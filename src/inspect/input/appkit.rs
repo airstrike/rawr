@@ -19,6 +19,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Once, OnceLock};
 use std::time::Duration;
 
+use super::travel::Travel;
 use super::{Button, Error, Gesture, Key, Modifiers, Point, Sent, Unit};
 use crate::inspect::screenshot;
 
@@ -33,9 +34,6 @@ const FRAME: Duration = Duration::from_millis(17);
 
 /// How often a wait for the main thread looks whether it is given up.
 const POLL: Duration = Duration::from_millis(50);
-
-/// How far a drag moves between two of its events, in points.
-const STRIDE: f64 = 8.0;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -112,7 +110,7 @@ pub(in crate::inspect) struct Runtime {
     bounds: unsafe extern "C" fn(u32) -> Rect,
     path: unsafe extern "C" fn() -> *mut c_void,
     move_to: unsafe extern "C" fn(*mut c_void, *const c_void, f64, f64),
-    line_to: unsafe extern "C" fn(*mut c_void, *const c_void, f64, f64),
+    arc_to: unsafe extern "C" fn(*mut c_void, *const c_void, f64, f64, f64, f64, f64),
     close: unsafe extern "C" fn(*mut c_void),
     color: unsafe extern "C" fn(f64, f64, f64, f64) -> *mut c_void,
     method: unsafe extern "C" fn(Id, Sel) -> *mut c_void,
@@ -205,7 +203,7 @@ impl Runtime {
                 bounds: function(c"CGDisplayBounds")?,
                 path: function(c"CGPathCreateMutable")?,
                 move_to: function(c"CGPathMoveToPoint")?,
-                line_to: function(c"CGPathAddLineToPoint")?,
+                arc_to: function(c"CGPathAddArcToPoint")?,
                 close: function(c"CGPathCloseSubpath")?,
                 color: function(c"CGColorCreateSRGB")?,
                 method: function(c"class_getInstanceMethod")?,
@@ -317,8 +315,11 @@ pub(super) fn send(
         return Err(missing());
     };
     let runtime = runtime?;
+    let owned = title.map(str::to_owned);
+    let (rest, size) =
+        main(interrupted, move || resting(runtime, owned.as_deref()))?.ok_or_else(missing)?;
     let mut sent = None;
-    for event in events(gesture) {
+    for Timed { event, pause } in events(gesture, rest, size.width, size.height) {
         let title = title.map(str::to_owned);
         sent = Some(
             main(interrupted, move || {
@@ -326,6 +327,9 @@ pub(super) fn send(
             })?
             .ok_or_else(missing)?,
         );
+        if !pause.is_zero() {
+            std::thread::sleep(pause);
+        }
     }
     // A redraw the events asked for runs before the loop waits again: two
     // more turns of it see one drawn, and the compositor shows it a frame
@@ -359,51 +363,89 @@ fn arrived(interrupted: &dyn Fn() -> bool) -> Option<Result<&'static Runtime, Er
     Some(Ok(runtime))
 }
 
-/// The events `gesture` is, in order.
-fn events(gesture: &Gesture) -> Vec<Event> {
+/// An event and how long the cursor rests after it, before the next.
+#[derive(Clone, Debug)]
+struct Timed {
+    event: Event,
+    pause: Duration,
+}
+
+impl From<Event> for Timed {
+    fn from(event: Event) -> Self {
+        Self {
+            event,
+            pause: Duration::ZERO,
+        }
+    }
+}
+
+/// The events `gesture` is, in order, in a window `width` by `height`
+/// points whose agent cursor rests at `rest`, if it shows one. A pointer
+/// gesture first moves the pointer along the cursor's travel to its point
+/// (see [`Travel`]), a pointer move at each point of it, so what follows
+/// the pointer follows it there; a drag moves with its button held along
+/// a straight travel to its end.
+fn events(gesture: &Gesture, rest: Option<Point>, width: f64, height: f64) -> Vec<Timed> {
     let pointer = |motion, at, button, clicks| Event::Pointer {
         motion,
         at,
         button,
         clicks,
     };
+    let travel = |travel: Travel, motion, button, clicks| {
+        let pause = travel.pause();
+        travel.points().map(move |at| Timed {
+            event: pointer(motion, at, button, clicks),
+            pause,
+        })
+    };
+    let approach = |to: Point, button| -> Vec<Timed> {
+        match rest {
+            Some(from) => travel(
+                Travel::curved(from, to, width, height),
+                Motion::Moved,
+                button,
+                0,
+            )
+            .collect(),
+            None => vec![pointer(Motion::Moved, to, button, 0).into()],
+        }
+    };
     match gesture {
-        Gesture::Move(at) => vec![pointer(Motion::Moved, *at, Button::Left, 0)],
+        Gesture::Move(at) => approach(*at, Button::Left),
         Gesture::Click { at, button, count } => {
-            let mut events = vec![pointer(Motion::Moved, *at, *button, 0)];
+            let mut events = approach(*at, *button);
             for click in 1..=*count as isize {
-                events.push(pointer(Motion::Down, *at, *button, click));
-                events.push(pointer(Motion::Up, *at, *button, click));
+                events.push(pointer(Motion::Down, *at, *button, click).into());
+                events.push(pointer(Motion::Up, *at, *button, click).into());
             }
             events
         }
         Gesture::Drag { from, to, button } => {
-            let distance = (to.x - from.x).hypot(to.y - from.y);
-            let steps = (distance / STRIDE).ceil().clamp(1.0, 60.0) as u32;
-            let mut events = vec![
-                pointer(Motion::Moved, *from, *button, 0),
-                pointer(Motion::Down, *from, *button, 1),
-            ];
-            for step in 1..=steps {
-                let part = f64::from(step) / f64::from(steps);
-                let at = Point {
-                    x: from.x + (to.x - from.x) * part,
-                    y: from.y + (to.y - from.y) * part,
-                };
-                events.push(pointer(Motion::Dragged, at, *button, 1));
-            }
-            events.push(pointer(Motion::Up, *to, *button, 1));
+            let mut events = approach(*from, *button);
+            events.push(pointer(Motion::Down, *from, *button, 1).into());
+            events.extend(travel(
+                Travel::straight(*from, *to),
+                Motion::Dragged,
+                *button,
+                1,
+            ));
+            events.push(pointer(Motion::Up, *to, *button, 1).into());
             events
         }
-        Gesture::Scroll { at, x, y, unit } => vec![
-            pointer(Motion::Moved, *at, Button::Left, 0),
-            Event::Scroll {
-                at: *at,
-                x: *x,
-                y: *y,
-                unit: *unit,
-            },
-        ],
+        Gesture::Scroll { at, x, y, unit } => {
+            let mut events = approach(*at, Button::Left);
+            events.push(
+                Event::Scroll {
+                    at: *at,
+                    x: *x,
+                    y: *y,
+                    unit: *unit,
+                }
+                .into(),
+            );
+            events
+        }
         Gesture::Press { key, modifiers } => {
             let held = modifiers.held();
             let mut events = Vec::new();
@@ -426,7 +468,7 @@ fn events(gesture: &Gesture) -> Vec<Event> {
                 flags &= !flag;
                 events.push(Event::Flags { code: *code, flags });
             }
-            events
+            events.into_iter().map(Timed::from).collect()
         }
         Gesture::Type(text) => text
             .chars()
@@ -445,6 +487,7 @@ fn events(gesture: &Gesture) -> Vec<Event> {
                     },
                 ]
             })
+            .map(Timed::from)
             .collect(),
     }
 }
@@ -570,6 +613,33 @@ fn deliver(runtime: &Runtime, event: &Event, title: Option<&str>) -> Option<Sent
     // SAFETY: `pool` was pushed above on this thread.
     unsafe { (runtime.pop)(pool) };
     sent
+}
+
+/// Where the agent cursor rests in the window titled `title`, or the
+/// front one, if it shows one, and the window's size; `None` when there is
+/// no such window.
+fn resting(runtime: &Runtime, title: Option<&str>) -> Option<(Option<Point>, Size)> {
+    // SAFETY: the pool is pushed and popped on this thread around the
+    // objects this call makes.
+    let pool = unsafe { (runtime.push)() };
+    let found = window(runtime, title).map(|window| {
+        let frame = runtime.rect(window, "frame\0");
+        let content = msg!(runtime, Id; window, "contentView");
+        let layer = msg!(runtime, Id; content, "layer");
+        let rest = named(runtime, layer, CURSOR).map(|cursor| {
+            let position = msg!(runtime, Vector; cursor, "position");
+            let at = placed(runtime, content, layer, position);
+            let base = msg!(runtime, Vector; content, "convertPoint:toView:", at => Vector, std::ptr::null_mut() => Id);
+            Point {
+                x: base.x,
+                y: frame.size.height - base.y,
+            }
+        });
+        (rest, frame.size)
+    });
+    // SAFETY: `pool` was pushed above on this thread.
+    unsafe { (runtime.pop)(pool) };
+    found
 }
 
 /// The window titled `title`, or the front one: a visible window with a
@@ -748,90 +818,143 @@ fn point(runtime: &Runtime, window: Id, content: Id, base: Vector) {
         return;
     }
     let at = msg!(runtime, Vector; content, "convertPoint:fromView:", base => Vector, std::ptr::null_mut() => Id);
-    let bounds = runtime.rect(content, "bounds\0");
-    // The layer's coordinates run down from the top when it is flipped.
-    let down = msg!(runtime, u8; layer, "contentsAreFlipped") != 0;
-    let flipped = msg!(runtime, u8; content, "isFlipped") != 0;
-    let position = if down == flipped {
-        at
-    } else {
-        Vector {
-            x: at.x,
-            y: bounds.size.height - at.y,
-        }
-    };
+    let position = placed(runtime, content, layer, at);
     let transaction = runtime.class(c"CATransaction");
     msg!(runtime, (); transaction, "begin");
     msg!(runtime, (); transaction, "setDisableActions:", true => bool);
-    let cursor = cursor(runtime, window, layer, down);
+    let cursor = named(runtime, layer, CURSOR).unwrap_or_else(|| cursor(runtime, window, layer));
     msg!(runtime, (); cursor, "setPosition:", position => Vector);
     msg!(runtime, (); transaction, "commit");
 }
 
-/// The agent cursor's layer in `layer`, made the first time: an arrow whose
-/// tip is at the layer's position.
-fn cursor(runtime: &Runtime, window: Id, layer: Id, down: bool) -> Id {
-    let name = runtime.string(&CURSOR.to_string_lossy());
-    let layers = msg!(runtime, Id; layer, "sublayers");
-    let count = msg!(runtime, usize; layers, "count");
-    for index in 0..count {
-        let sublayer = msg!(runtime, Id; layers, "objectAtIndex:", index => usize);
-        if msg!(runtime, u8; msg!(runtime, Id; sublayer, "name"), "isEqualToString:", name => Id)
-            != 0
-        {
-            return sublayer;
+/// `at` in `content`'s coordinates as a position in its `layer`, or a
+/// position in the layer back in the view's coordinates. The layer's
+/// coordinates run down from the top when it is flipped, the view's when
+/// it is, and when the two differ each is the other mirrored.
+fn placed(runtime: &Runtime, content: Id, layer: Id, at: Vector) -> Vector {
+    let down = msg!(runtime, u8; layer, "contentsAreFlipped") != 0;
+    let flipped = msg!(runtime, u8; content, "isFlipped") != 0;
+    if down == flipped {
+        at
+    } else {
+        Vector {
+            x: at.x,
+            y: runtime.rect(content, "bounds\0").size.height - at.y,
         }
     }
-    let cursor =
-        msg!(runtime, Id; msg!(runtime, Id; runtime.class(c"CAShapeLayer"), "alloc"), "init");
-    msg!(runtime, (); cursor, "setName:", name => Id);
-    // A pointer arrow, 20 points tall, its tip at the origin.
-    const ARROW: [(f64, f64); 7] = [
-        (0.0, 0.0),
-        (0.0, 17.0),
-        (4.2, 13.2),
-        (7.0, 19.6),
-        (9.8, 18.4),
-        (7.1, 12.2),
-        (12.4, 12.2),
-    ];
+}
+
+/// The agent cursor's outline, its coordinates running down: a dart whose
+/// left edge leans a little and whose base is notched, each corner with
+/// the radius it is rounded by. [`tip`] says where its rounded tip is.
+const ARROW: [(f64, f64, f64); 4] = [
+    (0.0, 0.0, 1.6),
+    (0.94, 17.98, 2.4),
+    (5.49, 11.78, 2.0),
+    (13.16, 12.28, 2.4),
+];
+
+/// How far the white outline reaches beyond the fill, in points.
+const OUTLINE: f64 = 1.75;
+
+/// Where the rounded tip of [`ARROW`] reaches. A rounded corner's arc meets
+/// the corner's bisector short of the corner by the radius over the sine
+/// of half the corner's angle, less the radius.
+fn tip() -> Vector {
+    let [(x, y, radius), (ax, ay, _), _, (bx, by, _)] = ARROW;
+    let unit = |dx: f64, dy: f64| {
+        let length = dx.hypot(dy);
+        (dx / length, dy / length)
+    };
+    let (ux, uy) = unit(ax - x, ay - y);
+    let (vx, vy) = unit(bx - x, by - y);
+    let half = ((1.0 - (ux * vx + uy * vy)) / 2.0).sqrt();
+    let (across, along) = unit(ux + vx, uy + vy);
+    let short = radius / half - radius;
+    Vector {
+        x: x + across * short,
+        y: y + along * short,
+    }
+}
+
+/// The agent cursor's path: [`ARROW`] with its corners rounded, moved so
+/// its rounded tip is at the origin, its coordinates running up unless
+/// `down`. The caller releases it.
+fn arrow(runtime: &Runtime, down: bool) -> *mut c_void {
     let sign = if down { 1.0 } else { -1.0 };
-    // SAFETY: Core Graphics' path and colour functions, making objects the
-    // layer keeps its own references to; this function releases its own.
-    let (path, colors) = unsafe {
+    let tip = tip();
+    let corner = |index: usize| {
+        let (x, y, radius) = ARROW[index % ARROW.len()];
+        (x - tip.x, (y - tip.y) * sign, radius)
+    };
+    let (last_x, last_y, _) = corner(ARROW.len() - 1);
+    let (first_x, first_y, _) = corner(0);
+    // SAFETY: Core Graphics' path functions on the fresh path. It starts
+    // in the middle of the last edge, and each corner is an arc tangent to
+    // the edges into and out of it.
+    unsafe {
         let path = (runtime.path)();
-        for (index, (x, y)) in ARROW.iter().enumerate() {
-            let line = if index == 0 {
-                runtime.move_to
-            } else {
-                runtime.line_to
-            };
-            line(path, std::ptr::null(), *x, y * sign);
+        (runtime.move_to)(
+            path,
+            std::ptr::null(),
+            (last_x + first_x) / 2.0,
+            (last_y + first_y) / 2.0,
+        );
+        for index in 0..ARROW.len() {
+            let (x, y, radius) = corner(index);
+            let (next_x, next_y, _) = corner(index + 1);
+            (runtime.arc_to)(path, std::ptr::null(), x, y, next_x, next_y, radius);
         }
         (runtime.close)(path);
-        let colors = [
-            (runtime.color)(1.0, 0.36, 0.0, 1.0),
+        path
+    }
+}
+
+/// The agent cursor's layer in `layer`, made: an orange dart, its tip at
+/// the layer's position, outlined in white and casting a soft shadow. The
+/// outline is the same path filled and stroked white under the dart's own
+/// fill, so all of the stroke's width shows outside the fill.
+fn cursor(runtime: &Runtime, window: Id, layer: Id) -> Id {
+    let make =
+        || msg!(runtime, Id; msg!(runtime, Id; runtime.class(c"CAShapeLayer"), "alloc"), "init");
+    let (cursor, fill) = (make(), make());
+    let name = runtime.string(&CURSOR.to_string_lossy());
+    msg!(runtime, (); cursor, "setName:", name => Id);
+    // The layer's coordinates run down from the top when it is flipped.
+    let down = msg!(runtime, u8; layer, "contentsAreFlipped") != 0;
+    let path = arrow(runtime, down);
+    // SAFETY: Core Graphics' colour function, making colours the layers
+    // keep their own references to; this function releases its own.
+    let colors = unsafe {
+        [
             (runtime.color)(1.0, 1.0, 1.0, 1.0),
+            (runtime.color)(0.97, 0.39, 0.04, 1.0),
             (runtime.color)(0.0, 0.0, 0.0, 1.0),
-        ];
-        (path, colors)
+        ]
     };
-    let [fill, stroke, shadow] = colors;
-    msg!(runtime, (); cursor, "setPath:", path => *mut c_void);
-    msg!(runtime, (); cursor, "setFillColor:", fill => *mut c_void);
-    msg!(runtime, (); cursor, "setStrokeColor:", stroke => *mut c_void);
+    let [white, orange, shadow] = colors;
+    let scale = msg!(runtime, f64; window, "backingScaleFactor");
+    for shape in [cursor, fill] {
+        msg!(runtime, (); shape, "setPath:", path => *mut c_void);
+        msg!(runtime, (); shape, "setContentsScale:", scale => f64);
+    }
+    msg!(runtime, (); cursor, "setFillColor:", white => *mut c_void);
+    msg!(runtime, (); cursor, "setStrokeColor:", white => *mut c_void);
+    msg!(runtime, (); cursor, "setLineWidth:", 2.0 * OUTLINE => f64);
+    msg!(runtime, (); cursor, "setLineJoin:", runtime.string("round") => Id);
     msg!(runtime, (); cursor, "setShadowColor:", shadow => *mut c_void);
+    msg!(runtime, (); cursor, "setShadowOpacity:", 0.35_f32 => f32);
+    msg!(runtime, (); cursor, "setShadowRadius:", 2.5_f64 => f64);
+    let below = if down { 1.0 } else { -1.0 };
+    msg!(runtime, (); cursor, "setShadowOffset:", Size { width: 0.0, height: below } => Size);
+    msg!(runtime, (); fill, "setFillColor:", orange => *mut c_void);
     runtime.release(path);
     for color in colors {
         runtime.release(color);
     }
-    msg!(runtime, (); cursor, "setLineWidth:", 1.5_f64 => f64);
-    msg!(runtime, (); cursor, "setShadowOpacity:", 0.4_f32 => f32);
-    msg!(runtime, (); cursor, "setShadowRadius:", 1.5_f64 => f64);
-    msg!(runtime, (); cursor, "setShadowOffset:", Size { width: 0.0, height: -sign } => Size);
     msg!(runtime, (); cursor, "setZPosition:", 1.0e6_f64 => f64);
-    let scale = msg!(runtime, f64; window, "backingScaleFactor");
-    msg!(runtime, (); cursor, "setContentsScale:", scale => f64);
+    msg!(runtime, (); cursor, "addSublayer:", fill => Id);
+    msg!(runtime, (); fill, "release");
     msg!(runtime, (); layer, "addSublayer:", cursor => Id);
     msg!(runtime, (); cursor, "release");
     cursor
@@ -1449,9 +1572,9 @@ mod tests {
                 ..Modifiers::default()
             },
         };
-        let flags: Vec<(String, usize)> = events(&gesture)
+        let flags: Vec<(String, usize)> = events(&gesture, None, 100.0, 100.0)
             .iter()
-            .map(|event| match event {
+            .map(|timed| match &timed.event {
                 Event::Flags { code, flags } => (format!("flags {code}"), *flags),
                 Event::Key { down, flags, .. } => (format!("key {down}"), *flags),
                 other => panic!("{other:?}"),
@@ -1489,25 +1612,17 @@ mod tests {
             to: Point { x: 40.0, y: 0.0 },
             button: Button::Left,
         };
-        let motions: Vec<Motion> = events(&gesture)
+        let motions: Vec<Motion> = events(&gesture, None, 100.0, 100.0)
             .iter()
-            .map(|event| match event {
+            .map(|timed| match &timed.event {
                 Event::Pointer { motion, .. } => *motion,
                 other => panic!("{other:?}"),
             })
             .collect();
-        assert_eq!(
-            motions,
-            [
-                Motion::Moved,
-                Motion::Down,
-                Motion::Dragged,
-                Motion::Dragged,
-                Motion::Dragged,
-                Motion::Dragged,
-                Motion::Dragged,
-                Motion::Up,
-            ]
-        );
+        let (ends, held) = (motions.len() - 1, &motions[2..motions.len() - 1]);
+        assert_eq!(motions[..2], [Motion::Moved, Motion::Down]);
+        assert_eq!(motions[ends], Motion::Up);
+        // 40 points in strides of at most 8.
+        assert!(held.len() >= 5 && held.iter().all(|motion| *motion == Motion::Dragged));
     }
 }
