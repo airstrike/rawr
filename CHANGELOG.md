@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- When a sealed build bundle's file count or size changes, rawr's error names the total that changed, its sealed and measured values, and the file behind it. (#2177; part of #2146)
 
 ## 0.3.241 (2026-11-17)
 

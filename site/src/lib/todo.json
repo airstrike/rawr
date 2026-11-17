@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"When a sealed build bundle's file count or size changes, rawr's error names the total that changed, its sealed and measured values, and the file behind it.","issues":[2177],"refs":[2146]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.241",
@@ -4819,7 +4824,8 @@
     {"issue":2173,"title":"A macro path through a crate's hidden $crate segment doesn't resolve to its macro_rules! definition","state":"open","category":"Divergences from rustc"},
     {"issue":2174,"title":"Type parameters and variants named `_0` don't parse","state":"open","category":"Divergences from rustc"},
     {"issue":2175,"title":"A program's `&mut Context` doesn't cross into crate functions","state":"open","category":"Divergences from rustc"},
-    {"issue":2176,"title":"`Future::poll` of a crate future where it sits","state":"open","category":"Divergences from rustc"}
+    {"issue":2176,"title":"`Future::poll` of a crate future where it sits","state":"open","category":"Divergences from rustc"},
+    {"issue":2177,"title":"When a sealed build bundle's file count or size changes, rawr's error names the total that…","state":"closed","category":"Health"}
   ],
   "groups": [
     {
