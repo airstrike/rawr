@@ -55,6 +55,20 @@ pub fn prune(project: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// The path and bytes of the basis the kept sources of the project at
+/// `project` are current against, when it keeps one. A kept expansion is
+/// its call's or item's text expanded against the artifact of its macro's
+/// crate the basis names, so the program's snapshot holds the basis beside
+/// the sources that hold the calls (#2156): a build of the macro's crate
+/// that changes an expansion keys the next check apart from a check of the
+/// old one.
+#[must_use]
+pub fn basis(project: &Path) -> Option<(PathBuf, Vec<u8>)> {
+    let path = super::directory(project).join(super::BASIS);
+    let bytes = fs::read(&path).ok()?;
+    Some((path, bytes))
+}
+
 /// What [`retire`] retired.
 #[cfg(feature = "rustc-driver")]
 #[derive(Debug, Default)]
@@ -64,6 +78,9 @@ pub struct Retired {
     pub derives: bool,
     /// Each call whose source was retired, which rustc expands again.
     pub calls: Vec<super::call::Call>,
+    /// Whether another basis was kept ([`basis`]): a snapshot taken before
+    /// holds the one it replaced.
+    pub basis: bool,
 }
 
 /// Retire each kept source of the project at `project` that was expanded
@@ -103,6 +120,7 @@ pub fn retire(project: &Path, basis: &super::Basis) -> io::Result<Retired> {
         }
     }
     basis.keep(&directory)?;
+    retired.basis = true;
     Ok(retired)
 }
 

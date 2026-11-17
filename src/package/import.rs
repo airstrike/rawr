@@ -192,6 +192,7 @@ impl crate::Engine {
             Some(cells) => super::Graph::load_with_cells(self, &target, cells)?,
             None => super::Graph::load(self, &target)?,
         };
+        let project = graph.entry_package().root().to_path_buf();
         let current_source = crate::reload::source::Graph::from_package(&graph);
         let current_snapshot = crate::reload::source::Snapshot::from_graph(&current_source);
         if !snapshot.exactly_matches(&current_snapshot) {
@@ -281,9 +282,15 @@ impl crate::Engine {
             }
         };
         took("resolving");
+        // rustc resolves each macro a `use` binds by name with the calls the
+        // pass finds, in one driver run (#2155).
+        let unresolved = program.unresolved_crate_macros(&project);
         let symbolic =
             match crate::resolve::lower_imported(self, &mut program, &registry, &mut allocation) {
-                Ok(uses) => uses,
+                Ok(uses) => match unresolved_uses(&sources, &unresolved) {
+                    Some(error) => return Err(error),
+                    None => uses,
+                },
                 Err(crate::resolve::ImportedFailure::Surface(error)) => {
                     return Err(super::Error::import(Error::Surface(error)));
                 }
@@ -315,6 +322,7 @@ impl crate::Engine {
                     ) {
                         let calls = unknowns
                             .iter()
+                            .chain(unresolved.iter().map(|(_, error)| error))
                             .filter_map(|unknown| match unknown {
                                 crate::resolve::Error::MacroExpansionRequired { call, .. } => {
                                     Some(call.clone())
@@ -779,6 +787,31 @@ pub(crate) fn crossing_impls(
         .filter(|native| *native.program == *program && found.contains(&native.owner.as_ref()))
         .map(|native| native.script.clone())
         .collect()
+}
+
+/// The failure that asks rustc to resolve each of `unresolved`, the
+/// `use`s of crate macros a passing pass found unresolved
+/// ([`crate::resolve::Program::unresolved_crate_macros`]), in one driver
+/// run: the first is its own miss, the others kept beside it. `None` when
+/// there are none.
+fn unresolved_uses(
+    sources: &[diagnostic::Source],
+    unresolved: &[(crate::program::source::Id, crate::resolve::Error)],
+) -> Option<super::Error> {
+    let ((source, error), others) = unresolved.split_first()?;
+    let calls = others
+        .iter()
+        .filter_map(|(_, error)| match error {
+            crate::resolve::Error::MacroExpansionRequired { call, .. } => Some(call.clone()),
+            _ => None,
+        })
+        .collect();
+    let failure = crate::resolve::package::Failure {
+        primary: super::source::Id::from_index(source.index()),
+        secondary: None,
+        error: error.clone(),
+    };
+    Some(super::Error::resolution(sources.into(), failure).with_rust_macro_calls(calls))
 }
 
 fn imported_resolution_report(

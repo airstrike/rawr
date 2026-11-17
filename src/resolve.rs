@@ -337,6 +337,59 @@ impl LoweringFailure {
 }
 
 impl Program {
+    /// Each `use` that binds a dependency's macro by name
+    /// ([`item::Import::CrateMacro`]) and that rustc hasn't resolved yet in
+    /// the project at `project`, as the source it is in and the miss rustc
+    /// answers: rustc resolves each in the small crate a call's expansion
+    /// runs in, so one that names no macro is E0432 whether or not a body
+    /// calls it (#2155). One rustc resolved is kept as an empty expansion
+    /// source, named as a check reads it so a passing check keeps it.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn unresolved_crate_macros(
+        &self,
+        project: &std::path::Path,
+    ) -> Vec<(program::source::Id, Error)> {
+        use rawr_import::expand::{call, kept};
+        let mut unresolved: Vec<(program::source::Id, Error)> = Vec::new();
+        let bindings = self.items.iter().filter_map(|shell| match &shell.kind {
+            item::Kind::Use(used) => Some((shell.source, used)),
+            _ => None,
+        });
+        for (source, used) in bindings {
+            for binding in &used.bindings {
+                if binding.target != item::Import::CrateMacro {
+                    continue;
+                }
+                let request = call::Call::used(&binding.qualified);
+                let path = request.source_path(project);
+                let resolved = std::fs::read_to_string(&path)
+                    .ok()
+                    .is_some_and(|text| call::kept(&text).is_some());
+                if resolved {
+                    kept::name(&path);
+                    continue;
+                }
+                let call: Box<[u8]> = serde_json::to_vec(&request).unwrap_or_default().into();
+                let known = |(_, missed): &(_, Error)| {
+                    matches!(missed, Error::MacroExpansionRequired { call: known, .. }
+                        if *known == call)
+                };
+                if unresolved.iter().any(known) {
+                    continue;
+                }
+                unresolved.push((
+                    source,
+                    Error::MacroExpansionRequired {
+                        path: binding.qualified.clone(),
+                        call,
+                        reference: binding.name.span,
+                    },
+                ));
+            }
+        }
+        unresolved
+    }
+
     pub(crate) fn package(&self) -> &str {
         &self.package
     }

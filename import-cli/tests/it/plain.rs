@@ -2119,10 +2119,27 @@ fn a_direct_proc_macro_dependency_expands_in_native_and_marked_code() {
     fs::write(&numerals, macro_source.replace("* 2", "* 3")).unwrap();
     let run = rawr_import(&root, &["run"]);
     assert_eq!(text(&run.stdout), "63 value 96\n", "{}", text(&run.stderr));
-    fs::write(&numerals, macro_source).unwrap();
+    fs::write(&numerals, &macro_source).unwrap();
     scale("3");
     let run = rawr_import(&root, &["run"]);
     assert_eq!(text(&run.stdout), "42 value 48\n", "{}", text(&run.stderr));
+    // An edit to the macro's crate that changes an expansion's type checks
+    // the program again, never replaying the check of the old expansion
+    // (#2156). The native `main` calls no macro, so only the marked call
+    // reads the new type.
+    fs::write(
+        root.join("src/main.rs"),
+        "mod scale;\n\nfn main() {\n    println!(\"{}\", scale::label(42));\n}\n",
+    )
+    .unwrap();
+    let checked = rawr_import(&root, &["check"]);
+    assert!(checked.status.success(), "{}", text(&checked.stderr));
+    fs::write(&numerals, macro_source.replace("* 2)", "* 2).to_string()")).unwrap();
+    let checked = rawr_import(&root, &["check"]);
+    let stdout = text(&checked.stdout);
+    assert!(!checked.status.success(), "{stdout}");
+    assert!(!stdout.contains("Checked "), "{stdout}");
+    fs::write(&numerals, &macro_source).unwrap();
 
     // A save that changes the call's input expands it again, and the
     // running program prints the new expansion's value.
@@ -2211,6 +2228,20 @@ fn a_used_crate_macro_expands_by_its_name() {
         text(&run.stderr)
     );
     assert_eq!(text(&run.stdout), "42 value 52\n");
+
+    // A `use` of a path that holds no macro is rustc's E0432, though no
+    // body calls it (#2155).
+    fs::write(
+        root.join("src/scale.rs"),
+        "// rawr\nuse numerals::dobule;\n\n\
+         pub fn label(value: i64) -> String {\n    format!(\"value {value}\")\n}\n",
+    )
+    .unwrap();
+    let checked = rawr_import(&root, &["check"]);
+    let stderr = text(&checked.stderr);
+    assert!(!checked.status.success(), "{stderr}");
+    assert!(stderr.contains("E0432"), "{stderr}");
+    assert!(stderr.contains("numerals::dobule"), "{stderr}");
 }
 
 /// A crate macro's call where a type or a pattern goes is rustc's

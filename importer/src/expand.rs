@@ -219,10 +219,6 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-#[cfg_attr(
-    not(feature = "rustc-driver"),
-    allow(dead_code, reason = "only the driver's build runs an expansion")
-)]
 /// Where a project's expansion directory keeps the basis its last
 /// expansion ran against.
 const BASIS: &str = "basis.json";

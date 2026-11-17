@@ -460,6 +460,19 @@ impl Snapshot {
             path: source.path.clone(),
             contents: source.text().as_bytes().into(),
         }));
+        // What rustc's kept expansions of the program's crate macro calls
+        // were expanded against (#2156): a call's expansion is program code
+        // no source holds, as one holds a derive's, but it is the call's
+        // text, which a source holds, expanded against the basis.
+        #[cfg(feature = "rust-import")]
+        files.extend(
+            rawr_import::expand::kept::basis(graph.entry_package().root()).map(
+                |(path, contents)| File {
+                    path,
+                    contents: contents.into(),
+                },
+            ),
+        );
         // The imported snapshot is keyed by path bytes, not path components:
         // `src/theme.rs` sorts after `src/theme/button.rs`.
         files.sort_by(|left, right| left.path.as_os_str().cmp(right.path.as_os_str()));
