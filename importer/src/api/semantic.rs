@@ -156,7 +156,11 @@ pub(super) struct Sections<'body> {
     scalar_predicate_proofs: &'body RawValue,
     #[serde(borrow)]
     support: Option<&'body RawValue>,
-    /// The table of the units the body names by key (`units::Keyed`).
+    /// The table of the re-export hops the body names by key
+    /// (`keyed::Tables`).
+    #[serde(borrow)]
+    pub(super) reexports: Option<&'body RawValue>,
+    /// The table of the units the body names by key (`keyed::Tables`).
     #[serde(borrow)]
     pub(super) units: Option<&'body RawValue>,
 }
@@ -174,6 +178,7 @@ impl Serialize for Current<'_> {
             + usize::from(body.schema.is_some())
             + usize::from(body.rejected.is_some())
             + usize::from(body.support.is_some())
+            + usize::from(body.reexports.is_some())
             + usize::from(body.units.is_some());
         let mut value = serializer.serialize_struct("RawCanonical", fields)?;
         if let Some(schema) = body.schema {
@@ -197,6 +202,9 @@ impl Serialize for Current<'_> {
         }
         if body.schema.is_none() {
             value.serialize_field("anonymous", body.anonymous)?;
+        }
+        if let Some(reexports) = body.reexports {
+            value.serialize_field("reexports", reexports)?;
         }
         if let Some(units) = body.units {
             value.serialize_field("units", units)?;
