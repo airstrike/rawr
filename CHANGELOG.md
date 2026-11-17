@@ -8,6 +8,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - The landing page's ratatui demo keeps drawing after a key press. A program in the browser's universe starts once its frame has been laid out at its shown size, so ratzilla no longer rebuilds an empty grid on the first key. (#2185; part of #2116)
 - While a program in the site's browser frame has focus, the arrow keys, Space, PageUp, PageDown, Home and End go to the program only and no longer scroll the page. (#2186)
 - The landing page's iced, ratatui and plain loop tabs can be linked to: `#iced`, `#ratatui` or `#loop` opens that tab in view, and choosing a tab writes its anchor. (#2187)
+- A macro call where an item goes, of the program's own `macro_rules!` or a dependency's `macro_rules!` or proc macro, declares the items it expands to in its module or block, as rustc does. (#2183; part of #1152)
 
 ## 0.3.244 (2026-11-17)
 
