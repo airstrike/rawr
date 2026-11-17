@@ -9,7 +9,13 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"The bundle seal flushes each file before it measures its allocation, so a large runner binary on Linux is no longer reported as corrupted when the filesystem settles its blocks after the seal.","issues":[2181],"refs":[2146]},
+        {"text":"A crate macro that calls another macro of its own crate through `$crate::`, one the program never names, expands as cargo expands it rather than failing with 'expected expression'.","issues":[2182],"refs":[1152]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.243",
@@ -4840,7 +4846,11 @@
     {"issue":2177,"title":"When a sealed build bundle's file count or size changes, rawr's error names the total that…","state":"closed","category":"Health","release":"0.3.242"},
     {"issue":2178,"title":"`pin!(future)` in marked code","state":"open","category":"Divergences from rustc"},
     {"issue":2179,"title":"A `Box::pin`ned crate future moved by value still moves its native value","state":"open","category":"Divergences from rustc"},
-    {"issue":2180,"title":"A type's future Output that names an impl parameter fixed by a where clause can't be awaited","state":"open","category":"Divergences from rustc"}
+    {"issue":2180,"title":"A type's future Output that names an impl parameter fixed by a where clause can't be awaited","state":"open","category":"Divergences from rustc"},
+    {"issue":2181,"title":"The bundle seal flushes each file before it measures its allocation, so a large runner binary on…","state":"closed","category":"Platforms"},
+    {"issue":2182,"title":"A crate macro that calls another macro of its own crate through `$crate::`, one the program…","state":"closed","category":"Divergences from rustc"},
+    {"issue":2183,"title":"Items a macro expansion produces in a body or module aren't registered as items","state":"open","category":"Divergences from rustc"},
+    {"issue":2184,"title":"A hidden `$crate` macro_rules! the program never names expands through rustc rather than from its rules","state":"open","category":"Platforms"}
   ],
   "groups": [
     {
@@ -5599,7 +5609,9 @@
             {"number":2176,"title":"`Future::poll` of a crate future where it sits","state":"closed"},
             {"number":2178,"title":"`pin!(future)` in marked code","state":"open"},
             {"number":2179,"title":"A `Box::pin`ned crate future moved by value still moves its native value","state":"open"},
-            {"number":2180,"title":"A type's future Output that names an impl parameter fixed by a where clause can't be awaited","state":"open"}
+            {"number":2180,"title":"A type's future Output that names an impl parameter fixed by a where clause can't be awaited","state":"open"},
+            {"number":2183,"title":"Items a macro expansion produces in a body or module aren't registered as items","state":"open"},
+            {"number":2184,"title":"A hidden `$crate` macro_rules! the program never names expands through rustc rather than from its rules","state":"open"}
           ],
           "milestone": "0.3"
         },

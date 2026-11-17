@@ -4,7 +4,10 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"The bundle seal flushes each file before it measures its allocation, so a large runner binary on Linux is no longer reported as corrupted when the filesystem settles its blocks after the seal.","issues":[2181],"refs":[2146]},
+      {"text":"A crate macro that calls another macro of its own crate through `$crate::`, one the program never names, expands as cargo expands it rather than failing with 'expected expression'.","issues":[2182],"refs":[1152]}
+    ]
   },
   "releases": [
     {

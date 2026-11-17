@@ -5,6 +5,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- The bundle seal flushes each file before it measures its allocation, so a large runner binary on Linux is no longer reported as corrupted when the filesystem settles its blocks after the seal. (#2181; part of #2146)
+- A crate macro that calls another macro of its own crate through `$crate::`, one the program never names, expands as cargo expands it rather than failing with 'expected expression'. (#2182; part of #1152)
 
 ## 0.3.243 (2026-11-17)
 
