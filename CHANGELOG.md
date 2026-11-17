@@ -6,6 +6,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 - A dependency declared in `[dependencies]` and again in a `[target.'cfg(..)'.dependencies]` table that holds gets the features of both, as Cargo unifies them. rawr kept only the first entry, so iced's integration example lost winit's x11 and wayland on Linux. (#2195)
+- A save during `rawr test` keeps the program's tests: the reload is parsed with `cfg(test)` and the run's features as the start was, so the next test still runs and no restart runs `main`. (#2194)
 
 ## 0.3.246 (2026-11-17)
 

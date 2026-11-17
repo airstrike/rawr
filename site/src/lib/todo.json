@@ -12,7 +12,8 @@
     "unreleased": {
       "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
       "entries": [
-        {"text":"A dependency declared in `[dependencies]` and again in a `[target.'cfg(..)'.dependencies]` table that holds gets the features of both, as Cargo unifies them. rawr kept only the first entry, so iced's integration example lost winit's x11 and wayland on Linux.","issues":[2195]}
+        {"text":"A dependency declared in `[dependencies]` and again in a `[target.'cfg(..)'.dependencies]` table that holds gets the features of both, as Cargo unifies them. rawr kept only the first entry, so iced's integration example lost winit's x11 and wayland on Linux.","issues":[2195]},
+        {"text":"A save during `rawr test` keeps the program's tests: the reload is parsed with `cfg(test)` and the run's features as the start was, so the next test still runs and no restart runs `main`.","issues":[2194]}
       ]
     },
     "releases": [
@@ -4885,10 +4886,11 @@
     {"issue":2191,"title":"A call of the program's own `macro_rules!` used as an expression declares the items of the…","state":"closed","category":"Divergences from rustc","release":"0.3.246"},
     {"issue":2192,"title":"A path through a module in a body macro's expansion doesn't resolve","state":"closed","category":"Divergences from rustc","release":"0.3.246"},
     {"issue":2193,"title":"An item laid out in a macro expansion's block can't name the block's other items from its body","state":"closed","category":"Divergences from rustc","release":"0.3.246"},
-    {"issue":2194,"title":"`rawr test` reloads the program mid-run with other cfgs, so a feature-gated module is 'removed' and the program restarts","state":"open","category":"Divergences from rustc"},
+    {"issue":2194,"title":"`rawr test` reloads the program mid-run with other cfgs, so a feature-gated module is 'removed' and the program restarts","state":"closed","category":"Divergences from rustc"},
     {"issue":2195,"title":"iced's integration example still doesn't build on Linux in the parity harness, under cargo either","state":"closed","category":"Health"},
     {"issue":2196,"title":"An expression-position call of a dependency's macro_rules! isn't laid out, so its items and paths stay with the lowering","state":"open","category":"Divergences from rustc"},
-    {"issue":2197,"title":"The parity harness can't give iced's integration example a verdict on a runner with no GPU","state":"open","category":"Health"}
+    {"issue":2197,"title":"The parity harness can't give iced's integration example a verdict on a runner with no GPU","state":"open","category":"Health"},
+    {"issue":2198,"title":"A `rawr test` start never reads its parse cells: every run parses all sources again","state":"open","category":"Platforms"}
   ],
   "groups": [
     {
@@ -5655,10 +5657,11 @@
             {"number":2190,"title":"A macro defined before a `mod` declaration, called from its child modules, isn't verified","state":"open"},
             {"number":2192,"title":"A path through a module in a body macro's expansion doesn't resolve","state":"closed"},
             {"number":2193,"title":"An item laid out in a macro expansion's block can't name the block's other items from its body","state":"closed"},
-            {"number":2194,"title":"`rawr test` reloads the program mid-run with other cfgs, so a feature-gated module is 'removed' and the program restarts","state":"open"},
+            {"number":2194,"title":"`rawr test` reloads the program mid-run with other cfgs, so a feature-gated module is 'removed' and the program restarts","state":"closed"},
             {"number":2195,"title":"iced's integration example still doesn't build on Linux in the parity harness, under cargo either","state":"closed"},
             {"number":2196,"title":"An expression-position call of a dependency's macro_rules! isn't laid out, so its items and paths stay with the lowering","state":"open"},
-            {"number":2197,"title":"The parity harness can't give iced's integration example a verdict on a runner with no GPU","state":"open"}
+            {"number":2197,"title":"The parity harness can't give iced's integration example a verdict on a runner with no GPU","state":"open"},
+            {"number":2198,"title":"A `rawr test` start never reads its parse cells: every run parses all sources again","state":"open"}
           ],
           "milestone": "0.3"
         },
