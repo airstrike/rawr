@@ -12,7 +12,8 @@
     "unreleased": {
       "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
       "entries": [
-        {"text":"A call of the program's own `macro_rules!` used as an expression declares the items of the blocks it expands to, so the expansion can name them, as rustc does.","issues":[2191],"refs":[2188]}
+        {"text":"A call of the program's own `macro_rules!` used as an expression declares the items of the blocks it expands to, so the expansion can name them, as rustc does.","issues":[2191],"refs":[2188]},
+        {"text":"A path through a module in a macro's expansion resolves, and an item a macro expands to in a block can name the items beside it, as rustc resolves both.","issues":[2192,2193],"refs":[2188]}
       ]
     },
     "releases": [
@@ -4875,8 +4876,11 @@
     {"issue":2189,"title":"An inline mod in a dependency macro's item expansion isn't loaded as a module","state":"open","category":"Divergences from rustc"},
     {"issue":2190,"title":"A macro defined before a `mod` declaration, called from its child modules, isn't verified","state":"open","category":"Divergences from rustc"},
     {"issue":2191,"title":"A call of the program's own `macro_rules!` used as an expression declares the items of the…","state":"closed","category":"Divergences from rustc"},
-    {"issue":2192,"title":"A path through a module in a body macro's expansion doesn't resolve","state":"open","category":"Divergences from rustc"},
-    {"issue":2193,"title":"An item laid out in a macro expansion's block can't name the block's other items from its body","state":"open","category":"Divergences from rustc"}
+    {"issue":2192,"title":"A path through a module in a body macro's expansion doesn't resolve","state":"closed","category":"Divergences from rustc"},
+    {"issue":2193,"title":"An item laid out in a macro expansion's block can't name the block's other items from its body","state":"closed","category":"Divergences from rustc"},
+    {"issue":2194,"title":"`rawr test` reloads the program mid-run with other cfgs, so a feature-gated module is 'removed' and the program restarts","state":"open","category":"Divergences from rustc"},
+    {"issue":2195,"title":"iced's integration example still doesn't build on Linux in the parity harness, under cargo either","state":"open","category":"Health"},
+    {"issue":2196,"title":"An expression-position call of a dependency's macro_rules! isn't laid out, so its items and paths stay with the lowering","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -5641,8 +5645,11 @@
             {"number":2188,"title":"Items in an expression-position macro expansion made during lowering are skipped","state":"open"},
             {"number":2189,"title":"An inline mod in a dependency macro's item expansion isn't loaded as a module","state":"open"},
             {"number":2190,"title":"A macro defined before a `mod` declaration, called from its child modules, isn't verified","state":"open"},
-            {"number":2192,"title":"A path through a module in a body macro's expansion doesn't resolve","state":"open"},
-            {"number":2193,"title":"An item laid out in a macro expansion's block can't name the block's other items from its body","state":"open"}
+            {"number":2192,"title":"A path through a module in a body macro's expansion doesn't resolve","state":"closed"},
+            {"number":2193,"title":"An item laid out in a macro expansion's block can't name the block's other items from its body","state":"closed"},
+            {"number":2194,"title":"`rawr test` reloads the program mid-run with other cfgs, so a feature-gated module is 'removed' and the program restarts","state":"open"},
+            {"number":2195,"title":"iced's integration example still doesn't build on Linux in the parity harness, under cargo either","state":"open"},
+            {"number":2196,"title":"An expression-position call of a dependency's macro_rules! isn't laid out, so its items and paths stay with the lowering","state":"open"}
           ],
           "milestone": "0.3"
         },

@@ -5,7 +5,8 @@
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
     "entries": [
-      {"text":"A call of the program's own `macro_rules!` used as an expression declares the items of the blocks it expands to, so the expansion can name them, as rustc does.","issues":[2191],"refs":[2188]}
+      {"text":"A call of the program's own `macro_rules!` used as an expression declares the items of the blocks it expands to, so the expansion can name them, as rustc does.","issues":[2191],"refs":[2188]},
+      {"text":"A path through a module in a macro's expansion resolves, and an item a macro expands to in a block can name the items beside it, as rustc resolves both.","issues":[2192,2193],"refs":[2188]}
     ]
   },
   "releases": [
