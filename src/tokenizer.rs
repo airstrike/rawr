@@ -2444,19 +2444,14 @@ fn keywords_written<'a>(text: &'a str, prefix: &str) -> std::borrow::Cow<'a, str
 /// Exported under the `internals` feature only.
 #[must_use]
 pub fn is_valid_identifier(name: &str) -> bool {
-    let mut first_alphabetic = false;
-
-    for ch in name.chars() {
-        match ch {
-            '_' => (),
-            _ if is_id_first_alphabetic(ch) => first_alphabetic = true,
-            _ if !first_alphabetic => return false,
-            _ if char::is_ascii_alphanumeric(&ch) => (),
-            _ => return false,
-        }
-    }
-
-    first_alphabetic
+    // rustc's rule: a start character or `_`, then continue characters,
+    // where `_` alone is the wildcard rather than a name (`_0` is a name).
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|first| is_id_first_alphabetic(first) || first == '_')
+        && name != "_"
+        && chars.all(is_id_continue)
 }
 
 /// _(internals)_ Is a text string a valid script-defined function name?

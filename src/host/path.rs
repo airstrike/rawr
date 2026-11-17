@@ -224,6 +224,16 @@ pub(crate) fn is_hidden(path: &str) -> bool {
     path.contains(HIDDEN_CRATE)
 }
 
+/// `path` with any crate's hidden segment left out, so
+/// `events::__rawr_crate_<..>::widgets::Row::boxed` is the item at
+/// `events::widgets::Row::boxed`.
+pub(crate) fn visible(path: &str) -> String {
+    segments(path)
+        .filter(|segment| !segment.starts_with(HIDDEN_CRATE))
+        .collect::<Vec<_>>()
+        .join("::")
+}
+
 /// `text` with each path through a crate's hidden segment written from
 /// that crate's own root, as rustc names an item of a crate the program
 /// does not name: `iced::__rawr_crate_iced_core_83b4d3c3e0fc96fe::text::Span`

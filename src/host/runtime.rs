@@ -445,7 +445,7 @@ impl Builder {
                 .is_some_and(|identity| identity.fingerprint() == *selector)
                 && (!self.bindings.contains_key(&item.fingerprint())
                     || (!path.is_empty()
-                        && visible(&item.path()) == visible(path)
+                        && host::path::visible(&item.path()) == host::path::visible(path)
                         && !self.owned_bindings.contains(&item.fingerprint())))
         })
     }
@@ -807,7 +807,7 @@ impl Builder {
             .map(|definition| {
                 (
                     definition.fingerprint(),
-                    visible(&definition.path()) == visible(path),
+                    host::path::visible(&definition.path()) == host::path::visible(path),
                 )
             })
             .collect::<Vec<_>>();
@@ -898,7 +898,8 @@ impl Builder {
         let definitions = definitions
             .iter()
             .map(|definition| {
-                let own = !path.is_empty() && visible(&definition.path()) == visible(path);
+                let own = !path.is_empty()
+                    && host::path::visible(&definition.path()) == host::path::visible(path);
                 (definition.fingerprint(), own)
             })
             .collect::<Vec<_>>();
@@ -1681,17 +1682,6 @@ mod witness_tests {
 }
 
 impl std::error::Error for Error {}
-
-/// `path` with any segment of a macro's `$crate` path left out, so
-/// `events::__rawr_crate_<..>::widgets::Row::boxed` is the item at
-/// `events::widgets::Row::boxed`.
-#[cfg(feature = "rust-import")]
-fn visible(path: &str) -> String {
-    path.split("::")
-        .filter(|segment| !segment.starts_with(rawr_import::api::ledger::CRATE_SEGMENT))
-        .collect::<Vec<_>>()
-        .join("::")
-}
 
 #[cfg(test)]
 mod tests {

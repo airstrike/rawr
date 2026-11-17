@@ -1195,6 +1195,29 @@ impl Registry {
         // `canvas::stroke::Style::Solid` through the re-export of `Style`.
         self.item_slice(&path)
             .or_else(|| self.item_slice(&self.canonical(&path)?))
+            .or_else(|| self.hidden_macro(&path))
+    }
+
+    /// The `macro_rules!` macro at a path through its crate's hidden
+    /// segment, as a macro's `$crate::name!` reads
+    /// (`tokio::__rawr_crate_tokio_<id>::select`). A facade holds a crate's
+    /// macros at their public paths only, so the path with the segment
+    /// left out ([`path::visible`]) names it, when that macro's `$crate`
+    /// reads as the path up to the segment.
+    fn hidden_macro(&self, path: &path::Path) -> Option<&[item::Definition]> {
+        let text = path.to_string();
+        if !path::is_hidden(&text) {
+            return None;
+        }
+        let items = self.item_slice(&path::Path::parse(path::visible(&text)).ok()?)?;
+        items
+            .iter()
+            .filter_map(item::Definition::macro_rules_source)
+            .any(|rules| {
+                text.strip_prefix(rules.krate())
+                    .is_some_and(|rest| rest.starts_with("::"))
+            })
+            .then_some(items)
     }
 
     #[cfg(feature = "rust-import")]
@@ -2160,6 +2183,32 @@ mod tests {
         let mut byte_short = super::TestImportAllocation::new(usize::MAX, oracle_bytes - 1);
         assert!(registry.clone_for_import(&mut byte_short).is_err());
         assert_eq!(byte_short.usage(), (0, 0));
+    }
+
+    /// A macro's `$crate::name!`, a path through its crate's hidden
+    /// segment, names the macro the facade holds at its public path when
+    /// the macro's `$crate` reads as that segment, and no other (#2173).
+    #[test]
+    fn a_crate_macro_resolves_through_its_hidden_segment() {
+        const OWN: &str = "tasks::__rawr_crate_tasks_00000000000000ab";
+        const OTHER: &str = "tasks::__rawr_crate_other_00000000000000cd";
+        let mut builder = facade::Builder::new("tasks", facade::Abi::new(1).unwrap()).unwrap();
+        builder
+            .item(
+                super::item::Definition::macro_rules(
+                    "select",
+                    "macro_rules! select { () => { () }; }",
+                    OWN,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let mut registry = Registry::new();
+        registry.install(builder.finish().unwrap()).unwrap();
+
+        let found = registry.overloads(&format!("{OWN}::select")).unwrap();
+        assert!(found.iter().all(|item| item.kind().is_macro()));
+        assert!(registry.overloads(&format!("{OTHER}::select")).is_none());
     }
 
     /// A facade installed among others keeps each imported type's paths

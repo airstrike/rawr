@@ -157,6 +157,26 @@ fn qualified_enum_constructors_support_bare_empty_and_payload_forms() {
     assert_eq!(engine.eval_ast::<String>(&debug).unwrap(), "Move(7, true)");
 }
 
+/// A name of `_` and digits is an identifier, as rustc lexes it: type
+/// parameters and variants named `_0` and `_1` (#2174).
+#[test]
+fn underscore_digit_names_are_identifiers() {
+    let engine = Engine::new();
+    let ast = engine
+        .compile(
+            r#"
+                #[derive(Debug)]
+                enum Out<_0, _1> { _0(_0), _1(_1) }
+
+                let first: Out<i64, bool> = Out::_0(3);
+                let second: Out<i64, bool> = Out::_1(true);
+                format!("{:?} {:?}", first, second)
+            "#,
+        )
+        .unwrap();
+    assert_eq!(engine.eval_ast::<String>(&ast).unwrap(), "_0(3) _1(true)");
+}
+
 /// A closure compares its parameters before its calls give them their
 /// type, as todos' `filter_button` compares `filter == current_filter`:
 /// each by its type's own `eq`, the derived one or one the program wrote.
