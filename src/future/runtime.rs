@@ -71,6 +71,9 @@ enum Kind {
     Native(Make),
     /// Futures polled together; their outputs in order, as a tuple.
     Join(Vec<Future>),
+    /// Futures polled in order till one ends: a tuple of an `Option` per
+    /// future, the one that ended's output in its own.
+    Select(Vec<Future>),
     /// A value already there.
     Ready(Dynamic),
 }
@@ -116,6 +119,15 @@ impl Future {
     #[must_use]
     pub fn join(parts: Vec<Self>) -> Self {
         Self::of(Kind::Join(parts))
+    }
+
+    /// The futures in `parts`, polled in order till the first ends, as
+    /// `select!` polls its branches: a tuple of an `Option` per future,
+    /// `Some` of that one's output. The others are dropped then, as
+    /// `select!` drops them.
+    #[must_use]
+    pub fn select(parts: Vec<Self>) -> Self {
+        Self::of(Kind::Select(parts))
     }
 
     /// A future whose output is `value`.
@@ -351,6 +363,8 @@ enum Poller {
     /// Each part until it ends, then its output: a part that ended is
     /// dropped then, with what it captured, as `join!` drops it.
     Join(Vec<(Option<Poller>, Option<Dynamic>)>),
+    /// Each part till the first ends; all of them are dropped then.
+    Select(Vec<Poller>),
     Ready(Option<Dynamic>),
     Failed(Option<Box<EvalAltResult>>),
 }
@@ -378,6 +392,7 @@ impl From<&Future> for Poller {
                     .map(|part| (Some(Self::from(part)), None))
                     .collect(),
             ),
+            Some(Kind::Select(parts)) => Self::Select(parts.iter().map(Self::from).collect()),
             Some(Kind::Ready(value)) => Self::Ready(Some(value)),
         }
     }
@@ -440,6 +455,28 @@ impl Poller {
                     parts
                         .iter_mut()
                         .filter_map(|(_, output)| output.take())
+                        .collect(),
+                )))
+            }
+            Self::Select(parts) => {
+                let ended = parts.iter_mut().enumerate().find_map(|(index, poller)| {
+                    match poller.poll(cx) {
+                        Pending => None,
+                        Ready(output) => Some((index, output)),
+                    }
+                });
+                let Some((index, output)) = ended else {
+                    return Pending;
+                };
+                let count = parts.len();
+                *self = Self::Failed(None);
+                let mut output = Some(output?);
+                Ready(Ok(Dynamic::from_array(
+                    (0..count)
+                        .map(|at| match output.take_if(|_| at == index) {
+                            Some(value) => crate::option::some(value),
+                            None => crate::option::none(),
+                        })
                         .collect(),
                 )))
             }

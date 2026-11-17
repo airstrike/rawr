@@ -429,6 +429,15 @@ impl<'a> Parser<'a> {
                 .cloned()
                 .zip(arguments.iter().cloned())
                 .collect::<BTreeMap<_, _>>();
+            // Its `Output` may name what a future that fills one of its
+            // parameters gives, as `T::Output` of tokio's `Timeout<T>`.
+            for (position, argument) in arguments.iter().enumerate() {
+                if let Some(awaited) = self.awaited_output(argument, span)? {
+                    let name =
+                        rawr_import::classify::representability::signature::awaited_name(position);
+                    parameters.insert(ImmutableString::from(&*name), awaited);
+                }
+            }
             let output = output.clone();
             let path = definition.path().as_str().to_string();
             return self
@@ -1202,12 +1211,14 @@ impl<'a> Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
-    /// tokio's `join!(a, b, ..)` and a one-branch
-    /// `select! { pattern = future => body, else => body }`, at the `!`,
-    /// written again as Rawr code: an `.await` on `rawr::future::__join2`
-    /// (and the others for each count), and for `select!` a `match` of its
-    /// output. The core runs `join!` only, so `try_join!` and a `select!` of
-    /// more than one future are rejected.
+    /// tokio's `join!(a, b, ..)` and `select! { pattern = future => body,
+    /// .., else => body }`, at the `!`, written again as Rawr code: an
+    /// `.await` on `rawr::future::__join2` or `__select2` (and the others
+    /// for each count), and for `select!` a `match` of its output, whose
+    /// arm for a branch matches that branch's `Some` of its pattern. The
+    /// core polls the branches in order, as a `biased;` select does, and a
+    /// branch whose pattern doesn't match ends the select at its `else`.
+    /// `try_join!` is rejected.
     pub(super) fn parse_tokio_macro(
         &mut self,
         name: &str,
@@ -1375,8 +1386,8 @@ impl<'a> Parser<'a> {
                 end,
             ));
         }
-        // The core has `join!` only, so far (D513.7).
-        if count > 1 && name != "join" {
+        // The core has `join!` and `select!` (D513.7).
+        if count > 1 && name != "join" && name != "select" {
             return Err(unsupported(
                 format!("`{name}!` of more than one future is not supported yet; `join!` is"),
                 end,
@@ -1411,8 +1422,26 @@ impl<'a> Parser<'a> {
         spliced.extend([(Token::Period, at), reserved("await")]);
         if name == "select" {
             spliced.push((Token::LeftBrace, at));
-            for (pattern, body) in branches {
-                spliced.extend(pattern);
+            for (index, (pattern, body)) in branches.into_iter().enumerate() {
+                if count == 1 {
+                    spliced.extend(pattern);
+                } else {
+                    // `(_, Some(pattern), _)` of the branch's own `Option`.
+                    spliced.push((Token::LeftParen, at));
+                    for position in 0..count {
+                        if position > 0 {
+                            spliced.push((Token::Comma, at));
+                        }
+                        if position != index {
+                            spliced.push((Token::Underscore, at));
+                            continue;
+                        }
+                        spliced.extend([ident("Some"), (Token::LeftParen, at)]);
+                        spliced.extend(pattern.iter().cloned());
+                        spliced.push((Token::RightParen, at));
+                    }
+                    spliced.push((Token::RightParen, at));
+                }
                 spliced.push((Token::DoubleArrow, at));
                 spliced.push((Token::LeftBrace, at));
                 spliced.extend(body);

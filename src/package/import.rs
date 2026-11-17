@@ -2654,14 +2654,19 @@ fn build(
             _ => 0,
         };
         // What `.await` on a value of the type gives, when it is a future.
+        // Its `Output` may name the output of a future that fills one of
+        // its parameters (`signature::with_awaited`).
+        let awaited = |parameters| {
+            rawr_import::classify::representability::signature::with_awaited(parameters)
+        };
         let future = match entry.outcome.representability() {
             Representability::Struct(plan) => plan
                 .future()
-                .map(|output| types.convert(output, plan.parameters(), allocation))
+                .map(|output| types.convert(output, &awaited(plan.parameters()), allocation))
                 .transpose()?,
             Representability::Enum(plan) => plan
                 .future()
-                .map(|output| types.convert(output, plan.parameters(), allocation))
+                .map(|output| types.convert(output, &awaited(plan.parameters()), allocation))
                 .transpose()?,
             _ => None,
         };

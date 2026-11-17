@@ -18,7 +18,7 @@ pub use cached::Cached;
 /// selects and how it encodes them. Bump it when a change alters a plan
 /// this module writes. A bump selects each plan again from the classified
 /// contract it keeps, so nothing is classified again (#1766).
-const SCHEMA: u32 = 71;
+const SCHEMA: u32 = 75;
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -4219,16 +4219,19 @@ fn written_type_definition(
     };
     // The bridge's `Output` names each parameter by its position, as a
     // value's type gives its arguments.
+    // A parameter's own future's `Output` is that position's synthetic.
     let future_source = future.and_then(|output| {
         output.with_parameters(&|index| {
+            let synthetic = index & representability::signature::FUTURE_OUTPUT;
             parameters_of
                 .iter()
-                .position(|parameter| parameter.index() == index)
+                .position(|parameter| parameter.index() == index & !synthetic)
                 .and_then(|position| u32::try_from(position).ok())
-                .map(representability::convert::Type::Parameter)
+                .map(|position| representability::convert::Type::Parameter(position | synthetic))
         })
     });
-    let future = future.map(|output| ty(output, parameters_of)).transpose()?;
+    let awaited = representability::signature::with_awaited(parameters_of);
+    let future = future.map(|output| ty(output, &awaited)).transpose()?;
     let layout = match outcome.representability() {
         Representability::Struct(plan) => plan.layout().cloned(),
         _ => None,

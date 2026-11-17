@@ -1112,3 +1112,36 @@ main();
 "#;
     assert_eq!(printed(source), "[] 0\n[(3, []), (4, [])]\nNone []\n");
 }
+
+/// A constructor's payload that never comes, as `Some(return)`'s, is a
+/// variable a later use settles or the fallback makes `!`, so the value is
+/// `Copy` once the fallback makes it `Option<!>`, and a later assignment
+/// may give it another type (#2134). The output is rustc's build of the
+/// same program.
+#[test]
+fn a_value_whose_payload_never_comes_is_copied_after_the_fallback() {
+    let source = r#"
+fn pick(stop: bool) -> i32 {
+    let p = if stop { Some(return 1) } else { None };
+    let q = p;
+    println!("{:?} {:?} {:?}", p, (p, 1), q);
+    let r: Result<i32, _> = if stop { Err(return 2) } else { Ok(3) };
+    let s = r;
+    println!("{:?} {:?}", r, s);
+    0
+}
+fn assigned() -> i32 {
+    let mut t = Some(return 4);
+    t = Some(String::from("t"));
+    println!("{:?}", t);
+    0
+}
+fn main() {
+    println!("{} {} {}", pick(false), pick(true), assigned());
+    let p = Some(return);
+    println!("{:?} {:?}", p, (p, 1));
+}
+main();
+"#;
+    assert_eq!(printed(source), "None (None, 1) None\nOk(3) Ok(3)\n0 1 4\n");
+}
