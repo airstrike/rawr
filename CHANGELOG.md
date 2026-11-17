@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- The iced parity harness reports an example whose tests can't create iced_test's headless renderer (integration draws only with wgpu, and a GitHub runner has no GPU) as not runnable headless rather than as a mismatch. (#2197)
 
 ## 0.3.247 (2026-11-17)
 
