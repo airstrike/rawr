@@ -6,6 +6,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
 - A stored API writes each re-export hop once, in a table beside its compiler units: counter's API value fell from 30.2 MB to 23.1 MB. (#2169)
+- Stored classifications, facade plans and inventory entries write 32-byte digests as 64 hex digits rather than arrays of 32 numbers: counter's stored classification is 92 MB rather than 110 MB. (#2170)
 
 ## 0.3.239 (2026-11-17)
 
