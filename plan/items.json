@@ -2185,6 +2185,7 @@
     {"t":"T2183","issue":2183,"title":"T2183: Items a macro expansion produces in a body or module aren't registered as items","state":"open","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":{"group":"no-glue","row":"per-example-gaps"},"decisions":[],"commit":null,"release":null},
     {"t":"T2184","issue":2184,"title":"T2184: A hidden `$crate` macro_rules! the program never names expands through rustc rather than from its rules","state":"open","category":"Platforms","labels":["platform"],"gantt":{"group":"no-glue","row":"per-example-gaps"},"decisions":[],"commit":null,"release":null},
     {"t":"T2185","issue":2185,"title":"T2185: The landing page's ratatui demo keeps drawing after a key press","state":"closed","category":"Platforms","labels":["platform"],"gantt":null,"decisions":[],"commit":"1abc6eb19","release":null},
-    {"t":"T2186","issue":2186,"title":"T2186: While a program in the site's browser frame has focus, the arrow keys, Space, PageUp, PageDown…","state":"closed","category":"Platforms","labels":["platform"],"gantt":null,"decisions":[],"commit":"7ebdc6e86","release":null}
+    {"t":"T2186","issue":2186,"title":"T2186: While a program in the site's browser frame has focus, the arrow keys, Space, PageUp, PageDown…","state":"closed","category":"Platforms","labels":["platform"],"gantt":null,"decisions":[],"commit":"7ebdc6e86","release":null},
+    {"t":"T2187","issue":2187,"title":"T2187: The landing page's iced, ratatui and plain loop tabs can be linked to: `#iced`, `#ratatui` or…","state":"closed","category":"Platforms","labels":["platform"],"gantt":null,"decisions":[],"commit":"4ca00295a","release":null}
   ]
 }

@@ -13,7 +13,8 @@
       "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
       "entries": [
         {"text":"The landing page's ratatui demo keeps drawing after a key press. A program in the browser's universe starts once its frame has been laid out at its shown size, so ratzilla no longer rebuilds an empty grid on the first key.","issues":[2185],"refs":[2116]},
-        {"text":"While a program in the site's browser frame has focus, the arrow keys, Space, PageUp, PageDown, Home and End go to the program only and no longer scroll the page.","issues":[2186]}
+        {"text":"While a program in the site's browser frame has focus, the arrow keys, Space, PageUp, PageDown, Home and End go to the program only and no longer scroll the page.","issues":[2186]},
+        {"text":"The landing page's iced, ratatui and plain loop tabs can be linked to: `#iced`, `#ratatui` or `#loop` opens that tab in view, and choosing a tab writes its anchor.","issues":[2187]}
       ]
     },
     "releases": [
@@ -4860,7 +4861,8 @@
     {"issue":2183,"title":"Items a macro expansion produces in a body or module aren't registered as items","state":"open","category":"Divergences from rustc"},
     {"issue":2184,"title":"A hidden `$crate` macro_rules! the program never names expands through rustc rather than from its rules","state":"open","category":"Platforms"},
     {"issue":2185,"title":"The landing page's ratatui demo keeps drawing after a key press","state":"closed","category":"Platforms"},
-    {"issue":2186,"title":"While a program in the site's browser frame has focus, the arrow keys, Space, PageUp, PageDown…","state":"closed","category":"Platforms"}
+    {"issue":2186,"title":"While a program in the site's browser frame has focus, the arrow keys, Space, PageUp, PageDown…","state":"closed","category":"Platforms"},
+    {"issue":2187,"title":"The landing page's iced, ratatui and plain loop tabs can be linked to: `#iced`, `#ratatui` or…","state":"closed","category":"Platforms"}
   ],
   "groups": [
     {
