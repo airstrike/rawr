@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"Marked code polls futures by hand: `std::future::poll_fn`, `Pin::new` and `Pin::new_unchecked`, `Future::poll`, `Context`, `Waker`, `Poll::Ready` and `Poll::Pending` in expressions and patterns, and `ready!`. Script futures are polled directly, and crate futures after `IntoFuture::into_future`.","issues":[2172],"refs":[1152]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.240",
@@ -4807,7 +4812,12 @@
     {"issue":2168,"title":"A run that never binds keeps superseded demand rounds' values","state":"closed","category":"Platforms","release":"0.3.239"},
     {"issue":2169,"title":"A stored API's canonical exports are about 2 KB each, 14.8 MB for counter's 7,417","state":"closed","category":"Platforms","release":"0.3.240"},
     {"issue":2170,"title":"Stored values write 32-byte digests as JSON arrays of numbers","state":"closed","category":"Platforms","release":"0.3.240"},
-    {"issue":2171,"title":"A stored API's exports repeat their own path and span in their alias, and its spans repeat their file path","state":"open","category":"Platforms"}
+    {"issue":2171,"title":"A stored API's exports repeat their own path and span in their alias, and its spans repeat their file path","state":"open","category":"Platforms"},
+    {"issue":2172,"title":"Marked code polls futures by hand: `std::future::poll_fn`, `Pin::new` and `Pin::new_unchecked`…","state":"closed","category":"Divergences from rustc"},
+    {"issue":2173,"title":"A macro path through a crate's hidden $crate segment doesn't resolve to its macro_rules! definition","state":"open","category":"Divergences from rustc"},
+    {"issue":2174,"title":"Type parameters and variants named `_0` don't parse","state":"open","category":"Divergences from rustc"},
+    {"issue":2175,"title":"A program's `&mut Context` doesn't cross into crate functions","state":"open","category":"Divergences from rustc"},
+    {"issue":2176,"title":"`Future::poll` of a crate future where it sits","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -5559,7 +5569,11 @@
             {"number":2168,"title":"A run that never binds keeps superseded demand rounds' values","state":"closed"},
             {"number":2169,"title":"A stored API's canonical exports are about 2 KB each, 14.8 MB for counter's 7,417","state":"closed"},
             {"number":2170,"title":"Stored values write 32-byte digests as JSON arrays of numbers","state":"closed"},
-            {"number":2171,"title":"A stored API's exports repeat their own path and span in their alias, and its spans repeat their file path","state":"open"}
+            {"number":2171,"title":"A stored API's exports repeat their own path and span in their alias, and its spans repeat their file path","state":"open"},
+            {"number":2173,"title":"A macro path through a crate's hidden $crate segment doesn't resolve to its macro_rules! definition","state":"open"},
+            {"number":2174,"title":"Type parameters and variants named `_0` don't parse","state":"open"},
+            {"number":2175,"title":"A program's `&mut Context` doesn't cross into crate functions","state":"open"},
+            {"number":2176,"title":"`Future::poll` of a crate future where it sits","state":"open"}
           ],
           "milestone": "0.3"
         },

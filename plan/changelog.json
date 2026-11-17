@@ -4,7 +4,9 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"Marked code polls futures by hand: `std::future::poll_fn`, `Pin::new` and `Pin::new_unchecked`, `Future::poll`, `Context`, `Waker`, `Poll::Ready` and `Poll::Pending` in expressions and patterns, and `ready!`. Script futures are polled directly, and crate futures after `IntoFuture::into_future`.","issues":[2172],"refs":[1152]}
+    ]
   },
   "releases": [
     {
