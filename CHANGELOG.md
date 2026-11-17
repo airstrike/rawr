@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- A stored API writes each definition, implementation and export once, and each compiler unit once in a table, so counter's API value is 30 MB rather than 156 MB. (#2166, #2167)
 
 ## 0.3.237 (2026-11-17)
 
