@@ -2486,13 +2486,10 @@ impl Builder {
         for dependency in self.dependencies {
             dependencies.push(dependency.seal(&project_root)?);
         }
-        // A package imports Rust only when it has a dependency or Rust
-        // modules, whose crate is then a dependency too; the internal
-        // dependency below brings the runtime and compiler roles.
-        assert!(
-            !dependencies.is_empty(),
-            "a request declares at least one library"
-        );
+        // The package's dependencies, its own library among them when it
+        // has Rust modules. A package with neither builds a runner of rawr
+        // and std alone: the internal dependency below brings the runtime
+        // and compiler roles.
         let internal_dependency = internal.dependency()?;
         dependencies.push(internal_dependency.seal(&project_root)?);
         dependencies.sort_unstable_by(|left, right| left.alias().cmp(right.alias()));

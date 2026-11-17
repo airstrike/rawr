@@ -325,6 +325,7 @@ fn execute() -> Result<ExitCode, String> {
     compiler_arguments.push(budget.owned(path_text(&probe_source)?)?);
     compiler::run(
         compiler_arguments,
+        &protocol_directory,
         invocations,
         budget,
         diagnose_recursion,
@@ -707,7 +708,6 @@ fn validate_plan(plan: &Plan, budget: &mut compiler::Budget) -> Result<(), Strin
         || plan.canonical_bytes != CANONICAL_BYTES
         || plan.compiler_commit != COMPILER_COMMIT
         || plan.host != include_str!(concat!(env!("OUT_DIR"), "/toolchain-host"))
-        || plan.entries.is_empty()
         || plan
             .demand
             .iter()

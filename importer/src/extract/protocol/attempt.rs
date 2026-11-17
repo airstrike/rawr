@@ -52,10 +52,8 @@ impl<'a> Completion<'a> {
             1 => true,
             _ => return Err("invalid attempt completion flags"),
         };
+        // A probe of no crate completes with no invocation.
         let count = number(&mut cursor)?;
-        if count == 0 {
-            return Err("invalid attempt invocation count");
-        }
         let invocations = take(
             &mut cursor,
             count
@@ -145,9 +143,6 @@ pub(crate) fn encode<'a>(
     let count = |length: usize| {
         u32::try_from(length).map_err(|_| invalid("attempt count is not encodable"))
     };
-    if invocations.is_empty() {
-        return Err(invalid("invalid attempt invocation count"));
-    }
     for row in invocations {
         identity(row.nonce.as_bytes()).map_err(invalid)?;
         identity(row.correlation.as_bytes()).map_err(invalid)?;
@@ -354,9 +349,11 @@ mod tests {
 
     #[test]
     fn validates_population_before_writing() {
+        // A probe of no crate completes with no invocation.
         let mut bytes = Vec::new();
-        assert!(encode(&mut bytes, ID, false, &[], [].into_iter(), [].into_iter()).is_err());
-        assert!(bytes.is_empty());
+        encode(&mut bytes, ID, false, &[], [].into_iter(), [].into_iter()).unwrap();
+        assert!(Completion::decode(&bytes).is_ok());
+        bytes.clear();
         let row = [Invocation {
             nonce: ID,
             correlation: ID,

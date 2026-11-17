@@ -898,13 +898,19 @@ enum Origin {
 
 pub(super) fn run(
     arguments: Vec<String>,
+    protocol_directory: &Path,
     invocations: Vec<Invocation>,
     mut budget: Budget,
     diagnose_recursion: bool,
     reuse: Option<PathBuf>,
 ) -> Result<ExitCode, String> {
     let arguments_digest = arguments_digest(&arguments, &mut budget)?;
-    let completion = completion::Prepared::bind(&invocations, &arguments_digest, &mut budget)?;
+    let completion = completion::Prepared::bind(
+        protocol_directory,
+        &invocations,
+        &arguments_digest,
+        &mut budget,
+    )?;
     let collector = attempt::Collector::install()?;
     let mut diagnostic = diagnose_recursion
         .then(|| Diagnostic::create(Path::new(DIAGNOSTIC_FILE)))
@@ -6088,16 +6094,25 @@ mod tests {
         row.invocation_nonce = digest.to_owned();
         row.unit_correlation = digest.to_owned();
         let mut measured = Budget::standard();
-        super::completion::Prepared::bind(std::slice::from_ref(&row), digest, &mut measured)
-            .unwrap();
+        let directory = std::path::Path::new("protocol");
+        super::completion::Prepared::bind(
+            directory,
+            std::slice::from_ref(&row),
+            digest,
+            &mut measured,
+        )
+        .unwrap();
         let mut other = invocation(&["other"]);
         other.invocation_nonce = digest.to_owned();
         other.unit_correlation = digest.to_owned();
         other.protocol_directory = PathBuf::from("other");
-        assert!(
-            super::completion::Prepared::bind(&[row, other], digest, &mut Budget::standard())
-                .is_err()
-        );
+        assert!(super::completion::Prepared::bind(
+            directory,
+            &[row, other],
+            digest,
+            &mut Budget::standard()
+        )
+        .is_err());
     }
 
     #[test]
@@ -6204,8 +6219,10 @@ mod tests {
         let digest = super::arguments_digest(&arguments, &mut Budget::standard()).unwrap();
         let previous_directory = std::env::current_dir().unwrap();
         std::env::set_current_dir(&root).unwrap();
+        let directory = row.protocol_directory.clone();
         let result = super::run(
             arguments,
+            &directory,
             vec![row],
             Budget::standard(),
             mode == "diagnostic",
@@ -6317,8 +6334,10 @@ mod tests {
         ];
         let previous_directory = std::env::current_dir().unwrap();
         std::env::set_current_dir(&bundle).unwrap();
+        let directory = row.protocol_directory.clone();
         let result = super::run(
             arguments,
+            &directory,
             vec![row],
             Budget::standard(),
             false,
@@ -6474,8 +6493,10 @@ mod tests {
         ];
         let previous_directory = std::env::current_dir().unwrap();
         std::env::set_current_dir(&bundle).unwrap();
+        let directory = row.protocol_directory.clone();
         let result = super::run(
             arguments,
+            &directory,
             vec![row],
             Budget::standard(),
             false,

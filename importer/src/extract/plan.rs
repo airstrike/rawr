@@ -333,12 +333,6 @@ impl Plan {
     ) -> Result<Self> {
         let units = graph.extraction();
         let mut allocation = Allocation::new(limits);
-        if units.is_empty() {
-            return Err(extraction(
-                "missing-extraction-unit",
-                "the initial Build graph selected no normal library units",
-            ));
-        }
         let run_nonce = run_nonce(
             graph.digest(),
             proof.rustc_commit(),
@@ -507,12 +501,6 @@ impl Plan {
     ) -> Result<Self> {
         let units = graph.extraction();
         let mut allocation = Allocation::new(limits);
-        if units.is_empty() {
-            return Err(extraction(
-                "missing-extraction-unit",
-                "the initial Build graph selected no normal library units",
-            ));
-        }
         let run_nonce = run_nonce(
             graph.digest(),
             proof.rustc_commit(),
@@ -1593,13 +1581,14 @@ impl Probe {
         }
         let completion = protocol::attempt::Completion::decode(&attempts_bytes)
             .map_err(|reason| extraction("compiler-attempt-completion", reason))?;
+        // Each fragment's handshake names the probe it came from. A probe of
+        // no crate writes no fragment, and its completion names no invocation.
         let arguments_digest = decoded
             .fragments
             .first()
-            .ok_or_else(|| extraction("compiler-attempt-completion", "validated fragments absent"))?
-            .handshake
-            .probe_arguments_digest
-            .as_str();
+            .map_or(completion.arguments_digest, |fragment| {
+                fragment.handshake.probe_arguments_digest.as_str()
+            });
         completion
             .require_invocation(
                 arguments_digest,

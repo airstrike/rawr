@@ -2089,13 +2089,9 @@ impl Invocations {
                 aliases.insert(alias, &handshake.unit_correlation);
             }
         }
-        if correlations.is_empty() {
-            return Err(extraction(
-                "missing-unit-correlation",
-                "no selected normal library units were expected",
-            ));
-        }
-        if aliases.is_empty() {
+        // A probe of no crate writes no fragment; support units come with
+        // the root that reaches them.
+        if !correlations.is_empty() && aliases.is_empty() {
             return Err(extraction(
                 "missing-selected-root",
                 "the sidecar set contains support units but no selected root",
@@ -2152,13 +2148,7 @@ impl Invocations {
             allocation.items(1)?;
             sealed.insert(correlation, handshake);
         }
-        if sealed.is_empty() {
-            return Err(extraction(
-                "missing-unit-correlation",
-                "no selected normal library units were expected",
-            ));
-        }
-        if aliases.is_empty() {
+        if !sealed.is_empty() && aliases.is_empty() {
             return Err(extraction(
                 "missing-selected-root",
                 "the sidecar set contains support units but no selected root",

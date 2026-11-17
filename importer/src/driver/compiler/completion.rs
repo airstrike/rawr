@@ -14,17 +14,18 @@ pub(super) struct Prepared {
 }
 
 impl Prepared {
+    /// The completion of a probe that writes its protocol to `directory`,
+    /// where each of `invocations` writes its sidecar. A probe of no crate
+    /// has no invocation, and its completion lists none.
     pub(super) fn bind(
+        directory: &Path,
         invocations: &[Invocation],
         digest: &str,
         budget: &mut Budget,
     ) -> Result<Self, String> {
-        let first = invocations
-            .first()
-            .ok_or("missing completion invocations")?;
         if invocations
             .iter()
-            .any(|row| row.protocol_directory != first.protocol_directory)
+            .any(|row| row.protocol_directory != directory)
         {
             return Err("inconsistent completion invocation population".to_owned());
         }
@@ -33,8 +34,8 @@ impl Prepared {
             attempt_protocol::identity(row.invocation_nonce.as_bytes())?;
             attempt_protocol::identity(row.unit_correlation.as_bytes())?;
         }
-        budget.path_capacity(first.protocol_directory.as_os_str().len())?;
-        let directory = first.protocol_directory.clone();
+        budget.path_capacity(directory.as_os_str().len())?;
+        let directory = directory.to_path_buf();
         let digest = budget.owned(digest)?;
         budget.items(invocations.len())?;
         let mut rows = Vec::new();
