@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-16",
-  "version": "0.3.224",
+  "version": "0.3.225",
   "examples": {
     "running": 56,
     "total": 56,
@@ -9,15 +9,17 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"`return` and `break` with no value before `)`, `]`, `,` or `}`, as in `Some(return)`, parse as rustc parses them.","issues":[2133]},
-        {"text":"`{:?}` of a value whose type only a diverging expression gives, such as `Vec<!>` from `.map(|_| panic!()).collect()`, prints as rustc's build does rather than giving E0282.","issues":[2131]},
-        {"text":"A crate's type that implements `Future` keeps its own type and methods. tokio's `JoinHandle` has `abort` and `is_finished`, a program's function can return one, `Sleep` has `is_elapsed`, and each is still awaited or joined.","issues":[2132],"refs":[1714]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.225",
+        "date": "2026-11-16",
+        "entries": [
+          {"text":"`return` and `break` with no value before `)`, `]`, `,` or `}`, as in `Some(return)`, parse as rustc parses them.","issues":[2133]},
+          {"text":"`{:?}` of a value whose type only a diverging expression gives, such as `Vec<!>` from `.map(|_| panic!()).collect()`, prints as rustc's build does rather than giving E0282.","issues":[2131]},
+          {"text":"A crate's type that implements `Future` keeps its own type and methods. tokio's `JoinHandle` has `abort` and `is_finished`, a program's function can return one, `Sleep` has `is_elapsed`, and each is still awaited or joined.","issues":[2132],"refs":[1714]}
+        ]
+      },
       {
         "version": "0.3.224",
         "date": "2026-11-16",
@@ -4642,9 +4644,9 @@
     {"issue":2128,"title":"An async block whose body is a loop with no break gives E0282 where rustc accepts it","state":"closed","category":"Divergences from rustc","release":"0.3.224"},
     {"issue":2129,"title":"From rustc 1.100, a method call on a let bound to a diverging expression is E0599 on `!`; rawr gives rustc 1.99's E0282","state":"open","category":"Divergences from rustc"},
     {"issue":2130,"title":"A resident-manifests test fails: its fixture depends on a crate named `native` that crates.io lacks","state":"closed","category":"Health"},
-    {"issue":2131,"title":"`{:?}` of a value whose type holds a diverging variable gives E0282: the piece is rendered before the fallback","state":"closed","category":"Divergences from rustc"},
-    {"issue":2132,"title":"The handle `tokio::spawn` returns has no `abort`: E0599 for `Future`","state":"closed","category":"Divergences from rustc"},
-    {"issue":2133,"title":"`return` with no value before `)` is a parse error, as in `Some(return)`","state":"closed","category":"Divergences from rustc"},
+    {"issue":2131,"title":"`{:?}` of a value whose type holds a diverging variable gives E0282: the piece is rendered before the fallback","state":"closed","category":"Divergences from rustc","release":"0.3.225"},
+    {"issue":2132,"title":"The handle `tokio::spawn` returns has no `abort`: E0599 for `Future`","state":"closed","category":"Divergences from rustc","release":"0.3.225"},
+    {"issue":2133,"title":"`return` with no value before `)` is a parse error, as in `Some(return)`","state":"closed","category":"Divergences from rustc","release":"0.3.225"},
     {"issue":2134,"title":"A value whose type holds a diverging variable is moved, not copied, before the fallback makes it `!`","state":"open","category":"Divergences from rustc"},
     {"issue":2135,"title":"A crate future nested in a crate call's output can't be awaited","state":"open","category":"Divergences from rustc"},
     {"issue":2136,"title":"`tokio::time::timeout` can't be used: its signature projects `F::IntoFuture`","state":"open","category":"Divergences from rustc"}
