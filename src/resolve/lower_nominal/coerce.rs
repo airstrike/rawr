@@ -636,6 +636,20 @@ impl<'a> Parser<'a> {
         if self.coerce_children(&source, &target, value)? {
             return Ok(None);
         }
+        // A crate value whose type is a future, as tokio's `Sleep` or
+        // `JoinHandle<T>`, goes where a future is taken as the core's
+        // future of its `Output`, as rustc passes it to `select!` or a
+        // crate's `F: Future`.
+        #[cfg(feature = "rust-import")]
+        if let Some(expected) = self.task_output(&target)
+            && matches!(&source, Ty::Host { proof, .. } if proof.definition.future().is_some())
+            && let Some(given) = self.awaited_output(&source, value.span)?
+        {
+            self.require_type(&expected, &given, value.span)?;
+            let span = value.span;
+            *value = self.core_future(value.clone(), &given, span)?;
+            return Ok(None);
+        }
         // A native value whose opaque type is a future, whatever bound
         // makes it one, as a program's own `impl Straw<..>` is through
         // `Core`, goes where a future is taken, as rustc passes it to

@@ -414,12 +414,9 @@ impl<'a> Parser<'a> {
         };
         let breaking = token == Token::Break;
         let mut value = None;
-        if breaking
-            && !matches!(
-                self.peek(),
-                Token::SemiColon | Token::RightBrace | Token::Comma
-            )
-        {
+        // A `{` after `break` in a condition opens the body, never a value.
+        let peeked = self.peek();
+        if breaking && begins_expr(&peeked) && !(peeked == Token::LeftBrace && self.no_struct) {
             let expected = self.loops[target].ty.clone();
             let mut parsed = self.parse_expr_expecting(expected.as_ref())?;
             end = parsed.span;
@@ -496,10 +493,7 @@ impl<'a> Parser<'a> {
         let mut source = origin::Fragment::plain("{ return");
         let mut end = start;
         let drops = self.temporary_drops_here() + self.exit_drops(self.drop_base)?.as_str();
-        if matches!(
-            self.peek(),
-            Token::SemiColon | Token::RightBrace | Token::Comma | Token::EOF
-        ) {
+        if !begins_expr(&self.peek()) {
             if !self.unify_type(&output, &Ty::Unit) {
                 return Err(Error::ReturnWithoutValue {
                     output: self.inference.resolve(&output).name(&self.models),
@@ -993,5 +987,62 @@ impl<'a> Parser<'a> {
         source.push_text(format!("; {rest}() }}"));
         looped.source = source;
         Ok(looped)
+    }
+}
+
+/// Whether `token` can begin an expression, as rustc's `can_begin_expr`
+/// decides it. `return` and `break` take a value only when one begins after
+/// them, so they end with no value before `)`, `]`, `}`, `,`, `;`, `=>`, an
+/// operator or the end of the input.
+fn begins_expr(token: &Token) -> bool {
+    match token {
+        Token::IntegerConstant(_)
+        | Token::FloatConstant(_)
+        | Token::Identifier(_)
+        | Token::CharConstant(_)
+        | Token::StringConstant(_)
+        | Token::ByteStringConstant(_)
+        | Token::ByteConstant(_)
+        | Token::LeftBrace
+        | Token::LeftParen
+        | Token::LeftBracket
+        | Token::Unit
+        | Token::Minus
+        | Token::UnaryMinus
+        | Token::Multiply
+        | Token::Bang
+        | Token::Pipe
+        | Token::Or
+        | Token::Ampersand
+        | Token::And
+        | Token::ExclusiveRange
+        | Token::InclusiveRange
+        | Token::LessThan
+        | Token::LeftShift
+        | Token::DoubleColon
+        | Token::Apostrophe
+        | Token::Hash
+        | Token::MapStart
+        | Token::True
+        | Token::False
+        | Token::Let
+        | Token::Const
+        | Token::SelfValue
+        | Token::If
+        | Token::Switch
+        | Token::Do
+        | Token::While
+        | Token::Loop
+        | Token::For
+        | Token::Continue
+        | Token::Break
+        | Token::Return
+        | Token::Throw
+        | Token::Try
+        | Token::LexError(_)
+        | Token::Reserved(_) => true,
+        #[cfg(feature = "decimal")]
+        Token::DecimalConstant(_) => true,
+        _ => false,
     }
 }

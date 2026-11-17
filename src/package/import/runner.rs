@@ -865,6 +865,10 @@ fn build(
                         (identity, ImmutableString::from(name), position as usize)
                     })
                     .collect(),
+                ty.future()
+                    .map(self::ty)
+                    .transpose()
+                    .map_err(|source| entry_error(facade.root(), ty.path(), source))?,
                 shape,
                 ty.dropped() as usize,
                 allocation,
@@ -1198,6 +1202,7 @@ pub(crate) fn imported_type(
         shape,
     )?
     .with_associated(associated)
+    .with_future(ty.future().map(self::ty).transpose()?)
     .with_dropped(ty.dropped() as usize))
 }
 

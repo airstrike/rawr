@@ -4,7 +4,7 @@
 use super::lvalue::Lvalue;
 use super::models::{Models, Nominal};
 use super::op::{Op, PreludeOp};
-use super::ty::{CellKind, Float, Int, Ty};
+use super::ty::{contains_inference, CellKind, Float, Int, Ty};
 use super::{
     cargo_env, cell, counted, cow, origin, point_span, span, split_arguments, stringify_tokens,
     text_end, thread, token_text, Binding, BindingKind, ParseError, ParsedExpr, Parser, STR_PIECES,
@@ -30,13 +30,10 @@ pub(super) struct Pending {
     pub(super) span: Span,
 }
 
-/// The width of a pending `format!` piece's placeholder: room for the
-/// piece once its type is known.
-pub(super) const PENDING_FORMAT_WIDTH: usize = 160;
-
+/// The placeholder of a pending `format!` piece, which the piece replaces
+/// once its type is known (`finish_formats`).
 pub(super) fn format_placeholder(index: usize) -> String {
-    let head = format!("__rawr_nominal_format_{index:010}");
-    format!("{head:_<PENDING_FORMAT_WIDTH$}")
+    format!("__rawr_nominal_format_{index:010}")
 }
 
 /// An argument a format string names: `{0}`, `{name}`, `1$`, `name$`.
@@ -1263,7 +1260,7 @@ impl<'a> Parser<'a> {
             };
             // A value whose type a later call settles, as a closure
             // parameter: its piece is written once the types are known.
-            if matches!(ty, Ty::Infer(_))
+            if contains_inference(&ty)
                 && matches!(spec.kind, Kind::Display | Kind::Debug)
                 && spec.width.is_none()
                 && !spec.sign
@@ -1721,20 +1718,10 @@ impl<'a> Parser<'a> {
                     None => return Err(mismatch(expected)),
                 },
             };
-            let rendered = rendered.as_str().to_string();
-            if rendered.len() > pending.placeholder.len() {
-                return Err(Error::UnsupportedNominalSyntax {
-                    construct: "a long `format!` piece of a value whose type is written later; write the closure parameter's type".into(),
-                    source: pending.span,
-                });
-            }
-            let replacement = format!("{rendered:<width$}", width = pending.placeholder.len());
-            self.output
-                .replace_same_length(&pending.placeholder, &replacement);
+            let rendered = rendered.as_str();
+            self.output.replace(&pending.placeholder, rendered);
             for closure in &mut self.lifted {
-                closure
-                    .body
-                    .replace_same_length(&pending.placeholder, &replacement);
+                closure.body.replace(&pending.placeholder, rendered);
             }
         }
         Ok(())

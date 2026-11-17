@@ -1089,3 +1089,26 @@ main();
         "Ok(3) Err(Parse(Parse)) Err(Range(Range))\nOk(2) Err(Parse)\n"
     );
 }
+
+/// A `{:?}` piece of a value whose type holds a variable only a diverging
+/// expression constrains is written after the fallback makes it `!`, as
+/// rustc checks the piece's `Debug` once the body is read (#2131). The
+/// written piece is longer than its placeholder. The output is rustc's
+/// build of the same program.
+#[test]
+fn a_format_piece_whose_type_holds_a_diverging_variable_waits_for_the_fallback() {
+    let source = r#"
+fn main() {
+    let v: Vec<i32> = Vec::new();
+    let o: Vec<_> = v.iter().map(|_| panic!()).collect();
+    println!("{:?} {}", o, o.len());
+    let w = vec![3, 4];
+    let pairs: Vec<_> = w.iter().map(|x| (x, v.iter().map(|_| todo!()).collect::<Vec<_>>())).collect();
+    println!("{:?}", pairs);
+    let n: Option<_> = None.map(|x: i32| -> _ { if x > 0 { unreachable!() } else { panic!() } });
+    println!("{:?} {:#?}", n, o);
+}
+main();
+"#;
+    assert_eq!(printed(source), "[] 0\n[(3, []), (4, [])]\nNone []\n");
+}

@@ -174,6 +174,28 @@ impl Fragment {
         found
     }
 
+    /// Replace each `from` with `to`, of any length. An origin past a
+    /// replaced range moves with the text after it, and one around it
+    /// grows or shrinks with it. Whether `from` was there.
+    pub(super) fn replace(&mut self, from: &str, to: &str) -> bool {
+        debug_assert!(!from.is_empty());
+        if from.len() == to.len() {
+            return self.replace_same_length(from, to);
+        }
+        let mut found = false;
+        let mut search = 0;
+        while let Some(at) = self.0.text[search..].find(from).map(|at| at + search) {
+            found = true;
+            let replaced = at..at + from.len();
+            self.0.text.replace_range(replaced.clone(), to);
+            if !self.0.sites.is_empty() {
+                Shared::make_mut(&mut self.0.sites).splice(&replaced, to.len());
+            }
+            search = at + to.len();
+        }
+        found
+    }
+
     pub(super) fn len(&self) -> usize {
         self.0.text.len()
     }
@@ -279,6 +301,49 @@ impl Sites {
         Self {
             local: suffix,
             children: suffix_children,
+        }
+    }
+
+    /// The text in `replaced` is now `len` bytes long: each origin and child
+    /// after it moves, and each one around it takes the new length.
+    fn splice(&mut self, replaced: &Range<usize>, len: usize) {
+        // Where a position lands. One inside the replaced text goes to the
+        // replacement's start when it begins a range, its end when it ends
+        // one.
+        let moved = |at: usize, ending: bool| {
+            if at <= replaced.start {
+                at
+            } else if at >= replaced.end {
+                at - replaced.end + replaced.start + len
+            } else if ending {
+                replaced.start + len
+            } else {
+                replaced.start
+            }
+        };
+        for origin in &mut self.local {
+            if origin.generated.end <= replaced.start {
+                continue;
+            }
+            origin.generated =
+                moved(origin.generated.start, false)..moved(origin.generated.end, true);
+        }
+        for child in &mut self.children {
+            let end = child.offset + child.len;
+            if end <= replaced.start {
+                continue;
+            }
+            let (offset, moved_end) = (moved(child.offset, false), moved(end, true));
+            if child.offset < replaced.end {
+                // The part of the replaced text inside the child, and the
+                // part of the replacement it now holds.
+                let inside = replaced.start.max(child.offset)..replaced.end.min(end);
+                let kept = child.len - inside.len();
+                let relative = inside.start - child.offset..inside.end - child.offset;
+                Shared::make_mut(&mut child.sites).splice(&relative, moved_end - offset - kept);
+            }
+            child.offset = offset;
+            child.len = moved_end - offset;
         }
     }
 
@@ -504,6 +569,36 @@ mod tests {
         assert!(suffix_locations
             .iter()
             .any(|location| location.generated == (0..5) && location.original == outer));
+    }
+
+    #[test]
+    fn replacing_with_other_lengths_moves_later_origins_and_resizes_enclosing_ones() {
+        let before = span(1, 1, 1, 4);
+        let after = span(2, 1, 2, 6);
+        let outer = span(1, 1, 3, 1);
+        let mut inner = Fragment::plain("(");
+        inner.push_text("HOLE");
+        inner.push(Fragment::exact("after", after));
+        inner.push_text(" HOLE)");
+        let mut fragment = Fragment::exact("let", before);
+        fragment.push_text(" = ");
+        fragment.push(inner);
+        fragment.cover(outer);
+
+        assert!(fragment.replace("HOLE", "longer"));
+        assert!(!fragment.replace("HOLE", "x"));
+        let (text, locations) = fragment.finish();
+
+        assert_eq!(text, "let = (longerafter longer)");
+        let at = |original| {
+            locations
+                .iter()
+                .find(|location| location.original == original)
+                .map(|location| location.generated.clone())
+        };
+        assert_eq!(at(before), Some(0..3));
+        assert_eq!(at(after), Some(13..18));
+        assert_eq!(at(outer), Some(0..text.len()));
     }
 
     const fn span(start_line: u16, start_column: u16, end_line: u16, end_column: u16) -> Span {
