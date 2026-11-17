@@ -151,7 +151,10 @@ impl GitReference {
     }
 
     /// Split a Cargo Git source id, `git+<url>[?<kind>=<name>][#<commit>]`,
-    /// into its URL and reference, as `cargo metadata` prints it.
+    /// into its URL and reference, as `cargo metadata` and `Cargo.lock`
+    /// print it. Cargo writes the query form-urlencoded, so a branch
+    /// `feature/x` is `branch=feature%2Fx`; the name is decoded as Cargo
+    /// reads it back.
     #[must_use]
     pub fn parse_source(source: &str) -> Option<(&str, Self)> {
         let location = source.strip_prefix("git+")?;
@@ -164,15 +167,46 @@ impl GitReference {
         let mut reference = Self::DefaultBranch;
         for pair in query.split('&') {
             let (key, value) = pair.split_once('=')?;
+            let value = form_decode(value).into_boxed_str();
             reference = match key {
-                "branch" => Self::Branch(value.into()),
-                "tag" => Self::Tag(value.into()),
-                "rev" => Self::Rev(value.into()),
+                "branch" => Self::Branch(value),
+                "tag" => Self::Tag(value),
+                "rev" => Self::Rev(value),
                 _ => continue,
             };
         }
         Some((url, reference))
     }
+}
+
+/// A form-urlencoded query value as text: `+` is a space and `%XX` is the
+/// byte `XX`, the way Cargo's `url` crate reads a source id's query. A `%`
+/// without two hex digits stays as written, and bytes that are not UTF-8
+/// become U+FFFD.
+fn form_decode(value: &str) -> String {
+    let hex = |byte: u8| {
+        char::from(byte)
+            .to_digit(16)
+            .and_then(|digit| u8::try_from(digit).ok())
+    };
+    let mut bytes = Vec::with_capacity(value.len());
+    let mut rest = value.as_bytes();
+    while let Some((&byte, tail)) = rest.split_first() {
+        rest = tail;
+        let escaped = match (byte, rest) {
+            (b'%', [high, low, tail @ ..]) => hex(*high).zip(hex(*low)).map(|pair| (pair, tail)),
+            _ => None,
+        };
+        bytes.push(match (byte, escaped) {
+            (_, Some(((high, low), tail))) => {
+                rest = tail;
+                high << 4 | low
+            }
+            (b'+', None) => b' ',
+            (byte, None) => byte,
+        });
+    }
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 #[derive(Clone, Debug)]
@@ -1553,6 +1587,21 @@ mod tests {
     use crate::cargo::{digest, Limits};
     use crate::Error;
     use toml_edit::DocumentMut;
+
+    /// Cargo writes a source id's query form-urlencoded, so a branch with a
+    /// `/` is `%2F` in the lock and is named decoded (#2143).
+    #[test]
+    fn a_git_source_branch_is_form_decoded() {
+        let (url, reference) = super::GitReference::parse_source(
+            "git+https://example.com/repo?branch=feature%2Fa+b%zz#0123abcd",
+        )
+        .expect("a Git source id");
+        assert_eq!(url, "https://example.com/repo");
+        assert_eq!(
+            reference,
+            super::GitReference::Branch("feature/a b%zz".into())
+        );
+    }
 
     /// An empty or relative CARGO_HOME is named as the variable it is (#483).
     #[test]
