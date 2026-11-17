@@ -227,7 +227,7 @@ sum 5050</span></div>
 </ul>
 <p>Limits today:</p>
 <ul>
-  <li><code>join!</code> works. <code>try_join!</code> and <code>select!</code> don&rsquo;t yet.</li>
+  <li><code>join!</code> and <code>select!</code> work. <code>try_join!</code> doesn&rsquo;t yet.</li>
   <li>On tokio&rsquo;s multi-thread runtime, a step of a spawned future runs inside <code>main</code>&rsquo;s task. So your code there sees <code>main</code>&rsquo;s <code>tokio::task::id()</code> and task-locals, and a tracing span that instruments the spawned future isn&rsquo;t entered. On the <code>current_thread</code> runtime it sees the spawned task&rsquo;s.</li>
   <li>An iced app has no runtime <code>main</code>. There, a runtime&rsquo;s future is made when it is first polled, so a <code>sleep</code> starts its timer at the await. A call that needs a runtime the app doesn&rsquo;t run fails with an error that says to give <code>async fn main</code> the runtime&rsquo;s attribute.</li>
   <li>A closure that <code>spawn_blocking</code> runs can&rsquo;t use values of imported types.</li>

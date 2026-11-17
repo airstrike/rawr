@@ -1,8 +1,7 @@
 //! The core future type as Rawr code names it (D511.3): `async` blocks and
 //! `async fn`s in a program without iced give a `rawr::future::Future<T>`,
 //! and so do native async functions in the plain runner. `join!` is
-//! `rawr::future::__join{N}`, and `select!` `rawr::future::__select{N}` or,
-//! `biased;`, `__biased_select{N}`. A host whose own type runs futures, as
+//! `rawr::future::__join{N}`. A host whose own type runs futures, as
 //! rawr-iced's `Task` does, takes precedence where it is installed.
 //!
 //! It also runs what code needs to poll a future by hand (#1152): std's
@@ -50,13 +49,6 @@ pub const MOST_FUTURES: usize = 5;
 #[must_use]
 pub fn join_path(count: usize) -> String {
     format!("rawr::future::__join{count}")
-}
-
-/// The `select!` function for `count` futures, or for a `biased;` one.
-#[must_use]
-pub fn select_path(count: usize, biased: bool) -> String {
-    let order = if biased { "biased_" } else { "" };
-    format!("rawr::future::__{order}select{count}")
 }
 
 /// An engine for a program whose futures are the core's: Rawr's own, with
@@ -178,25 +170,6 @@ pub fn definition() -> Result<facade::Definition, host::Error> {
             format!("future::__join{count}"),
             join.finish(),
         )?)?;
-        // `select!`: each branch's future gives `Some` of its output when
-        // its pattern matches, and the select an `Option` per branch,
-        // `Some` of the one that ended so.
-        for order in ["", "biased_"] {
-            let mut select = signature::Builder::new();
-            let mut outputs = Vec::with_capacity(count);
-            for name in names {
-                select.type_parameter(*name, &[])?;
-            }
-            for name in names {
-                select.parameter(future(Type::option(Type::parameter(*name)?))?);
-                outputs.push(Type::option(Type::parameter(*name)?));
-            }
-            select.output(future(Type::tuple(outputs)?)?);
-            builder.item(item::Definition::function(
-                format!("future::__{order}select{count}"),
-                select.finish(),
-            )?)?;
-        }
     }
     builder.finish()
 }
@@ -346,17 +319,6 @@ pub fn runtime() -> Result<host::runtime::Facade, host::Error> {
                 Ok(Dynamic::from(super::Future::join(parts)))
             })
             .expect("the rawr bindings declare each `future::__join` once");
-        for biased in [false, true] {
-            builder
-                .bind_with_context(select_path(count, biased), move |_call, args| {
-                    let parts = args
-                        .iter_mut()
-                        .map(|part| take_future(part))
-                        .collect::<Result<Vec<_>, _>>()?;
-                    Ok(Dynamic::from(super::Future::select(parts, biased)))
-                })
-                .expect("the rawr bindings declare each `future::__select` once");
-        }
     }
     Ok(builder.finish())
 }

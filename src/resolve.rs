@@ -1930,7 +1930,7 @@ pub fn cell_lock(value: &crate::Dynamic) -> Option<crate::Dynamic> {
 }
 
 /// The macro `path` names when it is tokio's or the futures crate's
-/// `join`, `try_join` or `select`, which Rawr expands itself.
+/// `join` or `try_join`, which Rawr expands itself.
 pub(crate) fn tokio_macro(path: &str, host: &host::Registry) -> Option<&'static str> {
     // A program whose futures are the core's (D513.5): the runtime's own
     // `join!` expands with private items, so Rawr writes it over
@@ -1939,7 +1939,7 @@ pub(crate) fn tokio_macro(path: &str, host: &host::Registry) -> Option<&'static 
         .strip_prefix("tokio::")
         .or_else(|| path.strip_prefix("futures::"))
         .or_else(|| path.strip_prefix("futures::future::"))?;
-    let name = ["join", "try_join", "select"]
+    let name = ["join", "try_join"]
         .into_iter()
         .find(|macro_name| *macro_name == name)?;
     core_futures(host).then_some(name)

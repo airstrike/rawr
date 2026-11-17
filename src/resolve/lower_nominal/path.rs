@@ -219,7 +219,7 @@ impl<'a> Parser<'a> {
             if matches!(self.peek(), Token::Bang) && self.names_std_ready(&full) {
                 return self.parse_ready_macro();
             }
-            // `tokio::join!(..)`, `try_join!` and `select!` without tokio.
+            // `tokio::join!(..)` and `try_join!` without tokio.
             if matches!(self.peek(), Token::Bang)
                 && let Some(name) = crate::resolve::tokio_macro(&full, &self.models.host)
             {

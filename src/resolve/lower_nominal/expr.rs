@@ -1274,7 +1274,7 @@ impl<'a> Parser<'a> {
         {
             return self.parse_ready_macro();
         }
-        // `join!`, `try_join!` and `select!` after `use tokio::join;`.
+        // `join!` and `try_join!` after `use tokio::join;`.
         if !std_macro
             && matches!(self.peek(), Token::Bang)
             && let Some(binding) = self.models.import(&name)
