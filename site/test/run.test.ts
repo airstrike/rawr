@@ -52,3 +52,32 @@ test("a universe frame imports the glue, hides WebKit's WebGPU and takes the mod
   assert.match(html, /glue\.default\(\{ module_or_path: event\.data \}\)/, "a module this large instantiates asynchronously");
   assert.match(html, /<div id="iced"><\/div>/, "iced's web shell puts its canvas in place of #iced");
 });
+
+test("a universe program starts after its shown frame's next animation frame, which follows the frame's resize", async () => {
+  const { universe } = await import("../src/scripts/universe.ts");
+  const events: string[] = [];
+  let frameCallback: (() => void) | undefined;
+  const contentWindow = {
+    get innerWidth() {
+      events.push("laid out");
+      return 700;
+    },
+    requestAnimationFrame: (callback: () => void) => (frameCallback = callback),
+  };
+  const page = universe({
+    document: {} as Document,
+    fetch: (async () => new Response("[dependencies]\n")) as typeof fetch,
+    compile: async () => ({}) as WebAssembly.Module,
+  });
+  const frame = {
+    element: { hidden: true, contentWindow } as unknown as HTMLIFrameElement,
+    instance: { run: () => (events.push("ran"), '{"kind":"text","status":0}') } as any,
+  };
+  const ran = page.run(frame, "fn main() {}");
+  await new Promise((next) => setTimeout(next, 10));
+  assert.equal(frame.element.hidden, false);
+  assert.deepEqual(events, ["laid out"], "the program waits for the frame's rendering update");
+  frameCallback!();
+  assert.deepEqual(await ran, { kind: "text", status: 0 });
+  assert.deepEqual(events, ["laid out", "ran"]);
+});
