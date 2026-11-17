@@ -11,6 +11,7 @@ use super::accounting::{self, Allocation, Charge, Class, Identity, LeaseKey, Rec
 use crate::node::{Digest, Error, ExecutionKey, Kind};
 
 pub(crate) mod buffer;
+mod census;
 mod corruption;
 mod directory;
 pub(crate) mod geometry;
@@ -705,7 +706,7 @@ pub(crate) fn validate_complete(
             kind,
             schema,
             key,
-            corruption::Fact::drift(drift),
+            corruption::Fact::drift(drift, &root, kind, record.charge(), measured.charge),
             budget,
         )?));
     }
@@ -861,7 +862,13 @@ impl<'store> Completion<'store> {
                         kind,
                         schema,
                         key,
-                        corruption::Fact::drift(drift),
+                        corruption::Fact::drift(
+                            drift,
+                            root,
+                            kind,
+                            record.charge(),
+                            measured.charge,
+                        ),
                         budget,
                     )?));
                 }

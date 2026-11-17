@@ -135,7 +135,8 @@ pub(super) fn recover_rejected(
     parents: &[crate::node::read_set::Entry],
     budget: &mut recovery::Budget,
 ) -> Result<(), Error> {
-    for (action, proof) in actions.iter().flatten().copied() {
+    for (action, proof) in actions.iter().flatten() {
+        let action = *action;
         let selected = lease::with_publication(store, |publication| {
             recovery::recover_temporaries(publication, store, budget)?;
             let registrations = accounting::registrations_recovery(store, budget)?;

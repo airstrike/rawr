@@ -1,13 +1,14 @@
 //! Positive corruption observed in authenticated candidate-owned storage.
 
-use super::{accounting, Allocation, BundleCommitment, BundleRef, Record};
+use super::census::Census;
+use super::{accounting, Allocation, BundleCommitment, BundleRef, Charge, Record};
 use crate::node::{Digest, Error, GraphBudget, Kind};
 use std::path::Path;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(super) enum Fact {
     Seal,
-    Census,
+    Census(Box<Census>),
     Geometry,
     Mode,
     Member,
@@ -16,16 +17,26 @@ pub(super) enum Fact {
 impl Fact {
     /// A count change or growth is a census fact; a per-member logical
     /// change is a geometry fact. A valid allocation release is never a fact.
-    pub(super) const fn drift(drift: super::Drift) -> Self {
+    /// A census fact carries the totals that differ and the member a second
+    /// walk of `root` finds most likely to explain them.
+    pub(super) fn drift(
+        drift: super::Drift,
+        root: &Path,
+        kind: Kind,
+        recorded: Charge,
+        measured: Charge,
+    ) -> Self {
         match drift {
-            super::Drift::Count | super::Drift::Growth => Self::Census,
+            super::Drift::Count | super::Drift::Growth => Self::Census(Box::new(Census::observe(
+                root, kind, drift, recorded, measured,
+            ))),
             super::Drift::Geometry => Self::Geometry,
         }
     }
 }
 
 /// Opaque evidence; only candidate-owned comparisons can construct this value.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct Corruption {
     reference: BundleRef,
     allocation: Allocation,
@@ -43,9 +54,14 @@ impl std::fmt::Debug for Corruption {
 
 impl std::fmt::Display for Corruption {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.fact {
+        match &self.fact {
             Fact::Seal => f.write_str("authenticated candidate bundle seal bytes changed"),
-            Fact::Census => f.write_str("authenticated candidate bundle physical census changed"),
+            Fact::Census(census) => {
+                write!(
+                    f,
+                    "authenticated candidate bundle physical census changed: {census}"
+                )
+            }
             Fact::Geometry => f.write_str("authenticated candidate bundle sealed geometry changed"),
             Fact::Mode => f.write_str("authenticated candidate bundle member became writable"),
             Fact::Member => f.write_str("authenticated candidate bundle inventory member changed"),
@@ -102,10 +118,10 @@ impl Corruption {
         )
     }
 
-    pub(crate) fn allocation(self) -> Allocation {
+    pub(crate) fn allocation(&self) -> Allocation {
         self.allocation
     }
-    pub(crate) fn reference(self) -> BundleRef {
+    pub(crate) fn reference(&self) -> BundleRef {
         self.reference
     }
 }
