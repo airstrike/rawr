@@ -4,7 +4,9 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"A runner that compiles rawr in the project settles its lock when the project locks an older version of a crate rawr needs. It takes rawr's version of that crate and keeps every other version and git revision the project pins.","issues":[2144]}
+    ]
   },
   "releases": [
     {

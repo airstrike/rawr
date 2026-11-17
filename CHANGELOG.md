@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- A runner that compiles rawr in the project settles its lock when the project locks an older version of a crate rawr needs. It takes rawr's version of that crate and keeps every other version and git revision the project pins. (#2144)
 
 ## 0.3.228 (2026-11-16)
 
