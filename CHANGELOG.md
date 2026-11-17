@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.242 (2026-11-17)
+
 - When a sealed build bundle's file count or size changes, rawr's error names the total that changed, its sealed and measured values, and the file behind it. (#2177; part of #2146)
 - Type parameters and variants named with an underscore and digits, such as `enum Out<_0, _1> { _0(_0), _1(_1) }`, parse as rustc accepts them. (#2174)
 - A dependency's macro that calls itself or another of its crate's macros through `$crate::name!` expands with the crate's own `macro_rules!` rules rather than going to rustc. (#2173; part of #1152)

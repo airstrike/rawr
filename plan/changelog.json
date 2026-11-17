@@ -4,13 +4,18 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": [
-      {"text":"When a sealed build bundle's file count or size changes, rawr's error names the total that changed, its sealed and measured values, and the file behind it.","issues":[2177],"refs":[2146]},
-      {"text":"Type parameters and variants named with an underscore and digits, such as `enum Out<_0, _1> { _0(_0), _1(_1) }`, parse as rustc accepts them.","issues":[2174]},
-      {"text":"A dependency's macro that calls itself or another of its crate's macros through `$crate::name!` expands with the crate's own `macro_rules!` rules rather than going to rustc.","issues":[2173],"refs":[1152]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.3.242",
+      "date": "2026-11-17",
+      "entries": [
+        {"text":"When a sealed build bundle's file count or size changes, rawr's error names the total that changed, its sealed and measured values, and the file behind it.","issues":[2177],"refs":[2146]},
+        {"text":"Type parameters and variants named with an underscore and digits, such as `enum Out<_0, _1> { _0(_0), _1(_1) }`, parse as rustc accepts them.","issues":[2174]},
+        {"text":"A dependency's macro that calls itself or another of its crate's macros through `$crate::name!` expands with the crate's own `macro_rules!` rules rather than going to rustc.","issues":[2173],"refs":[1152]}
+      ]
+    },
     {
       "version": "0.3.241",
       "date": "2026-11-17",
