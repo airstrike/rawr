@@ -346,7 +346,7 @@ fn acquire(
         if let Some((key, packages)) = promote.get(entry.native().0)
             && store::read(&closure.home, key).is_none()
         {
-            settlement.inventory(&rawr, &closure.home, key, packages, entry);
+            settlement.inventory(&rawr, &closure.home, key, &local, packages, entry);
         }
     }
     if complete {

@@ -34,6 +34,12 @@ const PROBE_SOURCE_FILE: &str = "probe.rs";
 const PROBE_SOURCE: &[u8] = b"#![no_std]\npub struct RawrMetadataProbe;\n";
 const CANONICAL_PATH_BYTES: usize = 1024;
 
+/// The run directory [`Plan::prepare`] makes afresh under `harness_root`
+/// for each run: its plan, probe source and the driver's protocol output.
+pub(crate) fn active(harness_root: &Path) -> PathBuf {
+    harness_root.join(DIRECTORY).join(ACTIVE_DIRECTORY)
+}
+
 /// One invocation plan proven by the initial normal Build unit graph.
 pub(crate) struct Plan {
     inventory: bool,

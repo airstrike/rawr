@@ -118,9 +118,15 @@ impl Acquired {
         let mut resolution = request.resolve(native, limits)?;
         let scripts = resolution.take_nightly_scripts();
         let mut acquired = resolution.publication(native, limits, |resolution| {
-            resolution
+            let active = crate::extract::plan::active(resolution.harness_root());
+            let acquired = resolution
                 .into_extraction_uncached(limits)?
-                .inventory(limits)
+                .inventory(limits);
+            // The facts hold all the protocol output said, and the next run
+            // makes its directory afresh, so nothing reads it again. It goes
+            // under the publication lease, before another run can make it.
+            let _ = std::fs::remove_dir_all(active);
+            acquired
         })?;
         acquired.scripts = scripts;
         Ok(acquired)

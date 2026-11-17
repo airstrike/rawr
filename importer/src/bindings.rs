@@ -695,10 +695,13 @@ pub(crate) enum Settled {
     /// A crate's intrinsic entry this run captured, whose closure runs a
     /// build script: published to rawr's home under its machine-wide key
     /// once the project's build gives its packages the outputs the nightly
-    /// did (#403).
+    /// did (#403). The project's copy, in `local` under `local_key`, goes
+    /// then: the project reads the home's, so no key reaches its own.
     Inventory {
         home: PathBuf,
         key: String,
+        local: PathBuf,
+        local_key: String,
         packages: Box<[Box<str>]>,
         entry: Box<crate::applicability::inventory::Entry>,
     },
@@ -863,20 +866,25 @@ impl Settlement {
     /// Publish `entry`, a crate's intrinsic facts this run kept with the
     /// project, to rawr's `home` under `key` once the project's build in
     /// `rawr` has given `packages` the build-script outputs it was captured
-    /// with (#403).
+    /// with (#403). `local` is the project's store that holds `entry`
+    /// under its own key, whose copy goes once the home holds it.
     pub fn inventory(
         &mut self,
         rawr: &Path,
         home: &Path,
         key: &[u8; 32],
+        local: &Path,
         packages: &[Box<str>],
         entry: &crate::applicability::inventory::Entry,
     ) {
+        let local_key = crate::extract::engine::hex(entry.key());
         let entry = entry.clone_rekeyed(*key);
         self.rawr.get_or_insert_with(|| rawr.to_path_buf());
         self.entries.push(Settled::Inventory {
             home: home.to_path_buf(),
             key: crate::extract::engine::hex(key),
+            local: local.to_path_buf(),
+            local_key,
             packages: packages.into(),
             entry: Box::new(entry),
         });
@@ -947,7 +955,10 @@ impl Settlement {
         self.settle_with(observed.0.clone())
     }
 
-    fn settle_with(self, stable: Option<BTreeMap<String, Vec<Script>>>) -> Result<(), Error> {
+    pub(crate) fn settle_with(
+        self,
+        stable: Option<BTreeMap<String, Vec<Script>>>,
+    ) -> Result<(), Error> {
         let Some(rawr) = self.rawr.clone() else {
             return Ok(());
         };
@@ -1094,6 +1105,8 @@ impl Settlement {
                 }
                 Settled::Inventory {
                     home,
+                    local,
+                    local_key,
                     packages,
                     entry,
                     ..
@@ -1104,8 +1117,15 @@ impl Settlement {
                             &crate::applicability::store::Scripts::from_map(stable.clone()),
                         )
                     });
-                    if agrees {
-                        let _ = crate::applicability::store::publish(&home, &entry);
+                    if !agrees {
+                        continue;
+                    }
+                    let _ = crate::applicability::store::publish(&home, &entry);
+                    // The project reads the home's entry from now on, so
+                    // its own copy goes once the home holds one. A union
+                    // that lists the copy misses once and is listed again.
+                    if crate::applicability::store::read(&home, entry.key()).is_some() {
+                        home::evict(&local, &local_key);
                     }
                 }
                 Settled::InventoryRead {
