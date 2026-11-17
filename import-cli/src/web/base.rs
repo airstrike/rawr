@@ -6,26 +6,25 @@
 //! its own once that runner is built.
 //!
 //! The runner is built from a package rawr writes, as a project's is: a
-//! marked `main` and an empty library, which is the one library the
-//! import pipeline builds and extracts a runner from. The library has no
-//! items, so the runner covers nothing past std.
+//! marked `main` alone. The package has no library and no dependency, so
+//! the import pipeline extracts no crate and the runner covers nothing
+//! past std.
 
 use std::path::{Path, PathBuf};
 
 use super::Error;
 
-/// The package's name, which names its library crate too.
+/// The package's name.
 const NAME: &str = "rawr-plain-runner";
 
 /// The package's files, by their paths in it.
-const FILES: [(&str, &str); 3] = [
+const FILES: [(&str, &str); 2] = [
     (
         "Cargo.toml",
         "# The package rawr builds the browser's runner of rawr and std from.\n\
          [package]\nname = \"rawr-plain-runner\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\
          publish = false\n\n[workspace]\n",
     ),
-    ("src/lib.rs", ""),
     ("src/main.rs", "// rawr\nfn main() {}\n"),
 ];
 
@@ -61,9 +60,9 @@ pub(super) fn package(home: &Path) -> Result<PathBuf, Error> {
 
 #[cfg(test)]
 mod tests {
-    /// The package is a marked binary beside an empty library, written
-    /// once: a second write leaves its files as they were, and another
-    /// version's package is removed.
+    /// The package is a marked binary with no library, written once: a
+    /// second write leaves its files as they were, and another version's
+    /// package is removed.
     #[test]
     fn the_plain_runners_package_is_written_once() {
         let home = std::env::temp_dir().join(format!("rawr-web-base-{}", std::process::id()));
@@ -77,10 +76,7 @@ mod tests {
             std::fs::read_to_string(&main).unwrap(),
             "// rawr\nfn main() {}\n"
         );
-        assert_eq!(
-            std::fs::read_to_string(directory.join("src").join("lib.rs")).unwrap(),
-            ""
-        );
+        assert!(!directory.join("src").join("lib.rs").exists());
         let written = std::fs::metadata(&main).unwrap().modified().unwrap();
         assert_eq!(super::package(&home).unwrap(), directory);
         assert_eq!(

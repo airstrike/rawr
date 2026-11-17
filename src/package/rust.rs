@@ -47,14 +47,20 @@ impl Graph {
         copies: &mut Copies,
     ) -> rawr_import::Result<Option<Request>> {
         let entry = self.entry_package();
-        let Some(config) = entry.rust.as_ref() else {
-            return Ok(None);
+        // A crate whose manifest declares no dependency and that has no
+        // Rust module imports nothing: its runner is rawr and std alone.
+        let config = match (entry.rust.as_ref(), entry.cargo()) {
+            (Some(config), _) => std::borrow::Cow::Borrowed(config),
+            (None, Some(cargo)) => {
+                std::borrow::Cow::Owned(Config::from_cargo(&cargo.path, Box::default()))
+            }
+            (None, None) => return Ok(None),
         };
         script_project(entry)?;
         let app = app_crate(self, &environment, copies)?;
         request(
             entry,
-            config,
+            &config,
             environment,
             Some(universe),
             app,

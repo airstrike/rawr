@@ -201,7 +201,9 @@ fn program(check: bool, path: Option<&PathBuf>, arguments: &[OsString]) -> ExitC
         Err(report) => return failure(&report),
     };
     rawr_cli::cells::keep("rawr-import", &loaded.cells, &loaded.graph);
-    if !loaded.graph.declares_rust_import() {
+    // A program that imports no Rust runs on the base language, unless the
+    // caller takes its runner: that runner is rawr and std alone.
+    if !loaded.graph.declares_rust_import() && !rawr_import::universe::delivers() {
         return rawr_cli::on_base(loaded, check, arguments);
     }
     let rawr_cli::base::Loaded { target, graph, .. } = loaded;

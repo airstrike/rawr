@@ -222,6 +222,33 @@ fn main() {
     );
 }
 
+/// A `main` that panics prints Rust's panic to the program's stderr, where
+/// a page shows it (#1160).
+#[test]
+fn a_panicking_main_prints_its_panic_to_the_programs_stderr() {
+    let mut universe = Universe::new(&Plain, Access::none()).unwrap();
+    let printed = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let sink = std::sync::Arc::clone(&printed);
+    assert!(universe.on_output(move |stream, text| {
+        if stream == crate::Output::Stderr {
+            sink.lock().unwrap().push_str(text);
+        }
+    }));
+    let source = "// rawr
+fn main() {
+    panic!(\"no thread here\");
+}
+";
+    let entry = PathBuf::from("/universe-fixture/src/main.rs");
+    let program = universe.program(entry, source, Vec::new()).unwrap();
+    assert_eq!(program.run(), 101);
+    let printed = printed.lock().unwrap();
+    assert!(
+        printed.starts_with("thread 'main' panicked") && printed.contains(":\nno thread here\n"),
+        "{printed}"
+    );
+}
+
 const GAUGE: &str = "// rawr
 pub struct Gauge {
     pub level: i64,

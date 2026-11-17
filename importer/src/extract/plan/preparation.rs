@@ -419,28 +419,21 @@ fn plan_preparation_charges_the_same_usage_each_time() {
 }
 
 #[test]
-fn empty_graph_refusal_does_not_publish_controls() {
+fn a_graph_with_no_library_unit_plans_no_entry() {
     let fixture = Fixture::open("early");
     fixture
         .reserve(|layout, proof| {
+            // A package with no library and no dependency: the probe
+            // extracts no crate, and the runner is rawr and std alone.
             let empty = unit::BuildGraph::fixture_artifacts(Box::default());
             let limits = cargo::Limits::standard();
-            let error = Plan::prepare_in(layout, &empty, proof, toolchain::HOST, &limits)
-                .err()
-                .expect("empty extraction graph rejects");
-            assert_eq!(code(error), "missing-extraction-unit");
-            assert!(!layout.extraction().source().exists());
-            assert!(!layout.extraction().plan().exists());
-            // A nonempty graph then prepares, publishes its controls and
-            // charges its bytes.
-            let plan = Plan::prepare_in(layout, &graph(), proof, toolchain::HOST, &limits)
-                .expect("the plan prepares");
+            let plan = Plan::prepare_in(layout, &empty, proof, toolchain::HOST, &limits)
+                .expect("a graph with no library unit prepares");
+            assert!(plan.entries.is_empty());
             assert!(layout.extraction().source().exists());
-            let (_, bytes) = plan.allocation.usage();
-            assert!(bytes > 0);
             assert!(!plan.allocation.is_refused());
             Ok(())
         })
-        .expect("early rejection cleans the reservation");
+        .expect("the plan prepares in its reservation");
     fixture.retire();
 }
