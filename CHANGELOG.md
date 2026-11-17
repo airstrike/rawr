@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+
+## 0.3.249 (2026-11-17)
+
 - A `&mut` destructuring inside a closure binds the place it names, whether of a `&mut` reference the closure captured, one that shadows its place's local, or the closure's own local. Each was refused with a false E0596 or panicked at run time. (#2200; part of #1152)
 - `tokio::select!` expands from tokio's own definition, so every form tokio accepts runs as tokio runs it, and rawr's separate `select!` expansion is gone. (#2204; part of #1152)
 - A match arm that an earlier arm makes unreachable is accepted, as rustc accepts it with a warning, rather than rejected. (#2205)
