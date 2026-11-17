@@ -1,6 +1,7 @@
 //! Complete owned domains, authenticated independently of consumer demand.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -15,7 +16,9 @@ use crate::Result;
 pub struct Acquired {
     exports: Box<[(identity::Export, identity::Definition)]>,
     facts: Facts,
-    fingerprint: [u8; 32],
+    /// The digest of the exports' and facts' encodings, made the first time
+    /// something asks for it: a capture split into entries never does.
+    fingerprint: OnceLock<[u8; 32]>,
     /// What the nightly's build scripts gave, which each entry keeps.
     scripts: super::store::Scripts,
     /// For each crate, sorted, the definitions its own walk recorded of
@@ -133,14 +136,10 @@ impl Acquired {
         if let Err(violation) = facts.validate() {
             panic!("captured crate facts are invalid: {violation}");
         }
-        let mut fingerprint = Sha256::new();
-        fingerprint.update(b"rawr.import.intrinsic-inventory/v2");
-        fingerprint.update(serde_json::to_vec(&exports).expect("exports encode as JSON"));
-        fingerprint.update(serde_json::to_vec(&facts).expect("facts encode as JSON"));
         Self {
             exports,
             facts,
-            fingerprint: fingerprint.finalize().into(),
+            fingerprint: OnceLock::new(),
             scripts: super::store::Scripts::default(),
             foreign,
         }
@@ -168,8 +167,14 @@ impl Acquired {
     }
 
     /// Identity includes the full fact payload and exact completeness domains.
-    pub const fn fingerprint(&self) -> &[u8; 32] {
-        &self.fingerprint
+    pub fn fingerprint(&self) -> &[u8; 32] {
+        self.fingerprint.get_or_init(|| {
+            let mut fingerprint = Sha256::new();
+            fingerprint.update(b"rawr.import.intrinsic-inventory/v2");
+            fingerprint.update(serde_json::to_vec(&self.exports).expect("exports encode as JSON"));
+            fingerprint.update(serde_json::to_vec(&self.facts).expect("facts encode as JSON"));
+            fingerprint.finalize().into()
+        })
     }
 
     /// Each public export, with its target.
@@ -201,7 +206,8 @@ pub(super) type RelativeExport = (Box<[Box<str>]>, identity::Namespace, identity
 /// The format of a shared crate entry.
 /// 2: an entry keeps the nightly's build-script outputs (#403).
 /// 3: identities order by their definition-path hash first (#1851).
-const ENTRY_SCHEMA: u32 = 3;
+/// 4: each unit is written once, in a table beside the entry (#2153).
+const ENTRY_SCHEMA: u32 = 4;
 
 /// One crate's complete intrinsic facts, shared per machine under a key the
 /// crate's own native inputs set before any nightly build (D609.3). Its
@@ -217,8 +223,19 @@ pub struct Entry {
     /// The outputs the nightly's build scripts gave when the facts were
     /// captured, by package: the entry holds where a build gives the same.
     scripts: super::store::Scripts,
+    /// The digest of the entry's encoding: of the bytes it was read from or
+    /// first written as, or of a fresh encoding when neither happened.
     #[serde(skip)]
-    fingerprint: [u8; 32],
+    fingerprint: OnceLock<[u8; 32]>,
+}
+
+/// An entry as [`Entry::encode`] writes it: the units its definitions
+/// name, by place, then the entry, read once the units are.
+#[derive(Deserialize)]
+struct Encoded<'bytes> {
+    units: Box<[std::sync::Arc<identity::Unit>]>,
+    #[serde(borrow)]
+    entry: &'bytes serde_json::value::RawValue,
 }
 
 impl Entry {
@@ -234,25 +251,52 @@ impl Entry {
         Ok(())
     }
 
-    fn sealed(mut self) -> Self {
+    fn digest(encoding: &[u8]) -> [u8; 32] {
         let mut fingerprint = Sha256::new();
         fingerprint.update(b"rawr.import.intrinsic-entry/v1");
-        fingerprint.update(self.encode());
-        self.fingerprint = fingerprint.finalize().into();
-        self
+        fingerprint.update(encoding);
+        fingerprint.finalize().into()
     }
 
     /// Decode a stored entry. One that does not decode, is not the one
-    /// `key` names, or does not hold together is absent.
+    /// `key` names, or does not hold together is absent. Its fingerprint is
+    /// the digest of `bytes`, which [`Entry::encode`] wrote, so the entry
+    /// is not encoded again to find it.
     #[must_use]
     pub fn decode(bytes: &[u8], key: &[u8; 32]) -> Option<Self> {
-        let entry: Self = serde_json::from_slice(bytes).ok()?;
-        (&entry.key == key && entry.check().is_ok()).then(|| entry.sealed())
+        let encoded: Encoded<'_> = serde_json::from_slice(bytes).ok()?;
+        let entry: Self =
+            crate::api::units::read(encoded.units, || serde_json::from_str(encoded.entry.get()))
+                .ok()?;
+        if &entry.key != key || entry.check().is_err() {
+            return None;
+        }
+        let _ = entry.fingerprint.set(Self::digest(bytes));
+        Some(entry)
     }
 
+    /// The entry's encoding. The first one also fixes its fingerprint, so
+    /// an entry that is published is encoded once.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
-        serde_json::to_vec(self).expect("an entry encodes as JSON")
+        let bytes = self.encoding();
+        let _ = self.fingerprint.set(Self::digest(&bytes));
+        bytes
+    }
+
+    /// The entry, with its units in a table before it: `{"units": [..],
+    /// "entry": {..}}`, which [`Encoded`] reads.
+    fn encoding(&self) -> Vec<u8> {
+        let (entry, units) = crate::api::units::write(|| serde_json::to_vec(self));
+        let entry = entry.expect("an entry encodes as JSON");
+        let units = serde_json::to_vec(&units).expect("units encode as JSON");
+        let mut bytes = Vec::with_capacity(units.len() + entry.len() + 20);
+        bytes.extend_from_slice(b"{\"units\":");
+        bytes.extend_from_slice(&units);
+        bytes.extend_from_slice(b",\"entry\":");
+        bytes.extend_from_slice(&entry);
+        bytes.push(b'}');
+        bytes
     }
 
     pub const fn key(&self) -> &[u8; 32] {
@@ -278,8 +322,9 @@ impl Entry {
         &self.facts
     }
 
-    pub(super) const fn fingerprint(&self) -> &[u8; 32] {
-        &self.fingerprint
+    pub(super) fn fingerprint(&self) -> &[u8; 32] {
+        self.fingerprint
+            .get_or_init(|| Self::digest(&self.encoding()))
     }
 
     /// The outputs the nightly's build scripts gave at capture.
@@ -306,9 +351,8 @@ impl Entry {
             exports: self.exports.clone(),
             facts: self.facts.clone(),
             scripts: self.scripts.clone(),
-            fingerprint: [0; 32],
+            fingerprint: OnceLock::new(),
         }
-        .sealed()
     }
 }
 
@@ -393,14 +437,14 @@ impl Acquired {
                     partitions: Box::new([partition.clone()]),
                 },
                 scripts: self.scripts.clone(),
-                fingerprint: [0; 32],
+                fingerprint: OnceLock::new(),
             };
             if let Err(violation) = entry.check() {
                 panic!(
                     "crate `{crate_name}`'s share of its capture breaks its invariant: {violation}"
                 );
             }
-            entries.push(entry.sealed());
+            entries.push(entry);
         }
         entries
     }
