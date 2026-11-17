@@ -1145,3 +1145,46 @@ main();
 "#;
     assert_eq!(printed(source), "None (None, 1) None\nOk(3) Ok(3)\n0 1 4\n");
 }
+
+/// An element that never comes, as `vec![return 2]`'s, is a variable a
+/// later use or another element settles, so the vector takes a `String`
+/// pushed after it (#2139). The output is rustc's build of the same
+/// program.
+#[test]
+fn an_element_that_never_comes_is_settled_by_a_later_use() {
+    let source = r#"
+fn pushed() -> i32 {
+    let mut v = vec![return 2];
+    v.push(String::new());
+    println!("{:?}", v);
+    0
+}
+fn mixed(stop: bool) -> i32 {
+    let a = if stop { [return 3, 4] } else { [5, 6] };
+    println!("{:?}", a);
+    0
+}
+fn main() {
+    println!("{} {} {}", pushed(), mixed(false), mixed(true));
+}
+main();
+"#;
+    assert_eq!(printed(source), "[5, 6]\n2 0 3\n");
+}
+
+/// `()` is a scrutinee as any other value is, matched by `()`, `_` or a
+/// binding, through a reference too. The output is rustc's build of the
+/// same program.
+#[test]
+fn a_unit_value_is_matched() {
+    let source = r#"
+fn main() {
+    let out = ();
+    let a = match &out { () => true, _ => false };
+    let b = match out { () => 1 };
+    println!("{a} {b}");
+}
+main();
+"#;
+    assert_eq!(printed(source), "true 1\n");
+}

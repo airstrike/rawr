@@ -1214,10 +1214,14 @@ impl<'a> Parser<'a> {
     /// tokio's `join!(a, b, ..)` and `select! { pattern = future => body,
     /// .., else => body }`, at the `!`, written again as Rawr code: an
     /// `.await` on `rawr::future::__join2` or `__select2` (and the others
-    /// for each count), and for `select!` a `match` of its output, whose
-    /// arm for a branch matches that branch's `Some` of its pattern. The
-    /// core polls the branches in order, as a `biased;` select does, and a
-    /// branch whose pattern doesn't match ends the select at its `else`.
+    /// for each count, `__biased_select2` after `biased;`), and for
+    /// `select!` a `match` of its output, whose arm for a branch matches
+    /// that branch's `Some` of its pattern. Each branch's future is made in
+    /// order and wrapped in an `async` block that gives `Some` of its
+    /// output when the pattern matches it and `None` when not, as tokio
+    /// tests the output against the pattern without its `ref` and `mut`:
+    /// the core then disables that branch and polls the rest, and once
+    /// every branch is disabled the select ends at its `else`.
     /// `try_join!` is rejected.
     pub(super) fn parse_tokio_macro(
         &mut self,
@@ -1237,13 +1241,13 @@ impl<'a> Parser<'a> {
         let mut futures = Vec::<Vec<(Token, Position)>>::new();
         let mut branches = Vec::<(Vec<(Token, Position)>, Vec<(Token, Position)>)>::new();
         let mut otherwise = None;
+        let mut biased = false;
         let end;
         if name == "select" {
-            let open = self.expect(Token::LeftBrace, "'{' after `select!`")?;
-            let _ = open;
-            if matches!(self.peek(), Token::Identifier(ref word) if word.as_str() == "biased")
-                && matches!(self.peek_second(), Token::SemiColon)
-            {
+            self.expect(Token::LeftBrace, "'{' after `select!`")?;
+            biased = matches!(self.peek(), Token::Identifier(ref word) if word.as_str() == "biased")
+                && matches!(self.peek_second(), Token::SemiColon);
+            if biased {
                 self.next();
                 self.next();
             }
@@ -1409,13 +1413,23 @@ impl<'a> Parser<'a> {
                 ident("future"),
                 (Token::DoubleColon, at),
             ]);
-            spliced.extend([ident(&format!("__{name}{count}")), (Token::LeftParen, at)]);
-            // Each future is an argument as written, so a local moves in.
+            let order = if biased { "biased_" } else { "" };
+            spliced.extend([
+                ident(&format!("__{order}{name}{count}")),
+                (Token::LeftParen, at),
+            ]);
+            // Each future is an argument as written, so a local moves in:
+            // a select branch's is bound, then awaited in its block.
             for (index, future) in futures.into_iter().enumerate() {
                 if index > 0 {
                     spliced.push((Token::Comma, at));
                 }
-                spliced.extend(future);
+                match branches.get(index) {
+                    Some((pattern, _)) => {
+                        spliced.extend(Self::select_branch(future, pattern, at));
+                    }
+                    None => spliced.extend(future),
+                }
             }
             spliced.push((Token::RightParen, at));
         }
@@ -1448,8 +1462,8 @@ impl<'a> Parser<'a> {
                 spliced.push((Token::RightBrace, at));
                 spliced.push((Token::Comma, at));
             }
-            // Once no branch's pattern matched, the select ends at the
-            // `else` branch, which panics as tokio's does when there is none.
+            // Once every branch is disabled, the select ends at the `else`
+            // branch, which panics as tokio's does when there is none.
             let otherwise = otherwise.unwrap_or_else(|| {
                 vec![
                     ident("panic"),
@@ -1476,6 +1490,100 @@ impl<'a> Parser<'a> {
         spliced.push((Token::RightParen, end));
         self.splice_tokens(spliced);
         self.parse_primary()
+    }
+}
+
+impl Parser<'_> {
+    /// `{ let branch = future; async move { let out = branch.await; .. } }`
+    /// of a `select!` branch's `future` and `pattern`: the future made where
+    /// the branch is, and awaited as `Some` of its output when `pattern`,
+    /// without its `ref` and `mut`, matches a borrow of it, `None` when not.
+    fn select_branch(
+        future: Vec<(Token, Position)>,
+        pattern: &[(Token, Position)],
+        at: Position,
+    ) -> Vec<(Token, Position)> {
+        let ident = |text: &str| (Token::Identifier(Box::new(text.into())), at);
+        let (branch, out, matched) = (
+            "__rawr_select_branch",
+            "__rawr_select_out",
+            "__rawr_select_matched",
+        );
+        let cleaned: Vec<_> = pattern
+            .iter()
+            .filter(|(token, _)| {
+                !matches!(token, Token::Mut)
+                    && !matches!(token, Token::Identifier(word) if word.as_str() == "ref")
+            })
+            .cloned()
+            .collect();
+        // `_` or a binding matches every output, so it needs no test.
+        let irrefutable = match cleaned.as_slice() {
+            [(Token::Underscore, _)] => true,
+            [(Token::Identifier(word), _)] => word.starts_with(|first: char| first.is_lowercase()),
+            _ => false,
+        };
+        let mut tokens = vec![
+            (Token::LeftBrace, at),
+            (Token::Let, at),
+            ident(branch),
+            (Token::Equals, at),
+        ];
+        tokens.extend(future);
+        tokens.extend([
+            (Token::SemiColon, at),
+            (Token::Reserved(Box::new("async".into())), at),
+            ident("move"),
+            (Token::LeftBrace, at),
+        ]);
+        let awaited = [
+            ident(branch),
+            (Token::Period, at),
+            (Token::Reserved(Box::new("await".into())), at),
+        ];
+        if irrefutable {
+            tokens.extend([ident("Some"), (Token::LeftParen, at)]);
+            tokens.extend(awaited);
+            tokens.push((Token::RightParen, at));
+        } else {
+            tokens.extend([(Token::Let, at), ident(out), (Token::Equals, at)]);
+            tokens.extend(awaited);
+            tokens.extend([
+                (Token::SemiColon, at),
+                (Token::Let, at),
+                ident(matched),
+                (Token::Equals, at),
+                (Token::Reserved(Box::new("match".into())), at),
+                (Token::Ampersand, at),
+                ident(out),
+                (Token::LeftBrace, at),
+            ]);
+            tokens.extend(cleaned);
+            tokens.extend([
+                (Token::DoubleArrow, at),
+                (Token::True, at),
+                (Token::Comma, at),
+                (Token::Underscore, at),
+                (Token::DoubleArrow, at),
+                (Token::False, at),
+                (Token::RightBrace, at),
+                (Token::SemiColon, at),
+                (Token::If, at),
+                ident(matched),
+                (Token::LeftBrace, at),
+                ident("Some"),
+                (Token::LeftParen, at),
+                ident(out),
+                (Token::RightParen, at),
+                (Token::RightBrace, at),
+                (Token::Else, at),
+                (Token::LeftBrace, at),
+                ident("None"),
+                (Token::RightBrace, at),
+            ]);
+        }
+        tokens.extend([(Token::RightBrace, at), (Token::RightBrace, at)]);
+        tokens
     }
 }
 

@@ -1,7 +1,8 @@
 //! The core future type as Rawr code names it (D511.3): `async` blocks and
 //! `async fn`s in a program without iced give a `rawr::future::Future<T>`,
 //! and so do native async functions in the plain runner. `join!` is
-//! `rawr::future::__join{N}`, and `select!` `rawr::future::__select{N}`. A host whose own type runs futures, as
+//! `rawr::future::__join{N}`, and `select!` `rawr::future::__select{N}` or,
+//! `biased;`, `__biased_select{N}`. A host whose own type runs futures, as
 //! rawr-iced's `Task` does, takes precedence where it is installed.
 
 use crate::host::{self, facade, item, signature, type_ref};
@@ -27,10 +28,11 @@ pub fn join_path(count: usize) -> String {
     format!("rawr::future::__join{count}")
 }
 
-/// The `select!` function for `count` futures.
+/// The `select!` function for `count` futures, or for a `biased;` one.
 #[must_use]
-pub fn select_path(count: usize) -> String {
-    format!("rawr::future::__select{count}")
+pub fn select_path(count: usize, biased: bool) -> String {
+    let order = if biased { "biased_" } else { "" };
+    format!("rawr::future::__{order}select{count}")
 }
 
 /// An engine for a program whose futures are the core's: Rawr's own, with
@@ -91,21 +93,25 @@ pub fn definition() -> Result<facade::Definition, host::Error> {
             format!("future::__join{count}"),
             join.finish(),
         )?)?;
-        // `select!`: an `Option` per future, `Some` of the one that ended.
-        let mut select = signature::Builder::new();
-        let mut outputs = Vec::with_capacity(count);
-        for name in names {
-            select.type_parameter(*name, &[])?;
+        // `select!`: each branch's future gives `Some` of its output when
+        // its pattern matches, and the select an `Option` per branch,
+        // `Some` of the one that ended so.
+        for order in ["", "biased_"] {
+            let mut select = signature::Builder::new();
+            let mut outputs = Vec::with_capacity(count);
+            for name in names {
+                select.type_parameter(*name, &[])?;
+            }
+            for name in names {
+                select.parameter(future(Type::option(Type::parameter(*name)?))?);
+                outputs.push(Type::option(Type::parameter(*name)?));
+            }
+            select.output(future(Type::tuple(outputs)?)?);
+            builder.item(item::Definition::function(
+                format!("future::__{order}select{count}"),
+                select.finish(),
+            )?)?;
         }
-        for name in names {
-            select.parameter(future(Type::parameter(*name)?)?);
-            outputs.push(Type::option(Type::parameter(*name)?));
-        }
-        select.output(future(Type::tuple(outputs)?)?);
-        builder.item(item::Definition::function(
-            format!("future::__select{count}"),
-            select.finish(),
-        )?)?;
     }
     builder.finish()
 }
@@ -182,15 +188,17 @@ pub fn runtime() -> Result<host::runtime::Facade, host::Error> {
                 Ok(Dynamic::from(super::Future::join(parts)))
             })
             .expect("the rawr bindings declare each `future::__join` once");
-        builder
-            .bind_with_context(select_path(count), |_call, args| {
-                let parts = args
-                    .iter_mut()
-                    .map(|part| take_future(part))
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(Dynamic::from(super::Future::select(parts)))
-            })
-            .expect("the rawr bindings declare each `future::__select` once");
+        for biased in [false, true] {
+            builder
+                .bind_with_context(select_path(count, biased), move |_call, args| {
+                    let parts = args
+                        .iter_mut()
+                        .map(|part| take_future(part))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Ok(Dynamic::from(super::Future::select(parts, biased)))
+                })
+                .expect("the rawr bindings declare each `future::__select` once");
+        }
     }
     Ok(builder.finish())
 }

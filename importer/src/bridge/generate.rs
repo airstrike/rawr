@@ -8314,16 +8314,11 @@ fn hidden_crate(
 fn hidden_dependency(hidden: &HiddenCrate) -> toml_edit::InlineTable {
     let mut table = toml_edit::InlineTable::new();
     table.insert("package", hidden.package.as_str().into());
-    if let Some(git) = hidden.source.strip_prefix("git+") {
-        let (url, _) = git.split_once('#').unwrap_or((git, ""));
-        let (url, query) = url.split_once('?').unwrap_or((url, ""));
+    if let Some((url, reference)) = crate::cargo::config::GitReference::parse_source(&hidden.source)
+    {
         table.insert("git", url.into());
-        for pair in query.split('&') {
-            if let Some((key, value)) = pair.split_once('=')
-                && matches!(key, "rev" | "branch" | "tag")
-            {
-                table.insert(key, value.into());
-            }
+        if let Some((key, value)) = reference.key_value() {
+            table.insert(key, value.into());
         }
     } else if let Some(directory) = hidden.source.strip_prefix("path+file://") {
         table.insert("path", directory.into());
