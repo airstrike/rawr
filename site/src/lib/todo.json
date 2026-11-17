@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-17",
-  "version": "0.3.239",
+  "version": "0.3.240",
   "examples": {
     "running": 56,
     "total": 56,
@@ -9,14 +9,16 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"A stored API writes each re-export hop once, in a table beside its compiler units: counter's API value fell from 30.2 MB to 23.1 MB.","issues":[2169]},
-        {"text":"Stored classifications, facade plans and inventory entries write 32-byte digests as 64 hex digits rather than arrays of 32 numbers: counter's stored classification is 92 MB rather than 110 MB.","issues":[2170]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.240",
+        "date": "2026-11-17",
+        "entries": [
+          {"text":"A stored API writes each re-export hop once, in a table beside its compiler units: counter's API value fell from 30.2 MB to 23.1 MB.","issues":[2169]},
+          {"text":"Stored classifications, facade plans and inventory entries write 32-byte digests as 64 hex digits rather than arrays of 32 numbers: counter's stored classification is 92 MB rather than 110 MB.","issues":[2170]}
+        ]
+      },
       {
         "version": "0.3.239",
         "date": "2026-11-17",
@@ -4803,8 +4805,8 @@
     {"issue":2166,"title":"A stored API writes each definition's compiler unit in full, about 70% of its bytes","state":"closed","category":"Platforms","release":"0.3.238"},
     {"issue":2167,"title":"A stored API keeps its definitions, exports and implementations twice, in the semantic canonical and the selected ledger","state":"closed","category":"Platforms","release":"0.3.238"},
     {"issue":2168,"title":"A run that never binds keeps superseded demand rounds' values","state":"closed","category":"Platforms","release":"0.3.239"},
-    {"issue":2169,"title":"A stored API's canonical exports are about 2 KB each, 14.8 MB for counter's 7,417","state":"closed","category":"Platforms"},
-    {"issue":2170,"title":"Stored values write 32-byte digests as JSON arrays of numbers","state":"closed","category":"Platforms"},
+    {"issue":2169,"title":"A stored API's canonical exports are about 2 KB each, 14.8 MB for counter's 7,417","state":"closed","category":"Platforms","release":"0.3.240"},
+    {"issue":2170,"title":"Stored values write 32-byte digests as JSON arrays of numbers","state":"closed","category":"Platforms","release":"0.3.240"},
     {"issue":2171,"title":"A stored API's exports repeat their own path and span in their alias, and its spans repeat their file path","state":"open","category":"Platforms"}
   ],
   "groups": [
