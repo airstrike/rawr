@@ -100,15 +100,7 @@ fn nightly_built(root: &Path) -> bool {
 
 #[test]
 fn a_plain_program_with_a_dependency_runs_in_a_runner_without_iced() {
-    let driver = Path::new(env!("CARGO_BIN_EXE_rawr-import")).with_file_name(format!(
-        "rawr-import-driver{}",
-        std::env::consts::EXE_SUFFIX
-    ));
-    assert!(
-        driver.is_file(),
-        "build {} first: cargo build -p rawr-import --features rustc-driver --bin rawr-import-driver",
-        driver.display()
-    );
+    crate::support::driver();
     let root = crate::support::fresh("plain-dependency");
     copy(Path::new(FIXTURE), &root);
 
@@ -832,6 +824,7 @@ fn another_rawr_build_checks_and_its_runner_names_no_cargo_view() {
     let home = crate::support::fresh("moved-host-home");
     let root = crate::support::fresh("moved-host");
     copy(Path::new(FIXTURE), &root);
+    crate::support::driver();
     let installed = Path::new(env!("CARGO_BIN_EXE_rawr-import"));
     let rawr_with = |importer: &Path, command: &str, host: &Path| {
         let output = Command::new(importer)

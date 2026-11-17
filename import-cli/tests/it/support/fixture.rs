@@ -82,15 +82,7 @@ impl Fixture {
     /// lane and its text, written over them. It waits for a lane when every
     /// one is held and no more can be made.
     pub fn lease(&'static self, files: &[(&str, &str)]) -> Lease {
-        let driver = Path::new(env!("CARGO_BIN_EXE_rawr-import")).with_file_name(format!(
-            "rawr-import-driver{}",
-            std::env::consts::EXE_SUFFIX
-        ));
-        assert!(
-            driver.is_file(),
-            "build {} first: cargo build -p rawr-import --features rustc-driver --bin rawr-import-driver",
-            driver.display()
-        );
+        crate::support::driver();
         // Before the lanes' lock: the test may wait here for its turn.
         let scratch = crate::support::scratch();
         let root = {

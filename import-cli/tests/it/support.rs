@@ -12,6 +12,7 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 pub mod alone;
@@ -34,11 +35,60 @@ use events::{Events, News};
 const RUNTIME_OPT_LEVEL: &str = "0";
 
 /// `rawr-import`, as the suite runs it: with rawr's runtime at the suite's
-/// opt-level, which every run must agree on to share the suite's runtime.
+/// opt-level, which every run must agree on to share the suite's runtime,
+/// and with the driver beside it built from these sources ([`driver`]).
 pub fn rawr_import() -> Command {
+    driver();
     let mut command = Command::new(env!("CARGO_BIN_EXE_rawr-import"));
     command.env("RAWR_RUNTIME_OPT_LEVEL", RUNTIME_OPT_LEVEL);
     command
+}
+
+/// The `rawr-import-driver` beside `rawr-import`, which it runs to read
+/// crates. `cargo test` builds no driver: its binary needs the importer's
+/// `rustc-driver` feature, which only its own build asks for. So the first
+/// test that needs it builds it, once per run, with Cargo into the same
+/// target directory and profile as `rawr-import`. Cargo's freshness check
+/// makes that a no-op when the driver is current, and rebuilds one that
+/// older sources left, such as one from before an extraction protocol bump.
+/// Tests that ask meanwhile wait for that build and run what it built.
+pub fn driver() -> &'static Path {
+    static DRIVER: OnceLock<PathBuf> = OnceLock::new();
+    DRIVER.get_or_init(|| {
+        let import = Path::new(env!("CARGO_BIN_EXE_rawr-import"));
+        let profile_directory = import
+            .parent()
+            .expect("a binary sits in its profile directory");
+        let target_directory = profile_directory
+            .parent()
+            .expect("a profile directory sits in a target directory");
+        let profile = match profile_directory.file_name().and_then(|name| name.to_str()) {
+            Some("debug") | None => "dev",
+            Some(name) => name,
+        };
+        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+        let status = Command::new(cargo)
+            .arg("build")
+            .arg("--manifest-path")
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../importer/Cargo.toml"
+            ))
+            .args(["-p", "rawr-import", "--features", "rustc-driver"])
+            .args(["--bin", "rawr-import-driver", "--profile", profile])
+            .arg("--target-dir")
+            .arg(target_directory)
+            .env_remove("CARGO_TARGET_DIR")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .status()
+            .expect("cargo runs");
+        assert!(status.success(), "cargo could not build rawr-import-driver");
+        import.with_file_name(format!(
+            "rawr-import-driver{}",
+            std::env::consts::EXE_SUFFIX
+        ))
+    })
 }
 
 /// How often a wait looks at the run's events and whether it exited. A
