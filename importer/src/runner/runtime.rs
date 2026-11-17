@@ -399,13 +399,15 @@ impl Runtime {
 
 /// Settle the runner's lockfile in `work`, written from the `pruned` lock
 /// and `manifest`, with the project's `cargo`, for a build that found no
-/// lock an earlier build settled ([`Runtime::settled_lock`]). The harness
-/// locked rawr's crate without its dependencies (#1914). A runner linked
-/// to the shared runtime starts from the project's own lock when it has
-/// one (#1912), pruned of rawr: cargo adds what the runner adds and keeps
-/// every version the project pins, so the runner's units are the ones the
-/// project's `cargo build` made. A runner that compiles rawr in the project
-/// starts from the harness's lock, and cargo adds rawr's graph to it.
+/// lock an earlier build settled ([`Runtime::settled_lock`]). The runner
+/// starts from the project's own lock when it has one (#1912): cargo adds
+/// what the runner adds and keeps every version and git revision the
+/// project pins, so the runner's units are the ones the project's `cargo
+/// build` made. Linked to the shared runtime, that lock is pruned of rawr;
+/// compiling rawr in the project, cargo adds rawr's graph to it, which the
+/// harness locked rawr's crate without (#1914). Cargo re-resolves a git
+/// source whose package the lock lacks at the branch head in its git
+/// database, so the lock must be the whole project's, never a part (#2142).
 pub(crate) fn settle_lock(
     cargo: &Path,
     work: &Path,

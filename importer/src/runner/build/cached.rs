@@ -343,8 +343,7 @@ fn compile<B>(
         .ok()
         .map(|text| crate::runner::mirror::mirror(&workspace, &work, text));
     let version = runner_version(context);
-    // The project's own lock, which a runner linked to the shared runtime
-    // starts from (#1912).
+    // The project's own lock, which the runner starts from (#1912, #2142).
     let project_lock = fs::read(workspace.join("Cargo.lock")).ok();
     let sources = |runtime: Option<&crate::runner::runtime::Runtime>| {
         runner_sources(
@@ -379,9 +378,9 @@ fn compile<B>(
         })
     };
     // The sources for `runtime`, written with the lock cargo settles them
-    // to. The harness locked rawr's crate without its dependencies (#1914):
-    // linked to the shared runtime, the runner keeps the project's
-    // versions; compiling rawr in the project, it adds rawr's graph.
+    // to. The runner keeps the project's versions and revisions: linked to
+    // the shared runtime, it adds none of rawr's graph; compiling rawr in
+    // the project, it adds rawr's graph (#1914).
     let stage = |runtime: Option<&crate::runner::runtime::Runtime>| {
         let staged = sources(runtime);
         // The lock cargo settled this one to, at an earlier build.
@@ -642,8 +641,8 @@ struct Rewrites<'a, 'r> {
 /// The runner's sources as Cargo builds them: the generated files with the
 /// mirrored manifest, linked to the shared `runtime` when there is one, else
 /// with the `rawr` crate at the opt-level setting (T302), and with the
-/// runner at `version` when it has one ([`runner_version`]). A runner linked
-/// to the shared runtime starts from the project's own lock (#1912). Each
+/// runner at `version` when it has one ([`runner_version`]). The runner starts
+/// from the project's own lock when it has one (#1912, #2142). Each
 /// member's manifest and lock entry take the runner's dependencies and
 /// version from the runner's as rewritten (`bridge::generate::member`).
 fn runner_sources<'a, B>(
@@ -686,12 +685,17 @@ fn runner_sources<'a, B>(
                         .map_or(Cow::Borrowed(base), |text| Cow::Owned(text.into_bytes()))
                 }
                 "Cargo.lock" => {
-                    // Linked to the shared runtime, the runner doesn't link
-                    // rawr's crate graph, whose version floors raise the
-                    // harness's lock. Its lock starts from the project's own,
-                    // which cargo settles to what the runner adds, keeping
-                    // every version the project pins (#1912).
-                    let base = runtime.and(project_lock).unwrap_or(file.bytes());
+                    // The runner's lock starts from the project's own, which
+                    // cargo settles to what the runner adds, keeping every
+                    // version the project pins (#1912). It has every package
+                    // the project's workspace locks, which the harness's lock
+                    // lacks: a runner's mirrored path crates are members of
+                    // its workspace, so cargo resolves their dev-dependencies
+                    // too, and a dependency the lock lacks makes cargo
+                    // re-resolve its whole git source at the branch head its
+                    // git database names, not the revision the project pins
+                    // (#2142).
+                    let base = project_lock.unwrap_or(file.bytes());
                     runner_lock(base, runtime, version, &without)
                         .map_or(Cow::Borrowed(base), |text| Cow::Owned(text.into_bytes()))
                 }
