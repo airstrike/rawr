@@ -19,3 +19,20 @@ macro_rules! offset {
         $value + $crate::__offset()
     };
 }
+
+/// The value plus two hundred, through a hidden macro of this crate that
+/// the program never names.
+#[macro_export]
+macro_rules! offset_twice {
+    ($value:expr) => {
+        $crate::__added!($value, 200)
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __added {
+    ($value:expr, $by:expr) => {
+        $value + $by
+    };
+}

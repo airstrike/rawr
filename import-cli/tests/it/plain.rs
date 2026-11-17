@@ -1785,8 +1785,9 @@ fn a_marked_main_gets_its_arguments_and_stdin_and_restarts_on_a_save() {
 /// A dependency's `macro_rules!` macros expand from its source as rustc
 /// expands them, and the program prints what `cargo run` prints: `$crate`
 /// paths into a crate the program does not name and to `#[doc(hidden)]`
-/// items, repetitions with separators, a macro calling itself through
-/// `$crate`, `stringify!` of a fragment, a trait method called by its path,
+/// items, repetitions with separators, a macro calling itself or a hidden
+/// macro the program never names through `$crate` (#1152), `stringify!`
+/// of a fragment, a trait method called by its path,
 /// and a local of the macro's own beside the caller's (T215).
 #[test]
 fn a_dependencys_macro_rules_expand_from_its_source() {
@@ -1804,7 +1805,7 @@ fn a_dependencys_macro_rules_expand_from_its_source() {
     );
     assert_eq!(
         text(&run.stdout),
-        "0 3 22\n8\n40 8\n116\n(\"0x123\", 5)\n220 220\n"
+        "0 3 22\n8\n40 8\n116\n208\n(\"0x123\", 5)\n220 220\n"
     );
 }
 

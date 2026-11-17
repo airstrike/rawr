@@ -1,8 +1,8 @@
 // rawr
 // A dependency's `macro_rules!` macros, expanded from its source: `$crate`
 // paths into a crate the program does not name and to hidden items,
-// repetitions, a macro that calls itself, and a local of the macro's own
-// beside the caller's.
+// repetitions, a macro that calls itself or a hidden one, and a local of
+// the macro's own beside the caller's.
 use outer::{list, scaled, total};
 
 fn main() {
@@ -14,6 +14,7 @@ fn main() {
     println!("{sum}");
     println!("{} {}", scaled!(4), outer::scaled!(2, 3 + 1));
     println!("{}", outer::offset!(sum * 2));
+    println!("{}", outer::offset_twice!(sum));
     println!("{:?}", outer::written!(0x123));
     println!(
         "{} {}",
