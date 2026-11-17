@@ -477,7 +477,74 @@ pub(super) fn retire_superseded(
         newest,
         &mut recovery::Budget::new(),
     )? {}
+    recover_unreached(store, project, newest, &mut recovery::Budget::new())?;
     Ok(())
+}
+
+/// Retire what a newly bound generation leaves behind once the executions
+/// it supersedes are gone: each of the project's API, classification,
+/// facade and overlay actions published before its newest unit, `before`,
+/// that no root holds and no kept action reaches through its parents, with
+/// its content and the parts only it named (`generation`). A demand round's
+/// values are such actions once a later round of the same build supersedes
+/// them: the next run starts from the last round's demand, so no current
+/// key names them (#2160). Returns whether anything was retired.
+fn recover_unreached(
+    store: &Path,
+    project: Digest,
+    before: u64,
+    budget: &mut recovery::Budget,
+) -> Result<bool, Error> {
+    let unreached = |publication: &lease::Publication<'_>,
+                     budget: &mut recovery::Budget|
+     -> Result<Option<Box<[Registered]>>, Error> {
+        let registrations = accounting::registrations_recovery(store, budget)?;
+        let snapshot = pins::snapshot(publication, store, &registrations, budget)?;
+        let rooted = rooted(store, &snapshot);
+        // With nothing older left unrooted no envelope is read: a bind
+        // after a bind finds only what the last one kept.
+        if !registrations.iter().any(|registered| {
+            registered.publisher() == project
+                && registered.allocation().class != Class::Bundle
+                && registered.sequence() < before
+                && !rooted.contains(&registered.reference())
+        }) {
+            return Ok(None);
+        }
+        let mut released = generation(
+            store,
+            &rooted,
+            &registrations,
+            project,
+            &SUPERSEDED,
+            before,
+            None,
+        )?;
+        released.retain(|reference| {
+            registrations.iter().any(|registered| {
+                registered.reference() == *reference
+                    && super::parts::named_by(Class::Content, registered.allocation().kind)
+            })
+        });
+        if released.is_empty() {
+            return Ok(None);
+        }
+        deletion_plan(&released, &rooted, &registrations).map(Some)
+    };
+    let Some(selected) =
+        lease::with_publication(store, |publication| unreached(publication, budget))?
+    else {
+        return Ok(false);
+    };
+    lease::with_publication(store, |publication| {
+        if unreached(publication, budget)?.as_deref() != Some(selected.as_ref()) {
+            return Ok(false);
+        }
+        accounting::begin_eviction(publication, store, &selected, budget)?;
+        retire_allocations(publication, store, &selected, false, budget)?;
+        accounting::finish_eviction(publication, store, budget)?;
+        Ok(true)
+    })
 }
 
 /// Every kind with none kept: what a collected project published goes whole.
@@ -794,7 +861,8 @@ fn kind_excess(
                 registrations,
                 requesting,
                 kept,
-                *action,
+                action.sequence(),
+                Some(*action),
             )?);
         }
         return deletion_plan(&released, rooted, registrations).map(Some);
@@ -812,15 +880,19 @@ fn kind_excess(
 /// inside them hits every unit (#1358). A sibling of a kept runner that is
 /// not one of its parents, such as its overlay, was published after the
 /// retired runner, so it stays too. An envelope that does not read keeps
-/// the whole generation.
+/// the whole generation. Older is published before `before`: the retired
+/// runner's sequence, or a bound generation's newest unit when no runner is
+/// `retired` ([`recover_unreached`]).
 fn generation(
     store: &Path,
     rooted: &BTreeSet<Reference>,
     registrations: &[Registered],
     requesting: Digest,
     kept: &[(Kind, usize)],
-    retired: Registered,
+    before: u64,
+    retired: Option<Registered>,
 ) -> Result<BTreeSet<Reference>, Error> {
+    let retired = |action: &Registered| retired == Some(*action);
     let actions = registrations
         .iter()
         .copied()
@@ -835,7 +907,7 @@ fn generation(
         .collect::<BTreeMap<_, _>>();
     let older = |registered: &Registered| {
         registered.publisher() == requesting
-            && registered.sequence() < retired.sequence()
+            && registered.sequence() < before
             && !rooted.contains(&registered.reference())
     };
     let mut reached = BTreeSet::new();
@@ -843,7 +915,7 @@ fn generation(
         .values()
         .copied()
         .filter(|action| {
-            *action != retired
+            !retired(action)
                 && (!older(action)
                     || kept
                         .iter()
@@ -877,7 +949,7 @@ fn generation(
     }
     let mut released = BTreeSet::new();
     for action in actions.values().copied().filter(|action| {
-        *action != retired
+        !retired(action)
             && older(action)
             && !reached.contains(&action.reference())
             && !registrations

@@ -547,6 +547,63 @@ mod tests {
         assert_eq!(again, manifest);
     }
 
+    /// The store writes definitions in source order, so the ones a round
+    /// adds sit beside their neighbours in the file, and reads them back in
+    /// identity order.
+    #[test]
+    fn a_stored_api_writes_definitions_in_source_order_and_reads_them_in_identity_order() {
+        use crate::api::{identity, model};
+
+        let limits = Limits::standard();
+        let fixture = crate::test_fixture::captured_support_outcomes();
+        let unit = fixture
+            .definitions()
+            .next()
+            .unwrap()
+            .id()
+            .shared_unit()
+            .clone();
+        let module = |hash: &str, name: &str, at: u32| {
+            model::Definition::new(
+                identity::Definition::new(unit.clone(), hash.into(), identity::Namespace::Type),
+                Box::from([Box::<str>::from(name)]),
+                model::Owner::Free,
+                model::Visibility::Public,
+                model::Kind::Module,
+                model::Span::new("src/lib.rs".into(), at, at + 1, 1, at, 1, at + 1),
+                model::Origin::Source,
+            )
+        };
+        // Identity order is hash order: the later item in the file first.
+        let definitions = vec![
+            module("00000000000000000000000000000001", "later_in_source", 20),
+            module("00000000000000000000000000000002", "earlier_in_source", 10),
+        ];
+        let graph = Graph::seal(
+            &Context::fixture(),
+            Vec::new(),
+            definitions.clone(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            &mut Allocation::new(&limits),
+        )
+        .unwrap();
+        let product = capture(graph);
+        let selected = String::from_utf8(product.stored().unwrap().selected.to_vec()).unwrap();
+        assert!(
+            selected.find("earlier_in_source").unwrap() < selected.find("later_in_source").unwrap()
+        );
+        let bytes = product.encode().unwrap();
+        let replayed = replay(&read(&bytes), &limits).unwrap();
+        assert_eq!(
+            replayed.definitions().cloned().collect::<Vec<_>>(),
+            definitions
+        );
+    }
+
     #[test]
     fn stored_graph_roundtrips_and_replays_the_same_semantic_graph() {
         let limits = Limits::standard();

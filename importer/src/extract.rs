@@ -1226,14 +1226,15 @@ enum SealMode<'evidence> {
 }
 
 /// The pre-policy graph after its context and invocations: the part the raw and
-/// semantic encodings share, encoded once.
+/// semantic encodings share, encoded once. Definitions and implementations
+/// are in source order (`api::layout`).
 #[derive(Serialize)]
 struct RawBody<'a> {
     definitions: &'a [&'a model::Definition],
     rejected: &'a [(&'a identity::Definition, &'a Rejected)],
     exports: &'a [&'a Export],
     anonymous: &'a [&'a ledger::AnonymousImport],
-    implementations: &'a [model::Implementation],
+    implementations: &'a [&'a model::Implementation],
     scalar_predicate_proofs: &'a [model::ScalarPredicateProof],
 }
 
@@ -4905,6 +4906,12 @@ fn raw_body(candidate: &Candidate, allocation: &mut Allocation) -> Result<Vec<u8
     allocation.temporary_conversions(candidate.definitions.len());
     allocation.reserve(&mut definitions, candidate.definitions.len())?;
     definitions.extend(candidate.definitions.values());
+    api::layout::definitions(&mut definitions);
+    let mut implementations = Vec::new();
+    allocation.temporary_conversions(candidate.implementations.len());
+    allocation.reserve(&mut implementations, candidate.implementations.len())?;
+    implementations.extend(candidate.implementations.iter());
+    api::layout::implementations(&mut implementations);
     let mut rejected = Vec::new();
     allocation.temporary_conversions(candidate.rejected.len());
     allocation.reserve(&mut rejected, candidate.rejected.len())?;
@@ -4922,7 +4929,7 @@ fn raw_body(candidate: &Candidate, allocation: &mut Allocation) -> Result<Vec<u8
         rejected: &rejected,
         exports: &exports,
         anonymous: &anonymous,
-        implementations: &candidate.implementations,
+        implementations: &implementations,
         scalar_predicate_proofs: &candidate.scalar_predicate_proofs,
     };
     api::semantic::encode_once(&body, allocation)

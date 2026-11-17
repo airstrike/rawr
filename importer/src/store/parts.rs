@@ -3,9 +3,10 @@
 //! A large stored value changes in a few regions from one edit to the next:
 //! the API, the generic contract, the facade, the overlay and the runner's
 //! generated sources. Their bytes are cut where their content says (a gear
-//! rolling hash, so a boundary depends only on the bytes just before it and an
-//! insertion moves no later boundary), each part is kept once under
-//! `<target>/rawr/store.parts/<sha256>`, frozen, and the store keeps only the
+//! rolling hash, so a boundary depends only on the bytes just before it and
+//! an insertion moves no later boundary; see [`BOUNDARY`]), each part is
+//! kept once under `<target>/rawr/store.parts/<sha256>`, frozen, and the
+//! store keeps only the
 //! manifest naming the parts in order. A new value writes the parts it
 //! changed; every other part is already there. A part is verified by its
 //! digest when read, so a missing or altered part refuses the value, never
@@ -27,10 +28,22 @@ pub(crate) mod sources;
 const MAGIC: &[u8; 8] = b"RAWRAPP1";
 const HEADER_BYTES: usize = 24;
 const ENTRY_BYTES: usize = 40;
-/// Parts are 16 KiB to 256 KiB, about 80 KiB on average.
-const MIN_PART: usize = 16 * 1024;
+/// Parts are cut 4 KiB to 64 KiB long, about 20 KiB on average: each entry
+/// a demand round adds to a large value rewrites the one part it lands in,
+/// so the part's length is what one added entry costs.
+const MIN_PART: usize = 4 * 1024;
+const CUT_PART: usize = 64 * 1024;
+/// The longest part a manifest may name.
 const MAX_PART: usize = 256 * 1024;
-const BOUNDARY: u64 = (1 << 16) - 1;
+/// A boundary is where the rolling hash's top 14 bits are zero. Bit `k` of
+/// the hash depends on the last `k + 1` bytes alone, so its top bits depend
+/// on the last 64: a value that repeats a short field, as an API repeats
+/// each definition's compiler unit, still has boundaries throughout.
+const BOUNDARY: u32 = 64 - 14;
+/// Where a part that reaches [`CUT_PART`] with no boundary ends: the last
+/// place before it whose top 10 bits are zero, so its end is still a
+/// function of the content and an insertion moves no later part.
+const FALLBACK: u32 = 64 - 10;
 /// Held shared by a writer whose manifest the store has not published yet,
 /// and exclusively by [`collect`].
 const LOCK: &str = "lock";
@@ -327,15 +340,19 @@ fn boundary(bytes: &[u8]) -> usize {
     if bytes.len() <= MIN_PART {
         return bytes.len();
     }
-    let end = bytes.len().min(MAX_PART);
+    let end = bytes.len().min(CUT_PART);
     let mut hash = 0_u64;
+    let mut fallback = None;
     for (offset, byte) in bytes[MIN_PART..end].iter().enumerate() {
         hash = (hash << 1).wrapping_add(GEAR[usize::from(*byte)]);
-        if hash & BOUNDARY == 0 {
+        if hash >> BOUNDARY == 0 {
             return MIN_PART + offset + 1;
         }
+        if hash >> FALLBACK == 0 {
+            fallback = Some(MIN_PART + offset + 1);
+        }
     }
-    end
+    fallback.unwrap_or(end)
 }
 
 fn name(digest: &[u8; 32]) -> String {

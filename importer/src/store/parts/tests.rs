@@ -106,3 +106,32 @@ fn a_sources_index_names_each_file_and_its_parts() {
     assert_eq!(super::sources::manifests(&index[..9]).count(), 0);
     fs::remove_dir_all(directory).unwrap();
 }
+
+// A value whose entries each repeat one long field, as an API's definitions
+// each repeat their compiler unit, still has boundaries throughout, so a new
+// entry rewrites the parts around it and no others.
+#[test]
+fn an_entry_added_among_entries_that_repeat_a_long_field_rewrites_only_its_neighbours() {
+    let directory = std::env::temp_dir().join(format!("rawr-parts-repeat-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&directory);
+    let field = vec![b'u'; 500];
+    let entry = |index: u64| [&field[..], &bytes(index, 40)].concat();
+    let value = |entries: &[u64]| {
+        entries
+            .iter()
+            .flat_map(|&index| entry(index))
+            .collect::<Vec<u8>>()
+    };
+    let mut entries: Vec<u64> = (1..=8_000).collect();
+    let manifest = super::write(&directory, &value(&entries)).unwrap();
+    let before = parts(&directory);
+    entries.insert(4_000, 1_000_000);
+    let edited = super::write(&directory, &value(&entries)).unwrap();
+    let added = parts(&directory)
+        .iter()
+        .filter(|part| !before.contains(part))
+        .count();
+    assert!(added <= 2, "an entry rewrote {added} parts");
+    assert_ne!(manifest, edited);
+    fs::remove_dir_all(directory).unwrap();
+}

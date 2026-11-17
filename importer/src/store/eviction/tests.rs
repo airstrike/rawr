@@ -229,6 +229,63 @@ fn a_kept_generations_parts_stay_and_an_undo_inside_the_window_hits() {
     );
 }
 
+// Two demand rounds of one build each publish a generic under the same
+// resolution, and the runner is built from the second alone. Binding the
+// runner retires the first round's generic and its parts, which nothing
+// bound reaches, and keeps the second's, which the next run hits (#2160).
+#[test]
+fn a_bind_retires_the_rounds_it_superseded() {
+    let fixture = Fixture::new("rounds");
+    let evaluator = Evaluator::new(&fixture.store, &crate::metrics::Current);
+    let context = [0x11; 32];
+    let executions = Cell::new(0);
+    let round = |round: usize| {
+        let resolution = evaluator
+            .direct(
+                &node::Direct::<Unit<RESOLUTION>>::capture(context, b"resolution", &[]).unwrap(),
+                || Ok(Unit(b"lock".to_vec().into())),
+            )
+            .unwrap();
+        evaluator
+            .direct(
+                &node::Direct::<Unit<GENERIC>>::capture(
+                    context,
+                    format!("generic of round {round}").as_bytes(),
+                    &[Parent::validated(&resolution)],
+                )
+                .unwrap(),
+                || {
+                    executions.set(executions.get() + 1);
+                    Ok(Unit(large(1, round)))
+                },
+            )
+            .unwrap()
+    };
+    round(0);
+    let generic = round(1);
+    let runner = evaluator
+        .direct(
+            &node::Direct::<Unit<RUNNER>>::capture(
+                context,
+                b"runner",
+                &[Parent::validated(&generic)],
+            )
+            .unwrap(),
+            || Ok(Unit(b"runner".to_vec().into())),
+        )
+        .unwrap();
+    assert_eq!(fixture.actions(Kind::Generic), 2);
+    let proof = evaluator
+        .seal_read_set([runner.receipt().read_set().clone()])
+        .unwrap();
+    let pins = fixture.store.pin_live_last_good(&proof).unwrap();
+    assert_eq!(fixture.actions(Kind::Generic), 1, "the first round's goes");
+    assert_eq!(fixture.parts(), fixture.named(), "and its parts with it");
+    round(1);
+    assert_eq!(executions.get(), 2, "the bound round hits");
+    drop(pins);
+}
+
 // A part no stored manifest names goes at the next retirement; the parts the
 // kept manifests name stay.
 #[test]
