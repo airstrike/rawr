@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- A crate-facts capture deletes the extraction driver's protocol output once its facts are built, and a crate's facts promoted to rawr's home no longer keep a second copy in the project. (#2161, #2162)
 
 ## 0.3.236 (2026-11-17)
 

@@ -4,7 +4,9 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"A crate-facts capture deletes the extraction driver's protocol output once its facts are built, and a crate's facts promoted to rawr's home no longer keep a second copy in the project.","issues":[2161,2162]}
+    ]
   },
   "releases": [
     {
