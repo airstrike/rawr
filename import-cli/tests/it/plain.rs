@@ -1947,6 +1947,86 @@ fn rawr_test_links_dev_dependencies_into_the_tests() {
     assert_eq!(text(&run.stdout), "no dependency\n");
 }
 
+/// A save during `rawr test --features gated` parses the program as the
+/// test run's start did, with `cfg(test)` and the feature holding (#2194):
+/// the save the runner admits at the next test's call still has that
+/// test, so it runs and passes, and no restart runs the program's `main`.
+#[test]
+fn a_save_during_rawr_test_keeps_the_tests_and_their_features() {
+    let root = crate::support::fresh("plain-test-save");
+    copy(Path::new(FIXTURE), &root);
+    let manifest = root.join("Cargo.toml");
+    let text_of_manifest = fs::read_to_string(&manifest)
+        .unwrap()
+        .replace("[dependencies]", "[features]\ngated = []\n\n[dependencies]");
+    fs::write(&manifest, text_of_manifest).unwrap();
+    let main = root.join("src/main.rs");
+    fs::write(
+        &main,
+        "// rawr\nconst SAVED: u64 = 1;\n\nfn main() {\n    println!(\"main ran {SAVED}\");\n}\n\n\
+         #[cfg(test)]\nmod tests {\n    #[cfg(feature = \"gated\")]\n    mod gated {\n        \
+         #[test]\n        fn a_waits_for_the_save() {\n            \
+         let go = concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/target/go\");\n            \
+         while std::fs::read_to_string(go).is_err() {\n                \
+         std::thread::sleep(std::time::Duration::from_millis(10));\n            }\n        }\n\n        \
+         #[test]\n        fn b_runs_after_it() {\n            \
+         assert_eq!(semver::Version::parse(\"1.2.3\").unwrap().minor, 2);\n        }\n    }\n}\n",
+    )
+    .unwrap();
+    let go = root.join("target/go");
+    let events = root.join("target/events.jsonl");
+    let _ = fs::remove_file(&go);
+    let _ = fs::remove_file(&events);
+
+    let mut child = crate::support::rawr_import()
+        .args(["test", "--features", "gated"])
+        .arg(&*root)
+        .args(["--", "--test-threads=1"])
+        .env("RAWR_HOME", crate::support::runtime_home())
+        .env("RAWR_RUNTIME_HOME", crate::support::runtime_home())
+        .env("RAWR_MCP_EVENTS", &events)
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    // Each wait ends with the event it waits on, or with the run.
+    let mut heard = |event: &str| {
+        while !fs::read_to_string(&events)
+            .unwrap_or_default()
+            .contains(event)
+        {
+            if child.try_wait().unwrap().is_some() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    };
+    // The first test waits while the save reaches the runner, which
+    // admits it at its next call: the second test's.
+    heard("\"running\"");
+    let text_of_main = fs::read_to_string(&main).unwrap();
+    fs::write(
+        &main,
+        text_of_main.replace("const SAVED: u64 = 1;", "const SAVED: u64 = 2;"),
+    )
+    .unwrap();
+    heard("\"queued\"");
+    fs::write(&go, "").unwrap();
+    let tested = child.wait_with_output().unwrap();
+
+    let stdout = text(&tested.stdout);
+    assert!(
+        tested.status.success()
+            && stdout.contains("test tests::gated::b_runs_after_it ... ok")
+            && !stdout.contains("main ran"),
+        "stdout:\n{stdout}\nstderr:\n{}",
+        text(&tested.stderr)
+    );
+}
+
 /// A crate's derive on a program type is expanded by rustc and its items
 /// are program code (D740, #593). A local proc-macro crate's derive,
 /// re-exported beside its trait as serde's is, runs on a top-level struct

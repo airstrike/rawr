@@ -461,6 +461,7 @@ pub(super) fn attempt(
     refresh_required: bool,
     watched: &mut Watched,
     scope: &Scope,
+    parser: &rawr::Engine,
     cells: &rawr::package::Cells,
     diagnostic: &rawr::diagnostic::Source,
 ) -> Result<Attempt, rawr::diagnostic::Report> {
@@ -468,7 +469,7 @@ pub(super) fn attempt(
     let native_current = native_change.is_none();
     let capture = (|| {
         let load = || {
-            rawr::package::Graph::load_with_cells(&rawr::Engine::new(), target, cells)
+            rawr::package::Graph::load_with_cells(parser, target, cells)
                 .map_err(|error| crate::report::package(&error, diagnostic.clone()))
         };
         let mut graph = load()?;

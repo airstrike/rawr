@@ -219,6 +219,7 @@ fn resident_cold_retry_observes_fresh_sources_without_a_hot_begin() {
         false,
         &mut super::Watched::default(),
         &rawr_import::supervisor::snapshot::attempt::Scope::begin(),
+        &rawr_cli::base::Build::Program.parser(),
         &rawr::package::Cells::new(fixture.root.join("target/rawr/parse")).remember(),
         &source,
     );
