@@ -370,6 +370,14 @@ impl<'a> Parser<'a> {
     pub(super) fn type_provides(&self, ty: &Ty, capability: capability::Kind) -> bool {
         match self.inference.resolve(ty) {
             Ty::Unit => true,
+            // `!` implements what core implements it for: it is `Copy`,
+            // prints, compares, orders and hashes, but has no `Default`
+            // and is no iterator. A type holding it is `Copy` as its other
+            // parts are, as `Option<!>` is once the fallback makes it.
+            Ty::Never => !matches!(
+                capability,
+                capability::Kind::Default | capability::Kind::Iterator
+            ),
             // Function pointers and items are `Copy`, as in Rust: a host's
             // callable and an imported function are its Rust items.
             Ty::Fn { .. } | Ty::FnChoice { .. } | Ty::Callable { .. } => {
@@ -620,7 +628,7 @@ impl<'a> Parser<'a> {
             Ty::Projection(_, trait_name, name) => self
                 .associated_bounds(&trait_name, &name)
                 .is_some_and(|(bounds, _)| bounds.contains(capability)),
-            Ty::Never | Ty::Infer(_) | Ty::Unknown => false,
+            Ty::Infer(_) | Ty::Unknown => false,
         }
     }
 

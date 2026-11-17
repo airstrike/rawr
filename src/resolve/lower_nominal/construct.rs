@@ -659,7 +659,19 @@ impl<'a> Parser<'a> {
         };
         self.coerce_expr(&expected, value)?;
         self.move_local(value)?;
-        let payload = Box::new(self.inference.resolve(&value.ty));
+        // A payload that never comes, as `Some(return)`'s, is the variable
+        // it was coerced into, which a later use settles or the fallback
+        // makes `!`: copyness waits for it, as rustc's does.
+        let payload = Box::new(match self.inference.resolve(&value.ty) {
+            Ty::Never => match self.inference.resolve(&expected) {
+                Ty::Infer(id) => {
+                    self.inference.diverging.push(id);
+                    Ty::Infer(id)
+                }
+                settled => settled,
+            },
+            own => own,
+        });
         let (op, ty) = match variant {
             Prelude::Some => (PreludeOp::Some, Ty::Option(payload)),
             Prelude::Ok => (PreludeOp::Ok, Ty::Result(payload, Box::new(err))),
