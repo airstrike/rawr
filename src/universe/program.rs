@@ -205,7 +205,8 @@ impl Program {
     /// program. A program with no `main` ends at once with 0.
     #[must_use]
     pub fn run(&self) -> i32 {
-        std::panic::catch_unwind(run_main).unwrap_or(101)
+        let engine = std::panic::AssertUnwindSafe(&*self.state.engine);
+        std::panic::catch_unwind(|| run_main(&engine)).unwrap_or(101)
     }
 
     /// What reloads this program from any thread.
@@ -410,7 +411,15 @@ fn swap(engine: &Shared<Engine>, candidate: reload::Candidate) -> Result<Option<
 /// Run the published program's `main` to its status, as a generated runner
 /// does: an async `main` hands its future to its runtime's entry (D513.4),
 /// and a native entry the program registered runs here (D501).
-fn run_main() -> i32 {
+/// Run `fn main` as [`Program::run`] does. What Rust prints on stderr as
+/// `main` ends goes to `engine`'s output, where the program's own
+/// `eprintln!` goes: a page shows it, as a terminal shows a process's.
+fn run_main(engine: &Engine) -> i32 {
+    let eprint = |text: &str| {
+        if let Some(write) = &engine.output {
+            write(crate::Output::Stderr, text);
+        }
+    };
     let mut result = island::invoke_main();
     if let Some(Ok(value)) = &result
         && value.is::<future::Future>()
@@ -422,8 +431,8 @@ fn run_main() -> i32 {
         return match island::take_entry() {
             Some(entry) => entry(),
             None => {
-                eprintln!(
-                    "error[E0752]: `main` function is not allowed to be `async` without a runtime's entry, such as `#[tokio::main]`"
+                eprint(
+                    "error[E0752]: `main` function is not allowed to be `async` without a runtime's entry, such as `#[tokio::main]`\n",
                 );
                 101
             }
@@ -436,13 +445,14 @@ fn run_main() -> i32 {
         None => 0,
         Some(Ok(value)) => match value.try_cast::<Result<Dynamic, Dynamic>>() {
             Some(Err(error)) => {
-                eprintln!("Error: {error:?}");
+                eprint(&format!("Error: {error:?}\n"));
                 1
             }
             _ => 0,
         },
+        // A panic, as Rust's hook prints it.
         Some(Err(error)) => {
-            eprintln!("error: {error}");
+            eprint(&island::main_failure(&error));
             101
         }
     }
