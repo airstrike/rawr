@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- `return` and `break` with no value before `)`, `]`, `,` or `}`, as in `Some(return)`, parse as rustc parses them. (#2133)
+- `{:?}` of a value whose type only a diverging expression gives, such as `Vec<!>` from `.map(|_| panic!()).collect()`, prints as rustc's build does rather than giving E0282. (#2131)
+- A crate's type that implements `Future` keeps its own type and methods. tokio's `JoinHandle` has `abort` and `is_finished`, a program's function can return one, `Sleep` has `is_elapsed`, and each is still awaited or joined. (#2132; part of #1714)
 
 ## 0.3.224 (2026-11-16)
 

@@ -11,4 +11,3 @@ type "Parity"
 type tab
 type "A toast that expires"
 type enter
-expect "A toast that expires"

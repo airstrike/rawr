@@ -4,7 +4,11 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"`return` and `break` with no value before `)`, `]`, `,` or `}`, as in `Some(return)`, parse as rustc parses them.","issues":[2133]},
+      {"text":"`{:?}` of a value whose type only a diverging expression gives, such as `Vec<!>` from `.map(|_| panic!()).collect()`, prints as rustc's build does rather than giving E0282.","issues":[2131]},
+      {"text":"A crate's type that implements `Future` keeps its own type and methods. tokio's `JoinHandle` has `abort` and `is_finished`, a program's function can return one, `Sleep` has `is_elapsed`, and each is still awaited or joined.","issues":[2132],"refs":[1714]}
+    ]
   },
   "releases": [
     {
