@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-16",
-  "version": "0.3.229",
+  "version": "0.3.230",
   "examples": {
     "running": 56,
     "total": 56,
@@ -9,16 +9,18 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-      "entries": [
-        {"text":"`vec![return x]` and `[return x, ..]` type their element as a variable a later use settles, so a later `v.push(String::new())` compiles as it does with rustc.","issues":[2139]},
-        {"text":"A `select!` branch whose pattern doesn't match is disabled and the others keep running. With every branch disabled the select runs `else`, and branches are polled from a random one unless `biased;` is given, as tokio does.","issues":[2140],"refs":[1152]},
-        {"text":"A `match` on `()` or a reference to it takes `()`, `_` and binding patterns.","issues":[2145]},
-        {"text":"A git dependency's percent-encoded branch, tag or rev in Cargo.lock (`feature%2Fx`) is decoded as cargo reads it.","issues":[2143]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
     "releases": [
+      {
+        "version": "0.3.230",
+        "date": "2026-11-16",
+        "entries": [
+          {"text":"`vec![return x]` and `[return x, ..]` type their element as a variable a later use settles, so a later `v.push(String::new())` compiles as it does with rustc.","issues":[2139]},
+          {"text":"A `select!` branch whose pattern doesn't match is disabled and the others keep running. With every branch disabled the select runs `else`, and branches are polled from a random one unless `biased;` is given, as tokio does.","issues":[2140],"refs":[1152]},
+          {"text":"A `match` on `()` or a reference to it takes `()`, `_` and binding patterns.","issues":[2145]},
+          {"text":"A git dependency's percent-encoded branch, tag or rev in Cargo.lock (`feature%2Fx`) is decoded as cargo reads it.","issues":[2143]}
+        ]
+      },
       {
         "version": "0.3.229",
         "date": "2026-11-16",
@@ -4691,13 +4693,13 @@
     {"issue":2136,"title":"`tokio::time::timeout` can't be used: its signature projects `F::IntoFuture`","state":"closed","category":"Divergences from rustc","release":"0.3.227"},
     {"issue":2137,"title":"The import pipeline can't build a runner for a package with no library unit","state":"open","category":"Platforms"},
     {"issue":2138,"title":"`tokio::select!` takes several branches and runs the body of the first future to finish","state":"closed","category":"Divergences from rustc","release":"0.3.227"},
-    {"issue":2139,"title":"`vec![return x]` types its element as `!`, so a later push of another type is E0308","state":"closed","category":"Divergences from rustc"},
-    {"issue":2140,"title":"A `select!` branch whose pattern doesn't match ends the select instead of waiting for the other branches","state":"closed","category":"Divergences from rustc"},
+    {"issue":2139,"title":"`vec![return x]` types its element as `!`, so a later push of another type is E0308","state":"closed","category":"Divergences from rustc","release":"0.3.230"},
+    {"issue":2140,"title":"A `select!` branch whose pattern doesn't match ends the select instead of waiting for the other branches","state":"closed","category":"Divergences from rustc","release":"0.3.230"},
     {"issue":2141,"title":"`Timeout<F>`'s own methods and `F: IntoFuture<Output = T>` bounds aren't covered","state":"open","category":"Divergences from rustc"},
     {"issue":2142,"title":"The runner's lock keeps a git dependency's old revision after the project's Cargo.lock moves it","state":"closed","category":"Platforms","release":"0.3.228"},
-    {"issue":2143,"title":"Hidden git dependencies copy the lock's percent-encoded branch as is","state":"closed","category":"Platforms"},
+    {"issue":2143,"title":"Hidden git dependencies copy the lock's percent-encoded branch as is","state":"closed","category":"Platforms","release":"0.3.230"},
     {"issue":2144,"title":"A runner compiling rawr in the project can't settle when the project's lock pins an older version of a crate rawr needs","state":"closed","category":"Platforms","release":"0.3.229"},
-    {"issue":2145,"title":"A `match` on `()` or a reference to it takes `()`, `_` and binding patterns","state":"closed","category":"Divergences from rustc"}
+    {"issue":2145,"title":"A `match` on `()` or a reference to it takes `()`, `_` and binding patterns","state":"closed","category":"Divergences from rustc","release":"0.3.230"}
   ],
   "groups": [
     {
