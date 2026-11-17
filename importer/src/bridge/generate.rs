@@ -2698,8 +2698,9 @@ impl Arena {
         Ok(())
     }
 
-    /// Lend the value to a future (D513.6): it leaves its slot, which
-    /// refuses every use until the future gives it back.
+    /// Lend the value to a future (D513.6): its box leaves its slot, which
+    /// refuses every use until the future gives it back. The value stays
+    /// in its box, so a lease never moves it, as a pinned value needs.
     #[allow(dead_code)]
     pub fn lease<T: Send + 'static>(&mut self, handle: NativeHandle) -> Result<Held<T>, Error> {
         self.settle(&handle);
@@ -2709,19 +2710,20 @@ impl Arena {
         let index = self.index::<T>(&handle)?;
         let value = self.slots[index].value.take().ok_or(Error::StaleHandle)?;
         self.slots[index].leased = true;
-        let value = value.downcast::<T>().map(|value| *value).map_err(|_| Error::TypeMismatch)?;
+        let value = value.downcast::<T>().map_err(|_| Error::TypeMismatch)?;
         Ok(Held::Leased { value: Some(value), handle })
     }
 
     /// Lend a native place synchronously on its owner thread, without
     /// imposing the transfer bound required by an asynchronous Held value.
+    /// As [`Self::lease`], the value stays in its box.
     pub fn lease_place<T: 'static>(&mut self, handle: NativeHandle) -> Result<PlaceHeld<T>, Error> {
         self.settle(&handle);
         if self.homed(&handle).is_some() { return Err(Error::Leased); }
         let index = self.index::<T>(&handle)?;
         let value = self.slots[index].value.take().ok_or(Error::StaleHandle)?;
         self.slots[index].leased = true;
-        let value = value.downcast::<T>().map(|value| *value).map_err(|_| Error::TypeMismatch)?;
+        let value = value.downcast::<T>().map_err(|_| Error::TypeMismatch)?;
         Ok(PlaceHeld { value: Some(value), handle })
     }
 
@@ -3111,7 +3113,8 @@ pub struct PlaceOwner<T>(pub std::marker::PhantomData<fn() -> T>);
 /// A value lent from its slot for a synchronous use on the owner thread,
 /// as a native place's access or a call's `&mut T` input is: it never
 /// leaves the thread, so it needs no `Send`, as rand's `ThreadRng` isn't.
-pub struct PlaceHeld<T: 'static> { pub value: Option<T>, pub handle: NativeHandle }
+/// It holds the slot's own box, which goes back as it came.
+pub struct PlaceHeld<T: 'static> { pub value: Option<Box<T>>, pub handle: NativeHandle }
 
 #[allow(dead_code)]
 impl<T: 'static> PlaceHeld<T> {
@@ -3126,7 +3129,7 @@ impl<T: 'static> Drop for PlaceHeld<T> {
             // The call that borrowed it may still hold the arena: the value
             // waits in this thread's queue for its next use.
             RELENDS.with_borrow_mut(|relends| {
-                relends.push((self.handle.clone(), Box::new(value) as Box<dyn Any>));
+                relends.push((self.handle.clone(), value as Box<dyn Any>));
             });
             queued_here();
             let _ = with_arena(|_| Ok(()));
@@ -3221,7 +3224,7 @@ impl<T: 'static> __rawr_internal::place::ownership::Owner<T> for PlaceOwner<T> {
         visit: impl FnOnce(__rawr_internal::place::Access<'_, T>) -> Result<R, Box<__rawr_internal::EvalAltResult>>,
     ) -> Result<R, Box<__rawr_internal::EvalAltResult>> {
         let mut held = with_arena(|arena| arena.lease_place::<T>(stored.clone())).map_err(place_error)?;
-        let value = held.value.as_mut().expect("native place lease retains its value until restored");
+        let value = &mut **held.value.as_mut().expect("native place lease retains its value until restored");
         visit(if mutable { __rawr_internal::place::Access::Mutable(value) } else { __rawr_internal::place::Access::Shared(value) })
     }
     fn take(stored: &NativeHandle) -> Result<T, Box<__rawr_internal::EvalAltResult>> {
@@ -3238,7 +3241,7 @@ impl<T: 'static> __rawr_internal::place::ownership::Owner<T> for PlaceOwner<T> {
 #[allow(dead_code)]
 pub enum Held<T: Send + 'static> {
     Cloned(T),
-    Leased { value: Option<T>, handle: NativeHandle },
+    Leased { value: Option<Box<T>>, handle: NativeHandle },
 }
 
 #[allow(dead_code)]
@@ -3280,7 +3283,7 @@ impl<T: Send + 'static> Drop for Held<T> {
             // The arena is the owner thread's, and may be borrowed by the
             // native call that drops this future, or absent on an executor's
             // thread: the value waits in the queue its next use drains.
-            enqueue(&RESTORES, (handle.clone(), Box::new(value) as Box<dyn Any + Send>));
+            enqueue(&RESTORES, (handle.clone(), value as Box<dyn Any + Send>));
             __rawr_internal::future::on_owner(|| {
                 let _ = with_arena(|_| Ok(()));
             });
@@ -3460,6 +3463,17 @@ pub fn native_handle(
 pub fn take_value(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<__rawr_internal::Value, Error> {
     let value = arguments.values.get_mut(index).ok_or(Error::MissingArgument)?;
     Ok(__rawr_internal::Value::from((**value).take()))
+}
+
+/// The waker of the task a program's `&mut Context` polls for, which native
+/// code is lent a `Context` of.
+#[allow(dead_code)]
+pub fn take_waker(arguments: &mut Arguments<'_, '_, '_>, index: usize) -> Result<std::task::Waker, Error> {
+    let value = arguments.values.get(index).ok_or(Error::MissingArgument)?;
+    value
+        .read_lock::<__rawr_internal::future::Waking>()
+        .map(|context| context.waker().clone())
+        .ok_or(Error::TypeMismatch)
 }
 
 /// A script future a generic item's `F: Future` takes, as the std future
@@ -4134,7 +4148,7 @@ pub fn reach_lender<T: 'static>(
         return with_arena(|arena| arena.shared::<T, _>(handle.clone(), |value| visit(value)))
             .map_err(place_error)?;
     };
-    let value = held.value.as_ref().expect("a leased receiver holds its value until restored");
+    let value = &**held.value.as_ref().expect("a leased receiver holds its value until restored");
     __rawr_internal::scope::lend_ref::<LenderF<T>, _>(value, |nonce| {
         LENDERS.with_borrow_mut(|lenders| lenders.insert(key, nonce));
         let _lending = Lending(key);
@@ -4240,7 +4254,7 @@ pub fn reach_lender_mut<T: 'static>(
         return with_arena(|arena| arena.mutable::<T, _>(handle.clone(), |value| visit(value)))
             .map_err(place_error)?;
     };
-    let value = held.value.as_mut().ok_or_else(|| place_error(Error::StaleHandle))?;
+    let value = &mut **held.value.as_mut().ok_or_else(|| place_error(Error::StaleHandle))?;
     visit(value)
 }
 
@@ -20608,6 +20622,21 @@ fn render_take_input(
         )
         .map_err(request::unwritable);
     }
+    // `&mut Context<'_>`, as tokio's `poll_budget_available` takes: a
+    // `Context` of the waker of the task polling the program, made for the
+    // call, as an executor makes one for each poll.
+    if let convert::Type::Borrowed {
+        mutable: true,
+        ty: borrowed,
+    } = substituted(ty, signature, substitutions)?
+        && is_context(&borrowed)
+    {
+        return writeln!(
+            output,
+            "    let argument_{local}_waker = take_waker(arguments, {index})?;\n    let mut argument_{local}_context = std::task::Context::from_waker(&argument_{local}_waker);\n    let argument_{local} = &mut argument_{local}_context;"
+        )
+        .map_err(request::unwritable);
+    }
     // `&[T]` of crate values, as iced's `markdown::view(&items, ..)` takes:
     // each value moved out of its slot into one slice, and back once nothing
     // borrows it (`SliceLent`). An output that may borrow it keeps it
@@ -22628,6 +22657,7 @@ fn render_give(
             writeln!(output, "    {frame}.give_{slot}(arguments.arena, {value})")
         }
         ty if boxed_element(ty).is_some()
+            || poll_element(ty).is_some()
             || std_generic(ty).is_some()
             || counted_element(ty).is_some()
             || keyed_element(ty).is_some()
@@ -23204,6 +23234,17 @@ fn render_to_dynamic(
         ty if let Some(element) = boxed_element(ty) => {
             return render_to_dynamic(element, &format!("(*{value})"), depth, output);
         }
+        // std's `Poll`, as the core future's: an `Option`, `Some` of what is
+        // ready.
+        ty if let Some(element) = poll_element(ty) => {
+            let inner = format!("inner_{depth}");
+            let mut converted = String::new();
+            render_to_dynamic(element, &inner, depth + 1, &mut converted)?;
+            write!(
+                output,
+                "match {value} {{ std::task::Poll::Pending => Ok(__rawr_internal::option::none()), std::task::Poll::Ready({inner}) => ({converted}).map(__rawr_internal::option::some) }}"
+            )
+        }
         // std's generic value, as the one rawr holds at its own values.
         ty if let Some((_, element)) = std_generic(ty) => {
             let mut converted = String::new();
@@ -23573,6 +23614,30 @@ fn is_future(ty: &convert::Type) -> bool {
         if *definition == crate::surface::identity::Definition::future())
 }
 
+/// std's `task::Context`, which native code is lent of the polling task's
+/// waker.
+fn is_context(ty: &convert::Type) -> bool {
+    matches!(ty, convert::Type::Nominal { definition, .. }
+        if *definition == crate::surface::identity::Definition::context())
+}
+
+/// `T` of std's `task::Poll<T>`, which crosses as an `Option` of `T`:
+/// `Some` is `Ready`.
+fn poll_element(ty: &convert::Type) -> Option<&convert::Type> {
+    match ty {
+        convert::Type::Nominal {
+            definition,
+            arguments,
+        } if *definition == crate::surface::identity::Definition::poll() => {
+            match arguments.as_ref() {
+                [element] => Some(element),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
 /// A facade value, as `iced::Length`, which crosses as its Rust value.
 fn is_facade_value(ty: &convert::Type) -> bool {
     matches!(ty, convert::Type::Nominal { definition, .. }
@@ -23584,6 +23649,7 @@ fn is_facade_value(ty: &convert::Type) -> bool {
 fn holds_native(ty: &convert::Type) -> bool {
     match ty {
         ty if let Some(element) = boxed_element(ty) => holds_native(element),
+        ty if let Some(element) = poll_element(ty) => holds_native(element),
         ty if let Some((_, element)) = std_generic(ty) => holds_native(element),
         ty if counted_element(ty).is_some() => true,
         // What a crate's thread gives crosses by value (#1266).
@@ -28399,6 +28465,10 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
         ty if let Some(element) = joined_element(ty) => {
             format!("std::thread::JoinHandle<{}>", concrete_type(element)?)
         }
+        ty if let Some(element) = poll_element(ty) => {
+            format!("std::task::Poll<{}>", concrete_type(element)?)
+        }
+        ty if is_context(ty) => "std::task::Context<'_>".to_owned(),
         ty if let Some((pointer, element)) = counted_element(ty) => {
             format!("{pointer}<{}>", concrete_type(element)?)
         }
@@ -28579,8 +28649,16 @@ fn render_method_head(
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     let encoding = request::unwritable;
+    // `self: Pin<&mut Self>`: the place the receiver's lease lends, which
+    // stays where its slot holds it, as a pinned value must.
+    let pinned = "__rawr_internal::crossing::pin_in_place(&mut *receiver)";
     let Some(through) = through_trait(signature, substitutions, None)? else {
-        write!(output, "receiver.{name}").map_err(encoding)?;
+        let receiver = if signature.pinned_receiver() {
+            pinned
+        } else {
+            "receiver"
+        };
+        write!(output, "{receiver}.{name}").map_err(encoding)?;
         render_item_turbofish(
             signature,
             substitutions,
@@ -28599,6 +28677,7 @@ fn render_method_head(
         output,
     )?;
     let lent = match receiver {
+        _ if signature.pinned_receiver() => pinned,
         Receiver::Owned => "receiver",
         Receiver::Shared => "&*receiver",
         Receiver::Mutable => "&mut *receiver",

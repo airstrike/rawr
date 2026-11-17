@@ -170,14 +170,15 @@ impl StructuralRow {
 }
 
 /// A Rust future, which no crate's type names, is the core's future
-/// (D511.3, D513.3), and std's `Duration` and `Instant` are Rawr's own.
+/// (D511.3, D513.3), a task's `Context` and `Poll` are the core future's,
+/// and std's `Duration` and `Instant` are Rawr's own.
 fn semantic_type(
     identity: &[u8; 32],
     arguments: Box<[host::type_ref::Type]>,
 ) -> Result<Option<host::type_ref::Type>, host::Error> {
     use rawr_import::surface::identity::Definition;
-    if identity == Definition::future().as_bytes() {
-        let future = crate::future::facade::definition()?.export_type("future::Future")?;
+    if let Some(path) = super::core_future_type(identity) {
+        let future = crate::future::facade::definition()?.export_type(path)?;
         return host::type_ref::Type::external(future, arguments).map(Some);
     }
     if let Some(path) = Definition::std_path(identity) {

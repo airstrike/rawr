@@ -606,6 +606,20 @@ impl<'a> Parser<'a> {
                 capability == capability::Kind::Debug && self.std_error(&dynamic, false)
                     || self.type_implements(&dynamic, capability.name())
             }
+            // std's `Poll<T>` derives what it is from `T`, its `Copy`,
+            // `Clone`, `Debug`, comparisons and `Hash`, as an `Option` does.
+            Ty::Host { proof, arguments }
+                if proof.definition.path().as_str() == crate::future::facade::POLL =>
+            {
+                !matches!(
+                    capability,
+                    capability::Kind::Default
+                        | capability::Kind::Iterator
+                        | capability::Kind::Error
+                ) && arguments
+                    .iter()
+                    .all(|argument| self.type_provides(argument, capability))
+            }
             Ty::Host { proof, .. } => proof.definition.capabilities().contains(capability),
             // A derive on a generic type holds when its arguments provide
             // the capability too, as derive's bounds require.

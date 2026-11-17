@@ -28,7 +28,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 270;
+const CLASSIFIER_VERSION: u32 = 274;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -10873,8 +10873,23 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             }
             _ => signature_plan,
         };
+        // `self: Pin<&mut Self>`, as `Future::poll` takes, which the
+        // extraction gives as a receiver by value of its `Pin` type: a
+        // `&mut self` whose call pins the place it lends. Any other `Pin`
+        // receiver is one rawr doesn't lend yet.
+        let pinned = match signature.receiver() {
+            model::Receiver::Value { ty } => self.pinned_receiver(ty),
+            _ => None,
+        };
+        let signature_plan = signature_plan.with_pinned_receiver(pinned == Some(true));
         let receiver = match signature.receiver() {
             model::Receiver::None => None,
+            model::Receiver::Value { .. } if pinned == Some(true) => {
+                Some(ownership::Receiver::Mutable)
+            }
+            model::Receiver::Value { .. } if pinned == Some(false) => {
+                return Err(representability::reject::Kind::ExplicitReceiver.into())
+            }
             model::Receiver::Value { .. } => Some(ownership::Receiver::Owned),
             model::Receiver::Reference { mutability, .. } => Some(match mutability {
                 model::Mutability::Shared => ownership::Receiver::Shared,
@@ -11138,6 +11153,30 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         Some(self.convert_object(representability::object::Pointer::Shared, bounds))
     }
 
+    /// Whether a receiver of type `ty` is core's `Pin`: `Some(true)` of a
+    /// `Pin<&mut Self>`, `Some(false)` of any other, `None` when `ty` is no
+    /// `Pin`.
+    fn pinned_receiver(&self, ty: &model::Type) -> Option<bool> {
+        let model::Type::Definition { id, arguments } = ty else {
+            return None;
+        };
+        let definition = self
+            .graph
+            .definition_index(id)
+            .and_then(|index| self.graph.definitions().nth(index))?;
+        definition.id().unit().authority().sysroot()?;
+        if !definition.display_path().eq(["core", "pin", "Pin"]) {
+            return None;
+        }
+        Some(matches!(
+            std_binding::type_argument(arguments, 0),
+            Some(model::Type::Reference {
+                mutability: model::Mutability::Mutable,
+                ..
+            })
+        ))
+    }
+
     /// A struct's public field: as `convert`, and a shared slice of
     /// scalars or a `&str` that borrows for the struct's own lifetime, as
     /// iced's `LineDash<'a>` has `segments: &'a [f32]`. A value Rawr builds
@@ -11274,6 +11313,22 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                     Some(Std::Instant) => Type::Nominal {
                         definition: crate::surface::identity::Definition::instant(),
                         arguments: Box::default(),
+                    },
+                    // A task's `Context`, which a crate borrows `&mut` only:
+                    // the core future's, its lifetime the borrow's.
+                    Some(Std::Context) => Type::Nominal {
+                        definition: crate::surface::identity::Definition::context(),
+                        arguments: Box::default(),
+                    },
+                    // `Poll<T>`, as tokio's `poll_budget_available` gives
+                    // `Poll<()>`: the core future's `Poll` of `T`.
+                    Some(Std::Poll) => Type::Nominal {
+                        definition: crate::surface::identity::Definition::poll(),
+                        arguments: Box::new([self.convert(
+                            std_binding::type_argument(arguments, 0).ok_or(
+                                representability::reject::Kind::UnsupportedGenericArgument,
+                            )?,
+                        )?]),
                     },
                     // A generic one at each type argument, as `Cursor<Bytes>`.
                     Some(Std::Held { path, .. } | Std::Lent { owned: path }) => {

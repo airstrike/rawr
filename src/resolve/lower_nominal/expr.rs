@@ -1490,7 +1490,9 @@ impl<'a> Parser<'a> {
             let (arguments, end) = self.parse_call_arguments("`Box` arguments")?;
             let [argument] = <[ParsedExpr; 1]>::try_from(arguments).map_err(|_| unknown())?;
             let call = span(name_span.start(), end);
-            if member.as_str() != "new" {
+            // `Box::pin(value)` too: its `Pin<Box<T>>` is the `Box` it pins
+            // at runtime, as a `Pin` is.
+            if !matches!(member.as_str(), "new" | "pin") {
                 return Err(unknown());
             }
             let ty = Ty::Boxed(Box::new(self.inference.resolve(&argument.ty)));

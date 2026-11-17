@@ -306,6 +306,15 @@ impl<'a> Parser<'a> {
                 value = polled;
                 continue;
             }
+            // `poll.map(f)` of std's `Poll`, an `Option` at runtime, which
+            // maps its `Ready` value as an `Option`'s `map` does its `Some`.
+            if member.as_str() == "map"
+                && matches!(self.peek(), Token::LeftParen)
+                && let Some(element) = self.poll_output(&value.ty)
+            {
+                value = self.parse_poll_map(value, element, member.clone(), member_span)?;
+                continue;
+            }
             if member.as_str() == "into_future"
                 && matches!(self.peek(), Token::Unit)
                 && let Some(future) = self.parse_into_future(&value)?

@@ -43,6 +43,12 @@ pub(crate) enum Std {
     Duration,
     /// std's `Instant`: rawr's own.
     Instant,
+    /// core's `task::Context<'a>`, lent `&mut`: the core future's context,
+    /// whose waker native code is lent a `Context` of.
+    Context,
+    /// core's `task::Poll<T>`: the core future's `Poll`, an `Option` of `T`
+    /// at runtime.
+    Poll,
     /// std's `thread::JoinHandle<T>`: rawr's thread handle, of any `T` a
     /// crate gives and of a `T` that crosses by value a crate takes (#1266,
     /// #1274, #1275). Elsewhere it is [`Unrun::JoinHandle`].
@@ -119,7 +125,7 @@ impl Unrun {
 }
 
 /// Each std definition rawr represents, by its definition path.
-pub(crate) const BINDING: [(&[&str], Std); 28] = [
+pub(crate) const BINDING: [(&[&str], Std); 30] = [
     (&["alloc", "borrow", "Cow"], Std::Cow),
     (&["alloc", "boxed", "Box"], Std::Box),
     (
@@ -178,6 +184,8 @@ pub(crate) const BINDING: [(&[&str], Std); 28] = [
         },
     ),
     (&["core", "result", "Result"], Std::Result),
+    (&["core", "task", "poll", "Poll"], Std::Poll),
+    (&["core", "task", "wake", "Context"], Std::Context),
     (&["core", "time", "Duration"], Std::Duration),
     (
         &["std", "collections", "hash", "map", "HashMap"],

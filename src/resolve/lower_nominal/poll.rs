@@ -129,20 +129,13 @@ impl Parser<'_> {
     /// `future.poll(cx)`, also as `Future::poll(future, cx)`, of a future
     /// the program holds, at its `(`: one poll of it with the polling
     /// task's context, `Poll<T>` of its output. `None` when the receiver is
-    /// no core future, whose `poll` is its own.
+    /// no core future, as a crate's future is, whose `poll` is its own
+    /// impl's, which polls it where its slot holds it.
     pub(super) fn parse_future_poll(
         &mut self,
         future: &ParsedExpr,
     ) -> Result<Option<ParsedExpr>, Error> {
         let Some(output) = self.polled_future(&future.ty) else {
-            // A crate's future is polled where it is by native code only;
-            // `IntoFuture::into_future` makes the core's future of it.
-            if self.awaited_output(&future.ty, future.span)?.is_some() {
-                return Err(Error::NotYet {
-                    path: "Future::poll".into(),
-                    reference: future.span,
-                });
-            }
             return Ok(None);
         };
         let (mut arguments, end) = self.parse_call_arguments("`poll` arguments")?;
@@ -267,6 +260,29 @@ impl Parser<'_> {
         }
         let at = future.span;
         self.core_future(future, &output, at).map(Some)
+    }
+
+    /// `poll.map(f)` of a `Poll<T>` `value` holds, at its `(`: an `Option`'s
+    /// `map` of it, which it is at runtime, of `Poll<U>`.
+    pub(super) fn parse_poll_map(
+        &mut self,
+        value: ParsedExpr,
+        element: Ty,
+        member: ImmutableString,
+        member_span: Span,
+    ) -> Result<ParsedExpr, Error> {
+        let option = ParsedExpr {
+            ty: Ty::Option(Box::new(element.clone())),
+            ..value
+        };
+        let mapped = self.parse_option_method(option, element, member, member_span)?;
+        let Ty::Option(output) = self.inference.resolve(&mapped.ty) else {
+            return Err(self.unsupported("`Poll::map` of other than an `Option`'s `map`"));
+        };
+        Ok(ParsedExpr {
+            ty: self.poll_type(*output),
+            ..mapped
+        })
     }
 
     /// std's `Poll<T>` of `output`, the core future's `Poll`.

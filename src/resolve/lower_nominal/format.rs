@@ -2118,6 +2118,30 @@ impl<'a> Parser<'a> {
         Ok(self.operator_expr(source, value.ty, span(name_span.start(), end)))
     }
 
+    /// The `{:?}` text of `value`, an option at runtime of an `element`
+    /// once its first variant of `names`: `Some(..)` or `None` of an
+    /// `Option`, `Ready(..)` or `Pending` of a `Poll`.
+    fn variant_debug(
+        &mut self,
+        element: &Ty,
+        value: origin::Fragment,
+        [some, none]: [&str; 2],
+        span: Span,
+    ) -> Result<origin::Fragment, Error> {
+        let option = self.temporary("debug");
+        let mut source = origin::Fragment::plain(format!("{{ let {option} = "));
+        source.push(value);
+        source.push_text("; if ");
+        let test = self.prelude_op(PreludeOp::IsSome, [option.as_str().into()]);
+        let inner = self.prelude_op(PreludeOp::Unwrap, [option.as_str().into()]);
+        let inner = self.debug_source(element, inner, span)?;
+        source.push(test);
+        source.push_text(format!(" {{ \"{some}(\" + "));
+        source.push(inner);
+        source.push_text(format!(" + \")\" }} else {{ \"{none}\" }} }}"));
+        Ok(source)
+    }
+
     /// A `String` expression rendering `value` of type `ty` as Rust's
     /// `{:?}` does, when `ty` is `Debug`.
     pub(super) fn debug_source(
@@ -2270,19 +2294,11 @@ impl<'a> Parser<'a> {
                     [value, code.into(), "()".into(), "()".into()],
                 )
             }
-            Ty::Option(element) => {
-                let option = self.temporary("debug");
-                let mut source = origin::Fragment::plain(format!("{{ let {option} = "));
-                source.push(value);
-                source.push_text("; if ");
-                let test = self.prelude_op(PreludeOp::IsSome, [option.as_str().into()]);
-                let inner = self.prelude_op(PreludeOp::Unwrap, [option.as_str().into()]);
-                let inner = self.debug_source(element, inner, span)?;
-                source.push(test);
-                source.push_text(" { \"Some(\" + ");
-                source.push(inner);
-                source.push_text(" + \")\" } else { \"None\" } }");
-                source
+            Ty::Option(element) => self.variant_debug(element, value, ["Some", "None"], span)?,
+            // std's `Poll<T>`, an `Option` at runtime: `Ready(..)` or
+            // `Pending`.
+            ty if let Some(element) = self.poll_output(ty) => {
+                self.variant_debug(&element, value, ["Ready", "Pending"], span)?
             }
             Ty::Result(ok, err) => {
                 let result = self.temporary("debug");
