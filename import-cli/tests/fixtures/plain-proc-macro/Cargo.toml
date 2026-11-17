@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 numerals = { path = "numerals" }
+wrap = { path = "wrap" }
 
 # Its own workspace: it is not a member of Rawr's.
 [workspace]

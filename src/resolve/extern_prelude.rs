@@ -62,6 +62,19 @@ impl Prelude {
         &self.project
     }
 
+    /// Whether `path` names a macro of one of the package's dependencies
+    /// that `host`'s facades hold no item at: a proc macro, whose crate has
+    /// no API to extract, or one a library re-exports from its proc macro
+    /// crate. rustc resolves the path when it expands the call, and names
+    /// it in its error when it holds no macro there.
+    pub(crate) fn crate_macro(&self, host: &crate::host::Registry, path: &str) -> bool {
+        path.split_once("::")
+            .is_some_and(|(root, _)| self.dependency(root))
+            && !host
+                .overloads(path)
+                .is_some_and(|items| items.iter().any(|item| item.kind().is_macro()))
+    }
+
     /// Whether it holds a crate named `name`.
     pub(crate) fn holds(&self, name: &str) -> bool {
         ALWAYS.contains(&name) || self.dependency(name)

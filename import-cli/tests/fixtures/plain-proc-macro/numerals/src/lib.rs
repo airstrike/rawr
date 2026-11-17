@@ -9,3 +9,10 @@ pub fn double(input: TokenStream) -> TokenStream {
         .parse()
         .expect("the product parses")
 }
+
+/// `verbatim!(tokens)`: the tokens as they are, so a call expands to a
+/// type in a type's place and a pattern in a pattern's.
+#[proc_macro]
+pub fn verbatim(input: TokenStream) -> TokenStream {
+    input
+}
