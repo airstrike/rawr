@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
+- rawr mcp's `type` sends text of any length in one turn of the window's event loop, so long text arrives whole and no longer waits two frames for each character. (#1415)
+- A rawr mcp `wait` the client gave up on no longer takes the events a later `wait` needs: the later one takes its place and returns them. (#1542)
+- rawr mcp's screenshot, input and debugger tools wait for a starting or restarting program and reach the restarted one, not the one it retires. (#1964)
 
 ## 0.4.18 (2026-11-18)
 
