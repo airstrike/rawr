@@ -300,11 +300,12 @@ pub(crate) struct ClassifiedParts {
     allocation: contract::Usage,
 }
 
-/// Counts the encoded canonical contract bytes; only checked-arithmetic
-/// overflow stops the measurement.
-struct Measured {
-    bytes: usize,
-    overflow: bool,
+/// The canonical contract's bytes, written once: a buffer that can't grow
+/// fails the write rather than aborting.
+#[derive(Default)]
+struct Encoded {
+    bytes: Vec<u8>,
+    exhausted: bool,
 }
 
 /// Checked-arithmetic overflow is a genuine failure and stays terminal.
@@ -4922,36 +4923,26 @@ impl<P: api::Phase> api::Graph<P> {
                     implementations: &implementations,
                 },
             };
-            let mut measured = Measured {
-                bytes: 0,
-                overflow: false,
-            };
-            let result = serde_json::to_writer(&mut measured, &canonical_value);
-            if measured.overflow {
-                return Err(arithmetic());
+            let mut encoded = Encoded::default();
+            let result = serde_json::to_writer(&mut encoded, &canonical_value);
+            if encoded.exhausted {
+                return Err(Error::Allocation);
             }
             result.map_err(|_| Error::Encoding)?;
-            context.retain(0, measured.bytes)?;
-            // The retained targets were measured above; the cardinality proof
+            let canonical = encoded.bytes;
+            context.retain(0, canonical.len())?;
+            // The retained targets were counted above; the cardinality proof
             // alone remains a gate.
             let allocation = contract::Usage::classified(
                 self,
                 &definitions,
                 &outcomes,
                 &context.support,
-                measured.bytes,
+                canonical.len(),
                 (context.retained_items.get(), context.retained_bytes.get()),
                 usize::MAX,
                 usize::MAX,
             )?;
-            let mut canonical = Vec::new();
-            canonical
-                .try_reserve_exact(measured.bytes)
-                .map_err(|_| Error::Allocation)?;
-            serde_json::to_writer(&mut canonical, &canonical_value).map_err(|_| Error::Encoding)?;
-            if canonical.len() != measured.bytes {
-                return Err(Error::Encoding);
-            }
             let fingerprint = contract::fingerprint::Fingerprint(Sha256::digest(&canonical).into());
             Ok((
                 definitions.into_boxed_slice(),
@@ -5149,12 +5140,8 @@ impl SupportLedger {
                     count: 0,
                 }),
         );
-        // Each implementation's identity, digested once for its group and
-        // for every support edge it is the provenance of.
-        let implementations = graph
-            .implementations()
-            .map(crate::surface::identity::Implementation::of)
-            .collect::<Result<Vec<_>, _>>()?;
+        // Each implementation's identity, digested once for the graph.
+        let implementations = graph.surface_implementations();
         groups.extend(implementations.iter().map(|implementation| SupportGroup {
             provenance: SupportProvenance::Implementation(*implementation),
             count: 0,
@@ -6307,7 +6294,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             self.retain_items(implementation.associated().len())?;
             self.retain_array::<ImplementationRecord>(1)?;
             outcomes.try_reserve(1).map_err(|_| Error::Allocation)?;
-            let identity = crate::surface::identity::Implementation::of(implementation)?;
+            let identity = crate::surface::identity::Implementation::of(implementation);
             let mut associated = Vec::new();
             self.retain_array::<OutcomeRecord>(implementation.associated().len())?;
             associated
@@ -8646,20 +8633,23 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         groups
             .try_reserve_exact(group_count)
             .map_err(|_| Error::Allocation)?;
-        groups.extend(self.graph.definitions().map(|definition| SupportGroup {
-            provenance: SupportProvenance::Definition(
-                self.graph.surface_definition(definition.id()),
-            ),
+        // Each definition's and implementation's identity, digested once
+        // for the graph, for its group and every edge it is the provenance
+        // of.
+        groups.extend(
+            self.graph
+                .surface_definitions()
+                .iter()
+                .map(|definition| SupportGroup {
+                    provenance: SupportProvenance::Definition(*definition),
+                    count: 0,
+                }),
+        );
+        let implementations = self.graph.surface_implementations();
+        groups.extend(implementations.iter().map(|implementation| SupportGroup {
+            provenance: SupportProvenance::Implementation(*implementation),
             count: 0,
         }));
-        for implementation in self.graph.implementations() {
-            groups.push(SupportGroup {
-                provenance: SupportProvenance::Implementation(
-                    crate::surface::identity::Implementation::of(implementation)?,
-                ),
-                count: 0,
-            });
-        }
         groups.sort_unstable_by_key(|group| group.provenance);
         if groups.len() != group_count
             || groups
@@ -8686,13 +8676,9 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                         .graph
                         .implementation_index(outcome.provenance())
                         .ok_or(Error::Cardinality)?;
-                    let implementation = self
-                        .graph
-                        .implementation_at(index)
-                        .ok_or(Error::Cardinality)?;
-                    SupportProvenance::Implementation(crate::surface::identity::Implementation::of(
-                        implementation,
-                    )?)
+                    SupportProvenance::Implementation(
+                        *implementations.get(index).ok_or(Error::Cardinality)?,
+                    )
                 }
             };
             let group = groups
@@ -17552,13 +17538,15 @@ pub enum Error {
     Node(#[source] Box<crate::node_parts::Error>),
 }
 
-impl Write for Measured {
+impl Write for Encoded {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        let Some(actual) = self.bytes.checked_add(buffer.len()) else {
-            self.overflow = true;
-            return Err(io::Error::other("canonical contract byte count overflowed"));
-        };
-        self.bytes = actual;
+        if self.bytes.try_reserve(buffer.len()).is_err() {
+            self.exhausted = true;
+            return Err(io::Error::other(
+                "the canonical contract's buffer can't grow",
+            ));
+        }
+        self.bytes.extend_from_slice(buffer);
         Ok(buffer.len())
     }
 

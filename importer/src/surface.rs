@@ -1255,8 +1255,7 @@ fn event_projection(
             );
             let trait_message = trait_argument(trait_arguments, widget_trait, widget_message);
             if self_message.is_some() && self_message == trait_message {
-                let proof = identity::Implementation::of(implementation)
-                    .map_err(|_| Error::InstanceMismatch)?;
+                let proof = identity::Implementation::of(implementation);
                 if widget.replace(proof).is_some() {
                     return Err(Error::InstanceMismatch);
                 }
@@ -1491,8 +1490,7 @@ fn predicate_proofs(
             {
                 continue;
             }
-            let proof = identity::Implementation::of(implementation)
-                .map_err(|_| Error::InstanceMismatch)?;
+            let proof = identity::Implementation::of(implementation);
             if selected.replace(proof).is_some() {
                 return Err(Error::InstanceMismatch);
             }

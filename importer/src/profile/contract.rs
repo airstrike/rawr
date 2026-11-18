@@ -958,9 +958,7 @@ fn evidence_matches_graph(
         }),
         Kind::Implementation => graph
             .implementation_at(index)
-            .and_then(|implementation| {
-                crate::surface::identity::Implementation::of(implementation).ok()
-            })
+            .map(crate::surface::identity::Implementation::of)
             .map(|implementation| *implementation.as_bytes()),
     };
     digest == Some(evidence.digest)
