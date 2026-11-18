@@ -714,14 +714,27 @@ impl Shared {
             return;
         }
         let request: Value = serde_json::from_str(&line).unwrap_or(Value::Null);
-        let gone = || gone(&stream);
-        let answer = match request.get("op").and_then(Value::as_str) {
-            Some("input") => self.input(&request, &gone),
-            Some("screenshot") => self.screenshot(&request, &gone),
-            Some("menu") => menu::answer(&request, &gone)
+        // Every request is answered, a panic as its error, so a tool that
+        // reads the end before an answer knows the process ended (#1964).
+        let answer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.respond(&request, &stream)
+        }))
+        .unwrap_or_else(|_| json!({ "error": "the program panicked answering this request" }));
+        let mut stream = stream;
+        let _ = writeln!(stream, "{answer}");
+    }
+
+    /// The answer to one request from the tool on `stream`.
+    #[cfg(unix)]
+    fn respond(&self, request: &Value, stream: &std::os::unix::net::UnixStream) -> Value {
+        let gone = || gone(stream);
+        match request.get("op").and_then(Value::as_str) {
+            Some("input") => self.input(request, &gone),
+            Some("screenshot") => self.screenshot(request, &gone),
+            Some("menu") => menu::answer(request, &gone)
                 .unwrap_or_else(|| json!({ "error": "the tool went away" })),
-            Some("break") => self.set(&request),
-            Some("clear") => self.clear(&request),
+            Some("break") => self.set(request),
+            Some("clear") => self.clear(request),
             Some("continue") => self.resume(Resume::Continue, &gone),
             Some("step") => self.resume(
                 Resume::Step(match request.get("kind").and_then(Value::as_str) {
@@ -731,10 +744,8 @@ impl Shared {
                 }),
                 &gone,
             ),
-            _ => self.inspect(&request, &gone),
-        };
-        let mut stream = stream;
-        let _ = writeln!(stream, "{answer}");
+            _ => self.inspect(request, &gone),
+        }
     }
 
     /// Send the program's window an input. A paused program holds its

@@ -319,11 +319,15 @@ pub(super) fn send(
     let (rest, size) =
         main(interrupted, move || resting(runtime, owned.as_deref()))?.ok_or_else(missing)?;
     let mut sent = None;
-    for Timed { event, pause } in events(gesture, rest, size.width, size.height) {
+    for Turn { events, pause } in turns(events(gesture, rest, size.width, size.height)) {
         let title = title.map(str::to_owned);
         sent = Some(
             main(interrupted, move || {
-                deliver(runtime, &event, title.as_deref())
+                let mut sent = None;
+                for event in &events {
+                    sent = Some(deliver(runtime, event, title.as_deref())?);
+                }
+                sent
             })?
             .ok_or_else(missing)?,
         );
@@ -377,6 +381,42 @@ impl From<Event> for Timed {
             pause: Duration::ZERO,
         }
     }
+}
+
+/// Events the window takes in one turn of its event loop, and how long the
+/// cursor rests after them.
+#[derive(Clone, Debug)]
+struct Turn {
+    events: Vec<Event>,
+    pause: Duration,
+}
+
+/// `events` in the turns the window takes them in (#1415). Key events that
+/// follow one another with no rest go in one turn, as keys typed faster
+/// than the window draws reach it: a text of any length takes one turn,
+/// not two for each character, each waiting on the window's next frame.
+/// Each pointer event has a turn of its own, so the window draws the
+/// cursor and what follows it at each point.
+fn turns(events: Vec<Timed>) -> Vec<Turn> {
+    let keyed = |event: &Event| matches!(event, Event::Key { .. } | Event::Flags { .. });
+    let mut turns: Vec<Turn> = Vec::new();
+    for Timed { event, pause } in events {
+        match turns.last_mut() {
+            Some(last)
+                if last.pause.is_zero()
+                    && keyed(&event)
+                    && last.events.last().is_some_and(keyed) =>
+            {
+                last.events.push(event);
+                last.pause = pause;
+            }
+            _ => turns.push(Turn {
+                events: vec![event],
+                pause,
+            }),
+        }
+    }
+    turns
 }
 
 /// The events `gesture` is, in order, in a window `width` by `height`
@@ -1603,6 +1643,26 @@ mod tests {
         let move_to = Gesture::Move(Point { x: 10.0, y: 10.0 });
         assert_eq!(send(&move_to, None, &|| true), Err(Error::Interrupted));
         assert!(!SHOWN.load(Ordering::Acquire));
+    }
+
+    /// Typed text reaches the window in one turn of its loop, whatever its
+    /// length, and a pointer gesture in one turn for each event (#1415).
+    #[test]
+    fn typed_text_takes_one_turn_and_each_pointer_event_its_own() {
+        let text: String = "abcdefghij".repeat(200);
+        let typed = turns(events(&Gesture::Type(text), None, 100.0, 100.0));
+        assert_eq!(typed.len(), 1);
+        assert_eq!(typed[0].events.len(), 4000);
+        let click = Gesture::Click {
+            at: Point { x: 50.0, y: 50.0 },
+            button: Button::Left,
+            count: 1,
+        };
+        let pointed = events(&click, Some(Point { x: 0.0, y: 0.0 }), 100.0, 100.0);
+        let count = pointed.len();
+        let clicked = turns(pointed);
+        assert_eq!(clicked.len(), count);
+        assert!(clicked.iter().all(|turn| turn.events.len() == 1));
     }
 
     #[test]

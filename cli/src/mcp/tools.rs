@@ -506,18 +506,26 @@ pub fn call(server: &Server, params: &Value, cancel: &Cancel) -> Value {
             )
         }),
         "wait" => session(server, text("path")).map(|session| {
-            session.next(
+            let after = session.next(
                 arguments.get("cursor").and_then(Value::as_u64),
                 cancel,
                 |stage, percent| progress.send(percent as f64, Some(100.0), stage),
             );
             // A cancelled call gets no answer, so it gives no events: the
-            // next call without a cursor still returns them.
+            // next call without a cursor still returns them. One a later
+            // wait took the place of gives none either.
             if cancel.is_cancelled() {
                 return content::success(json!({}), "cancelled", Vec::new());
             }
+            let Some(after) = after else {
+                return content::success(
+                    json!({ "superseded": true }),
+                    "a later `wait` took this one's place",
+                    Vec::new(),
+                );
+            };
             let answer = session.answer(
-                arguments.get("cursor").and_then(Value::as_u64),
+                Some(after),
                 arguments.get("output_cursor").and_then(Value::as_u64),
             );
             content::success(answer.structured, answer.summary, Vec::new())
@@ -1060,14 +1068,41 @@ fn ask(session: &session::Session, request: &Value, cancel: &Cancel) -> Result<V
             )
         }
     };
+    // A request made while the program starts or restarts is for the
+    // program that comes of it, not the one it retires (#1964).
+    session.settle(cancel, |_, _| {});
     exchange(session, request, cancel).map_err(unreachable)
 }
 
 /// [`ask`]'s exchange. A program that just started or restarted serves the
 /// socket once it compiled, and answers once it reached what the request
-/// waits for; closing the socket gives the request up.
+/// waits for; closing the socket gives the request up. The program answers
+/// every request it reads, so the end before an answer is the end of the
+/// process that read it, as a restart retires it (#1964): the request goes
+/// again to the program that serves the socket next, while the session
+/// still has one.
 #[cfg(unix)]
 fn exchange(
+    session: &session::Session,
+    request: &Value,
+    cancel: &Cancel,
+) -> std::io::Result<Value> {
+    loop {
+        match exchange_once(session, request, cancel) {
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::BrokenPipe
+                ) && !cancel.is_cancelled()
+                    && (session.phase().is_live() || session.phase().is_pending()) => {}
+            outcome => return outcome,
+        }
+    }
+}
+
+/// One connection's request and answer, for [`exchange`].
+#[cfg(unix)]
+fn exchange_once(
     session: &session::Session,
     request: &Value,
     cancel: &Cancel,
@@ -1261,4 +1296,46 @@ fn extension_call(
         cancel,
         |record| relay(progress, record),
     ))
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::io::{BufRead as _, BufReader, Write as _};
+    use std::os::unix::net::UnixListener;
+
+    use serde_json::json;
+
+    use super::session::{Phase, Session};
+    use super::{exchange, Cancel};
+
+    /// A program that ends while it holds a request, as a restart retires
+    /// it, leaves the request to the program that serves the socket next
+    /// (#1964).
+    #[test]
+    fn a_request_the_ending_program_held_goes_to_the_next_one() {
+        let directory = std::env::temp_dir().join(format!("rawr-exchange-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let socket = directory.join("inspect.sock");
+        let _ = std::fs::remove_file(&socket);
+        let listener = UnixListener::bind(&socket).unwrap();
+        let serving = std::thread::spawn(move || {
+            // The retiring program reads the request and ends.
+            let (ending, _) = listener.accept().unwrap();
+            let mut line = String::new();
+            BufReader::new(&ending).read_line(&mut line).unwrap();
+            drop(ending);
+            // The next one answers it.
+            let (mut next, _) = listener.accept().unwrap();
+            let mut again = String::new();
+            BufReader::new(&next).read_line(&mut again).unwrap();
+            writeln!(next, "{}", json!({ "answered": again.trim() })).unwrap();
+            line
+        });
+        let session = Session::running_at(socket, Phase::Running);
+        let request = json!({ "op": "screenshot" });
+        let answer = exchange(&session, &request, &Cancel::default()).unwrap();
+        assert_eq!(answer["answered"], request.to_string());
+        assert_eq!(serving.join().unwrap().trim(), request.to_string());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
 }
