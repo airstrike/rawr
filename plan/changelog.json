@@ -4,7 +4,9 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
-    "entries": []
+    "entries": [
+      {"text":"A rawr that waits for another rawr's build of the shared runtime, the nightly build directory, a toolchain's driver or the project's runner build says so once, naming the process that holds it. A wait for other runs' leases names none.","issues":[1408],"refs":[2239]}
+    ]
   },
   "releases": [
     {

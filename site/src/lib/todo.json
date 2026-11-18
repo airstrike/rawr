@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
+      "entries": [
+        {"text":"A rawr that waits for another rawr's build of the shared runtime, the nightly build directory, a toolchain's driver or the project's runner build says so once, naming the process that holds it. A wait for other runs' leases names none.","issues":[1408],"refs":[2239]}
+      ]
+    },
     "releases": [
       {
         "version": "0.4.6",
@@ -3155,7 +3160,7 @@
     {"issue":369,"title":"Substitute blanket provided-method types on concrete receivers","state":"closed","category":"No glue (D593)","release":"0.3.19"},
     {"issue":370,"title":"An unused ambiguous method family poisons retained bindings","state":"closed","category":"No glue (D593)","release":"0.3.19"},
     {"issue":371,"title":"A native trait callback returning Result gets a Value signature","state":"closed","category":"No glue (D593)","release":"0.3.20"},
-    {"issue":372,"title":"Explicit trait UFCS loses its chosen identity during method lowering","state":"open","category":"No glue (D593)"},
+    {"issue":372,"title":"Explicit trait UFCS loses its chosen identity during method lowering","state":"closed","category":"No glue (D593)"},
     {"issue":373,"title":"Reuse validated native bindings for plain and marked body edits","state":"closed","category":"No glue (D593)","release":"0.3.25"},
     {"issue":374,"title":"Deployment wait reads a stale container application list","state":"closed","category":"Health","release":"0.3.20"},
     {"issue":375,"title":"Port readiness resets the running bot's boot evidence","state":"closed","category":"Health","release":"0.3.21"},
@@ -3257,7 +3262,7 @@
     {"issue":471,"title":"Find why a warm check sometimes takes the intrinsic-facts path","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":472,"title":"Reading iced's whole dependency set passes the semantic API byte limit","state":"closed","category":"No glue (D593)","release":"0.3.41"},
     {"issue":473,"title":"Delete the reload scheduler's test-only observation binding","state":"open","category":"No glue (D593)"},
-    {"issue":474,"title":"Two crates sharing a target dir fail rawr check on a build script's OUT_DIR","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":474,"title":"Two crates sharing a target dir fail rawr check on a build script's OUT_DIR","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":475,"title":"The plain profile still runs through profile Contract and Demand nodes","state":"open","category":"No glue (D593)"},
     {"issue":476,"title":"The runner names iced_core's Map by an internal path it can't reach","state":"closed","category":"No glue (D593)","release":"0.3.42"},
     {"issue":477,"title":"bezier_tool: no Path::new on canvas Path","state":"retired","category":"No glue (D593)"},
@@ -3725,7 +3730,7 @@
     {"issue":939,"title":"mcp inspect test asserts one line of a running loop","state":"closed","category":"Health"},
     {"issue":940,"title":"background cargo check test waits on a deadline, not an event","state":"closed","category":"Health"},
     {"issue":941,"title":"rawr-cli breakpoint test sets its breakpoint before the program has compiled","state":"closed","category":"Health"},
-    {"issue":942,"title":"Build the std bindings once per machine, not once per process (0.4)","state":"open","category":"Health"},
+    {"issue":942,"title":"Build the std bindings once per machine, not once per process (0.4)","state":"retired","category":"Health"},
     {"issue":943,"title":"Two default methods of one trait that give opaque types mix up their members","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":944,"title":"Type::try_from(&v[..]) of untyped integers picks the [T; N] impl","state":"closed","category":"Divergences from rustc","release":"0.3.138"},
     {"issue":945,"title":"`-` on an unsigned value or literal is E0600","state":"closed","category":"Divergences from rustc","release":"0.3.177"},
@@ -4191,7 +4196,7 @@
     {"issue":1405,"title":"A native `&T` lent to a script fn is a borrow for the call: no Clone, no arena copy, valid on…","state":"closed","category":"Imported lifetimes after slice 2","release":"0.3.172"},
     {"issue":1406,"title":"A native `&T` a script fn was lent passes straight back to a native fn taking `&T` (elevato…","state":"closed","category":"Imported lifetimes after slice 2","release":"0.3.172"},
     {"issue":1407,"title":"inboard after one run: store.parts 7.4G beside store/executions 6.8G; parts should replace whole…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.216"},
-    {"issue":1408,"title":"A rawr blocked on another rawr's shared runtime or API build says so once, naming the builder's…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1408,"title":"A rawr blocked on another rawr's shared runtime or API build says so once, naming the builder's…","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1409,"title":"A program `Cow<str>`'s `.into()` into a crate type reaches `From<&str>`: the member chain derefs…","state":"open","category":"No glue (D593)"},
     {"issue":1410,"title":"A crate's `Cow<str>` nested in an input (`Option<Cow<str>>`, tuples) still reads as String","state":"open","category":"No glue (D593)"},
     {"issue":1411,"title":"A body whose instance-collection pass stops at a later error reports an earlier generic call's…","state":"open","category":"Divergences from rustc"},
@@ -5021,7 +5026,9 @@
     {"issue":2236,"title":"`cfg_if::cfg_if!` in a program fails with \"diagnostic span falls outside source\"","state":"open","category":"No glue (D593)"},
     {"issue":2237,"title":"`scopeguard::defer!` fails: cannot find function `guard` in module `scopeguard`","state":"open","category":"No glue (D593)"},
     {"issue":2238,"title":"A chrono `Datelike` method (`date.year()`) is not found on `NaiveDate`","state":"open","category":"No glue (D593)"},
-    {"issue":2239,"title":"Store, pins, session, runtime and deps locks are released only when every copy of the file closes","state":"open","category":"Health"}
+    {"issue":2239,"title":"Store, pins, session, runtime and deps locks are released only when every copy of the file closes","state":"open","category":"Health"},
+    {"issue":2240,"title":"iced::application with a u32 state and () message panics the runner generator","state":"open","category":"No glue (D593)"},
+    {"issue":2241,"title":"A program's own `#[derive(thiserror::Error)]` is refused as an impl of an unknown trait path","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -5219,21 +5226,21 @@
           "name": "Key and publish",
           "start": 43,
           "size": 3,
-          "state": "now",
-          "note": "Projects reuse extraction tables (#367) and each crate's classification and facade records (#271), published as layers of only what's new (#2224). Drift and lock cases are done (#1025, #1026). Left: #372, #474, #942, #1408.",
+          "state": "done",
+          "note": "Projects reuse extraction tables (#367) and each crate's classification and facade records (#271), published as layers of only what's new (#2224). Drift and locks: #1025, #1026, #1408.",
           "issues": [
             {"number":271,"title":"Generated bindings are built per project, so every project and script pays #255 again for the…","state":"closed"},
             {"number":367,"title":"Reuse verified crate extraction tables across projects","state":"closed"},
             {"number":369,"title":"Substitute blanket provided-method types on concrete receivers","state":"closed"},
             {"number":370,"title":"An unused ambiguous method family poisons retained bindings","state":"closed"},
-            {"number":372,"title":"Explicit trait UFCS loses its chosen identity during method lowering","state":"open"},
+            {"number":372,"title":"Explicit trait UFCS loses its chosen identity during method lowering","state":"closed"},
             {"number":1011,"title":"D742: a detected build-script output mismatch reruns that package in the shared directory and re-extracts","state":"closed"},
             {"number":1012,"title":"A proc macro that reads the environment without tracking isn't covered by build-script drift detection","state":"retired"},
             {"number":1025,"title":"Intrinsic facts captured this run under a stale nightly build-script output aren't recaptured after the clean","state":"closed"},
             {"number":1026,"title":"Shared bindings locks are briefly held by any process rawr starts","state":"closed"},
-            {"number":474,"title":"Two crates sharing a target dir fail rawr check on a build script's OUT_DIR","state":"open"},
-            {"number":1408,"title":"A rawr blocked on another rawr's shared runtime or API build says so once, naming the builder's…","state":"open"},
-            {"number":942,"title":"Build the std bindings once per machine, not once per process (0.4)","state":"open"},
+            {"number":474,"title":"Two crates sharing a target dir fail rawr check on a build script's OUT_DIR","state":"closed"},
+            {"number":1408,"title":"A rawr blocked on another rawr's shared runtime or API build says so once, naming the builder's…","state":"closed"},
+            {"number":942,"title":"Build the std bindings once per machine, not once per process (0.4)","state":"retired"},
             {"number":2224,"title":"Publishing a crate's classification entry rewrites the whole file whenever any record is fresh","state":"closed"}
           ],
           "milestone": "0.4"
@@ -5560,7 +5567,8 @@
             {"number":1082,"title":"pane_grid: a value of a type invariant in its lifetime, made in the arena, can't join a value of the view's region","state":"closed"},
             {"number":1191,"title":"A capturing closure whose output carries the region lifetime gives it in a region of its own (pane_grid)","state":"closed"},
             {"number":1505,"title":"pane_grid panics with E0502 in view: a &self method on a value generic over a script type asks for &mut","state":"closed"},
-            {"number":1506,"title":"A crate value a call's output borrows outside a view stays borrowed for the runner's life","state":"open"}
+            {"number":1506,"title":"A crate value a call's output borrows outside a view stays borrowed for the runner's life","state":"open"},
+            {"number":2240,"title":"iced::application with a u32 state and () message panics the runner generator","state":"open"}
           ],
           "milestone": "0.3"
         },
@@ -6057,7 +6065,8 @@
             {"number":1955,"title":"A marked Copy struct of Copy fields crosses as a proxy, so a native `T: Copy` bound fails in the runner","state":"open"},
             {"number":1956,"title":"A runner's holder of a script type lacks the Eq, Hash and Ord the type derives or writes, but for fieldless Copy enums","state":"open"},
             {"number":2212,"title":"A generic impl's trait method that takes a witness can't be called through dynamic dispatch","state":"open"},
-            {"number":1592,"title":"A value only a generic or std-type impl covers can't coerce to a crate trait's &dyn","state":"open"}
+            {"number":1592,"title":"A value only a generic or std-type impl covers can't coerce to a crate trait's &dyn","state":"open"},
+            {"number":2241,"title":"A program's own `#[derive(thiserror::Error)]` is refused as an impl of an unknown trait path","state":"open"}
           ]
         },
         {
