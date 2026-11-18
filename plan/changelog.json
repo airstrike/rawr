@@ -5,7 +5,11 @@
   "unreleased": {
     "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
     "entries": [
-      {"text":"An array's length may be a const parameter: `struct Buf<const N: usize> { data: [u8; N] }`, `[0; N]` in a body, and `fn sum<const N: usize>(a: [i32; N])`, whose `N` is read from the array it's given.","issues":[2213],"refs":[1152]}
+      {"text":"An array's length may be a const parameter: `struct Buf<const N: usize> { data: [u8; N] }`, `[0; N]` in a body, and `fn sum<const N: usize>(a: [i32; N])`, whose `N` is read from the array it's given.","issues":[2213],"refs":[1152]},
+      {"text":"The landing page's plain loop is a ball that bounces forever in your browser. Edit it while it runs and it reloads in place, keeping its state; a compile error shows while the last good code keeps running.","issues":[1206]},
+      {"text":"`std::thread::sleep` works in the browser. A program in a frame of its own gives the page its time at each sleep, and a one-off run waits on the clock within its time limit instead of stopping. A browser without JSPI still runs every other program, and says so in the frame of one that sleeps.","issues":[1206]},
+      {"text":"A `main` that loops in plain Rust and sleeps takes a reload at its next sleep and runs the new code from its next statement, with its locals kept.","issues":[2216]},
+      {"text":"An enum variant imported by `use` can be passed to a macro, as `column![row![..].align_y(Center)]` does.","issues":[2217]}
     ]
   },
   "releases": [

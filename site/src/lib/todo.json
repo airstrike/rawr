@@ -12,7 +12,11 @@
     "unreleased": {
       "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
       "entries": [
-        {"text":"An array's length may be a const parameter: `struct Buf<const N: usize> { data: [u8; N] }`, `[0; N]` in a body, and `fn sum<const N: usize>(a: [i32; N])`, whose `N` is read from the array it's given.","issues":[2213],"refs":[1152]}
+        {"text":"An array's length may be a const parameter: `struct Buf<const N: usize> { data: [u8; N] }`, `[0; N]` in a body, and `fn sum<const N: usize>(a: [i32; N])`, whose `N` is read from the array it's given.","issues":[2213],"refs":[1152]},
+        {"text":"The landing page's plain loop is a ball that bounces forever in your browser. Edit it while it runs and it reloads in place, keeping its state; a compile error shows while the last good code keeps running.","issues":[1206]},
+        {"text":"`std::thread::sleep` works in the browser. A program in a frame of its own gives the page its time at each sleep, and a one-off run waits on the clock within its time limit instead of stopping. A browser without JSPI still runs every other program, and says so in the frame of one that sleeps.","issues":[1206]},
+        {"text":"A `main` that loops in plain Rust and sleeps takes a reload at its next sleep and runs the new code from its next statement, with its locals kept.","issues":[2216]},
+        {"text":"An enum variant imported by `use` can be passed to a macro, as `column![row![..].align_y(Center)]` does.","issues":[2217]}
       ]
     },
     "releases": [
@@ -3941,7 +3945,7 @@
     {"issue":1203,"title":"A marked function can't return a native crate value to native code unless it sits in a Result","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":1204,"title":"A marked module can't reach a private field of its native crate root's struct","state":"open","category":"Divergences from rustc"},
     {"issue":1205,"title":"rawr has no timeouts of its own: remove every deadline from the protocol, the owner and the test harness","state":"closed","category":"Health","release":"0.3.172"},
-    {"issue":1206,"title":"std::thread::sleep traps rawr-web","state":"open","category":"Platforms"},
+    {"issue":1206,"title":"std::thread::sleep traps rawr-web","state":"closed","category":"Platforms"},
     {"issue":1207,"title":"rawr-repl drops a Drop value at the end of the line that bound it","state":"open","category":"Divergences from rustc"},
     {"issue":1208,"title":"A root package's build script that declares no rerun-if input runs again only when the generated crate changes","state":"open","category":"Divergences from rustc"},
     {"issue":1209,"title":"The package-tree witness of a build script without rerun-if inputs sees more files than Cargo lists","state":"open","category":"Health"},
@@ -4949,7 +4953,12 @@
     {"issue":2212,"title":"A generic impl's trait method that takes a witness can't be called through dynamic dispatch","state":"open","category":"Divergences from rustc"},
     {"issue":2213,"title":"An array whose length is a const parameter isn't supported","state":"closed","category":"Divergences from rustc"},
     {"issue":2214,"title":"A program's trait impl for an array type (`impl Total for [i32; 3]`) is refused as an inherent impl","state":"open","category":"Divergences from rustc"},
-    {"issue":2215,"title":"A tuple struct's constructor with a turbofish (`W::<i32>(1)`) is refused as an unknown value (E0425)","state":"open","category":"Divergences from rustc"}
+    {"issue":2215,"title":"A tuple struct's constructor with a turbofish (`W::<i32>(1)`) is refused as an unknown value (E0425)","state":"open","category":"Divergences from rustc"},
+    {"issue":2216,"title":"A `main` that loops in plain Rust and sleeps takes a reload at its next sleep and runs the new…","state":"open","category":"Hot reload of a marked `main` (D555)"},
+    {"issue":2217,"title":"An enum variant imported by `use` can be passed to a macro, as…","state":"open","category":"Divergences from rustc"},
+    {"issue":2218,"title":"Plain `rawr run` restarts a single file on save instead of reloading a looping `main` in place","state":"open","category":"Hot reload of a marked `main` (D555)"},
+    {"issue":2219,"title":"A browser with neither JSPI nor exnref can't compile the browser's universe module","state":"open","category":"Platforms"},
+    {"issue":2220,"title":"`rawr run --web` packages block the page on a sleep and append output instead of drawing a terminal","state":"open","category":"Platforms"}
   ],
   "groups": [
     {
@@ -6760,7 +6769,9 @@
             {"number":1381,"title":"A package with no file directly in src/ gets one watch root per input subdirectory instead of…","state":"open"},
             {"number":1350,"title":"A new top-level file in a package tree beside its target/ is not seen before the next native read","state":"open"},
             {"number":1351,"title":"A watched package tree covers its .git and nested packages","state":"open"},
-            {"number":1564,"title":"A body static's key misses an edit to a marked const or const fn its initializer calls","state":"open"}
+            {"number":1564,"title":"A body static's key misses an edit to a marked const or const fn its initializer calls","state":"open"},
+            {"number":2218,"title":"Plain `rawr run` restarts a single file on save instead of reloading a looping `main` in place","state":"open"},
+            {"number":2216,"title":"A `main` that loops in plain Rust and sleeps takes a reload at its next sleep and runs the new…","state":"open"}
           ]
         },
         {
@@ -7082,7 +7093,8 @@
             {"number":2188,"title":"Items in an expression-position macro expansion made during lowering are skipped","state":"open"},
             {"number":2190,"title":"A macro defined before a `mod` declaration, called from its child modules, isn't verified","state":"open"},
             {"number":2201,"title":"A graph-time expansion's locals share one hygiene number","state":"open"},
-            {"number":2202,"title":"A transcriber repetition starting with an operator inside a separated repetition doesn't expand","state":"open"}
+            {"number":2202,"title":"A transcriber repetition starting with an operator inside a separated repetition doesn't expand","state":"open"},
+            {"number":2217,"title":"An enum variant imported by `use` can be passed to a macro, as…","state":"open"}
           ]
         },
         {
@@ -7458,8 +7470,10 @@
             {"number":2126,"title":"A suspended async frame's body hash includes positions, so a line added above it restarts the program","state":"closed"},
             {"number":2137,"title":"The import pipeline can't build a runner for a package with no library unit","state":"closed"},
             {"number":94,"title":"In headless Chrome, the first key after clicking the playground canvas is dropped","state":"open"},
-            {"number":1206,"title":"std::thread::sleep traps rawr-web","state":"open"},
-            {"number":1248,"title":"rawr-web prints u128 and i128 values as their type names","state":"open"}
+            {"number":1206,"title":"std::thread::sleep traps rawr-web","state":"closed"},
+            {"number":1248,"title":"rawr-web prints u128 and i128 values as their type names","state":"open"},
+            {"number":2219,"title":"A browser with neither JSPI nor exnref can't compile the browser's universe module","state":"open"},
+            {"number":2220,"title":"`rawr run --web` packages block the page on a sleep and append output instead of drawing a terminal","state":"open"}
           ]
         },
         {

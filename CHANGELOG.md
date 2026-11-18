@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 - An array's length may be a const parameter: `struct Buf<const N: usize> { data: [u8; N] }`, `[0; N]` in a body, and `fn sum<const N: usize>(a: [i32; N])`, whose `N` is read from the array it's given. (#2213; part of #1152)
+- The landing page's plain loop is a ball that bounces forever in your browser. Edit it while it runs and it reloads in place, keeping its state; a compile error shows while the last good code keeps running. (#1206)
+- `std::thread::sleep` works in the browser. A program in a frame of its own gives the page its time at each sleep, and a one-off run waits on the clock within its time limit instead of stopping. A browser without JSPI still runs every other program, and says so in the frame of one that sleeps. (#1206)
+- A `main` that loops in plain Rust and sleeps takes a reload at its next sleep and runs the new code from its next statement, with its locals kept. (#2216)
+- An enum variant imported by `use` can be passed to a macro, as `column![row![..].align_y(Center)]` does. (#2217)
 
 ## 0.4.0 (2026-11-17)
 
