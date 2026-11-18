@@ -15462,3 +15462,52 @@ fn language_a_mut_destructuring_in_a_closure_binds_the_place() {
     );
     assert_eq!(value, "(11, 2) (3, 24) 35");
 }
+
+#[test]
+fn language_const_generics_take_values_as_arguments() {
+    // A const parameter's argument is a literal, a `{ .. }` block of a
+    // constant expression or a `const`'s name, and the item reads the value
+    // as `N`, as rustc evaluates each while it compiles.
+    let value = run_string(
+        r#"
+        const SIZE: usize = 2;
+        const DOUBLE: usize = SIZE * 2 + 1;
+        #[derive(Default)]
+        struct Buf<const N: usize> { used: usize }
+        impl<const N: usize> Buf<N> {
+            fn new() -> Self { Buf { used: 1 } }
+            fn room(&self) -> usize { N - self.used }
+            fn capacity() -> usize { N }
+        }
+        fn width<const N: usize>() -> usize { N * 10 }
+        fn total<const N: usize>(buf: &Buf<N>) -> usize { buf.room() + width::<N>() }
+        struct Flag<const ON: bool, const C: char>;
+        impl<const ON: bool, const C: char> Flag<ON, C> {
+            fn show(&self) -> String { format!("{ON}{C}") }
+        }
+        pub fn run() -> String {
+            let a = Buf::<4>::new();
+            let b: Buf<{ 1 + 2 + 3 }> = Buf::new();
+            let c: Buf<DOUBLE> = Buf::default();
+            let room = || a.room();
+            format!(
+                "{} {} {} {} {} {} {}",
+                room(),
+                b.room(),
+                c.room(),
+                total(&a),
+                width::<{ SIZE * 4 }>(),
+                Buf::<7>::capacity(),
+                Flag::<true, 'x'>.show(),
+            )
+        }
+        run()
+    "#,
+    );
+    assert_eq!(value, "3 5 5 43 80 7 truex");
+    // Two values are two types (E0308).
+    rejected(
+        "struct Buf<const N: usize>; impl<const N: usize> Buf<N> { fn new() -> Self { Buf } } \
+         pub fn run() -> i64 { let b: Buf<3> = Buf::<4>::new(); 0 } run()",
+    );
+}

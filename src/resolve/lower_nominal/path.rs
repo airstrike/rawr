@@ -106,13 +106,13 @@ impl<'a> Parser<'a> {
             if matches!(self.peek_second(), Token::LessThan) {
                 self.next();
                 self.next();
-                let mut types = vec![self.parse_local_type()?];
+                let mut types = vec![self.parse_local_argument()?];
                 while matches!(self.peek(), Token::Comma) {
                     self.next();
                     if matches!(self.peek(), Token::GreaterThan | Token::RightShift) {
                         break;
                     }
-                    types.push(self.parse_local_type()?);
+                    types.push(self.parse_local_argument()?);
                 }
                 self.expect_close_angle("'>' after turbofish type arguments")?;
                 self.pending_turbofish = Some(types);
@@ -1645,6 +1645,12 @@ impl<'a> Parser<'a> {
         };
         let substitution =
             self.method_substitution(&definition, None, span(owner_span.start(), end))?;
+        if let Some(written) = self.written_owners.remove(&owner_span.start())
+            && !definition.owner_arguments().is_empty()
+        {
+            let owner = impl_self_ty(&definition, &substitution);
+            self.require_type(&written, &owner, span(owner_span.start(), end))?;
+        }
         self.require_arguments(
             &definition,
             &mut arguments,

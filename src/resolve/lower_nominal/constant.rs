@@ -4,7 +4,40 @@
 
 use super::*;
 
+/// How deep one constant's initializer may name others: a cycle, which
+/// rustc reports, ends there.
+const CONSTANT_DEPTH: usize = 64;
+
 impl<'a> Parser<'a> {
+    /// The value of the program's `const` `name` (or `Type::NAME`), as rustc
+    /// evaluates it while it compiles: of a constant expression of
+    /// literals and other constants. `None` for any other initializer.
+    pub(super) fn constant_value(
+        &self,
+        name: &str,
+        depth: usize,
+    ) -> Option<crate::item::constant::Value> {
+        if depth > CONSTANT_DEPTH {
+            return None;
+        }
+        if let Some((owner, member)) = name.rsplit_once("::") {
+            let integer = self
+                .named_model(owner)
+                .and_then(|model| self.models.method(model.definition().id(), member))
+                .and_then(|definition| definition.integer())?;
+            return Some(crate::item::constant::Value::Integer(i128::from(integer)));
+        }
+        let function = self
+            .models
+            .function(name)
+            .filter(|function| function.definition.body.constant)?;
+        function
+            .definition
+            .body
+            .syntax
+            .constant(&mut |named| self.constant_value(named, depth + 1))
+    }
+
     /// A use of `const NAME` evaluates its initializer, as Rust inlines it.
     pub(super) fn constant_use(&mut self, function: &ScriptFunction, span: Span) -> ParsedExpr {
         let ty = function

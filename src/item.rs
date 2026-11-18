@@ -6,6 +6,9 @@ use std::fmt;
 /// Parsed type references used by item headers.
 pub mod type_ref;
 
+/// Constant expressions: const generic arguments and the consts they name.
+pub(crate) mod constant;
+
 /// The semantic kind of a declared Rawr item.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
@@ -881,6 +884,8 @@ pub struct GenericParam {
     /// which a turbofish doesn't name: `content::<Message>(..)` for
     /// `fn content<Message>(content: impl IntoView<Message>)`.
     pub lifted: bool,
+    /// The type of a const parameter's value: `usize` of `const N: usize`.
+    pub constant: Option<type_ref::Type>,
 }
 
 /// The lifetimes an item declares and the outlives bounds written on them,
@@ -1123,6 +1128,11 @@ pub(crate) enum BodyTokenKind {
     As,
     SelfValue,
     Mut,
+    /// `+`, `-`, `/`, `%`, `^`, `|`, `<<` or `>>`, so a `const N: T = 2 *
+    /// 3 + 1;` has its value.
+    Operator(constant::Operator),
+    /// `true`, `false` or a char literal.
+    Value(constant::Value),
     Other,
 }
 
@@ -1154,6 +1164,45 @@ impl BodySyntax {
             },
             _ => None,
         }
+    }
+
+    /// The value of a body that is a constant expression, as of `const N:
+    /// T = 2 * SIZE;`, each name's value found by `lookup`.
+    pub(crate) fn constant(
+        &self,
+        lookup: &mut dyn FnMut(&str) -> Option<constant::Value>,
+    ) -> Option<constant::Value> {
+        let mut pieces = Vec::<constant::Piece>::new();
+        let mut path = false;
+        for token in self.tokens() {
+            let piece = match token.kind() {
+                BodyTokenKind::Integer(value) => {
+                    constant::Piece::Value(constant::Value::Integer(i128::from(*value)))
+                }
+                BodyTokenKind::Value(value) => constant::Piece::Value(*value),
+                BodyTokenKind::Identifier(name) => {
+                    if path && let Some(constant::Piece::Name(head)) = pieces.last_mut() {
+                        *head = format!("{head}::{name}").into();
+                        path = false;
+                        continue;
+                    }
+                    constant::Piece::Name(name.clone())
+                }
+                BodyTokenKind::DoubleColon => {
+                    path = true;
+                    continue;
+                }
+                BodyTokenKind::LeftParen => constant::Piece::Open,
+                BodyTokenKind::RightParen => constant::Piece::Close,
+                BodyTokenKind::Star => constant::Piece::Operator(constant::Operator::Multiply),
+                BodyTokenKind::Ampersand => constant::Piece::Operator(constant::Operator::And),
+                BodyTokenKind::Bang => constant::Piece::Operator(constant::Operator::Not),
+                BodyTokenKind::Operator(operator) => constant::Piece::Operator(*operator),
+                _ => return None,
+            };
+            pieces.push(piece);
+        }
+        constant::evaluate(&pieces, lookup)
     }
 }
 

@@ -2720,3 +2720,28 @@ pub mod spread {
         }
     }
 }
+
+/// A type with a const parameter, which a program names at a value: its
+/// methods, its `Default` and a function whose const parameter its
+/// argument's type gives (#2210).
+pub mod dial {
+    #[derive(Debug, Default)]
+    pub struct Dial<const STEPS: u32> {
+        at: u32,
+    }
+
+    impl<const STEPS: u32> Dial<STEPS> {
+        pub fn new(at: u32) -> Self {
+            Dial { at: at % STEPS }
+        }
+
+        pub fn turn(&mut self) -> u32 {
+            self.at = (self.at + 1) % STEPS;
+            self.at
+        }
+    }
+
+    pub fn distance<const STEPS: u32>(dial: &Dial<STEPS>) -> u32 {
+        (STEPS - dial.at) % STEPS
+    }
+}

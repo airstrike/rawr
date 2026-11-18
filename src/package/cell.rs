@@ -31,7 +31,7 @@ use crate::{parse, source, ImmutableString, Position, Span};
 const MAGIC: &[u8; 4] = b"RPCL";
 
 /// Bumped when the encoding below changes.
-const FORMAT: u32 = 14;
+const FORMAT: u32 = 15;
 
 /// What a cell must have been written by to be read: the format, the crate
 /// version, a digest of the parser's sources (see `build.rs`), whether it
@@ -521,7 +521,7 @@ record! {
     item::MacroRules { header, name, span }
     item::Use { scope, header, tree, span }
     item::UseMember { name, alias }
-    item::GenericParam { name, bounds, projections, default, lifted }
+    item::GenericParam { name, bounds, projections, default, lifted, constant }
     item::Struct { header, name, generics, lifetimes, fields, form, span }
     item::Field { name, ty, span, attributes }
     item::Enum { header, name, generics, lifetimes, variants, span }
@@ -770,6 +770,22 @@ impl Codec for item::BodyToken {
             Kind::SelfValue => Some(25),
             Kind::Mut => Some(26),
             Kind::StarStar => Some(27),
+            Kind::Operator(operator) => {
+                writer.byte(28);
+                writer.byte(operator.index());
+                None
+            }
+            Kind::Value(value) => {
+                writer.byte(29);
+                let (kind, payload) = match value {
+                    item::constant::Value::Integer(value) => (0, *value),
+                    item::constant::Value::Bool(value) => (1, i128::from(*value)),
+                    item::constant::Value::Char(value) => (2, i128::from(u32::from(*value))),
+                };
+                writer.byte(kind);
+                writer.0.extend_from_slice(&payload.to_le_bytes());
+                None
+            }
         };
         if let Some(tag) = tag {
             writer.byte(tag);
@@ -810,6 +826,18 @@ impl Codec for item::BodyToken {
             25 => Kind::SelfValue,
             26 => Kind::Mut,
             27 => Kind::StarStar,
+            28 => Kind::Operator(item::constant::Operator::from_index(reader.byte()?)?),
+            29 => {
+                let kind = reader.byte()?;
+                let bytes = reader.take(core::mem::size_of::<i128>())?;
+                let payload = i128::from_le_bytes(bytes.try_into().ok()?);
+                Kind::Value(match kind {
+                    0 => item::constant::Value::Integer(payload),
+                    1 => item::constant::Value::Bool(payload != 0),
+                    2 => item::constant::Value::Char(char::from_u32(u32::try_from(payload).ok()?)?),
+                    _ => return None,
+                })
+            }
             _ => return None,
         };
         Some(Self::new(kind, Span::get(reader)?))

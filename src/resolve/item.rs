@@ -212,6 +212,10 @@ pub(crate) struct Generic {
     pub crate_bounds: Box<[type_ref::Type]>,
     /// An argument-position `impl Trait`, which a turbofish doesn't name.
     pub lifted: bool,
+    /// A const parameter's value type: `usize` of `const N: usize`. Its
+    /// argument is a value (`Ty::Const`), which the item takes as its
+    /// hidden witness and its body reads as `N`.
+    pub constant: Option<type_ref::Type>,
 }
 
 /// A trait declaration. `Self` in its signatures is the generic parameter

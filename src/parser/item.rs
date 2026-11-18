@@ -720,26 +720,21 @@ fn expand_items(
 }
 
 /// `[T; N]` naming a crate `const N: usize = 3;` reads as `[T; 3]`, as rustc
-/// evaluates the constant; a length naming anything else is an error.
+/// evaluates the constant; a length naming anything else is an error. A
+/// const generic argument naming crate constants (`Buf<SIZE>`, `Buf<{ SIZE
+/// * 2 }>`) reads as its value the same way (`type_ref::CONST_PREFIX`).
 fn resolve_const_lengths(items: &mut [crate::item::Parsed]) -> ParseResult<()> {
+    use crate::item::constant;
     use crate::item::Parsed;
-    let value = |function: &crate::item::Function| {
-        usize::try_from(
-            function
-                .body_syntax
-                .integer()
-                .filter(|_| function.constant)?,
-        )
-        .ok()
-    };
-    // Crate constants by name, and associated ones as `Type::NAME`.
-    let mut lengths = std::collections::BTreeMap::<crate::ImmutableString, usize>::new();
+    type Values = std::collections::BTreeMap<crate::ImmutableString, constant::Value>;
+    // Crate constants by name, and associated ones as `Type::NAME`, each
+    // with its initializer; a constant naming another is evaluated once
+    // the other is, so each pass evaluates at least one more or stops.
+    let mut pending = Vec::<(crate::ImmutableString, &crate::item::BodySyntax)>::new();
     for item in items.iter() {
         match item {
-            Parsed::Function(function) => {
-                if let Some(length) = value(function) {
-                    lengths.insert(function.name.text.clone(), length);
-                }
+            Parsed::Function(function) if function.constant => {
+                pending.push((function.name.text.clone(), &function.body_syntax));
             }
             Parsed::Impl(item) => {
                 let type_ref::Type::Path(owner) = &item.owner else {
@@ -748,70 +743,137 @@ fn resolve_const_lengths(items: &mut [crate::item::Parsed]) -> ParseResult<()> {
                 let Some(last) = owner.segments.last() else {
                     continue;
                 };
-                for function in item.functions.iter() {
-                    if let Some(length) = value(function) {
-                        lengths.insert(
-                            format!("{}::{}", last.name.text, function.name.text).into(),
-                            length,
-                        );
-                    }
+                for function in item.functions.iter().filter(|function| function.constant) {
+                    pending.push((
+                        format!("{}::{}", last.name.text, function.name.text).into(),
+                        &function.body_syntax,
+                    ));
                 }
             }
             _ => {}
         }
     }
+    let mut values = Values::new();
+    loop {
+        let before = values.len();
+        pending.retain(|(name, syntax)| {
+            match syntax.constant(&mut |named| values.get(named).copied()) {
+                Some(value) => {
+                    values.insert(name.clone(), value);
+                    false
+                }
+                None => true,
+            }
+        });
+        if values.len() == before {
+            break;
+        }
+    }
+    // Names that are types here, which a bare argument path names first.
+    let types = items
+        .iter()
+        .filter_map(|item| match item {
+            Parsed::Struct(item) => Some(item.name.text.clone()),
+            Parsed::Enum(item) => Some(item.name.text.clone()),
+            Parsed::TypeAlias(item) => Some(item.name.text.clone()),
+            _ => None,
+        })
+        .collect::<std::collections::BTreeSet<_>>();
     fn visit(
         ty: &mut type_ref::Type,
-        lengths: &std::collections::BTreeMap<crate::ImmutableString, usize>,
+        values: &Values,
+        types: &std::collections::BTreeSet<crate::ImmutableString>,
     ) -> ParseResult<()> {
         match ty {
             type_ref::Type::Path(path) => {
                 for segment in path.segments.iter_mut() {
                     if let Some(name) = type_ref::array_length_name(&segment.name.text) {
-                        let Some(length) = lengths.get(name) else {
+                        let Some(length) = values.get(name).and_then(|value| match value {
+                            constant::Value::Integer(value) => usize::try_from(*value).ok(),
+                            constant::Value::Bool(_) | constant::Value::Char(_) => None,
+                        }) else {
                             return Err(PERR::MissingSymbol(format!(
-                                "an array length `{name}` that names a `const` of an integer \
-                                 literal"
+                                "an array length `{name}` that names a `const` of an integer"
                             ))
                             .into_err(segment.span.start()));
                         };
-                        segment.name.text = type_ref::array_name(*length).into();
+                        segment.name.text = type_ref::array_name(length).into();
+                    }
+                    if let Some(text) = type_ref::const_text(&segment.name.text)
+                        && type_ref::const_value(&segment.name.text).is_none()
+                    {
+                        let value = constant::decode(text).and_then(|pieces| {
+                            constant::evaluate(&pieces, &mut |named| values.get(named).copied())
+                        });
+                        let Some(value) = value else {
+                            return Err(PERR::MissingSymbol(format!(
+                                "a const generic argument `{{ {text} }}` that evaluates to a \
+                                 value"
+                            ))
+                            .into_err(segment.span.start()));
+                        };
+                        segment.name.text = type_ref::const_name(&value.text()).into();
                     }
                     for argument in segment.arguments.iter_mut() {
-                        if let type_ref::Argument::Type(ty) = argument {
-                            visit(ty, lengths)?;
+                        let type_ref::Argument::Type(ty) = argument else {
+                            continue;
+                        };
+                        // `Buf<SIZE>`: a bare path naming a constant, and
+                        // no type, is the constant's value.
+                        if let type_ref::Type::Path(named) = ty
+                            && let [only] = &named.segments[..]
+                            && only.arguments.is_empty()
+                            && !named.global
+                            && !types.contains(&only.name.text)
+                            && let Some(value) = values.get(&only.name.text)
+                        {
+                            let name = type_ref::const_name(&value.text());
+                            named.segments[0].name.text = name.into();
+                            continue;
                         }
+                        visit(ty, values, types)?;
                     }
                 }
                 Ok(())
             }
-            type_ref::Type::Reference { target, .. } => visit(target, lengths),
+            type_ref::Type::Reference { target, .. } => visit(target, values, types),
             type_ref::Type::Tuple { members, .. } => members
                 .iter_mut()
-                .try_for_each(|member| visit(member, lengths)),
+                .try_for_each(|member| visit(member, values, types)),
             type_ref::Type::Unit(_) => Ok(()),
         }
     }
-    let function = |function: &mut crate::item::Function| -> ParseResult<()> {
+    // A const parameter shadows a crate constant of its name.
+    let shadowed = |generics: &[crate::item::GenericParam], values: &Values| {
+        let mut own = values.clone();
+        for generic in generics {
+            own.remove(&generic.name.text);
+        }
+        own
+    };
+    let function = |function: &mut crate::item::Function, values: &Values| -> ParseResult<()> {
+        let values = shadowed(&function.generics, values);
         for parameter in function.parameters.iter_mut() {
-            visit(&mut parameter.ty, &lengths)?;
+            visit(&mut parameter.ty, &values, &types)?;
         }
         function
             .output
             .iter_mut()
-            .try_for_each(|output| visit(output, &lengths))
+            .try_for_each(|output| visit(output, &values, &types))
     };
     for item in items.iter_mut() {
         match item {
             Parsed::Struct(item) => {
+                let values = shadowed(&item.generics, &values);
                 for field in item.fields.iter_mut() {
-                    visit(&mut field.ty, &lengths)?;
+                    visit(&mut field.ty, &values, &types)?;
                 }
             }
             Parsed::Enum(item) => {
+                let values = shadowed(&item.generics, &values);
                 for variant in item.variants.iter_mut() {
                     for ty in variant.payload.iter_mut() {
-                        visit(ty, &lengths)?;
+                        visit(ty, &values, &types)?;
                     }
                 }
             }
@@ -823,34 +885,32 @@ fn resolve_const_lengths(items: &mut [crate::item::Parsed]) -> ParseResult<()> {
                     }
                     _ => None,
                 };
-                let mut own = lengths.clone();
+                let mut own = shadowed(&item.generics, &values);
                 if let Some(owner) = owner {
-                    for (name, length) in &lengths {
+                    for (name, value) in &values {
                         if let Some(constant) = name.strip_prefix(&format!("{owner}::")) {
-                            own.insert(format!("Self::{constant}").into(), *length);
+                            own.insert(format!("Self::{constant}").into(), *value);
                         }
                     }
                 }
-                visit(&mut item.owner, &own)?;
+                visit(&mut item.owner, &own, &types)?;
                 for function_item in item.functions.iter_mut() {
-                    for parameter in function_item.parameters.iter_mut() {
-                        visit(&mut parameter.ty, &own)?;
-                    }
-                    if let Some(output) = function_item.output.as_mut() {
-                        visit(output, &own)?;
-                    }
+                    function(function_item, &own)?;
                 }
                 for (_, ty) in item.associated.iter_mut() {
-                    visit(ty, &own)?;
+                    visit(ty, &own, &types)?;
                 }
             }
             Parsed::Trait(item) => {
                 for function_item in item.functions.iter_mut() {
-                    function(function_item)?;
+                    function(function_item, &values)?;
                 }
             }
-            Parsed::Function(item) => function(item)?,
-            Parsed::TypeAlias(item) => visit(&mut item.target, &lengths)?,
+            Parsed::Function(item) => function(item, &values)?,
+            Parsed::TypeAlias(item) => {
+                let values = shadowed(&item.generics, &values);
+                visit(&mut item.target, &values, &types)?;
+            }
             Parsed::Module(_) | Parsed::Use(_) => {}
         }
     }
@@ -3214,6 +3274,31 @@ fn parse_generics(
                 }
             }
             lifetimes.push(lifetime);
+        } else if matches!(input.peek(), Some((Token::Const, _))) {
+            // `const N: usize = 3`: a parameter whose argument is a value,
+            // which a default may give.
+            input.next();
+            let name = parse_name(input, "as a const generic parameter")?;
+            expect(
+                input,
+                Token::Colon,
+                "after a const generic parameter's name",
+            )?;
+            let ty = parse_type(input)?;
+            let default = if matches!(input.peek(), Some((Token::Equals, _))) {
+                input.next();
+                Some(parse_const_argument(input)?)
+            } else {
+                None
+            };
+            generics.push(crate::item::GenericParam {
+                name,
+                bounds: Box::default(),
+                projections: Box::default(),
+                default,
+                lifted: false,
+                constant: Some(ty),
+            });
         } else {
             let name = parse_name(input, "as a generic parameter")?;
             let mut projections = Vec::new();
@@ -3240,6 +3325,7 @@ fn parse_generics(
                 projections: projections.into_boxed_slice(),
                 default,
                 lifted: false,
+                constant: None,
             });
         }
         if split.is_some() {
@@ -4589,6 +4675,7 @@ fn lift_impl_parameters(
                     projections: projections.into_boxed_slice(),
                     default: None,
                     lifted: true,
+                    constant: None,
                 });
                 *ty = type_ref::Type::Path(type_ref::Path {
                     span: path.span,
@@ -4971,6 +5058,8 @@ fn parse_path_bindings(
             ) {
                 if matches!(input.peek(), Some((Token::Apostrophe, _))) {
                     arguments.push(type_ref::Argument::Lifetime(parse_lifetime(input)?));
+                } else if starts_const_argument(input) {
+                    arguments.push(type_ref::Argument::Type(parse_const_argument(input)?));
                 } else {
                     let argument = parse_type_split(input, &mut nested)?;
                     if let Some(bindings) = bindings.as_deref_mut()
@@ -5034,6 +5123,94 @@ fn parse_path_bindings(
         span: Span::new(first.start(), last.end()),
         global,
     })
+}
+
+/// Whether a generic argument here is a const one written as a value: a
+/// literal, `-1` or a `{ .. }` block. A const argument naming a `const` or
+/// a const parameter (`Buf<SIZE>`, `Buf<N>`) reads as a type path, which
+/// `resolve_const_lengths` and the parameter scope then read as the value.
+fn starts_const_argument(input: &mut TokenStream) -> bool {
+    matches!(
+        input.peek(),
+        Some((
+            Token::IntegerConstant(_)
+                | Token::CharConstant(_)
+                | Token::True
+                | Token::False
+                | Token::LeftBrace
+                | Token::Minus
+                | Token::UnaryMinus,
+            _
+        ))
+    )
+}
+
+/// A const generic argument written as a value (`4`, `-1`, `'a'`, `{ 0 +
+/// 1 }`): the builtin path `const 4`, or its expression while the names in
+/// it are unknown (`type_ref::CONST_PREFIX`).
+fn parse_const_argument(input: &mut TokenStream) -> ParseResult<type_ref::Type> {
+    let (first, start) = input.next().expect("token streams always end with EOF");
+    let mut tokens = Vec::new();
+    let mut end = start;
+    match first {
+        Token::LeftBrace => {
+            let mut depth = 1usize;
+            loop {
+                let (token, position) = input.next().expect("token streams always end with EOF");
+                end = position;
+                match token {
+                    Token::LeftBrace => depth += 1,
+                    Token::RightBrace => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    Token::EOF => {
+                        return Err(PERR::MissingToken(
+                            Token::RightBrace.into(),
+                            "to close a const generic argument".into(),
+                        )
+                        .into_err(position))
+                    }
+                    Token::LexError(error) => return Err(error.into_err(position)),
+                    _ => {}
+                }
+                tokens.push(token);
+            }
+        }
+        Token::Minus | Token::UnaryMinus => {
+            tokens.push(Token::UnaryMinus);
+            let (token, position) = input.next().expect("token streams always end with EOF");
+            end = position;
+            tokens.push(token);
+        }
+        token => tokens.push(token),
+    }
+    let Some(pieces) = crate::item::constant::pieces(&tokens) else {
+        return Err(PERR::MissingToken(
+            "a constant expression".into(),
+            "as a const generic argument".into(),
+        )
+        .into_err(start));
+    };
+    let text = crate::item::constant::evaluate(&pieces, &mut |_| None).map_or_else(
+        || crate::item::constant::encode(&pieces),
+        crate::item::constant::Value::text,
+    );
+    let span = Span::new(start, after(end, 1));
+    Ok(type_ref::Type::Path(type_ref::Path {
+        segments: Box::new([type_ref::Segment {
+            name: crate::item::Name {
+                text: type_ref::const_name(&text).into(),
+                span,
+            },
+            arguments: Box::default(),
+            span,
+        }]),
+        span,
+        global: false,
+    }))
 }
 
 fn parse_lifetime(input: &mut TokenStream) -> ParseResult<type_ref::Lifetime> {
@@ -5783,6 +5960,28 @@ fn body_token(token: Token, position: Position) -> crate::item::BodyToken {
         Token::SelfValue => (Kind::SelfValue, 4),
         Token::Mut => (Kind::Mut, 3),
         Token::IntegerConstant(value) => (Kind::Integer(value), 0),
+        Token::True => (Kind::Value(crate::item::constant::Value::Bool(true)), 4),
+        Token::False => (Kind::Value(crate::item::constant::Value::Bool(false)), 5),
+        Token::CharConstant(value) => (Kind::Value(crate::item::constant::Value::Char(value)), 0),
+        Token::Plus | Token::UnaryPlus => (Kind::Operator(crate::item::constant::Operator::Add), 1),
+        Token::Minus | Token::UnaryMinus => {
+            (Kind::Operator(crate::item::constant::Operator::Subtract), 1)
+        }
+        Token::Divide => (Kind::Operator(crate::item::constant::Operator::Divide), 1),
+        Token::Modulo => (
+            Kind::Operator(crate::item::constant::Operator::Remainder),
+            1,
+        ),
+        Token::XOr => (Kind::Operator(crate::item::constant::Operator::Xor), 1),
+        Token::Pipe => (Kind::Operator(crate::item::constant::Operator::Or), 1),
+        Token::LeftShift => (
+            Kind::Operator(crate::item::constant::Operator::ShiftLeft),
+            2,
+        ),
+        Token::RightShift => (
+            Kind::Operator(crate::item::constant::Operator::ShiftRight),
+            2,
+        ),
         _ => (Kind::Other, 0),
     };
 

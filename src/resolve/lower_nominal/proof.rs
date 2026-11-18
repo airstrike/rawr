@@ -650,6 +650,9 @@ impl<'a> Parser<'a> {
             Ty::Projection(_, trait_name, name) => self
                 .associated_bounds(&trait_name, &name)
                 .is_some_and(|(bounds, _)| bounds.contains(capability)),
+            // A const argument is a value, which no derive's bound asks
+            // anything of.
+            Ty::Const(_) => true,
             Ty::Infer(_) | Ty::Unknown => false,
         }
     }
@@ -913,6 +916,8 @@ impl<'a> Parser<'a> {
             // it, or one native code gave, which the adapter takes at its
             // exact type.
             Ty::Dyn(name, _) if type_ref::is_native_trait(&name) => intrinsic::Type::Object(name),
+            // `3` of `Buf<3>`, among a type's arguments.
+            Ty::Const(value) => intrinsic::Type::Constant(value),
             Ty::Param(_) | Ty::Projection(..) | Ty::Weak(..) | Ty::Dyn(..) => {
                 return Err(unpassable(ty.name(&self.models), operation, span));
             }

@@ -4977,7 +4977,20 @@ fn generic_scope(
         let (bounds, traits, trait_arguments) = resolve_bounds_with_arguments(&parameter.bounds)?;
         arguments.push(trait_arguments);
         scope.insert(parameter.name.text.clone(), type_ref::Target::Parameter);
+        let constant = parameter
+            .constant
+            .map(|ty| {
+                type_ref::resolve(
+                    ty,
+                    types,
+                    host,
+                    #[cfg(feature = "rust-import")]
+                    native,
+                )
+            })
+            .transpose()?;
         resolved.push(item::Generic {
+            constant,
             name: parameter.name,
             bounds,
             traits,

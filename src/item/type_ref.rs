@@ -66,6 +66,29 @@ pub(crate) fn array_length(name: &str) -> Option<usize> {
         .ok()
 }
 
+/// The builtin path name of a const generic argument is this prefix, then
+/// its value as a type writes it (`const 4` of `Buf<4>`), which no Rust path
+/// can spell. Before the crate's items are all parsed, an argument naming a
+/// `const` (`Buf<{ SIZE * 2 }>`) is its encoded expression
+/// (`item::constant::encode`), which `resolve_const_lengths` evaluates.
+pub(crate) const CONST_PREFIX: &str = "const ";
+
+/// The builtin path name of the const generic argument `value`.
+pub(crate) fn const_name(value: &str) -> String {
+    format!("{CONST_PREFIX}{value}")
+}
+
+/// What a const generic argument's builtin path name holds: a value, or
+/// the expression it is while its names are unknown.
+pub(crate) fn const_text(name: &str) -> Option<&str> {
+    name.strip_prefix(CONST_PREFIX)
+}
+
+/// The value of a const generic argument's builtin path name, once known.
+pub(crate) fn const_value(name: &str) -> Option<crate::item::constant::Value> {
+    crate::item::constant::Value::parse(const_text(name)?)
+}
+
 /// The first segment of a trait object type: `dyn Trait` parses to the
 /// path `dyn::Trait`, which no Rust path can spell.
 pub(crate) const DYN_SEGMENT: &str = "dyn";

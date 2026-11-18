@@ -287,6 +287,10 @@ pub enum Type {
     /// A trait object of a crate's trait behind a pointer, as tracing's
     /// `Identifier(&'static dyn Callsite)` holds (D872).
     Object(Box<super::object::Object>),
+    /// A const generic argument among a nominal type's arguments, as `3`
+    /// of `Buf<3>`: its value as Rust writes it, which the
+    /// bridge writes where the type is named.
+    Constant(Box<str>),
 }
 
 impl Type {
@@ -303,6 +307,7 @@ impl Type {
         };
         Some(match self {
             Self::Parameter(index) => given(*index)?,
+            Self::Constant(_) => self.clone(),
             Self::Nominal {
                 definition,
                 arguments,

@@ -19440,6 +19440,9 @@ fn render_rust_type(
             )
             .map_err(request::unwritable),
         convert::Type::Inferred => output.write_all(b"_").map_err(request::unwritable),
+        convert::Type::Constant(constant) => output
+            .write_all(constant.as_bytes())
+            .map_err(request::unwritable),
         convert::Type::Unit | convert::Type::Never => {
             output.write_all(b"()").map_err(request::unwritable)
         }
@@ -22358,6 +22361,7 @@ fn render_take(
         .map_err(request::unwritable);
     }
     let helper = match ty {
+        convert::Type::Constant(_) => return Err(constant_value()),
         convert::Type::ConstArray { .. } => return Err(unlengthed()),
         convert::Type::Builtin(convert::Builtin::String) => "take_string",
         convert::Type::Builtin(convert::Builtin::InclusiveRange) => "take_range",
@@ -22648,6 +22652,7 @@ fn render_give(
     output: &mut Vec<u8>,
 ) -> Result<(), request::Error> {
     match ty {
+    convert::Type::Constant(_) => return Err(constant_value()),
     convert::Type::ConstArray { .. } => {
             return Err(unlengthed())
         }
@@ -22840,6 +22845,7 @@ fn render_from_dynamic(
             "{value}.try_cast_result::<NativeHandle>().map_err(|_| Error::TypeMismatch).and_then(|handle| {frame}.out_{slot}(arguments.arena, handle))"
         ),
         convert::Type::Inferred => return Err(request::drift("an inferred type parameter reached a runtime value")),
+        convert::Type::Constant(_) => return Err(constant_value()),
         convert::Type::ConstArray { .. } => {
             return Err(unlengthed())
         }
@@ -23224,6 +23230,7 @@ fn render_to_dynamic(
 ) -> Result<(), request::Error> {
     use std::fmt::Write as _;
     match ty {
+    convert::Type::Constant(_) => return Err(constant_value()),
     convert::Type::ConstArray { .. } => {
             return Err(unlengthed())
         }
@@ -24205,6 +24212,7 @@ fn instantiated(
         },
         convert::Type::Inferred => ty.clone(),
         convert::Type::Unit | convert::Type::Never | convert::Type::Builtin(_) => ty.clone(),
+        convert::Type::Constant(_) => ty.clone(),
         convert::Type::Object(object) => convert::Type::Object(Box::new(
             object
                 .try_map(|ty| instantiated(ty, signature, substitutions).ok_or(()))
@@ -24215,6 +24223,12 @@ fn instantiated(
 
 /// A `[T; N]` of a const parameter where the bridge needs a value: an
 /// instance's adapter has each at its argument's length (`adapter::at_lengths`).
+/// A const generic argument stands among a type's arguments and is never
+/// a value's type.
+fn constant_value() -> request::Error {
+    request::drift("a const generic argument reached the bridge as a value's type")
+}
+
 fn unlengthed() -> request::Error {
     request::drift("an array of a const length reached the bridge without its length")
 }
@@ -27035,6 +27049,7 @@ fn names_parameter(ty: &convert::Type) -> bool {
         convert::Type::Unit
         | convert::Type::Never
         | convert::Type::Builtin(_)
+        | convert::Type::Constant(_)
         | convert::Type::Inferred => false,
     }
 }
@@ -28179,6 +28194,7 @@ fn output_names(ty: &convert::Type, index: u32) -> bool {
         convert::Type::Unit
         | convert::Type::Never
         | convert::Type::Builtin(_)
+        | convert::Type::Constant(_)
         | convert::Type::Inferred => false,
         convert::Type::Nominal { arguments, .. }
         | convert::Type::Tuple(arguments)
@@ -28439,6 +28455,7 @@ fn concrete_type(ty: &convert::Type) -> Option<String> {
     }
     Some(match ty {
         convert::Type::Inferred => "_".to_owned(),
+        convert::Type::Constant(value) => value.to_string(),
         convert::Type::Unit | convert::Type::Never => "()".to_owned(),
         convert::Type::Object(object) => object::rust_type(object)?,
         convert::Type::Builtin(convert::Builtin::String | convert::Builtin::Text) => {
@@ -28901,6 +28918,7 @@ fn render_generic_arguments(
                                 ));
                             }
                         },
+                        convert::Type::Constant(constant) => constant.as_bytes(),
                         convert::Type::Parameter(_) => {
                             return Err(request::drift("unconstrained generated substitution"));
                         }
@@ -29223,6 +29241,7 @@ fn builder_execution_inputs(operation: &Operation) -> Option<Vec<&convert::Type>
 
 fn render_default(ty: &convert::Type, output: &mut Vec<u8>) -> Result<(), request::Error> {
     let source = match ty {
+        convert::Type::Constant(_) => return Err(constant_value()),
         convert::Type::Inferred => {
             return Err(request::drift(
                 "an inferred type parameter reached a runtime value",

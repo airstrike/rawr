@@ -298,6 +298,7 @@ impl<'a> Parser<'a> {
     /// Whether this body's generic parameter `name` has a type witness.
     pub(super) fn has_witness(&self, name: &str) -> bool {
         self.host_witnesses.iter().any(|host| host.as_str() == name)
+            || self.constants.contains_key(name)
             || self
                 .generics
                 .get(name)
@@ -334,6 +335,8 @@ impl<'a> Parser<'a> {
         }
         Ok(match ty {
             Ty::Script(id, _) => id.number().to_string(),
+            // A const argument's witness is its value.
+            Ty::Const(value) => value.to_string(),
             Ty::Param(name) if self.has_witness(name) => witness_variable(name),
             Ty::Infer(_) => {
                 return Err(Error::TypeAnnotationsNeeded {
@@ -961,15 +964,28 @@ pub(super) fn instantiate(ty: &Ty, substitution: &BTreeMap<ImmutableString, Ty>)
     }
 }
 
+/// The const parameters among `generics`, with their value types.
+pub(super) fn const_generics(generics: &[item::Generic]) -> BTreeMap<ImmutableString, Ty> {
+    generics
+        .iter()
+        .filter_map(|generic| {
+            let ty = generic.constant.as_ref()?;
+            Some((generic.name.text.clone(), Ty::from_resolved(ty)))
+        })
+        .collect()
+}
+
 /// The generic parameters bounded by `Default` or by a trait with a
 /// function without `self`: each takes a hidden type witness, so
-/// `T::default()` and `T::new()` reach a type erased at runtime.
+/// `T::default()` and `T::new()` reach a type erased at runtime. A const
+/// parameter takes its value as its witness, which `N` in the body reads.
 pub(super) fn witness_generics<'a>(
     generics: &'a [item::Generic],
     models: &'a Models,
 ) -> impl Iterator<Item = &'a item::Generic> {
     generics.iter().filter(|generic| {
         generic.host
+            || generic.constant.is_some()
             || generic.bounds.contains(capability::Kind::Default)
             || generic
                 .traits

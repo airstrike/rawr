@@ -16,8 +16,24 @@ impl<'a> Parser<'a> {
             return Ok(None);
         };
         match item.form {
-            crate::item::StructForm::Unit if item.generics.is_empty() => {
-                let ty = Ty::Script(definition.id(), Box::default());
+            crate::item::StructForm::Unit => {
+                let model = Nominal::Struct {
+                    definition: definition.clone(),
+                    item: item.clone(),
+                };
+                let (ty, _) = self.fresh_nominal(&model, expression);
+                // `Flag::<true>`: a generic unit struct's arguments, which
+                // only const parameters can be (a type parameter must be
+                // used by a field).
+                if matches!(self.peek(), Token::DoubleColon)
+                    && matches!(self.peek_second(), Token::LessThan)
+                {
+                    self.next();
+                    self.next();
+                    let written = self.parse_turbofish_types()?;
+                    let written = Ty::Script(definition.id(), written.into_boxed_slice());
+                    self.require_type(&written, &ty, expression)?;
+                }
                 let helper = self.push_op(Op::Struct {
                     definition,
                     item: Box::new(item),

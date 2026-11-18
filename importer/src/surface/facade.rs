@@ -1051,6 +1051,9 @@ pub enum Type {
     FunctionItem { input: Box<Type>, output: Box<Type> },
     /// Declared generic parameter by exact name.
     Parameter(Box<str>),
+    /// A const generic argument's value among a nominal type's
+    /// arguments, as `3` of `Buf<3>`.
+    Constant(Box<str>),
     /// Rust's `Option<T>`, a Rawr `Option`.
     Option(Box<Type>),
     /// Rust's `Result<T, E>`, a Rawr `Result`.
@@ -5045,6 +5048,7 @@ fn ty(
         }
         Source::Unit => Type::Unit,
         Source::Never => Type::Never,
+        Source::Constant(constant) => Type::Constant(copy(constant)?),
         Source::Builtin(Builtin::Bool) => Type::Bool,
         Source::Builtin(Builtin::Char) => Type::Char,
         Source::Builtin(Builtin::F64) => Type::F64,

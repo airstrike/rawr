@@ -1005,3 +1005,12 @@ fn a_universe_runner_loads_a_marked_file_against_the_crates_bindings() {
     assert_eq!(ran.status, 0, "{}", text(&ran.stderr));
     assert_eq!(text(&ran.stdout), expected, "{}", text(&ran.stderr));
 }
+
+/// A crate's type with a const parameter, named at a literal or a `{ .. }`
+/// block of constants, has its methods and its `Default` at that value,
+/// and a function's const parameter takes the value its argument's type
+/// has (#2210).
+#[test]
+fn a_const_generic_type_is_reached_at_each_value_named() {
+    runs_as_cargo_does("dial", "1 2 0\n4 1 Dial { at: 4 }\n");
+}

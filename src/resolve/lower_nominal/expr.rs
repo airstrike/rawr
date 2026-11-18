@@ -1055,6 +1055,16 @@ impl<'a> Parser<'a> {
             )]);
             return self.parse_primary();
         }
+        // `N` of `const N: usize`: the value the item's use gives it, its
+        // witness.
+        if let Some(ty) = self.constants.get(&name).cloned()
+            && !self.bindings.contains_key(name.as_str())
+            && !matches!(self.peek(), Token::DoubleColon)
+        {
+            self.capture_witnesses();
+            let source = origin::Fragment::plain(witness_variable(&name));
+            return Ok(self.operator_expr(source, ty, name_span));
+        }
         // `Self::with_text_size(..)` in an impl for a crate's type is the
         // type's own function, by the path the impl writes (#1466).
         if name.as_str() == "Self"
@@ -1105,7 +1115,10 @@ impl<'a> Parser<'a> {
         if matches!(self.peek(), Token::DoubleColon)
             && let Some(self_ty) = self.take_path_arguments(&name, name_span)?
         {
+            self.written_owners
+                .insert(name_span.start(), self_ty.clone());
             let value = self.parse_name_primary(name, name_span)?;
+            self.written_owners.remove(&name_span.start());
             let same_head = match (&self.inference.resolve(&value.ty), &self_ty) {
                 (Ty::Script(value, _), Ty::Script(written, _)) => value == written,
                 (Ty::Keyed(value, _), Ty::Keyed(written, _)) => value == written,
@@ -1636,10 +1649,14 @@ impl<'a> Parser<'a> {
         {
             return self.parse_struct(name, name_span);
         }
-        // `S` of `struct S;`, `W(x)` of `struct W(T);`, `W` uncalled.
+        // `S` of `struct S;`, `W(x)` of `struct W(T);`, `W` uncalled, and
+        // `S::<A>` of a generic one.
         if !self.bindings.contains_key(name.as_str())
-            && !matches!(self.peek(), Token::DoubleColon)
             && let Some(model) = self.named_model(&name)
+            && (!matches!(self.peek(), Token::DoubleColon)
+                || matches!(self.peek_second(), Token::LessThan)
+                    && matches!(&model, Nominal::Struct { item, .. }
+                        if item.form == crate::item::StructForm::Unit))
             && let Some(value) = self.parse_struct_value(model, name_span)?
         {
             return Ok(value);
@@ -1722,13 +1739,13 @@ impl<'a> Parser<'a> {
         {
             self.next();
             self.next();
-            let mut types = vec![self.parse_local_type()?];
+            let mut types = vec![self.parse_local_argument()?];
             while matches!(self.peek(), Token::Comma) {
                 self.next();
                 if matches!(self.peek(), Token::GreaterThan | Token::RightShift) {
                     break;
                 }
-                types.push(self.parse_local_type()?);
+                types.push(self.parse_local_argument()?);
             }
             self.expect_close_angle("'>' after turbofish type arguments")?;
             self.pending_turbofish = Some(types);

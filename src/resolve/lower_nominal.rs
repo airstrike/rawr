@@ -187,9 +187,10 @@ use expr::ParsedExpr;
 use format::PANIC_MACROS;
 use from_str::{parse_text, ParseError};
 use generics::{
-    bound_kinds, bounded_value, dyn_arguments, generic_conversion_call, generic_equalities,
-    generic_trait_arguments, generic_traits, host_witnesses, instantiate, is_iterator_trait,
-    item_generics, mentions_parameter, supertraits, witness_generics, PendingInstance,
+    bound_kinds, bounded_value, const_generics, dyn_arguments, generic_conversion_call,
+    generic_equalities, generic_trait_arguments, generic_traits, host_witnesses, instantiate,
+    is_iterator_trait, item_generics, mentions_parameter, supertraits, witness_generics,
+    PendingInstance,
 };
 #[cfg(feature = "rust-import")]
 use generics::{ImplBounds, ImplProjection, Selection};
@@ -648,11 +649,19 @@ struct Parser<'a> {
     some_payloads: BTreeMap<Position, Span>,
     /// The generic parameters in scope and their bounds.
     generics: BTreeMap<ImmutableString, capability::Set>,
+    /// The const parameters among `generics`, with their value types: `N`
+    /// of `const N: usize` reads as its witness, the value the item's use
+    /// gives it.
+    constants: BTreeMap<ImmutableString, Ty>,
     /// Each type parameter of a dependency's trait method that native code
     /// fills, with the host path of its opaque type (#593).
     opaque: BTreeMap<ImmutableString, ImmutableString>,
     /// `::<A, B>` read after a generic function's name, for its call.
     pending_turbofish: Option<Vec<Ty>>,
+    /// `Buf::<4>` written before an associated function's name, by where
+    /// the path starts: the impl's `Self` at that call is the written type,
+    /// so `Buf::<4>::capacity()` gives the impl's `N` its `4`.
+    written_owners: BTreeMap<Position, Ty>,
     /// `::<T>` read after a trait function's name in `Trait::f::<T>(..)`,
     /// for the call of that function once its arguments are read.
     trait_turbofish: Option<Vec<Ty>>,
@@ -1020,8 +1029,10 @@ impl<'a> Parser<'a> {
             err_payloads: BTreeMap::new(),
             some_payloads: BTreeMap::new(),
             generics: BTreeMap::new(),
+            constants: BTreeMap::new(),
             opaque: BTreeMap::new(),
             pending_turbofish: None,
+            written_owners: BTreeMap::new(),
             trait_turbofish: None,
             path_values: HashSet::new(),
             #[cfg(feature = "rust-import")]
@@ -1134,6 +1145,7 @@ impl<'a> Parser<'a> {
             .iter()
             .map(|generic| (generic.name.text.clone(), generic.bounds))
             .collect();
+        parser.constants = const_generics(definition.generics());
         parser.opaque = definition.opaque().clone();
         parser.generic_traits = generic_traits(definition.generics());
         parser.host_witnesses = host_witnesses(definition.generics());
@@ -1273,6 +1285,7 @@ impl<'a> Parser<'a> {
             .iter()
             .map(|generic| (generic.name.text.clone(), generic.bounds))
             .collect();
+        parser.constants = const_generics(&definition.generics);
         parser.generic_traits = generic_traits(&definition.generics);
         parser.host_witnesses = host_witnesses(&definition.generics);
         parser.generic_trait_arguments = generic_trait_arguments(&definition.generics);
