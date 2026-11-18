@@ -1067,7 +1067,7 @@ fn current_plain(kind: Kind) -> Option<&'static [u32]> {
         ]),
         Kind::Checked => Some(&[
             crate::checked::Product::SCHEMA,
-            crate::composition::Resolved::SCHEMA,
+            crate::composition::RESOLVED_SCHEMA,
         ]),
         _ => None,
     }

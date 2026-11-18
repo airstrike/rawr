@@ -74,7 +74,7 @@ impl node::Value for Product {
     // Same transform family as the checked demand it resolves; its own schema
     // and authority domain keep the action keys distinct.
     const KIND: node::Kind = node::Kind::Checked;
-    const SCHEMA: u32 = 0x5245_0001;
+    const SCHEMA: u32 = super::RESOLVED_SCHEMA;
 
     fn encode(&self) -> Result<Box<[u8]>, node::Error> {
         Ok(self.bytes.clone())
