@@ -46,6 +46,8 @@ pub(super) struct Stops {
     at: HashMap<Position, Stop>,
     /// Each function, as Rust names it, with its first statement's step.
     functions: Vec<(String, Position)>,
+    /// The function each closure is written in, by the closure's name.
+    closures: HashMap<String, String>,
 }
 
 impl Stops {
@@ -61,8 +63,38 @@ impl Stops {
                     crate::resolve::lower_nominal::function_display_name(&function.name).to_owned();
                 stops.functions.push((name, first));
             }
+            let mut path = Vec::new();
+            for statement in function.body.iter() {
+                statement.walk(&mut path, &mut |path: &[ASTNode]| {
+                    if let Some(ASTNode::Expr(Expr::DynamicConstant(value, _))) = path.last()
+                        && let Some(pointer) = value.read_lock::<crate::FnPtr>()
+                        && pointer.is_anonymous()
+                    {
+                        // A root function the program also names by its
+                        // own name has one body: its path names it.
+                        let within = stops
+                            .closures
+                            .entry(pointer.fn_name().to_owned())
+                            .or_insert_with(|| function.name.to_string());
+                        if !within.contains("::") {
+                            function.name.as_str().clone_into(within);
+                        }
+                    }
+                    true
+                });
+                path.clear();
+            }
         }
         stops
+    }
+
+    /// The function `name` as Rust names it: a closure as the function it
+    /// is written in names it, `main::run::{{closure}}`.
+    pub fn function_name(&self, name: &str) -> String {
+        match self.closures.get(name) {
+            Some(within) => format!("{}::{{{{closure}}}}", self.function_name(within)),
+            None => crate::resolve::lower_nominal::function_display_name(name).to_owned(),
+        }
     }
 
     /// Add the stops in `statements`; the first one's position.
@@ -320,6 +352,48 @@ fn positions(spec: &Spec, stops: &Stops) -> Vec<Position> {
 #[cfg(test)]
 mod tests {
     use super::{nearest, Spec};
+
+    #[test]
+    fn a_closure_is_named_by_the_function_it_is_written_in() {
+        let mut engine = crate::Engine::new();
+        #[allow(deprecated)]
+        engine.register_debugger(
+            |_, debugger| debugger,
+            |_, _, _, _, _| Ok(crate::debugger::DebuggerCommand::Continue),
+        );
+        let ast = engine
+            .compile("pub fn run() -> i64 { let f = |x: i64| x + 1; f(2) }\nrun()")
+            .unwrap_or_else(|error| panic!("{error}"));
+        let stops = super::Stops::of(&ast, &|_| None);
+        let closure = ast
+            .iter_fn_def()
+            .find(|function| crate::parser::is_anonymous_fn(&function.name))
+            .expect("the closure is a function of the program");
+        // The function by its path, when the program also names it so.
+        let run = ast
+            .iter_fn_def()
+            .filter(|function| !crate::parser::is_anonymous_fn(&function.name))
+            .map(|function| crate::resolve::lower_nominal::function_display_name(&function.name))
+            .max_by_key(|name| name.len())
+            .expect("`run` is a function of the program");
+        assert!(run.ends_with("run"), "{run}");
+        assert_eq!(
+            stops.function_name(&closure.name),
+            format!("{run}::{{{{closure}}}}")
+        );
+        assert_eq!(
+            stops.function_name("\0rawr.function.main::run"),
+            "main::run"
+        );
+        assert_eq!(
+            stops.function_name("\0rawr.method.main::Counter::bump"),
+            "main::Counter::bump"
+        );
+        assert_eq!(
+            stops.function_name("\0rawr.closure.main::run{closure#0}"),
+            "main::run{closure#0}"
+        );
+    }
 
     #[test]
     fn a_moved_line_is_found_by_its_text_nearest_where_it_was() {

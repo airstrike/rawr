@@ -2,6 +2,7 @@
 //! `Into` and static calls, and the text of each lowered function and method.
 
 use super::models::{Models, Nominal};
+use super::naming::PRIVATE_CLOSURE;
 use super::op::{builtin_code, owner_id, owner_key, ExecutableOp, PreludeOp, COUNTED_KEY};
 use super::ty::Ty;
 use super::{
@@ -56,7 +57,7 @@ pub(super) fn write_closures(
             continue;
         };
         let generated = naming.next();
-        let dispatch: ImmutableString = format!("\0rawr.closure.{}", closure.key).into();
+        let dispatch: ImmutableString = format!("{PRIVATE_CLOSURE}{}", closure.key).into();
         output.declaration(
             source,
             closure.span,

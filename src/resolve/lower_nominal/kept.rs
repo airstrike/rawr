@@ -1365,6 +1365,7 @@ mod tests {
             ops: vec![op],
             patterns: Vec::new(),
             closures: Vec::new(),
+            declared: Vec::new(),
         }];
         Kept {
             key: [0; 32],

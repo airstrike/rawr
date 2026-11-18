@@ -2092,11 +2092,16 @@ impl Arena {
         Ok(handle)
     }
 
-    /// The type of the value at `handle` when it has no `Debug`.
-    pub fn undebuggable(&self, handle: &NativeHandle) -> Option<&'static str> {
-        let entry = self.slots.get(handle.slot as usize)?;
-        (handle.epoch == self.epoch && handle.generation == entry.generation && entry.debug.is_none())
-            .then_some(entry.name)
+    /// Why the value at `handle` has no `Debug` text here: its type has
+    /// none, or it isn't in this arena. `None` when it has one.
+    pub fn unreadable(&self, handle: &NativeHandle) -> Option<__rawr_internal::inspect::Unreadable> {
+        use __rawr_internal::inspect::Unreadable;
+        match self.slots.get(handle.slot as usize) {
+            Some(entry) if handle.epoch == self.epoch && handle.generation == entry.generation => {
+                entry.debug.is_none().then_some(Unreadable::NoDebug(entry.name))
+            }
+            _ => Some(Unreadable::Elsewhere),
+        }
     }
 
     pub fn debug(&self, handle: NativeHandle) -> Option<String> {
@@ -5547,10 +5552,12 @@ fn inspector() -> Option<&'static __rawr_internal::inspect::Inspector> {
         .get_or_init(|| {
             let socket = std::env::var_os("RAWR_MCP_INSPECT").filter(|path| !path.is_empty())?;
             // A crate value lives in the arena behind a handle: its type
-            // names a value without `Debug`.
+            // names a value without `Debug`, and an arena a native call up
+            // this thread's stack holds can't be read (#533).
             __rawr_internal::inspect::name_undebuggable_with(|value| {
                 let handle = value.read_lock::<NativeHandle>()?.clone();
-                arena_access(|arena| arena.undebuggable(&handle)).flatten()
+                arena_read(|arena| arena.unreadable(&handle))
+                    .unwrap_or(Some(__rawr_internal::inspect::Unreadable::Held))
             });
             __rawr_internal::inspect::Inspector::bind(std::path::Path::new(&socket))
                 .map_err(|error| eprintln!("rawr: values can't be read from this run: {error}"))

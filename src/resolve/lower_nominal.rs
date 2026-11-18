@@ -228,6 +228,8 @@ use models::ScriptTraitImpl;
 use models::{model_clones, reset_model_clones};
 use models::{Models, Nominal, ScriptFunction};
 #[cfg(feature = "debugging")]
+pub(crate) use naming::DEBUG_DECLARED;
+#[cfg(feature = "debugging")]
 pub(crate) use naming::DEBUG_DISPATCHER;
 #[cfg(any(test, feature = "debugging"))]
 pub(crate) use naming::DEBUG_GENERIC;
@@ -239,7 +241,7 @@ use naming::{
     CLOSURE_SENTINEL, DEFAULT_DISPATCHER, FALLBACK_INSTANCE, METHOD_SENTINEL, PRIVATE_PREFIX,
     SENTINEL,
 };
-pub(crate) use naming::{function_display_name, private_function_name};
+pub(crate) use naming::{function_display_name, private_function_name, PRIVATE_METHOD};
 #[cfg(test)]
 use op::builtin_type_key;
 use op::invariant;
