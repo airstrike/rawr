@@ -137,17 +137,36 @@ pub enum Error {
         reason: Box<str>,
     },
 
-    /// Cargo answered differently for the same project within one build:
-    /// a Cargo.toml, Cargo.lock or Cargo configuration file changed while
-    /// it ran, or rawr misread Cargo.
-    #[error(
-        "Cargo.toml, Cargo.lock or the Cargo configuration changed during the build; \
-         run it again. If none changed, this is a rawr bug ({field} differs after {command})"
-    )]
+    /// A file the build read changed while it ran, named as Cargo names it.
+    /// The preparation starts again and takes the edit, as `cargo watch`
+    /// does (D1043).
+    #[error("`{}` changed during the build; run it again", path.display())]
+    Changed {
+        /// The file whose bytes differ from the ones the build read.
+        path: PathBuf,
+    },
+
+    /// Cargo answered other than the files rawr read say it would: one of
+    /// them changed while Cargo ran, or rawr misread Cargo. The resolution
+    /// reads its inputs again to tell which (`cargo::Request::settle`): the
+    /// changed file is [`Error::Changed`], and with none changed this is a
+    /// rawr bug.
+    #[error("internal error: Cargo's {field} differs after {command}. This is a rawr bug")]
     ResolutionDrift {
         /// The command whose postcondition failed.
         command: &'static str,
         /// The exact equality field that changed.
+        field: &'static str,
+    },
+
+    /// Evidence rawr derived itself disagrees with itself: its own
+    /// identities, generated files or stored proofs. No edit of the
+    /// program's files can cause it.
+    #[error("internal error: rawr's {field} differs at {command}. This is a rawr bug")]
+    Invariant {
+        /// The step whose evidence disagrees.
+        command: &'static str,
+        /// The evidence that differs.
         field: &'static str,
     },
 
@@ -177,11 +196,28 @@ pub enum Error {
 }
 
 impl Error {
-    /// Whether a cache entry this run read went stale before it was used.
-    /// The run starts again, and its lookup rebuilds the entry (#609).
+    /// Whether a cache entry this run read went stale before it was used,
+    /// or a file the build read changed while it ran. The run starts again,
+    /// and its lookup rebuilds the entry or reads the edit (#609, D1043).
     #[must_use]
     pub fn is_stale(&self) -> bool {
-        matches!(self, Self::Node { source, .. } if source.is_stale())
+        match self {
+            Self::Node { source, .. } => source.is_stale(),
+            Self::Changed { .. } => true,
+            Self::Input { code, .. } => changed(code),
+            _ => false,
+        }
+    }
+
+    /// Whether Cargo's answer drifted from the files rawr read, which only
+    /// reading them again tells apart from a rawr bug (D1043.4).
+    #[must_use]
+    pub(crate) fn drifted(&self) -> bool {
+        match self {
+            Self::ResolutionDrift { .. } => true,
+            Self::Node { source, .. } => source.drifted(),
+            _ => false,
+        }
     }
 
     /// The invariant this failure breaks, when only a rawr bug can cause it.
@@ -200,9 +236,24 @@ impl Error {
             Self::Extraction { code, reason } => Some(format!(
                 "internal error: rawr misread rustc's output (`{code}`): {reason}"
             )),
+            Self::Invariant { command, field } => Some(format!(
+                "internal error: rawr's {field} differs at {command}"
+            )),
             _ => None,
         }
     }
+}
+
+/// Whether an input failure is a file the build read that changed while it
+/// ran: the preparation starts again and takes the edit (D1043).
+fn changed(code: &str) -> bool {
+    matches!(
+        code,
+        "input-changed"
+            | "input-changed-during-read"
+            | "package-file-set-changed"
+            | "registry-marker-changed"
+    )
 }
 
 /// An input failure in Cargo's words: a file that changed during the build,
@@ -221,11 +272,12 @@ fn input_message(code: &str, reason: &str) -> String {
 /// words. Any other code is a rawr bug.
 fn input_condition(code: &str, reason: &str) -> Option<String> {
     Some(match code {
-        "input-changed" => "a file the build read changed during the build; run it again".into(),
+        "input-changed" => format!("{reason} changed during the build; run it again"),
         "input-changed-during-read" | "package-file-set-changed" | "registry-marker-changed" => {
             format!("`{reason}` changed during the build; run it again")
         }
         "package-file-set-utf8"
+        | "workspace-path-utf8"
         | "dep-info-utf8"
         | "saved-output-utf8"
         | "toolchain-executable-path-encoding"
@@ -276,13 +328,10 @@ mod tests {
                 "`/project/.cargo/config.toml` is reached through a symlink",
             ),
             (
-                Error::ResolutionDrift {
-                    command: "metadata",
-                    field: "selected whole lock",
+                Error::Changed {
+                    path: "/project/Cargo.toml".into(),
                 },
-                "Cargo.toml, Cargo.lock or the Cargo configuration changed during the build; \
-                 run it again. If none changed, this is a rawr bug (selected whole lock differs \
-                 after metadata)",
+                "`/project/Cargo.toml` changed during the build; run it again",
             ),
             (
                 Error::Schema {

@@ -98,6 +98,11 @@ fn exercise() {
             serde_json::to_vec(&receipt).unwrap(),
         )
         .unwrap();
+        fs::write(
+            legacy.join(cargo::WORKSPACE_RECORD),
+            harness.workspace.record()?,
+        )
+        .unwrap();
         Ok(())
     });
     let names = [

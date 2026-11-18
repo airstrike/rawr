@@ -122,7 +122,7 @@ impl Seed {
         let internal = selected
             .iter()
             .find(|selection| selection.alias() == config::INTERNAL_ALIAS)
-            .ok_or(Error::ResolutionDrift {
+            .ok_or(Error::Invariant {
                 command: "metadata",
                 field: "internal Rawr selection",
             })?;
@@ -141,12 +141,12 @@ impl Seed {
         }
         let package = metadata
             .package(internal.package_id())
-            .ok_or(Error::ResolutionDrift {
+            .ok_or(Error::Invariant {
                 command: "metadata",
                 field: "internal Rawr package authority",
             })?;
         let unit::PackageSource::Path { cargo_id } = package.source() else {
-            return Err(Error::ResolutionDrift {
+            return Err(Error::Invariant {
                 command: "metadata",
                 field: "internal Rawr path source",
             });
@@ -155,7 +155,7 @@ impl Seed {
             || package.version() != self.version.as_ref()
             || package.root() != self.root
         {
-            return Err(Error::ResolutionDrift {
+            return Err(Error::Invariant {
                 command: "metadata",
                 field: "internal Rawr exact package identity",
             });
@@ -246,24 +246,24 @@ impl Recipe {
         let selection = selected
             .iter()
             .find(|selection| selection.alias() == config::INTERNAL_ALIAS)
-            .ok_or(Error::ResolutionDrift {
+            .ok_or(Error::Invariant {
                 command: "publication validation",
                 field: "internal Rawr selection",
             })?;
         if selection.package_id() != self.package_id.as_ref() {
-            return Err(Error::ResolutionDrift {
+            return Err(Error::Invariant {
                 command: "publication validation",
                 field: "internal Rawr PackageId",
             });
         }
         let package = metadata
             .package(selection.package_id())
-            .ok_or(Error::ResolutionDrift {
+            .ok_or(Error::Invariant {
                 command: "publication validation",
                 field: "internal Rawr package authority",
             })?;
         let unit::PackageSource::Path { cargo_id } = package.source() else {
-            return Err(Error::ResolutionDrift {
+            return Err(Error::Invariant {
                 command: "publication validation",
                 field: "internal Rawr path source",
             });
@@ -273,7 +273,7 @@ impl Recipe {
             || package.root() != self.root
             || cargo_id.as_ref() != self.source.as_ref()
         {
-            return Err(Error::ResolutionDrift {
+            return Err(Error::Invariant {
                 command: "publication validation",
                 field: "internal Rawr exact package identity",
             });

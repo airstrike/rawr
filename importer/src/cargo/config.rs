@@ -1171,9 +1171,8 @@ impl Provenance {
                 (State::Absent, State::Present(_)) | (State::Present(_), State::Absent) => false,
             };
             if !equal {
-                return Err(Error::ResolutionDrift {
-                    command,
-                    field: "Cargo config provenance",
+                return Err(Error::Changed {
+                    path: candidate.path.clone(),
                 });
             }
         }
@@ -1544,9 +1543,8 @@ fn read_config(path: &Path, limit: usize) -> Result<Vec<u8>> {
     bytes.resize(length, 0);
     if let Err(source) = file.read_exact(&mut bytes) {
         if source.kind() == std::io::ErrorKind::UnexpectedEof {
-            return Err(Error::ResolutionDrift {
-                command: "Cargo config read",
-                field: "Cargo config provenance",
+            return Err(Error::Changed {
+                path: path.to_path_buf(),
             });
         }
         return Err(Error::Io {
@@ -1562,9 +1560,8 @@ fn read_config(path: &Path, limit: usize) -> Result<Vec<u8>> {
         source,
     })?;
     if extra != 0 {
-        return Err(Error::ResolutionDrift {
-            command: "Cargo config read",
-            field: "Cargo config provenance",
+        return Err(Error::Changed {
+            path: path.to_path_buf(),
         });
     }
     Ok(bytes)
@@ -1763,14 +1760,8 @@ mod tests {
         let error = provenance
             .revalidate(&Limits::standard(), "test")
             .expect_err("absent-to-present config drift rejects");
-        let _ = fs::remove_file(path);
-        assert!(matches!(
-            error,
-            Error::ResolutionDrift {
-                field: "Cargo config provenance",
-                ..
-            }
-        ));
+        let _ = fs::remove_file(&path);
+        assert!(matches!(error, Error::Changed { path: changed } if changed == path));
     }
 
     #[test]
@@ -1896,10 +1887,7 @@ mod tests {
         fs::remove_file(project.join(".cargo/config")).expect("config is removed");
         assert!(matches!(
             provenance.revalidate(&Limits::standard(), "test"),
-            Err(Error::ResolutionDrift {
-                field: "Cargo config provenance",
-                ..
-            })
+            Err(Error::Changed { path }) if path == project.join(".cargo/config")
         ));
         let provenance =
             discover_in(&project, &cargo_home).expect("config.toml alone is read again");
@@ -2031,10 +2019,7 @@ mod tests {
         let stale = |provenance: &Provenance| {
             matches!(
                 provenance.revalidate(&Limits::standard(), "test"),
-                Err(Error::ResolutionDrift {
-                    field: "Cargo config provenance",
-                    ..
-                })
+                Err(Error::Changed { .. })
             )
         };
         // An edit to the target is seen through the link.

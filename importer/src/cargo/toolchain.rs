@@ -476,6 +476,24 @@ impl Proof {
         &self.driver.path
     }
 
+    /// The executable whose bytes differ between this toolchain and
+    /// `earlier`, the one a build verified before: its compiler when only
+    /// what the tools report changed.
+    pub(crate) fn changed_from(&self, earlier: &Self) -> PathBuf {
+        [
+            (&self.rustup, &earlier.rustup),
+            (&self.cargo, &earlier.cargo),
+            (&self.rustc, &earlier.rustc),
+            (&self.rustdoc, &earlier.rustdoc),
+        ]
+        .into_iter()
+        .find(|(current, earlier)| current != earlier)
+        .map_or_else(
+            || self.rustc.path.clone(),
+            |(current, _)| current.path.clone(),
+        )
+    }
+
     pub(crate) fn executables(
         &self,
     ) -> impl ExactSizeIterator<Item = (&str, &Path, u64, &[u8; 32])> {
@@ -562,9 +580,8 @@ fn executable_evidence_in(
             break;
         }
         if budget.is_some() && length == metadata.len() {
-            return Err(Error::ResolutionDrift {
-                command: "toolchain verification",
-                field: "toolchain executable",
+            return Err(Error::Changed {
+                path: path.to_path_buf(),
             });
         }
         length = length.checked_add(count as u64).ok_or(Error::Limit {
@@ -582,9 +599,8 @@ fn executable_evidence_in(
         digest.update(&buffer[..count]);
     }
     if length != metadata.len() {
-        return Err(Error::ResolutionDrift {
-            command: "toolchain verification",
-            field: "toolchain executable",
+        return Err(Error::Changed {
+            path: path.to_path_buf(),
         });
     }
     let digest: [u8; 32] = digest.finalize().into();

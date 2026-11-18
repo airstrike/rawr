@@ -992,6 +992,13 @@ impl Proof {
     /// execution of its own under Rawr's store (#1890). Their place moves
     /// with every build, and what they hold follows from the inputs named.
     pub(crate) fn change_from(&self, older: &Self, outputs: &[PathBuf]) -> Option<String> {
+        self.changed_entry(older, outputs)
+            .map(|subject| format!("{subject} changed"))
+    }
+
+    /// What one of this proof and `older` read that the other did not,
+    /// as a message names it, leaving out what `outputs` hold.
+    pub(crate) fn changed_entry(&self, older: &Self, outputs: &[PathBuf]) -> Option<String> {
         let changed = |newer: &[Entry], older: &[Entry]| {
             newer
                 .iter()
@@ -999,9 +1006,7 @@ impl Proof {
                 .find(|entry| !older.contains(entry))
                 .map(Entry::subject)
         };
-        changed(&self.entries, &older.entries)
-            .or_else(|| changed(&older.entries, &self.entries))
-            .map(|subject| format!("{subject} changed"))
+        changed(&self.entries, &older.entries).or_else(|| changed(&older.entries, &self.entries))
     }
 
     pub(super) fn stored_parts(&self) -> (u32, &[Entry], Fingerprint) {
@@ -1160,9 +1165,8 @@ impl Proof {
             }
             let retained = super::read_file("runner path package manifest", path, limit)?;
             if retained.len() != *bytes || Sha256::digest(&retained).as_slice() != digest {
-                return Err(Error::ResolutionDrift {
-                    command: "runner generation",
-                    field: "path package manifest",
+                return Err(Error::Changed {
+                    path: path.to_path_buf(),
                 });
             }
             manifests.push(retained.into_boxed_slice());
@@ -1231,7 +1235,7 @@ impl Proof {
             }
             let retained = super::read_file("runner harness file", path, limit)?;
             if retained.len() != *bytes || Sha256::digest(&retained).as_slice() != digest {
-                return Err(Error::ResolutionDrift {
+                return Err(Error::Invariant {
                     command: "runner generation",
                     field: "final-form harness file",
                 });

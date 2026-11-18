@@ -35,18 +35,6 @@ impl Proof {
         self.jobs
     }
 
-    pub(crate) fn revalidate(self, command: &'static str) -> Result<()> {
-        let current = Self::discover()?;
-        if current == self {
-            Ok(())
-        } else {
-            Err(Error::ResolutionDrift {
-                command,
-                field: "Cargo parallelism proof",
-            })
-        }
-    }
-
     #[cfg(test)]
     pub(crate) fn fixture(available: NonZeroUsize) -> Result<Self> {
         Self::from_available(available)

@@ -272,7 +272,7 @@ fn acquire(
     };
     let probe = request(&[])?;
     let native = probe.pinned_native(limits).map_err(Error::other)?;
-    let closure = probe.closure(&native, limits).map_err(Error::other)?;
+    let closure = probe.closure(&native, limits).map_err(Error::cache)?;
     // What the project's last build gave its build scripts, against which
     // an entry whose closure runs one is shared (#403).
     let project = store::Scripts::project(&rawr);
@@ -324,7 +324,7 @@ fn acquire(
     if !missing.is_empty() {
         let request = request(&closure.dependencies)?;
         let acquired =
-            inventory::Acquired::capture(request, &native, limits).map_err(Error::other)?;
+            inventory::Acquired::capture(request, &native, limits).map_err(Error::cache)?;
         entries = acquired.entries(|unit| keys.get(unit).map(|(key, ..)| *key));
         for entry in &entries {
             let (unit, witness) = entry.native();
