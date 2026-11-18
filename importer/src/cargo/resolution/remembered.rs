@@ -16,9 +16,17 @@
 //! The demand is not part of the request here: it changes what the probe
 //! extracts, never what Cargo sees. The outputs are also kept in the
 //! project's Rawr directory, so the next process starts from them too.
+//!
+//! The files are read when the outputs are saved, after Cargo ran. A file
+//! modified since Cargo started reading may hold bytes Cargo never saw, so
+//! the outputs are then not saved, and the next run asks Cargo again. As in
+//! Cargo's own freshness check, a modification time at or after the start
+//! counts. Only manifests, configs and the directories listed for targets
+//! are compared; a source's bytes are never part of Cargo's view.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use sha2::{Digest as _, Sha256};
 
@@ -182,7 +190,7 @@ pub(in crate::cargo) fn lookup(base: &[u8; 32], root: &Path, rawr: &Path) -> Opt
             entry
         }
     };
-    if determinants(&entry.roots, root)? != entry.determinants {
+    if determinants(&entry.roots, root, None)? != entry.determinants {
         return None;
     }
     let rewrite = |bytes: &[u8]| replace(bytes, entry.root.as_bytes(), new.as_bytes());
@@ -194,17 +202,49 @@ pub(in crate::cargo) fn lookup(base: &[u8; 32], root: &Path, rawr: &Path) -> Opt
     })
 }
 
+/// When Cargo started reading the files of one request.
+#[derive(Clone, Copy)]
+pub(in crate::cargo) struct Started(Duration);
+
+impl Started {
+    /// Taken before Cargo reads anything for the request.
+    pub(in crate::cargo) fn now() -> Self {
+        Self(since_epoch(SystemTime::now()).unwrap_or_default())
+    }
+
+    /// Whether a file modified at `modified` was modified before this
+    /// start. A time with no fraction of a second may come from a
+    /// filesystem that keeps whole seconds, so it is compared at the start's
+    /// whole second.
+    fn precedes(self, modified: SystemTime) -> bool {
+        let Some(modified) = since_epoch(modified) else {
+            return false;
+        };
+        if modified.subsec_nanos() == 0 {
+            modified.as_secs() < self.0.as_secs()
+        } else {
+            modified < self.0
+        }
+    }
+}
+
+fn since_epoch(time: SystemTime) -> Option<Duration> {
+    time.duration_since(UNIX_EPOCH).ok()
+}
+
 /// Remember what Cargo produced for this request in the bundle at `root`,
-/// and keep it under the project's Rawr directory `rawr`.
+/// and keep it under the project's Rawr directory `rawr`, unless a file
+/// Cargo read was modified since `started`.
 pub(in crate::cargo) fn remember(
     base: [u8; 32],
     root: &Path,
     roots: &[PathBuf],
     outputs: Outputs,
     rawr: &Path,
+    started: Started,
 ) {
     let Some(text) = plain(root) else { return };
-    let Some(determinants) = determinants(roots, root) else {
+    let Some(determinants) = determinants(roots, root, Some(started)) else {
         return;
     };
     let entry = Arc::new(Entry {
@@ -246,8 +286,16 @@ fn replace(bytes: &[u8], old: &[u8], new: &[u8]) -> Box<[u8]> {
 
 /// What Cargo reads besides the request: each package manifest, every
 /// `Cargo.toml` and Cargo config above it and above the harness, and which
-/// target files exist for auto-discovery. Source bytes are not read.
-fn determinants(roots: &[PathBuf], harness: &Path) -> Option<[u8; 32]> {
+/// target files exist for auto-discovery. Source bytes are not read. With
+/// `since`, a manifest, config or listed directory modified at or after it
+/// is `None`; a source's edit leaves Cargo's view as it was.
+fn determinants(roots: &[PathBuf], harness: &Path, since: Option<Started>) -> Option<[u8; 32]> {
+    let unchanged = |path: &Path| match (since, std::fs::metadata(path)) {
+        (Some(since), Ok(metadata)) => metadata
+            .modified()
+            .is_ok_and(|modified| since.precedes(modified)),
+        _ => true,
+    };
     let mut files = std::collections::BTreeSet::new();
     let mut directories = std::collections::BTreeSet::new();
     let ancestors = |files: &mut std::collections::BTreeSet<PathBuf>, start: &Path| {
@@ -281,6 +329,9 @@ fn determinants(roots: &[PathBuf], harness: &Path) -> Option<[u8; 32]> {
             digest.update([u8::from(file.is_file())]);
             continue;
         }
+        if !unchanged(file) {
+            return None;
+        }
         match std::fs::read(file) {
             Ok(bytes) => {
                 digest.update([1]);
@@ -293,6 +344,9 @@ fn determinants(roots: &[PathBuf], harness: &Path) -> Option<[u8; 32]> {
         }
     }
     for directory in &directories {
+        if !unchanged(directory) {
+            return None;
+        }
         digest.update(directory.as_os_str().as_encoded_bytes());
         let mut names = match std::fs::read_dir(directory) {
             Ok(entries) => entries
@@ -318,7 +372,41 @@ fn determinants(roots: &[PathBuf], harness: &Path) -> Option<[u8; 32]> {
 
 #[cfg(test)]
 mod tests {
-    use super::{lookup, remember, Outputs};
+    use super::{lookup, remember, Outputs, Started};
+
+    /// A manifest modified after Cargo started reading leaves the outputs
+    /// unsaved, so the next lookup misses; a source edited then does not
+    /// (#2246).
+    #[test]
+    fn outputs_are_not_saved_beside_a_manifest_modified_after_cargo_started() {
+        let scratch = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../target/test-scratch")
+            .join(format!("remembered-started-{}", std::process::id()));
+        let package = scratch.join("package");
+        std::fs::create_dir_all(package.join("src")).unwrap();
+        std::fs::write(package.join("Cargo.toml"), "[package]\nname = \"p\"\n").unwrap();
+        std::fs::write(package.join("src/lib.rs"), "pub fn f() {}\n").unwrap();
+        let bundle = scratch.join("executions/a/bundle");
+        let roots = [package.join("Cargo.toml")];
+        let rawr = scratch.join("rawr");
+        let outputs = Outputs {
+            internal: Box::from(&b"recipe"[..]),
+            candidate: Box::from(&b"{}"[..]),
+            lock: Box::from(&b"lock"[..]),
+            units: Box::from(&b"{}"[..]),
+        };
+        let base = super::base(&[b"started-source"]);
+        let started = Started::now();
+        std::fs::write(package.join("src/lib.rs"), "pub fn g() {}\n").unwrap();
+        remember(base, &bundle, &roots, outputs.clone(), &rawr, started);
+        assert!(lookup(&base, &bundle, &rawr).is_some(), "a source edit");
+        let base = super::base(&[b"started-manifest"]);
+        let started = Started::now();
+        std::fs::write(package.join("Cargo.toml"), "[package]\nname = \"q\"\n").unwrap();
+        remember(base, &bundle, &roots, outputs, &rawr, started);
+        assert!(lookup(&base, &bundle, &rawr).is_none(), "a manifest edit");
+        std::fs::remove_dir_all(scratch).unwrap();
+    }
 
     #[test]
     fn cargo_outputs_survive_a_source_edit_and_not_a_manifest_or_target_change() {
@@ -348,6 +436,7 @@ mod tests {
                 units: named(&old).into(),
             },
             &rawr,
+            Started::now(),
         );
         std::fs::write(package.join("src/lib.rs"), "pub fn f() { let _ = 1; }\n").unwrap();
         let reused = lookup(&base, &new, &rawr).expect("a source edit keeps Cargo's view");
