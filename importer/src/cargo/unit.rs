@@ -2740,6 +2740,10 @@ impl Extraction {
         &self.profile
     }
 
+    pub(crate) fn mode(&self) -> &str {
+        &self.mode
+    }
+
     pub(crate) fn features(&self) -> &[Box<str>] {
         &self.features
     }

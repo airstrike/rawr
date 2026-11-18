@@ -483,6 +483,7 @@ impl Request {
                 unit_key: unit.semantic_key(),
                 package_id: unit.package_id(),
                 target: unit.target(),
+                mode: unit.mode(),
                 features: unit.features(),
             })
             .collect::<Vec<_>>();

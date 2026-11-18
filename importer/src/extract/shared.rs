@@ -40,6 +40,10 @@ pub(crate) struct Selected<'a> {
     pub(crate) unit_key: &'a str,
     pub(crate) package_id: &'a str,
     pub(crate) target: &'a str,
+    /// Cargo's compile mode for it: a library built for the target and as
+    /// a host dependency of a build script or procedural macro has a unit
+    /// of each, with the same features, and only the mode tells them apart.
+    pub(crate) mode: &'a str,
     pub(crate) features: &'a [Box<str>],
 }
 
@@ -172,6 +176,7 @@ fn keys_with(
         let mut matching = document.units.iter().enumerate().filter(|(_, candidate)| {
             candidate.pkg_id == unit.package_id
                 && candidate.target.src_path == unit.target
+                && candidate.mode == unit.mode
                 && matches!(candidate.mode.as_str(), "check" | "build")
                 && candidate
                     .target
@@ -367,6 +372,7 @@ mod tests {
             unit_key: target,
             package_id,
             target,
+            mode: "check",
             features: &[],
         }
     }
@@ -412,6 +418,47 @@ mod tests {
     }
 
     const SEMVER_TARGET: &str = "/registry/semver/src/lib.rs";
+
+    /// `libc` is a library of the target and, with the same features, a
+    /// host dependency of `pm2`'s build script, as a check build for a
+    /// named target compiles it: the target's unit is the selected one, and
+    /// it is shared (#471).
+    #[test]
+    fn a_library_also_built_for_a_host_script_is_keyed_by_its_target_unit() {
+        let unit = |src: &str, mode: &str, dependencies: &[usize]| {
+            serde_json::json!({
+                "pkg_id": if src.contains("pm2") { PM2 } else { LIBC },
+                "target": {
+                    "kind": [if src.ends_with("build.rs") { "custom-build" } else { "lib" }],
+                    "src_path": src,
+                },
+                "mode": mode,
+                "features": [],
+                "dependencies": dependencies
+                    .iter()
+                    .map(|index| serde_json::json!({ "index": index }))
+                    .collect::<Vec<_>>(),
+            })
+        };
+        const LIBC_TARGET: &str = "/registry/libc/src/lib.rs";
+        let units = serde_json::to_vec(&serde_json::json!({
+            "units": [
+                unit(LIBC_TARGET, "check", &[]),
+                unit(LIBC_TARGET, "build", &[]),
+                unit("/registry/pm2/build.rs", "build", &[1]),
+            ]
+        }))
+        .unwrap();
+        let libc = Selected {
+            unit_key: "libc",
+            package_id: LIBC,
+            target: LIBC_TARGET,
+            mode: "check",
+            features: &[],
+        };
+        let shared = keys(&units, &packages(2, 3), &[libc], "commit", "host", "host");
+        assert!(shared.contains_key("libc"), "the target's unit is shared");
+    }
 
     /// `semver` reaches the path package `local` (as a `[patch]` makes a
     /// registry crate do) through `libc`; `pm2` and `macros` reach none,
@@ -486,6 +533,7 @@ mod tests {
             unit_key: "libc",
             package_id: LIBC,
             target: &target,
+            mode: "check",
             features: &[],
         };
         let metadata = Metadata::fixture_packages([
