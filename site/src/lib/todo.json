@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-18",
-  "version": "0.4.9",
+  "version": "0.4.10",
   "examples": {
     "running": 56,
     "total": 56,
@@ -9,13 +9,15 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
-      "entries": [
-        {"text":"A library that is also built for a build script or a procedural macro of its closure shares its bindings and its intrinsic facts across projects, so a second project using it runs no nightly build.","issues":[471]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.10",
+        "date": "2026-11-18",
+        "entries": [
+          {"text":"A library that is also built for a build script or a procedural macro of its closure shares its bindings and its intrinsic facts across projects, so a second project using it runs no nightly build.","issues":[471]}
+        ]
+      },
       {
         "version": "0.4.9",
         "date": "2026-11-18",
@@ -3282,7 +3284,7 @@
     {"issue":468,"title":"A shared whole table lists only the external crates its publisher's probe reached","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":469,"title":"Trait-member answers are not in whole tables, so new member demand runs the nightly","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":470,"title":"Project-local tables are never replayed without the probe","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.177"},
-    {"issue":471,"title":"Find why a warm check sometimes takes the intrinsic-facts path","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":471,"title":"Find why a warm check sometimes takes the intrinsic-facts path","state":"closed","category":"Shared dependency cache (D607)","release":"0.4.10"},
     {"issue":472,"title":"Reading iced's whole dependency set passes the semantic API byte limit","state":"closed","category":"No glue (D593)","release":"0.3.41"},
     {"issue":473,"title":"Delete the reload scheduler's test-only observation binding","state":"open","category":"No glue (D593)"},
     {"issue":474,"title":"Two crates sharing a target dir fail rawr check on a build script's OUT_DIR","state":"closed","category":"Shared dependency cache (D607)"},
