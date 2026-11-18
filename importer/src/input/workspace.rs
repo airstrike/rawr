@@ -261,6 +261,26 @@ pub(crate) fn capture(roots: Box<[PathBuf]>, account: &mut Account<'_>) -> Resul
     })
 }
 
+/// The format of [`Image::record`].
+const RECORD: &str = "rawr.cargo.workspace-record/v1";
+
+/// Whether the manifests an [`Image::record`] observed are as it observed
+/// them: an edit to any manifest of the workspace, below the request's own
+/// path dependencies too, is a resolution kept for other files. A record
+/// that doesn't decode, or can't be observed again, holds nothing.
+pub(crate) fn holds(record: &[u8], limits: &cargo::Limits) -> bool {
+    let Ok((format, roots, digest)) =
+        serde_json::from_slice::<(Box<str>, Box<[PathBuf]>, [u8; 32])>(record)
+    else {
+        return false;
+    };
+    *format == *RECORD
+        && matches!(
+            observe(&roots, &mut Account::bounded(limits)),
+            Ok(Entry::Workspace { digest: current, .. }) if current == digest
+        )
+}
+
 pub(crate) fn observe(roots: &[PathBuf], account: &mut Account<'_>) -> Result<Entry> {
     scan(roots, None, account).map(|scanned| scanned.entry)
 }
@@ -534,6 +554,16 @@ impl Image {
             .expect("a workspace image has the request's own manifest as a root");
         Err(Error::Changed {
             path: changed.clone(),
+        })
+    }
+
+    /// The bytes a persisted resolution keeps of this image: the manifests
+    /// it starts from and its digest of what it observed, which [`holds`]
+    /// reads back.
+    pub(crate) fn record(&self) -> Result<Vec<u8>> {
+        serde_json::to_vec(&(RECORD, &self.roots, self.digest()?)).map_err(|error| Error::Schema {
+            document: "workspace record",
+            reason: error.to_string().into_boxed_str(),
         })
     }
 

@@ -39,6 +39,9 @@ const HARNESS_DIRECTORY: &str = "resolution";
 const PROVISIONAL_DIRECTORY: &str = "provisional";
 const CANDIDATE_DIRECTORY: &str = "candidates";
 const UNIVERSE_RECEIPT: &str = "resolution-universe.json";
+/// Every workspace manifest a persisted resolution read, and its digest of
+/// them (`input::workspace::Image::record`).
+const WORKSPACE_RECORD: &str = "resolution-workspace.json";
 const HARNESS_MANIFEST: &str = "Cargo.toml";
 const HARNESS_SOURCE: &str = "#![forbid(unsafe_code)]\n\
     /// Keeps the final-form resolution package a normal library target.\n\
@@ -393,7 +396,6 @@ pub struct Resolution {
     profile: Box<str>,
     policy: crate::extract::Policy,
     input: crate::input::Baseline,
-    parallelism: process::parallelism::Proof,
     internal: internal::Recipe,
     #[cfg(test)]
     observations: Option<Retained>,
@@ -507,7 +509,6 @@ impl CompletedHarness {
             profile: request.profile,
             policy: request.policy,
             input: self.input,
-            parallelism: request.parallelism,
             internal: self.internal,
             #[cfg(test)]
             observations: self.observations,
@@ -1842,7 +1843,6 @@ impl Request {
     }
 
     fn revalidate(&self, limits: &Limits, command: &'static str) -> Result<()> {
-        self.parallelism.revalidate(command)?;
         self.config.revalidate(limits, command)?;
         for input in &self.inputs {
             if authority_input_digest(&input.path, input.role.bytes())? != input.digest {
@@ -2073,6 +2073,8 @@ impl Request {
         #[cfg(feature = "rustc-driver")]
         let probe_scope = uncached(execution::Operation::Probe);
         let receipt_path = harness_root.join(UNIVERSE_RECEIPT);
+        let record_path = harness_root.join(WORKSPACE_RECORD);
+        let record = workspace.record()?;
         let harness = Harness {
             context: node_context,
             harness_root,
@@ -2110,6 +2112,9 @@ impl Request {
                 None,
             )
             .map_err(|error| self.settle(limits, None, error))?;
+        // After the receipt: a candidate whose attempt stops between the two
+        // has no record, and is a miss ([`select_placement`]).
+        write_atomic(&record_path, &record)?;
         #[allow(unused_mut)]
         let mut resolution = completed.into_resolution(self);
         #[cfg(feature = "rustc-driver")]
@@ -2803,7 +2808,6 @@ impl Resolution {
         native: &process::ProductionNative<'_>,
         limits: &Limits,
     ) -> Result<()> {
-        self.parallelism.revalidate("publication validation")?;
         self.retained_config
             .revalidate(limits, "publication validation")?;
         for input in &self.retained_inputs {
@@ -3179,7 +3183,7 @@ fn fixed_placement(
             digest(&fixed_source),
             fixed_lock.digest(),
         )?;
-        if receipt.matches_request(request_identity) {
+        if receipt.matches_request(request_identity) && workspace_holds(fixed) {
             return Ok(Some(Placement {
                 root: fixed.to_path_buf(),
                 request: request_identity,
@@ -3257,14 +3261,17 @@ fn select_placement(
                 reason: "is not a directory".into(),
             })
         }
-        // The receipt is written last, so a candidate without one is an
-        // attempt that stopped: it is built again in its place, never read.
-        Ok(_) if !candidate.join(UNIVERSE_RECEIPT).exists() => Ok(Placement {
-            root: candidate,
-            request: request_identity,
-            state: PlacementState::Fresh,
-            exclusive: true,
-        }),
+        // A candidate without its receipt is an attempt that stopped, and
+        // one whose workspace manifests changed since was resolved from
+        // other files: either is built again in its place, never read.
+        Ok(_) if !candidate.join(UNIVERSE_RECEIPT).exists() || !workspace_holds(&candidate) => {
+            Ok(Placement {
+                root: candidate,
+                request: request_identity,
+                state: PlacementState::Fresh,
+                exclusive: true,
+            })
+        }
         Ok(_) => {
             let lock_bytes = read_bounded(
                 "persisted final resolution lock",
@@ -3312,6 +3319,14 @@ fn select_placement(
             })
         }
     }
+}
+
+/// Whether every workspace manifest the persisted resolution at `root`
+/// read is as it read it. The request identity names only the request's own
+/// manifests, so an edit below its path dependencies is seen here.
+fn workspace_holds(root: &Path) -> bool {
+    fs::read(root.join(WORKSPACE_RECORD))
+        .is_ok_and(|record| crate::input::workspace::holds(&record, &Limits::standard()))
 }
 
 fn versioned_request_identity(
@@ -5046,6 +5061,23 @@ mod universe_placement_tests {
             *definition.identity(),
             *lock.digest().as_bytes(),
         );
+        install_record(root, &request.inputs);
+    }
+
+    /// The workspace record of a persisted resolution whose workspace is
+    /// the manifests `inputs` names.
+    fn install_record(root: &Path, inputs: &[Input]) {
+        let limits = Limits::standard();
+        let image = crate::input::workspace::before_metadata(
+            inputs,
+            &mut crate::input::workspace::Account::bounded(&limits),
+        )
+        .expect("the fixture workspace is observed");
+        fs::write(
+            root.join(WORKSPACE_RECORD),
+            image.record().expect("the record encodes"),
+        )
+        .expect("the record writes");
     }
 
     fn write_fixture_receipt(
@@ -5408,6 +5440,50 @@ mod universe_placement_tests {
         prepare_versioned_roots(&changed, &again.root, again.exclusive)
             .expect("the stopped attempt is retired under the lease");
         assert!(!again.root.join("Cargo.lock").exists());
+    }
+
+    /// A manifest below the request's path dependencies, which the request
+    /// identity doesn't name, edited between two runs: the second run's
+    /// persisted resolution was read from other files, so it builds a fresh
+    /// candidate instead of finding Cargo's answer drifted (#657).
+    #[test]
+    fn a_manifest_below_the_path_dependencies_edited_between_runs_is_a_clean_miss() {
+        let limits = Limits::standard();
+        let project = Project::new("transitive-manifest");
+        let request = request(&project, false, &limits);
+        let catalog = universe::Catalog::new(definition());
+        let manifest = render_manifest(&request, None).expect("manifest renders");
+        let fixed = project.cache().join(HARNESS_DIRECTORY);
+        install_legacy(&fixed, &manifest, SEED);
+        install_current_receipt(&fixed, &request, catalog.current(), &manifest);
+        let transitive = project.0.join("transitive/Cargo.toml");
+        fs::create_dir_all(transitive.parent().expect("the manifest has a directory"))
+            .expect("the transitive package's directory creates");
+        fs::write(
+            &transitive,
+            "[package]\nname = \"transitive\"\nversion = \"0.1.0\"\n",
+        )
+        .expect("the transitive manifest writes");
+        let image = crate::input::workspace::capture(
+            Box::new([transitive.clone()]),
+            &mut crate::input::workspace::Account::bounded(&limits),
+        )
+        .expect("the transitive workspace is observed");
+        fs::write(
+            fixed.join(WORKSPACE_RECORD),
+            image.record().expect("the record encodes"),
+        )
+        .expect("the record writes");
+        let first = select_placement(&request, &catalog, &manifest).expect("the first run selects");
+        assert!(matches!(first.state, PlacementState::Persisted { .. }));
+
+        fs::write(
+            &transitive,
+            "[package]\nname = \"transitive\"\nversion = \"0.2.0\"\n",
+        )
+        .expect("the transitive manifest is edited");
+        let (second, _) = select_before_command(&request, &catalog, &manifest);
+        assert_clean_miss(second, &fixed, SEED);
     }
 
     #[test]
