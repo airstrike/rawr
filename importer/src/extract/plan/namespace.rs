@@ -90,7 +90,7 @@ impl Snapshot {
             allocation,
             false,
         )?;
-        compare_members(&self.retained.members, &current, None)?;
+        compare_members(&self.retained.members, &current, None, allocation)?;
         let count = current.iter().filter(|member| member.candidate).count();
         let mut candidates = Vec::new();
         allocation.items(count)?;
@@ -201,7 +201,7 @@ impl Retained {
         // rewritten, so one decoded namespace serves every mode.
         let frozen = matches!(origin.mode(), retained::Mode::Frozen).then_some(root);
         let current = observe(&self.roots, &self.explicit, allocation, false)?;
-        compare_members(&self.members, &current, frozen)?;
+        compare_members(&self.members, &current, frozen, allocation)?;
         allocation.items(self.members.len())?;
         let mut shared = Vec::new();
         shared
@@ -308,7 +308,7 @@ impl Retained {
 
     pub(crate) fn revalidate(&self, allocation: &mut Allocation) -> Result<()> {
         let current = observe(&self.roots, &self.explicit, allocation, false)?;
-        compare_members(&self.members, &current, None)?;
+        compare_members(&self.members, &current, None, allocation)?;
         verify_content(&self.members, allocation)
     }
 }
@@ -332,18 +332,49 @@ fn expected_facts(member: &Member, frozen: Option<&Path>) -> Facts {
     facts
 }
 
-fn compare_members(expected: &[Member], current: &[Member], frozen: Option<&Path>) -> Result<()> {
-    if expected.len() != current.len()
-        || expected.iter().zip(current).any(|(left, right)| {
-            left.path.as_os_str() != right.path.as_os_str()
-                || !expected_facts(left, frozen).holds(right.facts)
-                || left.candidate != right.candidate
-                || left.explicit != right.explicit
-        })
+/// Compare a later observation of the namespace with the recorded one. A
+/// member added, removed or with other physical facts is a file another
+/// process changed in a directory rustc searches, such as a build sharing
+/// it: the build starts again and observes it anew (D1043.2). The same
+/// members in other roles is rawr disagreeing with itself.
+fn compare_members(
+    expected: &[Member],
+    current: &[Member],
+    frozen: Option<&Path>,
+    allocation: &mut Allocation,
+) -> Result<()> {
+    let differing = expected.iter().zip(current).find(|(left, right)| {
+        left.path.as_os_str() != right.path.as_os_str()
+            || !expected_facts(left, frozen).holds(right.facts)
+    });
+    // The first path the two observations order apart is the one added or
+    // removed; with equal paths, its facts differ.
+    let path = match differing {
+        Some((left, right)) => Some(left.path.as_path().min(right.path.as_path())),
+        None if expected.len() > current.len() => Some(expected[current.len()].path.as_path()),
+        None if current.len() > expected.len() => Some(current[expected.len()].path.as_path()),
+        None => None,
+    };
+    if let Some(path) = path {
+        return Err(changed(path, allocation));
+    }
+    if expected
+        .iter()
+        .zip(current)
+        .any(|(left, right)| left.candidate != right.candidate || left.explicit != right.explicit)
     {
-        return Err(invalid("namespace membership or physical facts changed"));
+        return Err(invalid("namespace member roles changed"));
     }
     Ok(())
+}
+
+/// A namespace member that another process changed after it was observed:
+/// stale, so the build starts again (D1043.2).
+fn changed(path: &Path, allocation: &mut Allocation) -> Error {
+    match own_path(path, allocation) {
+        Ok(path) => Error::Changed { path },
+        Err(error) => error,
+    }
 }
 
 fn verify_content(members: &[Member], allocation: &mut Allocation) -> Result<()> {
@@ -367,14 +398,14 @@ fn verify_content_with(
             {
                 let metadata = metadata(&member.path, allocation)?;
                 if !expected_facts(member, frozen).holds(facts(&member.path, &metadata)?) {
-                    return Err(invalid("selected namespace physical facts changed"));
+                    return Err(changed(&member.path, allocation));
                 }
                 if shared(index) {
                     continue;
                 }
                 let digest = hashes.hash(&member.path, &metadata).map_err(node)?;
                 if Some(digest) != member.digest {
-                    return Err(invalid("selected namespace content changed"));
+                    return Err(changed(&member.path, allocation));
                 }
             }
             Ok(())
@@ -439,10 +470,11 @@ fn observe(
     let mut members = members.into_vec();
     let observed_rows = members.len();
     members.sort_unstable_by(|left, right| left.path.as_os_str().cmp(right.path.as_os_str()));
-    for pair in members.windows(2) {
-        if pair[0].path.as_os_str() == pair[1].path.as_os_str() && pair[0].facts != pair[1].facts {
-            return Err(invalid("overlapping namespace observations changed"));
-        }
+    // A path two roots reach, observed apart, changed in between.
+    if let Some(pair) = members.windows(2).find(|pair| {
+        pair[0].path.as_os_str() == pair[1].path.as_os_str() && pair[0].facts != pair[1].facts
+    }) {
+        return Err(changed(&pair[0].path, allocation));
     }
     members.dedup_by(|later, earlier| {
         if later.path.as_os_str() != earlier.path.as_os_str() {
@@ -471,7 +503,7 @@ fn observe(
                 for member in members.iter_mut().filter(|member| member.candidate) {
                     let metadata = metadata(&member.path, allocation)?;
                     if !member.facts.holds(facts(&member.path, &metadata)?) {
-                        return Err(invalid("namespace physical facts changed before hashing"));
+                        return Err(changed(&member.path, allocation));
                     }
                     member.digest = Some(hashes.hash(&member.path, &metadata).map_err(node)?);
                 }
@@ -743,7 +775,7 @@ mod tests {
         // A successful earlier read plus unchanged physical facts cannot serve
         // the later consumer: an in-place content edit preserves this identity.
         let current = observe(&retained.roots, &retained.explicit, &mut allocation, false).unwrap();
-        compare_members(&retained.members, &current, None).unwrap();
+        compare_members(&retained.members, &current, None, &mut allocation).unwrap();
         assert!(retained.revalidate(&mut allocation).is_err());
         fs::write(fixture.0.join("liba.rmeta"), b"meta").unwrap();
         fs::write(fixture.0.join("opaque"), b"growth!").unwrap();
@@ -827,9 +859,59 @@ mod tests {
         fs::write(fixture.0.join("sibling0.rmeta"), b"later").unwrap();
         assert!(matches!(
             verify_content(&members, &mut allocation),
-            Err(Error::Extraction { code: "compiler-namespace", reason })
-                if reason.as_ref() == "selected namespace content changed"
+            Err(Error::Changed { path }) if path == fixture.0.join("sibling0.rmeta")
         ));
+    }
+
+    /// Another build writing into a directory rustc searches, between this
+    /// extraction's observation and its completion, makes the build stale:
+    /// it starts again, and never reports a misread of rustc's output.
+    #[test]
+    fn another_writer_in_a_searched_directory_is_stale() {
+        let fixture = Fixture::new();
+        let graph = GraphBudget::new();
+        let mut allocation = allocation();
+        let bytes = fixture.completion(false);
+        let completion = Completion::decode(&bytes).unwrap();
+        let other_writer = |write: Box<dyn FnOnce() + Send>| std::thread::spawn(write).join();
+
+        // The other writer adds a crate's outputs, as Cargo does.
+        let snapshot = Snapshot::capture(&fixture.roots(), &[], &mut allocation, &graph).unwrap();
+        let root = fixture.0.clone();
+        other_writer(Box::new(move || {
+            fs::write(root.join("libb.rlib"), b"archive").unwrap();
+            fs::write(root.join("libb.rmeta"), b"meta").unwrap();
+        }))
+        .unwrap();
+        let error = snapshot
+            .complete(&completion, &mut allocation, &graph)
+            .err()
+            .unwrap();
+        assert!(error.is_stale(), "{error:?}");
+        assert!(matches!(&error, Error::Changed { path } if path.starts_with(&fixture.0)));
+
+        // It replaces a crate this extraction selected, after completion.
+        let snapshot = Snapshot::capture(&fixture.roots(), &[], &mut allocation, &graph).unwrap();
+        let retained = snapshot
+            .complete(&completion, &mut allocation, &graph)
+            .unwrap();
+        let rmeta = fixture.0.join("liba.rmeta");
+        other_writer(Box::new(move || {
+            fs::remove_file(&rmeta).unwrap();
+            fs::write(&rmeta, b"other meta").unwrap();
+        }))
+        .unwrap();
+        let error = retained.revalidate(&mut allocation).unwrap_err();
+        assert!(error.is_stale(), "{error:?}");
+
+        // A completion that disagrees with the observation stays a misread.
+        let snapshot = Snapshot::capture(&fixture.roots(), &[], &mut allocation, &graph).unwrap();
+        let error = snapshot
+            .complete(&completion, &mut allocation, &GraphBudget::new())
+            .err()
+            .unwrap();
+        assert!(!error.is_stale());
+        assert!(error.invariant().is_some(), "{error:?}");
     }
 
     #[test]

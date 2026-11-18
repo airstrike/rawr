@@ -1355,53 +1355,17 @@ mod seed {
                 }
                 Token::Ident("use") => {
                     let global = tokens.get(index + 1) == Some(&Token::Path);
-                    let (prefix, next) = path(&tokens, index + 1 + usize::from(global));
-                    index = next;
-                    if prefix.is_empty() {
+                    let start = index + 1 + usize::from(global);
+                    if !matches!(tokens.get(start), Some(Token::Ident(_))) {
+                        index = start;
                         continue;
                     }
-                    if tokens.get(index) == Some(&Token::Path)
-                        && tokens.get(index + 1) == Some(&Token::Star)
-                    {
-                        // A glob demands every public name of the module.
-                        let mut glob = prefix;
-                        glob.push("*");
-                        qualified.push((glob, global));
-                        index += 2;
-                    } else if tokens.get(index) == Some(&Token::Path)
-                        && tokens.get(index + 1) == Some(&Token::Open)
-                    {
-                        index += 2;
-                        while let Some(Token::Ident(name)) = tokens.get(index) {
-                            let mut full = prefix.clone();
-                            let mut local = *name;
-                            if *name == "self" {
-                                local = prefix[prefix.len() - 1];
-                            } else {
-                                full.push(name);
-                            }
-                            index += 1;
-                            if tokens.get(index) == Some(&Token::Ident("as"))
-                                && let Some(Token::Ident(alias)) = tokens.get(index + 1)
-                            {
-                                local = alias;
-                                index += 2;
-                            }
-                            bindings.push((local, full, global));
-                            if tokens.get(index) == Some(&Token::Comma) {
-                                index += 1;
-                            }
-                        }
-                    } else {
-                        let mut local = prefix[prefix.len() - 1];
-                        if tokens.get(index) == Some(&Token::Ident("as"))
-                            && let Some(Token::Ident(alias)) = tokens.get(index + 1)
-                        {
-                            local = alias;
-                            index += 2;
-                        }
-                        bindings.push((local, prefix, global));
-                    }
+                    let mut tree = Tree {
+                        global,
+                        bindings: &mut bindings,
+                        qualified: &mut qualified,
+                    };
+                    index = tree.walk(&tokens, start, &[]);
                 }
                 Token::Ident(_) => {
                     let (segments, next) = path(&tokens, index);
@@ -1458,6 +1422,73 @@ mod seed {
             }
         }
         paths
+    }
+
+    /// What one `use` item binds and demands, as its tree is walked.
+    struct Tree<'t, 'a> {
+        /// Whether the item starts with `::`.
+        global: bool,
+        /// Each binding's name, its path, and whether that path is global.
+        bindings: &'t mut Vec<(&'a str, Vec<&'a str>, bool)>,
+        /// Each glob's module, with `*` as its last segment.
+        qualified: &'t mut Vec<(Vec<&'a str>, bool)>,
+    }
+
+    impl<'a> Tree<'_, 'a> {
+        /// The use tree at `index` below `prefix`, as Rust nests it: a
+        /// path, then a binding (`as` an alias, or `self` binding the
+        /// prefix), a glob, or a group of trees of their own, as in
+        /// `use a::{b, c::{self, d}, e::*};`. Returns the index after it.
+        fn walk(&mut self, tokens: &[Token<'a>], index: usize, prefix: &[&'a str]) -> usize {
+            let (segments, mut index) = path(tokens, index);
+            let mut full = prefix.to_vec();
+            full.extend(segments);
+            match (tokens.get(index), tokens.get(index + 1)) {
+                (Some(Token::Path), Some(Token::Star)) => {
+                    self.glob(full);
+                    index + 2
+                }
+                (Some(Token::Path), Some(Token::Open)) => {
+                    index += 2;
+                    loop {
+                        match tokens.get(index) {
+                            Some(Token::Ident(_)) => index = self.walk(tokens, index, &full),
+                            Some(Token::Star) => {
+                                self.glob(full.clone());
+                                index += 1;
+                            }
+                            Some(Token::Comma) => index += 1,
+                            Some(Token::Close) => return index + 1,
+                            _ => return index,
+                        }
+                    }
+                }
+                _ => {
+                    if full.last() == Some(&"self") {
+                        full.pop();
+                    }
+                    let Some(mut local) = full.last().copied() else {
+                        return index;
+                    };
+                    if tokens.get(index) == Some(&Token::Ident("as"))
+                        && let Some(Token::Ident(alias)) = tokens.get(index + 1)
+                    {
+                        local = alias;
+                        index += 2;
+                    }
+                    self.bindings.push((local, full, self.global));
+                    index
+                }
+            }
+        }
+
+        /// A glob of the module `full`, which demands its every public name.
+        fn glob(&mut self, mut full: Vec<&'a str>) {
+            if !full.is_empty() {
+                full.push("*");
+                self.qualified.push((full, self.global));
+            }
+        }
     }
 
     /// `full` with its first segment, while another `use` binds it, written
@@ -1526,6 +1557,32 @@ mod seed {
             paths.sort();
             paths.dedup();
             paths
+        }
+
+        /// A group's member may be a path, a group or a glob of its own,
+        /// and each binds below the group's prefix, so a type a nested
+        /// member binds is demanded with the paths through it.
+        #[test]
+        fn seed_expands_paths_and_groups_nested_in_a_group() {
+            let text = "use outer::inner;\n\
+                use inner::{events::{Loop, Flow as F}, keys::{self, State}, all::*};\n\
+                use ::outer::{deep::Item};\n\
+                fn main() { let _ = Loop::new(); F::Wait; keys::Code; }\n";
+            assert_eq!(
+                joined(text),
+                [
+                    "outer::deep::Item",
+                    "outer::inner",
+                    "outer::inner::all::*",
+                    "outer::inner::events::Flow",
+                    "outer::inner::events::Flow::Wait",
+                    "outer::inner::events::Loop",
+                    "outer::inner::events::Loop::new",
+                    "outer::inner::keys",
+                    "outer::inner::keys::Code",
+                    "outer::inner::keys::State",
+                ]
+            );
         }
 
         #[test]
