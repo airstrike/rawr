@@ -24,6 +24,7 @@ use sha2::{Digest as _, Sha256};
 use crate::extract::engine::home;
 
 pub mod format;
+mod named;
 mod rerun;
 
 pub(crate) use rerun::Stale;
@@ -563,6 +564,7 @@ pub(crate) fn stage(
         if kept_meta.as_ref() == Some(&meta) && kept_copy.as_ref() == Some(&copy) {
             continue;
         }
+        meta.retain_named(&publish.table);
         let (Ok(meta), Ok(copy)) = (serde_json::to_vec(&meta), serde_json::to_vec(&copy)) else {
             continue;
         };
@@ -944,6 +946,44 @@ impl Settlement {
         self.settle_with(stable)
     }
 
+    /// Where a classification of the API these tables give keeps each
+    /// item's record (`classify::records`): beside each shared table in
+    /// rawr's home, and in the project whose Rawr directory this settles
+    /// for, for the rest.
+    #[must_use]
+    pub fn classification(&self) -> crate::classify::Sources {
+        let mut crates = Vec::new();
+        for entry in &self.entries {
+            let krate = match entry {
+                Settled::Extracted { key, publish, .. } => crate::classify::records::Crate {
+                    bindings: publish.bindings.clone(),
+                    key: key.clone(),
+                    crate_name: publish.meta.crate_name.clone(),
+                    stable_crate_id: Some(publish.meta.stable_crate_id.clone()),
+                    shared: publish.meta.inputs.is_some()
+                        && self.bindings.as_ref() == Some(&publish.bindings),
+                },
+                Settled::Read {
+                    directory,
+                    key,
+                    crate_name,
+                    ..
+                } => crate::classify::records::Crate {
+                    bindings: directory.clone(),
+                    key: key.clone(),
+                    crate_name: crate_name.clone(),
+                    stable_crate_id: None,
+                    shared: self.bindings.as_ref() == Some(directory),
+                },
+                Settled::Inventory { .. } | Settled::InventoryRead { .. } => continue,
+            };
+            if !crates.contains(&krate) {
+                crates.push(krate);
+            }
+        }
+        crate::classify::Sources::new(crates, self.rawr.as_deref())
+    }
+
     /// [`Settlement::settle`] after `rawr check`, whose project build is the
     /// `cargo check` beside it, as [`Observed`] read it when it ended
     /// (D609.4, #661).
@@ -1062,6 +1102,7 @@ impl Settlement {
                         continue;
                     }
                     publish.meta.scripts = nightly;
+                    publish.meta.retain_named(&publish.table);
                     publish_entry(&key, &publish, &staged);
                 }
                 Settled::Read {
@@ -1682,6 +1723,69 @@ mod tests {
         .to_string();
         assert!(refused.contains("`demo`"), "{refused}");
         assert!(read_entry(&bindings, "demo").is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// The probe that grew a table loaded crates its walk never reached,
+    /// as another project's crates beside it: the shared entry lists only
+    /// the external crates its table names (#1128).
+    #[test]
+    fn a_shared_entry_lists_only_the_external_crates_its_table_names() {
+        if !home::alone(
+            "bindings::tests::a_shared_entry_lists_only_the_external_crates_its_table_names",
+        ) {
+            return;
+        }
+        let root = scratch("named");
+        let bindings = root.join("bindings");
+        let package = "registry+https://index#demo@1.0.0".to_owned();
+        let table = root.join("table");
+        fs::write(
+            &table,
+            br#"{"units":[[{"hash":"01"},[{"Register":{"sysroot":false,"crate_name":"reached","stable_crate_id":"0"}}]]]}"#,
+        )
+        .unwrap();
+        let rawr = runner(
+            &root.join("project"),
+            &BTreeMap::from([(package.clone(), vec![script("first")])]),
+        );
+        let mut meta = meta(BTreeMap::new());
+        for crate_name in ["reached", "loaded"] {
+            meta.externals.push(External {
+                crate_name: crate_name.to_owned(),
+                stable_crate_id: "0".to_owned(),
+                unit_key: None,
+            });
+        }
+        let extracted = Settled::Extracted {
+            key: "demo".to_owned(),
+            packages: vec![package.clone()],
+            inputs_packages: vec![package.clone()],
+            nightly: Some(BTreeMap::from([(package, vec![script("first")])])),
+            publish: Box::new(Publish {
+                bindings: bindings.clone(),
+                table,
+                meta,
+            }),
+            unshared: None,
+        };
+        Settlement {
+            entries: vec![extracted],
+            bindings: Some(bindings.clone()),
+            rawr: Some(rawr),
+            nightly: None,
+        }
+        .settle()
+        .unwrap();
+        let entry = read_entry(&bindings, "demo").unwrap();
+        let externals = entry
+            .meta
+            .externals
+            .iter()
+            .map(|external| external.crate_name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(externals, ["reached"]);
+        drop(entry);
         fs::remove_dir_all(root).unwrap();
     }
 

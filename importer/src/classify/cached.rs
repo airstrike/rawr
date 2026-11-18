@@ -100,6 +100,9 @@ struct Captured {
     semantic: api::Fingerprint,
     seed: api::Usage,
     parts: ClassifiedParts,
+    /// Each item's classification, for a later classification of a grown
+    /// API to take where the item reads the same (#1618).
+    items: std::sync::Arc<super::items::Items>,
 }
 
 impl Product {
@@ -108,7 +111,23 @@ impl Product {
         policy: &Policy,
         limits: &crate::limits::Limits,
     ) -> Result<Self, Error> {
-        let (parts, _) = graph.classify_parts(policy, Authority::production(limits))?;
+        Self::capture_from(graph, policy, limits, &[])
+    }
+
+    /// [`capture`](Self::capture), taking each item's classification from
+    /// `earlier` where the item reads the same in `graph`.
+    pub(crate) fn capture_from(
+        graph: &api::Graph<impl api::Phase>,
+        policy: &Policy,
+        limits: &crate::limits::Limits,
+        earlier: &[&super::items::Items],
+    ) -> Result<Self, Error> {
+        let (parts, _, items) = graph.classify_items_on(
+            policy,
+            Authority::production(limits),
+            crate::parallel::workers(),
+            earlier,
+        )?;
         let seed = graph.allocation();
         Ok(Self {
             canonical: std::sync::Arc::clone(&parts.canonical),
@@ -116,8 +135,14 @@ impl Product {
                 semantic: graph.semantic_fingerprint(),
                 seed,
                 parts,
+                items: std::sync::Arc::new(items),
             }),
         })
+    }
+
+    /// Each item's classification, for a product this process classified.
+    pub(crate) fn items(&self) -> Option<&std::sync::Arc<super::items::Items>> {
+        self.captured.as_ref().map(|captured| &captured.items)
     }
 
     pub(crate) fn replay(

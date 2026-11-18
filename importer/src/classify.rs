@@ -14,8 +14,17 @@ use crate::contract::{self, Classified, Contract};
 pub(crate) mod cached;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod kept;
+#[cfg(not(target_arch = "wasm32"))]
+pub use kept::Kept;
+#[cfg(all(feature = "rustc-driver", not(target_arch = "wasm32")))]
+pub use records::Sources;
+mod items;
 mod layout;
+mod premise;
+#[cfg(all(feature = "rustc-driver", not(target_arch = "wasm32")))]
+pub(crate) mod records;
 pub mod representability;
+mod resolved;
 mod slice;
 pub mod std_binding;
 
@@ -62,7 +71,7 @@ struct FunctionParameters {
 /// whether that output borrows at the bound's own lifetime.
 type Crossing = (u32, Box<[model::Type]>, model::Type, bool);
 
-#[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub(crate) struct OutcomeRecord {
     export: api::identity::Export,
     identity: crate::surface::identity::Identity,
@@ -82,7 +91,7 @@ pub(crate) struct OutcomeRecord {
     outputs: Option<Box<representability::signature::Outputs>>,
 }
 
-#[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 enum OutcomeEvidence {
     Plan {
         definition: crate::surface::identity::Definition,
@@ -196,7 +205,7 @@ struct Laid<'a, T: ?Sized> {
 }
 
 /// One exact implementation ledger nested under the export that retained it.
-#[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub(crate) struct ImplementationRecord {
     identity: crate::surface::identity::Implementation,
     span: model::Span,
@@ -404,6 +413,13 @@ fn settled<T: Clone>(
     settled
 }
 
+/// Each definition's plan, in graph order, and how each was found, by its
+/// index: classified, or taken from an earlier record.
+struct Definitions<'items> {
+    plans: Vec<DefinitionPlan>,
+    found: Vec<(usize, items::Found<'items, items::Definition>)>,
+}
+
 /// What makes a [`Context`] that classifies items of a graph beside others
 /// (`Context::worker`), on any thread.
 struct Seed<'graph, P: api::Phase> {
@@ -554,6 +570,7 @@ impl<'graph> SurfaceDefinitions<'graph> {
 
     /// The index of the first definition whose identity is `identity`.
     fn position(&self, identity: &crate::surface::identity::Definition) -> Option<usize> {
+        premise::note(|| premise::Memo::Surface(*identity));
         let start = self
             .sorted
             .partition_point(|index| self.by_index[*index as usize] < *identity);
@@ -964,16 +981,18 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
 
     /// Each definition of the graph classified on at most `workers`
     /// threads, taken up in `order`, a list of definition indices, and
-    /// given in graph order. The functions that give an opaque type go
+    /// given in graph order, each taken from its earlier record where
+    /// `check` finds one that holds. The functions that give an opaque type go
     /// first: the captures each of those leaves out of an opaque type of
     /// its own output (`Shared::left_out`) are then what every other item
     /// reads, so no item's classification depends on which was classified
     /// before it.
-    fn classify_definitions(
+    fn classify_definitions<'items>(
         &self,
         workers: usize,
         order: &[usize],
-    ) -> Result<Vec<DefinitionPlan>, Error> {
+        check: Option<&items::Check<'items>>,
+    ) -> Result<Definitions<'items>, Error> {
         let definitions = self.graph.definitions().collect::<Vec<_>>();
         let (giving, other) = order
             .iter()
@@ -992,13 +1011,37 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             &giving,
             || seed.context(),
             |worker, (index, definition)| {
+                let own = worker.graph.definition_digest(*index);
+                if let Some(carried) =
+                    check.and_then(|check| check.definition(definition.id(), own, worker))
+                {
+                    worker.carry(carried.record.charged)?;
+                    let opaque = carried.record.opaque.clone().unwrap_or_default();
+                    return Ok((
+                        carried.record.representability.clone(),
+                        opaque.excluded,
+                        opaque.bound,
+                        items::Found::Carried(carried),
+                    ));
+                }
                 worker.start_item();
-                let plan = worker.classify_definition(*index, definition)?;
-                Ok((
-                    plan,
-                    std::mem::take(&mut *worker.opaque_excluded.borrow_mut()),
-                    std::mem::take(&mut *worker.opaque_bound.borrow_mut()),
-                ))
+                let ((plan, excluded, bound), keys, charged) = worker.measured(|| {
+                    let plan = worker.classify_definition(*index, definition)?;
+                    Ok((
+                        plan,
+                        std::mem::take(&mut *worker.opaque_excluded.borrow_mut()),
+                        std::mem::take(&mut *worker.opaque_bound.borrow_mut()),
+                    ))
+                })?;
+                let record = items::Definition::new(
+                    plan.clone(),
+                    Some(items::Opaque {
+                        excluded: excluded.clone(),
+                        bound: bound.clone(),
+                    }),
+                    charged,
+                );
+                Ok((plan, excluded, bound, items::Found::Fresh { record, keys }))
             },
         );
         for worker in &workers_done {
@@ -1009,7 +1052,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         let mut by_index = giving
             .iter()
             .zip(&given)
-            .map(|((index, definition), (_, excluded, bound))| {
+            .map(|((index, definition), (_, excluded, bound, _))| {
                 (*index, *definition, excluded, bound)
             })
             .collect::<Vec<_>>();
@@ -1040,8 +1083,21 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             &other,
             || seed.context(),
             |worker, (index, definition)| {
+                let own = worker.graph.definition_digest(*index);
+                if let Some(carried) =
+                    check.and_then(|check| check.definition(definition.id(), own, worker))
+                {
+                    worker.carry(carried.record.charged)?;
+                    return Ok((
+                        carried.record.representability.clone(),
+                        items::Found::Carried(carried),
+                    ));
+                }
                 worker.start_item();
-                worker.classify_definition(*index, definition)
+                let (plan, keys, charged) =
+                    worker.measured(|| worker.classify_definition(*index, definition))?;
+                let record = items::Definition::new(plan.clone(), None, charged);
+                Ok((plan, items::Found::Fresh { record, keys }))
             },
         );
         for worker in &workers_done {
@@ -1050,20 +1106,65 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         let classified = classified?;
         let mut plans = giving
             .iter()
-            .zip(given.into_iter().map(|(plan, ..)| plan))
+            .zip(given.into_iter().map(|(plan, _, _, found)| (plan, found)))
             .chain(other.iter().zip(classified))
-            .map(|((index, definition), representability)| {
+            .map(|((index, definition), (representability, found))| {
                 (
                     *index,
                     DefinitionPlan {
                         definition: self.graph.surface_definition(definition.id()),
                         representability,
                     },
+                    found,
                 )
             })
             .collect::<Vec<_>>();
-        plans.sort_unstable_by_key(|(index, _)| *index);
-        Ok(plans.into_iter().map(|(_, plan)| plan).collect())
+        plans.sort_unstable_by_key(|(index, ..)| *index);
+        let mut found = Vec::with_capacity(plans.len());
+        let plans = plans
+            .into_iter()
+            .map(|(index, plan, item)| {
+                found.push((index, item));
+                plan
+            })
+            .collect();
+        Ok(Definitions { plans, found })
+    }
+
+    /// Run `classify`, one item's classification, noting the keys it reads
+    /// (`premise`) and what it charges.
+    fn measured<T>(
+        &self,
+        classify: impl FnOnce() -> Result<T, Error>,
+    ) -> Result<(T, Vec<premise::Key>, items::Charged), Error> {
+        let (items, bytes) = (self.retained_items.get(), self.retained_bytes.get());
+        let scratch = self.scratch_bytes.replace(0);
+        let (result, keys) = premise::record(self.graph, classify);
+        let peak = self.scratch_bytes.replace(scratch);
+        self.scratch_bytes.set(scratch.max(peak));
+        let result = result?;
+        let charged = items::Charged {
+            items: self
+                .retained_items
+                .get()
+                .checked_sub(items)
+                .ok_or(Error::Cardinality)?,
+            bytes: self
+                .retained_bytes
+                .get()
+                .checked_sub(bytes)
+                .ok_or(Error::Cardinality)?,
+            scratch: peak,
+        };
+        Ok((result, keys, charged))
+    }
+
+    /// Charge what a carried item charged when it was classified.
+    fn carry(&self, charged: items::Charged) -> Result<(), Error> {
+        self.retain(charged.items, charged.bytes)?;
+        self.scratch_bytes
+            .set(self.scratch_bytes.get().max(charged.scratch));
+        Ok(())
     }
 
     /// Forget what the item classified before left, so what the next one
@@ -1094,9 +1195,11 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
     /// arguments: those the function that gives it leaves out, and else
     /// those the item being classified first left out.
     fn left_out(&self, id: &api::identity::Definition) -> Option<Box<[u32]>> {
-        self.shared
-            .left_out
-            .get()
+        let table = self.shared.left_out.get();
+        if table.is_some() {
+            premise::note(|| premise::Memo::LeftOut(id.clone()));
+        }
+        table
             .and_then(|defined| defined.get(id))
             .cloned()
             .or_else(|| self.opaque_excluded.borrow().get(id).cloned())
@@ -1112,7 +1215,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             model::Owner::Implementation(owner) => self
                 .graph
                 .implementation_index(owner)
-                .and_then(|index| self.graph.implementations().nth(index))
+                .and_then(|index| self.graph.implementation_at(index))
                 .is_some_and(|implementation| lifetime_only(implementation.generics())),
             model::Owner::Definition(_) => false,
         }
@@ -1122,9 +1225,11 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
     /// its bounds bind: those the function that gives it takes, and else
     /// those the item being classified first took.
     fn bound(&self, id: &api::identity::Definition) -> Option<OpaqueBound> {
-        self.shared
-            .bound
-            .get()
+        let table = self.shared.bound.get();
+        if table.is_some() {
+            premise::note(|| premise::Memo::Bound(id.clone()));
+        }
+        table
             .and_then(|defined| defined.get(id))
             .cloned()
             .or_else(|| self.opaque_bound.borrow().get(id).cloned())
@@ -1995,7 +2100,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         let associated = match self
             .graph
             .definition_index(trait_id)
-            .and_then(|index| self.graph.definitions().nth(index))?
+            .and_then(|index| self.graph.definition_at(index))?
             .kind()
         {
             model::Kind::Trait { associated, .. } => &associated[..],
@@ -2044,7 +2149,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 let definition = self
                     .graph
                     .definition_index(item)
-                    .and_then(|index| self.graph.definitions().nth(index))?;
+                    .and_then(|index| self.graph.definition_at(index))?;
                 let model::Kind::AssociatedType {
                     default: model::Default::Present(model::Type::Parameter { owner, index }),
                     ..
@@ -2181,7 +2286,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         let supertrait = self
             .graph
             .definition_index(trait_id)
-            .and_then(|index| self.graph.definitions().nth(index))
+            .and_then(|index| self.graph.definition_at(index))
             .and_then(|definition| match definition.kind() {
                 model::Kind::Trait { supertraits, .. } => {
                     supertraits.iter().find_map(|predicate| match predicate {
@@ -2255,7 +2360,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         let name = self
             .graph
             .definition_index(associated)
-            .and_then(|index| self.graph.definitions().nth(index))
+            .and_then(|index| self.graph.definition_at(index))
             .and_then(|definition| definition.display_path().last())?;
         let value = self.associated_type(implementation, name)?;
         let model::Trait::Trait {
@@ -2967,7 +3072,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                     let definition = self
                         .graph
                         .definition_index(associated)
-                        .and_then(|index| self.graph.definitions().nth(index))?;
+                        .and_then(|index| self.graph.definition_at(index))?;
                     match definition.kind() {
                         model::Kind::AssociatedType {
                             default: model::Default::Present(ty),
@@ -3258,7 +3363,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             }) = self
                 .graph
                 .definition_index(&trait_id)
-                .and_then(|index| self.graph.definitions().nth(index))
+                .and_then(|index| self.graph.definition_at(index))
                 .map(model::Definition::kind)
             else {
                 continue;
@@ -3791,22 +3896,24 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         trait_id: &api::identity::Definition,
         associated: usize,
     ) -> Option<std::borrow::Cow<'_, [ProjectionCase]>> {
-        let name = self
-            .graph
-            .definitions()
-            .nth(associated)?
-            .display_path()
-            .last()?;
+        let definition = self.graph.definition_at(associated)?;
+        let name = definition.display_path().last()?;
         let read = || ProjectionCases::read(self.graph, trait_id, name, self.instance_aliases());
         let table = self.shared.projection_cases.get_or_init(|| {
-            (0..self.graph.definitions().len())
+            (0..self.graph.definition_count())
                 .map(|_| std::sync::OnceLock::new())
                 .collect()
         });
-        let cached = table.get(associated)?.get_or_init(|| Box::new(read()));
+        let cached = table
+            .get(associated)?
+            .get_or_init(|| Box::new(api::reads::paused(read)));
         // An associated type is its own trait's; a bound naming it through
         // another trait reads that trait's impls.
         Some(if cached.trait_id == *trait_id {
+            premise::note(|| premise::Memo::Projection {
+                associated: definition.id().clone(),
+                trait_id: trait_id.clone(),
+            });
             std::borrow::Cow::Borrowed(&cached.cases)
         } else {
             std::borrow::Cow::Owned(read().cases.into_vec())
@@ -3815,19 +3922,21 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
 
     /// The semantic identity of the definition at `index`, digested once.
     fn surface_definition(&self, index: usize) -> Option<crate::surface::identity::Definition> {
-        self.surface_definitions().by_index.get(index).copied()
+        let identity = self.surface_definitions().by_index.get(index).copied()?;
+        api::reads::definition(index);
+        Some(identity)
     }
 
     fn surface_definitions(&self) -> &SurfaceDefinitions<'graph> {
         self.shared
             .surface_definitions
-            .get_or_init(|| SurfaceDefinitions::new(self.graph))
+            .get_or_init(|| api::reads::paused(|| SurfaceDefinitions::new(self.graph)))
     }
 
     fn definition_name(&self, definition: &api::identity::Definition) -> Option<&str> {
         self.graph
             .definition_index(definition)
-            .and_then(|index| self.graph.definitions().nth(index))
+            .and_then(|index| self.graph.definition_at(index))
             .and_then(|definition| definition.display_path().last())
     }
 
@@ -3837,34 +3946,38 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         name: &str,
     ) -> impl Iterator<Item = &'graph model::Implementation> + use<'graph, '_, P> {
         let graph = self.graph;
+        premise::note(|| premise::Memo::Core(name.into()));
         let traits = self.shared.core_traits.get_or_init(|| {
-            let mut traits = HashMap::<&'graph str, Vec<usize>>::new();
-            for (index, implementation) in graph.implementations().enumerate() {
-                let model::Trait::Trait { id, .. } = implementation.trait_ref() else {
-                    continue;
-                };
-                if id.unit().authority().sysroot().is_none() || id.unit().crate_name() != "core" {
-                    continue;
+            api::reads::paused(|| {
+                let mut traits = HashMap::<&'graph str, Vec<usize>>::new();
+                for (index, implementation) in graph.implementations().enumerate() {
+                    let model::Trait::Trait { id, .. } = implementation.trait_ref() else {
+                        continue;
+                    };
+                    if id.unit().authority().sysroot().is_none() || id.unit().crate_name() != "core"
+                    {
+                        continue;
+                    }
+                    let Some(name) = graph
+                        .definition_index(id)
+                        .and_then(|index| graph.definition_at(index))
+                        .and_then(|definition| definition.display_path().last())
+                    else {
+                        continue;
+                    };
+                    traits.entry(name).or_default().push(index);
                 }
-                let Some(name) = graph
-                    .definition_index(id)
-                    .and_then(|index| graph.definitions().nth(index))
-                    .and_then(|definition| definition.display_path().last())
-                else {
-                    continue;
-                };
-                traits.entry(name).or_default().push(index);
-            }
-            traits
-                .into_iter()
-                .map(|(name, indices)| (name, indices.into_boxed_slice()))
-                .collect()
+                traits
+                    .into_iter()
+                    .map(|(name, indices)| (name, indices.into_boxed_slice()))
+                    .collect()
+            })
         });
         traits
             .get(name)
             .map_or(&[][..], AsRef::as_ref)
             .iter()
-            .filter_map(move |index| graph.implementations().nth(*index))
+            .filter_map(move |index| graph.implementation_at(*index))
     }
 }
 
@@ -4705,39 +4818,85 @@ impl<P: api::Phase> api::Graph<P> {
         authority: Authority,
         workers: usize,
     ) -> Result<(ClassifiedParts, usize), Error> {
+        self.classify_items_on(policy, authority, workers, &[])
+            .map(|(parts, scratch_bytes, _)| (parts, scratch_bytes))
+    }
+
+    /// [`classify_parts_on`](Self::classify_parts_on), taking each item's
+    /// record from `earlier` where it reads the same here, and giving
+    /// this classification's items.
+    fn classify_items_on(
+        &self,
+        policy: &Policy,
+        authority: Authority,
+        workers: usize,
+        earlier: &[&items::Items],
+    ) -> Result<(ClassifiedParts, usize, items::Items), Error> {
         let semantic_api = *self.semantic_fingerprint().as_bytes();
-        #[cfg(not(target_arch = "wasm32"))]
-        crate::progress::classified(self.definitions().len());
         let context = Context::new(self, authority)?;
+        let check = (!earlier.is_empty()).then(|| items::Check::new(earlier));
+        let mut gathered = items::Gathered::default();
         let result = (|| {
             context.retain_array::<OutcomeRecord>(self.exports().len())?;
             context.retain_array::<DefinitionPlan>(self.definitions().len())?;
             context.retain_items(self.definitions().len())?;
             let order = (0..self.definitions().len()).collect::<Vec<_>>();
-            let mut definitions = context.classify_definitions(workers, &order)?;
+            let Definitions {
+                plans: mut definitions,
+                found,
+            } = context.classify_definitions(workers, &order, check.as_ref())?;
             if definitions.len() != self.definitions().len() {
                 return Err(Error::Cardinality);
+            }
+            for (index, found) in found {
+                let definition = self.definition_at(index).ok_or(Error::Cardinality)?;
+                gathered.definition(
+                    definition.id(),
+                    self.definition_digest(index),
+                    found,
+                    check.as_ref(),
+                );
             }
             definitions.sort_unstable();
             drop_unnameable_fields(&context, &mut definitions);
             let exports = self.exports().collect::<Vec<_>>();
             let seed = context.seed();
+            let checked = check.as_ref();
             let (outcomes, workers_done) = crate::parallel::try_map_with_on(
                 workers,
                 &exports,
                 || seed.context(),
                 |worker, path| {
+                    let own = premise::encoded(path);
+                    if let Some(carried) =
+                        checked.and_then(|check| check.export(path.key(), own, worker))
+                    {
+                        worker.carry(carried.record.charged)?;
+                        let outcome = carried.record.outcome_in(&definitions)?;
+                        return Ok((outcome, own, items::Found::Carried(carried)));
+                    }
                     worker.start_item();
-                    worker.classify(path, &definitions)
+                    let (outcome, keys, charged) =
+                        worker.measured(|| worker.classify(path, &definitions))?;
+                    let record = items::Export::new(outcome.clone(), charged);
+                    Ok((outcome, own, items::Found::Fresh { record, keys }))
                 },
             );
             for worker in &workers_done {
                 context.absorb(worker)?;
             }
-            let mut outcomes = outcomes?;
+            let outcomes = outcomes?;
             if outcomes.len() != self.exports().len() {
                 return Err(Error::Cardinality);
             }
+            let mut outcomes = exports
+                .iter()
+                .zip(outcomes)
+                .map(|(path, (outcome, own, found))| {
+                    gathered.export(path.key(), own, found, check.as_ref());
+                    outcome
+                })
+                .collect::<Vec<_>>();
             enforce_nameability(&context, &definitions, &mut outcomes)?;
             let support_order = layout::support(self)?;
             let definition_order = layout::definitions(self, &definitions)?;
@@ -4804,6 +4963,9 @@ impl<P: api::Phase> api::Graph<P> {
         })();
         context.observe_result(&result);
         let (definitions, outcomes, canonical, fingerprint, allocation) = result?;
+        let items = gathered.finish(&context);
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::progress::classified(items.fresh().definitions);
         let support = context.support;
         let scratch_bytes = context.scratch_bytes.get();
         Ok((
@@ -4816,6 +4978,7 @@ impl<P: api::Phase> api::Graph<P> {
                 allocation,
             },
             scratch_bytes,
+            items,
         ))
     }
 }
@@ -5311,7 +5474,7 @@ fn write_type(
     let name = |id: &api::identity::Definition| {
         graph
             .definition_index(id)
-            .and_then(|index| graph.definitions().nth(index))
+            .and_then(|index| graph.definition_at(index))
             .and_then(|definition| definition.display_path().last())
             .unwrap_or("_")
             .to_owned()
@@ -5891,8 +6054,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                     .ok_or(Error::Cardinality)?;
                 let definition = self
                     .graph
-                    .definitions()
-                    .nth(definition_index)
+                    .definition_at(definition_index)
                     .ok_or(Error::Cardinality)?;
                 // `pub type Duration = TimeDelta;` is another path to the
                 // type it names, with that type's members. So is an alias
@@ -5913,8 +6075,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                             .ok_or(Error::Cardinality)?;
                         Some(
                             self.graph
-                                .implementations()
-                                .nth(index)
+                                .implementation_at(index)
                                 .ok_or(Error::Cardinality)?,
                         )
                     }
@@ -5995,10 +6156,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         if !arguments.is_empty() {
             return None;
         }
-        let target = self
-            .graph
-            .definitions()
-            .nth(self.graph.definition_index(id)?)?;
+        let target = self.graph.definition_at(self.graph.definition_index(id)?)?;
         matches!(
             target.kind(),
             model::Kind::Struct { .. } | model::Kind::Enum { .. }
@@ -6026,37 +6184,42 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
     /// The definitions some import exports, by root (`exported_by_root`),
     /// read once for the classification.
     fn exported(&self) -> &Exported<'graph> {
+        premise::note(|| premise::Memo::Exported);
         self.shared
             .exported
-            .get_or_init(|| exported_by_root(self.graph))
+            .get_or_init(|| api::reads::paused(|| exported_by_root(self.graph)))
     }
 
     /// `sole_passing_aliases`, read once for the classification.
     fn passing(&self) -> &[Passing<'graph>] {
-        self.shared
-            .passing
-            .get_or_init(|| sole_passing_aliases(self.graph, self.exported()).into())
+        premise::note(|| premise::Memo::Passing);
+        self.shared.passing.get_or_init(|| {
+            api::reads::paused(|| sole_passing_aliases(self.graph, self.exported()).into())
+        })
     }
 
     /// Each type whose only name is a passing alias, with that alias, by
     /// definition index (`sole_passing_aliases`).
     fn sole_aliases(&self) -> &[(usize, usize)] {
+        premise::note(|| premise::Memo::SoleAliases);
         self.shared.sole_aliases.get_or_init(|| {
-            let mut found = self
-                .passing()
-                .iter()
-                .filter_map(|(_, alias, target)| {
-                    Some((
-                        self.graph.definition_index(target.id())?,
-                        self.graph.definition_index(alias.id())?,
-                    ))
-                })
-                .collect::<Vec<_>>();
-            // The first alias in export order names the type, as the
-            // driver's walk takes the first.
-            found.sort_by_key(|(target, _)| *target);
-            found.dedup_by_key(|(target, _)| *target);
-            found.into_boxed_slice()
+            api::reads::paused(|| {
+                let mut found = self
+                    .passing()
+                    .iter()
+                    .filter_map(|(_, alias, target)| {
+                        Some((
+                            self.graph.definition_index(target.id())?,
+                            self.graph.definition_index(alias.id())?,
+                        ))
+                    })
+                    .collect::<Vec<_>>();
+                // The first alias in export order names the type, as the
+                // driver's walk takes the first.
+                found.sort_by_key(|(target, _)| *target);
+                found.dedup_by_key(|(target, _)| *target);
+                found.into_boxed_slice()
+            })
         })
     }
 
@@ -6076,11 +6239,8 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             return Ok(parameters);
         };
         let alias = self.sole_aliases()[found].1;
-        let Some(model::Kind::TypeAlias { generics, .. }) = self
-            .graph
-            .definitions()
-            .nth(alias)
-            .map(model::Definition::kind)
+        let Some(model::Kind::TypeAlias { generics, .. }) =
+            self.graph.definition_at(alias).map(model::Definition::kind)
         else {
             return Ok(parameters);
         };
@@ -6120,7 +6280,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             .graph
             .definition_index(export.target())
             .and_then(|index| self.instance_aliases().contains(&index).then_some(index));
-        let alias = alias.and_then(|index| self.graph.definitions().nth(index));
+        let alias = alias.and_then(|index| self.graph.definition_at(index));
         let instance = alias.and_then(|alias| match alias.kind() {
             model::Kind::TypeAlias { ty, .. } => Some(ty),
             _ => None,
@@ -6157,8 +6317,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 let definition_index = self.graph.definition_index(id).ok_or(Error::Cardinality)?;
                 let definition = self
                     .graph
-                    .definitions()
-                    .nth(definition_index)
+                    .definition_at(definition_index)
                     .ok_or(Error::Cardinality)?;
                 let selector = match selector(definition)? {
                     // A method of a trait's impl for `&str` is that impl's
@@ -6533,7 +6692,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 let Some(trait_definition) = self
                     .graph
                     .definition_index(trait_id)
-                    .and_then(|index| self.graph.definitions().nth(index))
+                    .and_then(|index| self.graph.definition_at(index))
                 else {
                     continue;
                 };
@@ -6545,7 +6704,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                     let Some(method) = self
                         .graph
                         .definition_index(method_id)
-                        .and_then(|index| self.graph.definitions().nth(index))
+                        .and_then(|index| self.graph.definition_at(index))
                     else {
                         continue;
                     };
@@ -6659,7 +6818,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         bound: &[(api::identity::Definition, Vec<model::Argument>)],
     ) -> Vec<(api::identity::Definition, Vec<model::Argument>)> {
         let mut found = Vec::<(api::identity::Definition, Vec<model::Argument>)>::new();
-        for implementation in self.graph.implementations() {
+        for implementation in self.graph.blanket_implementations() {
             let model::Trait::Trait {
                 id,
                 arguments: implemented,
@@ -6761,7 +6920,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             let Some(method) = self
                 .graph
                 .definition_index(method_id)
-                .and_then(|index| self.graph.definitions().nth(index))
+                .and_then(|index| self.graph.definition_at(index))
             else {
                 continue;
             };
@@ -6864,7 +7023,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             let Some(method) = self
                 .graph
                 .definition_index(method_id)
-                .and_then(|index| self.graph.definitions().nth(index))
+                .and_then(|index| self.graph.definition_at(index))
             else {
                 continue;
             };
@@ -7046,7 +7205,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             let Some(method) = self
                 .graph
                 .definition_index(method_id)
-                .and_then(|index| self.graph.definitions().nth(index))
+                .and_then(|index| self.graph.definition_at(index))
             else {
                 continue;
             };
@@ -7072,7 +7231,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                     let Some(model::Kind::Trait { associated, .. }) = self
                         .graph
                         .definition_index(&trait_id)
-                        .and_then(|index| self.graph.definitions().nth(index))
+                        .and_then(|index| self.graph.definition_at(index))
                         .map(model::Definition::kind)
                     else {
                         continue;
@@ -7081,7 +7240,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                         let Some(found) = self
                             .graph
                             .definition_index(item)
-                            .and_then(|index| self.graph.definitions().nth(index))
+                            .and_then(|index| self.graph.definition_at(index))
                         else {
                             continue;
                         };
@@ -7228,7 +7387,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         let declared = self
             .graph
             .definition_index(associated)
-            .and_then(|index| self.graph.definitions().nth(index));
+            .and_then(|index| self.graph.definition_at(index));
         let (owner, declared) = match declared.map(|found| (found, found.kind())) {
             Some((found, model::Kind::AssociatedType { bounds, .. })) => (
                 match found.owner() {
@@ -8529,8 +8688,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                         .ok_or(Error::Cardinality)?;
                     let implementation = self
                         .graph
-                        .implementations()
-                        .nth(index)
+                        .implementation_at(index)
                         .ok_or(Error::Cardinality)?;
                     SupportProvenance::Implementation(crate::surface::identity::Implementation::of(
                         implementation,
@@ -8936,7 +9094,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         let declares = self
             .graph
             .definition_index(id)
-            .and_then(|index| self.graph.definitions().nth(index))
+            .and_then(|index| self.graph.definition_at(index))
             .is_some_and(|definition| match definition.kind() {
                 model::Kind::Struct { generics, .. } | model::Kind::Enum { generics, .. } => {
                     lifetime_parameters(generics) != 0
@@ -8959,7 +9117,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         let lifetimes = |id: &api::identity::Definition| {
             self.graph
                 .definition_index(id)
-                .and_then(|index| self.graph.definitions().nth(index))
+                .and_then(|index| self.graph.definition_at(index))
                 .and_then(|definition| match definition.kind() {
                     model::Kind::Struct { generics, .. } | model::Kind::Enum { generics, .. } => {
                         Some(lifetime_parameters(generics))
@@ -9005,7 +9163,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         let lifetimes = |id: &api::identity::Definition| {
             self.graph
                 .definition_index(id)
-                .and_then(|index| self.graph.definitions().nth(index))
+                .and_then(|index| self.graph.definition_at(index))
                 .and_then(|definition| match definition.kind() {
                     model::Kind::Struct { generics, .. } | model::Kind::Enum { generics, .. } => {
                         Some(lifetime_parameters(generics))
@@ -9166,7 +9324,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             let Some(method) = self
                 .graph
                 .definition_index(item)
-                .and_then(|index| self.graph.definitions().nth(index))
+                .and_then(|index| self.graph.definition_at(index))
             else {
                 continue;
             };
@@ -9183,7 +9341,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                     let Some(model::Kind::AssociatedType { bounds, .. }) = self
                         .graph
                         .definition_index(output)
-                        .and_then(|index| self.graph.definitions().nth(index))
+                        .and_then(|index| self.graph.definition_at(index))
                         .map(model::Definition::kind)
                     else {
                         continue;
@@ -9266,7 +9424,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         let definition = |id: &api::identity::Definition| {
             self.graph
                 .definition_index(id)
-                .and_then(|index| self.graph.definitions().nth(index))
+                .and_then(|index| self.graph.definition_at(index))
         };
         let mut principal = None;
         for predicate in bounds {
@@ -9371,10 +9529,12 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             // A trait the graph shows implemented for every type of some
             // bounds, as `impl<T: Display> ToString for T` is, the value
             // has by that impl.
-            let blanket = self.graph.implementations().any(|implementation| {
-                matches!(implementation.trait_ref(), model::Trait::Trait { id, .. } if *id == trait_id)
-                    && matches!(implementation.self_type(), model::Type::Parameter { .. })
-            });
+            let blanket = self
+                .graph
+                .implementations_of(&trait_id)
+                .any(|implementation| {
+                    matches!(implementation.self_type(), model::Type::Parameter { .. })
+                });
             blankets.push(blanket);
             if blanket {
                 continue;
@@ -9532,7 +9692,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 let definition = self
                     .graph
                     .definition_index(id)
-                    .and_then(|index| self.graph.definitions().nth(index))?;
+                    .and_then(|index| self.graph.definition_at(index))?;
                 let path = match std_binding::of(definition) {
                     Some(Std::Option) => Some(("::core::option::Option", 1)),
                     Some(Std::Result) => Some(("::core::result::Result", 2)),
@@ -9590,7 +9750,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             || self
                 .graph
                 .definition_index(id)
-                .and_then(|index| self.graph.definitions().nth(index))
+                .and_then(|index| self.graph.definition_at(index))
                 .is_some_and(|definition| {
                     matches!(
                         definition.kind(),
@@ -9773,7 +9933,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             && let Some(definition) = self
                 .graph
                 .definition_index(id)
-                .and_then(|index| self.graph.definitions().nth(index))
+                .and_then(|index| self.graph.definition_at(index))
             && let Some(target) = std_binding::lazy_lock_target(definition, arguments)
         {
             return self.lasting_value(target).ok_or_else(|| {
@@ -9892,7 +10052,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 if let Some(element) = self
                     .graph
                     .definition_index(id)
-                    .and_then(|index| self.graph.definitions().nth(index))
+                    .and_then(|index| self.graph.definition_at(index))
                     .and_then(|definition| vec_element(definition, arguments)) =>
             {
                 Ok(Type::Sequence {
@@ -9907,7 +10067,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 if let Some(element) = self
                     .graph
                     .definition_index(id)
-                    .and_then(|index| self.graph.definitions().nth(index))
+                    .and_then(|index| self.graph.definition_at(index))
                     .and_then(|definition| shared_slice_element(definition, arguments)) =>
             {
                 let element = self.convert_value(element)?;
@@ -9926,14 +10086,14 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 if let Some(model::Type::Tuple(members)) = self
                     .graph
                     .definition_index(id)
-                    .and_then(|index| self.graph.definitions().nth(index))
+                    .and_then(|index| self.graph.definition_at(index))
                     .and_then(|definition| option_element(definition, arguments))
                     && members.len() >= 2 =>
             {
                 let element = self
                     .graph
                     .definition_index(id)
-                    .and_then(|index| self.graph.definitions().nth(index))
+                    .and_then(|index| self.graph.definition_at(index))
                     .and_then(|definition| option_element(definition, arguments))
                     .ok_or(Error::Cardinality)?;
                 Ok(Type::Option(Box::new(self.convert_value(element)?)))
@@ -9945,7 +10105,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 if let Some((ok, err)) = self
                     .graph
                     .definition_index(id)
-                    .and_then(|index| self.graph.definitions().nth(index))
+                    .and_then(|index| self.graph.definition_at(index))
                     .and_then(|definition| result_elements(definition, arguments)) =>
             {
                 Ok(Type::Result(
@@ -10285,9 +10445,10 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
     /// `core`'s `Fn` and `FnOnce` and `FnOnce::Output`, where the graph
     /// holds them.
     fn callable_traits(&self) -> Option<CallableTraits> {
+        premise::note(|| premise::Memo::Callable);
         self.shared
             .callable_traits
-            .get_or_init(|| self.read_callable_traits())
+            .get_or_init(|| api::reads::paused(|| self.read_callable_traits()))
             .clone()
     }
 
@@ -11094,7 +11255,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         let definition = self
             .graph
             .definition_index(trait_id)
-            .and_then(|index| self.graph.definitions().nth(index))
+            .and_then(|index| self.graph.definition_at(index))
             .ok_or_else(rejected)?;
         if !matches!(definition.kind(), model::Kind::Trait { .. }) {
             return Err(rejected());
@@ -11136,7 +11297,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
     fn is_option(&self, id: &api::identity::Definition) -> bool {
         self.graph
             .definition_index(id)
-            .and_then(|index| self.graph.definitions().nth(index))
+            .and_then(|index| self.graph.definition_at(index))
             .is_some_and(|definition| std_binding::of(definition) == Some(Std::Option))
     }
 
@@ -11152,7 +11313,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             && let Some(inner) = self
                 .graph
                 .definition_index(id)
-                .and_then(|index| self.graph.definitions().nth(index))
+                .and_then(|index| self.graph.definition_at(index))
                 .and_then(|definition| option_element(definition, arguments))
         {
             return self.lent_object(inner).map(|object| {
@@ -11183,7 +11344,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         let definition = self
             .graph
             .definition_index(id)
-            .and_then(|index| self.graph.definitions().nth(index))?;
+            .and_then(|index| self.graph.definition_at(index))?;
         definition.id().unit().authority().sysroot()?;
         if !definition.display_path().eq(["core", "pin", "Pin"]) {
             return None;
@@ -11234,7 +11395,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             && let Some(element) = self
                 .graph
                 .definition_index(id)
-                .and_then(|index| self.graph.definitions().nth(index))
+                .and_then(|index| self.graph.definition_at(index))
                 .and_then(|definition| option_element(definition, arguments))
             && let Some(target) = borrowed_argument(element)
         {
@@ -11308,8 +11469,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                     .ok_or(representability::reject::Kind::UnresolvedDefinition)?;
                 let definition = self
                     .graph
-                    .definitions()
-                    .nth(index)
+                    .definition_at(index)
                     .ok_or(representability::reject::Kind::UnresolvedDefinition)?;
                 definition_is_public(definition)?;
                 match std_binding::of(definition) {
@@ -11672,8 +11832,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 if let Some(index) = self.self_implementation(id) {
                     let implementation = self
                         .graph
-                        .implementations()
-                        .nth(index)
+                        .implementation_at(index)
                         .ok_or(Error::Cardinality)?;
                     self.convert(implementation.self_type())?
                 } else {
@@ -11683,8 +11842,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                         .ok_or(representability::reject::Kind::UnresolvedDefinition)?;
                     let definition = self
                         .graph
-                        .definitions()
-                        .nth(index)
+                        .definition_at(index)
                         .ok_or(representability::reject::Kind::UnresolvedDefinition)?;
                     definition_is_public(definition)?;
                     definition_is_publishable_nominal(definition)?;
@@ -12032,16 +12190,17 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
     /// graph whose other root re-exports both backends, as `iced_test`
     /// does, leaves `iced::Renderer` the only name `iced` has.
     fn instance_aliases(&self) -> &[usize] {
-        self.shared
-            .instance_aliases
-            .get_or_init(|| instance_aliases_among(self.graph, self.exported()))
+        premise::note(|| premise::Memo::InstanceAliases);
+        self.shared.instance_aliases.get_or_init(|| {
+            api::reads::paused(|| instance_aliases_among(self.graph, self.exported()))
+        })
     }
 
     /// The alias that is the only name of `ty` (`instance_aliases`).
     fn instance_alias(&self, ty: &model::Type) -> Option<&model::Definition> {
         self.instance_aliases()
             .iter()
-            .filter_map(|index| self.graph.definitions().nth(*index))
+            .filter_map(|index| self.graph.definition_at(*index))
             .find(|definition| {
                 matches!(definition.kind(), model::Kind::TypeAlias { ty: target, .. } if target == ty)
             })
@@ -12067,11 +12226,8 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             && !arguments
                 .iter()
                 .any(|argument| !matches!(argument, model::Argument::Type(_)))
-            && let Some(model::Kind::Struct { fields, generics }) = self
-                .graph
-                .definitions()
-                .nth(index)
-                .map(model::Definition::kind)
+            && let Some(model::Kind::Struct { fields, generics }) =
+                self.graph.definition_at(index).map(model::Definition::kind)
         {
             return self.structure(index, fields, generics, Some(arguments));
         }
@@ -12160,7 +12316,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         let Some(index) = self.graph.definition_index(id) else {
             return false;
         };
-        let Some(definition) = self.graph.definitions().nth(index) else {
+        let Some(definition) = self.graph.definition_at(index) else {
             return false;
         };
         match definition.kind() {
@@ -12180,7 +12336,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         definition: usize,
         generics: &model::Generics,
     ) -> Option<representability::convert::Type> {
-        let id = self.graph.definitions().nth(definition)?.id();
+        let id = self.graph.definition_at(definition)?.id();
         let mut arguments = Vec::new();
         for parameter in generics.parameters() {
             arguments.push(match parameter.kind() {
@@ -12364,7 +12520,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                     let definition = self
                         .graph
                         .definition_index(associated)
-                        .and_then(|index| self.graph.definitions().nth(index))?;
+                        .and_then(|index| self.graph.definition_at(index))?;
                     match definition.kind() {
                         model::Kind::AssociatedType {
                             default: model::Default::Present(ty),
@@ -12446,7 +12602,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                     let definition = self
                         .graph
                         .definition_index(associated)
-                        .and_then(|index| self.graph.definitions().nth(index))?;
+                        .and_then(|index| self.graph.definition_at(index))?;
                     match definition.kind() {
                         model::Kind::AssociatedType {
                             default: model::Default::Present(ty),
@@ -12610,7 +12766,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             self.trait_self.get().filter(|_| {
                 self.graph
                     .definition_index(id)
-                    .and_then(|index| self.graph.definitions().nth(index))
+                    .and_then(|index| self.graph.definition_at(index))
                     .is_some_and(|definition| {
                         matches!(definition.kind(), model::Kind::Trait { .. })
                     })
@@ -12637,7 +12793,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         let name = self
             .graph
             .definition_index(associated)
-            .and_then(|index| self.graph.definitions().nth(index))
+            .and_then(|index| self.graph.definition_at(index))
             .and_then(|definition| definition.display_path().last())?;
         let model::Argument::Type(self_type) = arguments.first()? else {
             return None;
@@ -12647,8 +12803,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         let self_type = match self_type {
             model::Type::SelfType(id) => self
                 .graph
-                .implementations()
-                .nth(self.self_implementation(id)?)?
+                .implementation_at(self.self_implementation(id)?)?
                 .self_type(),
             self_type => self_type,
         };
@@ -12682,7 +12837,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             let definition = self
                 .graph
                 .definition_index(associated)
-                .and_then(|index| self.graph.definitions().nth(index))?;
+                .and_then(|index| self.graph.definition_at(index))?;
             match definition.kind() {
                 model::Kind::AssociatedType {
                     default: model::Default::Present(ty),
@@ -12700,7 +12855,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         let generics = self
             .graph
             .definition_index(id)
-            .and_then(|index| self.graph.definitions().nth(index))
+            .and_then(|index| self.graph.definition_at(index))
             .and_then(|definition| match definition.kind() {
                 model::Kind::Struct { generics, .. }
                 | model::Kind::Enum { generics, .. }
@@ -12727,7 +12882,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         let definition = self
             .graph
             .definition_index(id)
-            .and_then(|index| self.graph.definitions().nth(index))?;
+            .and_then(|index| self.graph.definition_at(index))?;
         vec_element(definition, arguments).filter(|element| {
             matches!(element, model::Type::Primitive(_))
                 // A `Vec<String>` crosses as a typed native place when
@@ -12858,11 +13013,8 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             return false;
         };
         self.graph
-            .implementations()
-            .filter(|other| {
-                as_ref(other)
-                    && matches!(other.self_type(), model::Type::Definition { id, .. } if id == target)
-            })
+            .implementations_for(target)
+            .filter(|other| as_ref(other))
             .count()
             > 1
     }
@@ -12885,13 +13037,12 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             return false;
         };
         self.graph
-            .implementations()
-            .filter(|other| instance(other.self_type()))
+            .implementations_for(target)
             .flat_map(model::Implementation::associated)
             .filter(|member| {
                 self.graph
                     .definition_index(member)
-                    .and_then(|index| self.graph.definitions().nth(index))
+                    .and_then(|index| self.graph.definition_at(index))
                     .and_then(|member| member.display_path().last())
                     == Some(name)
             })
@@ -13000,7 +13151,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             let Some(model::Kind::Trait { supertraits, .. }) = self
                 .graph
                 .definition_index(trait_id)
-                .and_then(|index| self.graph.definitions().nth(index))
+                .and_then(|index| self.graph.definition_at(index))
                 .map(model::Definition::kind)
             else {
                 continue;
@@ -13029,7 +13180,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         let definition = self
             .graph
             .definition_index(id)
-            .and_then(|index| self.graph.definitions().nth(index))?;
+            .and_then(|index| self.graph.definition_at(index))?;
         Some(
             definition
                 .display_path()
@@ -13045,7 +13196,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             && self
                 .graph
                 .definition_index(id)
-                .and_then(|index| self.graph.definitions().nth(index))
+                .and_then(|index| self.graph.definition_at(index))
                 .is_some_and(|definition| definition.display_path().last() == Some(name))
     }
 
@@ -13100,7 +13251,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             }) = self
                 .graph
                 .definition_index(id)
-                .and_then(|index| self.graph.definitions().nth(index))
+                .and_then(|index| self.graph.definition_at(index))
                 .and_then(|definition| option_element(definition, arguments))
             && lifetime == receiver
         {
@@ -13199,7 +13350,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             && let Some(definition) = self
                 .graph
                 .definition_index(id)
-                .and_then(|index| self.graph.definitions().nth(index))
+                .and_then(|index| self.graph.definition_at(index))
             && std_binding::of(definition) == Some(Std::Arguments)
         {
             return Ok(representability::convert::Type::Builtin(
@@ -13216,7 +13367,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             model::Type::Definition { id, arguments } => self
                 .graph
                 .definition_index(id)
-                .and_then(|index| self.graph.definitions().nth(index))
+                .and_then(|index| self.graph.definition_at(index))
                 .map(|definition| (definition, arguments)),
             _ => None,
         };
@@ -13508,7 +13659,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
     /// does. Bounds on the arguments are not read: `cargo check` holds the
     /// crate to them.
     fn implements_for_any(&self, definition: usize, name: &str) -> bool {
-        let Some(definition) = self.graph.definitions().nth(definition) else {
+        let Some(definition) = self.graph.definition_at(definition) else {
             return false;
         };
         self.graph
@@ -13523,7 +13674,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                 let Some(trait_definition) = self
                     .graph
                     .definition_index(id)
-                    .and_then(|index| self.graph.definitions().nth(index))
+                    .and_then(|index| self.graph.definition_at(index))
                 else {
                     return false;
                 };
@@ -13572,7 +13723,7 @@ fn passing_target<'graph>(
     {
         return None;
     }
-    let target = graph.definitions().nth(graph.definition_index(id)?)?;
+    let target = graph.definition_at(graph.definition_index(id)?)?;
     matches!(
         target.kind(),
         model::Kind::Struct { .. } | model::Kind::Enum { .. }
@@ -13597,9 +13748,7 @@ fn sole_passing_aliases<'graph>(
             _ => None,
         })
         .filter_map(|export| {
-            let alias = graph
-                .definitions()
-                .nth(graph.definition_index(export.target())?)?;
+            let alias = graph.definition_at(graph.definition_index(export.target())?)?;
             let target = passing_target(graph, alias)?;
             let root = export.key().root_alias();
             (!exported
@@ -13660,7 +13809,7 @@ pub(crate) fn associated_at(
         let value = implementation.associated().find_map(|associated| {
             let definition = graph
                 .definition_index(associated)
-                .and_then(|index| graph.definitions().nth(index))?;
+                .and_then(|index| graph.definition_at(index))?;
             match definition.kind() {
                 model::Kind::AssociatedType {
                     default: model::Default::Present(ty),
@@ -13748,7 +13897,7 @@ fn definition_name<'g>(
 ) -> Option<&'g str> {
     graph
         .definition_index(definition)
-        .and_then(|index| graph.definitions().nth(index))
+        .and_then(|index| graph.definition_at(index))
         .and_then(|definition| definition.display_path().last())
 }
 
@@ -13774,12 +13923,12 @@ pub(crate) fn projection_candidates(
         .map(|ty| (*ty).clone())
         .collect::<Vec<_>>();
     let base = concrete.clone();
-    concrete.extend(instances.iter().filter_map(|index| {
-        match graph.definitions().nth(*index)?.kind() {
+    concrete.extend(instances.iter().filter_map(
+        |index| match graph.definition_at(*index)?.kind() {
             model::Kind::TypeAlias { ty, .. } => Some(ty.clone()),
             _ => None,
-        }
-    }));
+        },
+    ));
     for generic in selves.iter().filter(|ty| names_type_parameter(ty)) {
         let mut indices = BTreeSet::new();
         type_parameter_indices(generic, &mut indices);
@@ -13898,7 +14047,7 @@ pub(crate) fn blanket_call(
             && id.unit().crate_name() == "core"
             && graph
                 .definition_index(id)
-                .and_then(|index| graph.definitions().nth(index))
+                .and_then(|index| graph.definition_at(index))
                 .is_some_and(|definition| definition.display_path().last() == Some(name))
     };
     // The inputs of the bound `T: Fn(A..)` of the impl's self type `T`.
@@ -13968,7 +14117,7 @@ pub(crate) fn blanket_call(
     // crate::Theme` is where `dyn Highlighter<Code>` leaves it out.
     let defaults = match graph
         .definition_index(trait_id)
-        .and_then(|index| graph.definitions().nth(index))
+        .and_then(|index| graph.definition_at(index))
         .map(model::Definition::kind)
     {
         Some(model::Kind::Trait { generics, .. }) => generics
@@ -14032,7 +14181,7 @@ fn instance_aliases_among(
                         && !matches!(id.unit().crate_name(), "core" | "alloc" | "std")
                         && graph
                             .definition_index(id)
-                            .and_then(|index| graph.definitions().nth(index))
+                            .and_then(|index| graph.definition_at(index))
                             .is_some_and(|target| {
                                 matches!(
                                     target.kind(),
@@ -14559,7 +14708,7 @@ fn provided_signature(
         .filter_map(|associated| {
             let definition = graph
                 .definition_index(associated)
-                .and_then(|index| graph.definitions().nth(index))?;
+                .and_then(|index| graph.definition_at(index))?;
             match definition.kind() {
                 model::Kind::AssociatedType {
                     default: model::Default::Present(ty),
@@ -19734,8 +19883,7 @@ mod tests {
         };
         let (wait, hold) = (index("wait"), index("hold"));
         let Some(crate::api::model::Kind::Function { signature, .. }) = graph
-            .definitions()
-            .nth(wait)
+            .definition_at(wait)
             .map(crate::api::model::Definition::kind)
         else {
             panic!("`wait` is a function");
@@ -19746,8 +19894,8 @@ mod tests {
         let classify = |order: &[usize]| {
             let context =
                 super::Context::new(&graph, authority).expect("the fixture context is bounded");
-            let plans = context
-                .classify_definitions(1, order)
+            let super::Definitions { plans, .. } = context
+                .classify_definitions(1, order, None)
                 .expect("the fixture's definitions classify");
             let left_out = context
                 .shared

@@ -58,11 +58,13 @@ impl<P: api::Phase> Context<'_, P> {
             };
             (**ty == this && binders.is_empty()).then(|| (trait_id, lifetime.clone()))
         })?;
-        let mut found = self.graph.implementations().filter(|implementation| {
-            matches!(implementation.trait_ref(), model::Trait::Trait { id, .. } if id == other)
-                && implementation.polarity() == model::Polarity::Positive
-                && slice_element(implementation).is_some()
-        });
+        let mut found = self
+            .graph
+            .implementations_of(other)
+            .filter(|implementation| {
+                implementation.polarity() == model::Polarity::Positive
+                    && slice_element(implementation).is_some()
+            });
         let through = found.next()?;
         found
             .next()
@@ -419,7 +421,7 @@ fn given<'graph>(
         .filter_map(|associated| {
             let definition = graph
                 .definition_index(associated)
-                .and_then(|index| graph.definitions().nth(index))?;
+                .and_then(|index| graph.definition_at(index))?;
             match definition.kind() {
                 model::Kind::AssociatedType {
                     default: model::Default::Present(ty),
