@@ -1317,6 +1317,13 @@ impl Error {
             _ => false,
         }
     }
+
+    /// Whether this failure is Cargo's answer drifting from the files rawr
+    /// read ([`crate::Error::drifted`]).
+    #[must_use]
+    pub(crate) fn drifted(&self) -> bool {
+        matches!(self, Self::Importer(error) if error.drifted())
+    }
 }
 
 // Candidate absence, stale inputs and malformed historical evidence may miss.
@@ -1353,7 +1360,9 @@ fn terminal_replay_failure(error: &Error) -> bool {
             crate::Error::Request { .. }
             | crate::Error::Path { .. }
             | crate::Error::Schema { .. }
+            | crate::Error::Changed { .. }
             | crate::Error::ResolutionDrift { .. }
+            | crate::Error::Invariant { .. }
             | crate::Error::Input { .. }
             | crate::Error::Extraction { .. } => false,
         },

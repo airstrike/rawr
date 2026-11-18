@@ -132,7 +132,7 @@ impl Attestation {
         // The selection is part of the key; a record under it naming other
         // paths is damaged or tampered evidence, not an ordinary change.
         if process::Native::from_toolchain(&self.proof) != *selected {
-            return Err(super::evidence_error(crate::Error::ResolutionDrift {
+            return Err(super::evidence_error(crate::Error::Invariant {
                 command: "toolchain node validation",
                 field: "pinned toolchain selector",
             }));

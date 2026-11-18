@@ -222,13 +222,7 @@ fn exercise(outcome: Outcome) {
                             .err()
                             .expect("original workspace image rejects drift");
                         assert!(
-                            matches!(
-                                error,
-                                Error::ResolutionDrift {
-                                    command: "workspace input observation",
-                                    ..
-                                }
-                            ),
+                            matches!(error, Error::Changed { .. }),
                             "original error: {error:?}"
                         );
                     }
@@ -292,7 +286,7 @@ fn a_different_real_attestation_cannot_execute_the_prepared_harness() {
                     result
                         .err()
                         .expect("different attestation rejects before Build"),
-                    Error::ResolutionDrift {
+                    Error::Invariant {
                         command: "reserved Build preparation",
                         field: "prepared harness toolchain"
                     }

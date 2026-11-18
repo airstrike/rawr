@@ -1126,7 +1126,9 @@ impl Request {
             &self.cache_root.join(LEASE_FILE),
             "acquire resolution cache lease",
         )?;
-        let harness = self.prepare_harness(&native, limits, limits, cached)?;
+        let harness = self
+            .prepare_harness(&native, limits, limits, cached)
+            .map_err(|error| self.settle(limits, None, error))?;
         self.resolve_under_epoch(&native, harness, limits)
     }
 
@@ -1146,7 +1148,9 @@ impl Request {
             &self.cache_root.join(LEASE_FILE),
             "acquire resolution cache lease",
         )?;
-        let harness = self.prepare_harness(&native, limits, limits, None)?;
+        let harness = self
+            .prepare_harness(&native, limits, limits, None)
+            .map_err(|error| self.settle(limits, None, error))?;
         self.resolve_under_epoch(&native, harness, limits)
     }
 
@@ -1842,13 +1846,53 @@ impl Request {
         self.config.revalidate(limits, command)?;
         for input in &self.inputs {
             if authority_input_digest(&input.path, input.role.bytes())? != input.digest {
-                return Err(Error::ResolutionDrift {
-                    command,
-                    field: "Cargo manifest/lock authority",
+                return Err(Error::Changed {
+                    path: input.path.clone(),
                 });
             }
         }
         Ok(())
+    }
+
+    /// `error`, or the file whose edit explains it when Cargo's answer
+    /// drifted from what this request read ([`Request::changed`]).
+    pub(crate) fn settle(
+        &self,
+        limits: &Limits,
+        workspace: Option<&crate::input::workspace::Image>,
+        error: Error,
+    ) -> Error {
+        if error.drifted() {
+            self.changed(limits, workspace, &error)
+        } else {
+            error
+        }
+    }
+
+    /// The file whose edit explains `drift`, Cargo's answer differing from
+    /// what this request and `workspace` read: each is read again, and the
+    /// first that changed starts the build again (D1043.2).
+    ///
+    /// # Panics
+    ///
+    /// When none changed: no edit explains the drift, so it is a rawr bug
+    /// (D1043.4).
+    pub(crate) fn changed(
+        &self,
+        limits: &Limits,
+        workspace: Option<&crate::input::workspace::Image>,
+        drift: &dyn std::fmt::Display,
+    ) -> Error {
+        if let Err(error) = self.revalidate(limits, "drift settlement") {
+            return error;
+        }
+        if let Some(workspace) = workspace
+            && let Err(error) =
+                workspace.require(&mut crate::input::workspace::Account::bounded(limits))
+        {
+            return error;
+        }
+        panic!("{drift}");
     }
 }
 
@@ -2052,19 +2096,22 @@ impl Request {
             #[cfg(feature = "rustc-driver")]
             closure_units,
         };
+        let completed = self
+            .complete_harness_parts(
+                native,
+                harness,
+                build,
+                limits,
+                [manifest_path, source_path, lock_path],
+                &receipt_path,
+                #[cfg(feature = "rustc-driver")]
+                Some(&probe_scope),
+                #[cfg(feature = "rustc-driver")]
+                None,
+            )
+            .map_err(|error| self.settle(limits, None, error))?;
         #[allow(unused_mut)]
-        let mut resolution = self.complete_harness(
-            native,
-            harness,
-            build,
-            limits,
-            [manifest_path, source_path, lock_path],
-            &receipt_path,
-            #[cfg(feature = "rustc-driver")]
-            Some(&probe_scope),
-            #[cfg(feature = "rustc-driver")]
-            None,
-        )?;
+        let mut resolution = completed.into_resolution(self);
         #[cfg(feature = "rustc-driver")]
         {
             resolution.dag = dag_build.map(|(context, request, build)| DagResolution {
@@ -2074,36 +2121,6 @@ impl Request {
             });
         }
         Ok(resolution)
-    }
-
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "completion retains the prepared harness, original account, fixed paths and existing execution ownership"
-    )]
-    fn complete_harness(
-        self,
-        native: &impl ProductionReplay,
-        harness: Harness,
-        build: crate::input::build::Build,
-        limits: &Limits,
-        files: [PathBuf; 3],
-        receipt_path: &Path,
-        #[cfg(feature = "rustc-driver")] probe_scope: Option<&execution::Scope>,
-        #[cfg(feature = "rustc-driver")] reserved_layout: Option<&resolution::layout::Layout>,
-    ) -> Result<Resolution> {
-        let complete = self.complete_harness_parts(
-            native,
-            harness,
-            build,
-            limits,
-            files,
-            receipt_path,
-            #[cfg(feature = "rustc-driver")]
-            probe_scope,
-            #[cfg(feature = "rustc-driver")]
-            reserved_layout,
-        )?;
-        Ok(complete.into_resolution(self))
     }
 
     #[allow(
@@ -2791,14 +2808,14 @@ impl Resolution {
             .revalidate(limits, "publication validation")?;
         for input in &self.retained_inputs {
             if authority_input_digest(&input.path, input.role.bytes())? != input.digest {
-                return Err(Error::ResolutionDrift {
-                    command: "publication validation",
-                    field: "Cargo manifest/lock authority",
+                return Err(Error::Changed {
+                    path: input.path.clone(),
                 });
             }
         }
-        // File reads are I/O retention bounded by the physical capture
-        // constant.
+        // The harness is rawr's own, and Cargo runs on it only `--locked`,
+        // so nothing rewrites it once read. File reads are I/O retention
+        // bounded by the physical capture constant.
         for (field, path, expected, limit) in [
             (
                 "final-form harness manifest",
@@ -2821,7 +2838,7 @@ impl Resolution {
         ] {
             let bytes = read_bounded(field, &path, limit)?;
             if digest(&bytes) != expected {
-                return Err(Error::ResolutionDrift {
+                return Err(Error::Invariant {
                     command: "publication validation",
                     field,
                 });
@@ -2838,9 +2855,8 @@ impl Resolution {
             &self.target,
         )?;
         if current_toolchain != self.toolchain {
-            return Err(Error::ResolutionDrift {
-                command: "publication validation",
-                field: "pinned toolchain proof",
+            return Err(Error::Changed {
+                path: current_toolchain.changed_from(&self.toolchain),
             });
         }
         self.internal.revalidate(&self.metadata, &self.selected)?;
@@ -3113,8 +3129,9 @@ fn open_lease_at(project_root: &Path, requested_cache: &Path) -> Result<fd_lock:
 }
 
 /// The fixed namespace's placement when a completed receipt for this request
-/// is there, `None` when it is another request's, and an error when it is not
-/// this version's.
+/// is there, and `None` when it is another request's, another version's, or
+/// an attempt's that stopped before its lock. An error is a namespace that
+/// can't be read.
 fn fixed_placement(
     fixed: &Path,
     request_identity: Digest,
@@ -3122,10 +3139,7 @@ fn fixed_placement(
 ) -> Result<Option<Placement>> {
     let fixed_lock_path = fixed.join("Cargo.lock");
     if !fixed_lock_path.exists() {
-        return Err(Error::ResolutionDrift {
-            command: "persisted universe preflight",
-            field: "final lock is absent from an existing namespace",
-        });
+        return Ok(None);
     }
     let fixed_lock_bytes = read_bounded(
         "persisted final resolution lock",
@@ -3138,10 +3152,7 @@ fn fixed_placement(
         process::TAIL_BYTES,
     )?;
     if fixed_source != HARNESS_SOURCE.as_bytes() {
-        return Err(Error::ResolutionDrift {
-            command: "persisted universe preflight",
-            field: "generated harness source",
-        });
+        return Ok(None);
     }
     let fixed_manifest = read_bounded(
         "persisted final-form harness manifest",
@@ -3159,10 +3170,7 @@ fn fixed_placement(
         )?;
         let selected_identity = universe::Receipt::universe(&bytes)?;
         if selected_identity != *definition.identity() {
-            return Err(Error::ResolutionDrift {
-                command: "persisted universe selection",
-                field: "current runnable receipt universe",
-            });
+            return Ok(None);
         }
         let fixed_lock = definition.candidate(fixed_lock_bytes.into_boxed_slice())?;
         let receipt = universe::Receipt::parse(&bytes, definition)?;
@@ -3249,6 +3257,14 @@ fn select_placement(
                 reason: "is not a directory".into(),
             })
         }
+        // The receipt is written last, so a candidate without one is an
+        // attempt that stopped: it is built again in its place, never read.
+        Ok(_) if !candidate.join(UNIVERSE_RECEIPT).exists() => Ok(Placement {
+            root: candidate,
+            request: request_identity,
+            state: PlacementState::Fresh,
+            exclusive: true,
+        }),
         Ok(_) => {
             let lock_bytes = read_bounded(
                 "persisted final resolution lock",
@@ -3272,15 +3288,17 @@ fn select_placement(
                 process::CAPTURE_BYTES,
             )?;
             let selected_identity = universe::Receipt::universe(&receipt_bytes)?;
+            // The candidate's directory is named by the request identity,
+            // which hashes the universe's.
             if selected_identity != *definition.identity() {
-                return Err(Error::ResolutionDrift {
+                return Err(Error::Invariant {
                     command: "side-by-side candidate preflight",
                     field: "current universe identity",
                 });
             }
             let receipt = universe::Receipt::parse(&receipt_bytes, definition)?;
             if !receipt.matches_request(request_identity) {
-                return Err(Error::ResolutionDrift {
+                return Err(Error::Invariant {
                     command: "side-by-side candidate preflight",
                     field: "request identity",
                 });
@@ -3447,6 +3465,20 @@ fn prepare_versioned_roots(
         source,
     })?;
     if exclusive {
+        // A root already there is an attempt that stopped before its
+        // receipt ([`select_placement`]). The resolution lease is held, so
+        // no other build writes it.
+        match fs::remove_dir_all(harness_root) {
+            Ok(()) => {}
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
+            Err(source) => {
+                return Err(Error::Io {
+                    operation: "retire a stopped resolution attempt",
+                    path: harness_root.to_path_buf(),
+                    source,
+                })
+            }
+        }
         fs::create_dir(harness_root).map_err(|source| Error::Io {
             operation: "exclusively create final resolution harness",
             path: harness_root.to_path_buf(),
@@ -3497,6 +3529,8 @@ fn prepare_versioned_roots(
     Ok(provisional_root)
 }
 
+/// Require that rawr's own harness file at `path` holds `expected`: rawr
+/// writes it, and Cargo runs on it only `--locked`.
 fn require_exact_file(
     field: &'static str,
     path: &Path,
@@ -3507,7 +3541,7 @@ fn require_exact_file(
     if actual == expected {
         Ok(())
     } else {
-        Err(Error::ResolutionDrift {
+        Err(Error::Invariant {
             command: "persisted universe selection",
             field,
         })
@@ -4272,8 +4306,9 @@ fn revalidate_harness(
         ),
     ] {
         let bytes = read_bounded(field, path, limit)?;
+        // The harness is rawr's own, and Cargo runs on it only `--locked`.
         if digest(&bytes) != expected {
-            return Err(Error::ResolutionDrift { command, field });
+            return Err(Error::Invariant { command, field });
         }
     }
     Ok(())
@@ -4574,9 +4609,8 @@ fn read_bounded(resource: &'static str, path: &Path, limit: usize) -> Result<Vec
     bytes.resize(length, 0);
     if let Err(source) = file.read_exact(&mut bytes) {
         if source.kind() == std::io::ErrorKind::UnexpectedEof {
-            return Err(Error::ResolutionDrift {
-                command: "bounded input read",
-                field: resource,
+            return Err(Error::Changed {
+                path: path.to_path_buf(),
             });
         }
         return Err(Error::Io {
@@ -4592,9 +4626,8 @@ fn read_bounded(resource: &'static str, path: &Path, limit: usize) -> Result<Vec
         source,
     })?;
     if extra != 0 {
-        return Err(Error::ResolutionDrift {
-            command: "bounded input read",
-            field: resource,
+        return Err(Error::Changed {
+            path: path.to_path_buf(),
         });
     }
     Ok(bytes)

@@ -173,7 +173,7 @@ impl Request {
     ) -> Result<crate::process::Native> {
         harness.cargo_allocation.require(cargo_limits);
         if &harness.toolchain != cached.attestation.value().proof() {
-            return Err(Error::ResolutionDrift {
+            return Err(Error::Invariant {
                 command: "reserved Build preparation",
                 field: "prepared harness toolchain",
             });
@@ -187,7 +187,7 @@ impl Request {
             || harness.extraction_plan.protocol_directory().as_os_str()
                 != layout.extraction().protocol().as_os_str()
         {
-            return Err(Error::ResolutionDrift {
+            return Err(Error::Invariant {
                 command: "reserved Build preparation",
                 field: "prepared harness and extraction Layout",
             });
@@ -381,7 +381,7 @@ impl Request {
                     cargo::digest(&locked),
                 )?;
                 if locked.as_slice() != lock.bytes() {
-                    return Err(Error::ResolutionDrift {
+                    return Err(Error::Invariant {
                         command: "reserved persisted materialization",
                         field: "selected whole lock",
                     });
@@ -409,23 +409,27 @@ impl Request {
             }
         };
         let metadata_bytes = cargo_allocation.retain_transport(metadata_transport)?;
-        let (metadata, observation) = cargo::unit::Metadata::parse_versioned_in(
-            metadata_bytes.bytes(),
-            &self.dependencies,
-            cargo_limits,
-            self.toolchain.schemas().graph(),
-            paths,
-            &mut cargo_allocation,
-            definition,
-        )?;
-        let (metadata, selected, internal) = self.bind_fresh_metadata(
-            metadata,
-            internal,
-            &candidate_lock,
-            (paths.manifest(), paths.source()),
-            cargo_limits,
-            &mut cargo_allocation,
-        )?;
+        let (metadata, observation, selected, internal) = (|| {
+            let (metadata, observation) = cargo::unit::Metadata::parse_versioned_in(
+                metadata_bytes.bytes(),
+                &self.dependencies,
+                cargo_limits,
+                self.toolchain.schemas().graph(),
+                paths,
+                &mut cargo_allocation,
+                definition,
+            )?;
+            let (metadata, selected, internal) = self.bind_fresh_metadata(
+                metadata,
+                internal,
+                &candidate_lock,
+                (paths.manifest(), paths.source()),
+                cargo_limits,
+                &mut cargo_allocation,
+            )?;
+            Ok((metadata, observation, selected, internal))
+        })()
+        .map_err(|error| self.settle(limits, Some(&workspace), error))?;
         let manifest = cargo::digest(&cargo::read_bounded(
             "final-form harness manifest",
             paths.manifest(),
@@ -463,18 +467,20 @@ impl Request {
             );
         }
         let bytes = cargo_allocation.retain_transport(bytes)?;
-        let (initial, universe) = self.bind_versioned_units(
-            bytes.bytes(),
-            &metadata,
-            cargo_limits,
-            &mut cargo_allocation,
-            definition,
-            observation,
-            candidate_lock,
-            placement.request,
-            context,
-            None,
-        )?;
+        let (initial, universe) = self
+            .bind_versioned_units(
+                bytes.bytes(),
+                &metadata,
+                cargo_limits,
+                &mut cargo_allocation,
+                definition,
+                observation,
+                candidate_lock,
+                placement.request,
+                context,
+                None,
+            )
+            .map_err(|error| self.settle(limits, Some(&workspace), error))?;
         // Which selected crates share their tables per machine, before
         // the unit graph's bytes move into the documents.
         let selected_units = initial

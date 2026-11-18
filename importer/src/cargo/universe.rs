@@ -486,7 +486,7 @@ impl Definition {
             || rustc_commit != self.rustc_commit
             || cargo_commit != self.cargo_commit
         {
-            return Err(Error::ResolutionDrift {
+            return Err(Error::Invariant {
                 command: "resolution universe selection",
                 field: "target/profile/toolchain cohort",
             });
@@ -845,13 +845,13 @@ impl Receipt {
             reason: error.to_string().into_boxed_str(),
         })?;
         if receipt.schema != RECEIPT_SCHEMA || receipt.universe != *definition.identity() {
-            return Err(Error::ResolutionDrift {
+            return Err(Error::Invariant {
                 command: "persisted universe preflight",
                 field: "resolution receipt request/universe",
             });
         }
         if receipt.encode()?.as_ref() != bytes {
-            return Err(Error::ResolutionDrift {
+            return Err(Error::Invariant {
                 command: "persisted universe preflight",
                 field: "canonical resolution receipt",
             });
@@ -865,7 +865,7 @@ impl Receipt {
             reason: error.to_string().into_boxed_str(),
         })?;
         if receipt.schema != RECEIPT_SCHEMA || receipt.encode()?.as_ref() != bytes {
-            return Err(Error::ResolutionDrift {
+            return Err(Error::Invariant {
                 command: "persisted universe preflight",
                 field: "canonical supported resolution receipt",
             });
@@ -887,7 +887,7 @@ impl Receipt {
             || self.source != *source.as_bytes()
             || self.lock != *lock.as_bytes()
         {
-            return Err(Error::ResolutionDrift {
+            return Err(Error::Invariant {
                 command: "persisted universe preflight",
                 field: "manifest/source/whole-lock receipt",
             });
@@ -910,6 +910,8 @@ impl Receipt {
             || self.input != *build.input.as_bytes()
             || self.complete != *proof.complete().as_bytes()
         {
+            // Cargo ran again for this receipt's request: its answer is
+            // the receipt's unless a file it read changed.
             return Err(Error::ResolutionDrift {
                 command: "persisted universe validation",
                 field: "lock/metadata/unit completed proof",
@@ -975,7 +977,7 @@ impl Pending {
         input: &crate::input::Baseline,
         _limits: &Limits,
     ) -> Result<Completion> {
-        let projection = input.universe_build().ok_or(Error::ResolutionDrift {
+        let projection = input.universe_build().ok_or(Error::Invariant {
             command: "resolution universe completion",
             field: "post-build protected source/build observation",
         })?;
@@ -1191,7 +1193,7 @@ fn require_universe(expected: Digest, actual: Digest, field: &'static str) -> Re
     if expected == actual {
         Ok(())
     } else {
-        Err(Error::ResolutionDrift {
+        Err(Error::Invariant {
             command: "resolution universe proof join",
             field,
         })
@@ -3768,7 +3770,7 @@ mod tests {
             );
             assert!(!called);
             assert!(
-                matches!(result, Err(crate::Error::ResolutionDrift { field: actual, .. })
+                matches!(result, Err(crate::Error::Invariant { field: actual, .. })
                 if actual == field)
             );
         }

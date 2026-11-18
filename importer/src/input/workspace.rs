@@ -24,6 +24,9 @@ pub(crate) struct Image {
     // Live derivation proof only. Persisted records retain roots and regenerate
     // complete coverage from current owners; this list is never serialized.
     candidates: Box<[PathBuf]>,
+    // The observation's digest before each candidate and after the last, so
+    // a changed image names the first candidate it differs at. Live only.
+    prefixes: Box<[[u8; 32]]>,
 }
 
 pub(crate) struct Account<'a> {
@@ -151,7 +154,7 @@ impl<'a> Account<'a> {
 
     fn normalize(&mut self, path: &Path) -> Result<PathBuf> {
         if !path.is_absolute() {
-            return Err(drift("workspace root is not absolute"));
+            return Err(invariant("absolute workspace candidate"));
         }
         self.retain(1, path.as_os_str().len())?;
         let mut result = PathBuf::new();
@@ -247,24 +250,34 @@ fn above(paths: &mut Slots<PathBuf>, manifest: &Path, account: &mut Account<'_>)
 }
 
 pub(crate) fn capture(roots: Box<[PathBuf]>, account: &mut Account<'_>) -> Result<Image> {
-    let (entry, candidates) = scan(&roots, None, account)?;
-    let candidates = account.boxed(candidates)?;
+    let scanned = scan(&roots, None, account)?;
+    let candidates = account.boxed(scanned.candidates)?;
+    let prefixes = account.boxed(scanned.prefixes)?;
     Ok(Image {
         roots,
-        entry,
+        entry: scanned.entry,
         candidates,
+        prefixes,
     })
 }
 
 pub(crate) fn observe(roots: &[PathBuf], account: &mut Account<'_>) -> Result<Entry> {
-    scan(roots, None, account).map(|(entry, _)| entry)
+    scan(roots, None, account).map(|scanned| scanned.entry)
+}
+
+/// One observation of a workspace's manifests: its entry, the candidates
+/// it read in order, and its digest before each and after the last.
+struct Scanned {
+    entry: Entry,
+    candidates: Slots<PathBuf>,
+    prefixes: Slots<[u8; 32]>,
 }
 
 fn scan(
     roots: &[PathBuf],
     captured: Option<&[PathBuf]>,
     account: &mut Account<'_>,
-) -> Result<(Entry, Slots<PathBuf>)> {
+) -> Result<Scanned> {
     let mut hash = Sha256::new();
     account.frame(&mut hash, b"rawr.cargo.workspace-observations/v2")?;
     account.frame(&mut hash, &(roots.len() as u64).to_le_bytes())?;
@@ -285,8 +298,10 @@ fn scan(
     }
     let mut watched = Slots::new();
     let mut expanded = Slots::new();
+    let mut prefixes = Slots::new();
     let mut cursor = 0;
     while cursor < candidates.values.len() {
+        account.push(&mut prefixes, hash.clone().finalize().into())?;
         let path = account.copy(&candidates.values[cursor])?;
         cursor += 1;
         account.frame(&mut hash, b"candidate")?;
@@ -431,7 +446,7 @@ fn scan(
         let normalized = account.normalize(&path)?;
         let parent = path
             .parent()
-            .ok_or_else(|| drift("workspace manifest lacks parent"))?;
+            .expect("a workspace candidate names a `Cargo.toml` in a directory");
         let parent = account.canonical(parent)?;
         if expanded.values.iter().any(|(query, directory, target)| {
             query == &normalized && directory == &parent && target == &canonical
@@ -443,7 +458,7 @@ fn scan(
         for spelling in [&path, &canonical] {
             let parent = spelling
                 .parent()
-                .ok_or_else(|| drift("workspace manifest lacks parent"))?;
+                .expect("a workspace candidate names a `Cargo.toml` in a directory");
             let directory = account.join(parent, Path::new(redirect.as_str()))?;
             let manifest = account.join(&directory, Path::new("Cargo.toml"))?;
             // Its ancestors are observed once it is read, unless it is a
@@ -453,6 +468,7 @@ fn scan(
             insert(&mut candidates, &normalized, account)?;
         }
     }
+    account.push(&mut prefixes, hash.clone().finalize().into())?;
     // In the bytes' order, as the stored entry reads them back: a path's
     // own order compares components, so `a/rawr/x` comes before
     // `a/rawr-home` there and after it as text.
@@ -463,22 +479,24 @@ fn scan(
     });
     let mut paths = Slots::new();
     for path in watched.values {
-        let text = path
-            .to_str()
-            .ok_or_else(|| drift("workspace path is not UTF-8"))?;
+        let text = path.to_str().ok_or_else(|| Error::Input {
+            code: "workspace-path-utf8",
+            reason: path.display().to_string().into_boxed_str(),
+        })?;
         account.retain(1, text.len())?;
         let mut value = String::new();
         value.try_reserve_exact(text.len()).map_err(allocation)?;
         value.push_str(text);
         account.push(&mut paths, value.into_boxed_str())?;
     }
-    Ok((
-        Entry::Workspace {
+    Ok(Scanned {
+        entry: Entry::Workspace {
             paths: account.boxed(paths)?,
             digest: hash.finalize().into(),
         },
         candidates,
-    ))
+        prefixes,
+    })
 }
 
 impl Image {
@@ -495,17 +513,34 @@ impl Image {
         capture(roots(authority, metadata, account)?, account)
     }
 
+    /// Whether the manifests this image read are as it read them: the
+    /// first that differs is [`Error::Changed`].
     pub(crate) fn require(&self, account: &mut Account<'_>) -> Result<()> {
-        if scan(&self.roots, Some(&self.candidates), account)?.0 != self.entry {
-            return Err(drift("Cargo workspace manifest closure changed"));
+        let current = scan(&self.roots, Some(&self.candidates), account)?;
+        if current.entry == self.entry {
+            return Ok(());
         }
-        Ok(())
+        // The digest before candidate `n + 1` is the first to differ when
+        // candidate `n` changed.
+        let changed = current
+            .prefixes
+            .values
+            .iter()
+            .zip(&self.prefixes)
+            .position(|(current, captured)| current != captured)
+            .and_then(|first| first.checked_sub(1))
+            .and_then(|candidate| self.candidates.get(candidate))
+            .or_else(|| self.roots.first())
+            .expect("a workspace image has the request's own manifest as a root");
+        Err(Error::Changed {
+            path: changed.clone(),
+        })
     }
 
     pub(crate) fn digest(&self) -> Result<&[u8; 32]> {
         match &self.entry {
             Entry::Workspace { digest, .. } => Ok(digest),
-            _ => Err(drift("invalid workspace image")),
+            _ => Err(invariant("workspace image entry")),
         }
     }
 }
@@ -533,7 +568,7 @@ fn read(path: &Path, account: &mut Account<'_>) -> Result<Vec<u8>> {
     let mut offset = 0;
     while offset < bytes.len() {
         match file.read(&mut bytes[offset..]) {
-            Ok(0) => return Err(drift("workspace manifest shortened during read")),
+            Ok(0) => return Err(changed(path)),
             Ok(amount) => offset += amount,
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
             Err(source) => return Err(io("read workspace manifest", path, source)),
@@ -550,7 +585,7 @@ fn read(path: &Path, account: &mut Account<'_>) -> Result<Vec<u8>> {
         }
     };
     if extra != 0 {
-        return Err(drift("workspace manifest changed during read"));
+        return Err(changed(path));
     }
     Ok(bytes)
 }
@@ -588,8 +623,13 @@ fn allocation(source: std::collections::TryReserveError) -> Error {
 fn overflow() -> Error {
     graph_error(node::Error::Allocation)
 }
-fn drift(field: &'static str) -> Error {
-    Error::ResolutionDrift {
+fn changed(path: &Path) -> Error {
+    Error::Changed {
+        path: path.to_path_buf(),
+    }
+}
+fn invariant(field: &'static str) -> Error {
+    Error::Invariant {
         command: "workspace input observation",
         field,
     }

@@ -1310,9 +1310,8 @@ impl Baseline {
                 // never to the configurable JSON target.
                 let actual = optional_file_digest_accounted(retained.path(), &mut allocation)?;
                 if actual.as_ref() != retained.digest() {
-                    return Err(Error::ResolutionDrift {
-                        command: "input publication",
-                        field: "Cargo authority input",
+                    return Err(Error::Changed {
+                        path: retained.path().to_path_buf(),
                     });
                 }
                 recipe!(if retained.digest().is_some() {
@@ -1338,8 +1337,9 @@ impl Baseline {
             });
             for (path, expected) in probe_artifacts {
                 let actual = file_digest_accounted(path, &mut allocation)?;
+                // Only rawr's own probe writes its artifacts.
                 if &actual != expected {
-                    return Err(Error::ResolutionDrift {
+                    return Err(Error::Invariant {
                         command: "input publication",
                         field: "metadata probe artifact",
                     });
@@ -1355,10 +1355,7 @@ impl Baseline {
             for (path, expected) in config.candidates {
                 let current = optional_file_digest_accounted(&path, &mut allocation)?;
                 if current != expected {
-                    return Err(Error::ResolutionDrift {
-                        command: "input publication",
-                        field: "Cargo config provenance",
-                    });
+                    return Err(Error::Changed { path });
                 }
                 recipe!(Recipe::path(Role::Config, &path, &mut allocation)?);
             }
@@ -1524,9 +1521,9 @@ impl Baseline {
             let recipe_allocation = allocation.usage();
             let mut proof = proof::evaluate_known(&recipes, known, limits, &mut allocation)?;
             if !proof.contains_workspace(&workspace_expected) {
-                return Err(Error::ResolutionDrift {
-                    command: "input publication",
-                    field: "workspace input before-image",
+                return Err(Error::Input {
+                    code: "input-changed",
+                    reason: "the Cargo workspace".into(),
                 });
             }
             #[cfg(feature = "rustc-driver")]
@@ -1620,9 +1617,12 @@ impl Baseline {
         let mut allocation = Allocation::for_proof(self.recipe_allocation, limits);
         let mut current = proof::evaluate(&self.recipes, limits, &mut allocation)?;
         if current.fingerprint() != self.proof.fingerprint() {
+            let changed = current
+                .changed_entry(&self.proof, &[])
+                .unwrap_or_else(|| "a file the build read".to_owned());
             return Err(Error::Input {
                 code: "input-changed",
-                reason: "content changed after authoritative Build capture".into(),
+                reason: changed.into_boxed_str(),
             });
         }
         // The same exact evidence was re-observed; preserve its already-derived

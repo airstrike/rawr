@@ -1065,7 +1065,10 @@ impl Evaluation {
                     let script = self
                         .script
                         .map(|factory| factory(&self.request, &self.cached, &layout));
-                    let run = || self.execute_in(layout, cargo_account, accounts, graph, tables);
+                    let run = || {
+                        self.execute_in(layout, cargo_account, accounts, graph, tables)
+                            .map_err(|error| self.settle(error))
+                    };
                     #[cfg(test)]
                     if let Some(script) = script {
                         return script.run_result(run).map_err(|error| {
@@ -1076,6 +1079,16 @@ impl Evaluation {
                 })()
             },
         )
+    }
+
+    /// `error`, or the file whose edit explains it when Cargo's answer
+    /// drifted from what the request read (`Request::changed`).
+    fn settle(&self, error: node::Error) -> node::Error {
+        if error.drifted() {
+            self.request.changed(&self.limits, None, &error).into()
+        } else {
+            error
+        }
     }
 
     fn execute_in(

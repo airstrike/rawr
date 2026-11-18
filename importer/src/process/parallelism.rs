@@ -40,7 +40,7 @@ impl Proof {
         if current == self {
             Ok(())
         } else {
-            Err(Error::ResolutionDrift {
+            Err(Error::Invariant {
                 command,
                 field: "Cargo parallelism proof",
             })

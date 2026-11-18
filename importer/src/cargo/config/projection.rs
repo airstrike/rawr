@@ -299,7 +299,9 @@ impl Projection {
         if &current == self {
             Ok(())
         } else {
-            Err(Error::ResolutionDrift {
+            // The environment is captured once, so it derives the same
+            // projection every time.
+            Err(Error::Invariant {
                 command,
                 field: "sealed Cargo environment projection",
             })

@@ -404,6 +404,42 @@ mod stale {
         assert!(matches!(failed, Err(Error::Other(_))));
         assert_eq!(attempts, 1);
     }
+
+    /// A file the build read that changed while it ran prepares again and
+    /// takes the edit, and one that keeps changing ends the restarts with
+    /// Cargo's words for it (D1043, #657).
+    #[test]
+    fn a_file_edited_during_the_build_prepares_again() {
+        let changed = || {
+            Error::import(rawr_import::Error::Input {
+                code: "input-changed-during-read",
+                reason: "/project/src/main.rs".into(),
+            })
+        };
+        let mut attempts = 0;
+        let edited = again_while_stale(|| {
+            attempts += 1;
+            if attempts == 1 {
+                Err(changed())
+            } else {
+                Ok(attempts)
+            }
+        });
+        assert_eq!(edited.ok(), Some(2));
+
+        let mut attempts = 0;
+        let changing = again_while_stale(|| -> Result<(), Error> {
+            attempts += 1;
+            Err(changed())
+        });
+        assert_eq!(attempts, STALE_RESTARTS + 1);
+        assert_eq!(
+            changing
+                .expect_err("a file that keeps changing fails")
+                .to_string(),
+            "`/project/src/main.rs` changed during the build; run it again"
+        );
+    }
 }
 
 /// The Rust path a failed compilation missed that a new preparation may

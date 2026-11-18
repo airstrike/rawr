@@ -487,16 +487,161 @@ fn a_workspace_manifest_edited_while_cargo_reads_metadata_is_drift() {
         assert!(
             matches!(
                 error,
-                crate::Error::ResolutionDrift {
-                    field: "Cargo workspace manifest closure changed",
-                    ..
-                }
+                crate::Error::Changed { ref path } if path.ends_with("dependencies/Cargo.toml")
             ),
             "{error}"
         );
         Ok(())
     });
     fs::remove_file(workspace).expect("the edited workspace manifest retires");
+    fixture.retire();
+}
+
+/// What Cargo's candidate metadata run replies, from the fixture's document.
+type Rewrite = Box<dyn FnOnce(Vec<u8>) -> Vec<u8>>;
+
+/// The preparation of `request` in `layout`, with Cargo answering its two
+/// metadata runs and its unit graph from `documents`, the candidate run
+/// rewritten by `candidate`.
+fn prepare_scripted(
+    request: &mut Request,
+    cached: &cargo::CachedToolchain,
+    layout: &resolution::layout::Layout,
+    native: &crate::process::Native,
+    candidate: Option<Rewrite>,
+) -> Result<crate::Result<cargo::Harness>, test_launch::Failure> {
+    let (final_bytes, units) = documents(request, layout.final_form());
+    bind_universe(request, cached);
+    let (provisional_bytes, _) = documents(request, layout.provisional());
+    let candidate = candidate.unwrap_or_else(|| Box::new(|bytes| bytes));
+    let steps = vec![
+        expected_reply(
+            request,
+            native,
+            layout.provisional(),
+            Command::Metadata(false),
+            true,
+            move |_| test_launch::Reply::stdout(provisional_bytes),
+        ),
+        expected_reply(
+            request,
+            native,
+            layout.final_form(),
+            Command::Metadata(false),
+            true,
+            move |_| test_launch::Reply::stdout(candidate(final_bytes)),
+        ),
+        expected_reply(
+            request,
+            native,
+            layout.final_form(),
+            Command::Units,
+            true,
+            move |_| test_launch::Reply::stdout(units),
+        ),
+    ];
+    super::script(layout, steps).run_result(|| {
+        request.prepare_fresh_harness_in(
+            layout,
+            cached,
+            &Limits::standard(),
+            &Limits::standard(),
+            unit::Allocation::begin(&Limits::standard()),
+        )
+    })
+}
+
+fn cached(fixture: &Fixture) -> cargo::CachedToolchain {
+    cargo::CachedToolchain {
+        context: fixture.context.clone(),
+        attestation: fixture
+            .context
+            .cached_toolchain()
+            .expect("current fixture attestation"),
+    }
+}
+
+/// A manifest edited while Cargo resolves is a stale preparation named by
+/// the manifest, as Cargo names a file, and the preparation that starts
+/// again takes the edit and succeeds (D1043.2, #657).
+#[test]
+fn a_manifest_edited_while_cargo_resolves_prepares_again() {
+    let mut fixture = Fixture::open();
+    let manifest = fixture.root.join("authority/Cargo.toml");
+    let cached = cached(&fixture);
+    let request = &mut fixture.request;
+    Fixture::reserve_parts(&fixture.context, &fixture.store, |layout, native| {
+        let edited = manifest.clone();
+        let edit: Rewrite = Box::new(move |bytes| {
+            fs::write(edited, "[workspace]\nresolver = \"3\"\n# edited\n")
+                .expect("the manifest writes while Cargo resolves");
+            bytes
+        });
+        let error = match prepare_scripted(request, &cached, layout, native, Some(edit)) {
+            Ok(Err(error)) => error,
+            Ok(Ok(_)) => panic!("a manifest edited while Cargo resolves is never prepared"),
+            Err(failure) => panic!("the script ends at the edit: {failure:?}"),
+        };
+        assert!(error.is_stale(), "{error:?}");
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "`{}` changed during the build; run it again",
+                manifest.display()
+            )
+        );
+        Ok(())
+    });
+    let environment = fixture.request.config.environment().clone();
+    fixture.request = Fixture::request(&fixture.root, environment);
+    let request = &mut fixture.request;
+    Fixture::reserve_parts(&fixture.context, &fixture.store, |layout, native| {
+        prepare_scripted(request, &cached, layout, native, None)
+            .expect("the preparation that starts again runs each command once")
+            .expect("the preparation that starts again reads the edit");
+        Ok(())
+    });
+    fixture.retire();
+}
+
+/// Cargo answering otherwise than the files it read say, with none of them
+/// changed, is a rawr bug: the preparation panics (D1043.4).
+#[test]
+fn cargo_answering_otherwise_with_no_file_changed_panics() {
+    let mut fixture = Fixture::open();
+    let cached = cached(&fixture);
+    let request = &mut fixture.request;
+    Fixture::reserve_parts(&fixture.context, &fixture.store, |layout, native| {
+        let defaults: Rewrite = Box::new(|bytes| {
+            let mut metadata: Value =
+                serde_json::from_slice(&bytes).expect("fixture metadata parses");
+            let declaration = &mut metadata["packages"][0]["dependencies"][0];
+            let defaults = declaration["uses_default_features"]
+                .as_bool()
+                .expect("the fixture declares its default-feature policy");
+            declaration["uses_default_features"] = Value::Bool(!defaults);
+            serde_json::to_vec(&metadata).expect("metadata encodes")
+        });
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            drop(prepare_scripted(
+                request,
+                &cached,
+                layout,
+                native,
+                Some(defaults),
+            ));
+        }))
+        .expect_err("drift no file explains panics");
+        let message = panicked
+            .downcast_ref::<String>()
+            .expect("the panic carries its message");
+        assert_eq!(
+            message,
+            "internal error: Cargo's dependency default features differs after metadata. \
+             This is a rawr bug"
+        );
+        Ok(())
+    });
     fixture.retire();
 }
 
