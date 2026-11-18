@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
+- A change to the `[profile.dev]` settings in your `~/.cargo/config.toml`, or another Cargo config file rawr's runtime build reads, compiles a new shared runtime instead of reusing one compiled under the old settings. (#304)
+- Shared bindings no longer refuse to share a crate because a build script reached only as another build script's dependency gives the nightly other output than the project's build. (#1525)
+- A registry crate whose dependencies a `[patch]` or `[replace]` points at a path keeps its item decisions in the project's `target/rawr`, never in rawr's home. (#2235)
 
 ## 0.4.8 (2026-11-18)
 

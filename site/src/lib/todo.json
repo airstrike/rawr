@@ -9,7 +9,14 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
+      "entries": [
+        {"text":"A change to the `[profile.dev]` settings in your `~/.cargo/config.toml`, or another Cargo config file rawr's runtime build reads, compiles a new shared runtime instead of reusing one compiled under the old settings.","issues":[304]},
+        {"text":"Shared bindings no longer refuse to share a crate because a build script reached only as another build script's dependency gives the nightly other output than the project's build.","issues":[1525]},
+        {"text":"A registry crate whose dependencies a `[patch]` or `[replace]` points at a path keeps its item decisions in the project's `target/rawr`, never in rawr's home.","issues":[2235]}
+      ]
+    },
     "releases": [
       {
         "version": "0.4.8",
@@ -3101,7 +3108,7 @@
     {"issue":301,"title":"Compile rawr's own runtime once per machine in rawr's home, keyed by rawr's version and source…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.5"},
     {"issue":302,"title":"A user setting outside the crate's files lowers the runtime's opt-level","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.5"},
     {"issue":303,"title":"No `rawr cache clean` command reaches the shared runtime","state":"retired","category":"Shared dependency cache (D607)"},
-    {"issue":304,"title":"A user's `~/.cargo/config.toml` profile settings aren't in the runtime's key, so a change to…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":304,"title":"A user's `~/.cargo/config.toml` profile settings aren't in the runtime's key, so a change to…","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":305,"title":"Seen once, not reproduced: the import-cli script test's second script failed with \"invalid…","state":"retired","category":"Shared dependency cache (D607)"},
     {"issue":306,"title":"rawr-iced keeps a blanket impl of rawr's `host::stream::Source` over `futures_core::Stream`…","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":307,"title":"No-glue: crate type aliases don't cross, either an alias that defaults a parameter to another…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.7"},
@@ -3265,7 +3272,7 @@
     {"issue":465,"title":"Build the play image's universe stage","state":"closed","category":"No glue (D593)","release":"0.3.48"},
     {"issue":466,"title":"A warm `rawr check` of a new iced program no longer reruns Cargo's resolution on each demand…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.37"},
     {"issue":467,"title":"Generated bindings read iced's whole dependency set: crates sharing a name (rustc-hash 1 and 2)…","state":"closed","category":"No glue (D593)","release":"0.3.37"},
-    {"issue":468,"title":"A shared whole table lists only the external crates its publisher's probe reached","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":468,"title":"A shared whole table lists only the external crates its publisher's probe reached","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":469,"title":"Trait-member answers are not in whole tables, so new member demand runs the nightly","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":470,"title":"Project-local tables are never replayed without the probe","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.177"},
     {"issue":471,"title":"Find why a warm check sometimes takes the intrinsic-facts path","state":"open","category":"Shared dependency cache (D607)"},
@@ -4322,7 +4329,7 @@
     {"issue":1522,"title":"A call before a call that borrows a local, in one statement outside an array literal, is refused","state":"retired","category":"No glue (D593)"},
     {"issue":1523,"title":"A marked view whose scope frame captures a non-Send value fails to compile in the runner","state":"closed","category":"Divergences from rustc","release":"0.3.173"},
     {"issue":1524,"title":"Shared bindings compared a build script's whole OUT_DIR and read the project's after extraction","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.173"},
-    {"issue":1525,"title":"Shared bindings compare the build scripts of packages reached only as build-dependencies","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1525,"title":"Shared bindings compare the build scripts of packages reached only as build-dependencies","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":1526,"title":"Every new engine declares the std facade by re-reading std_table","state":"closed","category":"Platforms","release":"0.3.174"},
     {"issue":1527,"title":"A marked type spelled through its proxy alias and its mirror's re-exported path gave two scope families","state":"closed","category":"No glue (D593)","release":"0.3.173"},
     {"issue":1528,"title":"A scope family mismatch reaches the user as a runtime error rather than a rawr bug","state":"closed","category":"No glue (D593)","release":"0.3.174"},
@@ -5031,7 +5038,7 @@
     {"issue":2232,"title":"Each demand round digests every impl's identity once, and writes the stored classification in…","state":"closed","category":"Shared dependency cache (D607)","release":"0.4.4"},
     {"issue":2233,"title":"A shared crate's paths whose outcome names no definition keep their facade contributions in the project","state":"closed","category":"Shared dependency cache (D607)","release":"0.4.5"},
     {"issue":2234,"title":"A check's later demand rounds take and keep decisions in rawr's home too, so a second project…","state":"closed","category":"Shared dependency cache (D607)","release":"0.4.5"},
-    {"issue":2235,"title":"A registry crate reaching a path crate through `[patch]` can keep its records in rawr's home in a later round","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":2235,"title":"A registry crate reaching a path crate through `[patch]` can keep its records in rawr's home in a later round","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":2236,"title":"`cfg_if::cfg_if!` in a program fails with \"diagnostic span falls outside source\"","state":"open","category":"No glue (D593)"},
     {"issue":2237,"title":"`scopeguard::defer!` fails: cannot find function `guard` in module `scopeguard`","state":"open","category":"No glue (D593)"},
     {"issue":2238,"title":"A chrono `Datelike` method (`date.year()`) is not found on `NaiveDate`","state":"open","category":"No glue (D593)"},
@@ -5260,19 +5267,19 @@
           "name": "Key holes",
           "start": 45,
           "size": 2,
-          "state": "next",
-          "note": "A shared table holds no crates outside its key (#1097). The facade-plan gap was fixed by #630. Left: an entry's meta lists every crate its session loaded (#1128).",
+          "state": "done",
+          "note": "A shared entry holds only what its key covers: crates outside the key (#1097, #1128, #468), each crate under its own key (#2223), the Cargo profile in the runtime's key (#304), build-dependency scripts (#1525) and [patch] closures (#2235).",
           "issues": [
             {"number":252,"title":"A change to how the importer builds its facade plan wasn't picked up until `RAWR_HOME` was…","state":"retired"},
             {"number":254,"title":"With `RAWR_HOME` set to a folder beside the project (`../rawr-foo-home` for `../rawr-foo`)…","state":"closed"},
             {"number":276,"title":"`importer/src/store.rs:68` still says rawr's home holds \"the typed store (`v1`), shared deps…","state":"closed"},
             {"number":1097,"title":"A shared extraction table holds definitions from crates outside its key; another project replays crates it never loaded","state":"closed"},
             {"number":1128,"title":"A shared entry's meta lists every crate its session loaded, not only those its table names","state":"closed"},
-            {"number":304,"title":"A user's `~/.cargo/config.toml` profile settings aren't in the runtime's key, so a change to…","state":"open"},
-            {"number":468,"title":"A shared whole table lists only the external crates its publisher's probe reached","state":"open"},
-            {"number":1525,"title":"Shared bindings compare the build scripts of packages reached only as build-dependencies","state":"open"},
+            {"number":304,"title":"A user's `~/.cargo/config.toml` profile settings aren't in the runtime's key, so a change to…","state":"closed"},
+            {"number":468,"title":"A shared whole table lists only the external crates its publisher's probe reached","state":"closed"},
+            {"number":1525,"title":"Shared bindings compare the build scripts of packages reached only as build-dependencies","state":"closed"},
             {"number":2223,"title":"A dependency several selected crates reach keeps its classification records under the first one's key","state":"closed"},
-            {"number":2235,"title":"A registry crate reaching a path crate through `[patch]` can keep its records in rawr's home in a later round","state":"open"},
+            {"number":2235,"title":"A registry crate reaching a path crate through `[patch]` can keep its records in rawr's home in a later round","state":"closed"},
             {"number":2234,"title":"A check's later demand rounds take and keep decisions in rawr's home too, so a second project…","state":"closed"}
           ],
           "milestone": "0.4"
