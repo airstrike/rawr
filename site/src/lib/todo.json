@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-18",
-  "version": "0.4.12",
+  "version": "0.4.13",
   "examples": {
     "running": 56,
     "total": 56,
@@ -9,13 +9,15 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
-      "entries": [
-        {"text":"A Cargo.toml, Cargo.lock, Cargo config, toolchain or source file edited during a build starts the build again silently, as `cargo watch` does. A file that keeps changing ends with Cargo's message: \"`<path>` changed during the build; run it again\".","issues":[657]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.13",
+        "date": "2026-11-18",
+        "entries": [
+          {"text":"A Cargo.toml, Cargo.lock, Cargo config, toolchain or source file edited during a build starts the build again silently, as `cargo watch` does. A file that keeps changing ends with Cargo's message: \"`<path>` changed during the build; run it again\".","issues":[657]}
+        ]
+      },
       {
         "version": "0.4.12",
         "date": "2026-11-18",
@@ -3497,7 +3499,7 @@
     {"issue":654,"title":"A stale stored baseline rebuilds silently (D683.7)","state":"closed","category":"Health"},
     {"issue":655,"title":"Stop re-running Cargo after each build to compare its output byte for byte","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.81"},
     {"issue":656,"title":"Check the manifests behind Cargo metadata before capturing the workspace image, in both lanes","state":"closed","category":"Shared dependency cache (D607)","release":"0.4.12"},
-    {"issue":657,"title":"A real mid-build edit restarts preparation instead of erroring","state":"closed","category":"Divergences from rustc"},
+    {"issue":657,"title":"A real mid-build edit restarts preparation instead of erroring","state":"closed","category":"Divergences from rustc","release":"0.4.13"},
     {"issue":658,"title":"ResolutionDrift with no user edit: the program's own cargo check and ancestor manifests","state":"closed","category":"Shared dependency cache (D607)","release":"0.4.11"},
     {"issue":659,"title":"std::fs inside an async block","state":"closed","category":"Divergences from rustc"},
     {"issue":660,"title":"A first check replays its own extracted tables for later demand rounds","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.82"},
