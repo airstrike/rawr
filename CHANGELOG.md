@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
+- Cached profile and checked entries written in an older format are evicted, never read, and a profile entry that doesn't decode under its own key stops the warm launch as a rawr bug, as the full path already did. (#2245)
 
 ## 0.4.13 (2026-11-18)
 
