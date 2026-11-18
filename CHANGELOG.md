@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
+- A Cargo.toml, Cargo.lock, Cargo config, toolchain or source file edited during a build starts the build again silently, as `cargo watch` does. A file that keeps changing ends with Cargo's message: "`<path>` changed during the build; run it again". (#657)
 
 ## 0.4.12 (2026-11-18)
 

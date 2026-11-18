@@ -4,7 +4,9 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
-    "entries": []
+    "entries": [
+      {"text":"A Cargo.toml, Cargo.lock, Cargo config, toolchain or source file edited during a build starts the build again silently, as `cargo watch` does. A file that keeps changing ends with Cargo's message: \"`<path>` changed during the build; run it again\".","issues":[657]}
+    ]
   },
   "releases": [
     {
