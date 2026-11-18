@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-18",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "examples": {
     "running": 56,
     "total": 56,
@@ -9,14 +9,16 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
-      "entries": [
-        {"text":"A second project that uses a crate, and a later demand round of a check, write none of the crate's trait and impl headers or its paths' sites again: each is kept beside the crate's item decisions with what it read, and taken where it reads the same.","issues":[2222]},
-        {"text":"Each demand round digests every impl's identity once, and writes the stored classification in one pass instead of two.","issues":[2232],"refs":[2221]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.4",
+        "date": "2026-11-18",
+        "entries": [
+          {"text":"A second project that uses a crate, and a later demand round of a check, write none of the crate's trait and impl headers or its paths' sites again: each is kept beside the crate's item decisions with what it read, and taken where it reads the same.","issues":[2222]},
+          {"text":"Each demand round digests every impl's identity once, and writes the stored classification in one pass instead of two.","issues":[2232],"refs":[2221]}
+        ]
+      },
       {
         "version": "0.4.3",
         "date": "2026-11-18",
@@ -4984,7 +4986,7 @@
     {"issue":2219,"title":"A browser with neither JSPI nor exnref can't compile the browser's universe module","state":"open","category":"Platforms"},
     {"issue":2220,"title":"`rawr run --web` packages block the page on a sleep and append output instead of drawing a terminal","state":"open","category":"Platforms"},
     {"issue":2221,"title":"A demand round still runs classification's and the plan's whole-API passes","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":2222,"title":"D604 headers and the facade plan's sites are computed per program, not kept per crate","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":2222,"title":"D604 headers and the facade plan's sites are computed per program, not kept per crate","state":"closed","category":"Shared dependency cache (D607)","release":"0.4.4"},
     {"issue":2223,"title":"A dependency several selected crates reach keeps its classification records under the first one's key","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":2224,"title":"Publishing a crate's classification entry rewrites the whole file whenever any record is fresh","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":2225,"title":"`&req.comparators[0]` on a crate struct's field is taken as a partial move: a later method call is a false E0382","state":"open","category":"Borrow checker (D572)"},
@@ -4994,7 +4996,7 @@
     {"issue":2229,"title":"A closure local that shadows a capture (`let c = c.borrow(); c.method()`) panics with \"Function not found\"","state":"open","category":"Divergences from rustc"},
     {"issue":2230,"title":"A panic in a call the page makes into a running program aborts the instance with no message in its frame","state":"open","category":"Platforms"},
     {"issue":2231,"title":"Two crate traits with a same-named method on one type make the generated call ambiguous (E0034)","state":"open","category":"No glue (D593)"},
-    {"issue":2232,"title":"Each demand round digests every impl's identity once, and writes the stored classification in…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":2232,"title":"Each demand round digests every impl's identity once, and writes the stored classification in…","state":"closed","category":"Shared dependency cache (D607)","release":"0.4.4"},
     {"issue":2233,"title":"A shared crate's paths whose outcome names no definition keep their facade contributions in the project","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
@@ -5306,7 +5308,7 @@
             {"number":2221,"title":"A demand round still runs classification's and the plan's whole-API passes","state":"open"},
             {"number":2222,"title":"D604 headers and the facade plan's sites are computed per program, not kept per crate","state":"closed"},
             {"number":2233,"title":"A shared crate's paths whose outcome names no definition keep their facade contributions in the project","state":"open"},
-            {"number":2232,"title":"Each demand round digests every impl's identity once, and writes the stored classification in…","state":"open"}
+            {"number":2232,"title":"Each demand round digests every impl's identity once, and writes the stored classification in…","state":"closed"}
           ],
           "milestone": "0.4"
         }
