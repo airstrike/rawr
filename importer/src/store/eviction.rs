@@ -1042,20 +1042,33 @@ fn current_execution(kind: Kind) -> Option<u32> {
     }
 }
 
-/// The schema each plain kind's current value has. These kinds have one
-/// value each and no bundle, and each schema folds in the versions its action
-/// key carries, so an action of these kinds with another schema is one no
-/// current lookup reaches (#630).
-fn current_plain(kind: Kind) -> Option<u32> {
+/// The schemas each plain kind's current values have. These kinds have no
+/// bundle, and each schema folds in the versions its action key carries, so
+/// an action of these kinds with another schema is one no current lookup
+/// reaches. A kind that holds several value types has each one's (#630,
+/// #631).
+fn current_plain(kind: Kind) -> Option<&'static [u32]> {
     use crate::node::Value as _;
     match kind {
         // The API's cache lives behind the driver; a build without it reads
         // no API entries, so none is current for it.
         #[cfg(feature = "rustc-driver")]
-        Kind::Api => Some(crate::api::cached::Product::SCHEMA),
-        Kind::Generic => Some(crate::classify::cached::Product::SCHEMA),
-        Kind::Facade => Some(crate::surface::facade::cached::Product::SCHEMA),
-        Kind::Overlay => Some(crate::bridge::generate::cached::SCHEMA),
+        Kind::Api => Some(&[crate::api::cached::Product::SCHEMA]),
+        Kind::Generic => Some(&[crate::classify::cached::Product::SCHEMA]),
+        Kind::Facade => Some(&[crate::surface::facade::cached::Product::SCHEMA]),
+        Kind::Overlay => Some(&[crate::bridge::generate::cached::SCHEMA]),
+        Kind::Profile => Some(&[crate::profile::cached::Product::SCHEMA]),
+        Kind::ProfileProof => Some(&[
+            crate::profile::demand::cached::Product::SCHEMA,
+            crate::profile::demand::cached::GeneratedProduct::SCHEMA,
+            // The fixtures' parents and products.
+            #[cfg(any(test, feature = "test-fixtures"))]
+            u32::MAX,
+        ]),
+        Kind::Checked => Some(&[
+            crate::checked::Product::SCHEMA,
+            crate::composition::Resolved::SCHEMA,
+        ]),
         _ => None,
     }
 }
@@ -1063,12 +1076,14 @@ fn current_plain(kind: Kind) -> Option<u32> {
 /// An execution's bundle, or a plain entry's action, that an older rawr
 /// wrote.
 fn unreadable(allocation: Allocation) -> bool {
-    let current = match allocation.class {
-        Class::Bundle => current_execution(allocation.kind),
-        Class::Action => current_plain(allocation.kind),
-        Class::Content => None,
-    };
-    current.is_some_and(|schema| schema != allocation.schema)
+    match allocation.class {
+        Class::Bundle => {
+            current_execution(allocation.kind).is_some_and(|schema| schema != allocation.schema)
+        }
+        Class::Action => current_plain(allocation.kind)
+            .is_some_and(|schemas| !schemas.contains(&allocation.schema)),
+        Class::Content => false,
+    }
 }
 
 /// Retire one entry an older rawr wrote, with its action, bundle and content,
