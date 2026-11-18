@@ -955,14 +955,30 @@ impl Settlement {
         let mut crates = Vec::new();
         for entry in &self.entries {
             let krate = match entry {
-                Settled::Extracted { key, publish, .. } => crate::classify::records::Crate {
+                // A table a demand round grew is extracted before the
+                // project's build captures its inputs: its key's directory
+                // says whether it is shared, unless capturing found why not.
+                Settled::Extracted {
+                    key,
+                    publish,
+                    unshared,
+                    ..
+                } => crate::classify::records::Crate {
                     bindings: publish.bindings.clone(),
                     key: key.clone(),
                     crate_name: publish.meta.crate_name.clone(),
                     stable_crate_id: Some(publish.meta.stable_crate_id.clone()),
-                    shared: publish.meta.inputs.is_some()
-                        && self.bindings.as_ref() == Some(&publish.bindings),
+                    shared: unshared.is_none() && self.bindings.as_ref() == Some(&publish.bindings),
                 },
+                // A table this project grew and has not settled yet is read
+                // where it waits, under a shared key or its own: it says
+                // nothing of where its crate's records go, which is then
+                // decided as for a crate no settlement names.
+                Settled::Read { directory, .. }
+                    if self.rawr.as_deref().map(staged).as_ref() == Some(directory) =>
+                {
+                    continue;
+                }
                 Settled::Read {
                     directory,
                     key,
@@ -981,7 +997,7 @@ impl Settlement {
                 crates.push(krate);
             }
         }
-        crate::classify::Sources::new(crates, self.rawr.as_deref())
+        crate::classify::Sources::new(crates, self.rawr.as_deref(), self.bindings.as_deref())
     }
 
     /// [`Settlement::settle`] after `rawr check`, whose project build is the

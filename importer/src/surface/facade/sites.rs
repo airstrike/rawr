@@ -192,19 +192,21 @@ fn insert<T: Clone>(
 
 #[cfg(feature = "rustc-driver")]
 impl Kept {
-    /// The sites of the paths `keep` keeps, by the definition each names.
-    pub(crate) fn select(
+    /// The sites the plan that gave these wrote, by the owner `owner`
+    /// gives the definition each path names.
+    pub(crate) fn fresh_parts<O: Ord>(
         &self,
-        mut keep: impl FnMut(&crate::surface::identity::Definition) -> bool,
-    ) -> Self {
-        Self {
-            by_digest: self
+        mut owner: impl FnMut(&crate::surface::identity::Definition) -> O,
+    ) -> BTreeMap<O, Self> {
+        let mut parts = BTreeMap::<O, Self>::new();
+        for (digest, site) in self.by_digest.iter().filter(|(_, site)| site.fresh) {
+            parts
+                .entry(owner(&site.target))
+                .or_default()
                 .by_digest
-                .iter()
-                .filter(|(_, site)| keep(&site.target))
-                .map(|(digest, site)| (*digest, site.clone()))
-                .collect(),
+                .insert(*digest, site.clone());
         }
+        parts
     }
 
     /// These sites with those of `later` beside them: of each definition's
@@ -223,16 +225,6 @@ impl Kept {
             }
         }
         Self { by_digest }
-    }
-
-    /// Whether the plan that gave these wrote any of them.
-    pub(crate) fn any_fresh(&self) -> bool {
-        self.by_digest.values().any(|site| site.fresh)
-    }
-
-    /// Whether these hold no path's sites.
-    pub(crate) fn is_empty(&self) -> bool {
-        self.by_digest.is_empty()
     }
 }
 

@@ -34,7 +34,27 @@ pub struct Kept {
 #[cfg(feature = "rustc-driver")]
 struct Records {
     sources: super::records::Sources,
-    loaded: Option<super::records::Loaded>,
+    /// Whether each crate's stable crate id is read.
+    resolved: bool,
+    loaded: super::records::Loaded,
+}
+
+#[cfg(feature = "rustc-driver")]
+impl Records {
+    /// The sources, each crate's stable crate id read once.
+    fn sources(&mut self) -> &super::records::Sources {
+        if !self.resolved {
+            self.sources.resolve();
+            self.resolved = true;
+        }
+        &self.sources
+    }
+
+    /// Read each entry a classification of `graph` may read, once.
+    fn load(&mut self, graph: &api::Graph<impl api::Phase>) {
+        self.sources();
+        self.sources.load(&mut self.loaded, graph);
+    }
 }
 
 struct Held {
@@ -66,8 +86,8 @@ impl Kept {
         {
             #[cfg(feature = "rustc-driver")]
             if let Some(records) = &mut self.records {
-                let loaded = records.loaded.get_or_insert_with(Default::default);
-                records.sources.publish(items, loaded);
+                records.sources();
+                records.sources.publish(items, graph, &mut records.loaded);
             }
             self.items = Some(std::sync::Arc::clone(items));
         }
@@ -94,81 +114,90 @@ impl Kept {
 
 impl Kept {
     /// Keep each crate's records where `sources` says, and take earlier
-    /// records from there, read once a classification needs them.
+    /// records from there, read once a classification needs them. A round
+    /// whose settlement names fewer crates, as one after the tables it
+    /// read are settled does, still reaches those crates: `sources` adds to
+    /// the crates known, and what was read of their entries stays.
     #[cfg(feature = "rustc-driver")]
     pub fn share(&mut self, sources: super::records::Sources) {
-        if self
-            .records
-            .as_ref()
-            .is_some_and(|records| records.sources.same(&sources))
-        {
-            return;
+        match &mut self.records {
+            Some(records) if records.sources.covers(&sources) => {}
+            Some(records) => {
+                records.sources.join(sources);
+                records.resolved = false;
+            }
+            None => {
+                self.records = Some(Records {
+                    sources,
+                    resolved: false,
+                    loaded: super::records::Loaded::default(),
+                });
+            }
         }
-        self.records = Some(Records {
-            sources,
-            loaded: None,
-        });
     }
 
-    /// Read each crate's kept records and contributions, once.
-    fn load(&mut self) {
+    /// Read each kept entry of records and contributions a classification
+    /// of `graph` may read, once.
+    #[cfg_attr(not(feature = "rustc-driver"), allow(unused_variables))]
+    fn load(&mut self, graph: &api::Graph<impl api::Phase>) {
         #[cfg(feature = "rustc-driver")]
-        if let Some(records) = &mut self.records
-            && records.loaded.is_none()
-        {
-            records.sources.resolve();
-            records.loaded = Some(records.sources.load());
+        if let Some(records) = &mut self.records {
+            records.load(graph);
         }
     }
 
-    /// Each path's facade contribution a plan may take: the last plan's,
-    /// then each crate's kept ones, read now if not yet.
+    /// Each path's facade contribution a plan of `graph` may take: the last
+    /// plan's, then each crate's kept ones, read now if not yet.
     pub(crate) fn earlier_contributions(
         &mut self,
+        graph: &api::Graph<impl api::Phase>,
     ) -> Vec<&crate::surface::facade::contribution::Contributions> {
-        self.load();
+        self.load(graph);
         let kept = self.contributions.as_deref().into_iter();
         #[cfg(feature = "rustc-driver")]
         let loaded = self
             .records
             .as_ref()
-            .and_then(|records| records.loaded.as_ref())
             .into_iter()
-            .flat_map(super::records::Loaded::contributions);
+            .flat_map(|records| records.loaded.contributions());
         #[cfg(not(feature = "rustc-driver"))]
         let loaded = std::iter::empty();
         kept.chain(loaded).collect()
     }
 
-    /// Keep `contributions`, a plan's, for the next plan, and each crate's
-    /// where its records are kept.
+    /// Keep `contributions`, a plan of `graph`'s, for the next plan, and
+    /// each crate's where its records are kept.
+    #[cfg_attr(not(feature = "rustc-driver"), allow(unused_variables))]
     pub(crate) fn keep_contributions(
         &mut self,
         contributions: crate::surface::facade::contribution::Contributions,
+        graph: &api::Graph<impl api::Phase>,
     ) {
         #[cfg(feature = "rustc-driver")]
         if let (Some(records), Some(items)) = (&mut self.records, &self.items) {
-            let loaded = records.loaded.get_or_insert_with(Default::default);
+            records.sources();
             records
                 .sources
-                .publish_facade(&contributions, items, loaded);
+                .publish_facade(&contributions, items, graph, &mut records.loaded);
         }
         self.contributions = Some(std::sync::Arc::new(contributions));
     }
 
-    /// Each item's record a classification may take: the last one this
-    /// owner classified, then each crate's kept records, read now if not
-    /// yet.
-    pub(crate) fn earlier(&mut self) -> Vec<&super::items::Items> {
-        self.load();
+    /// Each item's record a classification of `graph` may take: the last
+    /// one this owner classified, then each crate's kept records, read now
+    /// if not yet.
+    pub(crate) fn earlier(
+        &mut self,
+        graph: &api::Graph<impl api::Phase>,
+    ) -> Vec<&super::items::Items> {
+        self.load(graph);
         let kept = self.items.as_deref().into_iter();
         #[cfg(feature = "rustc-driver")]
         let loaded = self
             .records
             .as_ref()
-            .and_then(|records| records.loaded.as_ref())
             .into_iter()
-            .flat_map(super::records::Loaded::items);
+            .flat_map(|records| records.loaded.items());
         #[cfg(not(feature = "rustc-driver"))]
         let loaded = std::iter::empty();
         kept.chain(loaded).collect()

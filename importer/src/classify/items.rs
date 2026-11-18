@@ -102,28 +102,37 @@ impl Items {
         self.fresh
     }
 
-    /// The records of the definitions `keep_definition` keeps and of the
-    /// exports `keep_export` keeps, with the keys they read.
+    /// The records the classification that gave these classified anew,
+    /// with the keys they read, by the owner `definition` gives each
+    /// definition and `export` each export: what a later one has not yet
+    /// kept of each owner's.
     #[cfg(feature = "rustc-driver")]
-    pub(super) fn select(
+    pub(super) fn fresh_parts<O: Ord>(
         &self,
-        mut keep_definition: impl FnMut(&api::identity::Definition) -> bool,
-        mut keep_export: impl FnMut(&Export) -> bool,
-    ) -> Self {
-        let mut gathered = Gathered::default();
+        mut definition: impl FnMut(&api::identity::Definition) -> O,
+        mut export: impl FnMut(&api::identity::Export, &Export) -> O,
+    ) -> BTreeMap<O, Self> {
+        let mut parts = BTreeMap::<O, Gathered>::new();
         for (id, records) in &self.definitions {
-            if keep_definition(id) {
-                for record in records {
-                    gathered.carry_definition(id, self, record);
-                }
+            for record in records.iter().filter(|record| record.fresh) {
+                parts
+                    .entry(definition(id))
+                    .or_default()
+                    .carry_definition(id, self, record);
             }
         }
-        for (export, records) in &self.exports {
-            for record in records.iter().filter(|record| keep_export(record)) {
-                gathered.carry_export(export, self, record);
+        for (key, records) in &self.exports {
+            for record in records.iter().filter(|record| record.fresh) {
+                parts
+                    .entry(export(key, record))
+                    .or_default()
+                    .carry_export(key, self, record);
             }
         }
-        gathered.carried()
+        parts
+            .into_iter()
+            .map(|(owner, gathered)| (owner, gathered.carried()))
+            .collect()
     }
 
     /// These items with those of `later` first: what a record of a crate's
@@ -146,22 +155,6 @@ impl Items {
             }
         }
         gathered.carried()
-    }
-
-    /// Whether the classification that gave these classified any of them.
-    #[cfg(feature = "rustc-driver")]
-    pub(super) fn any_fresh(&self) -> bool {
-        self.definitions
-            .values()
-            .flatten()
-            .any(|record| record.fresh)
-            || self.exports.values().flatten().any(|record| record.fresh)
-    }
-
-    /// Whether these hold no record.
-    #[cfg(feature = "rustc-driver")]
-    pub(super) fn is_empty(&self) -> bool {
-        self.definitions.is_empty() && self.exports.is_empty()
     }
 }
 
@@ -315,6 +308,8 @@ impl Gathered {
     ) {
         let mut record = record.clone();
         record.premises = self.carried_premises(earlier, &record.premises);
+        // A carried record was classified by an earlier classification.
+        record.fresh = false;
         candidate(
             self.definitions.entry(id.clone()).or_default(),
             record,
@@ -325,6 +320,7 @@ impl Gathered {
     fn carry_export(&mut self, export: &api::identity::Export, earlier: &Items, record: &Export) {
         let mut record = record.clone();
         record.premises = self.carried_premises(earlier, &record.premises);
+        record.fresh = false;
         candidate(
             self.exports.entry(export.clone()).or_default(),
             record,

@@ -54,11 +54,15 @@ pub(crate) struct Written {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub(crate) struct Digest(#[serde(with = "crate::hex")] [u8; 32]);
 
-/// One outcome's contribution, and the definition its path names.
+/// One outcome's contribution, and the definition its path names, or the
+/// path itself when it names none.
 #[derive(Clone, Deserialize, Serialize)]
 pub(crate) struct Kept {
     contribution: Arc<Contribution>,
     target: Option<crate::surface::identity::Definition>,
+    /// The path, its root alias first, when it names no definition: the
+    /// crate its root selects keeps it.
+    unnamed: Option<Box<str>>,
     /// Whether the plan that gave it generated it.
     #[serde(skip)]
     #[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
@@ -74,23 +78,31 @@ impl Contributions {
     }
 
     /// Keep `contribution`, of the outcome whose digest is `digest` and
-    /// whose path names `target`; `fresh` when this plan generated it.
+    /// whose path `export` names `target`; `fresh` when this plan generated
+    /// it.
     pub(super) fn keep(
         &mut self,
         digest: [u8; 32],
         contribution: Arc<Contribution>,
+        export: &crate::api::identity::Export,
         target: Option<crate::surface::identity::Definition>,
         fresh: bool,
-    ) {
+    ) -> Result<(), crate::surface::Error> {
+        let unnamed = match target {
+            Some(_) => None,
+            None => Some(unnamed(export)?),
+        };
         self.fresh += usize::from(fresh);
         self.by_digest.insert(
             Digest(digest),
             Kept {
                 contribution,
                 target,
+                unnamed,
                 fresh,
             },
         );
+        Ok(())
     }
 
     /// How many the plan that gave these generated anew.
@@ -128,41 +140,49 @@ impl Contributions {
         self.written
     }
 
-    /// The contributions `keep` keeps, by the definition each one's path
-    /// names, and the header units `keep_item` keeps, by the item whose
-    /// crate keeps each.
+    /// The contributions, header units and sites the plan that gave these
+    /// generated or wrote, not yet kept, by their owners: `owner` gives a
+    /// contribution's or a site's by what its path belongs to, and
+    /// `item_owner` a header unit's by the item whose crate keeps it.
     #[cfg(feature = "rustc-driver")]
-    pub(crate) fn select(
+    pub(crate) fn fresh_parts<O: Ord>(
         &self,
-        mut keep: impl FnMut(Option<&crate::surface::identity::Definition>) -> bool,
-        mut keep_item: impl FnMut(&crate::api::identity::Definition) -> bool,
-    ) -> Self {
-        Self {
-            by_digest: self
+        mut owner: impl FnMut(Owner<'_>) -> O,
+        mut item_owner: impl FnMut(&crate::api::identity::Definition) -> O,
+    ) -> BTreeMap<O, Self> {
+        let mut parts = BTreeMap::<O, Self>::new();
+        for (digest, kept) in self.by_digest.iter().filter(|(_, kept)| kept.fresh) {
+            parts
+                .entry(owner(kept.owner()))
+                .or_default()
                 .by_digest
-                .iter()
-                .filter(|(_, kept)| keep(kept.target.as_ref()))
-                .map(|(digest, kept)| (*digest, kept.clone()))
-                .collect(),
-            headers: self.headers.select(|unit| keep_item(unit.owner())),
-            sites: self.sites.select(|target| keep(Some(target))),
-            fresh: 0,
-            written: Written::default(),
+                .insert(*digest, kept.clone());
         }
+        for (part, headers) in self.headers.fresh_parts(|unit| item_owner(unit.owner())) {
+            parts.entry(part).or_default().headers = headers;
+        }
+        for (part, sites) in self
+            .sites
+            .fresh_parts(|target| owner(Owner::Definition(target)))
+        {
+            parts.entry(part).or_default().sites = sites;
+        }
+        parts
     }
 
     /// These contributions with those of `later` beside them: of each
-    /// definition's paths, `later`'s, then up to [`CANDIDATES`] in all, as
-    /// another plan may read an outcome as an earlier one did.
+    /// definition's paths, and of each path that names none, `later`'s,
+    /// then up to [`CANDIDATES`] in all, as another plan may read an
+    /// outcome as an earlier one did.
     #[cfg(feature = "rustc-driver")]
     pub(crate) fn with(&self, later: &Self) -> Self {
         let mut by_digest = later.by_digest.clone();
-        let mut per_target = BTreeMap::<Option<crate::surface::identity::Definition>, usize>::new();
+        let mut per_owner = BTreeMap::<Owner<'_>, usize>::new();
         for kept in later.by_digest.values() {
-            *per_target.entry(kept.target).or_default() += 1;
+            *per_owner.entry(kept.owner()).or_default() += 1;
         }
         for (digest, kept) in &self.by_digest {
-            let count = per_target.entry(kept.target).or_default();
+            let count = per_owner.entry(kept.owner()).or_default();
             if *count < CANDIDATES && !by_digest.contains_key(digest) {
                 *count += 1;
                 by_digest.insert(*digest, kept.clone());
@@ -176,20 +196,53 @@ impl Contributions {
             written: Written::default(),
         }
     }
+}
 
-    /// Whether the plan that gave these generated any of them.
-    #[cfg(feature = "rustc-driver")]
-    pub(crate) fn any_fresh(&self) -> bool {
-        self.by_digest.values().any(|kept| kept.fresh)
-            || self.headers.any_fresh()
-            || self.sites.any_fresh()
-    }
+/// What a kept contribution belongs to: the definition its path names, or
+/// the path, its root alias first, when it names none.
+#[cfg(feature = "rustc-driver")]
+#[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) enum Owner<'k> {
+    Definition(&'k crate::surface::identity::Definition),
+    Unnamed(&'k str),
+}
 
-    /// Whether these hold no contribution.
-    #[cfg(feature = "rustc-driver")]
-    pub(crate) fn is_empty(&self) -> bool {
-        self.by_digest.is_empty() && self.headers.is_empty() && self.sites.is_empty()
+#[cfg(feature = "rustc-driver")]
+impl<'k> Owner<'k> {
+    /// The root alias an unnamed path starts at.
+    pub(crate) fn root(self) -> Option<&'k str> {
+        match self {
+            Self::Definition(_) => None,
+            Self::Unnamed(path) => path.split("::").next(),
+        }
     }
+}
+
+#[cfg(feature = "rustc-driver")]
+impl Kept {
+    fn owner(&self) -> Owner<'_> {
+        match &self.target {
+            Some(target) => Owner::Definition(target),
+            None => Owner::Unnamed(self.unnamed.as_deref().unwrap_or_default()),
+        }
+    }
+}
+
+/// `export`'s path as a kept contribution names it, its root alias first.
+fn unnamed(export: &crate::api::identity::Export) -> Result<Box<str>, crate::surface::Error> {
+    let mut path = String::new();
+    let length = export
+        .path()
+        .map(|segment| segment.len() + 2)
+        .fold(export.root_alias().len(), usize::saturating_add);
+    path.try_reserve_exact(length)
+        .map_err(|_| crate::surface::Error::Allocation)?;
+    path.push_str(export.root_alias());
+    for segment in export.path() {
+        path.push_str("::");
+        path.push_str(segment);
+    }
+    Ok(path.into_boxed_str())
 }
 
 /// A map written as a sequence of its entries, as JSON keys are strings.

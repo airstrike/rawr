@@ -60,30 +60,24 @@ struct Record<V> {
 const CANDIDATES: usize = 4;
 
 impl<U: Ord + Clone, K: Ord + Clone, V: Clone> Table<U, K, V> {
-    /// Whether these hold no record.
+    /// The records of the units the work that gave these ran, with the
+    /// keys they read, by the owner `owner` gives each unit: what a later
+    /// one has not yet kept of each owner's.
     #[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
-    pub(crate) fn is_empty(&self) -> bool {
-        self.units.is_empty()
-    }
-
-    /// Whether the work that gave these ran any unit.
-    #[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
-    pub(crate) fn any_fresh(&self) -> bool {
-        self.units.values().flatten().any(|record| record.fresh)
-    }
-
-    /// The records of the units `keep` keeps, with the keys they read.
-    #[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
-    pub(crate) fn select(&self, mut keep: impl FnMut(&U) -> bool) -> Self {
-        let mut gathered = Gathered::default();
+    pub(crate) fn fresh_parts<O: Ord>(&self, mut owner: impl FnMut(&U) -> O) -> BTreeMap<O, Self> {
+        let mut parts = BTreeMap::<O, Gathered<U, K, V>>::new();
         for (unit, records) in &self.units {
-            if keep(unit) {
-                for record in records {
-                    gathered.carry_record(unit, self, record, record.fresh);
-                }
+            for record in records.iter().filter(|record| record.fresh) {
+                parts
+                    .entry(owner(unit))
+                    .or_default()
+                    .carry_record(unit, self, record, false);
             }
         }
-        gathered.finish()
+        parts
+            .into_iter()
+            .map(|(owner, gathered)| (owner, gathered.finish()))
+            .collect()
     }
 
     /// These records with those of `later` first: of each unit, `later`'s,

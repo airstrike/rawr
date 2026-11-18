@@ -1676,6 +1676,34 @@ impl<P: Phase> Graph<P> {
             .filter(move |implementation| implementation.relevance().any(|actual| actual == id))
     }
 
+    /// Each selected root alias with the crate it selects: its crate name
+    /// and stable crate id, as its invocation records them. Where work on
+    /// the graph is kept, not a read of it.
+    #[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
+    pub(crate) fn root_crates(&self) -> impl Iterator<Item = (&str, &str, &str)> {
+        self.invocations.iter().flat_map(|invocation| {
+            invocation.root_aliases.iter().map(|alias| {
+                (
+                    alias.as_ref(),
+                    invocation.crate_name.as_ref(),
+                    invocation.artifact.stable_crate_id.as_ref(),
+                )
+            })
+        })
+    }
+
+    /// The unit of each definition, once each. Where work on the graph is
+    /// kept, not a read of it.
+    #[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
+    pub(crate) fn definition_units(&self) -> Vec<&Arc<identity::Unit>> {
+        let mut seen = std::collections::HashSet::<*const identity::Unit>::new();
+        self.definitions
+            .iter()
+            .map(|definition| definition.id().shared_unit())
+            .filter(|unit| seen.insert(Arc::as_ptr(unit)))
+            .collect()
+    }
+
     /// Each definition's semantic identity, by its index, digested once for
     /// the graph and its copies.
     pub(crate) fn surface_definitions(&self) -> &[crate::surface::identity::Definition] {
