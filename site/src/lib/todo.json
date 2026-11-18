@@ -9,7 +9,13 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
+      "entries": [
+        {"text":"A change to the surface format evicts old resolved-demand entries when the store opens, instead of leaving them for size-based eviction.","issues":[2247]},
+        {"text":"Projects whose path has a space, braces or non-ASCII characters reuse Cargo's metadata and unit graph across source-only edits.","issues":[2249]}
+      ]
+    },
     "releases": [
       {
         "version": "0.4.15",
@@ -5103,9 +5109,9 @@
     {"issue":2244,"title":"A program with dependencies runs again: rawr's shared runtime compiles, which it didn't on 0.4.11","state":"closed","category":"Health","release":"0.4.12"},
     {"issue":2245,"title":"A profile entry that decodes stale under its own key panics in the full path after the warm launch falls back","state":"closed","category":"Shared dependency cache (D607)","release":"0.4.14"},
     {"issue":2246,"title":"Remembered Cargo outputs can pair old metadata with a transitive manifest edited before they're saved","state":"closed","category":"Shared dependency cache (D607)","release":"0.4.15"},
-    {"issue":2247,"title":"A surface schema change leaves old resolved entries unevicted, because RESOLVED_SCHEMA doesn't fold SURFACE_SCHEMA","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":2247,"title":"A surface schema change leaves old resolved entries unevicted, because RESOLVED_SCHEMA doesn't fold SURFACE_SCHEMA","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":2248,"title":"A check reaches its demand closure in many rounds, each paying probes, harness work and a resolution","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":2249,"title":"Remembered Cargo outputs are never kept for a root whose path has characters outside [A-Za-z0-9/._-]","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":2249,"title":"Remembered Cargo outputs are never kept for a root whose path has characters outside [A-Za-z0-9/._-]","state":"closed","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -5365,8 +5371,8 @@
           "name": "Stale entries rebuild",
           "start": 48,
           "size": 3,
-          "state": "next",
-          "note": "Stale, damaged or older entries rebuild quietly, and an edit during a build restarts silently (#657, D1043): workspace roots (#894), symlinks (#1173, #1172), damaged memos (#484), bundled entries (#615), older schemas (#631), relative RAWR_HOME (#2226), metadata after capture (#656). Left: #1209, #2245, #2246.",
+          "state": "done",
+          "note": "Stale, damaged or older entries rebuild quietly, and an edit during a build restarts silently (#657): workspace roots (#894), symlinks (#1173, #1172), damaged memos (#484), bundled entries (#615), older schemas (#631, #2245, #2247), relative RAWR_HOME (#2226), metadata after capture (#656, #2246), Cargo-listed package trees (#1209).",
           "issues": [
             {"number":411,"title":"One-time 'workspace manifest closure changed' drift on a fresh path-crate project","state":"closed"},
             {"number":484,"title":"An unreadable cached dependency build is a user error, not a cache miss","state":"closed"},
@@ -5391,8 +5397,8 @@
             {"number":2245,"title":"A profile entry that decodes stale under its own key panics in the full path after the warm launch falls back","state":"closed"},
             {"number":2244,"title":"A program with dependencies runs again: rawr's shared runtime compiles, which it didn't on 0.4.11","state":"closed"},
             {"number":2246,"title":"Remembered Cargo outputs can pair old metadata with a transitive manifest edited before they're saved","state":"closed"},
-            {"number":2247,"title":"A surface schema change leaves old resolved entries unevicted, because RESOLVED_SCHEMA doesn't fold SURFACE_SCHEMA","state":"open"},
-            {"number":2249,"title":"Remembered Cargo outputs are never kept for a root whose path has characters outside [A-Za-z0-9/._-]","state":"open"}
+            {"number":2247,"title":"A surface schema change leaves old resolved entries unevicted, because RESOLVED_SCHEMA doesn't fold SURFACE_SCHEMA","state":"closed"},
+            {"number":2249,"title":"Remembered Cargo outputs are never kept for a root whose path has characters outside [A-Za-z0-9/._-]","state":"closed"}
           ],
           "milestone": "0.4"
         },
