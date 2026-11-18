@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-17",
-  "version": "0.3.250",
+  "version": "0.4.0",
   "examples": {
     "running": 56,
     "total": 56,
@@ -9,13 +9,15 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
-      "entries": [
-        {"text":"Const generics work: a program's `struct S<const N: usize>`, `impl<const N: usize> S<N>` and `fn f<const N: usize>()` read `N` as a value, and a const argument may be a literal, a `{ .. }` block of constants or a `const`'s name. A crate's const-generic type, such as tokio's `Rotator::<3>`, is reached at each value the program names.","issues":[2210],"refs":[1152]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.0",
+        "date": "2026-11-17",
+        "entries": [
+          {"text":"Const generics work: a program's `struct S<const N: usize>`, `impl<const N: usize> S<N>` and `fn f<const N: usize>()` read `N` as a value, and a const argument may be a literal, a `{ .. }` block of constants or a `const`'s name. A crate's const-generic type, such as tokio's `Rotator::<3>`, is reached at each value the program names.","issues":[2210],"refs":[1152]}
+        ]
+      },
       {
         "version": "0.3.250",
         "date": "2026-11-17",
@@ -4937,7 +4939,7 @@
     {"issue":2207,"title":"An assignment in parentheses, such as `(sum += v)`, is an expression of type `()`, and macro…","state":"closed","category":"Divergences from rustc","release":"0.3.249"},
     {"issue":2208,"title":"A closure passed to a crate or std function that changes what it captures keeps each change…","state":"closed","category":"Divergences from rustc","release":"0.3.250"},
     {"issue":2209,"title":"A crate function whose return type has no public path can't be called","state":"open","category":"Divergences from rustc"},
-    {"issue":2210,"title":"Const generic arguments in a type path, such as `Rotator::<3>` and `Rotator::<{ 0 + 1 }>`, don't parse","state":"closed","category":"Divergences from rustc"},
+    {"issue":2210,"title":"Const generic arguments in a type path, such as `Rotator::<3>` and `Rotator::<{ 0 + 1 }>`, don't parse","state":"closed","category":"Divergences from rustc","release":"0.4.0"},
     {"issue":2211,"title":"A qualified path through a crate trait's generic associated type is refused","state":"open","category":"Divergences from rustc"},
     {"issue":2212,"title":"A generic impl's trait method that takes a witness can't be called through dynamic dispatch","state":"open","category":"Divergences from rustc"},
     {"issue":2213,"title":"An array whose length is a const parameter isn't supported","state":"open","category":"Divergences from rustc"}
