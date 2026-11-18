@@ -7888,7 +7888,7 @@
           "name": "Evaluate in a paused frame",
           "start": 60,
           "size": 3,
-          "state": "next",
+          "state": "now",
           "note": "The same interpreter, the same errors",
           "issues": [
             {"number":490,"title":"Evaluate Rust in a paused frame","state":"open"},
