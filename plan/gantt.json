@@ -70,7 +70,7 @@
         {"id":"nightly-on-miss","name":"A new project runs no nightly","start":48,"size":3,"state":"next","note":"A first check reads what the machine's tables hold. Left: path crates inside the project (#419), members no demanded name reached (#469), the program's own unmarked modules (#682).","issues":[419,469,471,682,684],"milestone":"0.4"},
         {"id":"stale-entries","name":"Stale entries rebuild","start":48,"size":3,"state":"next","note":"A damaged or stale entry rebuilds as Cargo rebuilds target/, and drift names a real edit. Left: damaged entries (#484, #615, #654), drift with no edit (#658, #894), symlinked inputs (#1172, #1173, #1174).","issues":[411,484,615,631,632,656,658,1423,546,641,654,657,739,894,1172,1173,1174,1209,2108,2226],"milestone":"0.4"},
         {"id":"hit-with-no-nightly","name":"Hit with no nightly","start":47,"size":3,"state":"done","note":"A check whose demand the shared tables hold reads them with no nightly build","issues":[398,402,281],"milestone":"0.3"},
-        {"id":"re-key-plan-and-headers","name":"Re-key plan and headers","start":41,"size":3,"state":"now","note":"A demand round classifies and generates only what its new paths change (#1618). Left: the whole-API passes (#2221) and D604 headers per crate (#2222).","issues":[1618,914,2221,2222],"milestone":"0.4"}
+        {"id":"re-key-plan-and-headers","name":"Re-key plan and headers","start":41,"size":3,"state":"now","note":"A demand round classifies and generates only what its new paths change (#1618), and a crate's headers and sites are kept per crate (#2222). Left: the whole-API passes (#2221) and paths that name no definition (#2233).","issues":[1618,914,2221,2222,2233,2232],"milestone":"0.4"}
       ]
     },
     {

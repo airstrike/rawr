@@ -5,6 +5,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
+- A second project that uses a crate, and a later demand round of a check, write none of the crate's trait and impl headers or its paths' sites again: each is kept beside the crate's item decisions with what it read, and taken where it reads the same. (#2222)
+- Each demand round digests every impl's identity once, and writes the stored classification in one pass instead of two. (#2232; part of #2221)
 
 ## 0.4.3 (2026-11-18)
 
