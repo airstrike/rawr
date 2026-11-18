@@ -1,82 +1,84 @@
-//! An outcome with each plan it names in place: all a facade reads of it
-//! (#1618). Its digest names what a facade generates for the outcome, so a
+//! What a facade reads of an outcome, by digest (#1618, #2221). An outcome
+//! with each plan it names in place is all a facade generates from, so a
 //! generation of the same digest is the one kept.
+//!
+//! The digest is of the outcome's canonical bytes and of each plan it
+//! names, at any depth, in the order the outcome names them. A
+//! classification has both as each item's fragment, kept with its record
+//! (`items`), so it reads the digest of an outcome it took whole from what
+//! it took, encoding nothing again.
 
-use serde::ser::{SerializeSeq as _, SerializeStruct as _};
-use serde::{Serialize, Serializer};
 use sha2::{Digest as _, Sha256};
 
-use super::{ImplementationRecord, Outcome};
+use super::items::Fragment;
+use super::premise::Digest;
+use super::{layout, DefinitionPlan, Error, OutcomeEvidence, OutcomeRecord};
 
-/// An outcome as a facade reads it.
-struct Resolved<'a>(Outcome<'a>);
+const DOMAIN: &[u8] = b"rawr.classified.resolved/v1\0";
 
-/// An outcome's implementation ledgers as a facade reads them.
-struct Implementations<'a> {
-    records: &'a [ImplementationRecord],
-    outcome: Outcome<'a>,
-}
-
-impl Serialize for Resolved<'_> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let record = self.0.record;
-        let mut state = serializer.serialize_struct("Resolved", 9)?;
-        state.serialize_field("export", &record.export)?;
-        state.serialize_field("identity", &record.identity)?;
-        state.serialize_field("name", &record.name)?;
-        state.serialize_field("origin", &record.origin)?;
-        state.serialize_field("representability", self.0.representability)?;
-        state.serialize_field(
-            "implementations",
-            &Implementations {
-                records: &record.implementations,
-                outcome: self.0,
-            },
-        )?;
-        state.serialize_field("variant", &record.variant)?;
-        state.serialize_field("member", &record.member)?;
-        state.serialize_field("outputs", &record.outputs)?;
-        state.end()
-    }
-}
-
-impl Serialize for Implementations<'_> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut sequence = serializer.serialize_seq(Some(self.records.len()))?;
-        for implementation in self.outcome.implementations() {
-            sequence.serialize_element(&(
-                implementation.identity(),
-                implementation.span(),
-                implementation
-                    .associated()
-                    .map(Resolved)
-                    .collect::<Vec<_>>(),
-            ))?;
+/// The digest of `outcome`, whose canonical bytes are `fragment`, with the
+/// digest `plan` gives of each plan it names, by its index.
+pub(super) fn digest(
+    outcome: &OutcomeRecord,
+    fragment: &Fragment,
+    plan: impl Fn(u32) -> Option<Digest>,
+) -> Digest {
+    let mut digest = Sha256::new();
+    digest.update(DOMAIN);
+    digest.update(fragment.digest);
+    named(outcome, &mut |index| {
+        if let Some(plan) = plan(index) {
+            digest.update(plan);
         }
-        sequence.end()
-    }
+    });
+    digest.finalize().into()
 }
 
-impl Outcome<'_> {
-    /// The digest of the outcome with each plan it names in place.
-    pub(crate) fn resolved_digest(&self) -> [u8; 32] {
-        let mut digest = Sha256::new();
-        serde_json::to_writer(Writer(&mut digest), &Resolved(*self))
-            .expect("an outcome encodes, as the classification's canonical bytes encode it");
-        digest.finalize().into()
+/// The digest of each of `outcomes`, `graph`'s classified with `plans`,
+/// when the items' fragments aren't at hand: each outcome, and each plan
+/// one names, encoded once.
+pub(super) fn digests<P: crate::api::Phase>(
+    graph: &crate::api::Graph<P>,
+    outcomes: &[OutcomeRecord],
+    plans: &[DefinitionPlan],
+) -> Result<std::sync::Arc<[Digest]>, Error> {
+    let implementations = layout::Implementations::of(graph)?;
+    let mut fragments = vec![None; plans.len()];
+    let mut named_plans = Vec::new();
+    for outcome in outcomes {
+        named(outcome, &mut |index| named_plans.push(index as usize));
     }
+    for index in named_plans {
+        if let (Some(slot @ None), Some(plan)) = (fragments.get_mut(index), plans.get(index)) {
+            *slot = Some(Fragment::of(plan, Vec::new())?.digest);
+        }
+    }
+    outcomes
+        .iter()
+        .map(|outcome| {
+            let fragment = Fragment::of(
+                &super::Laid {
+                    records: outcome,
+                    implementations: &implementations,
+                },
+                Vec::new(),
+            )?;
+            Ok(digest(outcome, &fragment, |index| {
+                fragments.get(index as usize).copied().flatten()
+            }))
+        })
+        .collect()
 }
 
-/// Writes JSON straight into a digest.
-struct Writer<'a>(&'a mut Sha256);
-
-impl std::io::Write for Writer<'_> {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.0.update(bytes);
-        Ok(bytes.len())
+/// Give `plan` the index of each plan `outcome` names, its own first, then
+/// its associated outcomes' in order.
+fn named(outcome: &OutcomeRecord, plan: &mut impl FnMut(u32)) {
+    if let OutcomeEvidence::Plan { index, .. } = &outcome.evidence {
+        plan(*index);
     }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
+    for implementation in &outcome.implementations {
+        for associated in &implementation.associated {
+            named(associated, plan);
+        }
     }
 }

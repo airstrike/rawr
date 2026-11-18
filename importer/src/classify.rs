@@ -190,10 +190,11 @@ struct CanonicalSupport<'a> {
     order: &'a layout::Order,
 }
 
-/// The definition plans as the store writes them, in `order` (`layout`).
-struct CanonicalDefinitions<'a> {
-    plans: &'a [DefinitionPlan],
-    order: &'a layout::Order,
+/// Items as the store writes them, each its canonical bytes
+/// (`items::Fragment`), in `order` (`layout`) or as they are.
+struct Spliced<'a> {
+    fragments: &'a [items::Fragment],
+    order: Option<&'a layout::Order>,
 }
 
 /// Outcome or implementation records as the store writes them, each list
@@ -230,8 +231,8 @@ struct Canonical<'a> {
     classifier: u32,
     compiler_abi: u32,
     support: CanonicalSupport<'a>,
-    definitions: CanonicalDefinitions<'a>,
-    outcomes: Laid<'a, [OutcomeRecord]>,
+    definitions: Spliced<'a>,
+    outcomes: Spliced<'a>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -298,6 +299,9 @@ pub(crate) struct ClassifiedParts {
     canonical: std::sync::Arc<[u8]>,
     pub(crate) fingerprint: contract::fingerprint::Fingerprint,
     allocation: contract::Usage,
+    /// What a facade reads of each outcome, by digest (`resolved`), when
+    /// the classification that gave the parts read them from its items.
+    resolved: Option<std::sync::Arc<[premise::Digest]>>,
 }
 
 /// The canonical contract's bytes, written once: a buffer that can't grow
@@ -4605,18 +4609,27 @@ impl Serialize for CanonicalSupport<'_> {
     }
 }
 
-impl Serialize for CanonicalDefinitions<'_> {
+impl Serialize for Spliced<'_> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        let mut sequence = serializer.serialize_seq(Some(self.order.indices().len()))?;
-        for index in self.order.indices() {
-            let plan = self
-                .plans
-                .get(index)
-                .ok_or_else(|| serde::ser::Error::custom("definition order names no plan"))?;
-            sequence.serialize_element(plan)?;
+        let mut sequence = serializer.serialize_seq(Some(self.fragments.len()))?;
+        match self.order {
+            Some(order) => {
+                for index in order.indices() {
+                    let fragment = self
+                        .fragments
+                        .get(index)
+                        .ok_or_else(|| serde::ser::Error::custom("the order names no item"))?;
+                    sequence.serialize_element(&*fragment.bytes)?;
+                }
+            }
+            None => {
+                for fragment in self.fragments {
+                    sequence.serialize_element(&*fragment.bytes)?;
+                }
+            }
         }
         sequence.end()
     }
@@ -4843,23 +4856,34 @@ impl<P: api::Phase> api::Graph<P> {
             context.retain_items(self.definitions().len())?;
             let order = (0..self.definitions().len()).collect::<Vec<_>>();
             let Definitions {
-                plans: mut definitions,
+                plans: definitions,
                 found,
             } = context.classify_definitions(workers, &order, check.as_ref())?;
             if definitions.len() != self.definitions().len() {
                 return Err(Error::Cardinality);
             }
-            for (index, found) in found {
-                let definition = self.definition_at(index).ok_or(Error::Cardinality)?;
-                gathered.definition(
-                    definition.id(),
-                    self.definition_digest(index),
-                    found,
-                    check.as_ref(),
-                );
-            }
-            definitions.sort_unstable();
-            drop_unnameable_fields(&context, &mut definitions);
+            // Each plan with the record it was found under, in digest
+            // order, and the canonical bytes its record kept.
+            let mut plans = definitions
+                .into_iter()
+                .zip(found)
+                .map(|(plan, (index, found))| {
+                    let definition = self.definition_at(index).ok_or(Error::Cardinality)?;
+                    let kept = gathered.definition(
+                        definition.id(),
+                        self.definition_digest(index),
+                        found,
+                        check.as_ref(),
+                    );
+                    Ok((plan, definition.id(), kept))
+                })
+                .collect::<Result<Vec<_>, Error>>()?;
+            plans.sort_unstable_by(|(left, ..), (right, ..)| left.cmp(right));
+            let (mut definitions, plans): (Vec<_>, Vec<_>) = plans
+                .into_iter()
+                .map(|(plan, id, kept)| (plan, (id, kept)))
+                .unzip();
+            let dropped = drop_unnameable_fields(&context, &mut definitions);
             let exports = self.exports().collect::<Vec<_>>();
             let seed = context.seed();
             let checked = check.as_ref();
@@ -4890,21 +4914,71 @@ impl<P: api::Phase> api::Graph<P> {
             if outcomes.len() != self.exports().len() {
                 return Err(Error::Cardinality);
             }
-            let mut outcomes = exports
+            let (mut outcomes, kept_outcomes): (Vec<_>, Vec<_>) = exports
                 .iter()
                 .zip(outcomes)
                 .map(|(path, (outcome, own, found))| {
-                    gathered.export(path.key(), own, found, check.as_ref());
-                    outcome
+                    let kept = gathered.export(path.key(), own, found, check.as_ref());
+                    (outcome, kept)
                 })
-                .collect::<Vec<_>>();
-            enforce_nameability(&context, &definitions, &mut outcomes)?;
+                .unzip();
+            let rejected = enforce_nameability(&context, &definitions, &mut outcomes)?;
             let support_order = layout::support(self)?;
             let definition_order = layout::definitions(self, &definitions)?;
             let implementations = layout::Implementations::of(self)?;
             // Graph order already: what a read of the stored outcomes
             // restores (`layout`).
             implementations.restore(&mut outcomes);
+            // Each item's canonical bytes: its record's, when the passes
+            // over every item changed the same of its value as when the
+            // record's bytes were written, else encoded now and kept with
+            // its record.
+            let mut encoded = items::Encoded::default();
+            let plan_fragments = definitions
+                .iter()
+                .zip(plans)
+                .zip(dropped)
+                .map(|((plan, (id, kept)), dropped)| match kept {
+                    Some(kept) if *kept.changed == *dropped => Ok(kept),
+                    _ => {
+                        encoded.definitions += 1;
+                        let fragment = items::Fragment::of(plan, dropped)?;
+                        gathered.definition_fragment(id, fragment.clone());
+                        Ok(fragment)
+                    }
+                })
+                .collect::<Result<Vec<_>, Error>>()?;
+            let outcome_fragments = outcomes
+                .iter()
+                .zip(kept_outcomes)
+                .zip(rejected)
+                .zip(&exports)
+                .map(|(((outcome, kept), rejected), path)| match kept {
+                    Some(kept) if *kept.changed == *rejected => Ok(kept),
+                    _ => {
+                        encoded.exports += 1;
+                        let fragment = items::Fragment::of(
+                            &Laid {
+                                records: outcome,
+                                implementations: &implementations,
+                            },
+                            rejected,
+                        )?;
+                        gathered.export_fragment(path.key(), fragment.clone());
+                        Ok(fragment)
+                    }
+                })
+                .collect::<Result<Vec<_>, Error>>()?;
+            gathered.encoded(encoded);
+            let resolved = outcomes
+                .iter()
+                .zip(&outcome_fragments)
+                .map(|(outcome, fragment)| {
+                    resolved::digest(outcome, fragment, |index| {
+                        plan_fragments.get(index as usize).map(|plan| plan.digest)
+                    })
+                })
+                .collect::<std::sync::Arc<[_]>>();
             let canonical_value = Canonical {
                 semantic_api: &semantic_api,
                 schema: policy.schema,
@@ -4914,13 +4988,13 @@ impl<P: api::Phase> api::Graph<P> {
                     ledger: &context.support,
                     order: &support_order,
                 },
-                definitions: CanonicalDefinitions {
-                    plans: &definitions,
-                    order: &definition_order,
+                definitions: Spliced {
+                    fragments: &plan_fragments,
+                    order: Some(&definition_order),
                 },
-                outcomes: Laid {
-                    records: outcomes.as_slice(),
-                    implementations: &implementations,
+                outcomes: Spliced {
+                    fragments: &outcome_fragments,
+                    order: None,
                 },
             };
             let mut encoded = Encoded::default();
@@ -4950,10 +5024,11 @@ impl<P: api::Phase> api::Graph<P> {
                 canonical.into_boxed_slice(),
                 fingerprint,
                 allocation,
+                resolved,
             ))
         })();
         context.observe_result(&result);
-        let (definitions, outcomes, canonical, fingerprint, allocation) = result?;
+        let (definitions, outcomes, canonical, fingerprint, allocation, resolved) = result?;
         let items = gathered.finish(&context);
         #[cfg(not(target_arch = "wasm32"))]
         crate::progress::classified(items.fresh().definitions);
@@ -4967,6 +5042,7 @@ impl<P: api::Phase> api::Graph<P> {
                 canonical: canonical.into(),
                 fingerprint,
                 allocation,
+                resolved: Some(resolved),
             },
             scratch_bytes,
             items,
@@ -4974,11 +5050,92 @@ impl<P: api::Phase> api::Graph<P> {
     }
 }
 
+/// The canonical bytes of `parts`, a classification of `graph` under
+/// `policy`, each plan and outcome encoded from its value rather than
+/// spliced from its fragment: what a classification's bytes must be.
+#[cfg(test)]
+pub(crate) fn encoded_whole(
+    graph: &api::Graph<impl api::Phase>,
+    parts: &ClassifiedParts,
+    policy: &Policy,
+) -> Vec<u8> {
+    /// The plans in `order`, each encoded from its value.
+    struct Plans<'a> {
+        plans: &'a [DefinitionPlan],
+        order: &'a layout::Order,
+    }
+
+    impl Serialize for Plans<'_> {
+        fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            serializer.collect_seq(self.order.indices().map(|index| &self.plans[index]))
+        }
+    }
+
+    #[derive(Serialize)]
+    struct Whole<'a> {
+        #[serde(with = "crate::hex")]
+        semantic_api: &'a [u8; 32],
+        schema: u32,
+        classifier: u32,
+        compiler_abi: u32,
+        support: CanonicalSupport<'a>,
+        definitions: Plans<'a>,
+        outcomes: Laid<'a, [OutcomeRecord]>,
+    }
+
+    let support = layout::support(graph).expect("the graph's support lays out");
+    let definitions = layout::definitions(graph, &parts.definitions).expect("the plans lay out");
+    let implementations = layout::Implementations::of(graph).expect("the impls lay out");
+    serde_json::to_vec(&Whole {
+        semantic_api: graph.semantic_fingerprint().as_bytes(),
+        schema: policy.schema,
+        classifier: policy.classifier,
+        compiler_abi: policy.compiler_abi,
+        support: CanonicalSupport {
+            ledger: &parts.support,
+            order: &support,
+        },
+        definitions: Plans {
+            plans: &parts.definitions,
+            order: &definitions,
+        },
+        outcomes: Laid {
+            records: &*parts.outcomes,
+            implementations: &implementations,
+        },
+    })
+    .expect("a classification encodes")
+}
+
+/// What a facade reads of each of `outcomes`, `graph`'s classified with
+/// `plans`, by digest.
+#[cfg(test)]
+pub(crate) fn resolved_digests(
+    graph: &api::Graph<impl api::Phase>,
+    outcomes: &[OutcomeRecord],
+    plans: &[DefinitionPlan],
+) -> Result<std::sync::Arc<[[u8; 32]]>, Error> {
+    resolved::digests(graph, outcomes, plans)
+}
+
 impl ClassifiedParts {
     pub(crate) fn outcomes(&self) -> impl ExactSizeIterator<Item = Outcome<'_>> {
         self.outcomes
             .iter()
             .map(|outcome| Outcome::new(outcome, &self.definitions))
+    }
+
+    /// What a facade reads of each outcome, by digest, in outcome order:
+    /// as the classification read them, or encoded now from `graph`, the
+    /// graph classified.
+    pub(crate) fn resolved(
+        &self,
+        graph: &api::Graph<impl api::Phase>,
+    ) -> Result<std::sync::Arc<[[u8; 32]]>, Error> {
+        match &self.resolved {
+            Some(resolved) => Ok(std::sync::Arc::clone(resolved)),
+            None => resolved::digests(graph, &self.outcomes, &self.definitions),
+        }
     }
 
     pub(crate) fn into_contract(
@@ -5054,6 +5211,7 @@ impl ClassifiedParts {
                 canonical: std::sync::Arc::clone(bytes),
                 fingerprint: contract::fingerprint::Fingerprint(Sha256::digest(bytes).into()),
                 allocation,
+                resolved: None,
             })
         })()
     }
@@ -5371,8 +5529,12 @@ impl<'names> Names<'names> {
 /// error enum) is unavailable by itself, as a field Rawr cannot hold is. The
 /// struct or enum stays, and a struct or variant that lost a field cannot be
 /// built. A field's type is nameable when every definition in it is an
-/// exported struct or enum, so the verdict does not lean on fields.
-fn drop_unnameable_fields(context: &Context<'_, impl api::Phase>, plans: &mut [DefinitionPlan]) {
+/// exported struct or enum, so the verdict does not lean on fields. Gives,
+/// for each plan, the position of each field it lost.
+fn drop_unnameable_fields(
+    context: &Context<'_, impl api::Phase>,
+    plans: &mut [DefinitionPlan],
+) -> Vec<Vec<u32>> {
     let graph = context.graph;
     use representability::Representability as R;
     let mut exported = std::collections::BTreeSet::new();
@@ -5403,6 +5565,7 @@ fn drop_unnameable_fields(context: &Context<'_, impl api::Phase>, plans: &mut [D
         .zip(graph.surface_definitions())
         .map(|(model, definition)| (*definition, model))
         .collect::<std::collections::BTreeMap<_, _>>();
+    let mut dropped = Vec::with_capacity(plans.len());
     for plan in plans {
         let keep =
             |field: &representability::structure::Field| field_type_nameable(field.ty(), &nominal);
@@ -5432,12 +5595,13 @@ fn drop_unnameable_fields(context: &Context<'_, impl api::Phase>, plans: &mut [D
                 ty.unwrap_or_default().into(),
             )
         };
-        match &mut plan.representability {
+        dropped.push(match &mut plan.representability {
             R::Struct(structure) => structure.retain_fields(keep, lost),
             R::Enum(enumeration) => enumeration.retain_fields(keep, lost),
-            _ => {}
-        }
+            _ => Vec::new(),
+        });
     }
+    dropped
 }
 
 /// `ty` as Rust writes it in a message: each definition by its own name,
@@ -5678,7 +5842,7 @@ fn enforce_nameability(
     context: &Context<'_, impl api::Phase>,
     plans: &[DefinitionPlan],
     outcomes: &mut [OutcomeRecord],
-) -> Result<(), Error> {
+) -> Result<Vec<Vec<u32>>, Error> {
     context.scratch_arrays::<crate::surface::identity::Definition>(plans.len(), 2)?;
     let mut names = Names::new(context, plans);
     names
@@ -5689,16 +5853,26 @@ fn enforce_nameability(
         .resolved
         .try_reserve_exact(plans.len())
         .map_err(|_| Error::Allocation)?;
-    for outcome in outcomes {
-        enforce_outcome_nameability(context, &mut names, outcome)?;
-    }
-    Ok(())
+    outcomes
+        .iter_mut()
+        .map(|outcome| {
+            let mut rejected = Vec::new();
+            enforce_outcome_nameability(context, &mut names, outcome, &mut 0, &mut rejected)?;
+            Ok(rejected)
+        })
+        .collect()
 }
 
+/// Reject `outcome`, and each associated outcome under it, whose types
+/// Rawr code can't name, noting each one's place in `rejected`: `place`
+/// counts the outcomes met, the outcome first and then each associated one
+/// in order.
 fn enforce_outcome_nameability(
     context: &Context<'_, impl api::Phase>,
     names: &mut Names<'_>,
     outcome: &mut OutcomeRecord,
+    place: &mut u32,
+    rejected: &mut Vec<u32>,
 ) -> Result<(), Error> {
     names.visiting.clear();
     names.resolved.clear();
@@ -5729,9 +5903,13 @@ fn enforce_outcome_nameability(
                 ),
             )));
     }
+    if !nameable {
+        rejected.push(*place);
+    }
+    *place += 1;
     for implementation in &mut outcome.implementations {
         for associated in &mut implementation.associated {
-            enforce_outcome_nameability(context, names, associated)?;
+            enforce_outcome_nameability(context, names, associated, place, rejected)?;
         }
     }
     Ok(())

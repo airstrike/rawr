@@ -123,6 +123,12 @@ impl Contract<Classified> {
         &self.canonical
     }
 
+    /// What a facade reads of each outcome, by digest, in outcome order.
+    #[cfg(test)]
+    pub(crate) fn resolved(&self) -> Result<std::sync::Arc<[[u8; 32]]>, crate::classify::Error> {
+        crate::classify::resolved_digests(&self.graph, &self.outcomes, &self.definitions)
+    }
+
     /// Iterate over exactly one closed outcome per selected export path.
     pub fn outcomes(&self) -> impl ExactSizeIterator<Item = crate::classify::Outcome<'_>> {
         self.outcomes

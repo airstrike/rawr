@@ -44,13 +44,16 @@ use crate::extract::engine::home;
 use crate::surface::facade::contribution::{Contributions, Owner};
 
 /// The format of a records entry's file: bump it when what a record holds
-/// changes. 2: an entry is a stack of layers (#2224).
-const RECORDS_SCHEMA: u32 = 2;
+/// changes. 2: an entry is a stack of layers (#2224). 3: a record keeps
+/// its item's canonical bytes (#2221).
+const RECORDS_SCHEMA: u32 = 3;
 /// The format of a facade entry's file: bump it when what a contribution
 /// or a header unit holds changes. 2: the entry keeps its plan's header
 /// units (#2222). 3: an entry is a stack of layers (#2224), and a
 /// contribution of a path naming no definition keeps the path (#2233).
-const FACADE_SCHEMA: u32 = 3;
+/// 4: a contribution is kept by the digest of its outcome's canonical bytes
+/// and its plans' (#2221).
+const FACADE_SCHEMA: u32 = 4;
 /// The project's own entry, under its classified directory.
 const PROJECT: &str = "project";
 

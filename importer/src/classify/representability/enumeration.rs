@@ -334,28 +334,36 @@ impl Plan {
 
     /// Drop the variant fields `keep` refuses. A variant that lost one cannot
     /// be built, as with a private field, and `written` names the first one
-    /// it lost.
+    /// it lost. The position of each field any lost, counted across the
+    /// variants in order.
     pub(crate) fn retain_fields(
         &mut self,
         mut keep: impl FnMut(&super::structure::Field) -> bool,
         mut written: impl FnMut(&super::structure::Field) -> super::structure::Unsupported,
-    ) {
+    ) -> Vec<u32> {
+        let mut dropped = Vec::new();
+        let mut position = 0;
         for variant in &mut self.variants {
-            let before = variant.fields.len();
+            let before = dropped.len();
             let mut fields = std::mem::take(&mut variant.fields).into_vec();
             let mut unsupported = variant.unsupported.take();
             fields.retain(|field| {
                 let kept = keep(field);
-                if !kept && unsupported.is_none() {
-                    unsupported = Some(written(field));
+                if !kept {
+                    dropped.push(position);
+                    if unsupported.is_none() {
+                        unsupported = Some(written(field));
+                    }
                 }
+                position += 1;
                 kept
             });
             variant.unsupported = unsupported;
-            if fields.len() != before {
+            if dropped.len() != before {
                 variant.constructible = false;
             }
             variant.fields = fields.into_boxed_slice();
         }
+        dropped
     }
 }

@@ -1297,17 +1297,19 @@ impl Plan {
         parts: &crate::classify::ClassifiedParts,
         earlier: &[&contribution::Contributions],
     ) -> Result<(Box<[u8]>, contribution::Contributions), super::Error> {
-        let (bytes, contributions) = Self::encode_outcomes(graph, parts.outcomes(), Some(earlier))?;
+        let resolved = parts.resolved(graph).map_err(|_| super::Error::Encoding)?;
+        let (bytes, contributions) =
+            Self::encode_outcomes(graph, parts.outcomes(), Some((earlier, &resolved)))?;
         Ok((bytes, contributions.unwrap_or_default()))
     }
 
-    /// The plan of `outcomes`. With `earlier`, an outcome whose
-    /// contribution is kept there takes it, and the plan's contributions
-    /// are given.
+    /// The plan of `outcomes`. With `earlier`, and what a facade reads of
+    /// each outcome by digest, an outcome whose contribution is kept there
+    /// takes it, and the plan's contributions are given.
     fn encode_outcomes<'a>(
         graph: &crate::api::Graph<impl crate::api::Phase>,
         outcomes: impl ExactSizeIterator<Item = crate::classify::Outcome<'a>>,
-        earlier: Option<&[&contribution::Contributions]>,
+        earlier: Option<(&[&contribution::Contributions], &[[u8; 32]])>,
     ) -> Result<(Box<[u8]>, Option<contribution::Contributions>), super::Error> {
         let mut generated = earlier.map(|_| contribution::Contributions::default());
         #[cfg(not(target_arch = "wasm32"))]
@@ -1319,7 +1321,7 @@ impl Plan {
         // whose header is written once every type is in (D604).
         let mut named_traits = Vec::<contribution::NamedTrait>::new();
         let mut building = Vec::<contribution::Building>::new();
-        for outcome in outcomes {
+        for (position, outcome) in outcomes.enumerate() {
             // A crate whose every item is left out still has its facade,
             // with nothing in it: the program's path into the crate finds
             // its module and says why the item can't be used yet (#1267).
@@ -1335,8 +1337,8 @@ impl Plan {
                 }
             };
             let contribution = match (earlier, &mut generated) {
-                (Some(earlier), Some(generated)) => {
-                    let digest = outcome.resolved_digest();
+                (Some((earlier, resolved)), Some(generated)) => {
+                    let digest = *resolved.get(position).ok_or(super::Error::Encoding)?;
                     let kept = earlier.iter().find_map(|earlier| earlier.get(digest));
                     let contribution = match kept {
                         Some(kept) => std::sync::Arc::clone(kept),
@@ -1659,7 +1661,7 @@ impl Plan {
         // unit taken from an earlier plan where it reads the same.
         let mut heads = headers::Writer::new(
             graph,
-            earlier.map(|earlier| earlier.iter().map(|earlier| earlier.headers()).collect()),
+            earlier.map(|(earlier, _)| earlier.iter().map(|earlier| earlier.headers()).collect()),
         );
         for facade in &mut facades {
             let declared = facade
@@ -1719,7 +1721,7 @@ impl Plan {
         let sites = sites::sites(
             graph,
             earlier
-                .map(|earlier| {
+                .map(|(earlier, _)| {
                     earlier
                         .iter()
                         .map(|earlier| earlier.sites())
