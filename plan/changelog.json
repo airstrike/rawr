@@ -4,14 +4,19 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
-    "entries": [
-      {"text":"`rawr mcp inspect` prints each binding by its declared type: a tuple as a tuple, an `Ordering` as its variant, a `u64` and an `f32` as their kind.","issues":[512]},
-      {"text":"`rawr mcp` names each frame by its Rust path (`app::Counter::update`, `app::run::{{closure}}`), and leaves out frames the compiler wrote.","issues":[573]},
-      {"text":"`rawr mcp inspect` reads `self` while an expression on it runs, or says it is borrowed there, reads a caller's `self` during a call on a value it made, and says why a frame or a crate value can't be read instead of leaving it out or printing `NativeHandle`.","issues":[541,575,533]},
-      {"text":"`rawr mcp inspect` reads an iced app's state paused in `update` and in `view`.","issues":[532]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.4.20",
+      "date": "2026-11-18",
+      "entries": [
+        {"text":"`rawr mcp inspect` prints each binding by its declared type: a tuple as a tuple, an `Ordering` as its variant, a `u64` and an `f32` as their kind.","issues":[512]},
+        {"text":"`rawr mcp` names each frame by its Rust path (`app::Counter::update`, `app::run::{{closure}}`), and leaves out frames the compiler wrote.","issues":[573]},
+        {"text":"`rawr mcp inspect` reads `self` while an expression on it runs, or says it is borrowed there, reads a caller's `self` during a call on a value it made, and says why a frame or a crate value can't be read instead of leaving it out or printing `NativeHandle`.","issues":[541,575,533]},
+        {"text":"`rawr mcp inspect` reads an iced app's state paused in `update` and in `view`.","issues":[532]}
+      ]
+    },
     {
       "version": "0.4.19",
       "date": "2026-11-18",

@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-18",
-  "version": "0.4.19",
+  "version": "0.4.20",
   "examples": {
     "running": 56,
     "total": 56,
@@ -9,16 +9,18 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
-      "entries": [
-        {"text":"`rawr mcp inspect` prints each binding by its declared type: a tuple as a tuple, an `Ordering` as its variant, a `u64` and an `f32` as their kind.","issues":[512]},
-        {"text":"`rawr mcp` names each frame by its Rust path (`app::Counter::update`, `app::run::{{closure}}`), and leaves out frames the compiler wrote.","issues":[573]},
-        {"text":"`rawr mcp inspect` reads `self` while an expression on it runs, or says it is borrowed there, reads a caller's `self` during a call on a value it made, and says why a frame or a crate value can't be read instead of leaving it out or printing `NativeHandle`.","issues":[541,575,533]},
-        {"text":"`rawr mcp inspect` reads an iced app's state paused in `update` and in `view`.","issues":[532]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.20",
+        "date": "2026-11-18",
+        "entries": [
+          {"text":"`rawr mcp inspect` prints each binding by its declared type: a tuple as a tuple, an `Ordering` as its variant, a `u64` and an `f32` as their kind.","issues":[512]},
+          {"text":"`rawr mcp` names each frame by its Rust path (`app::Counter::update`, `app::run::{{closure}}`), and leaves out frames the compiler wrote.","issues":[573]},
+          {"text":"`rawr mcp inspect` reads `self` while an expression on it runs, or says it is borrowed there, reads a caller's `self` during a call on a value it made, and says why a frame or a crate value can't be read instead of leaving it out or printing `NativeHandle`.","issues":[541,575,533]},
+          {"text":"`rawr mcp inspect` reads an iced app's state paused in `update` and in `view`.","issues":[532]}
+        ]
+      },
       {
         "version": "0.4.19",
         "date": "2026-11-18",
@@ -3409,7 +3411,7 @@
     {"issue":509,"title":"Rename the importer test fixtures' rawr-iced universe root","state":"open","category":"Health"},
     {"issue":510,"title":"inspect answers for programs with Rust dependencies","state":"closed","category":"Health","release":"0.3.52"},
     {"issue":511,"title":"inspect reads callers' frames","state":"closed","category":"Health","release":"0.3.54"},
-    {"issue":512,"title":"inspect prints bindings by their declared type","state":"closed","category":"Health"},
+    {"issue":512,"title":"inspect prints bindings by their declared type","state":"closed","category":"Health","release":"0.4.20"},
     {"issue":513,"title":"A registered debugger copies every call's arguments into its call-stack frame","state":"closed","category":"Health","release":"0.3.59"},
     {"issue":514,"title":"Debug adapter: an editor reads a running program's values","state":"open","category":"Health"},
     {"issue":515,"title":"Build ?play's universe engine once per bot and give each snippet a copy","state":"closed","category":"No glue (D593)","release":"0.3.53"},
@@ -3429,8 +3431,8 @@
     {"issue":529,"title":"?play draws an iced frame at the program's own scale_factor","state":"closed","category":"No glue (D593)","release":"0.3.55"},
     {"issue":530,"title":"A shared iced snippet's link preview shows its frame","state":"open","category":"No glue (D593)"},
     {"issue":531,"title":"A dependency with both path and version is refused in a Rawr manifest","state":"open","category":"Divergences from rustc"},
-    {"issue":532,"title":"inspect on a real iced app's state in update and view","state":"closed","category":"Health"},
-    {"issue":533,"title":"inspect says why a runner value can't be read while its arena is lent","state":"closed","category":"Health"},
+    {"issue":532,"title":"inspect on a real iced app's state in update and view","state":"closed","category":"Health","release":"0.4.20"},
+    {"issue":533,"title":"inspect says why a runner value can't be read while its arena is lent","state":"closed","category":"Health","release":"0.4.20"},
     {"issue":534,"title":"inspect reads a free function's &mut parameter","state":"closed","category":"Health","release":"0.3.54"},
     {"issue":535,"title":"Show a paused program in wait and status","state":"closed","category":"Health","release":"0.3.54"},
     {"issue":536,"title":"The compiler's registry copies each facade definition it installs","state":"open","category":"Importer"},
@@ -3438,7 +3440,7 @@
     {"issue":538,"title":"Split stale from broken in the profile, checked and bridge invariants","state":"closed","category":"Importer","release":"0.3.56"},
     {"issue":539,"title":"Remove the remaining placeholders from error messages","state":"closed","category":"Divergences from rustc","release":"0.3.56"},
     {"issue":540,"title":"Check the debugger's caller-frame reads under Miri","state":"closed","category":"Health","release":"0.3.59"},
-    {"issue":541,"title":"inspect misses a receiver while it is lent to a method call on itself","state":"closed","category":"Health"},
+    {"issue":541,"title":"inspect misses a receiver while it is lent to a method call on itself","state":"closed","category":"Health","release":"0.4.20"},
     {"issue":542,"title":"A closure whose input is a borrowed program type fails to import","state":"closed","category":"No glue (D593)","release":"0.3.57"},
     {"issue":543,"title":"?play loops a GIF of a program that never settles, or notes that it was cut","state":"open","category":"No glue (D593)"},
     {"issue":544,"title":"Arity errors for functions and closures read as rustc's E0061","state":"closed","category":"Divergences from rustc","release":"0.3.57"},
@@ -3470,9 +3472,9 @@
     {"issue":570,"title":"gallery: E0599 boxed on an inferred type","state":"closed","category":"Divergences from rustc"},
     {"issue":571,"title":"The generator panics on a crate closure whose input is &mut Vec<String>","state":"open","category":"No glue (D593)"},
     {"issue":572,"title":"A module-qualified variant pattern names an unknown type","state":"open","category":"Divergences from rustc"},
-    {"issue":573,"title":"Debugger frames name methods by their internal symbol","state":"closed","category":"Health"},
+    {"issue":573,"title":"Debugger frames name methods by their internal symbol","state":"closed","category":"Health","release":"0.4.20"},
     {"issue":574,"title":"Check the engine under Miri's Stacked Borrows","state":"open","category":"Health"},
-    {"issue":575,"title":"Say why a caller frame has no bindings to read","state":"closed","category":"Health"},
+    {"issue":575,"title":"Say why a caller frame has no bindings to read","state":"closed","category":"Health","release":"0.4.20"},
     {"issue":576,"title":"imported_shape_metadata_stays_compact fails on main","state":"closed","category":"Health"},
     {"issue":577,"title":"rawr's store keeps every execution it ever ran","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.75"},
     {"issue":578,"title":"Infer a per-instance generic function's type arguments from a later use","state":"closed","category":"No glue (D593)","release":"0.3.176"},

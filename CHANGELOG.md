@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
+
+## 0.4.20 (2026-11-18)
+
 - `rawr mcp inspect` prints each binding by its declared type: a tuple as a tuple, an `Ordering` as its variant, a `u64` and an `f32` as their kind. (#512)
 - `rawr mcp` names each frame by its Rust path (`app::Counter::update`, `app::run::{{closure}}`), and leaves out frames the compiler wrote. (#573)
 - `rawr mcp inspect` reads `self` while an expression on it runs, or says it is borrowed there, reads a caller's `self` during a call on a value it made, and says why a frame or a crate value can't be read instead of leaving it out or printing `NativeHandle`. (#541, #575, #533)

@@ -1,6 +1,6 @@
 [package]
 name = "rawr-hot"
-version = "0.4.19"
+version = "0.4.20"
 rust-version = "1.95.0"
 edition = "2024"
 description = "Tells a program `rawr run` runs when it takes a new generation of its marked code; under cargo it never does"
