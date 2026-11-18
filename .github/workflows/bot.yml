@@ -209,12 +209,27 @@ jobs:
           printf '%s' "$password" | docker login registry.cloudflare.com -u "$(field username)" --password-stdin
           docker push "$IMAGE"
 
+  # The nightly run also builds rawr-web and the browser's universe, so the
+  # site's modules are never more than a day behind main without anyone
+  # dispatching playground.yml.
+  web:
+    if: github.event_name == 'schedule'
+    uses: ./.github/workflows/playground.yml
+    with:
+      deploy: false
+    secrets: inherit
+
   deploy:
-    needs: image
-    # A push has no inputs; it always deploys what it built.
-    if: inputs.deploy || github.event_name == 'schedule'
+    needs: [image, web]
+    # A push has no inputs; it always deploys what it built. The nightly run
+    # deploys its new modules even when the image is unchanged, which keeps
+    # the running image.
+    if: >-
+      !cancelled() && needs.web.result != 'failure' &&
+      (needs.image.result == 'success' || (github.event_name == 'schedule' && needs.image.result == 'skipped')) &&
+      (inputs.deploy || github.event_name == 'schedule')
     uses: ./.github/workflows/site.yml
     with:
       image: ${{ needs.image.outputs.ref }}
-      web: live
+      web: ${{ github.event_name == 'schedule' && 'artifact' || 'live' }}
     secrets: inherit
