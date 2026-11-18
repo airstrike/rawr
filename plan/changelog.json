@@ -4,7 +4,9 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
-    "entries": []
+    "entries": [
+      {"text":"A closure passed to a crate or std function that changes what it captures keeps each change across calls, so `std::future::poll_fn(move |cx| ..)` that counts its polls ends as it does under cargo rather than polling forever.","issues":[2208],"refs":[1152]}
+    ]
   },
   "releases": [
     {

@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only.
+- A closure passed to a crate or std function that changes what it captures keeps each change across calls, so `std::future::poll_fn(move |cx| ..)` that counts its polls ends as it does under cargo rather than polling forever. (#2208; part of #1152)
 
 ## 0.3.249 (2026-11-17)
 

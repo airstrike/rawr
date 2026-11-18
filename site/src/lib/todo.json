@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is every iced example, and every example in `examples/`, running under `rawr run` through importer-generated bindings only."],
+      "entries": [
+        {"text":"A closure passed to a crate or std function that changes what it captures keeps each change across calls, so `std::future::poll_fn(move |cx| ..)` that counts its polls ends as it does under cargo rather than polling forever.","issues":[2208],"refs":[1152]}
+      ]
+    },
     "releases": [
       {
         "version": "0.3.249",
@@ -4922,7 +4927,11 @@
     {"issue":2204,"title":"`tokio::select!` expands from tokio's own definition, so every form tokio accepts runs as tokio…","state":"closed","category":"Divergences from rustc","release":"0.3.249"},
     {"issue":2205,"title":"A match arm that an earlier arm makes unreachable is accepted, as rustc accepts it with a…","state":"closed","category":"Divergences from rustc","release":"0.3.249"},
     {"issue":2206,"title":"A crate macro that another of its macros calls through `$crate::` is extracted with it, and a…","state":"closed","category":"Divergences from rustc","release":"0.3.249"},
-    {"issue":2207,"title":"An assignment in parentheses, such as `(sum += v)`, is an expression of type `()`, and macro…","state":"closed","category":"Divergences from rustc","release":"0.3.249"}
+    {"issue":2207,"title":"An assignment in parentheses, such as `(sum += v)`, is an expression of type `()`, and macro…","state":"closed","category":"Divergences from rustc","release":"0.3.249"},
+    {"issue":2208,"title":"A closure passed to a crate or std function that changes what it captures keeps each change…","state":"closed","category":"Divergences from rustc"},
+    {"issue":2209,"title":"A crate function whose return type has no public path can't be called","state":"open","category":"Divergences from rustc"},
+    {"issue":2210,"title":"Const generic arguments in a type path, such as `Rotator::<3>` and `Rotator::<{ 0 + 1 }>`, don't parse","state":"open","category":"Divergences from rustc"},
+    {"issue":2211,"title":"A qualified path through a crate trait's generic associated type is refused","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -5697,7 +5706,10 @@
             {"number":2200,"title":"A `&mut` destructuring of a captured reference in a closure is refused or loses its place","state":"closed"},
             {"number":2201,"title":"A graph-time expansion's locals share one hygiene number","state":"open"},
             {"number":2202,"title":"A transcriber repetition starting with an operator inside a separated repetition doesn't expand","state":"open"},
-            {"number":2203,"title":"A generic type named through its module in a let annotation isn't read","state":"open"}
+            {"number":2203,"title":"A generic type named through its module in a let annotation isn't read","state":"open"},
+            {"number":2209,"title":"A crate function whose return type has no public path can't be called","state":"open"},
+            {"number":2210,"title":"Const generic arguments in a type path, such as `Rotator::<3>` and `Rotator::<{ 0 + 1 }>`, don't parse","state":"open"},
+            {"number":2211,"title":"A qualified path through a crate trait's generic associated type is refused","state":"open"}
           ],
           "milestone": "0.3"
         },
