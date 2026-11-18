@@ -771,3 +771,48 @@ fn provisional_decode_failure_releases_the_shared_checkpoint() {
     });
     fixture.retire();
 }
+
+/// Cargo's outputs are remembered for a root whose path Cargo's JSON and
+/// package ids spell differently, as the fixture's braced root is: the next
+/// preparation in another bundle runs no Cargo command, and its documents
+/// are the first ones with the root rewritten in each spelling (#2249).
+#[test]
+fn a_braced_root_reuses_remembered_cargo_outputs_in_another_bundle() {
+    let mut fixture = Fixture::open();
+    let cached = cached(&fixture);
+    let request = &mut fixture.request;
+    let mut first = None;
+    Fixture::reserve_parts(&fixture.context, &fixture.store, |layout, native| {
+        assert!(layout.root().to_str().unwrap().contains('{'));
+        prepare_scripted(request, &cached, layout, native, None)
+            .expect("the first preparation runs each command once")
+            .expect("the first preparation succeeds");
+        first = Some(layout.root().to_path_buf());
+        Ok(())
+    });
+    let request = &mut fixture.request;
+    Fixture::reserve_parts(&fixture.context, &fixture.store, |layout, _| {
+        assert_ne!(Some(layout.root()), first.as_deref(), "another bundle");
+        let (metadata, units) = documents(request, layout.final_form());
+        let harness = super::script(layout, Vec::new())
+            .run(|| {
+                request.prepare_fresh_harness_in(
+                    layout,
+                    &cached,
+                    &Limits::standard(),
+                    &Limits::standard(),
+                    unit::Allocation::begin(&Limits::standard()),
+                )
+            })
+            .expect("the remembered outputs run no Cargo command")?;
+        let documents = harness
+            .documents
+            .as_ref()
+            .expect("the preparation owns its documents");
+        assert_eq!(documents.metadata.bytes(), metadata.as_slice());
+        assert_eq!(documents.units.bytes(), units.as_slice());
+        drop(harness);
+        Ok(())
+    });
+    fixture.retire();
+}

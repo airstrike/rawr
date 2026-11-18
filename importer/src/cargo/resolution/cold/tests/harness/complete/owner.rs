@@ -36,6 +36,8 @@ fn script(
     cached: &cargo::CachedToolchain,
     layout: &Layout,
 ) -> test_launch::Script {
+    // The script answers every Cargo command a cold preparation runs.
+    crate::cargo::resolution::remembered::forget(cached.context.rawr());
     ATTEMPT.with(|slot| *slot.borrow_mut() = Some(layout.root().to_path_buf()));
     let native = process::Native::from_attestation(&cached.attestation);
     let (metadata, units) = documents_scaled(request, layout.final_form(), REGISTRY.get());

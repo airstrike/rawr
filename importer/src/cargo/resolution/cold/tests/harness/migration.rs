@@ -115,6 +115,8 @@ fn exercise() {
         .iter()
         .map(|name| fs::read(legacy.join(name)).unwrap())
         .collect();
+    // The locked commands run, as they do when Cargo's outputs aren't remembered.
+    crate::cargo::resolution::remembered::forget(cached.context.rawr());
     Fixture::reserve_parts(&fixture.context, &fixture.store, |layout, native| {
         let (metadata, units) = documents(request, layout.final_form());
         // The compatibility constructor still refuses Persisted before commands.

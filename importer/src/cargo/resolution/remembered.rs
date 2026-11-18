@@ -9,9 +9,10 @@
 //! bytes, so a `.rs` edit leaves them all unchanged. The provisional metadata
 //! is read only for the internal recipe it seals, so the recipe is kept in its
 //! place (#1837). The others name the bundle they were produced in, so a reuse
-//! rewrites that bundle's root to the new one. Anything else (a new request, a
-//! changed manifest, an added target, an unusual root path) runs Cargo as
-//! before.
+//! rewrites that bundle's root to the new one, in each spelling Cargo gives
+//! it: a JSON string's text for a path, and a percent-encoded `file://` URL
+//! inside a package id. Anything else (a new request, a changed manifest, an
+//! added target) runs Cargo as before.
 //!
 //! The demand is not part of the request here: it changes what the probe
 //! extracts, never what Cargo sees. The outputs are also kept in the
@@ -43,7 +44,7 @@ pub(in crate::cargo) struct Outputs {
 
 struct Entry {
     base: [u8; 32],
-    root: String,
+    root: Spelled,
     roots: Box<[PathBuf]>,
     determinants: [u8; 32],
     outputs: Outputs,
@@ -72,7 +73,7 @@ fn encode(entry: &Entry) -> Option<Vec<u8>> {
     };
     frame(FORMAT);
     frame(&entry.base);
-    frame(entry.root.as_bytes());
+    frame(entry.root.text.as_bytes());
     frame(&(entry.roots.len() as u64).to_le_bytes());
     for root in &entry.roots {
         frame(root.to_str()?.as_bytes());
@@ -101,7 +102,7 @@ fn decode(mut bytes: &[u8]) -> Option<Entry> {
         return None;
     }
     let base = field()?.try_into().ok()?;
-    let root = std::str::from_utf8(field()?).ok()?.to_owned();
+    let root = Spelled::of(Path::new(std::str::from_utf8(field()?).ok()?))?;
     let count = u64::from_le_bytes(field()?.try_into().ok()?);
     let roots = (0..count)
         .map(|_| Some(PathBuf::from(std::str::from_utf8(field()?).ok()?)))
@@ -172,7 +173,7 @@ pub(in crate::cargo) fn base(parts: &[&[u8]]) -> [u8; 32] {
 /// rewritten to name `root`: this process's, else the one kept under the
 /// project's Rawr directory `rawr`.
 pub(in crate::cargo) fn lookup(base: &[u8; 32], root: &Path, rawr: &Path) -> Option<Outputs> {
-    let new = plain(root)?;
+    let new = Spelled::of(root)?;
     let known = REMEMBERED
         .lock()
         .ok()?
@@ -193,13 +194,28 @@ pub(in crate::cargo) fn lookup(base: &[u8; 32], root: &Path, rawr: &Path) -> Opt
     if determinants(&entry.roots, root, None)? != entry.determinants {
         return None;
     }
-    let rewrite = |bytes: &[u8]| replace(bytes, entry.root.as_bytes(), new.as_bytes());
+    let rewrite = |bytes: &[u8]| entry.root.rewrite(bytes, &new);
     Some(Outputs {
         internal: entry.outputs.internal.clone(),
         candidate: rewrite(&entry.outputs.candidate),
         lock: entry.outputs.lock.clone(),
         units: rewrite(&entry.outputs.units),
     })
+}
+
+/// Forget every remembered request, in this process and under the
+/// project's Rawr directory `rawr`, so the next preparation asks Cargo.
+#[cfg(test)]
+pub(in crate::cargo) fn forget(rawr: &Path) {
+    if let Ok(mut remembered) = REMEMBERED.lock() {
+        remembered.clear();
+    }
+    match std::fs::remove_dir_all(rawr.join(DIRECTORY)) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            panic!("the remembered outputs are removed: {error}")
+        }
+        _ => {}
+    }
 }
 
 /// When Cargo started reading the files of one request.
@@ -243,13 +259,15 @@ pub(in crate::cargo) fn remember(
     rawr: &Path,
     started: Started,
 ) {
-    let Some(text) = plain(root) else { return };
+    let Some(spelled) = Spelled::of(root) else {
+        return;
+    };
     let Some(determinants) = determinants(roots, root, Some(started)) else {
         return;
     };
     let entry = Arc::new(Entry {
         base,
-        root: text.to_owned(),
+        root: spelled,
         roots: roots.into(),
         determinants,
         outputs,
@@ -262,26 +280,70 @@ pub(in crate::cargo) fn remember(
     }
 }
 
-/// A root whose text appears verbatim in Cargo's JSON and package ids.
-fn plain(root: &Path) -> Option<&str> {
-    let text = root.to_str()?;
-    (text.len() > 1
-        && text
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'.' | b'_' | b'-')))
-    .then_some(text)
+/// A bundle root as Cargo's JSON spells it: the text of a path string, and
+/// the `file://` URL a path package's id holds, whose path segments are
+/// percent-encoded.
+struct Spelled {
+    text: String,
+    path: String,
+    url: String,
 }
 
-fn replace(bytes: &[u8], old: &[u8], new: &[u8]) -> Box<[u8]> {
-    let mut output = Vec::with_capacity(bytes.len());
-    let mut rest = bytes;
-    while let Some(index) = rest.windows(old.len()).position(|window| window == old) {
-        output.extend_from_slice(&rest[..index]);
-        output.extend_from_slice(new);
-        rest = &rest[index + old.len()..];
+impl Spelled {
+    /// `None` for a root no rewrite names exactly: one that isn't Unicode
+    /// or absolute, or the filesystem root, whose text begins every path.
+    fn of(root: &Path) -> Option<Self> {
+        let text = root.to_str()?;
+        if text.len() <= 1 || !root.is_absolute() {
+            return None;
+        }
+        let quoted = serde_json::to_string(text).ok()?;
+        let path = quoted.get(1..quoted.len() - 1)?.to_owned();
+        let mut url = String::from("file://");
+        for component in root.components().skip(1) {
+            url.push('/');
+            for &byte in component.as_os_str().as_encoded_bytes() {
+                if segment_escaped(byte) {
+                    url.push_str(&format!("%{byte:02X}"));
+                } else {
+                    url.push(char::from(byte));
+                }
+            }
+        }
+        Some(Self {
+            text: text.to_owned(),
+            path,
+            url,
+        })
     }
-    output.extend_from_slice(rest);
-    output.into_boxed_slice()
+
+    /// `bytes` with each spelling of this root replaced by `new`'s same
+    /// spelling. A URL is matched with its scheme, which no path starts
+    /// with, so a root both spellings write alike still takes the new
+    /// root's own spelling in each place.
+    fn rewrite(&self, bytes: &[u8], new: &Self) -> Box<[u8]> {
+        let spellings = [(&self.url, &new.url), (&self.path, &new.path)];
+        let mut output = Vec::with_capacity(bytes.len());
+        let mut rest = bytes;
+        'scan: while let Some((&byte, next)) = rest.split_first() {
+            for (old, new) in spellings {
+                if let Some(after) = rest.strip_prefix(old.as_bytes()) {
+                    output.extend_from_slice(new.as_bytes());
+                    rest = after;
+                    continue 'scan;
+                }
+            }
+            output.push(byte);
+            rest = next;
+        }
+        output.into_boxed_slice()
+    }
+}
+
+/// Whether a file URL's path segment percent-encodes `byte`: a control, a
+/// non-ASCII byte, a space or one of the delimiters below.
+fn segment_escaped(byte: u8) -> bool {
+    !(0x20..0x7f).contains(&byte) || b" \"#<>?`{}/%\\".contains(&byte)
 }
 
 /// What Cargo reads besides the request: each package manifest, every
@@ -372,7 +434,30 @@ fn determinants(roots: &[PathBuf], harness: &Path, since: Option<Started>) -> Op
 
 #[cfg(test)]
 mod tests {
-    use super::{lookup, remember, Outputs, Started};
+    use super::{lookup, remember, Outputs, Spelled, Started};
+
+    /// A root's path text is a JSON string's and its URL is the one a file
+    /// URL gives it, so a rewrite between a plain root and one with a space,
+    /// braces, a quote, a percent sign or non-ASCII names each exactly
+    /// (#2249).
+    #[test]
+    fn a_root_is_rewritten_in_each_spelling_cargo_gives_it() {
+        let plain = std::path::Path::new("/store/executions/a/bundle");
+        let unusual = std::path::Path::new("/store/{home} \"x\"%/é/bundle");
+        let spell = |root: &std::path::Path| {
+            let url = url::Url::from_file_path(root).expect("an absolute root is a URL");
+            let path = serde_json::to_string(root).expect("a Unicode root encodes");
+            let path = path.trim_matches('"').to_owned();
+            format!("{{\"id\":\"path+{url}#p@0.1.0\",\"path\":\"{path}/src/lib.rs\"}}")
+        };
+        for (old, new) in [(plain, unusual), (unusual, plain)] {
+            let (spelled, renamed) = (Spelled::of(old).unwrap(), Spelled::of(new).unwrap());
+            let rewritten = spelled.rewrite(spell(old).as_bytes(), &renamed);
+            assert_eq!(std::str::from_utf8(&rewritten).unwrap(), spell(new));
+        }
+        assert!(Spelled::of(std::path::Path::new("/")).is_none());
+        assert!(Spelled::of(std::path::Path::new("relative/bundle")).is_none());
+    }
 
     /// A manifest modified after Cargo started reading leaves the outputs
     /// unsaved, so the next lookup misses; a source edited then does not
