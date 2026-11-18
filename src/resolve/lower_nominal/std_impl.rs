@@ -15,7 +15,7 @@ use crate::std_table::{self, Written};
 #[derive(Clone, Debug, Default)]
 pub(super) struct Substitution {
     types: BTreeMap<&'static str, Ty>,
-    lengths: BTreeMap<&'static str, usize>,
+    lengths: BTreeMap<&'static str, sequence::Length>,
 }
 
 /// An impl the solver selected.
@@ -590,7 +590,7 @@ fn bind(
                         substitution.lengths.insert(length, given_length);
                         true
                     }
-                    None => length.parse::<usize>().ok() == Some(given_length),
+                    None => length.parse::<usize>().ok() == given_length.fixed(),
                 };
                 fits && bind(solver, element, &given, parameters, substitution)
             }
@@ -691,8 +691,8 @@ fn instantiate<S: Solve>(
         },
         Written::Array(element, length) => {
             let length = match substitution.lengths.get(length) {
-                Some(length) => *length,
-                None => length.parse().ok()?,
+                Some(length) => length.clone(),
+                None => sequence::Length::Fixed(length.parse().ok()?),
             };
             Ty::Array {
                 element: Box::new(ty(solver, element)?),

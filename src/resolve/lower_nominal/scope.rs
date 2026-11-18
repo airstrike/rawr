@@ -2,7 +2,7 @@
 //! them, and the loops and branches they are read in.
 
 use super::ty::Ty;
-use super::{iterator, origin, pattern, ParsedExpr};
+use super::{iterator, origin, pattern, sequence, ParsedExpr};
 use crate::resolve::borrowck;
 use crate::{ImmutableString, Position, Span};
 use std::collections::BTreeSet;
@@ -78,7 +78,11 @@ pub(super) struct RecordFields {
 
 /// An array literal's elements, its array's repeat count and a `vec!`'s
 /// count expression (`[x; 3]`, `vec![x; n]`).
-pub(super) type ArrayElements = (Vec<ParsedExpr>, Option<usize>, Option<ParsedExpr>);
+pub(super) type ArrayElements = (
+    Vec<ParsedExpr>,
+    Option<sequence::Length>,
+    Option<ParsedExpr>,
+);
 
 /// A scope frame a statement's call opens (D558 tier 1): `outer` declares
 /// what keeps the frame, `inner` binds and opens it ahead of the statement,

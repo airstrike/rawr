@@ -916,7 +916,7 @@ impl Type {
         if let Some((element, length)) = ty.array_element() {
             return Ok(Self::array(
                 Self::from_resolved_in(element, model, parameters)?,
-                Some(length),
+                length.fixed(),
             ));
         }
         if let Some(element) = ty.box_element() {

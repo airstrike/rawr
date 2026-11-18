@@ -9,6 +9,7 @@ use super::{type_ref, Error, Parser, Ty};
 #[cfg(feature = "rust-import")]
 use crate::host::runtime::type_ref::Type;
 use crate::tokenizer::Token;
+use crate::ImmutableString;
 #[cfg(feature = "rust-import")]
 use crate::{Dynamic, RawrResult, Span};
 #[cfg(feature = "rust-import")]
@@ -16,11 +17,11 @@ use std::collections::BTreeSet;
 
 /// Which of Rust's sequence types a `Ty::Array` is. Each is its own type,
 /// as in Rust, and every one is an array at runtime.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 #[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(super) enum Kind {
     /// `[T; N]`, of its length.
-    Array(usize),
+    Array(Length),
     /// `Vec<T>`, which derefs to `[T]`.
     Vec,
     /// `[T]`, behind a reference or a box.
@@ -29,11 +30,81 @@ pub(super) enum Kind {
     Deque,
 }
 
+/// An array's length. A const parameter's (`[T; N]` of `const N: usize`)
+/// is substituted and inferred as a type argument is: a use of the item
+/// gives it a number, or an inference variable that unifying with another
+/// array's length settles.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
+pub(super) enum Length {
+    Fixed(usize),
+    Param(ImmutableString),
+    Infer(usize),
+}
+
+impl Length {
+    /// The length a const generic argument `ty` stands for: a number of
+    /// `Ty::Const`, a parameter or an inference variable. `None` for any
+    /// other type, which no length is.
+    pub(super) fn of_argument(ty: &Ty) -> Option<Self> {
+        match ty {
+            Ty::Const(value) => value.parse().ok().map(Self::Fixed),
+            Ty::Param(name) => Some(Self::Param(name.clone())),
+            Ty::Infer(id) => Some(Self::Infer(*id)),
+            _ => None,
+        }
+    }
+
+    /// This length as the const generic argument it is, which unifies and
+    /// substitutes as a type argument does.
+    pub(super) fn argument(&self) -> Ty {
+        match self {
+            Self::Fixed(length) => Ty::Const(length.to_string().into()),
+            Self::Param(name) => Ty::Param(name.clone()),
+            Self::Infer(id) => Ty::Infer(*id),
+        }
+    }
+
+    /// This length with `map` applied to it as a const generic argument;
+    /// itself when `map` gives what no length is.
+    pub(super) fn mapped(&self, map: impl FnOnce(&Ty) -> Ty) -> Self {
+        match self {
+            Self::Fixed(_) => self.clone(),
+            Self::Param(_) | Self::Infer(_) => {
+                Self::of_argument(&map(&self.argument())).unwrap_or_else(|| self.clone())
+            }
+        }
+    }
+
+    /// The number, once it is one.
+    pub(super) fn fixed(&self) -> Option<usize> {
+        match self {
+            Self::Fixed(length) => Some(*length),
+            Self::Param(_) | Self::Infer(_) => None,
+        }
+    }
+}
+
+impl std::fmt::Display for Length {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Fixed(length) => write!(f, "{length}"),
+            Self::Param(name) => write!(f, "{name}"),
+            // rustc writes a length it has yet to infer as `_`.
+            Self::Infer(_) => write!(f, "_"),
+        }
+    }
+}
+
 impl Kind {
     /// The element and kind of a header's sequence type: `Vec<T>`, `[T]`,
     /// `VecDeque<T>` or `[T; N]`.
     pub(super) fn of(ty: &type_ref::Type) -> Option<(&type_ref::Type, Self)> {
         if let Some((element, length)) = ty.array_element() {
+            let length = match length {
+                crate::item::type_ref::Length::Fixed(length) => Length::Fixed(length),
+                crate::item::type_ref::Length::Param(name) => Length::Param(name.into()),
+            };
             return Some((element, Self::Array(length)));
         }
         [
@@ -45,10 +116,20 @@ impl Kind {
         .find_map(|(element, kind)| Some((element?, kind)))
     }
 
-    /// An array's length; `None` for the others.
-    pub(super) fn length(self) -> Option<usize> {
+    /// `[T; length]`.
+    pub(super) fn array(length: usize) -> Self {
+        Self::Array(Length::Fixed(length))
+    }
+
+    /// Whether this is `[T; N]`, of any length.
+    pub(super) fn is_array(&self) -> bool {
+        matches!(self, Self::Array(_))
+    }
+
+    /// An array's length, once it is a number; `None` for the others.
+    pub(super) fn length(&self) -> Option<usize> {
         match self {
-            Self::Array(length) => Some(length),
+            Self::Array(length) => length.fixed(),
             Self::Vec | Self::Slice | Self::Deque => None,
         }
     }

@@ -171,7 +171,7 @@ pub(crate) fn matches_type(value: &Dynamic, ty: &type_ref::Type) -> bool {
     }
     if let Some((element, length)) = ty.array_element() {
         return value.as_array_ref().is_ok_and(|array| {
-            array.len() == length && array.iter().all(|value| matches_type(value, element))
+            length.admits(array.len()) && array.iter().all(|value| matches_type(value, element))
         });
     }
     // An iterator crossing a function boundary is the array of its items.

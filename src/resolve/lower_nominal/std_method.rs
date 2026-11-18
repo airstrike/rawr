@@ -390,7 +390,7 @@ pub(super) fn foreign_sequence_method(receiver: &Ty, member: &str) -> bool {
         sequence::Kind::Vec,
         sequence::Kind::Slice,
         sequence::Kind::Deque,
-        sequence::Kind::Array(0),
+        sequence::Kind::array(0),
     ]
     .into_iter()
     .filter(|other| std::mem::discriminant(other) != std::mem::discriminant(kind))
@@ -626,7 +626,7 @@ impl Known {
         {
             return Some(match std_table::top_level(inner, "; ") {
                 Some(at) => Ty::sequence(
-                    sequence::Kind::Array(inner[at + 2..].trim().parse().ok()?),
+                    sequence::Kind::array(inner[at + 2..].trim().parse().ok()?),
                     self.ty(&inner[..at])?,
                 ),
                 None => Ty::sequence(sequence::Kind::Slice, self.ty(inner)?),

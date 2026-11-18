@@ -329,12 +329,21 @@ impl<'a> Parser<'a> {
             kind: sequence::Kind::Vec,
         };
         self.compose(span(open, end), &array_ty, &parts);
-        let source = match (repeat, counted) {
+        let source = match (&repeat, counted) {
             (Some(count), _) => {
                 let value = elements.pop().expect("a repeat array has its value");
                 let items = self.temporary("repeat");
                 let mut source =
                     origin::Fragment::plain(format!("{{ let {items} = []; {items}.pad("));
+                // A const parameter's count is the value the item's use
+                // gives it, its witness.
+                let count = match count {
+                    sequence::Length::Param(name) => {
+                        self.capture_witnesses();
+                        witness_variable(name)
+                    }
+                    count => count.to_string(),
+                };
                 source.push_text(format!("{count}, "));
                 source.push(value.rendered_source());
                 source.push_text(format!("); {items} }}"));
@@ -387,7 +396,9 @@ impl<'a> Parser<'a> {
             }
         };
         let kind = match array {
-            Some(_) => sequence::Kind::Array(repeat.unwrap_or(elements.len())),
+            Some(_) => {
+                sequence::Kind::Array(repeat.unwrap_or(sequence::Length::Fixed(elements.len())))
+            }
             None => sequence::Kind::Vec,
         };
         Ok(self.operator_expr(source, Ty::sequence(kind, element), span(open, end)))
@@ -589,7 +600,16 @@ impl<'a> Parser<'a> {
 
     /// An array length or repeat count: an integer literal, or a `const`
     /// whose value is one (`[0; N]`, `[T; N]`), as rustc evaluates it.
-    pub(super) fn parse_array_length(&mut self, what: &str) -> Result<usize, Error> {
+    pub(super) fn parse_array_length(&mut self, what: &str) -> Result<sequence::Length, Error> {
+        // `N` of `const N: usize`: the value each use of the item gives.
+        if let Token::Identifier(name) = self.peek()
+            && self.constants.contains_key(name.as_str())
+            && !self.bindings.contains_key(name.as_str())
+        {
+            let name = ImmutableString::from(name.as_str());
+            self.next();
+            return Ok(sequence::Length::Param(name));
+        }
         let (token, position) = self.next();
         let value = match &token {
             Token::IntegerConstant(length) => Some(*length),
@@ -610,6 +630,7 @@ impl<'a> Parser<'a> {
         };
         value
             .and_then(|value| usize::try_from(value).ok())
+            .map(sequence::Length::Fixed)
             .ok_or_else(|| Error::UnsupportedNominalSyntax {
                 construct: format!("{what} other than an integer literal or a `const` of one")
                     .into(),

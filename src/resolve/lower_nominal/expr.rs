@@ -1398,7 +1398,7 @@ impl<'a> Parser<'a> {
             self.next();
             let (member, member_span) = self.expect_member_name()?;
             // `Vec::len`, `Vec::is_empty(&v)`.
-            let owner = Ty::sequence(kind, self.inference.fresh());
+            let owner = Ty::sequence(kind.clone(), self.inference.fresh());
             let written = match kind {
                 sequence::Kind::Deque => "VecDeque",
                 _ => "Vec",

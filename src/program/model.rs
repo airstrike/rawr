@@ -741,11 +741,22 @@ impl Model {
             type_ref::Type::Path(_) if ty.weak_element().is_some() => {
                 Ok(crate::resolve::lower_nominal::counted::weak())
             }
-            type_ref::Type::Path(_) if let Some((element, length)) = ty.array_element() => (0
-                ..length)
-                .map(|_| self.default_for_type(element, active))
-                .collect::<Result<crate::Array, _>>()
-                .map(Dynamic::from_array),
+            type_ref::Type::Path(_)
+                if let Some((element, length)) = ty.array_element()
+                    && let Some(length) = length.fixed() =>
+            {
+                (0..length)
+                    .map(|_| self.default_for_type(element, active))
+                    .collect::<Result<crate::Array, _>>()
+                    .map(Dynamic::from_array)
+            }
+            // `[T; N]` of a const parameter has no `Default`, as in Rust.
+            type_ref::Type::Path(_) if ty.array_element().is_some() => {
+                Err(construction::Error::ValueType {
+                    expected: type_name(ty),
+                    actual: "no executable Default implementation".into(),
+                })
+            }
             type_ref::Type::Reference { .. } => Err(construction::Error::ValueType {
                 expected: type_name(ty),
                 actual: "no executable Default implementation".into(),
@@ -920,7 +931,7 @@ impl Model {
             let array = value
                 .as_array_ref()
                 .ok()
-                .filter(|array| array.len() == length)
+                .filter(|array| length.admits(array.len()))
                 .ok_or_else(|| construction::Error::ValueType {
                     expected: type_name(expected),
                     actual: value.type_name().into(),

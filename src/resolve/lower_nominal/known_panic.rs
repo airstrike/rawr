@@ -325,7 +325,7 @@ impl Parser<'_> {
     /// an index known into an array of a known length.
     pub(super) fn note_known_index(&mut self, array: &Ty, index: Span, at: Span) {
         let Ty::Array {
-            kind: sequence::Kind::Array(length),
+            kind: sequence::Kind::Array(sequence::Length::Fixed(length)),
             ..
         } = self.inference.resolve(array)
         else {

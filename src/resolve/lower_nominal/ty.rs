@@ -1936,6 +1936,10 @@ pub(super) fn contains(ty: &Ty, leaf: &dyn Fn(&Ty) -> bool) -> bool {
             | Ty::Range(target)
             | Ty::InclusiveOf(target)
             | Ty::Cell(_, target) => inside(target),
+            Ty::Array {
+                element,
+                kind: sequence::Kind::Array(length),
+            } => inside(&length.argument()) || inside(element),
             Ty::Array { element, .. } | Ty::Option(element) => inside(element),
             Ty::Result(ok, err) => inside(ok) || inside(err),
             Ty::Tuple(members) | Ty::Keyed(_, members) => members.iter().any(inside),
