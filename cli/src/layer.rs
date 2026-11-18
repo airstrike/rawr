@@ -421,10 +421,11 @@ impl Store {
     }
 }
 
-/// Rawr's home: `$RAWR_HOME`, else `$CARGO_HOME/rawr`, else `~/.cargo/rawr`.
+/// Rawr's home: `$RAWR_HOME`, against the current directory when relative,
+/// else `$CARGO_HOME/rawr`, else `~/.cargo/rawr`.
 fn home() -> Option<PathBuf> {
     std::env::var_os("RAWR_HOME")
-        .map(PathBuf::from)
+        .map(|home| std::path::absolute(&home).unwrap_or_else(|_| home.into()))
         .or_else(|| std::env::var_os("CARGO_HOME").map(|home| Path::new(&home).join("rawr")))
         .or_else(|| {
             std::env::var_os("HOME").map(|home| Path::new(&home).join(".cargo").join("rawr"))

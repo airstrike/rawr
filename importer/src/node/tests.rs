@@ -3553,6 +3553,70 @@ fn fresh_build_replaces_a_stale_entry_at_its_action() {
     fs::remove_dir_all(root).expect("the stale-action fixture retires");
 }
 
+/// A fresh bundled build whose action already holds an older bundled entry
+/// that no longer checks retires that entry and publishes in its place, as
+/// a plain one does (#615).
+#[cfg(feature = "test-fixtures")]
+#[test]
+fn fresh_bundled_build_replaces_a_stale_entry_at_its_action() {
+    static CHANGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    static OLDER: std::sync::OnceLock<Box<[u8]>> = std::sync::OnceLock::new();
+    let root = temporary("discoverable-stale-bundled-action");
+    let context = prepare_fixture(&root);
+    let store = context.open_store().expect("the typed store opens");
+    let counts = Counts::default();
+    let recipe = context
+        .discover::<BundleValue>(b"discoverable-stale-bundled-action")
+        .expect("the discoverable recipe seals");
+    // Both values discover the same inputs, so they share one action, and
+    // the older value stops checking once its external fact changes.
+    let validation_store = store.clone();
+    let validate = move |candidate: &BundleValue| {
+        let bytes = candidate.encode()?;
+        if CHANGED.load(Ordering::Relaxed) && OLDER.get() == Some(&bytes) {
+            return Err(Error::Codec("fixture external fact changed"));
+        }
+        candidate.validate_published(&validation_store)?;
+        retain_fixture_bytes(b"same-inputs")
+    };
+    let execute = |attempt: crate::store::bundle::Attempt| {
+        fs::write(attempt.generated().join("input"), b"generated")
+            .map_err(|error| Error::Transform(error.to_string().into()))?;
+        let value = BundleValue::capture(attempt.reference());
+        let pending = attempt.seal(Box::from(BundleValue::SEAL))?;
+        super::Bundled::validate(value, pending, |value, pending| {
+            value.validate_pending(pending)?;
+            retain_fixture_bytes(b"same-inputs")
+        })
+    };
+    let older = Evaluator::new(&store, &counts)
+        .discover_bundled(&recipe, validate.clone(), execute)
+        .expect("the older entry publishes");
+    let action = older.receipt().action();
+    OLDER.set(older.value().encode().unwrap()).unwrap();
+    drop(older);
+    CHANGED.store(true, Ordering::Relaxed);
+    let fresh = Evaluator::new(&store, &counts)
+        .discover_bundled(&recipe, validate.clone(), execute)
+        .expect("the fresh build replaces the stale entry");
+    assert_eq!(fresh.receipt().action(), action);
+    let replacement = fresh.value().encode().unwrap();
+    assert!(OLDER.get() != Some(&replacement));
+    drop(fresh);
+    let replayed = Evaluator::new(&store, &counts)
+        .discover_bundled(&recipe, validate, |_| {
+            Err(Error::State("the replaced entry is reused"))
+        })
+        .expect("the replacement is found");
+    assert_eq!(replayed.value().encode().unwrap(), replacement);
+    drop(replayed);
+    store
+        .fixture_physical_inventory()
+        .expect("the store's inventory is whole");
+    store.retire_fixture().expect("the store retires");
+    fs::remove_dir_all(root).expect("the stale-action fixture retires");
+}
+
 #[test]
 fn same_discoverable_key_contenders_execute_and_publish_exactly_once() {
     let root = temporary("discoverable-contenders");
@@ -5737,4 +5801,112 @@ fn a_store_evicts_plain_entries_an_older_rawr_wrote_when_it_opens() {
         .expect("the store's inventory is whole");
     store.retire_fixture().expect("the store retires");
     fs::remove_dir_all(root).expect("the fixture retires");
+}
+
+/// One schema's value of the checked kind, which holds several value types.
+struct Checked<const SCHEMA: u32>(Box<[u8]>);
+
+impl<const SCHEMA: u32> Value for Checked<SCHEMA> {
+    const KIND: Kind = Kind::Checked;
+    const SCHEMA: u32 = SCHEMA;
+
+    fn encode(&self) -> Result<Box<[u8]>, Error> {
+        retain_fixture_bytes(&self.0)
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, Error> {
+        retain_fixture_bytes(bytes).map(Self)
+    }
+}
+
+/// A kind that holds several value types keeps an entry of each one's
+/// current schema and evicts one of any other schema, which an older rawr
+/// wrote, when the store opens (#631).
+#[test]
+fn a_store_keeps_each_current_schema_of_a_kind_and_evicts_older_ones() {
+    const CHECKED: u32 = <crate::checked::Product as Value>::SCHEMA;
+    const RESOLVED: u32 = <crate::composition::Resolved as Value>::SCHEMA;
+    const OLD: u32 = 0x5245_0000;
+    let root = temporary("store-unreadable-schemas");
+    let context = prepare_fixture(&root);
+    let store = context.open_store().expect("the store opens");
+    let evaluator = Evaluator::new(&store, &crate::metrics::Current);
+    let checked = evaluator
+        .direct(
+            &context
+                .direct::<Checked<CHECKED>>(b"checked-current")
+                .expect("the checked recipe seals"),
+            || Ok(Checked(Box::from(b"checked".as_slice()))),
+        )
+        .expect("the checked entry publishes");
+    let resolved = evaluator
+        .direct(
+            &context
+                .direct::<Checked<RESOLVED>>(b"resolved-current")
+                .expect("the resolved recipe seals"),
+            || Ok(Checked(Box::from(b"resolved".as_slice()))),
+        )
+        .expect("the resolved entry publishes");
+    let old = evaluator
+        .direct(
+            &context
+                .direct::<Checked<OLD>>(b"checked-old")
+                .expect("the old recipe seals"),
+            || Ok(Checked(Box::from(b"old".as_slice()))),
+        )
+        .expect("the old entry publishes");
+    let action = |key: super::ActionKey| {
+        store
+            .root()
+            .join("actions/checked")
+            .join(super::STORAGE_DIRECTORY)
+            .join(key.directory())
+    };
+    let old_action = action(old.receipt().action());
+    let current = [
+        action(checked.receipt().action()),
+        action(resolved.receipt().action()),
+    ];
+    for path in current.iter().chain([&old_action]) {
+        assert!(path.exists(), "{} is published", path.display());
+    }
+    drop((evaluator, checked, resolved, old));
+    drop(store);
+
+    // The next run opens the store.
+    let store = context.open_store().expect("the store opens");
+    assert!(!old_action.exists(), "the old entry evicts");
+    for path in &current {
+        assert!(path.exists(), "{} stays", path.display());
+    }
+    store
+        .fixture_physical_inventory()
+        .expect("the store's inventory is whole");
+    store.retire_fixture().expect("the store retires");
+    fs::remove_dir_all(root).expect("the fixture retires");
+}
+
+/// A failed evaluation whose reservation also fails to release reports
+/// the evaluation's own failure, a full disk's I/O error among them, and
+/// then the release's (#641, D664).
+#[test]
+fn a_failed_release_reports_the_failure_it_follows() {
+    let failure = Error::Importer(Box::new(crate::Error::Io {
+        operation: "write build output",
+        path: PathBuf::from("/fixture/output"),
+        source: std::io::Error::from(std::io::ErrorKind::StorageFull),
+    }));
+    let cleanup = Error::State("fixture reservation release");
+    let shown = [failure.to_string(), cleanup.to_string()];
+    let error = Error::Cleanup {
+        failure: Box::new(failure),
+        cleanup: Box::new(cleanup),
+    };
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "{}; releasing its build reservation also failed: {}",
+            shown[0], shown[1]
+        )
+    );
 }
