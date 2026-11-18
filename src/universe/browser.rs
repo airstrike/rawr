@@ -121,7 +121,16 @@ fn sleep(duration: std::time::Duration) {
     }
     let milliseconds = duration.as_secs_f64() * 1000.0;
     let timer = js_sys::Promise::new(&mut |resolve, _| set_timeout(&resolve, milliseconds));
-    let _ = js_sys::futures::jspi_block_on_promise(&timer);
+    // A page without JSPI refuses to suspend, with its reason: the program
+    // stops here, and the reason is what stopped it.
+    if let Err(reason) = js_sys::futures::jspi_block_on_promise(&timer) {
+        let reason = reason
+            .as_string()
+            .unwrap_or_else(|| "rawr: this page can't suspend the program".to_owned());
+        written().panic = Some(reason.clone());
+        MAIN.set(false);
+        wasm_bindgen::throw_str(&reason);
+    }
     SUSPENDABLE.set(true);
 }
 

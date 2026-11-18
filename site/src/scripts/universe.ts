@@ -22,7 +22,9 @@
 // `WebAssembly.promising`), so the page's events and the program's edits
 // run while it waits. What it prints from then on goes to a terminal in
 // its frame, which redraws in place from the cursor and erase escapes the
-// program writes (lib/terminal.ts).
+// program writes (lib/terminal.ts). A browser without JSPI gets stand-ins
+// in the frame: every call runs to its end, as before JSPI, and only a
+// sleep on `main`'s stack stops the program, which says so in its frame.
 //
 // On Apple's WebKit (Safari, and every browser on iOS) the frame hides
 // `navigator.gpu` before the program starts, so wgpu draws with WebGL2:
@@ -38,6 +40,12 @@
 // started with `--force-device-scale-factor=2` and no viewport override.
 
 import { Screen } from "../lib/terminal.ts";
+
+/**
+ * What a program that sleeps on main's stack says in its frame in a
+ * browser without JSPI (WebAssembly JS Promise Integration).
+ */
+export const NO_JSPI = "This browser can't run a program that sleeps: it has no WebAssembly JS Promise Integration (JSPI).";
 
 /** The universe's files, beside rawr-web's (web/build.sh). */
 export const UNIVERSE_GLUE = "/web/universe.js";
@@ -97,6 +105,14 @@ export function frameDocument(glue: string): string {
   return `<!doctype html><html><head><meta charset="utf-8"><style>${FRAME_STYLE}</style></head>
 <body><div id="iced"></div><script type="module">
 import * as glue from ${JSON.stringify(glue)};
+// Without JSPI nothing suspends: a call runs to its end, and a sleep on
+// main's stack refuses with NO_JSPI, which stops the program there.
+if (typeof WebAssembly.Suspending !== "function") {
+  WebAssembly.Suspending = function () {
+    return () => { throw ${JSON.stringify(NO_JSPI)}; };
+  };
+  WebAssembly.promising = (call) => (...args) => new Promise((resolve) => resolve(call(...args)));
+}
 if (navigator.vendor === "Apple Computer, Inc.") {
   Object.defineProperty(navigator, "gpu", { value: undefined, configurable: true });
 }
@@ -161,6 +177,15 @@ function settled(element: HTMLIFrameElement): Promise<void> {
   return new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
 }
 
+/** An empty terminal in `frame`. */
+function terminalIn(frame: Frame): HTMLPreElement {
+  const page = frame.element.contentWindow!.document;
+  const pre = page.createElement("pre");
+  pre.className = "terminal";
+  page.body.append(pre);
+  return pre;
+}
+
 /**
  * A terminal in `frame` that shows what its program prints from now on,
  * and what it printed before, drawn once per animation frame.
@@ -168,9 +193,7 @@ function settled(element: HTMLIFrameElement): Promise<void> {
 function terminal(frame: Frame): void {
   const window = frame.element.contentWindow!;
   const page = window.document;
-  const pre = page.createElement("pre");
-  pre.className = "terminal";
-  page.body.append(pre);
+  const pre = terminalIn(frame);
   const screen = new Screen();
   let drawing = false;
   frame.instance.set_output((_stream, text) => {
@@ -234,7 +257,8 @@ export function universe({ document, fetch, compile }: UniverseEnv) {
    * Show `frame` and run `code` in it: the server's text result, or a
    * compile error. A panic aborts the instance; its message is the error.
    * A `main` that sleeps runs on in the frame and prints to its terminal:
-   * the answer is then a status of 0 with no output.
+   * the answer is then a status of 0 with no output. Without JSPI it stops
+   * at its first sleep, and its frame says why.
    */
   const run = async (frame: Frame, code: string): Promise<any> => {
     const { manifest } = await load();
@@ -251,6 +275,11 @@ export function universe({ document, fetch, compile }: UniverseEnv) {
       return JSON.parse(await answer);
     } catch (error) {
       const message = frame.instance.panic_message?.() ?? String(error);
+      // A browser that can't suspend the program says so in its frame.
+      if (message === NO_JSPI) {
+        terminalIn(frame).textContent = message;
+        return { kind: "text", status: 101, output: [] };
+      }
       return { kind: "text", status: 101, output: [{ stream: "stderr", text: message + "\n" }] };
     }
   };

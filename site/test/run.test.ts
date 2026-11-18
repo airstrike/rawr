@@ -144,3 +144,39 @@ test("a universe program whose main sleeps runs on, printing to a terminal in it
   drawn.shift()!();
   assert.equal(appended[0].textContent, "frame 3", "a frame redraws in place");
 });
+
+test("without JSPI the frame stands in for it: calls run to their end, and a sleep refuses with NO_JSPI", async () => {
+  const { frameDocument, NO_JSPI } = await import("../src/scripts/universe.ts");
+  const script = frameDocument("https://example.org/web/universe.js").match(/if \(typeof WebAssembly\.Suspending[\s\S]*?\n\}\n/)![0];
+  const WebAssembly: any = {};
+  new Function("WebAssembly", script)(WebAssembly);
+  const bridge = new WebAssembly.Suspending((promise: Promise<unknown>) => promise);
+  assert.throws(() => bridge(Promise.resolve()), (thrown: unknown) => thrown === NO_JSPI);
+  assert.equal(await WebAssembly.promising((a: number, b: number) => a + b)(2, 3), 5);
+  await assert.rejects(WebAssembly.promising(() => { throw NO_JSPI; })(), (thrown: unknown) => thrown === NO_JSPI);
+});
+
+test("a program stopped for want of JSPI says so in its frame", async () => {
+  const { universe, NO_JSPI } = await import("../src/scripts/universe.ts");
+  const appended: { className: string; textContent: string }[] = [];
+  const contentWindow = {
+    innerWidth: 700,
+    document: {
+      createElement: () => ({ className: "", textContent: "" }),
+      body: { append: (node: { className: string; textContent: string }) => appended.push(node) },
+    },
+    requestAnimationFrame: (callback: () => void) => callback(),
+  };
+  const page = universe({
+    document: {} as Document,
+    fetch: (async () => new Response("[dependencies]\n")) as typeof fetch,
+    compile: async () => ({}) as WebAssembly.Module,
+  });
+  const frame = {
+    element: { hidden: true, contentWindow } as unknown as HTMLIFrameElement,
+    instance: { run: async () => { throw NO_JSPI; }, sleeping: () => false, panic_message: () => NO_JSPI } as any,
+  };
+  assert.deepEqual(await page.run(frame, "fn main() {}"), { kind: "text", status: 101, output: [] });
+  assert.equal(appended[0].className, "terminal");
+  assert.equal(appended[0].textContent, NO_JSPI);
+});
