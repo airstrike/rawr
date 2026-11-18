@@ -4,6 +4,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 ## Unreleased
 
+- Const generics work: a program's `struct S<const N: usize>`, `impl<const N: usize> S<N>` and `fn f<const N: usize>()` read `N` as a value, and a const argument may be a literal, a `{ .. }` block of constants or a `const`'s name. A crate's const-generic type, such as tokio's `Rotator::<3>`, is reached at each value the program names. (#2210; part of #1152)
+
 ## 0.3.250 (2026-11-17)
 
 - A closure passed to a crate or std function that changes what it captures keeps each change across calls, so `std::future::poll_fn(move |cx| ..)` that counts its polls ends as it does under cargo rather than polling forever. (#2208; part of #1152)
