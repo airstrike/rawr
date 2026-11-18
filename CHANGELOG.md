@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
+
+## 0.4.6 (2026-11-18)
+
 - A process rawr starts no longer holds a shared bindings lock for a moment after rawr lets go of it, so a reader no longer misses and extracts again, and a publication or eviction is no longer skipped. (#1026)
 - A crate's facts captured where rawr's nightly build had a stale build-script output are captured again after that output is cleaned, rather than served again from the project. (#1025)
 
