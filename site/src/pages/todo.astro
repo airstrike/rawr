@@ -388,7 +388,7 @@ const tally = (rows: Row[]) => {
     <details class="milestone" open={m.open} id={m.id}>
       <summary><span class="v">{m.title}</span><span class="s">{m.groups.map((g) => g.title).join(" · ")}</span><span class="c">{tally(m.rows)}</span></summary>
       {m.groups.map((g) => (
-        <details class="group" open id={`${m.id}-${g.id}`}>
+        <details class="group" open={!g.rows.every((r) => r.state === "done")} id={`${m.id}-${g.id}`}>
           <summary><span class="t">{g.title}</span><span class="s">{g.subtitle}</span><span class="c">{tally(g.rows)}</span></summary>
           {g.rows.map((r) => (
             <div class="row" id={`${g.id}-${r.id}`} data-start={r.start} data-size={r.size}>
@@ -547,12 +547,22 @@ const tally = (rows: Row[]) => {
         show(a.dataset.tab);
       });
     }
+    // An anchor inside a folded group or milestone opens what folds it, so a
+    // link to a done row still lands on it.
+    const reveal = (hash) => {
+      const target = hash && document.getElementById(hash);
+      if (!target) return;
+      for (let fold = target.closest("details"); fold; fold = fold.parentElement?.closest("details")) fold.open = true;
+      target.scrollIntoView({ block: "start" });
+    };
     const fromHash = () => {
       const hash = decodeURIComponent(location.hash.slice(1));
       show(tabs.includes(hash) ? hash : /^v\d/.test(hash) ? "changelog" : "gantt");
+      reveal(hash);
     };
     addEventListener("popstate", fromHash);
     addEventListener("hashchange", fromHash);
+    reveal(decodeURIComponent(location.hash.slice(1)));
 
     const parts = (panel) => ({
       gate: panel.querySelector(".gate"),
