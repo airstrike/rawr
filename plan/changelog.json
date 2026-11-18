@@ -4,7 +4,10 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
-    "entries": []
+    "entries": [
+      {"text":"A process rawr starts no longer holds a shared bindings lock for a moment after rawr lets go of it, so a reader no longer misses and extracts again, and a publication or eviction is no longer skipped.","issues":[1026]},
+      {"text":"A crate's facts captured where rawr's nightly build had a stale build-script output are captured again after that output is cleaned, rather than served again from the project.","issues":[1025]}
+    ]
   },
   "releases": [
     {

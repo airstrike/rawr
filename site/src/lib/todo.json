@@ -9,7 +9,13 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
+      "entries": [
+        {"text":"A process rawr starts no longer holds a shared bindings lock for a moment after rawr lets go of it, so a reader no longer misses and extracts again, and a publication or eviction is no longer skipped.","issues":[1026]},
+        {"text":"A crate's facts captured where rawr's nightly build had a stale build-script output are captured again after that output is cleaned, rather than served again from the project.","issues":[1025]}
+      ]
+    },
     "releases": [
       {
         "version": "0.4.5",
@@ -3787,7 +3793,7 @@
     {"issue":1009,"title":"A frame method's turbofish type argument (`next_key::<__Field>`) gives an Option the checker can't type","state":"closed","category":"Divergences from rustc","release":"0.3.152"},
     {"issue":1010,"title":"A fn pointer that takes &mut, passed to a crate's impl Fn","state":"open","category":"Divergences from rustc"},
     {"issue":1011,"title":"D742: a detected build-script output mismatch reruns that package in the shared directory and re-extracts","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.152"},
-    {"issue":1012,"title":"A proc macro that reads the environment without tracking isn't covered by build-script drift detection","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1012,"title":"A proc macro that reads the environment without tracking isn't covered by build-script drift detection","state":"retired","category":"Shared dependency cache (D607)"},
     {"issue":1013,"title":"Intrinsic entries inline each identity's whole Unit; objc2_app_kit's entry is 1.88 GB","state":"open","category":"Health"},
     {"issue":1014,"title":"changelog: jiff's DateTime::strftime is unusable because its signature borrows at an early-bound lifetime (E0599)","state":"closed","category":"iced examples","release":"0.3.160"},
     {"issue":1015,"title":"The legacy extraction plan hashes every selected artifact in full on each check","state":"open","category":"Health"},
@@ -3800,8 +3806,8 @@
     {"issue":1022,"title":"A generic impl's frame entry takes a projection value from the arena, needing 'static (E0310)","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":1023,"title":"A crate unit struct used as a value is refused","state":"retired","category":"Divergences from rustc"},
     {"issue":1024,"title":"Crossing test for a crate trait method that takes a future","state":"open","category":"Health"},
-    {"issue":1025,"title":"Intrinsic facts captured this run under a stale nightly build-script output aren't recaptured after the clean","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":1026,"title":"Shared bindings locks are briefly held by any process rawr starts","state":"open","category":"Health"},
+    {"issue":1025,"title":"Intrinsic facts captured this run under a stale nightly build-script output aren't recaptured after the clean","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":1026,"title":"Shared bindings locks are briefly held by any process rawr starts","state":"closed","category":"Health"},
     {"issue":1027,"title":"A by-value type parameter a borrow fills was made as &T for the call","state":"closed","category":"Divergences from rustc","release":"0.3.152"},
     {"issue":1028,"title":"A float literal only one Float impl types is f64 in rawr, f32 in rustc (iced progress_bar's Animation::new(0.))","state":"closed","category":"Divergences from rustc","release":"0.3.162"},
     {"issue":1029,"title":"?play: a builder call that takes a crate function item isn't covered (tooltip's .style(container::rounded_box))","state":"open","category":"Divergences from rustc"},
@@ -5012,7 +5018,8 @@
     {"issue":2235,"title":"A registry crate reaching a path crate through `[patch]` can keep its records in rawr's home in a later round","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":2236,"title":"`cfg_if::cfg_if!` in a program fails with \"diagnostic span falls outside source\"","state":"open","category":"No glue (D593)"},
     {"issue":2237,"title":"`scopeguard::defer!` fails: cannot find function `guard` in module `scopeguard`","state":"open","category":"No glue (D593)"},
-    {"issue":2238,"title":"A chrono `Datelike` method (`date.year()`) is not found on `NaiveDate`","state":"open","category":"No glue (D593)"}
+    {"issue":2238,"title":"A chrono `Datelike` method (`date.year()`) is not found on `NaiveDate`","state":"open","category":"No glue (D593)"},
+    {"issue":2239,"title":"Store, pins, session, runtime and deps locks are released only when every copy of the file closes","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -5211,7 +5218,7 @@
           "start": 43,
           "size": 3,
           "state": "now",
-          "note": "Projects reuse extraction tables (#367) and each crate's classification and facade records (#271), published as layers of only what's new (#2224). Left: drift and lock cases (#1012, #1025, #1026).",
+          "note": "Projects reuse extraction tables (#367) and each crate's classification and facade records (#271), published as layers of only what's new (#2224). Drift and lock cases are done (#1025, #1026). Left: #372, #474, #942, #1408.",
           "issues": [
             {"number":271,"title":"Generated bindings are built per project, so every project and script pays #255 again for the…","state":"closed"},
             {"number":367,"title":"Reuse verified crate extraction tables across projects","state":"closed"},
@@ -5219,9 +5226,9 @@
             {"number":370,"title":"An unused ambiguous method family poisons retained bindings","state":"closed"},
             {"number":372,"title":"Explicit trait UFCS loses its chosen identity during method lowering","state":"open"},
             {"number":1011,"title":"D742: a detected build-script output mismatch reruns that package in the shared directory and re-extracts","state":"closed"},
-            {"number":1012,"title":"A proc macro that reads the environment without tracking isn't covered by build-script drift detection","state":"open"},
-            {"number":1025,"title":"Intrinsic facts captured this run under a stale nightly build-script output aren't recaptured after the clean","state":"open"},
-            {"number":1026,"title":"Shared bindings locks are briefly held by any process rawr starts","state":"open"},
+            {"number":1012,"title":"A proc macro that reads the environment without tracking isn't covered by build-script drift detection","state":"retired"},
+            {"number":1025,"title":"Intrinsic facts captured this run under a stale nightly build-script output aren't recaptured after the clean","state":"closed"},
+            {"number":1026,"title":"Shared bindings locks are briefly held by any process rawr starts","state":"closed"},
             {"number":474,"title":"Two crates sharing a target dir fail rawr check on a build script's OUT_DIR","state":"open"},
             {"number":1408,"title":"A rawr blocked on another rawr's shared runtime or API build says so once, naming the builder's…","state":"open"},
             {"number":942,"title":"Build the std bindings once per machine, not once per process (0.4)","state":"open"},
@@ -6706,7 +6713,8 @@
             {"number":1825,"title":"The run owner's per-save state sits in process statics behind locks","state":"open"},
             {"number":1826,"title":"The generated runner's release queues and callback witnesses are process globals","state":"open"},
             {"number":1827,"title":"Every store open takes the bootstrap and publication locks, from 55 call sites","state":"open"},
-            {"number":1828,"title":"The save loops and the watcher poll on timeouts and stat files under a lock nest","state":"open"}
+            {"number":1828,"title":"The save loops and the watcher poll on timeouts and stat files under a lock nest","state":"open"},
+            {"number":2239,"title":"Store, pins, session, runtime and deps locks are released only when every copy of the file closes","state":"open"}
           ]
         },
         {
