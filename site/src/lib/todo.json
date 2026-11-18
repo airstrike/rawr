@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-18",
-  "version": "0.4.16",
+  "version": "0.4.17",
   "examples": {
     "running": 56,
     "total": 56,
@@ -9,14 +9,16 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
-      "entries": [
-        {"text":"`use krate::{module::Type}` and nested groups, `self` and globs inside a `use` group reach a dependency's bindings, so a type a nested member binds no longer fails with E0433. iced's integration example builds and agrees with cargo again.","issues":[2250]},
-        {"text":"A directory rustc searches that another build changes during extraction restarts the build, then reports \"`<path>` changed during the build; run it again\", instead of \"internal error: rawr misread rustc's output\". A completion that truly disagrees with what was observed is still a misread.","issues":[2251]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.17",
+        "date": "2026-11-18",
+        "entries": [
+          {"text":"`use krate::{module::Type}` and nested groups, `self` and globs inside a `use` group reach a dependency's bindings, so a type a nested member binds no longer fails with E0433. iced's integration example builds and agrees with cargo again.","issues":[2250]},
+          {"text":"A directory rustc searches that another build changes during extraction restarts the build, then reports \"`<path>` changed during the build; run it again\", instead of \"internal error: rawr misread rustc's output\". A completion that truly disagrees with what was observed is still a misread.","issues":[2251]}
+        ]
+      },
       {
         "version": "0.4.16",
         "date": "2026-11-18",
@@ -5120,8 +5122,8 @@
     {"issue":2247,"title":"A surface schema change leaves old resolved entries unevicted, because RESOLVED_SCHEMA doesn't fold SURFACE_SCHEMA","state":"closed","category":"Shared dependency cache (D607)","release":"0.4.16"},
     {"issue":2248,"title":"A check reaches its demand closure in many rounds, each paying probes, harness work and a resolution","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":2249,"title":"Remembered Cargo outputs are never kept for a root whose path has characters outside [A-Za-z0-9/._-]","state":"closed","category":"Shared dependency cache (D607)","release":"0.4.16"},
-    {"issue":2250,"title":"`use krate::{module::Type}` and nested groups, `self` and globs inside a `use` group reach a…","state":"open","category":"No glue (D593)"},
-    {"issue":2251,"title":"A directory rustc searches that another build changes during extraction restarts the build, then…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":2250,"title":"`use krate::{module::Type}` and nested groups, `self` and globs inside a `use` group reach a…","state":"closed","category":"No glue (D593)","release":"0.4.17"},
+    {"issue":2251,"title":"A directory rustc searches that another build changes during extraction restarts the build, then…","state":"closed","category":"Shared dependency cache (D607)","release":"0.4.17"},
     {"issue":2252,"title":"Find which searched directory another build changed under extraction, and close the window","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":2253,"title":"A cold iced emulator test spends about 10 minutes building the API","state":"open","category":"Health"}
   ],
@@ -6831,7 +6833,7 @@
             {"number":1828,"title":"The save loops and the watcher poll on timeouts and stat files under a lock nest","state":"open"},
             {"number":2239,"title":"Store, pins, session, runtime and deps locks are released only when every copy of the file closes","state":"open"},
             {"number":2252,"title":"Find which searched directory another build changed under extraction, and close the window","state":"open"},
-            {"number":2251,"title":"A directory rustc searches that another build changes during extraction restarts the build, then…","state":"open"}
+            {"number":2251,"title":"A directory rustc searches that another build changes during extraction restarts the build, then…","state":"closed"}
           ]
         },
         {
@@ -7153,7 +7155,7 @@
             {"number":2203,"title":"A generic type named through its module in a let annotation isn't read","state":"open"},
             {"number":2215,"title":"A tuple struct's constructor with a turbofish (`W::<i32>(1)`) is refused as an unknown value (E0425)","state":"open"},
             {"number":1168,"title":"A crate's tuple-struct constructor isn't callable from marked code","state":"open"},
-            {"number":2250,"title":"`use krate::{module::Type}` and nested groups, `self` and globs inside a `use` group reach a…","state":"open"}
+            {"number":2250,"title":"`use krate::{module::Type}` and nested groups, `self` and globs inside a `use` group reach a…","state":"closed"}
           ]
         },
         {
