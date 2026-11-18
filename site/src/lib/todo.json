@@ -5069,7 +5069,7 @@
     {"issue":2218,"title":"Plain `rawr run` restarts a single file on save instead of reloading a looping `main` in place","state":"open","category":"Hot reload of a marked `main` (D555)"},
     {"issue":2219,"title":"A browser with neither JSPI nor exnref can't compile the browser's universe module","state":"open","category":"Platforms"},
     {"issue":2220,"title":"`rawr run --web` packages block the page on a sleep and append output instead of drawing a terminal","state":"open","category":"Platforms"},
-    {"issue":2221,"title":"A demand round still runs classification's and the plan's whole-API passes","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":2221,"title":"A demand round still runs classification's and the plan's whole-API passes","state":"retired","category":"Shared dependency cache (D607)"},
     {"issue":2222,"title":"D604 headers and the facade plan's sites are computed per program, not kept per crate","state":"closed","category":"Shared dependency cache (D607)","release":"0.4.4"},
     {"issue":2223,"title":"A dependency several selected crates reach keeps its classification records under the first one's key","state":"closed","category":"Shared dependency cache (D607)","release":"0.4.5"},
     {"issue":2224,"title":"Publishing a crate's classification entry rewrites the whole file whenever any record is fresh","state":"closed","category":"Shared dependency cache (D607)","release":"0.4.5"},
@@ -5095,7 +5095,8 @@
     {"issue":2244,"title":"A program with dependencies runs again: rawr's shared runtime compiles, which it didn't on 0.4.11","state":"closed","category":"Health","release":"0.4.12"},
     {"issue":2245,"title":"A profile entry that decodes stale under its own key panics in the full path after the warm launch falls back","state":"closed","category":"Shared dependency cache (D607)","release":"0.4.14"},
     {"issue":2246,"title":"Remembered Cargo outputs can pair old metadata with a transitive manifest edited before they're saved","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":2247,"title":"A surface schema change leaves old resolved entries unevicted, because RESOLVED_SCHEMA doesn't fold SURFACE_SCHEMA","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":2247,"title":"A surface schema change leaves old resolved entries unevicted, because RESOLVED_SCHEMA doesn't fold SURFACE_SCHEMA","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":2248,"title":"A check reaches its demand closure in many rounds, each paying probes, harness work and a resolution","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -5404,12 +5405,12 @@
           "name": "Re-key plan and headers",
           "start": 41,
           "size": 3,
-          "state": "now",
-          "note": "A demand round classifies, encodes and generates only what its new paths change (#1618, #2242), and a crate's headers and sites are kept per crate (#2222). Left: record checks and the support ledger still digest the whole graph each round (#2221).",
+          "state": "done",
+          "note": "A demand round classifies, encodes and generates only what its new paths change (#1618, #2242), and a crate's headers and sites are kept per crate (#2222). The whole-graph digest passes wait for an installed-profile measurement (D1046).",
           "issues": [
             {"number":1618,"title":"A demand round reclassifies and regenerates the whole API, when only new demanded paths were added","state":"closed"},
             {"number":914,"title":"A shared-bindings API is rebuilt whenever Cargo resolves again","state":"closed"},
-            {"number":2221,"title":"A demand round still runs classification's and the plan's whole-API passes","state":"open"},
+            {"number":2221,"title":"A demand round still runs classification's and the plan's whole-API passes","state":"retired"},
             {"number":2222,"title":"D604 headers and the facade plan's sites are computed per program, not kept per crate","state":"closed"},
             {"number":2233,"title":"A shared crate's paths whose outcome names no definition keep their facade contributions in the project","state":"closed"},
             {"number":2232,"title":"Each demand round digests every impl's identity once, and writes the stored classification in…","state":"closed"},
@@ -6758,7 +6759,8 @@
             {"number":1922,"title":"Every rawr build on a machine waits on one Cargo lock for the toolchain's shared build directory","state":"open"},
             {"number":1948,"title":"icedxdy's browser opens a blank window and stays at 'starting 95%' under rawr run","state":"open"},
             {"number":1984,"title":"Runner crates share one build-script unit in a shared target dir, so after a reinstall it links the old runtime","state":"closed"},
-            {"number":1983,"title":"Any edit to rawr's src/ rebuilds rawr's whole runtime, so a crossing test rerun takes about 3 minutes","state":"closed"}
+            {"number":1983,"title":"Any edit to rawr's src/ rebuilds rawr's whole runtime, so a crossing test rerun takes about 3 minutes","state":"closed"},
+            {"number":2248,"title":"A check reaches its demand closure in many rounds, each paying probes, harness work and a resolution","state":"open"}
           ]
         },
         {
