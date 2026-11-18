@@ -4,6 +4,9 @@
 // visit opens. The Rustlings group is rustlings' solutions
 // (https://github.com/rust-lang/rustlings, MIT licence), each crediting its
 // source; play/tests/fixtures/rust/LICENSE-rustlings holds the licence.
+// The Crates group runs in the browser's universe, in a frame of its own:
+// the ratatui to-do list is the landing page's, from
+// play/universe/programs/web.
 
 import type { Example } from "./playpage.ts";
 import enums from "../../../tests/fixtures/rust/enums.rs";
@@ -14,6 +17,7 @@ import strings from "../../../tests/fixtures/rust/strings.rs";
 import traits from "../../../tests/fixtures/rust/traits.rs";
 import useAfterMove from "../../../tests/fixtures/rust/use_after_move.rs";
 import wordCount from "../../../tests/fixtures/rust/word_count.rs";
+import ratatuiTodo from "../../../universe/programs/web/todo.rs";
 import rustlingsBoxDynError from "../../../tests/fixtures/rust/rustlings_box_dyn_error.rs";
 import rustlingsCapitalize from "../../../tests/fixtures/rust/rustlings_capitalize.rs";
 import rustlingsConsList from "../../../tests/fixtures/rust/rustlings_cons_list.rs";
@@ -28,7 +32,7 @@ import rustlingsStrings from "../../../tests/fixtures/rust/rustlings_strings.rs"
 import rustlingsTraits from "../../../tests/fixtures/rust/rustlings_traits.rs";
 import rustlingsTryFrom from "../../../tests/fixtures/rust/rustlings_try_from.rs";
 
-/** Plain programs: each prints its output as text. The first opens on a first visit. */
+/** Plain programs print their output as text; a Crates one draws in its frame. The first opens on a first visit. */
 export const EXAMPLES: Example[] = [
   ...[
     { name: "Letter histogram", code: histogram },
@@ -40,6 +44,7 @@ export const EXAMPLES: Example[] = [
     { name: "Word count", code: wordCount },
     { name: "Strings and let else", code: strings },
   ].map((example) => ({ ...example, group: "Rust" })),
+  ...[{ name: "ratatui to-do list", code: ratatuiTodo }].map((example) => ({ ...example, group: "Crates" })),
   ...[
     { name: "Taking ownership", code: rustlingsOwnership },
     { name: "Enum variants with data", code: rustlingsEnums },
