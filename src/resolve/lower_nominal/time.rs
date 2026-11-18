@@ -361,7 +361,7 @@ pub(super) fn time_method(args: &mut FnCallArgs) -> RawrResult {
         "from_millis" => Dynamic::from(Duration::from_millis(unsigned(operand))),
         "sleep" => {
             if let Some(duration) = duration(operand) {
-                std::thread::sleep(duration);
+                crate::future::sleep(duration);
             }
             Dynamic::UNIT
         }

@@ -17,6 +17,13 @@
 // body. Keys reach the program only while its frame has focus, which a
 // click or Tab gives it, and the frame draws an outline while it does.
 //
+// A `main` that loops in plain Rust and sleeps keeps its instance too: its
+// run starts `main` on a stack each `std::thread::sleep` suspends (JSPI,
+// `WebAssembly.promising`), so the page's events and the program's edits
+// run while it waits. What it prints from then on goes to a terminal in
+// its frame, which redraws in place from the cursor and erase escapes the
+// program writes (lib/terminal.ts).
+//
 // On Apple's WebKit (Safari, and every browser on iOS) the frame hides
 // `navigator.gpu` before the program starts, so wgpu draws with WebGL2:
 // WebKit's WebGPU fails a command buffer that copies twice out of one
@@ -30,6 +37,8 @@
 // (#1449). A real display at that scale doesn't: check scale 2 in a Chrome
 // started with `--force-device-scale-factor=2` and no viewport override.
 
+import { Screen } from "../lib/terminal.ts";
+
 /** The universe's files, beside rawr-web's (web/build.sh). */
 export const UNIVERSE_GLUE = "/web/universe.js";
 export const UNIVERSE_WASM = "/web/universe_bg.wasm";
@@ -39,7 +48,10 @@ export const UNIVERSE_MANIFEST = "/web/universe.toml";
 /** One instance's API (rawr::universe::browser). */
 export interface Instance {
   prepare(): void;
-  run(manifest: string, source: string): string;
+  /** The answer once `main` returns; meanwhile `sleeping` is true. */
+  run(manifest: string, source: string): Promise<string>;
+  sleeping(): boolean;
+  set_output(sink: (stream: string, text: string) => void): void;
   replace(source: string): string;
   panic_message(): string | undefined;
 }
@@ -71,8 +83,9 @@ export interface UniverseEnv {
  */
 const FRAME_STYLE = `html, body { margin: 0; height: 100%; overflow: hidden; background: transparent; }
 body { font: 13px/1.25 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: CanvasText; }
-body:has(> div > pre) { background: #111; color: #eee; }
+body:has(> div > pre), body:has(> pre.terminal) { background: #111; color: #eee; }
 pre { margin: 0; font: inherit; }
+pre.terminal { padding: 8px 12px; }
 :focus { outline: none; }
 canvas:focus-visible, [tabindex]:focus { outline: 2px solid #d43; outline-offset: -2px; }`;
 
@@ -148,6 +161,31 @@ function settled(element: HTMLIFrameElement): Promise<void> {
   return new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
 }
 
+/**
+ * A terminal in `frame` that shows what its program prints from now on,
+ * and what it printed before, drawn once per animation frame.
+ */
+function terminal(frame: Frame): void {
+  const window = frame.element.contentWindow!;
+  const page = window.document;
+  const pre = page.createElement("pre");
+  pre.className = "terminal";
+  page.body.append(pre);
+  const screen = new Screen();
+  let drawing = false;
+  frame.instance.set_output((_stream, text) => {
+    screen.write(text);
+    if (drawing) return;
+    drawing = true;
+    window.requestAnimationFrame(() => {
+      drawing = false;
+      pre.textContent = screen.text();
+      // A program that appends shows its latest rows.
+      page.scrollingElement?.scrollTo(0, page.scrollingElement.scrollHeight);
+    });
+  });
+}
+
 /** The page's universe: the module compiled once, an instance per frame. */
 export function universe({ document, fetch, compile }: UniverseEnv) {
   // The manifest alone, for a page that asks which snippets use crates
@@ -195,13 +233,22 @@ export function universe({ document, fetch, compile }: UniverseEnv) {
   /**
    * Show `frame` and run `code` in it: the server's text result, or a
    * compile error. A panic aborts the instance; its message is the error.
+   * A `main` that sleeps runs on in the frame and prints to its terminal:
+   * the answer is then a status of 0 with no output.
    */
   const run = async (frame: Frame, code: string): Promise<any> => {
     const { manifest } = await load();
     frame.element.hidden = false;
     await settled(frame.element);
     try {
-      return JSON.parse(frame.instance.run(manifest, code));
+      const answer = frame.instance.run(manifest, code);
+      if (frame.instance.sleeping()) {
+        terminal(frame);
+        // A panic's message goes to the terminal.
+        answer.catch(() => {});
+        return { kind: "text", status: 0, output: [] };
+      }
+      return JSON.parse(await answer);
     } catch (error) {
       const message = frame.instance.panic_message?.() ?? String(error);
       return { kind: "text", status: 101, output: [{ stream: "stderr", text: message + "\n" }] };

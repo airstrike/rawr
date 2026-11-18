@@ -355,6 +355,14 @@ fn sandbox(engine: &mut Engine, sink: &Arc<Mutex<Output>>) {
                 .unwrap()
                 .push(stream == rawr::Output::Stderr, text);
         });
+    // A page's one thread can't be suspended mid-run, so a sleep waits on
+    // the clock, and ends at the deadline, after which the program stops.
+    rawr::future::on_sleep(move |duration| {
+        let until = (crate::now() + duration.as_secs_f64() * 1000.0).min(deadline);
+        while crate::now() < until {
+            std::hint::spin_loop();
+        }
+    });
     let refuse = || Err::<(), Box<rawr::EvalAltResult>>("sleep is not available in ?play".into());
     engine
         .register_fn("sleep", move |_: rawr::INT| refuse())

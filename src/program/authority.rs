@@ -70,6 +70,14 @@ impl Authority {
         self.executable.in_async_fn(step)
     }
 
+    /// The libraries a call of this generation's functions runs with: its
+    /// script functions, and the compiler's support for them.
+    #[cfg(all(feature = "rust-import", feature = "sync"))]
+    pub(crate) fn libraries(&self) -> [&crate::SharedModule; 2] {
+        let ast = self.executable.ast();
+        [ast.shared_lib(), ast.shared_support()]
+    }
+
     /// Return stable symbolic values declared by this generation.
     pub fn items(&self) -> impl ExactSizeIterator<Item = &item::Value> {
         self.executable.items()

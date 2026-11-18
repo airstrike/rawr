@@ -190,6 +190,54 @@ fn a_program_is_called_reloaded_and_keeps_its_last_good_text() {
     // queued for the owner is admitted where the future resumes (#2127).
     a_suspended_future_resumes_in_a_save_queued_while_it_waited(&universe);
     a_future_that_suspended_since_a_save_compiled_refuses_it_at_its_resumption(&universe);
+
+    // A `main` that loops in script code admits a save at a sleep.
+    a_main_that_loops_takes_a_save_at_its_next_sleep();
+}
+
+const SLEEPER: &str = "// rawr
+pub fn frame(tick: i64) -> i64 {
+    tick
+}
+
+fn main() {
+    let mut tick = 0;
+    loop {
+        tick += 1;
+        println!(\"{}\", frame(tick));
+        if tick == 3 {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+";
+
+/// A save offered while `main` loops in script code, as a page's edit or
+/// `rawr run`'s watcher offers one, is taken at `main`'s next sleep, and
+/// `main` goes on with its locals as they were.
+fn a_main_that_loops_takes_a_save_at_its_next_sleep() {
+    let mut universe = Universe::new(&Plain, Access::none()).unwrap();
+    let printed = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let reloader = std::sync::Arc::new(std::sync::OnceLock::<super::Reloader>::new());
+    let (sink, saves) = (
+        std::sync::Arc::clone(&printed),
+        std::sync::Arc::clone(&reloader),
+    );
+    assert!(universe.on_output(move |_, text| {
+        let mut printed = sink.lock().unwrap();
+        printed.push_str(text);
+        // The save arrives once the first frame is out.
+        if *printed == "1\n" {
+            let saved = SLEEPER.replace("    tick\n}", "    tick * 10\n}");
+            assert_eq!(saves.get().unwrap().replace(saved), Outcome::Queued);
+        }
+    }));
+    let entry = PathBuf::from("/universe-sleeper/src/main.rs");
+    let program = universe.program(entry, SLEEPER, Vec::new()).unwrap();
+    assert!(reloader.set(program.reloader()).is_ok());
+    assert_eq!(program.run(), 0);
+    assert_eq!(*printed.lock().unwrap(), "1\n20\n30\n");
 }
 
 /// A snippet's statements outside any function, as ?play runs them, call

@@ -13,6 +13,17 @@
 //! to it from then on. An edit reloads it in place, its state kept, as `rawr run`
 //! reloads a save (#1455). The page instantiates a fresh copy of the
 //! compiled module for the next run, and for an edit that can't reload.
+//!
+//! A `main` that loops in script code and sleeps hands the page its time
+//! instead: [`run`] starts `main` on a stack the page can suspend
+//! (`WebAssembly.promising`), each `std::thread::sleep` there suspends it
+//! while a timer of the page's runs, and the page's events run meanwhile.
+//! [`run`]'s answer then waits for `main` to return; [`sleeping`] says at
+//! once that it runs on. An edit reloads it while it sleeps, and `main`
+//! goes on in the new code from its next statement (`island::follow`).
+
+// wasm-bindgen marks its JSPI attribute and call deprecated, as experimental.
+#![allow(deprecated)]
 
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
@@ -53,6 +64,19 @@ thread_local! {
     /// The page's function [`set_output`] named, which takes the program's
     /// output in place of the answers.
     static SINK: RefCell<Option<Sink>> = const { RefCell::new(None) };
+    /// Whether `main` runs: it hasn't returned, so outside its own calls it
+    /// waits in a sleep.
+    static MAIN: Cell<bool> = const { Cell::new(false) };
+    /// Whether this call runs on the stack [`run`] started `main` on, which
+    /// a sleep may suspend. A call from the page while `main` sleeps runs
+    /// on a stack of its own.
+    static SUSPENDABLE: Cell<bool> = const { Cell::new(false) };
+}
+
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_name = setTimeout)]
+    fn set_timeout(callback: &js_sys::Function, milliseconds: f64);
 }
 
 /// What the program wrote, and the message of the panic that stopped it.
@@ -82,15 +106,42 @@ pub fn serve(bindings: &'static dyn Bindings) {
         });
         written().panic = Some(message);
     }));
+    future::on_sleep(sleep);
     BINDINGS.set(Some(bindings));
+}
+
+/// Wait out a sleep of the program's: on `main`'s own stack, suspend it
+/// while a timer of the page's runs, so the page runs its events
+/// meanwhile; elsewhere, as a call from the page can't be suspended, wait
+/// on the clock.
+fn sleep(duration: std::time::Duration) {
+    if !SUSPENDABLE.replace(false) {
+        future::wait(duration);
+        return;
+    }
+    let milliseconds = duration.as_secs_f64() * 1000.0;
+    let timer = js_sys::Promise::new(&mut |resolve, _| set_timeout(&resolve, milliseconds));
+    let _ = js_sys::futures::jspi_block_on_promise(&timer);
+    SUSPENDABLE.set(true);
 }
 
 /// Send what the program writes to `sink` as it writes it, rather than
 /// with the answer of the call it wrote it in: a program that runs on the
-/// page's events writes between calls from the page.
+/// page's events writes between calls from the page. What it wrote before
+/// goes to `sink` first.
 #[wasm_bindgen]
 pub fn set_output(sink: Sink) {
+    for (stream, text) in std::mem::take(&mut written().chunks) {
+        sink.write(&JsValue::NULL, stream_name(stream), &text);
+    }
     SINK.set(Some(sink));
+}
+
+/// Whether the program's `main` runs on, waiting in a sleep: what the page
+/// asks once [`run`] hands it the answer's promise.
+#[wasm_bindgen]
+pub fn sleeping() -> bool {
+    MAIN.get()
 }
 
 /// Install the served bindings in a universe ahead of [`run`], so a Run
@@ -114,14 +165,8 @@ pub fn prepare() -> Result<(), JsError> {
     let mut universe = Universe::new(bindings, Access::none())?;
     universe.on_output(|stream, text| {
         let sent = SINK.with_borrow(|sink| {
-            sink.as_ref().map(|sink| {
-                let stream = if stream == Output::Stderr {
-                    "stderr"
-                } else {
-                    "stdout"
-                };
-                sink.write(&JsValue::NULL, stream, text);
-            })
+            sink.as_ref()
+                .map(|sink| sink.write(&JsValue::NULL, stream_name(stream), text))
         });
         if sent.is_none() {
             written().push(stream, text);
@@ -138,20 +183,27 @@ pub fn prepare() -> Result<(), JsError> {
 /// `{"kind":"error","text":..}` when the snippet doesn't compile. The
 /// instance runs one program: the universe is the program's from then on.
 ///
+/// The page gets the answer as a promise: `main` runs on a stack a sleep
+/// suspends, and the promise settles once `main` returns. Meanwhile
+/// [`sleeping`] is true.
+///
 /// # Errors
 ///
 /// Returns the error installing the bindings gave.
-#[wasm_bindgen]
+#[wasm_bindgen(jspi)]
 pub fn run(manifest: &str, source: &str) -> Result<String, JsError> {
     let root = PathBuf::from(ROOT);
     let files = vec![(root.join("Cargo.toml"), Box::from(manifest))];
     let features = crate::project::cargo::features::Enabled::default();
-    started(
+    SUSPENDABLE.set(true);
+    let answer = started(
         root.join("src").join("main.rs"),
         Box::from(source),
         files,
         features,
-    )
+    );
+    SUSPENDABLE.set(false);
+    answer
 }
 
 /// Compile the package `files` holds, a JSON array of `[path, text]`
@@ -202,8 +254,13 @@ fn started(
         Ok(program) => program,
         Err(error) => return Ok(failure(&error).to_string()),
     };
-    let status = program.run();
+    // The program is the page's before `main` runs, so an edit made while
+    // `main` sleeps reloads it.
     PROGRAM.set(Some((universe, program)));
+    MAIN.set(true);
+    let status =
+        PROGRAM.with_borrow(|running| running.as_ref().map_or(0, |(_, program)| program.run()));
+    MAIN.set(false);
     // The next call from native code into the program takes this offer
     // first, which says the program runs on past `main`.
     future::offer(|| CALLED.set(true));
@@ -245,7 +302,7 @@ fn replaced(offer: impl FnOnce(&Program) -> Outcome) -> String {
         None => Outcome::Restarting {
             reason: "no program runs".to_owned(),
         },
-        Some(_) if !CALLED.get() => Outcome::Restarting {
+        Some(_) if !CALLED.get() && !MAIN.get() => Outcome::Restarting {
             reason: "the program has ended".to_owned(),
         },
         Some((_, program)) => offer(program),
@@ -303,15 +360,17 @@ fn taken_output() -> Vec<Value> {
     written
         .chunks
         .iter()
-        .map(|(stream, text)| {
-            let stream = if *stream == Output::Stderr {
-                "stderr"
-            } else {
-                "stdout"
-            };
-            json!({ "stream": stream, "text": text })
-        })
+        .map(|(stream, text)| json!({ "stream": stream_name(*stream), "text": text }))
         .collect()
+}
+
+/// The page's name of `stream`.
+fn stream_name(stream: Output) -> &'static str {
+    if stream == Output::Stderr {
+        "stderr"
+    } else {
+        "stdout"
+    }
 }
 
 impl Written {

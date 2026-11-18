@@ -986,6 +986,8 @@ pub fn __rawr_scope_release_v1(nonce: u64, shared: bool) {
 /// which owns the program from now on, and on every other thread. Async
 /// steps run in it too (D513.3).
 pub fn publish(bootstrap: Bootstrap) {
+    #[cfg(feature = "sync")]
+    MOVED.set(None);
     install(Current::new(bootstrap));
 }
 
@@ -1019,6 +1021,62 @@ fn install(current: Current) {
             Some((current.calls.clone(), current.shared.clone()));
     }
     CURRENT.with(|slot| *slot.borrow_mut() = Some(current));
+}
+
+/// A generation installed while a marked `main`'s own frame may run on, as
+/// a `main` that loops in script code does: the libraries its calls ran
+/// with, and the ones and the runtime they run with now.
+#[cfg(feature = "sync")]
+struct Moved {
+    from: [crate::SharedModule; 2],
+    to: [crate::SharedModule; 2],
+    runtime: crate::Shared<crate::host::runtime::Registry>,
+}
+
+#[cfg(feature = "sync")]
+thread_local! {
+    /// The generation installed last, until a marked `main`'s own frame
+    /// follows it.
+    static MOVED: RefCell<Option<Moved>> = const { RefCell::new(None) };
+}
+
+/// Move the frame evaluating a statement at `global`'s level to the
+/// generation installed last, when it is a marked `main`'s own frame that
+/// still runs with the libraries of the one before: its next calls are
+/// entries (D553.1), so a `main` that loops in script code calls the new
+/// code from its next statement on, its locals as they were. Its own body
+/// is the same text, or the save restarted it.
+#[cfg(feature = "sync")]
+pub(crate) fn follow(
+    global: &mut crate::eval::GlobalRuntimeState,
+    caches: &mut crate::eval::Caches,
+) {
+    if global.level != 0 || !crate::future::outermost() {
+        return;
+    }
+    MOVED.with_borrow_mut(|moved| {
+        let Some(Moved { from, to, runtime }) = moved.as_ref() else {
+            return;
+        };
+        let mut followed = false;
+        for library in &mut global.lib {
+            if let Some(at) = from
+                .iter()
+                .position(|from| crate::Shared::ptr_eq(from, library))
+            {
+                *library = to[at].clone();
+                followed = true;
+            }
+        }
+        if !followed {
+            return;
+        }
+        caches.rewind_fn_resolution_caches(0);
+        if global.host_runtime.is_some() {
+            global.host_runtime = Some(runtime.clone());
+        }
+        *moved = None;
+    });
 }
 
 /// `file` named by its path from `root`, as a program Cargo builds names
@@ -1968,9 +2026,33 @@ pub fn admit(bootstrap: Bootstrap) -> Admission {
                 Err(reason) => return Admission::Refused(reason),
             }
         }
+        replaced(&running, &next);
     }
     install(next);
     Admission::Admitted(migrated)
+}
+
+/// Note that `next` replaces `running`, for a marked `main`'s own frame
+/// to follow ([`follow`]). A frame that hasn't followed the generation
+/// before runs with the libraries of the one it followed last.
+#[cfg(feature = "sync")]
+fn replaced(running: &Current, next: &Current) {
+    let libraries = |current: &Current| {
+        current
+            .bootstrap
+            .catalog()
+            .authority()
+            .libraries()
+            .map(Clone::clone)
+    };
+    let from = MOVED
+        .take()
+        .map_or_else(|| libraries(running), |moved| moved.from);
+    MOVED.set(Some(Moved {
+        from,
+        to: libraries(next),
+        runtime: next.bootstrap.catalog().runtime().clone(),
+    }));
 }
 
 /// Rewrite each live value of `changed`, the script types `next` changed

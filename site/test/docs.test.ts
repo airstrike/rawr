@@ -105,6 +105,8 @@ test("a browser block isn't run at build: its output before Run says where it ru
   const html = await runOutputs(block("a", "todo", ' data-where="browser"'), runs);
   assert.match(html, new RegExp(`<span id="out-a" aria-live="polite">${BROWSER_ONLY}</span>`));
   assert.deepEqual(ran, []);
+  const noted = await runOutputs(block("b", "loop", ' data-where="browser" data-note="Run it, then edit it."'), runs);
+  assert.match(noted, /<span id="out-b" aria-live="polite"><span class="next">Run it, then edit it\.<\/span><\/span>/, "its data-note says it instead");
 });
 
 test("a server block that waits for the next image says so while the live server can't compile it, then shows its run", async () => {
