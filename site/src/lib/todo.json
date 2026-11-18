@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-18",
-  "version": "0.4.7",
+  "version": "0.4.8",
   "examples": {
     "running": 56,
     "total": 56,
@@ -9,13 +9,15 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
-      "entries": [
-        {"text":"A later demand round writes each item it takes from an earlier classification into the stored classification as it was, and its plan takes each kept contribution without digesting outcomes again. On chrono, encoding and digests fall from 117 ms to 37 ms per round.","issues":[2242],"refs":[2221]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.8",
+        "date": "2026-11-18",
+        "entries": [
+          {"text":"A later demand round writes each item it takes from an earlier classification into the stored classification as it was, and its plan takes each kept contribution without digesting outcomes again. On chrono, encoding and digests fall from 117 ms to 37 ms per round.","issues":[2242],"refs":[2221]}
+        ]
+      },
       {
         "version": "0.4.7",
         "date": "2026-11-18",
@@ -5036,7 +5038,7 @@
     {"issue":2239,"title":"Store, pins, session, runtime and deps locks are released only when every copy of the file closes","state":"open","category":"Health"},
     {"issue":2240,"title":"iced::application with a u32 state and () message panics the runner generator","state":"open","category":"No glue (D593)"},
     {"issue":2241,"title":"A program's own `#[derive(thiserror::Error)]` is refused as an impl of an unknown trait path","state":"open","category":"No glue (D593)"},
-    {"issue":2242,"title":"A later demand round writes each item it takes from an earlier classification into the stored…","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":2242,"title":"A later demand round writes each item it takes from an earlier classification into the stored…","state":"closed","category":"Shared dependency cache (D607)","release":"0.4.8"}
   ],
   "groups": [
     {
@@ -5350,7 +5352,7 @@
             {"number":2222,"title":"D604 headers and the facade plan's sites are computed per program, not kept per crate","state":"closed"},
             {"number":2233,"title":"A shared crate's paths whose outcome names no definition keep their facade contributions in the project","state":"closed"},
             {"number":2232,"title":"Each demand round digests every impl's identity once, and writes the stored classification in…","state":"closed"},
-            {"number":2242,"title":"A later demand round writes each item it takes from an earlier classification into the stored…","state":"open"}
+            {"number":2242,"title":"A later demand round writes each item it takes from an earlier classification into the stored…","state":"closed"}
           ],
           "milestone": "0.4"
         }

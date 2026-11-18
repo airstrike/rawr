@@ -2241,6 +2241,6 @@
     {"t":"T2239","issue":2239,"title":"T2239: Store, pins, session, runtime and deps locks are released only when every copy of the file closes","state":"open","category":"Health","labels":["health"],"gantt":{"group":"parity","row":"owner-locks"},"decisions":[],"commit":null,"release":null},
     {"t":"T2240","issue":2240,"title":"T2240: iced::application with a u32 state and () message panics the runner generator","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":{"group":"no-glue","row":"runner-build-gaps"},"decisions":[],"commit":null,"release":null},
     {"t":"T2241","issue":2241,"title":"T2241: A program's own `#[derive(thiserror::Error)]` is refused as an impl of an unknown trait path","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":{"group":"no-glue","row":"program-impls-cross"},"decisions":[],"commit":null,"release":null},
-    {"t":"T2242","issue":2242,"title":"T2242: A later demand round writes each item it takes from an earlier classification into the stored…","state":"open","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":{"group":"bind","row":"re-key-plan-and-headers"},"decisions":[],"commit":null,"release":null}
+    {"t":"T2242","issue":2242,"title":"T2242: A later demand round writes each item it takes from an earlier classification into the stored…","state":"closed","category":"Shared dependency cache (D607)","labels":["shared bindings"],"gantt":{"group":"bind","row":"re-key-plan-and-headers"},"decisions":[],"commit":null,"release":"0.4.8"}
   ]
 }
