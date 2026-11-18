@@ -73,9 +73,14 @@ pub(super) fn record<T, P: api::Phase>(
     graph: &api::Graph<P>,
     work: impl FnOnce() -> T,
 ) -> (T, Vec<Key>) {
-    let saved = MEMOS.take();
+    let mut saved = Saved(Some(MEMOS.take()));
     let (done, noted) = api::reads::record(work);
-    let memos = MEMOS.replace(saved);
+    let memos = MEMOS.replace(
+        saved
+            .0
+            .take()
+            .expect("the outer memos stay set aside while the work runs"),
+    );
     let mut keys = Vec::with_capacity(
         noted.definitions.len()
             + noted.absent_definitions.len()
@@ -117,6 +122,18 @@ pub(super) fn record<T, P: api::Phase>(
     keys.sort_unstable();
     keys.dedup();
     (done, keys)
+}
+
+/// The memos noted before a [`record`], put back when it ends, by return
+/// or unwind.
+struct Saved(Option<Vec<Memo>>);
+
+impl Drop for Saved {
+    fn drop(&mut self) {
+        if let Some(memos) = self.0.take() {
+            MEMOS.replace(memos);
+        }
+    }
 }
 
 /// The digest of what a graph gives one key.

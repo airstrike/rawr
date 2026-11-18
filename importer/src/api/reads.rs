@@ -64,22 +64,57 @@ pub(crate) struct Noted {
 }
 
 /// Run `work` noting what it reads of any graph, on this thread.
+/// The work's own reads are noted whatever work around it pauses; the
+/// thread's state around it is back when it ends, by return or unwind.
 pub(crate) fn record<T>(work: impl FnOnce() -> T) -> (T, Noted) {
-    let outer = RECORDING.replace(true);
-    let saved = NOTED.take();
+    let mut outer = Outer {
+        recording: RECORDING.replace(true),
+        paused: PAUSED.replace(0),
+        noted: Some(NOTED.take()),
+    };
     let done = work();
-    let noted = NOTED.replace(saved);
-    RECORDING.set(outer);
+    let noted = NOTED.replace(
+        outer
+            .noted
+            .take()
+            .expect("the outer notes stay set aside while the work runs"),
+    );
+    drop(outer);
     (done, noted)
+}
+
+/// What a thread noted and how before a [`record`], put back when it ends.
+struct Outer {
+    recording: bool,
+    paused: u32,
+    noted: Option<Noted>,
+}
+
+impl Drop for Outer {
+    fn drop(&mut self) {
+        RECORDING.set(self.recording);
+        PAUSED.set(self.paused);
+        if let Some(noted) = self.noted.take() {
+            NOTED.replace(noted);
+        }
+    }
 }
 
 /// Run `work` without noting its reads: what it computes is read once for
 /// many pieces of work, each of which notes reading the result itself.
 pub(crate) fn paused<T>(work: impl FnOnce() -> T) -> T {
     PAUSED.set(PAUSED.get() + 1);
-    let done = work();
-    PAUSED.set(PAUSED.get() - 1);
-    done
+    let _resume = Resume;
+    work()
+}
+
+/// Ends a [`paused`] stretch, by return or unwind.
+struct Resume;
+
+impl Drop for Resume {
+    fn drop(&mut self) {
+        PAUSED.set(PAUSED.get() - 1);
+    }
 }
 
 /// Whether this thread notes what it reads now: it records, and is not

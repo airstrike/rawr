@@ -1301,9 +1301,10 @@ impl Plan {
         earlier: Option<&[&contribution::Contributions]>,
     ) -> Result<(Box<[u8]>, Option<contribution::Contributions>), super::Error> {
         let mut generated = earlier.map(|_| contribution::Contributions::default());
+        #[cfg(not(target_arch = "wasm32"))]
+        let paths = outcomes.len();
         // Each re-exported variant: its root, its path, its enum and its
         // name, named through a path to the enum once every type is in.
-        let building_outcomes = outcomes.len();
         let mut variants = Vec::<contribution::Variant>::new();
         // Each trait Rawr code names: its root, its path and its identity,
         // whose header is written once every type is in (D604).
@@ -1348,7 +1349,7 @@ impl Plan {
         crate::progress::generated(
             generated
                 .as_ref()
-                .map_or(building_outcomes, contribution::Contributions::fresh),
+                .map_or(paths, contribution::Contributions::fresh),
         );
         let mut facades = building
             .into_iter()
