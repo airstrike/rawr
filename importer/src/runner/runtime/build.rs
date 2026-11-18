@@ -185,10 +185,11 @@ impl Build {
         publish(entry, key, &messages)
     }
 
-    /// The build directory, locked for this build. A prune that retired it
-    /// between its creation and the lock took the lock file with it, and the
-    /// second attempt makes the directory anew.
-    fn lock(&self) -> Result<File, node::Error> {
+    /// The build directory, locked for this build. A wait for another
+    /// build there says so, naming it. A prune that retired it between its
+    /// creation and the lock took the lock file with it, and the second
+    /// attempt makes the directory anew.
+    fn lock(&self) -> Result<crate::blocking::Exclusive, node::Error> {
         let path = self.directory.join(".lock");
         for _ in 0..2 {
             let Ok(lock) = fs::create_dir_all(&self.directory).and_then(|()| {
@@ -200,11 +201,13 @@ impl Build {
             }) else {
                 continue;
             };
-            lock.lock().map_err(|source| node::Error::Io {
-                operation: "lock the build of rawr's runtime",
-                path: path.clone(),
-                source,
-            })?;
+            let lock =
+                crate::blocking::Exclusive::new(lock, &path, "rawr's runtime build directory")
+                    .map_err(|source| node::Error::Io {
+                        operation: "lock the build of rawr's runtime",
+                        path: path.clone(),
+                        source,
+                    })?;
             if path.exists() {
                 return Ok(lock);
             }

@@ -57,15 +57,15 @@ impl Built {
             return Ok(built);
         }
         fs::create_dir_all(&drivers).map_err(|source| io("create", &drivers, source))?;
+        // A wait for another process's driver build says so, naming it.
+        let path = drivers.join(".lock");
         let lock = fs::OpenOptions::new()
             .create(true)
             .truncate(false)
             .write(true)
-            .open(drivers.join(".lock"))
+            .open(&path)
             .map_err(|source| io("lock", &drivers, source))?;
-        let mut lock = fd_lock::RwLock::new(lock);
-        let _guard = lock
-            .write()
+        let _guard = crate::blocking::Exclusive::new(lock, &path, "rawr-import-driver builds")
             .map_err(|source| io("lock", &drivers, source))?;
         if built.driver().is_file() {
             return Ok(built);

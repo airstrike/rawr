@@ -953,13 +953,15 @@ fn ensure(
 /// and the lease is all this does: the exclusive lock would wait for every
 /// runner build that holds a lease, and for those that start meanwhile.
 /// Otherwise `refresh` runs under the exclusive lock first and says whether
-/// it compiled the entry new.
+/// it compiled the entry new. A wait for the lock says so, naming the
+/// build that holds it.
 fn lease(
     lock: &File,
     path: &Path,
     current: impl FnOnce() -> bool,
     refresh: impl FnOnce() -> Result<bool, node::Error>,
 ) -> Result<bool, node::Error> {
+    use crate::blocking::Mode;
     let io = |operation: &'static str| {
         move |source| node::Error::Io {
             operation,
@@ -967,17 +969,22 @@ fn lease(
             source,
         }
     };
-    lock.lock_shared().map_err(io("lease rawr's runtime"))?;
+    let wait = |mode| crate::blocking::wait(lock, path, RUNTIME, mode, crate::progress::say);
+    wait(Mode::Shared).map_err(io("lease rawr's runtime"))?;
     if current() {
         return Ok(false);
     }
-    lock.unlock().map_err(io("unlock rawr's runtime"))?;
-    lock.lock().map_err(io("lock rawr's runtime"))?;
-    let compiled = refresh()?;
-    lock.unlock().map_err(io("unlock rawr's runtime"))?;
-    lock.lock_shared().map_err(io("lease rawr's runtime"))?;
+    crate::blocking::release(lock, Mode::Shared).map_err(io("unlock rawr's runtime"))?;
+    wait(Mode::Exclusive).map_err(io("lock rawr's runtime"))?;
+    let refreshed = refresh();
+    crate::blocking::release(lock, Mode::Exclusive).map_err(io("unlock rawr's runtime"))?;
+    let compiled = refreshed?;
+    wait(Mode::Shared).map_err(io("lease rawr's runtime"))?;
     Ok(compiled)
 }
+
+/// What a wait for an entry's lock names.
+const RUNTIME: &str = "rawr's runtime";
 
 fn write_changed(path: &Path, bytes: &[u8]) -> Result<(), node::Error> {
     if fs::read(path).ok().as_deref() == Some(bytes) {
