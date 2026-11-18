@@ -5886,6 +5886,58 @@ fn a_store_keeps_each_current_schema_of_a_kind_and_evicts_older_ones() {
     fs::remove_dir_all(root).expect("the fixture retires");
 }
 
+/// A resolved entry an older surface schema wrote holds another schema, so
+/// the store evicts it when it opens, and keeps the current one (#2247).
+#[test]
+fn a_resolved_entry_of_an_older_surface_schema_evicts() {
+    const RESOLVED: u32 = crate::composition::RESOLVED_SCHEMA;
+    const OLDER: u32 = crate::composition::resolved_schema(crate::surface::SURFACE_SCHEMA - 1);
+    let root = temporary("store-older-surface");
+    let context = prepare_fixture(&root);
+    let store = context.open_store().expect("the store opens");
+    let evaluator = Evaluator::new(&store, &crate::metrics::Current);
+    let current = evaluator
+        .direct(
+            &context
+                .direct::<Checked<RESOLVED>>(b"resolved-current")
+                .expect("the resolved recipe seals"),
+            || Ok(Checked(Box::from(b"current".as_slice()))),
+        )
+        .expect("the current entry publishes");
+    let older = evaluator
+        .direct(
+            &context
+                .direct::<Checked<OLDER>>(b"resolved-older")
+                .expect("the older recipe seals"),
+            || Ok(Checked(Box::from(b"older".as_slice()))),
+        )
+        .expect("the older entry publishes");
+    let action = |key: super::ActionKey| {
+        store
+            .root()
+            .join("actions/checked")
+            .join(super::STORAGE_DIRECTORY)
+            .join(key.directory())
+    };
+    let (current_action, older_action) = (
+        action(current.receipt().action()),
+        action(older.receipt().action()),
+    );
+    assert!(older_action.exists(), "the older entry is published");
+    drop((evaluator, current, older));
+    drop(store);
+
+    // The next run opens the store.
+    let store = context.open_store().expect("the store opens");
+    assert!(!older_action.exists(), "the older entry evicts");
+    assert!(current_action.exists(), "the current entry stays");
+    store
+        .fixture_physical_inventory()
+        .expect("the store's inventory is whole");
+    store.retire_fixture().expect("the store retires");
+    fs::remove_dir_all(root).expect("the fixture retires");
+}
+
 /// A failed evaluation whose reservation also fails to release reports
 /// the evaluation's own failure, a full disk's I/O error among them, and
 /// then the release's (#641, D664).

@@ -11,7 +11,15 @@ mod source;
 /// The schema of a sealed resolved demand. Every build of rawr keeps it as
 /// current, with or without the warm launch that writes it, so a process
 /// that never resolves one never evicts one another process wrote.
-pub(crate) const RESOLVED_SCHEMA: u32 = 0x5245_0001;
+pub(crate) const RESOLVED_SCHEMA: u32 = resolved_schema(crate::surface::SURFACE_SCHEMA);
+
+/// The resolved value's schema. The plans it holds are decoded in the
+/// surface's format, so the surface schema is folded in: the schema is part
+/// of the key, a surface change gives every resolved entry a new one, and
+/// the store evicts the entries an older format wrote (D1042, D1045).
+pub(crate) const fn resolved_schema(surface: u32) -> u32 {
+    node::reader_schema(2, &[surface])
+}
 #[cfg(feature = "rustc-driver")]
 pub use resolved::{record as record_resolved, resolve_api_semantic, Warm};
 
