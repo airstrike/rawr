@@ -98,7 +98,10 @@ pub(crate) fn snapshot_generation_plain(
         .map_err(|failure| Error::resolution(sources.clone(), failure))?;
     let executable = snapshot_executable(engine, program, &sources)?;
     let tests = declared.map(|declared| super::test::Declared::compiled_in(declared, &executable));
-    Ok(crate::reload::Candidate::from_package_plain(executable, source).with_tests(tests))
+    Ok(
+        crate::reload::Candidate::from_package_plain(executable, source, engine, snapshot)
+            .with_tests(tests),
+    )
 }
 
 #[cfg(feature = "rust-import")]

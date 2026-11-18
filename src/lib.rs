@@ -185,6 +185,8 @@ pub mod receiver;
 mod redraw;
 /// Immutable candidates for script-native program replacement.
 pub mod reload;
+/// A REPL session: its entries run as the statements of one body.
+pub mod repl;
 /// Rawr item-name and header-type resolution.
 pub mod resolve;
 /// Rawr's `Result<T, E>` at runtime, and its round trip to Rust's `Result<T, E>`.
@@ -207,6 +209,8 @@ mod serde;
 pub mod signature;
 /// Source text retained by parsed compilation units.
 pub mod source;
+/// Code compiled into a program at one place and run on its own.
+mod splice;
 mod std_facade;
 #[cfg(feature = "rust-import")]
 mod stored;

@@ -187,12 +187,26 @@ pub fn run(loaded: Loaded) -> Result<Option<String>, Failed> {
     // The debugger is registered before the program compiles, so only a
     // program a debugger reads carries what reading needs (#526).
     let inspector = inspector(engine);
+    // Code evaluated at a pause compiles into the program as it was read
+    // (#490).
+    let snapshot = inspector.as_ref().and_then(|_| {
+        rawr::package::snapshot::Snapshot::of(&graph)
+            .map_err(|error| eprintln!("rawr: code can't be evaluated in this run: {error}"))
+            .ok()
+    });
     let (ast, main, positions) = engine
         .compile_package_with_positions(graph)
         .map_err(|error| Failed::Compile(compile_report(&error, target)))?;
     let positions = std::sync::Arc::new(positions);
     if let (Some(inspector), Some(entry)) = (inspector, source(target)) {
         let positions = std::sync::Arc::clone(&positions);
+        if let Some(snapshot) = snapshot {
+            inspector.evaluate_in(rawr::inspect::Program::new(
+                snapshot,
+                entry.clone(),
+                std::sync::Arc::clone(&positions),
+            ));
+        }
         inspector.locate_with(move |position| {
             let (file, span) = positions.locate_position(&entry, position)?;
             Some((file.identity().to_owned(), span.start().line()?))

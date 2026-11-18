@@ -5571,6 +5571,10 @@ fn locate(program: &Program) {
     if let Some(inspector) = inspector()
         && let Some(located) = program.candidate.as_ref().and_then(|candidate| candidate.located())
     {
+        // Code evaluated at a pause compiles into this program (#490).
+        if let Some(evaluated) = located.program() {
+            inspector.evaluate_in(evaluated);
+        }
         let located = std::sync::Arc::clone(located);
         inspector.locate_with(move |position| located.line(position));
         // Its breakpoints move to this generation's lines (#489).

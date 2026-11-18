@@ -1,5 +1,5 @@
 use rawr::plugin::*;
-use rawr::{Dynamic, Engine, EvalAltResult, Module, Scope, AST, INT};
+use rawr::{Engine, EvalAltResult, Module, Scope, INT};
 use rustyline::config::Builder;
 use rustyline::error::ReadlineError;
 use rustyline::history::{History, SearchDirection};
@@ -56,13 +56,6 @@ fn print_help() {
     println!("!?<text>   => repeat the last history line containing some text");
     println!("scope      => print all variables in the scope");
     println!("strict     => toggle on/off Strict Variables Mode");
-    println!("optimize   => toggle on/off script optimization");
-    #[cfg(feature = "metadata")]
-    println!("functions  => print all functions defined");
-    #[cfg(feature = "metadata")]
-    println!("json       => output all functions to `metadata.json`");
-    println!("ast        => print the last AST (optimized)");
-    println!("astu       => print the last raw, un-optimized AST");
     println!();
     println!("press Ctrl-Enter or end a line with `\\`");
     println!("to continue to the next line.");
@@ -290,8 +283,6 @@ fn main() {
     println!("{title}");
     println!("{0:=<1$}", "", title.len());
 
-    let mut optimize_level = rawr::OptimizationLevel::Full;
-
     // Initialize scripting engine
     let mut engine = Engine::new();
 
@@ -315,9 +306,8 @@ fn main() {
     let mut replacement_index = 0;
     let mut history_offset = 1;
 
-    let mut main_ast = AST::empty();
-    let mut ast_u = AST::empty();
-    let mut ast = AST::empty();
+    // Each entry is a statement of one body (#1207).
+    let mut session = rawr::repl::Session::new();
 
     print_help();
 
@@ -421,62 +411,8 @@ fn main() {
                 println!("Strict Variables Mode turned ON.");
                 continue;
             }
-            "optimize" => {
-                match optimize_level {
-                    rawr::OptimizationLevel::Full => {
-                        optimize_level = rawr::OptimizationLevel::None;
-                        println!("Script optimization turned OFF.");
-                    }
-                    rawr::OptimizationLevel::Simple => {
-                        optimize_level = rawr::OptimizationLevel::Full;
-                        println!("Script optimization turned to FULL.");
-                    }
-                    _ => {
-                        optimize_level = rawr::OptimizationLevel::Simple;
-                        println!("Script optimization turned to SIMPLE.");
-                    }
-                }
-                continue;
-            }
             "scope" => {
                 println!("{scope}");
-                continue;
-            }
-            "astu" => {
-                // print the last un-optimized AST
-                println!("{ast_u:#?}\n");
-                continue;
-            }
-            "ast" => {
-                // print the last AST
-                println!("{ast:#?}\n");
-                continue;
-            }
-            #[cfg(feature = "metadata")]
-            "functions" => {
-                // print a list of all registered functions
-                for f in engine.gen_fn_signatures(false) {
-                    println!("{f}")
-                }
-
-                for f in main_ast.iter_functions() {
-                    println!("{f}")
-                }
-
-                println!();
-                continue;
-            }
-            #[cfg(feature = "metadata")]
-            "json" => {
-                use std::io::Write;
-
-                let json = engine
-                    .gen_fn_metadata_with_ast_to_json(&main_ast, false)
-                    .expect("Unable to generate JSON");
-                let mut f = std::fs::File::create("metadata.json")
-                    .expect("Unable to create `metadata.json`");
-                f.write_all(json.as_bytes()).expect("Unable to write data");
-                println!("Functions metadata written to `metadata.json`.");
                 continue;
             }
             "!!" => {
@@ -539,36 +475,23 @@ fn main() {
             _ => (),
         }
 
-        match engine
-            .compile_with_scope(&scope, &input)
-            .map_err(Into::into)
-            .and_then(|r| {
-                {
-                    ast_u = r.clone();
-
-                    ast = engine.optimize_ast(&scope, r, optimize_level);
-                }
-
-                // Merge the AST into the main
-                main_ast += ast.clone();
-
-                // Evaluate
-                engine.eval_ast_with_scope::<Dynamic>(&mut scope, &main_ast)
-            }) {
-            Ok(result) if !result.is_unit() => {
-                println!("=> {result:?}");
+        match session.run(&engine, &mut scope, &input) {
+            Ok(Some(value)) => {
+                println!("=> {value}");
                 println!();
             }
-            Ok(_) => (),
-            Err(err) => {
+            Ok(None) => (),
+            Err(error) => {
                 println!();
-                print_error(&input, *err);
+                println!("{error}");
                 println!();
             }
         }
+    }
 
-        // Throw away all the statements, leaving only the functions
-        main_ast.clear_statements();
+    // The session's locals drop at its end, as a body's do.
+    if let Err(error) = session.end(&engine, &mut scope) {
+        println!("{error}");
     }
 
     rl.save_history(HISTORY_FILE)
