@@ -25,14 +25,29 @@ pub(crate) struct Contribution {
 }
 
 /// Each outcome's contribution one plan applied, by the digest of the
-/// outcome with every plan it names in place.
+/// outcome with every plan it names in place, each unit of its facades'
+/// headers under what it read (`headers`), and each path's sites by what
+/// it read (`sites`).
 #[derive(Default, Deserialize, Serialize)]
 pub(crate) struct Contributions {
     #[serde(serialize_with = "entries", deserialize_with = "from_entries")]
     by_digest: BTreeMap<Digest, Kept>,
+    headers: super::headers::Kept,
+    sites: super::sites::Kept,
     /// How many the plan that gave these generated anew.
     #[serde(skip)]
     fresh: usize,
+    /// How many header units and paths' sites the plan wrote anew.
+    #[serde(skip)]
+    written: Written,
+}
+
+/// How many header units and paths' sites a plan wrote, rather than
+/// taking an earlier plan's.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct Written {
+    pub(crate) headers: usize,
+    pub(crate) sites: usize,
 }
 
 /// An outcome's digest with its plans in place.
@@ -83,12 +98,44 @@ impl Contributions {
         self.fresh
     }
 
+    /// Each unit of the plan's headers, under what it read.
+    pub(super) const fn headers(&self) -> &super::headers::Kept {
+        &self.headers
+    }
+
+    /// Each path's sites of the plan.
+    pub(super) const fn sites(&self) -> &super::sites::Kept {
+        &self.sites
+    }
+
+    /// Keep `headers`, the units of the plan's headers, and `sites`, its
+    /// paths' sites, of which it wrote `written`.
+    pub(super) fn keep_parts(
+        &mut self,
+        headers: super::headers::Kept,
+        sites: super::sites::Kept,
+        written: Written,
+    ) {
+        self.headers = headers;
+        self.sites = sites;
+        self.written = written;
+    }
+
+    /// How many header units and paths' sites the plan that gave these
+    /// wrote anew.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) const fn written(&self) -> Written {
+        self.written
+    }
+
     /// The contributions `keep` keeps, by the definition each one's path
-    /// names.
+    /// names, and the header units `keep_item` keeps, by the item whose
+    /// crate keeps each.
     #[cfg(feature = "rustc-driver")]
     pub(crate) fn select(
         &self,
         mut keep: impl FnMut(Option<&crate::surface::identity::Definition>) -> bool,
+        mut keep_item: impl FnMut(&crate::api::identity::Definition) -> bool,
     ) -> Self {
         Self {
             by_digest: self
@@ -97,7 +144,10 @@ impl Contributions {
                 .filter(|(_, kept)| keep(kept.target.as_ref()))
                 .map(|(digest, kept)| (*digest, kept.clone()))
                 .collect(),
+            headers: self.headers.select(|unit| keep_item(unit.owner())),
+            sites: self.sites.select(|target| keep(Some(target))),
             fresh: 0,
+            written: Written::default(),
         }
     }
 
@@ -120,7 +170,10 @@ impl Contributions {
         }
         Self {
             by_digest,
+            headers: self.headers.with(&later.headers),
+            sites: self.sites.with(&later.sites),
             fresh: 0,
+            written: Written::default(),
         }
     }
 
@@ -128,12 +181,14 @@ impl Contributions {
     #[cfg(feature = "rustc-driver")]
     pub(crate) fn any_fresh(&self) -> bool {
         self.by_digest.values().any(|kept| kept.fresh)
+            || self.headers.any_fresh()
+            || self.sites.any_fresh()
     }
 
     /// Whether these hold no contribution.
     #[cfg(feature = "rustc-driver")]
     pub(crate) fn is_empty(&self) -> bool {
-        self.by_digest.is_empty()
+        self.by_digest.is_empty() && self.headers.is_empty() && self.sites.is_empty()
     }
 }
 
@@ -601,6 +656,7 @@ mod tests {
     #[test]
     fn a_grown_graphs_plan_generates_only_its_new_paths_to_the_same_bytes() {
         let limits = crate::limits::Limits::standard();
+        let mut written = super::Written::default();
         for fixture in [
             crate::test_fixture::iced_profile(),
             crate::test_fixture::graph(),
@@ -613,6 +669,27 @@ mod tests {
                 .classify(&Policy::standard(), &limits)
                 .expect("the grown graph classifies");
             let alone = super::super::Plan::encode(&contract).expect("the grown plan encodes");
+            // A plan of the same graph from its own takes every header
+            // unit and every path's sites (#2222).
+            let (_, own) = super::super::Plan::encode_outcomes(
+                contract.raw_graph(),
+                contract.outcomes(),
+                Some(&[]),
+            )
+            .expect("the grown plan encodes");
+            let own = own.expect("a plan asked to keep its contributions keeps them");
+            written.headers += own.written().headers;
+            written.sites += own.written().sites;
+            let (again, taken) = super::super::Plan::encode_outcomes(
+                contract.raw_graph(),
+                contract.outcomes(),
+                Some(&[&own]),
+            )
+            .expect("the grown plan encodes from its own");
+            assert_eq!(alone, again);
+            let taken = taken.expect("a plan asked to keep its contributions keeps them");
+            assert_eq!(taken.fresh(), 0);
+            assert_eq!(taken.written(), super::Written::default());
             for dropped in 0..exports {
                 let smaller = crate::test_fixture::with_exports(&fixture, |index| index != dropped)
                     .classify(&Policy::standard(), &limits)
@@ -638,7 +715,16 @@ mod tests {
                     "the paths both plans name are taken: {} of {exports}",
                     generated.fresh()
                 );
+                assert!(
+                    generated.written().sites <= 1,
+                    "only the new path's sites are written: {:?}",
+                    generated.written()
+                );
             }
         }
+        assert!(
+            written.headers > 0 && written.sites > 0,
+            "the fixtures have headers and sites: {written:?}"
+        );
     }
 }

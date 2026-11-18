@@ -28,9 +28,13 @@ use super::{api, Policy};
 use crate::extract::engine::home;
 use crate::surface::facade::contribution::Contributions;
 
-/// The format of an entry's file: bump it when what a record or a
-/// contribution holds changes.
-const ENTRY_SCHEMA: u32 = 1;
+/// The format of a records entry's file: bump it when what a record holds
+/// changes.
+const RECORDS_SCHEMA: u32 = 1;
+/// The format of a facade entry's file: bump it when what a contribution
+/// or a header unit holds changes. 2: the entry keeps its plan's header
+/// units (#2222).
+const FACADE_SCHEMA: u32 = 2;
 /// The project's own entry, under its classified directory.
 const PROJECT: &str = "project";
 
@@ -98,11 +102,22 @@ impl Kind {
             Self::Records => {
                 let policy = Policy::standard();
                 format!(
-                    "{}-{}-{}-{ENTRY_SCHEMA}",
+                    "{}-{}-{}-{RECORDS_SCHEMA}",
                     policy.schema, policy.classifier, policy.compiler_abi
                 )
             }
-            Self::Facade => format!("facade-{}-{ENTRY_SCHEMA}", crate::surface::facade::schema()),
+            Self::Facade => format!(
+                "facade-{}-{FACADE_SCHEMA}",
+                crate::surface::facade::schema()
+            ),
+        }
+    }
+
+    /// The format of this kind's file.
+    const fn schema(self) -> u32 {
+        match self {
+            Self::Records => RECORDS_SCHEMA,
+            Self::Facade => FACADE_SCHEMA,
         }
     }
 
@@ -215,7 +230,10 @@ impl Sources {
     ) {
         let owners = Owners::of(self, items);
         for entry in self.entries() {
-            let part = contributions.select(|target| owners.owns(&entry, target));
+            let part = contributions.select(
+                |target| owners.owns(&entry, target),
+                |id| owners.entry(self, id) == entry,
+            );
             if part.is_empty() || !part.any_fresh() {
                 continue;
             }
@@ -273,6 +291,8 @@ impl Loaded {
 struct Owners {
     definitions: BTreeMap<api::identity::Definition, Entry>,
     surface: BTreeMap<crate::surface::identity::Definition, Entry>,
+    /// The first shared crate's entry.
+    first_shared: Option<Entry>,
 }
 
 impl Owners {
@@ -285,32 +305,40 @@ impl Owners {
             .iter()
             .position(|krate| krate.shared)
             .map(Entry::Crate);
-        let mut definitions = BTreeMap::new();
-        let mut surface = BTreeMap::new();
+        let mut owners = Self {
+            definitions: BTreeMap::new(),
+            surface: BTreeMap::new(),
+            first_shared,
+        };
         for id in items.definitions.keys() {
-            let unit = id.unit();
-            let own = sources.crates.iter().position(|krate| {
-                krate.crate_name == unit.crate_name()
-                    && krate.stable_crate_id.as_deref() == Some(unit.stable_crate_id())
-            });
-            let shareable = match unit.package() {
-                Some(package) => {
-                    package.source().starts_with("registry+")
-                        || package.source().starts_with("git+")
-                }
-                None => true,
-            };
-            let entry = match (own, &first_shared) {
-                (Some(index), _) => Entry::Crate(index),
-                (None, Some(shared)) if shareable => shared.clone(),
-                _ => Entry::Project,
-            };
-            surface.insert(crate::surface::identity::Definition::of(id), entry.clone());
-            definitions.insert(id.clone(), entry);
+            let entry = owners.entry(sources, id);
+            owners
+                .surface
+                .insert(crate::surface::identity::Definition::of(id), entry.clone());
+            owners.definitions.insert(id.clone(), entry);
         }
-        Self {
-            definitions,
-            surface,
+        owners
+    }
+
+    /// The entry that keeps what belongs to the item `id`: its selected
+    /// crate's, else the first shared crate's when a registry, a git
+    /// commit or the toolchain gives it, else the project's.
+    fn entry(&self, sources: &Sources, id: &api::identity::Definition) -> Entry {
+        let unit = id.unit();
+        let own = sources.crates.iter().position(|krate| {
+            krate.crate_name == unit.crate_name()
+                && krate.stable_crate_id.as_deref() == Some(unit.stable_crate_id())
+        });
+        let shareable = match unit.package() {
+            Some(package) => {
+                package.source().starts_with("registry+") || package.source().starts_with("git+")
+            }
+            None => true,
+        };
+        match (own, &self.first_shared) {
+            (Some(index), _) => Entry::Crate(index),
+            (None, Some(shared)) if shareable => shared.clone(),
+            _ => Entry::Project,
         }
     }
 
@@ -334,7 +362,7 @@ fn read<T: DeserializeOwned>(directory: &Path, key: &str, kind: Kind) -> Option<
     let _lease = home::hold(directory, key)?;
     let bytes = std::fs::read(directory.join(key).join(kind.file())).ok()?;
     let stored = crate::extract::sidecar::read::<Stored>(&bytes).ok()?;
-    if stored.schema != ENTRY_SCHEMA {
+    if stored.schema != kind.schema() {
         return None;
     }
     api::units::read(stored.units, || {
@@ -350,7 +378,7 @@ fn write<T: Serialize>(directory: &Path, key: &str, kind: Kind, contents: &T) {
         return;
     };
     let Ok(bytes) = serde_json::to_vec(&Stored {
-        schema: ENTRY_SCHEMA,
+        schema: kind.schema(),
         units,
         contents,
     }) else {
@@ -409,6 +437,11 @@ mod tests {
                     .expect("the fixture's plan encodes from its contributions");
             assert_eq!(plan, again, "a plan of kept contributions is the plan");
             assert_eq!(kept.fresh(), 0);
+            assert_eq!(
+                kept.written(),
+                crate::surface::facade::contribution::Written::default(),
+                "a plan of kept header units and sites writes none of them"
+            );
         }
         std::fs::remove_dir_all(&directory).expect("the scratch directory goes");
     }

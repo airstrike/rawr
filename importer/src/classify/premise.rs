@@ -81,43 +81,16 @@ pub(super) fn record<T, P: api::Phase>(
             .take()
             .expect("the outer memos stay set aside while the work runs"),
     );
-    let mut keys = Vec::with_capacity(
-        noted.definitions.len()
-            + noted.absent_definitions.len()
-            + noted.implementations.len()
-            + noted.absent_implementations.len()
-            + noted.groups.len()
-            + noted.ledgers.len()
-            + memos.len(),
-    );
-    let mut definitions = noted.definitions;
-    definitions.sort_unstable();
-    definitions.dedup();
-    keys.extend(definitions.into_iter().filter_map(|index| {
-        let definition = api::reads::paused(|| graph.definition_at(index as usize))?;
-        Some(Key::Definition(definition.id().clone()))
-    }));
-    keys.extend(noted.absent_definitions.into_iter().map(Key::Definition));
-    let mut implementations = noted.implementations;
-    implementations.sort_unstable();
-    implementations.dedup();
-    keys.extend(implementations.into_iter().filter_map(|index| {
-        let implementation = api::reads::paused(|| graph.implementation_at(index as usize))?;
-        Some(Key::Implementation(implementation.id().clone()))
-    }));
-    keys.extend(
-        noted
-            .absent_implementations
-            .into_iter()
-            .map(Key::Implementation),
-    );
-    keys.extend(
-        noted
-            .groups
-            .into_iter()
-            .map(|(group, id)| Key::Group(group, id)),
-    );
-    keys.extend(noted.ledgers.into_iter().map(Key::Ledger));
+    let mut keys = noted
+        .reads(graph)
+        .into_iter()
+        .map(|read| match read {
+            api::reads::Read::Definition(id) => Key::Definition(id),
+            api::reads::Read::Implementation(id) => Key::Implementation(id),
+            api::reads::Read::Group(group, id) => Key::Group(group, id),
+            api::reads::Read::Ledger(ledger) => Key::Ledger(ledger),
+        })
+        .collect::<Vec<_>>();
     keys.extend(memos.into_iter().map(Key::Memo));
     keys.sort_unstable();
     keys.dedup();

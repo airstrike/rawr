@@ -18,6 +18,7 @@ pub(crate) mod layout;
 pub mod ledger;
 pub mod model;
 pub(crate) mod reads;
+pub(crate) mod recorded;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod selected;
 #[cfg(not(target_arch = "wasm32"))]

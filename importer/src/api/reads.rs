@@ -63,6 +63,60 @@ pub(crate) struct Noted {
     pub(crate) ledgers: Vec<Ledger>,
 }
 
+/// One read a recorded piece of work made of a graph, by identity: what
+/// another graph is asked for to tell whether it gives the work the same.
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub(crate) enum Read {
+    Definition(identity::Definition),
+    Implementation(identity::Definition),
+    Group(Group, identity::Definition),
+    Ledger(Ledger),
+}
+
+impl Noted {
+    /// Each read, by identity in `graph`, the graph they were made of, each
+    /// once, in order.
+    pub(crate) fn reads<P: Phase>(self, graph: &Graph<P>) -> Vec<Read> {
+        let mut definitions = self.definitions;
+        definitions.sort_unstable();
+        definitions.dedup();
+        let mut implementations = self.implementations;
+        implementations.sort_unstable();
+        implementations.dedup();
+        let mut reads = Vec::with_capacity(
+            definitions.len()
+                + self.absent_definitions.len()
+                + implementations.len()
+                + self.absent_implementations.len()
+                + self.groups.len()
+                + self.ledgers.len(),
+        );
+        reads.extend(definitions.into_iter().filter_map(|index| {
+            let definition = paused(|| graph.definition_at(index as usize))?;
+            Some(Read::Definition(definition.id().clone()))
+        }));
+        reads.extend(self.absent_definitions.into_iter().map(Read::Definition));
+        reads.extend(implementations.into_iter().filter_map(|index| {
+            let implementation = paused(|| graph.implementation_at(index as usize))?;
+            Some(Read::Implementation(implementation.id().clone()))
+        }));
+        reads.extend(
+            self.absent_implementations
+                .into_iter()
+                .map(Read::Implementation),
+        );
+        reads.extend(
+            self.groups
+                .into_iter()
+                .map(|(group, id)| Read::Group(group, id)),
+        );
+        reads.extend(self.ledgers.into_iter().map(Read::Ledger));
+        reads.sort_unstable();
+        reads.dedup();
+        reads
+    }
+}
+
 /// Run `work` noting what it reads of any graph, on this thread.
 /// The work's own reads are noted whatever work around it pauses; the
 /// thread's state around it is back when it ends, by return or unwind.
@@ -253,6 +307,16 @@ impl<P: Phase> Graph<P> {
             Group::SelfType => digest(&mut self.implementations_for(id)),
             Group::Relevant => digest(&mut self.relevant_implementations(id)),
         })
+    }
+
+    /// The digest of what this graph gives `read`.
+    pub(crate) fn read_digest(&self, read: &Read) -> Digest {
+        match read {
+            Read::Definition(id) => self.definition_identity_digest(id),
+            Read::Implementation(id) => self.implementation_identity_digest(id),
+            Read::Group(group, id) => self.group_digest(*group, id),
+            Read::Ledger(ledger) => self.ledger_digest(*ledger),
+        }
     }
 
     /// The digest of the whole of `ledger`.
