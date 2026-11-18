@@ -4,17 +4,22 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
-    "entries": [
-      {"text":"A change to a manifest above a workspace's root, such as the checkout around a project, no longer stops a build as changed Cargo inputs.","issues":[894,411,658]},
-      {"text":"A relative `RAWR_HOME` is read from the current directory, so the first check of a project with dependencies no longer fails on a doubled path.","issues":[2226]},
-      {"text":"A damaged remembered resolution, or the document beside it, is resolved again instead of failing the run.","issues":[484]},
-      {"text":"A stale bundled cache entry at a fresh build's action is replaced instead of failing the build.","issues":[615]},
-      {"text":"Profile, profile-proof and checked entries an older rawr wrote are evicted when the store opens.","issues":[631]},
-      {"text":"A declared path with `..` after a symlinked directory names the link target's sibling, as Cargo reads it.","issues":[1173]},
-      {"text":"A failed runner build shows its own error first; a build-script difference follows as a possible cause. A failed reservation release reports the failure it follows.","issues":[1423,641]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.4.11",
+      "date": "2026-11-18",
+      "entries": [
+        {"text":"A change to a manifest above a workspace's root, such as the checkout around a project, no longer stops a build as changed Cargo inputs.","issues":[894,411,658]},
+        {"text":"A relative `RAWR_HOME` is read from the current directory, so the first check of a project with dependencies no longer fails on a doubled path.","issues":[2226]},
+        {"text":"A damaged remembered resolution, or the document beside it, is resolved again instead of failing the run.","issues":[484]},
+        {"text":"A stale bundled cache entry at a fresh build's action is replaced instead of failing the build.","issues":[615]},
+        {"text":"Profile, profile-proof and checked entries an older rawr wrote are evicted when the store opens.","issues":[631]},
+        {"text":"A declared path with `..` after a symlinked directory names the link target's sibling, as Cargo reads it.","issues":[1173]},
+        {"text":"A failed runner build shows its own error first; a build-script difference follows as a possible cause. A failed reservation release reports the failure it follows.","issues":[1423,641]}
+      ]
+    },
     {
       "version": "0.4.10",
       "date": "2026-11-18",

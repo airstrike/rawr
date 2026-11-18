@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
+
+## 0.4.11 (2026-11-18)
+
 - A change to a manifest above a workspace's root, such as the checkout around a project, no longer stops a build as changed Cargo inputs. (#894, #411, #658)
 - A relative `RAWR_HOME` is read from the current directory, so the first check of a project with dependencies no longer fails on a doubled path. (#2226)
 - A damaged remembered resolution, or the document beside it, is resolved again instead of failing the run. (#484)
