@@ -120,7 +120,15 @@ impl<'a> Parser<'a> {
                 .expect("a structural adapter takes the operands its operation was generated for");
                 ExecutableOp::Imported { proof }
             }
-            Op::Symbolic { value, captures } => ExecutableOp::Symbolic { value, captures },
+            Op::Symbolic {
+                value,
+                captures,
+                changes,
+            } => ExecutableOp::Symbolic {
+                value,
+                captures,
+                changes,
+            },
             Op::Intrinsic { operation } => {
                 let IntrinsicOperation {
                     facade,

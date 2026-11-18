@@ -86,9 +86,18 @@ impl<'a> Parser<'a> {
         expression: Span,
         captures: Vec<origin::Fragment>,
     ) -> ParsedExpr {
+        // A lifted closure that changes what it captures holds each capture
+        // in a cell, so the native function that calls it again sees what
+        // the last call changed, as an `FnMut` owns its captures.
+        let changes = !captures.is_empty()
+            && self
+                .flow()
+                .closure(value.key())
+                .is_some_and(|closure| closure.mutable);
         let helper = self.push_op(Op::Symbolic {
             value: value.clone(),
             captures: captures.len(),
+            changes,
         });
         ParsedExpr {
             prelude: origin::Fragment::default(),

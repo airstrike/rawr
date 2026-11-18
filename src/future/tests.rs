@@ -96,6 +96,38 @@ fn a_step_that_fails_ends_the_future_with_its_message() {
     assert!(super::message(&error).contains("no luck"), "{error}");
 }
 
+/// A `move` closure `poll_fn` calls keeps what each call changed in what
+/// it captured, as Rust's `FnMut` closure owns its captures.
+#[test]
+fn poll_fn_keeps_what_its_move_closure_changed() {
+    let future = main_of(
+        r#"
+        #[tokio::main]
+        pub async fn main() -> i64 {
+            let mut n = 10;
+            std::future::poll_fn(move |cx| {
+                n += 1;
+                if n < 13 {
+                    cx.waker().wake_by_ref();
+                    return std::task::Poll::Pending;
+                }
+                std::task::Poll::Ready(n)
+            })
+            .await
+        }
+        "#,
+    );
+    let mut script = future.cast::<super::Future>().into_script();
+    let mut cx = Context::from_waker(Waker::noop());
+    for _ in 0..5 {
+        if let Poll::Ready(output) = script.poll_output(&mut cx) {
+            assert_eq!(output.unwrap().as_int().unwrap(), 13);
+            return;
+        }
+    }
+    panic!("the closure lost what it changed");
+}
+
 #[test]
 fn try_join_is_not_yet_in_a_program_without_iced() {
     let mut engine = Engine::new();
