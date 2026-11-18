@@ -13,7 +13,7 @@ use crate::layer;
 
 /// Core's tool names: an extension's tool by one of these names is not
 /// listed.
-pub const CORE: [&str; 19] = [
+pub const CORE: [&str; 20] = [
     "new",
     "check",
     "run",
@@ -29,6 +29,7 @@ pub const CORE: [&str; 19] = [
     "key",
     "type",
     "inspect",
+    "eval",
     "break",
     "step",
     "continue",
@@ -284,6 +285,18 @@ pub fn list() -> Vec<Value> {
             },
         }),
         json!({
+            "name": "eval",
+            "description": "Evaluate Rust where the started program is paused, as if the code were a block written just before the statement it is paused at: it reads and can change the bindings in scope there, and rustc's rules for that line apply, so a type error or a borrow that conflicts with one the program holds is refused with rustc's error. Returns the value of its last expression as Rust's `{:?}` prints it, read through a borrow so nothing moves; bindings the code makes end with it. Only the function the program is paused in, frame 0.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": path_schema(),
+                    "code": { "type": "string", "description": "Rust statements and an optional last expression, such as `items.len() * 2` or `let n = count + 1; n * n`" },
+                },
+                "required": ["code"],
+            },
+        }),
+        json!({
             "name": "break",
             "description": "Set a breakpoint in the started program: on a `line` of a `file`, or on a `function`'s first statement. The program pauses when it reaches it, and `wait` returns the `paused` event with where; `inspect` then reads its values there, and `step` or `continue` resumes it. Returns once the breakpoint is set, with where the program is paused if it already is. A breakpoint stays across saves while its line's text is still in the file, and moves with that text. Code in Rust dependencies has no breakpoints. A pause inside a call from native code, such as a window's event loop, holds that loop: the window doesn't redraw or take input until the program goes on.",
             "inputSchema": {
@@ -345,7 +358,7 @@ pub fn instructions(root: &Path) -> String {
         .map_or_else(|| "rawr".to_owned(), |path| path.display().to_string());
     let mut text = format!(
         "rawr {} ({executable}) runs Rust programs for dev builds: a Cargo crate whose files start with `// rawr`, or one .rs file. It reloads them when you save.\n\
-         Loop: `new` makes a crate. Edit its files with your own tools. `check` it. `run` a command-line program to its end with args and stdin, or `start` a window or long-running program and `wait` after each save to see it reload or fail. `screenshot` shows its window, and `move`, `click`, `drag`, `scroll`, `key` and `type` send it input, at positions in the screenshot's points. `inspect` reads its values while it runs. `break` pauses it at a line or a function, `step` and `continue` go on from there, and `clear` removes breakpoints. `stop` ends it.\n\
+         Loop: `new` makes a crate. Edit its files with your own tools. `check` it. `run` a command-line program to its end with args and stdin, or `start` a window or long-running program and `wait` after each save to see it reload or fail. `screenshot` shows its window, and `move`, `click`, `drag`, `scroll`, `key` and `type` send it input, at positions in the screenshot's points. `inspect` reads its values while it runs. `break` pauses it at a line or a function, `eval` runs Rust where it is paused, `step` and `continue` go on from there, and `clear` removes breakpoints. `stop` ends it.\n\
          Relative paths start at {}.\n",
         rawr::VERSION,
         root.display()
@@ -538,6 +551,12 @@ pub fn call(server: &Server, params: &Value, cancel: &Cancel) -> Value {
             text("name"),
             text("file"),
             arguments.get("frame").and_then(Value::as_u64).unwrap_or(0),
+            cancel,
+        ),
+        "eval" => evaluate(
+            server,
+            text("path"),
+            text("code").unwrap_or_default(),
             cancel,
         ),
         "break" | "step" | "continue" | "clear" => debug(server, name, &arguments, cancel),
@@ -889,6 +908,29 @@ fn inspect(
         "frames": frames,
     });
     Ok(content::success(structured, summary.trim_end(), Vec::new()))
+}
+
+/// `eval`: ask the paused program to evaluate `code` where it is paused.
+fn evaluate(
+    server: &Server,
+    path: Option<&str>,
+    code: &str,
+    cancel: &Cancel,
+) -> Result<Value, String> {
+    let session = session(server, path)?;
+    let answer = ask(&session, &json!({ "op": "eval", "code": code }), cancel)?;
+    match (answer["value"].as_str(), answer["error"].as_str()) {
+        (Some(value), _) => Ok(content::success(
+            json!({ "root": session.root, "value": value }),
+            value,
+            Vec::new(),
+        )),
+        (None, Some("not paused")) => Err(
+            "the program isn't paused, so there is no frame to evaluate in. Set a breakpoint with `break`; the program pauses when it reaches it.".to_owned(),
+        ),
+        (None, Some(error)) => Err(error.to_owned()),
+        (None, None) => Err("the program gave no answer".to_owned()),
+    }
 }
 
 /// `break`, `step`, `continue` and `clear`: ask the started program over

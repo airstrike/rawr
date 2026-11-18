@@ -38,15 +38,27 @@ pub struct Candidate {
 }
 
 impl Candidate {
-    /// A generation of any program, a plain one included. It keeps the
-    /// program's positions, which place a panic and a debugger's steps.
+    /// A generation of any program, a plain one included, compiled from
+    /// `snapshot` on `engine`. It keeps the program's positions, which
+    /// place a panic and a debugger's steps, and for a debugger registered
+    /// on `engine`, the snapshot, which code it evaluates compiles into.
     #[cfg(feature = "rust-import")]
     pub(crate) fn from_package_plain(
         executable: program::Executable,
         source: source::Graph,
+        engine: &crate::Engine,
+        snapshot: &crate::package::snapshot::Snapshot,
     ) -> Self {
         #[cfg(feature = "debugging")]
-        let located = executable.located().map(Arc::new);
+        let located = executable
+            .located()
+            .map(|located| match engine.is_debugger_registered() {
+                true => located.with_snapshot(snapshot.clone()),
+                false => located,
+            })
+            .map(Arc::new);
+        #[cfg(not(feature = "debugging"))]
+        let _ = (engine, snapshot);
         let schemas = executable.schemas().clone();
         let candidate = Self::from_catalog(
             catalog::Catalog::from_executable(executable),

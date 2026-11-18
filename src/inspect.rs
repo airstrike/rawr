@@ -57,6 +57,10 @@
 //! And it reads the program's menu bar, or chooses one of rawr's own
 //! items in it, with `{"op": "menu"}` (#1990, see [`menu`]).
 //!
+//! A paused program evaluates Rust where it is paused, with `{"op":
+//! "eval", "code": ..}`: `{"value": ..}` or `{"error": ..}` (#490, see
+//! [`evaluate`]); `{"error": "not paused"}` on a program that isn't.
+//!
 //! Under `rawr mcp`, a pause and its end are also told as `paused` (with
 //! the file, line, function and reason) and `resumed` events in the file
 //! `RAWR_MCP_DEBUG_EVENTS` names, so `wait` and `status` say so (#535).
@@ -69,6 +73,9 @@
 //! called pauses at the program's next call from it.
 #![cfg(feature = "debugging")]
 
+// What it compiles code with is shared between threads.
+#[cfg(feature = "sync")]
+mod evaluate;
 mod input;
 pub mod menu;
 mod screenshot;
@@ -93,6 +100,9 @@ const POLL: Duration = Duration::from_millis(50);
 /// and when it went on. The process that runs the program has it, a
 /// runner or the program's own.
 pub const EVENTS: &str = "RAWR_MCP_DEBUG_EVENTS";
+
+#[cfg(feature = "sync")]
+pub use evaluate::Program;
 
 /// One binding as a tool reads it: its name and its `Debug` text, or why it
 /// has none.
@@ -558,17 +568,44 @@ pub type Locate = dyn Fn(Position) -> Option<(String, usize)> + Send + Sync;
 /// at its place.
 pub struct Located {
     entry: crate::diagnostic::Source,
-    positions: crate::program::Positions,
+    positions: Arc<crate::program::Positions>,
+    /// The files it was compiled from, when a debugger was registered.
+    snapshot: Option<crate::package::snapshot::Snapshot>,
 }
 
 impl Located {
     // Only a runner's compiler, a rust-import build, keeps one.
     #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
-    pub(crate) const fn new(
+    pub(crate) fn new(
         entry: crate::diagnostic::Source,
         positions: crate::program::Positions,
     ) -> Self {
-        Self { entry, positions }
+        Self {
+            entry,
+            positions: Arc::new(positions),
+            snapshot: None,
+        }
+    }
+
+    /// It compiled from `snapshot`.
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
+    pub(crate) fn with_snapshot(self, snapshot: crate::package::snapshot::Snapshot) -> Self {
+        Self {
+            snapshot: Some(snapshot),
+            ..self
+        }
+    }
+
+    /// What evaluating code in this program takes, when it kept the files
+    /// it compiled from (#490).
+    #[cfg(feature = "sync")]
+    #[must_use]
+    pub fn program(&self) -> Option<Program> {
+        Some(Program::new(
+            self.snapshot.clone()?,
+            self.entry.clone(),
+            Arc::clone(&self.positions),
+        ))
     }
 
     /// The file and line `position` in the lowered program comes from, or
@@ -603,6 +640,8 @@ struct Request {
     /// Which frame: 0 for the function the program is in, 1 for its
     /// caller, and on (#511).
     frame: usize,
+    /// Code to evaluate where the program is paused (#490).
+    code: Option<String>,
     reply: mpsc::Sender<Value>,
 }
 
@@ -664,6 +703,10 @@ struct Shared {
     one: Mutex<()>,
     /// Where the running program's steps are, once it compiled.
     locate: Mutex<Option<Arc<Locate>>>,
+    /// What compiling code into the running program takes, once it
+    /// compiled.
+    #[cfg(feature = "sync")]
+    program: Mutex<Option<Arc<Program>>>,
     /// Where the breakpoints are kept across restarts.
     saved: std::path::PathBuf,
     /// The file a supervising `rawr mcp` reads the program's events from,
@@ -732,6 +775,8 @@ impl Inspector {
             answering: AtomicBool::new(false),
             one: Mutex::new(()),
             locate: Mutex::new(None),
+            #[cfg(feature = "sync")]
+            program: Mutex::new(None),
             saved,
             events: std::env::var_os(EVENTS)
                 .filter(|path| !path.is_empty())
@@ -774,6 +819,16 @@ impl Inspector {
         locate: impl Fn(Position) -> Option<(String, usize)> + Send + Sync + 'static,
     ) {
         *self.0.locate.lock().unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(locate));
+    }
+
+    /// Evaluate code in the program that runs next, `program` (#490).
+    #[cfg(feature = "sync")]
+    pub fn evaluate_in(&self, program: Program) {
+        *self
+            .0
+            .program
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(program));
     }
 
     /// The program that runs next compiled as `ast`, its steps placed by
@@ -854,6 +909,7 @@ impl Shared {
             Some("screenshot") => self.screenshot(request, &gone),
             Some("menu") => menu::answer(request, &gone)
                 .unwrap_or_else(|| json!({ "error": "the tool went away" })),
+            Some("eval") => self.evaluate(request, &gone),
             Some("break") => self.set(request),
             Some("clear") => self.clear(request),
             Some("continue") => self.resume(Resume::Continue, &gone),
@@ -867,6 +923,14 @@ impl Shared {
             ),
             _ => self.inspect(request, &gone),
         }
+    }
+
+    /// Evaluate code where the program is paused: answered by the pause.
+    fn evaluate(&self, request: &Value, gone: &dyn Fn() -> bool) -> Value {
+        if self.state().paused.is_none() {
+            return json!({ "error": "not paused" });
+        }
+        self.inspect(request, gone)
     }
 
     /// Send the program's window an input. A paused program holds its
@@ -907,6 +971,7 @@ impl Shared {
                 .and_then(Value::as_u64)
                 .and_then(|frame| usize::try_from(frame).ok())
                 .unwrap_or(0),
+            code: text("code"),
             reply,
         });
         self.wake.store(true, Ordering::Release);
@@ -1140,7 +1205,11 @@ impl Shared {
                 drop(state);
                 self.answering.store(true, Ordering::Release);
                 for request in pending {
-                    if self.matches(context, &request, position) {
+                    if let Some(code) = &request.code {
+                        let _ = request
+                            .reply
+                            .send(self.evaluated(context, &request, code, position));
+                    } else if self.matches(context, &request, position) {
                         self.reply(context, &request, position);
                     } else {
                         let _ = request.reply.send(json!({
@@ -1209,7 +1278,9 @@ impl Shared {
     /// program is as deep as its frame, which is in its file and has its
     /// binding.
     fn matches(&self, context: &EvalContext, request: &Request, position: Position) -> bool {
-        request.frame < depth_of(context)
+        // Code is evaluated only where the program is paused.
+        request.code.is_none()
+            && request.frame < depth_of(context)
             && request
                 .name
                 .as_deref()
@@ -1240,6 +1311,38 @@ impl Shared {
             || crate::resolve::lower_nominal::function_display_name(&symbol).to_owned(),
             |stops| stops.function_name(&symbol),
         ))
+    }
+
+    /// The answer to `code`, evaluated where `context` is paused, at
+    /// `position`.
+    fn evaluated(
+        &self,
+        context: &mut EvalContext,
+        request: &Request,
+        code: &str,
+        position: Position,
+    ) -> Value {
+        if request.frame > 0 {
+            return json!({ "error": "code is evaluated only in the function the program is paused in, frame 0" });
+        }
+        #[cfg(feature = "sync")]
+        let program = self
+            .program
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        #[cfg(not(feature = "sync"))]
+        let program: Option<()> = {
+            let _ = (context, code, position);
+            None
+        };
+        match program {
+            #[cfg(feature = "sync")]
+            Some(program) => evaluate::answer(context, &program, position, code),
+            _ => {
+                json!({ "error": "this run kept none of the program's files, which compiling code into it takes" })
+            }
+        }
     }
 
     /// Answer `request` with the values of its frame where `context` is, at

@@ -4,6 +4,7 @@
 use std::path::{Component, Path, PathBuf};
 
 /// One exact Rawr package snapshot with canonical path identity.
+#[derive(Clone)]
 pub struct Snapshot {
     entry: PathBuf,
     files: Box<[(PathBuf, Box<str>)]>,
@@ -37,6 +38,47 @@ impl Snapshot {
             entry,
             files: files.into_boxed_slice(),
             features: crate::project::cargo::features::Enabled::default(),
+        })
+    }
+
+    /// The files `graph` was loaded from, as it read them: its sources and
+    /// its packages' manifests. Loading the snapshot reads the program as
+    /// it was compiled, whatever its files hold now.
+    ///
+    /// # Errors
+    ///
+    /// When two of its sources share a path.
+    pub fn of(graph: &super::Graph) -> Result<Self, Error> {
+        let mut files: Vec<(PathBuf, Box<str>)> = graph
+            .sources()
+            .iter()
+            .map(|source| (source.path().to_path_buf(), source.text().into()))
+            .collect();
+        for package in graph.packages() {
+            if let Some((path, text)) = package.cargo_manifest()
+                && !files.iter().any(|(file, _)| file == path)
+            {
+                files.push((path.to_path_buf(), text.into()));
+            }
+        }
+        Self::new(graph.entry_source().path().to_path_buf(), files)
+    }
+
+    /// The snapshot with the file at `path` reading `text`, or `None` when
+    /// it has no such file.
+    #[cfg(all(feature = "debugging", feature = "sync"))]
+    pub(crate) fn with_text(&self, path: &Path, text: &str) -> Option<Self> {
+        let path = normalize(path.to_path_buf()).ok()?;
+        let index = self
+            .files
+            .binary_search_by(|(candidate, _)| candidate.cmp(&path))
+            .ok()?;
+        let mut files = self.files.clone();
+        files[index].1 = text.into();
+        Some(Self {
+            entry: self.entry.clone(),
+            files,
+            features: self.features.clone(),
         })
     }
 

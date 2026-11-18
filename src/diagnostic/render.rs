@@ -165,7 +165,7 @@ fn annotation(label: &Label) -> Option<Annotation<'_>> {
 
 /// The byte offset in `text` of the one-based `line` and character
 /// `column`. A column past the line's end is its end.
-fn offset(text: &str, line: usize, column: usize) -> usize {
+pub(crate) fn offset(text: &str, line: usize, column: usize) -> usize {
     let start: usize = text
         .split_inclusive('\n')
         .take(line.saturating_sub(1))

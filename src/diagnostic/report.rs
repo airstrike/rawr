@@ -219,6 +219,31 @@ impl Report {
     pub fn notes(&self) -> impl ExactSizeIterator<Item = &str> {
         self.notes.iter().map(AsRef::as_ref)
     }
+
+    /// The report with each label `moved` gives a new place moved there: a
+    /// text compiled from pieces of others reports where each piece is
+    /// shown (`crate::splice`). A source no label is left in is dropped.
+    pub(crate) fn relabeled(
+        &self,
+        mut moved: impl FnMut(&Source, Span) -> Option<(Source, Span)>,
+    ) -> Self {
+        let mut report = self.clone();
+        let mut left = Vec::new();
+        for label in &mut report.labels {
+            if let Some((source, span)) = moved(&label.source, label.span) {
+                left.push(label.source.clone());
+                label.source = source;
+                label.span = span;
+            }
+        }
+        report.sources.retain(|source| !left.contains(source));
+        for label in &report.labels {
+            if !report.sources.contains(&label.source) {
+                report.sources.push(label.source.clone());
+            }
+        }
+        report
+    }
 }
 
 /// A report's text as the program could write it: an item a macro's

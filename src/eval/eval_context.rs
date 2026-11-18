@@ -80,6 +80,26 @@ impl<'a, 's, 'ps, 'g, 'c, 't> EvalContext<'a, 's, 'ps, 'g, 'c, 't> {
     pub fn scope_mut(&mut self) -> &mut Scope<'ps> {
         self.scope
     }
+    /// Its engine, runtime state, caches, scope and `this`, apart: what
+    /// running more statements where it is takes.
+    #[cfg(all(feature = "debugging", feature = "sync"))]
+    pub(crate) fn parts(
+        &mut self,
+    ) -> (
+        &'a Engine,
+        &mut GlobalRuntimeState,
+        &mut Caches,
+        &mut Scope<'ps>,
+        Option<&mut Dynamic>,
+    ) {
+        (
+            self.engine,
+            self.global,
+            self.caches,
+            self.scope,
+            self.this_ptr.as_deref_mut(),
+        )
+    }
     /// Get an iterator over the current set of modules imported via `import` statements,
     /// in reverse order (i.e. modules imported last come first).
     #[inline(always)]
