@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
+- `rawr test` catches a test that panics in a dependency's code, as `cargo test` does: the panic is printed on a thread named after the test with its output, that test fails alone, the others run on, and the failures list, result line and exit status are libtest's. With `--nocapture`, each test is named as libtest names it for the number of test threads. (#2254)
 
 ## 0.4.17 (2026-11-18)
 

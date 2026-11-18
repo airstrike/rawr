@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
+      "entries": [
+        {"text":"`rawr test` catches a test that panics in a dependency's code, as `cargo test` does: the panic is printed on a thread named after the test with its output, that test fails alone, the others run on, and the failures list, result line and exit status are libtest's. With `--nocapture`, each test is named as libtest names it for the number of test threads.","issues":[2254]}
+      ]
+    },
     "releases": [
       {
         "version": "0.4.17",
@@ -5126,7 +5131,7 @@
     {"issue":2251,"title":"A directory rustc searches that another build changes during extraction restarts the build, then…","state":"closed","category":"Shared dependency cache (D607)","release":"0.4.17"},
     {"issue":2252,"title":"Find which searched directory another build changed under extraction, and close the window","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":2253,"title":"A cold iced emulator test spends about 10 minutes building the API","state":"open","category":"Health"},
-    {"issue":2254,"title":"A test that panics in a dependency's code ends `rawr test` as a crash, where libtest reports it FAILED with a summary","state":"open","category":"Divergences from rustc"}
+    {"issue":2254,"title":"A test that panics in a dependency's code ends `rawr test` as a crash, where libtest reports it FAILED with a summary","state":"closed","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -6636,7 +6641,7 @@
             {"number":1474,"title":"A marked type's `&self -> &str` into a native part's String comes back as interned program text…","state":"open"},
             {"number":1476,"title":"A marked fn returning a reference into a `&T` parameter's native part …","state":"open"},
             {"number":1492,"title":"Pins kept for a marked value's borrowed results leak when the value is dropped or moved","state":"open"},
-            {"number":2254,"title":"A test that panics in a dependency's code ends `rawr test` as a crash, where libtest reports it FAILED with a summary","state":"open"}
+            {"number":2254,"title":"A test that panics in a dependency's code ends `rawr test` as a crash, where libtest reports it FAILED with a summary","state":"closed"}
           ]
         },
         {
