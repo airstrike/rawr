@@ -142,16 +142,25 @@ fn optional(
     base: &Path,
     budget: &mut Budget<'_>,
 ) -> Result<Entry> {
-    let normalized = path::normalized(source, base, budget)?;
-    match path::metadata(&normalized, false, budget) {
-        Ok(metadata) if metadata.is_file() => file(role, package_id, &normalized, base, budget),
+    // `..` after a symlinked directory leaves the link's target, as Cargo
+    // and the OS read the path: it is inspected as given, and its lexical
+    // form only names it when it is missing. A config candidate keeps the
+    // lexical path Cargo reads it at.
+    let given = if follows(role) {
+        path::normalized(source, base, budget)?
+    } else {
+        path::absolute(source, base, budget)?
+    };
+    match path::metadata(&given, false, budget) {
+        Ok(metadata) if metadata.is_file() => file(role, package_id, &given, base, budget),
         Ok(metadata) if metadata.is_dir() => {
-            directory::entry(role, package_id, &normalized, base, budget)
+            directory::entry(role, package_id, &given, base, budget)
         }
         Ok(_) => Err(Error::Policy("unsupported-input-shape").into()),
-        Err(super::Error::Observation(Error::Io { source, .. }))
-            if source.kind() == std::io::ErrorKind::NotFound =>
+        Err(super::Error::Observation(Error::Io { source: error, .. }))
+            if error.kind() == std::io::ErrorKind::NotFound =>
         {
+            let normalized = path::normalized(source, base, budget)?;
             Ok(Entry::Missing {
                 role,
                 package_id: package(package_id, budget)?,
