@@ -52,6 +52,9 @@ pub(super) enum Op {
         value: crate::item::Value,
         /// A lifted closure's captures, passed to the op where it is written.
         captures: usize,
+        /// Whether the closure changes what it captures (`FnMut`): each
+        /// capture is a cell its calls write, as the closure owns it.
+        changes: bool,
     },
     Intrinsic {
         operation: Box<IntrinsicOperation>,
@@ -1916,6 +1919,9 @@ pub(super) enum ExecutableOp {
         value: crate::item::Value,
         /// A lifted closure's captures, passed to the op where it is written.
         captures: usize,
+        /// Whether the closure changes what it captures (`FnMut`): each
+        /// capture is a cell its calls write, as the closure owns it.
+        changes: bool,
     },
     Intrinsic {
         proof: intrinsic::Proof,
@@ -2447,8 +2453,19 @@ impl ExecutableOp {
                 )
             }
             Self::Symbolic { value, .. } if args.is_empty() => Ok(Dynamic::from(value.clone())),
-            Self::Symbolic { value, .. } => Ok(Dynamic::from(
-                value.bind(args.iter_mut().map(|arg| arg.take()).collect()),
+            Self::Symbolic { value, changes, .. } => Ok(Dynamic::from(
+                value.bind(
+                    args.iter_mut()
+                        .map(|arg| {
+                            let capture = arg.take();
+                            if *changes {
+                                capture.into_shared()
+                            } else {
+                                capture
+                            }
+                        })
+                        .collect(),
+                ),
             )),
             Self::Intrinsic { proof } => {
                 let Some(context) = context else {
