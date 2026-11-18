@@ -4,14 +4,19 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
-    "entries": [
-      {"text":"A crate that several of a program's dependencies reach keeps rawr's decisions about its items under its own key, so a project that reaches it through any one of them decides none of them again.","issues":[2223]},
-      {"text":"A dependency path that names no item, such as a derive macro's, is kept with the crate it starts at, so a second project no longer regenerates it each round.","issues":[2233]},
-      {"text":"Saving a crate's decisions writes only what a run decided anew, not the crate's whole entry: on chrono a second project writes 755 KB, not 3.2 MB.","issues":[2224]},
-      {"text":"A check's later demand rounds take and keep decisions in rawr's home too, so a second project checking the same program decides nothing in any round, where it decided 293 items again in round 2.","issues":[2234]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.4.5",
+      "date": "2026-11-18",
+      "entries": [
+        {"text":"A crate that several of a program's dependencies reach keeps rawr's decisions about its items under its own key, so a project that reaches it through any one of them decides none of them again.","issues":[2223]},
+        {"text":"A dependency path that names no item, such as a derive macro's, is kept with the crate it starts at, so a second project no longer regenerates it each round.","issues":[2233]},
+        {"text":"Saving a crate's decisions writes only what a run decided anew, not the crate's whole entry: on chrono a second project writes 755 KB, not 3.2 MB.","issues":[2224]},
+        {"text":"A check's later demand rounds take and keep decisions in rawr's home too, so a second project checking the same program decides nothing in any round, where it decided 293 items again in round 2.","issues":[2234]}
+      ]
+    },
     {
       "version": "0.4.4",
       "date": "2026-11-18",

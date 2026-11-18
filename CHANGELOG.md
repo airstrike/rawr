@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
+
+## 0.4.5 (2026-11-18)
+
 - A crate that several of a program's dependencies reach keeps rawr's decisions about its items under its own key, so a project that reaches it through any one of them decides none of them again. (#2223)
 - A dependency path that names no item, such as a derive macro's, is kept with the crate it starts at, so a second project no longer regenerates it each round. (#2233)
 - Saving a crate's decisions writes only what a run decided anew, not the crate's whole entry: on chrono a second project writes 755 KB, not 3.2 MB. (#2224)
