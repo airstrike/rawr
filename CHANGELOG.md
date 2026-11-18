@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
+- An array's length may be a const parameter: `struct Buf<const N: usize> { data: [u8; N] }`, `[0; N]` in a body, and `fn sum<const N: usize>(a: [i32; N])`, whose `N` is read from the array it's given. (#2213; part of #1152)
 
 ## 0.4.0 (2026-11-17)
 

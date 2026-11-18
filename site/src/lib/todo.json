@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
+      "entries": [
+        {"text":"An array's length may be a const parameter: `struct Buf<const N: usize> { data: [u8; N] }`, `[0; N]` in a body, and `fn sum<const N: usize>(a: [i32; N])`, whose `N` is read from the array it's given.","issues":[2213],"refs":[1152]}
+      ]
+    },
     "releases": [
       {
         "version": "0.4.0",
@@ -4942,7 +4947,9 @@
     {"issue":2210,"title":"Const generic arguments in a type path, such as `Rotator::<3>` and `Rotator::<{ 0 + 1 }>`, don't parse","state":"closed","category":"Divergences from rustc","release":"0.4.0"},
     {"issue":2211,"title":"A qualified path through a crate trait's generic associated type is refused","state":"open","category":"Divergences from rustc"},
     {"issue":2212,"title":"A generic impl's trait method that takes a witness can't be called through dynamic dispatch","state":"open","category":"Divergences from rustc"},
-    {"issue":2213,"title":"An array whose length is a const parameter isn't supported","state":"open","category":"Divergences from rustc"}
+    {"issue":2213,"title":"An array whose length is a const parameter isn't supported","state":"closed","category":"Divergences from rustc"},
+    {"issue":2214,"title":"A program's trait impl for an array type (`impl Total for [i32; 3]`) is refused as an inherent impl","state":"open","category":"Divergences from rustc"},
+    {"issue":2215,"title":"A tuple struct's constructor with a turbofish (`W::<i32>(1)`) is refused as an unknown value (E0425)","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -5722,7 +5729,9 @@
             {"number":2210,"title":"Const generic arguments in a type path, such as `Rotator::<3>` and `Rotator::<{ 0 + 1 }>`, don't parse","state":"closed"},
             {"number":2211,"title":"A qualified path through a crate trait's generic associated type is refused","state":"open"},
             {"number":2212,"title":"A generic impl's trait method that takes a witness can't be called through dynamic dispatch","state":"open"},
-            {"number":2213,"title":"An array whose length is a const parameter isn't supported","state":"open"}
+            {"number":2213,"title":"An array whose length is a const parameter isn't supported","state":"closed"},
+            {"number":2214,"title":"A program's trait impl for an array type (`impl Total for [i32; 3]`) is refused as an inherent impl","state":"open"},
+            {"number":2215,"title":"A tuple struct's constructor with a turbofish (`W::<i32>(1)`) is refused as an unknown value (E0425)","state":"open"}
           ],
           "milestone": "0.3"
         },
