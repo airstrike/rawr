@@ -2809,6 +2809,54 @@ fn a_table_answers_the_selected_crates_own_macro() {
     assert_eq!(traces.len(), 0, "nightly processes ran: {traces:?}");
 }
 
+/// Path crates inside the project's directory are workspace members: their
+/// tables stay with the project, and a later check whose demand they hold,
+/// after another demand grew them, runs no nightly build or probe (#419).
+/// Their staying is no news, so the check says nothing of it (#684).
+#[test]
+fn a_workspace_members_tables_answer_a_later_check() {
+    const MACROS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/plain-macros");
+    let root = crate::support::fresh("member-tables");
+    copy(Path::new(MACROS), &root);
+    let home = crate::support::runtime_home();
+    // rawr's summary of the check's nightly work, and the rest of its words.
+    let check = |source: &str| {
+        fs::write(root.join("src/main.rs"), source).unwrap();
+        let checked = crate::support::rawr_import()
+            .arg("check")
+            .arg(&root)
+            .env("RAWR_HOME", &home)
+            .env("RAWR_RUNTIME_HOME", &home)
+            .env("RAWR_VERBOSE", "1")
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .output()
+            .unwrap();
+        let stderr = text(&checked.stderr);
+        assert!(checked.status.success(), "{stderr}");
+        let nightly = stderr
+            .lines()
+            .find_map(|line| line.strip_prefix("rawr-import: check rounds "))
+            .and_then(|rest| rest.split_once(", nightly builds "))
+            .map(|(_, rest)| rest.to_owned())
+            .unwrap_or_else(|| panic!("{stderr}"));
+        (nightly, stderr)
+    };
+    let (_, cold) = check(
+        "// rawr\nfn main() {\n    println!(\"{} {}\", outer::__offset(), outer::offset!(5));\n}\n",
+    );
+    assert!(
+        !cold.contains("rawr: "),
+        "the check says nothing of its tables:\n{cold}"
+    );
+    let (grown, _) = check(
+        "// rawr\nuse outer::list;\nfn main() {\n    let made = list![1, 2, 3];\n    println!(\"{}\", made.sum());\n}\n",
+    );
+    assert_ne!(grown, "0, probes 0", "a new demand grows the tables");
+    let (held, _) = check("// rawr\nfn main() {\n    println!(\"{}\", outer::__offset());\n}\n");
+    assert_eq!(held, "0, probes 0", "the tables hold the demand");
+}
+
 /// A project that depends on a crate the runner also needs under a name of
 /// its own, as serde is for a `$crate` path, builds its runner: Cargo takes
 /// one name per package, so the runner reaches the project's crate by both.

@@ -464,6 +464,7 @@ impl CompletedHarness {
                             unit_key: output.semantic_key(),
                             package_id: output.package_id(),
                             target: output.target().to_str()?,
+                            mode: output.mode(),
                             features: output.features(),
                         })
                     })
