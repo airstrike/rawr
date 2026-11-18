@@ -9,7 +9,15 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
+      "entries": [
+        {"text":"A crate that several of a program's dependencies reach keeps rawr's decisions about its items under its own key, so a project that reaches it through any one of them decides none of them again.","issues":[2223]},
+        {"text":"A dependency path that names no item, such as a derive macro's, is kept with the crate it starts at, so a second project no longer regenerates it each round.","issues":[2233]},
+        {"text":"Saving a crate's decisions writes only what a run decided anew, not the crate's whole entry: on chrono a second project writes 755 KB, not 3.2 MB.","issues":[2224]},
+        {"text":"A check's later demand rounds take and keep decisions in rawr's home too, so a second project checking the same program decides nothing in any round, where it decided 293 items again in round 2.","issues":[2234]}
+      ]
+    },
     "releases": [
       {
         "version": "0.4.4",
@@ -4987,8 +4995,8 @@
     {"issue":2220,"title":"`rawr run --web` packages block the page on a sleep and append output instead of drawing a terminal","state":"open","category":"Platforms"},
     {"issue":2221,"title":"A demand round still runs classification's and the plan's whole-API passes","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":2222,"title":"D604 headers and the facade plan's sites are computed per program, not kept per crate","state":"closed","category":"Shared dependency cache (D607)","release":"0.4.4"},
-    {"issue":2223,"title":"A dependency several selected crates reach keeps its classification records under the first one's key","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":2224,"title":"Publishing a crate's classification entry rewrites the whole file whenever any record is fresh","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":2223,"title":"A dependency several selected crates reach keeps its classification records under the first one's key","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":2224,"title":"Publishing a crate's classification entry rewrites the whole file whenever any record is fresh","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":2225,"title":"`&req.comparators[0]` on a crate struct's field is taken as a partial move: a later method call is a false E0382","state":"open","category":"Borrow checker (D572)"},
     {"issue":2226,"title":"A relative RAWR_HOME (`../home`) doubles the project path in the store's Cargo output path","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":2227,"title":"Two rawr-import classify lib tests fail on main","state":"open","category":"Health"},
@@ -4997,7 +5005,12 @@
     {"issue":2230,"title":"A panic in a call the page makes into a running program aborts the instance with no message in its frame","state":"open","category":"Platforms"},
     {"issue":2231,"title":"Two crate traits with a same-named method on one type make the generated call ambiguous (E0034)","state":"open","category":"No glue (D593)"},
     {"issue":2232,"title":"Each demand round digests every impl's identity once, and writes the stored classification in…","state":"closed","category":"Shared dependency cache (D607)","release":"0.4.4"},
-    {"issue":2233,"title":"A shared crate's paths whose outcome names no definition keep their facade contributions in the project","state":"open","category":"Shared dependency cache (D607)"}
+    {"issue":2233,"title":"A shared crate's paths whose outcome names no definition keep their facade contributions in the project","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":2234,"title":"A check's later demand rounds take and keep decisions in rawr's home too, so a second project…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":2235,"title":"A registry crate reaching a path crate through `[patch]` can keep its records in rawr's home in a later round","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":2236,"title":"`cfg_if::cfg_if!` in a program fails with \"diagnostic span falls outside source\"","state":"open","category":"No glue (D593)"},
+    {"issue":2237,"title":"`scopeguard::defer!` fails: cannot find function `guard` in module `scopeguard`","state":"open","category":"No glue (D593)"},
+    {"issue":2238,"title":"A chrono `Datelike` method (`date.year()`) is not found on `NaiveDate`","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -5196,7 +5209,7 @@
           "start": 43,
           "size": 3,
           "state": "now",
-          "note": "Projects reuse extraction tables (#367) and each crate's classification and facade records (#271): a second project classifies and generates none of a shared crate. Left: drift and lock cases (#1012, #1025, #1026) and whole-file republish (#2224).",
+          "note": "Projects reuse extraction tables (#367) and each crate's classification and facade records (#271), published as layers of only what's new (#2224). Left: drift and lock cases (#1012, #1025, #1026).",
           "issues": [
             {"number":271,"title":"Generated bindings are built per project, so every project and script pays #255 again for the…","state":"closed"},
             {"number":367,"title":"Reuse verified crate extraction tables across projects","state":"closed"},
@@ -5210,7 +5223,7 @@
             {"number":474,"title":"Two crates sharing a target dir fail rawr check on a build script's OUT_DIR","state":"open"},
             {"number":1408,"title":"A rawr blocked on another rawr's shared runtime or API build says so once, naming the builder's…","state":"open"},
             {"number":942,"title":"Build the std bindings once per machine, not once per process (0.4)","state":"open"},
-            {"number":2224,"title":"Publishing a crate's classification entry rewrites the whole file whenever any record is fresh","state":"open"}
+            {"number":2224,"title":"Publishing a crate's classification entry rewrites the whole file whenever any record is fresh","state":"closed"}
           ],
           "milestone": "0.4"
         },
@@ -5230,7 +5243,9 @@
             {"number":304,"title":"A user's `~/.cargo/config.toml` profile settings aren't in the runtime's key, so a change to…","state":"open"},
             {"number":468,"title":"A shared whole table lists only the external crates its publisher's probe reached","state":"open"},
             {"number":1525,"title":"Shared bindings compare the build scripts of packages reached only as build-dependencies","state":"open"},
-            {"number":2223,"title":"A dependency several selected crates reach keeps its classification records under the first one's key","state":"open"}
+            {"number":2223,"title":"A dependency several selected crates reach keeps its classification records under the first one's key","state":"closed"},
+            {"number":2235,"title":"A registry crate reaching a path crate through `[patch]` can keep its records in rawr's home in a later round","state":"open"},
+            {"number":2234,"title":"A check's later demand rounds take and keep decisions in rawr's home too, so a second project…","state":"open"}
           ],
           "milestone": "0.4"
         },
@@ -5301,13 +5316,13 @@
           "start": 41,
           "size": 3,
           "state": "now",
-          "note": "A demand round classifies and generates only what its new paths change (#1618), and a crate's headers and sites are kept per crate (#2222). Left: the whole-API passes (#2221) and paths that name no definition (#2233).",
+          "note": "A demand round classifies and generates only what its new paths change (#1618), and a crate's headers and sites are kept per crate (#2222). Left: the whole-API passes (#2221).",
           "issues": [
             {"number":1618,"title":"A demand round reclassifies and regenerates the whole API, when only new demanded paths were added","state":"closed"},
             {"number":914,"title":"A shared-bindings API is rebuilt whenever Cargo resolves again","state":"open"},
             {"number":2221,"title":"A demand round still runs classification's and the plan's whole-API passes","state":"open"},
             {"number":2222,"title":"D604 headers and the facade plan's sites are computed per program, not kept per crate","state":"closed"},
-            {"number":2233,"title":"A shared crate's paths whose outcome names no definition keep their facade contributions in the project","state":"open"},
+            {"number":2233,"title":"A shared crate's paths whose outcome names no definition keep their facade contributions in the project","state":"closed"},
             {"number":2232,"title":"Each demand round digests every impl's identity once, and writes the stored classification in…","state":"closed"}
           ],
           "milestone": "0.4"
@@ -6007,7 +6022,8 @@
             {"number":1580,"title":"`&T` as a crate function's type argument is refused in marked code","state":"open"},
             {"number":2093,"title":"A trait associated function through a dependency type alias is not found: sha2 Sha256::digest fails E0599","state":"open"},
             {"number":2231,"title":"Two crate traits with a same-named method on one type make the generated call ambiguous (E0034)","state":"open"},
-            {"number":2228,"title":"A method of a generic impl that names its type's parameters its own way, as ratzilla's…","state":"closed"}
+            {"number":2228,"title":"A method of a generic impl that names its type's parameters its own way, as ratzilla's…","state":"closed"},
+            {"number":2238,"title":"A chrono `Datelike` method (`date.year()`) is not found on `NaiveDate`","state":"open"}
           ]
         },
         {
@@ -7144,7 +7160,9 @@
             {"number":2190,"title":"A macro defined before a `mod` declaration, called from its child modules, isn't verified","state":"open"},
             {"number":2201,"title":"A graph-time expansion's locals share one hygiene number","state":"open"},
             {"number":2202,"title":"A transcriber repetition starting with an operator inside a separated repetition doesn't expand","state":"open"},
-            {"number":2217,"title":"An enum variant imported by `use` can be passed to a macro, as…","state":"closed"}
+            {"number":2217,"title":"An enum variant imported by `use` can be passed to a macro, as…","state":"closed"},
+            {"number":2236,"title":"`cfg_if::cfg_if!` in a program fails with \"diagnostic span falls outside source\"","state":"open"},
+            {"number":2237,"title":"`scopeguard::defer!` fails: cannot find function `guard` in module `scopeguard`","state":"open"}
           ]
         },
         {
