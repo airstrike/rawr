@@ -18,7 +18,7 @@ pub use cached::Cached;
 /// selects and how it encodes them. Bump it when a change alters a plan
 /// this module writes. A bump selects each plan again from the classified
 /// contract it keeps, so nothing is classified again (#1766).
-const SCHEMA: u32 = 80;
+const SCHEMA: u32 = 81;
 
 /// The bindings plan's version (`SCHEMA`), which what a plan keeps of each
 /// outcome is of.
@@ -924,6 +924,13 @@ pub struct Signature {
     /// a message shows (`representability::signature::Parameter::renamed`).
     #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
     shown: Shown,
+    /// The parameters a method's receiver's type arguments give, in their
+    /// order, by the impl's names for them, which may not be the type's:
+    /// `impl<T> Trait for Wrapper<T>` calls `T` what `struct Wrapper<B>`
+    /// calls `B`. Empty for an item with no receiver, or one whose impl
+    /// fixes its receiver's type (`instance`).
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    receiver: Box<[Box<str>]>,
 }
 
 /// How rustc spells each parameter Rawr names, by its name.
@@ -2486,6 +2493,7 @@ fn runner_fixture(foreign: bool) -> Box<[u8]> {
                 opaques: Box::default(),
                 lengths: Box::default(),
                 shown: Box::default(),
+                receiver: Box::default(),
             },
             values: None,
             member: None,
@@ -3836,6 +3844,11 @@ impl Signature {
     pub fn parameters(&self) -> impl ExactSizeIterator<Item = &str> {
         self.parameters.iter().map(AsRef::as_ref)
     }
+    /// Return the parameters a method's receiver's type arguments give, in
+    /// their order; none when the type's own names are the signature's.
+    pub fn receiver_parameters(&self) -> impl ExactSizeIterator<Item = &str> {
+        self.receiver.iter().map(AsRef::as_ref)
+    }
     /// Return the derivable std traits the bounds on the parameter at
     /// `index` name.
     pub fn bounds(&self, index: usize) -> &[Box<str>] {
@@ -4133,6 +4146,7 @@ fn written_item(
                 opaques: Box::default(),
                 lengths: Box::default(),
                 shown: Box::default(),
+                receiver: Box::default(),
             },
         ),
         Representability::Value(_)
@@ -4236,6 +4250,16 @@ fn written_item(
             signature
         }
     };
+    // A method of a generic impl that fixes none of its receiver's type
+    // arguments leads its signature with the impl's parameters the receiver
+    // gives, in its type's argument order, whatever the impl names them.
+    let mut signature = signature;
+    if let Representability::Invocation(plan) = outcome.representability()
+        && plan.receiver().is_some()
+        && signature.instance.is_none()
+    {
+        signature.receiver = receiver_parameters(plan)?;
+    }
     Ok(Some(Item {
         path: copy(path)?,
         body: std::sync::Arc::new(ItemBody {
@@ -4307,6 +4331,7 @@ fn signature(source: &representability::signature::Signature) -> Result<Signatur
         opaques: source.opaques().into(),
         lengths: lengths(&kept)?,
         shown: shown(&kept)?,
+        receiver: Box::default(),
     })
 }
 
@@ -4517,6 +4542,7 @@ fn callable_signature(
         opaques: source.opaques().into(),
         lengths: lengths(&kept)?,
         shown: shown(&kept)?,
+        receiver: Box::default(),
     })
 }
 
@@ -4610,6 +4636,26 @@ fn shown(source: &[representability::signature::Parameter]) -> Result<Shown, sup
             .try_reserve(1)
             .map_err(|_| super::Error::Allocation)?;
         output.push((copy(parameter.name())?, copy(shown)?));
+    }
+    Ok(output.into_boxed_slice())
+}
+
+/// The names of `plan`'s leading parameters, its impl's that its receiver's
+/// type arguments give, in order.
+fn receiver_parameters(
+    plan: &representability::callable::Invocation,
+) -> Result<Box<[Box<str>]>, super::Error> {
+    let parameters = plan
+        .signature()
+        .parameters()
+        .get(..plan.container_parameters())
+        .unwrap_or_default();
+    let mut output = Vec::new();
+    output
+        .try_reserve_exact(parameters.len())
+        .map_err(|_| super::Error::Allocation)?;
+    for parameter in parameters {
+        output.push(copy(parameter.name())?);
     }
     Ok(output.into_boxed_slice())
 }

@@ -1,10 +1,12 @@
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use ratatui::layout::{Constraint, Layout};
 use ratatui::widgets::{Block, Paragraph};
 use ratatui::Frame;
 use ratatui::Terminal;
-use ratzilla::event::{KeyCode, KeyEvent};
-use ratzilla::{DomBackend, WebEventHandler};
-use tokio::sync::mpsc::{self, UnboundedReceiver};
+use ratzilla::event::KeyCode;
+use ratzilla::{DomBackend, WebEventHandler, WebRenderer};
 
 struct Todos {
     items: Vec<(String, bool)>,
@@ -78,28 +80,13 @@ impl Todos {
 }
 
 pub fn main() -> std::io::Result<()> {
+    let todos = Rc::new(RefCell::new(Todos::new()));
     let mut backend = DomBackend::new()?;
-    let (keys, presses) = mpsc::unbounded_channel();
-    backend.on_key_event(move |key| {
-        let _ = keys.send(key);
+    backend.on_key_event({
+        let todos = Rc::clone(&todos);
+        move |key| todos.borrow_mut().press(key.code)
     })?;
     let terminal = Terminal::new(backend)?;
-    wasm_bindgen_futures::spawn_local(async move {
-        run(terminal, presses).await.expect("a drawn frame");
-    });
+    terminal.draw_web(move |frame| todos.borrow().draw(frame));
     Ok(())
-}
-
-async fn run(
-    mut terminal: Terminal<DomBackend>,
-    mut presses: UnboundedReceiver<KeyEvent>,
-) -> std::io::Result<()> {
-    let mut todos = Todos::new();
-    loop {
-        terminal.draw(|frame| todos.draw(frame))?;
-        let Some(key) = presses.recv().await else {
-            return Ok(());
-        };
-        todos.press(key.code);
-    }
 }

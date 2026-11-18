@@ -908,6 +908,15 @@ fn a_crate_traits_generic_impl_gives_a_generic_crate_type_its_methods() {
     runs_as_cargo_does("renderer", "page | hi!\n");
 }
 
+/// A generic impl that names its type's parameter its own way, as `impl<T>
+/// Trait for Surface<T>` names `Surface<S>`'s `S`, takes the receiver's
+/// type argument for its own parameter: the method's `self` is the
+/// receiver's instance, and its `'static` closure is called on each frame.
+#[test]
+fn an_impl_that_renames_its_types_parameter_takes_the_receivers_argument() {
+    runs_as_cargo_does("renamed_receiver", "page | frame 1\npage | frame 2\n");
+}
+
 /// A method that lends a script closure `&mut` of a crate type with a
 /// lifetime, and gives back a value that borrows its receiver with its
 /// type parameter's associated error type, as ratatui's `Terminal::draw`

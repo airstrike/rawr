@@ -294,17 +294,19 @@ pub fn draw(frame: &amp;mut Frame, state: &amp;mut ListState) {
 
 <h3 id="ratatui-browser">In the browser</h3>
 <p>A ratatui program also runs in this page, on rawr&rsquo;s browser universe. The page has no terminal, so the program draws with <a href="https://github.com/ratatui/ratzilla">ratzilla</a>&rsquo;s <code>DomBackend</code>, which implements ratatui&rsquo;s <code>Backend</code> trait over the page&rsquo;s elements. <code>Terminal::new</code>, <code>Terminal::draw</code> and the widgets are ratatui&rsquo;s own.</p>
-<p>A browser tab has one thread, so a loop can&rsquo;t block in <code>event::read()</code>. The program&rsquo;s loop is <code>async</code> instead: it draws, then awaits the next key, as a terminal app does with crossterm&rsquo;s <code>EventStream</code>. ratzilla&rsquo;s key callback sends each key into a channel, and <code>wasm_bindgen_futures::spawn_local</code> runs the loop on the page&rsquo;s events.</p>
+<p>A browser tab has one thread, so a loop can&rsquo;t block in <code>event::read()</code>. The program hands its loop to the page instead, as ratzilla&rsquo;s own examples do. <code>draw_web</code> calls the program&rsquo;s closure on every animation frame, and the closure draws the to-dos. ratzilla&rsquo;s key callback changes them between frames. Both closures share the state through an <code>Rc&lt;RefCell&lt;Todos&gt;&gt;</code>, and <code>main</code> returns once it has set them up.</p>
 <div class="block">
   <div class="file"><b>todo.rs</b><span>ratatui on ratzilla&rsquo;s backend</span></div>
   <pre><code data-lang="rust" data-run="todo.rs" id="src-todo" data-where="browser">// rawr
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use ratatui::layout::{Constraint, Layout};
 use ratatui::widgets::{Block, Paragraph};
 use ratatui::Frame;
 use ratatui::Terminal;
-use ratzilla::event::{KeyCode, KeyEvent};
-use ratzilla::{DomBackend, WebEventHandler};
-use tokio::sync::mpsc::{self, UnboundedReceiver};
+use ratzilla::event::KeyCode;
+use ratzilla::{DomBackend, WebEventHandler, WebRenderer};
 
 struct Todos {
     items: Vec&lt;(String, bool)&gt;,
@@ -378,36 +380,21 @@ impl Todos {
 }
 
 pub fn main() -&gt; std::io::Result&lt;()&gt; {
+    let todos = Rc::new(RefCell::new(Todos::new()));
     let mut backend = DomBackend::new()?;
-    let (keys, presses) = mpsc::unbounded_channel();
-    backend.on_key_event(move |key| {
-        let _ = keys.send(key);
+    backend.on_key_event({
+        let todos = Rc::clone(&amp;todos);
+        move |key| todos.borrow_mut().press(key.code)
     })?;
     let terminal = Terminal::new(backend)?;
-    wasm_bindgen_futures::spawn_local(async move {
-        run(terminal, presses).await.expect("a drawn frame");
-    });
+    terminal.draw_web(move |frame| todos.borrow().draw(frame));
     Ok(())
-}
-
-async fn run(
-    mut terminal: Terminal&lt;DomBackend&gt;,
-    mut presses: UnboundedReceiver&lt;KeyEvent&gt;,
-) -&gt; std::io::Result&lt;()&gt; {
-    let mut todos = Todos::new();
-    loop {
-        terminal.draw(|frame| todos.draw(frame))?;
-        let Some(key) = presses.recv().await else {
-            return Ok(());
-        };
-        todos.press(key.code);
-    }
 }</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-todo" data-out="out-todo" aria-label="Run todo.rs" hidden></button><b>rawr run todo.rs</b><span id="out-todo" aria-live="polite"></span></div>
 </div>
-<p>Run it, then click it or press Tab to give it the keys. An outline shows while it has them, and keys reach it only then. Type a to-do and press Enter, move with &uarr; and &darr;, and check one off with Space. An edit to <code>press</code> or <code>draw</code> reloads it with its to-dos kept, at the next key.</p>
+<p>Run it, then click it or press Tab to give it the keys. An outline shows while it has them, and keys reach it only then. Type a to-do and press Enter, move with &uarr; and &darr;, and check one off with Space. An edit to <code>press</code> or <code>draw</code> reloads it with its to-dos kept, and the next frame draws with the new code.</p>
 <ul>
-  <li>An edit to <code>run</code>, the loop that waits at its <code>.await</code>, stops it at its next key. Run it again.</li>
+  <li>An edit to <code>main</code> starts the program again in a fresh frame, as <code>rawr run</code> restarts for one. Its to-dos start over.</li>
   <li>When the page resizes, ratzilla&rsquo;s <code>DomBackend</code> builds its grid again without its key handler, and the program takes no more keys. Run it again.</li>
   <li><code>.is_err()</code> on what <code>Terminal::draw</code> gives isn&rsquo;t reached yet. <code>?</code> is.</li>
 </ul>
