@@ -32,6 +32,13 @@ impl Error {
     pub(crate) fn invariant(&self) -> Option<String> {
         match *self {}
     }
+
+    /// Whether this failure is Cargo's answer drifting from the files rawr
+    /// read.
+    #[allow(dead_code)]
+    pub(crate) fn drifted(&self) -> bool {
+        match *self {}
+    }
 }
 
 #[cfg(target_arch = "wasm32")]

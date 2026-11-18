@@ -212,6 +212,7 @@ impl Error {
     /// Whether Cargo's answer drifted from the files rawr read, which only
     /// reading them again tells apart from a rawr bug (D1043.4).
     #[must_use]
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) fn drifted(&self) -> bool {
         match self {
             Self::ResolutionDrift { .. } => true,
