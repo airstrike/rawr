@@ -2099,7 +2099,7 @@ impl<'a> Parser<'a> {
                         let middle = Ty::Array {
                             element: element.clone(),
                             kind: match length {
-                                Some(length) => sequence::Kind::Array(length - fixed),
+                                Some(length) => sequence::Kind::array(length - fixed),
                                 None => sequence::Kind::Slice,
                             },
                         };

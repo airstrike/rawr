@@ -1042,7 +1042,7 @@ pub(super) fn array_length(ty: &Ty) -> Option<usize> {
         Ty::Array {
             kind: sequence::Kind::Array(length),
             ..
-        } => Some(*length),
+        } => length.fixed(),
         Ty::Reference { target, .. } => array_length(target),
         _ => None,
     }

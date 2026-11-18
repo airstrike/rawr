@@ -3,7 +3,9 @@
 
 #[cfg(feature = "rust-import")]
 use super::ImplProjection;
-use super::{builtin_operator, instantiate, is_iterator_trait, Float, FnCandidate, Int, Ty};
+use super::{
+    builtin_operator, instantiate, is_iterator_trait, sequence, Float, FnCandidate, Int, Ty,
+};
 use crate::resolve::type_ref;
 use crate::{type_def, ImmutableString, Shared};
 use std::collections::{BTreeMap, BTreeSet};
@@ -301,7 +303,12 @@ impl Inference {
             },
             Ty::Array { element, kind } => Ty::Array {
                 element: Box::new(self.resolve(element)),
-                kind: *kind,
+                kind: match kind {
+                    sequence::Kind::Array(length) => {
+                        sequence::Kind::Array(length.mapped(|length| self.resolve(length)))
+                    }
+                    kind => kind.clone(),
+                },
             },
             Ty::Tuple(members) => {
                 Ty::Tuple(members.iter().map(|member| self.resolve(member)).collect())

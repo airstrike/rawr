@@ -292,7 +292,7 @@ impl<'a> Parser<'a> {
                     values,
                     Ty::Array {
                         element: Box::new(item.clone()),
-                        kind: sequence::Kind::Array(arguments.len()),
+                        kind: sequence::Kind::array(arguments.len()),
                     },
                     call,
                 );

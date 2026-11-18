@@ -858,11 +858,13 @@ pub(crate) fn type_supports(
             capability == Kind::Default || type_supports(element, capability, resolved)
         }
         // `[T; N]` derives from `T`; Rust's `Default` stops at 32 elements
-        // (and holds for `[T; 0]` whatever `T`).
+        // (and holds for `[T; 0]` whatever `T`), so an array of a const
+        // parameter's length has none.
         type_ref::Type::Path(_) if let Some((element, length)) = ty.array_element() => {
-            match capability {
-                Kind::Default if length == 0 => true,
-                Kind::Default if length > 32 => false,
+            match (capability, length.fixed()) {
+                (Kind::Default, Some(0)) => true,
+                (Kind::Default, None) => false,
+                (Kind::Default, Some(length)) if length > 32 => false,
                 _ => type_supports(element, capability, resolved),
             }
         }

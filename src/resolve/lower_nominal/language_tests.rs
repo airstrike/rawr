@@ -15511,3 +15511,40 @@ fn language_const_generics_take_values_as_arguments() {
          pub fn run() -> i64 { let b: Buf<3> = Buf::<4>::new(); 0 } run()",
     );
 }
+
+#[test]
+fn language_an_array_length_may_be_a_const_parameter() {
+    // `[T; N]` of a const parameter takes `N` from each use: a turbofish,
+    // the array an argument or a field gives, or the type a result is
+    // coerced into. `[x; N]` repeats as many times as the use gives.
+    let value = run_string(
+        r#"
+        struct Buf<const N: usize> { data: [u8; N] }
+        impl<const N: usize> Buf<N> {
+            fn new() -> Self { Buf { data: [0; N] } }
+            fn len(&self) -> usize { self.data.len() }
+        }
+        fn sum<const N: usize>(a: [i32; N]) -> i32 {
+            let mut total = 0;
+            for x in a { total += x; }
+            total + N as i32
+        }
+        fn first<T: Copy, const N: usize>(a: [T; N]) -> T { a[0] }
+        fn make<const N: usize>() -> [i64; N] { [7; N] }
+        pub fn run() -> String {
+            let b = Buf::<4>::new();
+            let c: [i64; 3] = make();
+            let d = Buf { data: [1, 2] };
+            format!("{} {} {} {:?} {:?} {}", b.len(), sum([1, 2, 3]), first([5u8, 6]), c,
+                make::<2>(), d.len())
+        }
+        run()
+    "#,
+    );
+    assert_eq!(value, "4 9 5 [7, 7, 7] [7, 7] 2");
+    // Two lengths are two types (E0308).
+    rejected(
+        "fn pair<const N: usize>(a: [u8; N], b: [u8; N]) -> usize { a.len() + b.len() } \
+         pub fn run() -> usize { pair([1, 2], [3, 4, 5]) } run()",
+    );
+}

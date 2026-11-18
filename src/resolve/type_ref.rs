@@ -1670,7 +1670,7 @@ impl Type {
     }
 
     /// `T` and `N` of an array type `[T; N]`.
-    pub(crate) fn array_element(&self) -> Option<(&Type, usize)> {
+    pub(crate) fn array_element(&self) -> Option<(&Type, item::type_ref::Length<'_>)> {
         let Type::Path(path) = self else {
             return None;
         };

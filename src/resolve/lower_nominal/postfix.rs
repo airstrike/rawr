@@ -2398,7 +2398,7 @@ impl<'a> Parser<'a> {
             });
         }
         let kind = match without_references(&receiver_ty) {
-            Ty::Array { kind, .. } => *kind,
+            Ty::Array { kind, .. } => kind.clone(),
             _ => sequence::Kind::Vec,
         };
         // A `VecDeque` is an array at runtime, whose back is its end: its

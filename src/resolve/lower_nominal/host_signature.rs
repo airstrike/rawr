@@ -905,7 +905,7 @@ impl<'a> Parser<'a> {
                     {
                         parameters.insert(
                             name.clone(),
-                            Ty::sequence(sequence::Kind::Array(length), Ty::Unit),
+                            Ty::sequence(sequence::Kind::array(length), Ty::Unit),
                         );
                     }
                     self.instantiate_host_type(
@@ -993,7 +993,7 @@ impl<'a> Parser<'a> {
         ty: &Ty,
     ) -> Option<u32> {
         let Ty::Array {
-            kind: sequence::Kind::Array(length),
+            kind: sequence::Kind::Array(sequence::Length::Fixed(length)),
             ..
         } = self.inference.resolved_ref(ty)
         else {
@@ -2410,7 +2410,7 @@ impl<'a> Parser<'a> {
                 )?),
                 kind: match sequence {
                     crate::host::type_ref::Sequence::Array(length) => {
-                        sequence::Kind::Array(*length)
+                        sequence::Kind::array(*length)
                     }
                     crate::host::type_ref::Sequence::Vec => sequence::Kind::Vec,
                     crate::host::type_ref::Sequence::Slice => sequence::Kind::Slice,

@@ -1317,7 +1317,7 @@ impl<'a> Parser<'a> {
         let (element, length) = match ty {
             Ty::Array {
                 element,
-                kind: sequence::Kind::Array(length),
+                kind: sequence::Kind::Array(sequence::Length::Fixed(length)),
             } => (element, *length),
             Ty::Array { .. } => {
                 return Err(Error::UnsupportedNominalSyntax {
@@ -1373,7 +1373,7 @@ impl<'a> Parser<'a> {
             self.trace_unmodeled("a slice pattern binding its middle", *span);
             let middle = Ty::Array {
                 element: element.clone(),
-                kind: sequence::Kind::Array(length - fixed),
+                kind: sequence::Kind::array(length - fixed),
             };
             let binding = pattern::Syntax::Binding {
                 name: name.clone(),

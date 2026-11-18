@@ -76,6 +76,21 @@ impl<'a> Parser<'a> {
                     kind: actual_kind,
                 },
             ) if expected_kind == actual_kind => self.unify_type(expected_element, actual_element),
+            // Two arrays' lengths unify as const generic arguments do, so
+            // `[T; N]` of a generic item takes `N` from the array it meets.
+            (
+                Ty::Array {
+                    element: expected_element,
+                    kind: sequence::Kind::Array(expected_length),
+                },
+                Ty::Array {
+                    element: actual_element,
+                    kind: sequence::Kind::Array(actual_length),
+                },
+            ) => {
+                self.unify_type(&expected_length.argument(), &actual_length.argument())
+                    && self.unify_type(expected_element, actual_element)
+            }
             (
                 Ty::Script(expected_id, expected_arguments),
                 Ty::Script(actual_id, actual_arguments),

@@ -684,7 +684,13 @@ pub(super) fn named_type(ty: &Ty, models: &Models, span: Span) -> Option<type_re
         Ty::Result(ok, err) => builtin("Result", vec![named(ok)?, named(err)?]),
         Ty::Array { element, kind } => builtin(
             &match kind {
-                sequence::Kind::Array(length) => crate::item::type_ref::array_name(*length),
+                sequence::Kind::Array(sequence::Length::Fixed(length)) => {
+                    crate::item::type_ref::array_name(*length)
+                }
+                sequence::Kind::Array(sequence::Length::Param(name)) => {
+                    crate::item::type_ref::named_array_name(name)
+                }
+                sequence::Kind::Array(sequence::Length::Infer(_)) => return None,
                 sequence::Kind::Vec => "Vec".into(),
                 sequence::Kind::Slice => crate::item::type_ref::SLICE_TYPE.into(),
                 sequence::Kind::Deque => "VecDeque".into(),

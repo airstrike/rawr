@@ -779,15 +779,27 @@ fn resolve_const_lengths(items: &mut [crate::item::Parsed]) -> ParseResult<()> {
             _ => None,
         })
         .collect::<std::collections::BTreeSet<_>>();
+    /// The constants an item's types may name, and its const parameters,
+    /// which shadow constants of their names.
+    #[derive(Clone)]
+    struct Scope {
+        values: Values,
+        params: std::collections::BTreeSet<crate::ImmutableString>,
+    }
     fn visit(
         ty: &mut type_ref::Type,
-        values: &Values,
+        scope: &Scope,
         types: &std::collections::BTreeSet<crate::ImmutableString>,
     ) -> ParseResult<()> {
+        let values = &scope.values;
         match ty {
             type_ref::Type::Path(path) => {
                 for segment in path.segments.iter_mut() {
-                    if let Some(name) = type_ref::array_length_name(&segment.name.text) {
+                    // `[T; N]` of a const parameter stays named: each use
+                    // of the item gives `N` its value.
+                    if let Some(name) = type_ref::array_length_name(&segment.name.text)
+                        && !scope.params.contains(name)
+                    {
                         let Some(length) = values.get(name).and_then(|value| match value {
                             constant::Value::Integer(value) => usize::try_from(*value).ok(),
                             constant::Value::Bool(_) | constant::Value::Char(_) => None,
@@ -831,35 +843,44 @@ fn resolve_const_lengths(items: &mut [crate::item::Parsed]) -> ParseResult<()> {
                             named.segments[0].name.text = name.into();
                             continue;
                         }
-                        visit(ty, values, types)?;
+                        visit(ty, scope, types)?;
                     }
                 }
                 Ok(())
             }
-            type_ref::Type::Reference { target, .. } => visit(target, values, types),
+            type_ref::Type::Reference { target, .. } => visit(target, scope, types),
             type_ref::Type::Tuple { members, .. } => members
                 .iter_mut()
-                .try_for_each(|member| visit(member, values, types)),
+                .try_for_each(|member| visit(member, scope, types)),
             type_ref::Type::Unit(_) => Ok(()),
         }
     }
     // A const parameter shadows a crate constant of its name.
-    let shadowed = |generics: &[crate::item::GenericParam], values: &Values| {
-        let mut own = values.clone();
+    let shadowed = |generics: &[crate::item::GenericParam], scope: &Scope| {
+        let mut own = scope.clone();
         for generic in generics {
-            own.remove(&generic.name.text);
+            own.values.remove(&generic.name.text);
+            if generic.constant.is_some() {
+                own.params.insert(generic.name.text.clone());
+            } else {
+                own.params.remove(&generic.name.text);
+            }
         }
         own
     };
-    let function = |function: &mut crate::item::Function, values: &Values| -> ParseResult<()> {
-        let values = shadowed(&function.generics, values);
+    let function = |function: &mut crate::item::Function, scope: &Scope| -> ParseResult<()> {
+        let scope = shadowed(&function.generics, scope);
         for parameter in function.parameters.iter_mut() {
-            visit(&mut parameter.ty, &values, &types)?;
+            visit(&mut parameter.ty, &scope, &types)?;
         }
         function
             .output
             .iter_mut()
-            .try_for_each(|output| visit(output, &values, &types))
+            .try_for_each(|output| visit(output, &scope, &types))
+    };
+    let values = Scope {
+        values,
+        params: std::collections::BTreeSet::new(),
     };
     for item in items.iter_mut() {
         match item {
@@ -887,9 +908,10 @@ fn resolve_const_lengths(items: &mut [crate::item::Parsed]) -> ParseResult<()> {
                 };
                 let mut own = shadowed(&item.generics, &values);
                 if let Some(owner) = owner {
-                    for (name, value) in &values {
+                    for (name, value) in &values.values {
                         if let Some(constant) = name.strip_prefix(&format!("{owner}::")) {
-                            own.insert(format!("Self::{constant}").into(), *value);
+                            own.values
+                                .insert(format!("Self::{constant}").into(), *value);
                         }
                     }
                 }

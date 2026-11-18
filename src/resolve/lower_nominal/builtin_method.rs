@@ -1646,7 +1646,7 @@ impl<'a> Parser<'a> {
             | Ty::Keyed(..) => "[]".into(),
             Ty::Array {
                 element,
-                kind: sequence::Kind::Array(length),
+                kind: sequence::Kind::Array(sequence::Length::Fixed(length)),
             } => {
                 let element = self.default_source(element, span)?;
                 origin::Fragment::join(vec![element; *length], ", ").surrounded("[", "]")
@@ -1818,7 +1818,7 @@ pub(super) fn primitive_size(ty: &Ty) -> Option<u64> {
         Ty::Float(_) => 8,
         Ty::Array {
             element,
-            kind: sequence::Kind::Array(length),
+            kind: sequence::Kind::Array(sequence::Length::Fixed(length)),
         } => primitive_size(element)?.checked_mul(u64::try_from(*length).ok()?)?,
         _ => return None,
     })

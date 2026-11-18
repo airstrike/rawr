@@ -91,7 +91,7 @@ impl<'a> Parser<'a> {
                     mutable: false,
                     target: Box::new(Ty::Array {
                         element: Box::new(Ty::Int(Int::U8)),
-                        kind: sequence::Kind::Array(bytes.len()),
+                        kind: sequence::Kind::array(bytes.len()),
                     }),
                 };
                 return Ok(self.literal(crate::resolve::bundled_constant(index), ty, at));
@@ -116,7 +116,7 @@ impl<'a> Parser<'a> {
             mutable: false,
             target: Box::new(Ty::Array {
                 element: Box::new(Ty::Int(Int::U8)),
-                kind: sequence::Kind::Array(bytes.len()),
+                kind: sequence::Kind::array(bytes.len()),
             }),
         };
         self.literal(source, ty, at)

@@ -930,7 +930,12 @@ pub(super) fn instantiate(ty: &Ty, substitution: &BTreeMap<ImmutableString, Ty>)
         ),
         Ty::Array { element, kind } => Ty::Array {
             element: Box::new(instantiate(element, substitution)),
-            kind: *kind,
+            kind: match kind {
+                sequence::Kind::Array(length) => {
+                    sequence::Kind::Array(length.mapped(|length| instantiate(length, substitution)))
+                }
+                kind => kind.clone(),
+            },
         },
         Ty::Tuple(members) => Ty::Tuple(each(members)),
         Ty::Reference { mutable, target } => Ty::Reference {

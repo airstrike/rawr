@@ -918,8 +918,9 @@ impl Parser<'_> {
     ) -> Result<(), Error> {
         let item = self.inference.resolve(item);
         let fits = match self.inference.resolve(target) {
-            target @ Ty::Array { kind, .. } if kind.length().is_none() => {
-                let collected = Ty::sequence(kind, item.clone());
+            Ty::Array { element, kind } if !kind.is_array() => {
+                let collected = Ty::sequence(kind.clone(), item.clone());
+                let target = Ty::Array { element, kind };
                 self.unifies(&target, &collected) && self.unify_type(&target, &collected)
             }
             // A map of `(key, value)` items, a set of the items.
@@ -1539,9 +1540,12 @@ impl Parser<'_> {
                         )
                     }
                     // `FromIterator` of a `Vec` or a `VecDeque`.
-                    Some(target @ Ty::Array { kind, .. }) => {
-                        let kind = match kind {
-                            sequence::Kind::Deque => sequence::Kind::Deque,
+                    Some(target @ Ty::Array { .. }) => {
+                        let kind = match target {
+                            Ty::Array {
+                                kind: sequence::Kind::Deque,
+                                ..
+                            } => sequence::Kind::Deque,
                             _ => sequence::Kind::Vec,
                         };
                         let collected = Ty::sequence(kind, item.clone());

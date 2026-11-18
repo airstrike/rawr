@@ -58,12 +58,52 @@ pub(crate) fn array_length_name(name: &str) -> Option<&str> {
         .then_some(length)
 }
 
-/// The length of an array type's builtin path name.
-pub(crate) fn array_length(name: &str) -> Option<usize> {
+/// An array type's length: a number, or the name of a const parameter of
+/// the item it is in (`[T; N]` of `const N: usize`), which each use of the
+/// item gives a value.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Length<'a> {
+    Fixed(usize),
+    Param(&'a str),
+}
+
+impl Length<'_> {
+    /// The number, when the length is one.
+    pub(crate) fn fixed(self) -> Option<usize> {
+        match self {
+            Self::Fixed(length) => Some(length),
+            Self::Param(_) => None,
+        }
+    }
+
+    /// Whether an array of `length` elements is of this length: any is of
+    /// a parameter's, whose value the item's use gave.
+    pub(crate) fn admits(self, length: usize) -> bool {
+        self.fixed().is_none_or(|fixed| fixed == length)
+    }
+}
+
+impl std::fmt::Display for Length<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Fixed(length) => write!(f, "{length}"),
+            Self::Param(name) => write!(f, "{name}"),
+        }
+    }
+}
+
+/// The length of an array type's builtin path name. Once the crate's
+/// items are parsed, a named length is a const parameter's
+/// (`resolve_const_lengths`).
+pub(crate) fn array_length(name: &str) -> Option<Length<'_>> {
+    if let Some(name) = array_length_name(name) {
+        return Some(Length::Param(name));
+    }
     name.strip_prefix(ARRAY_PREFIX)?
         .strip_suffix(']')?
         .parse()
         .ok()
+        .map(Length::Fixed)
 }
 
 /// The builtin path name of a const generic argument is this prefix, then
