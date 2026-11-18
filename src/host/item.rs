@@ -140,6 +140,12 @@ pub struct Definition {
     /// by its definition identity: each `into` core's blanket `Into` gives
     /// a type through a crate's `From` impls is `Into::into`.
     member: Option<[u8; 32]>,
+    /// The signature's parameters a method's receiver gives, in its type's
+    /// argument order, by the impl's names for them, which may not be the
+    /// type's: `impl<T> Trait for Wrapper<T>` calls `T` what `struct
+    /// Wrapper<B>` calls `B`. Empty, the type's own names are the
+    /// signature's.
+    receiver_parameters: Box<[ImmutableString]>,
 }
 
 /// How an imported method's borrow guard output is reached: Rawr types the
@@ -249,6 +255,7 @@ impl Definition {
             lends_receiver: self.lends_receiver,
             application: self.application,
             member: self.member,
+            receiver_parameters: self.receiver_parameters.clone(),
             rules: self.rules.clone(),
         })
     }
@@ -276,6 +283,7 @@ impl Definition {
             lends_receiver: false,
             application: None,
             member: None,
+            receiver_parameters: Box::default(),
             rules: Some(crate::Shared::new(MacroRules {
                 source: source.into(),
                 krate: krate.into(),
@@ -313,6 +321,7 @@ impl Definition {
             lends_receiver: false,
             application: None,
             member: None,
+            receiver_parameters: Box::default(),
             rules: None,
         })
     }
@@ -340,6 +349,7 @@ impl Definition {
             lends_receiver: false,
             application: None,
             member: None,
+            receiver_parameters: Box::default(),
             rules: None,
         })
     }
@@ -365,6 +375,7 @@ impl Definition {
             lends_receiver: false,
             application: None,
             member: None,
+            receiver_parameters: Box::default(),
             rules: None,
         })
     }
@@ -390,6 +401,7 @@ impl Definition {
             lends_receiver: false,
             application: None,
             member: None,
+            receiver_parameters: Box::default(),
             rules: None,
         })
     }
@@ -418,6 +430,7 @@ impl Definition {
             lends_receiver: false,
             application: None,
             member: None,
+            receiver_parameters: Box::default(),
             rules: None,
         })
     }
@@ -443,6 +456,7 @@ impl Definition {
             lends_receiver: false,
             application: None,
             member: None,
+            receiver_parameters: Box::default(),
             rules: None,
         })
     }
@@ -469,6 +483,7 @@ impl Definition {
             lends_receiver: false,
             application: None,
             member: None,
+            receiver_parameters: Box::default(),
             rules: None,
         })
     }
@@ -495,6 +510,7 @@ impl Definition {
             lends_receiver: false,
             application: None,
             member: None,
+            receiver_parameters: Box::default(),
             rules: None,
         })
     }
@@ -572,6 +588,22 @@ impl Definition {
     pub(crate) fn instancing(mut self, member: Option<[u8; 32]>) -> Self {
         self.member = member;
         self
+    }
+
+    /// This imported method with `names`, its signature's parameters its
+    /// receiver's type arguments give, in their order.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn receiving(mut self, names: Box<[ImmutableString]>) -> Self {
+        self.receiver_parameters = names;
+        self
+    }
+
+    /// The signature's parameters the receiver's type arguments give, in
+    /// their order, when the item names them; otherwise the type's own
+    /// parameters are.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn receiver_parameters(&self) -> Option<&[ImmutableString]> {
+        (!self.receiver_parameters.is_empty()).then_some(&*self.receiver_parameters)
     }
 
     /// The trait's own method this imported impl member is an instance of,
@@ -813,6 +845,7 @@ impl Definition {
             lends_receiver: self.lends_receiver,
             application: self.application,
             member: self.member,
+            receiver_parameters: self.receiver_parameters.clone(),
             rules: self.rules.clone(),
         })
     }

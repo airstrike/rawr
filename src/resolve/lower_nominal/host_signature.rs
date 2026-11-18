@@ -713,10 +713,17 @@ impl<'a> Parser<'a> {
             let fixed = item.signature().instance().is_some();
             #[cfg(not(feature = "rust-import"))]
             let fixed = false;
+            // The receiver's type arguments are the signature's parameters
+            // its impl names them by, which may not be the type's own.
+            #[cfg(feature = "rust-import")]
+            let names = item
+                .receiver_parameters()
+                .unwrap_or_else(|| definition.parameters());
+            #[cfg(not(feature = "rust-import"))]
+            let names = definition.parameters();
             if !fixed {
                 parameters.extend(
-                    definition
-                        .parameters()
+                    names
                         .iter()
                         .zip(arguments)
                         .map(|(name, argument)| (name.clone(), argument.clone())),

@@ -1811,6 +1811,34 @@ pub mod pressable {
     }
 }
 
+/// A trait whose generic impl for another crate's generic type names the
+/// type's parameter its own way: `T` for `Surface<S>`'s `S`. Its method
+/// takes the surface by value and a `'static` closure it calls once per
+/// frame, lending it each frame.
+pub mod painter {
+    use parts::surface::{Frame, Sink, Surface};
+
+    pub trait Painter {
+        fn paint<F>(self, render: F)
+        where
+            F: FnMut(&mut Frame) + 'static;
+    }
+
+    impl<T> Painter for Surface<T>
+    where
+        T: Sink + 'static,
+    {
+        fn paint<F>(mut self, mut render: F)
+        where
+            F: FnMut(&mut Frame) + 'static,
+        {
+            for _ in 0..2 {
+                let _ = self.draw(|frame| render(frame));
+            }
+        }
+    }
+}
+
 /// A terminal that draws into a page, as ratzilla's is: its trait gives
 /// another crate's generic `Terminal<B>` methods by a generic impl, and
 /// its error converts into an `io::Error` and is a `std::error::Error` by

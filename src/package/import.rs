@@ -3349,6 +3349,7 @@ fn imported_item(
                 _ => unreachable!("an item's plan is of its selector's kind"),
             }
             .imported(outcome.identity().selector().try_clone()?)
+            .receiving(receiver_parameters(plan, allocation)?)
             .guarded(guard(plan.signature()))
             .opening(plan.signature().scope())
             .lending_static(lent_static(plan.signature()))
@@ -4881,6 +4882,32 @@ fn names_impl_parameter(ty: &representability::convert::Type) -> bool {
         Type::ProfileMessage { payload, .. } => names_impl_parameter(payload),
         Type::Object(object) => object.types().any(names_impl_parameter),
     }
+}
+
+/// The parameters of `plan`'s signature its receiver's type arguments
+/// give, in their order: an impl that fixes none of them leads its
+/// signature with them, as it declares them, whatever it names them. An
+/// impl that fixes some is reached at its own instance, which names them.
+fn receiver_parameters(
+    plan: &representability::callable::Invocation,
+    allocation: &mut rawr_import::contract::Allocation,
+) -> Result<Box<[ImmutableString]>, Error> {
+    let signature = plan.signature();
+    if signature.instance().is_some() {
+        return Ok(Box::default());
+    }
+    let parameters = signature
+        .parameters()
+        .get(..plan.container_parameters())
+        .unwrap_or_default();
+    let bytes = parameters.iter().try_fold(0_usize, |bytes, parameter| {
+        bytes.checked_add(parameter.name().len())
+    });
+    allocation.retain_checked(Some(parameters.len()), bytes)?;
+    Ok(parameters
+        .iter()
+        .map(|parameter| ImmutableString::from(parameter.name()))
+        .collect())
 }
 
 /// The signature of a generic item whose callable parameter takes a script
