@@ -57,6 +57,7 @@ impl<'a> Parser<'a> {
             ops,
             patterns: std::mem::take(&mut self.patterns),
             closures: self.take_lifted(),
+            declared: self.declared_locals(),
         })
     }
 
@@ -95,6 +96,7 @@ impl<'a> Parser<'a> {
                 ops,
                 patterns: std::mem::take(&mut self.patterns),
                 closures: self.take_lifted(),
+                declared: self.declared_locals(),
             });
         }
         if definition.asynchronous() {
@@ -142,6 +144,7 @@ impl<'a> Parser<'a> {
                 ops,
                 patterns: std::mem::take(&mut self.patterns),
                 closures: self.take_lifted(),
+                declared: self.declared_locals(),
             });
         }
         self.expect(Token::LeftBrace, "'{' to start a method body")?;
@@ -219,6 +222,7 @@ impl<'a> Parser<'a> {
             ops,
             patterns: std::mem::take(&mut self.patterns),
             closures: self.take_lifted(),
+            declared: self.declared_locals(),
         })
     }
 
@@ -596,6 +600,7 @@ impl<'a> Parser<'a> {
             ops,
             patterns: std::mem::take(&mut self.patterns),
             closures: self.take_lifted(),
+            declared: self.declared_locals(),
         })
     }
 
@@ -766,6 +771,49 @@ impl<'a> Parser<'a> {
                 .filter(|_| made.is_none())
                 .map(|bound| format!("the type must implement `{bound}`").into()),
         })
+    }
+
+    /// The body's locals and parameters a debugger prints by their type,
+    /// now the body's types are settled (#512). Most print as their values
+    /// do, and aren't kept.
+    pub(super) fn declared_locals(&self) -> Vec<super::entry::Declared> {
+        let locals = &self.local_types;
+        let lets = locals
+            .iter()
+            .map(|local| (&local.name, local.declaration, &local.ty));
+        // What is still bound at the body's end and no `let` made: its
+        // parameters.
+        let parameters = self
+            .bindings
+            .iter()
+            .filter(|(_, binding)| matches!(binding.kind, BindingKind::Local))
+            .filter(|(_, binding)| {
+                !locals
+                    .iter()
+                    .any(|local| local.declaration == binding.declaration)
+            })
+            .map(|(name, binding)| (name, binding.declaration, &binding.ty));
+        let all = lets
+            .chain(parameters)
+            .filter(|(name, ..)| !name.starts_with("__rawr"))
+            .map(|(name, declaration, ty)| {
+                let ty = self.inference.resolve(ty);
+                super::entry::Declared {
+                    name: name.to_string(),
+                    line: declaration.start().line().unwrap_or_default(),
+                    ty: super::format::needs_declared(&ty).then_some(ty),
+                }
+            })
+            .collect::<Vec<_>>();
+        // Each declaration of a name one of them is kept for, so a debugger
+        // tells which one a binding of that name is.
+        all.iter()
+            .filter(|local| {
+                all.iter()
+                    .any(|other| other.name == local.name && other.ty.is_some())
+            })
+            .cloned()
+            .collect()
     }
 
     /// The first use of a `let x;` before it has a value, now the body's

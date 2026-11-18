@@ -435,9 +435,10 @@ impl Definition {
     /// The method's generated name: its path, after its owner's place among
     /// its module's block items of its name when a block declares it.
     pub(crate) fn symbol(&self) -> ImmutableString {
+        use crate::resolve::lower_nominal::PRIVATE_METHOD;
         match self.key.block() {
-            Some(block) => format!("\0rawr.method.{block}\0{}", self.key).into(),
-            None => format!("\0rawr.method.{}", self.key).into(),
+            Some(block) => format!("{PRIVATE_METHOD}{block}\0{}", self.key).into(),
+            None => format!("{PRIVATE_METHOD}{}", self.key).into(),
         }
     }
 }

@@ -20,6 +20,11 @@ pub(crate) const DEBUG_DISPATCHER: &str = "__rawr_nominal_dispatch_Debug__fmt";
 /// type's. Present when the program formats with `Debug` or a debugger is
 /// registered while it compiles.
 pub(crate) const DEBUG_GENERIC: &str = "\0rawr.generic.debug";
+/// The `Debug` text of a local by its declared type, as a debugger reads
+/// it (`format::register_declared_debug`). Present while a debugger is
+/// registered.
+#[cfg(feature = "debugging")]
+pub(crate) const DEBUG_DECLARED: &str = "\0rawr.declared.debug";
 /// The generated function from a type witness to that type's default.
 pub(super) const DEFAULT_DISPATCHER: &str = "__rawr_nominal_default";
 pub(super) const CLOSURE_SENTINEL: &str = "__rawr_nominal_closure_";
@@ -89,11 +94,28 @@ pub(super) const PRIVATE_FUNCTION: &str = "\0rawr.function.";
 /// What separates a block item's place from its path in its generated name.
 const BLOCK_ITEM: char = '\0';
 
-/// A function's name as a user reads it: a private function's path in its
-/// crate (`main::geometry::area`), and any other name as it is.
+/// What a method's generated name starts with, before its path
+/// (`method::Definition::symbol`).
+pub(crate) const PRIVATE_METHOD: &str = "\0rawr.method.";
+
+/// What the name of a closure passed to native code starts with, before
+/// its path (`dispatch::write_closures`).
+pub(super) const PRIVATE_CLOSURE: &str = "\0rawr.closure.";
+
+/// A function's name as a user reads it: a private function's, a
+/// method's or a closure's path in its crate (`main::geometry::area`,
+/// `main::Counter::bump`, `main::run{closure#0}`), and any other name as
+/// it is.
 pub(crate) fn function_display_name(name: &str) -> &str {
-    match name.strip_prefix(PRIVATE_FUNCTION) {
-        Some(path) => path.split(BLOCK_ITEM).next().unwrap_or(path),
+    if let Some(path) = name.strip_prefix(PRIVATE_FUNCTION) {
+        return path.split(BLOCK_ITEM).next().unwrap_or(path);
+    }
+    if let Some(path) = name.strip_prefix(PRIVATE_CLOSURE) {
+        return path;
+    }
+    // A block's method has its owner's place before its path.
+    match name.strip_prefix(PRIVATE_METHOD) {
+        Some(symbol) => symbol.rsplit(BLOCK_ITEM).next().unwrap_or(symbol),
         None => name,
     }
 }

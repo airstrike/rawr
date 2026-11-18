@@ -12,8 +12,10 @@
 //!   and on (#511); `name` and `file` apply to that call;
 //! - the answer: `{"reached": true, "frame": .., "file": .., "line": ..,
 //!   "function": .., "bindings": [{"name": .., "value": ..} or {"name": ..,
-//!   "error": ..}], "frames": [{"function": .., "file": .., "line": ..}]}`,
-//!   the frames innermost first, a caller's line the line of its call; or
+//!   "error": ..}], "unread": .., "frames": [{"function": .., "file": ..,
+//!   "line": ..}]}`, the frames innermost first, a caller's line the line
+//!   of its call, and `unread` why the frame's bindings can't be read, or
+//!   null (#575); or
 //!   `{"reached": false, "paused": .., "depth": ..}` when the program is
 //!   paused where the request doesn't match. A request waits for its step
 //!   as long as that takes; the tool closing the socket gives it up.
@@ -119,7 +121,8 @@ fn is_written(name: &str) -> bool {
 
 /// The program's own function calls where `context` is: their indices in
 /// the debugger's call stack, the innermost first. A crate's native calls
-/// between them are left out.
+/// between them are left out, and so are the functions the compiler wrote
+/// around the program's, as a value's drop glue.
 fn script_frames(context: &EvalContext) -> Vec<usize> {
     let Some(debugger) = context.global_runtime_state().debugger.as_ref() else {
         return Vec::new();
@@ -127,7 +130,9 @@ fn script_frames(context: &EvalContext) -> Vec<usize> {
     let stack = debugger.call_stack();
     (0..stack.len())
         .rev()
-        .filter(|&index| stack[index].bindings.is_some())
+        .filter(|&index| {
+            stack[index].bindings.is_some() && !stack[index].fn_name.starts_with("__rawr")
+        })
         .collect()
 }
 
@@ -180,10 +185,10 @@ fn scope_of<'c>(
 /// entries, then its receiver under the name the program gave it (#534).
 /// A caller's bindings are read where the call it made was lent them
 /// (#540); one that call holds by reference reads as borrowed, as Rust
-/// would have it, and a caller that lent nothing (native code called the
-/// next frame in) has none to read. `None` when the program isn't that
+/// would have it. `Err` says why a caller's bindings can't be read: the
+/// call it made lent nothing (#575). `None` when the program isn't that
 /// deep.
-fn entries<'c>(context: &'c EvalContext, frame: usize) -> Option<Vec<Entry<'c>>> {
+fn entries<'c>(context: &'c EvalContext, frame: usize) -> Option<Result<Vec<Entry<'c>>, String>> {
     let frames = script_frames(context);
     let stack = context
         .global_runtime_state()
@@ -199,24 +204,32 @@ fn entries<'c>(context: &'c EvalContext, frame: usize) -> Option<Vec<Entry<'c>>>
                 .iter_rev_inner()
                 .map(|(name, _, value)| (name.as_str(), Ok(value))),
         );
-        if let (Some(name), Some(this)) = (
-            own(0).and_then(|bindings| bindings.this_name.as_ref()),
-            context.this_ptr(),
-        ) {
-            found.push((name.as_str(), Ok(this)));
+        // A step inside an expression that reaches into the receiver, as
+        // `self.items[0].push(x)` does, has none: the expression holds it
+        // (#541).
+        if let Some(name) = own(0).and_then(|bindings| bindings.this_name.as_ref()) {
+            found.push((
+                name.as_str(),
+                context.this_ptr().ok_or_else(|| {
+                    format!("`{name}` is borrowed by the expression being evaluated")
+                }),
+            ));
         }
-        return Some(found);
+        return Some(Ok(found));
     }
     let bindings = own(frame)?;
     let index = frames[frame];
     let call = stack.get(index + 1)?;
+    let callee = crate::resolve::lower_nominal::function_display_name(&call.fn_name);
     let (Some(lent), Some((scope, end))) = (
         call.caller.as_ref(),
         scope_of(context, stack, &frames, frame),
     ) else {
-        return Some(found);
+        return Some(Err(format!(
+            "its bindings can't be read while it calls `{callee}`: rawr doesn't keep them for \
+             this call"
+        )));
     };
-    let callee = crate::resolve::lower_nominal::function_display_name(&call.fn_name);
     let borrowed = |name: &str| format!("`{name}` is borrowed by the call to `{callee}`");
     let places: Vec<(&'c str, *const Dynamic)> = scope
         .places()
@@ -246,17 +259,37 @@ fn entries<'c>(context: &'c EvalContext, frame: usize) -> Option<Vec<Entry<'c>>>
         } else if let Some(this) = lent.this {
             // SAFETY: as for the scope in `scope_of`.
             found.push((name.as_str(), Ok(unsafe { this.as_ref() })));
+        } else {
+            found.push((
+                name.as_str(),
+                Err(format!(
+                    "`{name}` can't be read while `{callee}` runs: rawr doesn't keep it for this \
+                     call"
+                )),
+            ));
         }
     }
-    Some(found)
+    Some(Ok(found))
 }
 
 /// The bindings of frame `frame` where `context` is, the last of each name,
-/// in the order they were made; or one binding, `name`. `None` when the
-/// program isn't that deep.
-fn read(context: &mut EvalContext, frame: usize, name: Option<&str>) -> Option<Vec<Binding>> {
+/// in the order they were made; or one binding, `name`. Each prints by the
+/// type its function declares it with (#512), the frame at `line` of its
+/// file when that is known (0 when not). `Err` says why the frame's
+/// bindings can't be read. `None` when the program isn't that deep.
+fn read(
+    context: &mut EvalContext,
+    frame: usize,
+    line: usize,
+    name: Option<&str>,
+) -> Option<Result<Vec<Binding>, String>> {
     let mut seen = HashSet::new();
-    let mut found: Vec<(String, Result<Dynamic, String>)> = entries(context, frame)?
+    let function = frame_symbol(context, frame);
+    let entries = match entries(context, frame)? {
+        Ok(entries) => entries,
+        Err(why) => return Some(Err(why)),
+    };
+    let mut found: Vec<(String, Result<Dynamic, String>)> = entries
         .into_iter()
         .filter(|(entry, _)| {
             name.map_or_else(|| is_written(entry), |name| *entry == name)
@@ -265,31 +298,91 @@ fn read(context: &mut EvalContext, frame: usize, name: Option<&str>) -> Option<V
         .map(|(entry, value)| (entry.to_owned(), value.map(Dynamic::flatten_clone)))
         .collect();
     found.reverse();
-    Some(
-        found
-            .into_iter()
-            .map(|(name, value)| Binding {
-                value: value.and_then(|value| debug_text(context, &value)),
-                name,
-            })
-            .collect(),
-    )
+    Some(Ok(found
+        .into_iter()
+        .map(|(name, value)| Binding {
+            value: value.and_then(|value| {
+                let declared = function.as_ref().map(|function| Declared {
+                    function,
+                    name: &name,
+                    line,
+                });
+                binding_text(context, &value, declared)
+            }),
+            name,
+        })
+        .collect()))
 }
 
 /// The bindings in scope where `context` is, the last of each name, in the
 /// order they were made.
 pub fn bindings(context: &mut EvalContext) -> Vec<Binding> {
-    read(context, 0, None).unwrap_or_default()
+    read(context, 0, 0, None)
+        .and_then(Result::ok)
+        .unwrap_or_default()
 }
 
 /// The binding `name` in scope where `context` is.
 pub fn binding(context: &mut EvalContext, name: &str) -> Option<Binding> {
-    read(context, 0, Some(name))?.pop()
+    read(context, 0, 0, Some(name))?.ok()?.pop()
+}
+
+/// The name frame `frame`'s function runs under where `context` is.
+fn frame_symbol(context: &EvalContext, frame: usize) -> Option<crate::ImmutableString> {
+    let index = *script_frames(context).get(frame)?;
+    let stack = context
+        .global_runtime_state()
+        .debugger
+        .as_ref()?
+        .call_stack();
+    Some(stack[index].fn_name.clone())
+}
+
+/// Where a binding is declared, for its type: its function's name as the
+/// program runs it, its own name, and the line the function is at (0 when
+/// not known).
+struct Declared<'a> {
+    function: &'a crate::ImmutableString,
+    name: &'a str,
+    line: usize,
+}
+
+/// `value`, a binding's, as the program's `{:?}` prints it: by the type
+/// `declared` gives it when that type prints otherwise than the value
+/// alone (#512).
+fn binding_text(
+    context: &mut EvalContext,
+    value: &Dynamic,
+    declared: Option<Declared<'_>>,
+) -> Result<String, String> {
+    if undebuggable(value).is_none()
+        && let Some(declared) = declared
+    {
+        let mut arguments = [
+            value.clone(),
+            Dynamic::from(declared.function.clone()),
+            Dynamic::from(crate::ImmutableString::from(declared.name)),
+            Dynamic::from(crate::INT::try_from(declared.line).unwrap_or_default()),
+        ];
+        let mut arguments: Vec<&mut Dynamic> = arguments.iter_mut().collect();
+        if let Ok(text) = context.call_fn_raw(
+            crate::resolve::lower_nominal::DEBUG_DECLARED,
+            false,
+            false,
+            &mut arguments,
+        ) && let Ok(text) = text.into_immutable_string()
+        {
+            return Ok(text.to_string());
+        }
+    }
+    debug_text(context, value)
 }
 
 /// Whether `name` is in scope in frame `frame` where `context` is.
 fn in_scope(context: &EvalContext, frame: usize, name: &str) -> bool {
-    entries(context, frame).is_some_and(|entries| entries.iter().any(|(entry, _)| *entry == name))
+    entries(context, frame).is_some_and(|entries| {
+        entries.is_ok_and(|entries| entries.iter().any(|(entry, _)| *entry == name))
+    })
 }
 
 /// The function the program is in where `context` is, as Rust names it.
@@ -329,11 +422,8 @@ fn frame_position(context: &EvalContext, frame: usize, position: Position) -> Op
 /// first, then a derive or a builtin's. A crate type without `Debug` gives
 /// Rust's reason instead.
 pub fn debug_text(context: &mut EvalContext, value: &Dynamic) -> Result<String, String> {
-    if let Some(name) = undebuggable(value) {
-        return Err(format!(
-            "`{}` doesn't implement `Debug`",
-            short_type_name(name)
-        ));
+    if let Some(unreadable) = undebuggable(value) {
+        return Err(unreadable.reason());
     }
     let mut receiver = value.clone();
     let mut formatter = Dynamic::from(crate::ImmutableString::from(""));
@@ -364,21 +454,52 @@ pub fn debug_text(context: &mut EvalContext, value: &Dynamic) -> Result<String, 
     }
 }
 
-/// How a host that keeps crate values behind handles names the type of one
-/// without `Debug`, as a runner's arena does.
-pub type Undebuggable = fn(&Dynamic) -> Option<&'static str>;
+/// Why a crate value has no `Debug` text where a debugger reads it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unreadable {
+    /// Its type, by this name, doesn't implement `Debug`.
+    NoDebug(&'static str),
+    /// A native call up this thread's stack holds the values the host
+    /// keeps behind handles, as a runner's arena (#533).
+    Held,
+    /// The host keeps it where this thread can't reach: another thread's
+    /// values, or another call's.
+    Elsewhere,
+}
+
+impl Unreadable {
+    /// The reason, as a tool shows it.
+    fn reason(self) -> String {
+        match self {
+            Self::NoDebug(name) => format!("`{}` doesn't implement `Debug`", short_type_name(name)),
+            Self::Held => "the program's crate values can't be read at this step: a native call \
+                           it runs inside holds them"
+                .to_owned(),
+            Self::Elsewhere => {
+                "this crate value can't be read from this thread: another thread or \
+                                call holds it"
+                    .to_owned()
+            }
+        }
+    }
+}
+
+/// How a host that keeps crate values behind handles says why one has no
+/// `Debug` text, as a runner's arena does.
+pub type Undebuggable = fn(&Dynamic) -> Option<Unreadable>;
 
 static UNDEBUGGABLE: std::sync::OnceLock<Undebuggable> = std::sync::OnceLock::new();
 
-/// Name a crate value's type that has no `Debug` with `name`, for values
-/// the host keeps behind handles. Set once per process.
+/// Say why a crate value the host keeps behind a handle has no `Debug`
+/// text with `name`. Set once per process.
 pub fn name_undebuggable_with(name: Undebuggable) {
     let _ = UNDEBUGGABLE.set(name);
 }
 
-/// The type of the first value inside `value` that has no `Debug` text: a
-/// crate value whose type doesn't implement `Debug`.
-fn undebuggable(value: &Dynamic) -> Option<&'static str> {
+/// Why the first value inside `value` that has no `Debug` text has none: a
+/// crate value whose type doesn't implement `Debug`, or one the host can't
+/// reach here.
+fn undebuggable(value: &Dynamic) -> Option<Unreadable> {
     match &value.0 {
         Union::Array(items, ..) => items.iter().find_map(undebuggable),
         Union::Map(map, ..) => map.values().find_map(undebuggable),
@@ -400,12 +521,12 @@ fn undebuggable(value: &Dynamic) -> Option<&'static str> {
             if crate::place::get(value).is_some() {
                 return None;
             }
-            if let Some(name) = UNDEBUGGABLE.get().and_then(|name| name(value)) {
-                return Some(name);
+            if let Some(unreadable) = UNDEBUGGABLE.get().and_then(|name| name(value)) {
+                return Some(unreadable);
             }
             // Without a `Debug` text, `{:?}` falls back to the type's name.
             let name = (***variant).type_name();
-            (format!("{value:?}") == name).then_some(name)
+            (format!("{value:?}") == name).then_some(Unreadable::NoDebug(name))
         }
         _ => None,
     }
@@ -997,7 +1118,7 @@ impl Shared {
         let at = json!({
             "file": stop.file,
             "line": stop.line,
-            "function": function(context),
+            "function": self.frame_name(context, 0),
             "reason": reason,
         });
         let mut state = self.state();
@@ -1110,6 +1231,17 @@ impl Shared {
         self.locate(frame_position(context, frame, position)?)
     }
 
+    /// The function of frame `frame` where `context` is, as Rust names it:
+    /// a closure by the function it is written in (`Stops::function_name`).
+    fn frame_name(&self, context: &EvalContext, frame: usize) -> Option<String> {
+        let symbol = frame_symbol(context, frame)?;
+        let stops = self.state().stops.clone();
+        Some(stops.map_or_else(
+            || crate::resolve::lower_nominal::function_display_name(&symbol).to_owned(),
+            |stops| stops.function_name(&symbol),
+        ))
+    }
+
     /// Answer `request` with the values of its frame where `context` is, at
     /// `position`, and where each frame is.
     fn reply(&self, context: &mut EvalContext, request: &Request, position: Position) {
@@ -1119,14 +1251,19 @@ impl Shared {
             .map(|index| {
                 let at = self.frame_line(context, index, position);
                 json!({
-                    "function": frame_function(context, index),
+                    "function": self.frame_name(context, index),
                     "file": at.as_ref().map(|(file, _)| file),
                     "line": at.as_ref().map(|(_, line)| line),
                 })
             })
             .collect();
-        let function = frame_function(context, frame);
-        let found = read(context, frame, request.name.as_deref()).unwrap_or_default();
+        let function = self.frame_name(context, frame);
+        let line = location.as_ref().map_or(0, |(_, line)| *line);
+        let (found, unread) = match read(context, frame, line, request.name.as_deref()) {
+            Some(Ok(found)) => (found, None),
+            Some(Err(why)) => (Vec::new(), Some(why)),
+            None => (Vec::new(), None),
+        };
         let _ = request.reply.send(json!({
             "reached": true,
             "frame": frame,
@@ -1134,6 +1271,7 @@ impl Shared {
             "line": location.as_ref().map(|(_, line)| line),
             "function": function,
             "bindings": found.iter().map(Binding::to_json).collect::<Vec<_>>(),
+            "unread": unread,
             "frames": frames,
         }));
     }
@@ -1228,9 +1366,13 @@ mod tests {
     }
 
     fn shown(context: &mut crate::EvalContext, frame: usize) -> String {
-        read(context, frame, None).map_or_else(
+        read(context, frame, 0, None).map_or_else(
             || "none".to_owned(),
             |found| {
+                let found = match found {
+                    Ok(found) => found,
+                    Err(why) => return format!("unread <{why}>"),
+                };
                 found
                     .iter()
                     .map(|binding| {
@@ -1297,7 +1439,8 @@ mod tests {
         );
         assert!(
             seen.iter()
-                .any(|saw| saw == "inner: x=6 | outer: a=5 b=6 | run: n=5 | : none"),
+                .any(|saw| saw
+                    == "main::inner: x=6 | main::outer: a=5 b=6 | main::run: n=5 | : none"),
             "{seen:?}"
         );
     }
@@ -1326,14 +1469,11 @@ mod tests {
             "bump",
             every_frame,
         );
-        // A method's frame is named by its symbol, which ends in its name.
+        // A method's frame is named by its path, as Rust names it (#573).
         assert!(
-            seen.iter().any(|saw| {
-                let (bump, run) = saw.split_once(" | ").unwrap();
-                bump.ends_with("bump: self=Counter { count: 1 } by=4")
-                    && run.starts_with("run: k=7 c=<`c` is borrowed by the call to `")
-                    && run.ends_with("bump`>")
-            }),
+            seen.iter().any(|saw| saw
+                == "main::Counter::bump: self=Counter { count: 1 } by=4 | main::run: k=7 \
+                    c=<`c` is borrowed by the call to `main::Counter::bump`>"),
             "{seen:?}"
         );
         let seen = at_steps(
@@ -1345,9 +1485,125 @@ mod tests {
         );
         assert!(
             seen.iter().any(|saw| saw
-                == "tick: count=3 step=2 | run: k=7 n=<`n` is borrowed by the call to `tick`>"),
+                == "main::tick: count=3 step=2 | main::run: k=7 n=<`n` is borrowed by the call \
+                    to `main::tick`>"),
             "{seen:?}"
         );
+    }
+
+    #[test]
+    fn bindings_print_by_their_declared_type() {
+        let seen = at_steps(
+            "fn look(p: (i64, bool), o: std::cmp::Ordering) -> i64 {\n\
+                 let pair = (1, \"a\");\n\
+                 let ord = 3.cmp(&4);\n\
+                 let big: u64 = u64::MAX;\n\
+                 let half: f32 = 0.1;\n\
+                 let pairs = vec![(1, 2)];\n\
+                 let maybe = Some(ord);\n\
+                 p.0\n\
+             }\n\
+             pub fn run() -> i64 { look((7, true), std::cmp::Ordering::Greater) }\n\
+             run()",
+            "look",
+            |context| shown(context, 0),
+        );
+        assert!(
+            seen.iter().any(|saw| saw
+                == "p=(7, true) o=Greater pair=(1, \"a\") ord=Less big=18446744073709551615 \
+                    half=0.1 pairs=[(1, 2)] maybe=Some(Less)"),
+            "{seen:?}"
+        );
+    }
+
+    #[test]
+    fn a_receiver_lent_to_an_expression_on_itself_reads_or_says_why() {
+        let seen = at_steps(
+            "struct Counter { count: i64, items: Vec<i64> }\n\
+             impl Counter {\n\
+                 fn bump(&mut self, by: i64) { self.count += by; self.items.push(by); }\n\
+             }\n\
+             pub fn run() -> i64 { let mut c = Counter { count: 1, items: vec![] }; c.bump(4); c.count }\n\
+             run()",
+            "bump",
+            |context| shown(context, 0),
+        );
+        // Every step lists `self`: read where the expression is on `self`
+        // itself, and borrowed further into it.
+        assert!(seen.iter().all(|saw| saw.starts_with("self=")), "{seen:?}");
+        assert!(
+            seen.iter()
+                .any(|saw| saw == "self=Counter { count: 5, items: [] } by=4"),
+            "{seen:?}"
+        );
+        assert!(
+            seen.iter().any(
+                |saw| saw == "self=<`self` is borrowed by the expression being evaluated> by=4"
+            ),
+            "{seen:?}"
+        );
+    }
+
+    #[test]
+    fn a_caller_frame_reads_its_receiver_under_a_chain_on_a_value() {
+        let seen = at_steps(
+            "struct C { k: i64 }\n\
+             impl C {\n\
+                 fn get(&self) -> i64 { self.k }\n\
+                 fn g(&self) -> i64 { let z = 1; C { k: self.k + z }.get() }\n\
+             }\n\
+             pub fn run() -> i64 { let c = C { k: 2 }; c.g() }\n\
+             run()",
+            "get",
+            every_frame,
+        );
+        assert!(
+            seen.iter().any(|saw| saw
+                == "main::C::get: self=C { k: 3 } | main::C::g: self=C { k: 2 } z=1 | main::run: \
+                    c=<`c` is borrowed by the call to `main::C::g`>"),
+            "{seen:?}"
+        );
+    }
+
+    #[test]
+    fn frames_the_compiler_wrote_are_left_out() {
+        let seen = at_steps(
+            "struct D { n: i64 }\n\
+             impl Drop for D { fn drop(&mut self) { let m = self.n; } }\n\
+             pub fn run() -> i64 { let k = 1; { let d = D { n: 9 }; } k }\n\
+             run()",
+            "drop",
+            every_frame,
+        );
+        assert!(
+            seen.iter()
+                .any(|saw| saw
+                    == "main::D::Drop::drop: self=D { n: 9 } | main::run: k=1 d=D { n: 9 }"),
+            "{seen:?}"
+        );
+    }
+
+    /// A crate value a test host keeps where a native call holds it.
+    #[derive(Clone)]
+    struct HeldHandle;
+
+    #[test]
+    fn a_crate_value_a_native_call_holds_says_why_it_cant_be_read() {
+        super::name_undebuggable_with(|value| {
+            value
+                .read_lock::<HeldHandle>()
+                .map(|_| super::Unreadable::Held)
+        });
+        let held = Dynamic::from_array(vec![Dynamic::from(1_i64), Dynamic::from(HeldHandle)]);
+        assert_eq!(
+            undebuggable(&held).map(super::Unreadable::reason),
+            Some(
+                "the program's crate values can't be read at this step: a native call it runs \
+                 inside holds them"
+                    .to_owned()
+            )
+        );
+        assert_eq!(undebuggable(&Dynamic::from(1_i64)), None);
     }
 
     /// A value whose copies are counted.
@@ -1391,7 +1647,10 @@ mod tests {
 
     #[test]
     fn a_crate_value_without_debug_is_named_inside_what_holds_it() {
-        let named = |value: &Dynamic| undebuggable(value).map(short_type_name);
+        let named = |value: &Dynamic| match undebuggable(value) {
+            Some(super::Unreadable::NoDebug(name)) => Some(short_type_name(name)),
+            _ => None,
+        };
         assert_eq!(named(&Dynamic::from(Opaque)), Some("Opaque".to_owned()));
         let held = Dynamic::from_array(vec![Dynamic::from(1_i64), Dynamic::from(Opaque)]);
         assert_eq!(named(&held), Some("Opaque".to_owned()));

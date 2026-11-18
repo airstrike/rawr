@@ -43,19 +43,43 @@ struct ChainLent {
     this: Option<std::ptr::NonNull<Dynamic>>,
     #[cfg(feature = "debugging")]
     held: Option<crate::eval::Held>,
+    /// The value a chain on the receiver starts at, its root target's: only
+    /// compared with a target's, never dereferenced.
+    #[cfg(feature = "debugging")]
+    root: Option<*const Dynamic>,
 }
 
 impl ChainLent {
-    /// A chain on the receiver, which its calls hold.
-    fn this_held() -> Self {
+    /// A chain on the receiver, which its calls hold, starting at `root`.
+    #[allow(unused_variables)]
+    fn this_held(root: &Target) -> Self {
         #[cfg_attr(not(feature = "debugging"), allow(unused_mut))]
         let mut lent = Self::default();
         #[cfg(feature = "debugging")]
         {
             lent.held = Some(crate::eval::Held::This);
+            lent.root = Some(std::ptr::from_ref(root.as_ref()));
         }
         lent
     }
+
+    /// The receiver a step inside the chain shows a debugger when the
+    /// chain took the code's own (#541): the one its start lent, which the
+    /// chain doesn't hold; or, in a chain on the receiver, the target while
+    /// it is the receiver itself. `None` further into the receiver, where
+    /// the target borrows it.
+    #[cfg(feature = "debugging")]
+    fn step_this<'t>(&self, target: &'t mut Target) -> Option<&'t mut Dynamic> {
+        match self.root {
+            Some(root) => std::ptr::eq(target.as_ref(), root).then(|| target.as_mut()),
+            // SAFETY: the start's own borrow of the receiver, which nothing
+            // else uses while the chain runs (`Self::local`); the chain's
+            // target is a local, not the receiver. The reference lives for
+            // one debugger callback.
+            None => self.this.map(|this| unsafe { &mut *this.as_ptr() }),
+        }
+    }
+
     /// A chain on the local `target`, which the start found through
     /// `scope` and `this`.
     #[allow(unused_variables)]
@@ -71,6 +95,8 @@ impl ChainLent {
             this,
             #[cfg(feature = "debugging")]
             held: target.held_address().map(crate::eval::Held::Local),
+            #[cfg(feature = "debugging")]
+            root: None,
         }
     }
 }
@@ -616,7 +642,7 @@ impl Engine {
                     |this_ptr| {
                         let target = &mut this_ptr.try_into()?;
                         let scope = Some(scope);
-                        let lent = ChainLent::this_held();
+                        let lent = ChainLent::this_held(target);
                         self.eval_dot_index_chain_raw(
                             lent, global, caches, scope, None, lhs, expr, target, rhs, idx_values,
                             new_val,
@@ -867,26 +893,30 @@ impl Engine {
     /// Chain-evaluate a dot/index chain.
     /// Lend a method call in a chain what the code running the chain keeps
     /// its bindings in (#540): what the chain's start took, or the scope
-    /// passed down the chain, taken here after its last use before the
-    /// call. A call on a temporary value holds no binding.
+    /// passed down the chain, and the receiver `this` passed down a chain
+    /// on a value (#575), each taken here after its last use before the
+    /// call. A call on a temporary value holds no binding, but one inside
+    /// the receiver still borrows it.
     #[cfg(feature = "debugging")]
     fn lend_chain_call(
         &self,
         global: &mut GlobalRuntimeState,
         lent: ChainLent,
         scope: Option<&mut Scope>,
+        this: Option<&mut Dynamic>,
         target: &Target,
     ) {
         let scope = lent
             .scope
             .map(std::ptr::NonNull::cast)
             .or_else(|| scope.map(std::ptr::NonNull::from));
-        let held = if target.is_temp_value() {
+        let held = if target.is_temp_value() && lent.root.is_none() {
             None
         } else {
             lent.held
         };
-        self.lend_bindings(global, scope, lent.this, held);
+        let this = lent.this.or_else(|| this.map(std::ptr::NonNull::from));
+        self.lend_bindings(global, scope, this, held);
     }
 
     // Without `debugging`, `lent` is empty and only passed down the chain.
@@ -918,6 +948,15 @@ impl Engine {
             }};
         }
 
+        // The receiver a step inside the chain shows a debugger: the one
+        // passed down, else what the chain took of it (`ChainLent::step_this`).
+        #[cfg(feature = "debugging")]
+        macro_rules! seen {
+            ($this:expr) => {
+                $this.or_else(|| lent.step_this(target))
+            };
+        }
+
         let is_ref_mut = target.is_ref();
         let op_pos = parent.position();
 
@@ -931,7 +970,13 @@ impl Engine {
                         if !parent.options().intersects(ASTFlags::BREAK) =>
                     {
                         #[cfg(feature = "debugging")]
-                        self.dbg(global, caches, x!(s, b), this_ptr.as_deref_mut(), parent)?;
+                        self.dbg(
+                            global,
+                            caches,
+                            x!(s, b),
+                            seen!(this_ptr.as_deref_mut()),
+                            parent,
+                        )?;
 
                         let idx_val = &mut idx_values.pop().unwrap();
                         let mut idx_val_for_setter = idx_val.clone();
@@ -1026,7 +1071,13 @@ impl Engine {
                     // xxx[rhs] op= new_val
                     (_, Some((new_val, op_info))) => {
                         #[cfg(feature = "debugging")]
-                        self.dbg(global, caches, x!(s, b), this_ptr.as_deref_mut(), parent)?;
+                        self.dbg(
+                            global,
+                            caches,
+                            x!(s, b),
+                            seen!(this_ptr.as_deref_mut()),
+                            parent,
+                        )?;
 
                         let obj = target.as_mut();
 
@@ -1128,7 +1179,13 @@ impl Engine {
                     // xxx[rhs]
                     (_, None) => {
                         #[cfg(feature = "debugging")]
-                        self.dbg(global, caches, x!(s, b), this_ptr.as_deref_mut(), parent)?;
+                        self.dbg(
+                            global,
+                            caches,
+                            x!(s, b),
+                            seen!(this_ptr.as_deref_mut()),
+                            parent,
+                        )?;
 
                         let obj = target.as_mut();
 
@@ -1171,7 +1228,13 @@ impl Engine {
                         );
 
                         #[cfg(feature = "debugging")]
-                        let reset = self.dbg_reset(global, caches, x!(s, b), this_ptr, rhs)?;
+                        let reset = self.dbg_reset(
+                            global,
+                            caches,
+                            x!(s, b),
+                            seen!(this_ptr.as_deref_mut()),
+                            rhs,
+                        )?;
                         #[cfg(feature = "debugging")]
                         defer! { global if Some(reset) => move |g| g.debugger_mut().reset_status(reset) }
 
@@ -1186,7 +1249,13 @@ impl Engine {
                         let arg1_pos = args.first().map_or(Position::NONE, Expr::position);
 
                         #[cfg(feature = "debugging")]
-                        self.lend_chain_call(global, lent, s.as_deref_mut(), target);
+                        self.lend_chain_call(
+                            global,
+                            lent,
+                            s.as_deref_mut(),
+                            this_ptr.as_deref_mut(),
+                            target,
+                        );
                         let result = self.make_method_call(
                             global, caches, name, *hashes, target, call_args, arg1_pos, *pos,
                         );
@@ -1197,7 +1266,13 @@ impl Engine {
                     // {xxx:map}.id op= ???
                     (Expr::Property(x, pos), Some((new_val, op_info)), true) => {
                         #[cfg(feature = "debugging")]
-                        self.dbg(global, caches, x!(s, b), this_ptr.as_deref_mut(), rhs)?;
+                        self.dbg(
+                            global,
+                            caches,
+                            x!(s, b),
+                            seen!(this_ptr.as_deref_mut()),
+                            rhs,
+                        )?;
 
                         let index = &mut x.2.clone().into();
                         {
@@ -1225,7 +1300,13 @@ impl Engine {
                     // {xxx:map}.id
                     (Expr::Property(x, pos), None, true) => {
                         #[cfg(feature = "debugging")]
-                        self.dbg(global, caches, x!(s, b), this_ptr.as_deref_mut(), rhs)?;
+                        self.dbg(
+                            global,
+                            caches,
+                            x!(s, b),
+                            seen!(this_ptr.as_deref_mut()),
+                            rhs,
+                        )?;
 
                         let obj = target.as_mut();
 
@@ -1249,7 +1330,7 @@ impl Engine {
                     // xxx.id op= ???
                     (Expr::Property(x, pos), Some((mut new_val, op_info)), false) => {
                         #[cfg(feature = "debugging")]
-                        self.dbg(global, caches, x!(s, b), this_ptr, rhs)?;
+                        self.dbg(global, caches, x!(s, b), seen!(this_ptr), rhs)?;
 
                         let ((getter, hash_get), (setter, hash_set), name) = &**x;
 
@@ -1317,7 +1398,7 @@ impl Engine {
                     // xxx.id
                     (Expr::Property(x, pos), None, false) => {
                         #[cfg(feature = "debugging")]
-                        self.dbg(global, caches, x!(s, b), this_ptr, rhs)?;
+                        self.dbg(global, caches, x!(s, b), seen!(this_ptr), rhs)?;
 
                         let ((getter, hash_get), _, name) = &**x;
                         let args = &mut [target.as_mut()];
@@ -1354,7 +1435,13 @@ impl Engine {
                         let item = &mut match x.lhs {
                             Expr::Property(ref p, pos) => {
                                 #[cfg(feature = "debugging")]
-                                self.dbg(global, caches, x!(s, b), _tp.as_deref_mut(), _node)?;
+                                self.dbg(
+                                    global,
+                                    caches,
+                                    x!(s, b),
+                                    seen!(_tp.as_deref_mut()),
+                                    _node,
+                                )?;
 
                                 let obj = target.as_mut();
 
@@ -1381,7 +1468,13 @@ impl Engine {
                                 );
 
                                 #[cfg(feature = "debugging")]
-                                let reset = self.dbg_reset(global, caches, x!(s, b), _tp, _node)?;
+                                let reset = self.dbg_reset(
+                                    global,
+                                    caches,
+                                    x!(s, b),
+                                    seen!(_tp.as_deref_mut()),
+                                    _node,
+                                )?;
                                 #[cfg(feature = "debugging")]
                                 defer! { global if Some(reset) => move |g| g.debugger_mut().reset_status(reset) }
 
@@ -1396,7 +1489,7 @@ impl Engine {
                                 let arg1_pos = args.first().map_or(Position::NONE, Expr::position);
 
                                 #[cfg(feature = "debugging")]
-                                self.lend_chain_call(global, lent, s.as_deref_mut(), target);
+                                self.lend_chain_call(global, lent, s.as_deref_mut(), _tp, target);
                                 let result = self.make_method_call(
                                     global, caches, name, *hashes, target, call_args, arg1_pos, pos,
                                 );
@@ -1417,13 +1510,14 @@ impl Engine {
                     (Expr::Index(x, ..) | Expr::Dot(x, ..), new_val, ..) => {
                         let _node = &x.lhs;
                         let mut _this_ptr = this_ptr;
-                        let _tp = _this_ptr.as_deref_mut();
+                        #[cfg_attr(not(feature = "debugging"), allow(unused_mut))]
+                        let mut _tp = _this_ptr.as_deref_mut();
 
                         match x.lhs {
                             // xxx.prop[expr] | xxx.prop.expr
                             Expr::Property(ref p, pos) => {
                                 #[cfg(feature = "debugging")]
-                                self.dbg(global, caches, x!(s, b), _tp, _node)?;
+                                self.dbg(global, caches, x!(s, b), seen!(_tp), _node)?;
 
                                 let ((getter, hash_get), (setter, hash_set), name) = &**p;
                                 let args = &mut [target.as_mut()];
@@ -1505,8 +1599,13 @@ impl Engine {
 
                                 let val = {
                                     #[cfg(feature = "debugging")]
-                                    let reset =
-                                        self.dbg_reset(global, caches, x!(s, b), _tp, _node)?;
+                                    let reset = self.dbg_reset(
+                                        global,
+                                        caches,
+                                        x!(s, b),
+                                        seen!(_tp.as_deref_mut()),
+                                        _node,
+                                    )?;
                                     #[cfg(feature = "debugging")]
                                     defer! { global if Some(reset) => move |g| g.debugger_mut().reset_status(reset) }
 
@@ -1521,7 +1620,13 @@ impl Engine {
                                     let pos1 = args.first().map_or(Position::NONE, Expr::position);
 
                                     #[cfg(feature = "debugging")]
-                                    self.lend_chain_call(global, lent, s.as_deref_mut(), target);
+                                    self.lend_chain_call(
+                                        global,
+                                        lent,
+                                        s.as_deref_mut(),
+                                        _tp,
+                                        target,
+                                    );
                                     let result = self.make_method_call(
                                         global, caches, name, *hashes, target, call_args, pos1, pos,
                                     );

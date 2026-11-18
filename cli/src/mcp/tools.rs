@@ -849,7 +849,9 @@ fn inspect(
     }
     summary.push('\n');
     let bindings = answer["bindings"].as_array().cloned().unwrap_or_default();
-    if bindings.is_empty() {
+    if let Some(why) = answer["unread"].as_str() {
+        summary.push_str(&format!("no bindings to read: {why}\n"));
+    } else if bindings.is_empty() {
         summary.push_str("no bindings in scope\n");
     }
     for binding in &bindings {
@@ -883,6 +885,7 @@ fn inspect(
         "line": answer["line"],
         "function": answer["function"],
         "bindings": bindings,
+        "unread": answer["unread"],
         "frames": frames,
     });
     Ok(content::success(structured, summary.trim_end(), Vec::new()))

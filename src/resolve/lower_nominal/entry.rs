@@ -212,6 +212,9 @@ struct Assembly {
     /// Where each free function's `&mut` parameter, its receiver, is
     /// written among its parameters, for a host call that passes it there.
     written_receivers: BTreeMap<ImmutableString, usize>,
+    /// Each generated function's locals a debugger prints by their type
+    /// (#512).
+    declared: BTreeMap<ImmutableString, Vec<Declared>>,
 }
 
 /// One source's part being lowered, and what its lowering reads.
@@ -246,6 +249,14 @@ impl<'a> Counts<'a> {
 }
 
 impl Assembly {
+    /// Keep the locals of the generated function `name` a debugger prints
+    /// by their type.
+    fn declare(&mut self, name: ImmutableString, declared: Vec<Declared>) {
+        if !declared.is_empty() {
+            self.declared.insert(name, declared);
+        }
+    }
+
     /// Write `lowered`, the lowering of `body`, into the generated text.
     fn place(
         &mut self,
@@ -300,6 +311,7 @@ impl Assembly {
                     &mut self.closures,
                     &mut self.symbol_rewrites,
                 );
+                self.declare(generated_name.as_str().into(), lowered.declared);
             }
             Body::Method(definition) => {
                 if definition.receiver().is_some() {
@@ -324,6 +336,7 @@ impl Assembly {
                     &mut self.closures,
                     &mut self.symbol_rewrites,
                 );
+                self.declare(method_name(definition).into(), lowered.declared);
             }
             Body::Script(script) => {
                 let offset = self.generated.body(
@@ -647,6 +660,7 @@ pub(super) fn lower_with_context(
         symbol_rewrites,
         receivers: BTreeMap::new(),
         written_receivers: BTreeMap::new(),
+        declared: BTreeMap::new(),
     };
     // A runner's compiler lowers again only the sources whose lowering
     // reads something that changed (#1646).
@@ -739,6 +753,7 @@ pub(super) fn lower_with_context(
         symbol_rewrites,
         receivers,
         written_receivers,
+        declared,
     } = assembly;
     // The dispatchers' ops are numbered apart from every source's.
     let ops = dispatch_ops
@@ -823,7 +838,22 @@ pub(super) fn lower_with_context(
             ExecutableOp::Prelude(PreludeOp::GenericDebug),
             &models,
         );
+        // Its locals by their functions' names as the program runs them.
+        let declared = declared
+            .into_iter()
+            .map(|(name, locals)| {
+                let name = rewrites
+                    .get(&name)
+                    .filter(|renamed| renamed.as_str() != NATIVE_ONLY)
+                    .cloned()
+                    .unwrap_or(name);
+                (name, locals)
+            })
+            .collect();
+        super::format::register_declared_debug(&mut module, &models, declared);
     }
+    #[cfg(not(feature = "debugging"))]
+    drop(declared);
 
     rewrite_statements(ast.statements_mut(), &rewrites, &nominal_patterns);
     #[cfg(feature = "debugging")]
@@ -931,6 +961,23 @@ pub(super) struct Lowered {
     pub(super) ops: Vec<ExecutableOp>,
     pub(super) patterns: Vec<NominalPattern>,
     pub(super) closures: Vec<closure::Lifted>,
+    /// The body's locals a debugger prints by their type (#512).
+    pub(super) declared: Vec<Declared>,
+}
+
+/// A declaration of a local whose `Debug` text a debugger reads by its
+/// type, not its value alone (`format::needs_declared`): its name, the
+/// line it is declared on, and its type; `None` for another declaration of
+/// the name, which prints as its value does.
+#[derive(Clone)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
+pub(super) struct Declared {
+    pub(super) name: String,
+    // Read by a debugger only, and kept the same without one, so a lowering
+    // kept on disk serves both.
+    #[cfg_attr(not(feature = "debugging"), allow(dead_code))]
+    pub(super) line: usize,
+    pub(super) ty: Option<super::ty::Ty>,
 }
 
 /// The blocks of the import at `span` among a source's `imports`, and of

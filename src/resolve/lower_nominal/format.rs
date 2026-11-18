@@ -639,6 +639,176 @@ pub(super) fn debug_typed(
     }
 }
 
+/// Whether a local of type `ty` prints otherwise by its type than by its
+/// runtime value alone: a tuple (an array at runtime), an `Ordering` (an
+/// integer), an unsigned 64-bit integer, an `f32` or a parse error (its
+/// message), or a value holding one.
+pub(super) fn needs_declared(ty: &Ty) -> bool {
+    match ty {
+        Ty::Tuple(_)
+        | Ty::Ordering
+        | Ty::ParseError(_)
+        | Ty::Int(Int::U64 | Int::Usize)
+        | Ty::Float(Float::F32) => true,
+        Ty::Option(inner)
+        | Ty::Array { element: inner, .. }
+        | Ty::Reference { target: inner, .. }
+        | Ty::Boxed(inner)
+        | Ty::Counted(_, inner)
+        | Ty::Reverse(inner) => needs_declared(inner),
+        Ty::Result(ok, err) => needs_declared(ok) || needs_declared(err),
+        Ty::Keyed(_, arguments) => arguments.iter().any(needs_declared),
+        _ => false,
+    }
+}
+
+/// Register [`super::naming::DEBUG_DECLARED`] in `module`, the `Debug`
+/// text a debugger reads a local by its type through (#512): called with
+/// the value, its function's name, the local's name and the line the
+/// function is at, it gives the text, or `()` when `declared` keeps no
+/// type for that local, which then prints as its value does. A name
+/// declared more than once is the last declaration at or above the line;
+/// with no line (0), the declarations' one type, if they have one.
+#[cfg(feature = "debugging")]
+pub(super) fn register_declared_debug(
+    module: &mut crate::Module,
+    models: &crate::Shared<Models>,
+    declared: std::collections::BTreeMap<ImmutableString, Vec<super::entry::Declared>>,
+) {
+    use std::any::TypeId;
+    let models = crate::Shared::clone(models);
+    let func: crate::Shared<crate::func::native::FnAny> = crate::Shared::new(move |_, args| {
+        let function = args[1].clone_cast::<ImmutableString>();
+        let name = args[2].clone_cast::<ImmutableString>();
+        let line = usize::try_from(args[3].as_int().unwrap_or_default()).unwrap_or_default();
+        let candidates = declared
+            .get(&function)
+            .into_iter()
+            .flatten()
+            .filter(|local| local.name == name.as_str())
+            .collect::<Vec<_>>();
+        let ty = if line > 0 {
+            candidates
+                .iter()
+                .rev()
+                .find(|local| local.line <= line)
+                .or(candidates.first())
+                .and_then(|local| local.ty.as_ref())
+        } else {
+            candidates
+                .first()
+                .and_then(|first| first.ty.as_ref())
+                .filter(|ty| {
+                    candidates
+                        .iter()
+                        .all(|local| local.ty.as_ref() == Some(*ty))
+                })
+        };
+        Ok(ty.map_or(Dynamic::UNIT, |ty| {
+            ImmutableString::from(debug_declared(args[0], ty, &models)).into()
+        }))
+    });
+    crate::FuncRegistration::new(super::naming::DEBUG_DECLARED)
+        .in_internal_namespace()
+        .set_into_module_raw(
+            module,
+            [
+                TypeId::of::<Dynamic>(),
+                TypeId::of::<ImmutableString>(),
+                TypeId::of::<ImmutableString>(),
+                TypeId::of::<INT>(),
+            ],
+            crate::func::RawrFunc::Pure {
+                func,
+                has_context: false,
+                is_pure: true,
+                is_volatile: false,
+            },
+        );
+}
+
+/// `{:?}` of a local of declared type `ty` (#512), as a debugger shows it:
+/// a tuple as a tuple, an `Ordering` as its variant, a number as its
+/// declared kind, through what holds them. A value whose shape isn't the
+/// type's prints as it is.
+#[cfg(feature = "debugging")]
+pub(super) fn debug_declared(value: &Dynamic, ty: &Ty, models: &Models) -> String {
+    let each = |values: &[Dynamic], ty: &Ty| {
+        values
+            .iter()
+            .map(|value| debug_declared(value, ty, models))
+            .collect::<Vec<_>>()
+    };
+    match (ty, &value.0) {
+        (Ty::Int(_) | Ty::Float(_), Union::Int(..) | Union::Float(..)) => {
+            match DebugLeaf::of_name(&ty.name(models)) {
+                Some(leaf) => DebugSpec::PLAIN.leaf(value, leaf),
+                None => debug_value(value, models),
+            }
+        }
+        (Ty::Ordering, Union::Int(ordering, ..)) => match ordering {
+            ..0 => "Less",
+            0 => "Equal",
+            _ => "Greater",
+        }
+        .into(),
+        (Ty::ParseError(error), Union::Str(text, ..)) => error
+            .texts()
+            .iter()
+            .find(|(message, _)| *message == text.as_str())
+            .map_or_else(|| text.to_string(), |(_, debug)| (*debug).to_owned()),
+        (Ty::Tuple(members), Union::Array(values, ..)) if members.len() == values.len() => {
+            let members = values
+                .iter()
+                .zip(members.iter())
+                .map(|(value, ty)| debug_declared(value, ty, models))
+                .collect::<Vec<_>>();
+            if members.len() == 1 {
+                format!("({},)", members[0])
+            } else {
+                format!("({})", members.join(", "))
+            }
+        }
+        (Ty::Array { element, .. }, Union::Array(values, ..)) => {
+            format!("[{}]", each(values, element).join(", "))
+        }
+        (Ty::Keyed(kind, arguments), Union::Array(values, ..)) => {
+            let entries = values.iter().map(|entry| match (&arguments[..], &entry.0) {
+                ([key, item], Union::Array(pair, ..)) if kind.is_map() && pair.len() == 2 => {
+                    format!(
+                        "{}: {}",
+                        debug_declared(&pair[0], key, models),
+                        debug_declared(&pair[1], item, models)
+                    )
+                }
+                ([key], _) => debug_declared(entry, key, models),
+                _ => debug_value(entry, models),
+            });
+            format!("{{{}}}", entries.collect::<Vec<_>>().join(", "))
+        }
+        (Ty::Reference { target: inner, .. } | Ty::Boxed(inner), _) => {
+            debug_declared(value, inner, models)
+        }
+        (Ty::Counted(_, inner), _) if let Some(held) = counted::value(value) => {
+            debug_declared(&held, inner, models)
+        }
+        (Ty::Reverse(inner), _)
+            if let Some(reverse) = value.read_lock::<std::cmp::Reverse<Dynamic>>() =>
+        {
+            format!("Reverse({})", debug_declared(&reverse.0, inner, models))
+        }
+        (Ty::Option(inner), _) if let Some(option) = crate::option::read(value) => match option {
+            Some(held) => format!("Some({})", debug_declared(&held, inner, models)),
+            None => "None".into(),
+        },
+        (Ty::Result(ok, err), _) if let Some(result) = crate::result::read(value) => match result {
+            Ok(held) => format!("Ok({})", debug_declared(&held, ok, models)),
+            Err(held) => format!("Err({})", debug_declared(&held, err, models)),
+        },
+        _ => debug_value(value, models),
+    }
+}
+
 /// A builtin leaf of a `Debug` text, which a `{:?}` spec formats.
 #[derive(Clone, Copy)]
 pub(super) enum DebugLeaf {
