@@ -172,6 +172,14 @@ impl Memo {
         &self.context
     }
 
+    /// Whether the document beside the memo is the one it remembers. Its
+    /// digest comes from the digests table while the file is unchanged.
+    fn document_current(&self, rawr: &Path) -> bool {
+        crate::file_digest::sha256(&rawr.join(DOCUMENT)).is_ok_and(|(bytes, digest)| {
+            bytes == self.document.0 && crate::extract::engine::hex(&digest) == self.document.1
+        })
+    }
+
     /// What the API is built from, read from disk alone.
     pub(super) fn materials(self, rawr: &Path) -> Option<super::Materials> {
         let (document, digest) = crate::file_digest::read_sha256(&rawr.join(DOCUMENT)).ok()?;
@@ -302,10 +310,15 @@ pub(super) fn recall(
 ) -> Option<Memo> {
     let mut memo = serde_json::from_slice::<Memo>(&fs::read(rawr.join(FILE)).ok()?).ok()?;
     let hex = crate::extract::engine::hex;
+    // A damaged memo or document is no answer: the resolution runs again
+    // and remembers it anew, as Cargo rebuilds a damaged entry (#484).
     if memo.schema != SCHEMA
         || memo.request != hex(request)
         || memo.attestation != hex(attestation)
         || memo.entries.is_empty()
+        || unhex(&memo.identity).is_none()
+        || unhex(&memo.native).is_none()
+        || !memo.document_current(rawr)
         || !memo.files.iter().all(File::current)
     {
         return None;
@@ -519,13 +532,23 @@ mod tests {
         assert!(watches.contains(&crate::input::proof::Watch::Exact(missing.clone())));
         assert!(watches.contains(&crate::input::proof::Watch::Tree(tree.clone())));
         assert_eq!(memo.settled().len(), 1);
-        // What the API is built from comes back from disk alone, and a
-        // document that changed does not.
+        // What the API is built from comes back from disk alone. A document
+        // that changed or went missing, and a memo that doesn't decode, are
+        // no answer, so the resolution runs again rather than failing on
+        // them (#484).
         let materials = memo.materials(&rawr).unwrap();
         assert_eq!(materials.document, b"{\"schema\":1}");
         std::fs::write(rawr.join(super::DOCUMENT), "{}").unwrap();
-        let memo = recall(&rawr, &request, &attestation, &current).unwrap();
-        assert!(memo.materials(&rawr).is_none());
+        assert!(recall(&rawr, &request, &attestation, &current).is_none());
+        std::fs::remove_file(rawr.join(super::DOCUMENT)).unwrap();
+        assert!(recall(&rawr, &request, &attestation, &current).is_none());
+        std::fs::write(rawr.join(super::DOCUMENT), "{\"schema\":1}").unwrap();
+        assert!(recall(&rawr, &request, &attestation, &current).is_some());
+        let remembered = std::fs::read_to_string(rawr.join(super::FILE)).unwrap();
+        let damaged = remembered.replace(&crate::extract::engine::hex(&[3; 32]), "damaged");
+        std::fs::write(rawr.join(super::FILE), damaged).unwrap();
+        assert!(recall(&rawr, &request, &attestation, &current).is_none());
+        std::fs::write(rawr.join(super::FILE), remembered).unwrap();
         // Declared input changes cannot return the historical API or its
         // historical watch projection, including creation of an absent path.
         std::fs::write(&declared, "second").unwrap();
