@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-17",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "examples": {
     "running": 56,
     "total": 56,
@@ -9,14 +9,16 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
-      "entries": [
-        {"text":"A shared crate's bindings entry lists only the crates its table names.","issues":[1128]},
-        {"text":"A later demand round classifies and generates only the items its new paths change, and a second project classifies and generates none of a crate another project already did: each item's classification and facade contribution are kept beside the crate's shared table in rawr's home.","issues":[1618,271]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.2",
+        "date": "2026-11-17",
+        "entries": [
+          {"text":"A shared crate's bindings entry lists only the crates its table names.","issues":[1128]},
+          {"text":"A later demand round classifies and generates only the items its new paths change, and a second project classifies and generates none of a crate another project already did: each item's classification and facade contribution are kept beside the crate's shared table in rawr's home.","issues":[1618,271]}
+        ]
+      },
       {
         "version": "0.4.1",
         "date": "2026-11-17",
@@ -3018,7 +3020,7 @@
     {"issue":268,"title":"The docs (`site/src/content/docs`) don't describe running a crate like iced through generated…","state":"closed","category":"No glue (D593)","release":"0.2.9"},
     {"issue":269,"title":"A lone `.rs` file can't declare dependencies","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.2"},
     {"issue":270,"title":"Built crates aren't shared across lone files","state":"closed","category":"Shared dependency cache (D607)"},
-    {"issue":271,"title":"Generated bindings are built per project, so every project and script pays #255 again for the…","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":271,"title":"Generated bindings are built per project, so every project and script pays #255 again for the…","state":"closed","category":"Shared dependency cache (D607)","release":"0.4.2"},
     {"issue":272,"title":"The shared cache needs removal by last use, and a reinstall must keep entries whose binding…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.18"},
     {"issue":273,"title":"A crate with Cargo dependencies is refused unless it adds `rust-toolchain.toml` and…","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":274,"title":"`src/project/marker.rs` reads the marker only on the file's first line, so a file with a shebang…","state":"closed","category":"Shared dependency cache (D607)","release":"0.2.8"},
@@ -3875,7 +3877,7 @@
     {"issue":1125,"title":"A marked module can't name a direct proc-macro dependency's macros","state":"closed","category":"Divergences from rustc","release":"0.3.232"},
     {"issue":1126,"title":"A direct dependency whose only library is a Rust dylib stops the build","state":"open","category":"Health"},
     {"issue":1127,"title":"A native main announces a restart on a changed field but keeps running the old program","state":"closed","category":"Health","release":"0.3.172"},
-    {"issue":1128,"title":"A shared entry's meta lists every crate its session loaded, not only those its table names","state":"closed","category":"Health"},
+    {"issue":1128,"title":"A shared entry's meta lists every crate its session loaded, not only those its table names","state":"closed","category":"Health","release":"0.4.2"},
     {"issue":1129,"title":"progress_bar: a transition moved into a row! in one branch and a column! in the other fails with a lent-value mismatch","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":1130,"title":"A slot whose input borrows a crate value panics the generator","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":1131,"title":"Embedding: Engine::script refuses an inline module","state":"closed","category":"Divergences from rustc","release":"0.3.170"},
@@ -4365,7 +4367,7 @@
     {"issue":1615,"title":"An operator on a type without an impl of its trait reports rawr's own message or E0308 where rustc reports E0369","state":"closed","category":"Divergences from rustc","release":"0.3.177"},
     {"issue":1616,"title":"Classification re-read every trait impl per projection bound and hashed every definition per lookup","state":"closed","category":"No glue (D593)","release":"0.3.176"},
     {"issue":1617,"title":"let t = theme().into(); of a crate value is accepted where rustc gives E0283","state":"closed","category":"Divergences from rustc","release":"0.3.177"},
-    {"issue":1618,"title":"A demand round reclassifies and regenerates the whole API, when only new demanded paths were added","state":"closed","category":"No glue (D593)"},
+    {"issue":1618,"title":"A demand round reclassifies and regenerates the whole API, when only new demanded paths were added","state":"closed","category":"No glue (D593)","release":"0.4.2"},
     {"issue":1619,"title":"A borrow of a local crate value isn't a loan in rawr's borrow facts","state":"open","category":"Divergences from rustc"},
     {"issue":1620,"title":"A local borrowed for a crate's &'static dyn field fails at run time; #1594's fix was reverted for real tracing","state":"closed","category":"Divergences from rustc","release":"0.3.178"},
     {"issue":1621,"title":"&format_args!(..) needed as &dyn Value where a crate call takes &dyn Value","state":"closed","category":"No glue (D593)","release":"0.3.177"},
@@ -5172,7 +5174,7 @@
           "start": 43,
           "size": 3,
           "state": "now",
-          "note": "Projects reuse verified extraction tables (#367). A new rawr build doesn't classify an unchanged API again (#1666, #1686). Left: generated bindings once per machine (#271). Three drift and lock cases remain (#1012, #1025, #1026).",
+          "note": "Projects reuse extraction tables (#367) and each crate's classification and facade records (#271): a second project classifies and generates none of a shared crate. Left: drift and lock cases (#1012, #1025, #1026) and whole-file republish (#2224).",
           "issues": [
             {"number":271,"title":"Generated bindings are built per project, so every project and script pays #255 again for the…","state":"closed"},
             {"number":367,"title":"Reuse verified crate extraction tables across projects","state":"closed"},
@@ -5277,7 +5279,7 @@
           "start": 41,
           "size": 3,
           "state": "now",
-          "note": "Classify per crate and compose per program, so a demand round costs only its new paths (#1618). A new rawr build no longer classifies an unchanged API again (#1686).",
+          "note": "A demand round classifies and generates only what its new paths change (#1618). Left: the whole-API passes (#2221) and D604 headers per crate (#2222).",
           "issues": [
             {"number":1618,"title":"A demand round reclassifies and regenerates the whole API, when only new demanded paths were added","state":"closed"},
             {"number":914,"title":"A shared-bindings API is rebuilt whenever Cargo resolves again","state":"open"},

@@ -1,7 +1,7 @@
 {
   "$schema": "schema/gantt.schema.json",
   "updated": "2026-11-17",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "examples": {
     "running": 56,
     "total": 56,
@@ -65,12 +65,12 @@
         {"id":"drift-loudly","name":"Loud drift checks","start":49,"size":2,"state":"done","note":"Inputs are checked before any reuse","issues":[275],"milestone":"0.3"},
         {"id":"macro-crate-roots","name":"Macro $crate roots","start":37,"size":2,"state":"done","note":"column! without demand","issues":[281,404],"milestone":"0.3"},
         {"id":"crate-keyed-entry","name":"Crate-keyed entry","start":39,"size":4,"state":"done","note":"Extract once per crate","issues":[],"milestone":"0.4"},
-        {"id":"key-and-publish","name":"Key and publish","start":43,"size":3,"state":"now","note":"Projects reuse verified extraction tables (#367). A new rawr build doesn't classify an unchanged API again (#1666, #1686). Left: generated bindings once per machine (#271). Three drift and lock cases remain (#1012, #1025, #1026).","issues":[271,367,369,370,372,1011,1012,1025,1026,474,1408,942,2224],"milestone":"0.4"},
+        {"id":"key-and-publish","name":"Key and publish","start":43,"size":3,"state":"now","note":"Projects reuse extraction tables (#367) and each crate's classification and facade records (#271): a second project classifies and generates none of a shared crate. Left: drift and lock cases (#1012, #1025, #1026) and whole-file republish (#2224).","issues":[271,367,369,370,372,1011,1012,1025,1026,474,1408,942,2224],"milestone":"0.4"},
         {"id":"key-holes","name":"Key holes","start":45,"size":2,"state":"next","note":"A shared table holds no crates outside its key (#1097). The facade-plan gap was fixed by #630. Left: an entry's meta lists every crate its session loaded (#1128).","issues":[252,254,276,1097,1128,304,468,1525,2223],"milestone":"0.4"},
         {"id":"nightly-on-miss","name":"A new project runs no nightly","start":48,"size":3,"state":"next","note":"A first check reads what the machine's tables hold. Left: path crates inside the project (#419), members no demanded name reached (#469), the program's own unmarked modules (#682).","issues":[419,469,471,682,684],"milestone":"0.4"},
         {"id":"stale-entries","name":"Stale entries rebuild","start":48,"size":3,"state":"next","note":"A damaged or stale entry rebuilds as Cargo rebuilds target/, and drift names a real edit. Left: damaged entries (#484, #615, #654), drift with no edit (#658, #894), symlinked inputs (#1172, #1173, #1174).","issues":[411,484,615,631,632,656,658,1423,546,641,654,657,739,894,1172,1173,1174,1209,2108,2226],"milestone":"0.4"},
         {"id":"hit-with-no-nightly","name":"Hit with no nightly","start":47,"size":3,"state":"done","note":"A check whose demand the shared tables hold reads them with no nightly build","issues":[398,402,281],"milestone":"0.3"},
-        {"id":"re-key-plan-and-headers","name":"Re-key plan and headers","start":41,"size":3,"state":"now","note":"Classify per crate and compose per program, so a demand round costs only its new paths (#1618). A new rawr build no longer classifies an unchanged API again (#1686).","issues":[1618,914,2221,2222],"milestone":"0.4"}
+        {"id":"re-key-plan-and-headers","name":"Re-key plan and headers","start":41,"size":3,"state":"now","note":"A demand round classifies and generates only what its new paths change (#1618). Left: the whole-API passes (#2221) and D604 headers per crate (#2222).","issues":[1618,914,2221,2222],"milestone":"0.4"}
       ]
     },
     {
