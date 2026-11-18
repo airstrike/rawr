@@ -88,7 +88,7 @@ test("a universe program starts after its shown frame's next animation frame, wh
   });
   const frame = {
     element: { hidden: true, contentWindow } as unknown as HTMLIFrameElement,
-    instance: { run: () => (events.push("ran"), '{"kind":"text","status":0}') } as any,
+    instance: { run: async () => (events.push("ran"), '{"kind":"text","status":0}'), sleeping: () => false } as any,
   };
   const ran = page.run(frame, "fn main() {}");
   await new Promise((next) => setTimeout(next, 10));
@@ -97,4 +97,86 @@ test("a universe program starts after its shown frame's next animation frame, wh
   frameCallback!();
   assert.deepEqual(await ran, { kind: "text", status: 0 });
   assert.deepEqual(events, ["laid out", "ran"]);
+});
+
+test("a universe program whose main sleeps runs on, printing to a terminal in its frame", async () => {
+  const { universe } = await import("../src/scripts/universe.ts");
+  const drawn: (() => void)[] = [];
+  const appended: { className: string; textContent: string }[] = [];
+  const document = {
+    createElement: () => ({ className: "", textContent: "" }),
+    body: { append: (node: { className: string; textContent: string }) => appended.push(node) },
+    scrollingElement: null,
+  };
+  const contentWindow = {
+    innerWidth: 700,
+    document,
+    requestAnimationFrame: (callback: () => void) => drawn.push(callback),
+  };
+  const page = universe({
+    document: {} as Document,
+    fetch: (async () => new Response("[dependencies]\n")) as typeof fetch,
+    compile: async () => ({}) as WebAssembly.Module,
+  });
+  let sink: (stream: string, text: string) => void = () => {};
+  const frame = {
+    element: { hidden: true, contentWindow } as unknown as HTMLIFrameElement,
+    instance: {
+      // main has slept: its answer waits for it to return.
+      run: () => new Promise<string>(() => {}),
+      sleeping: () => true,
+      set_output: (write: typeof sink) => {
+        sink = write;
+        write("stdout", "\x1b[H\x1b[2Jframe 1\n");
+      },
+    } as any,
+  };
+  const ran = page.run(frame, "fn main() {}");
+  await new Promise((next) => setTimeout(next, 10));
+  drawn.shift()!();
+  assert.deepEqual(await ran, { kind: "text", status: 0, output: [] });
+  assert.equal(appended[0].className, "terminal");
+  drawn.shift()!();
+  assert.equal(appended[0].textContent, "frame 1", "what it printed before shows first");
+  sink("stdout", "\x1b[H\x1b[2Jframe 2\n");
+  sink("stdout", "\x1b[H\x1b[2Jframe 3\n");
+  assert.equal(drawn.length, 1, "writes between animation frames draw once");
+  drawn.shift()!();
+  assert.equal(appended[0].textContent, "frame 3", "a frame redraws in place");
+});
+
+test("without JSPI the frame stands in for it: calls run to their end, and a sleep refuses with NO_JSPI", async () => {
+  const { frameDocument, NO_JSPI } = await import("../src/scripts/universe.ts");
+  const script = frameDocument("https://example.org/web/universe.js").match(/if \(typeof WebAssembly\.Suspending[\s\S]*?\n\}\n/)![0];
+  const WebAssembly: any = {};
+  new Function("WebAssembly", script)(WebAssembly);
+  const bridge = new WebAssembly.Suspending((promise: Promise<unknown>) => promise);
+  assert.throws(() => bridge(Promise.resolve()), (thrown: unknown) => thrown === NO_JSPI);
+  assert.equal(await WebAssembly.promising((a: number, b: number) => a + b)(2, 3), 5);
+  await assert.rejects(WebAssembly.promising(() => { throw NO_JSPI; })(), (thrown: unknown) => thrown === NO_JSPI);
+});
+
+test("a program stopped for want of JSPI says so in its frame", async () => {
+  const { universe, NO_JSPI } = await import("../src/scripts/universe.ts");
+  const appended: { className: string; textContent: string }[] = [];
+  const contentWindow = {
+    innerWidth: 700,
+    document: {
+      createElement: () => ({ className: "", textContent: "" }),
+      body: { append: (node: { className: string; textContent: string }) => appended.push(node) },
+    },
+    requestAnimationFrame: (callback: () => void) => callback(),
+  };
+  const page = universe({
+    document: {} as Document,
+    fetch: (async () => new Response("[dependencies]\n")) as typeof fetch,
+    compile: async () => ({}) as WebAssembly.Module,
+  });
+  const frame = {
+    element: { hidden: true, contentWindow } as unknown as HTMLIFrameElement,
+    instance: { run: async () => { throw NO_JSPI; }, sleeping: () => false, panic_message: () => NO_JSPI } as any,
+  };
+  assert.deepEqual(await page.run(frame, "fn main() {}"), { kind: "text", status: 101, output: [] });
+  assert.equal(appended[0].className, "terminal");
+  assert.equal(appended[0].textContent, NO_JSPI);
 });

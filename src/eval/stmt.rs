@@ -825,6 +825,11 @@ impl Engine {
     ) -> RawrResult {
         self.track_operation(global, stmt.position())?;
 
+        // A marked `main` that loops in script code goes on in the
+        // generation a reload installed.
+        #[cfg(all(feature = "rust-import", feature = "sync"))]
+        crate::island::follow(global, caches);
+
         #[cfg(feature = "debugging")]
         let reset = self.dbg_reset(global, caches, scope, this_ptr.as_deref_mut(), stmt)?;
         #[cfg(feature = "debugging")]

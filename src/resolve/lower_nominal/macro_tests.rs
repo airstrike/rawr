@@ -451,3 +451,33 @@ fn an_error_in_an_expansion_of_an_argument_and_the_macros_own_tokens_is_reported
         "{report:?}"
     );
 }
+
+/// A name a call passes in keeps the caller's scope, where a `use` brought
+/// it: a variant a module re-exports by name is found in an expansion as
+/// it is outside one, as rustc finds it.
+#[test]
+fn an_argument_names_what_the_callers_use_brought() {
+    let source = r#"
+mod w {
+    #[derive(Debug, Clone, Copy)]
+    pub enum Alignment {
+        Start,
+        Center,
+    }
+    pub use Alignment::Center;
+    pub fn boxed(alignment: Alignment) -> Alignment {
+        alignment
+    }
+}
+use w::Center;
+macro_rules! column {
+    ($($x:expr),+ $(,)?) => ([$(w::boxed($x)),+]);
+}
+fn main() {
+    let outside = Center;
+    let inside = column![w::Alignment::Start, Center];
+    println!("{outside:?} {inside:?}");
+}
+"#;
+    assert_eq!(printed(source), "Center [Start, Center]\n");
+}

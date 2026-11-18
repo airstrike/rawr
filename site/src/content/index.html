@@ -325,42 +325,63 @@ async fn run(
       <div class="lib" id="lib-std-panel">
         <div class="block">
           <div class="file"><b>bounce.rs</b><span>std only</span></div>
-          <pre><code data-lang="rust" data-run="bounce.rs" id="src-bounce">// rawr
-const GRAVITY: f64 = 9.8;
-const BOUNCE: f64 = 0.8;
+          <pre><code data-lang="rust" data-run="bounce.rs" id="src-bounce" data-where="browser" data-note="This program runs in your browser. Run it, then edit it while it runs.">// rawr
+use std::thread::sleep;
+use std::time::Duration;
+
+const WIDTH: usize = 40;
+const HEIGHT: usize = 10;
+const GRAVITY: f64 = 40.0;
+const BOUNCE: f64 = 1.0;
+const BALL: char = '●';
 
 struct Ball {
-    height: f64,
+    x: f64,
+    y: f64,
+    right: f64,
     up: f64,
 }
 
 impl Ball {
     fn advance(&amp;mut self, step: f64) {
         self.up -= GRAVITY * step;
-        self.height += self.up * step;
-        if self.height &lt; 0.0 {
-            self.height = 0.0;
+        self.x += self.right * step;
+        self.y += self.up * step;
+        if self.y &lt; 0.0 {
+            self.y = 0.0;
             self.up = -self.up * BOUNCE;
+        }
+        let wall = (WIDTH - 1) as f64;
+        if self.x &lt; 0.0 || self.x &gt; wall {
+            self.x = self.x.clamp(0.0, wall);
+            self.right = -self.right;
         }
     }
 }
 
+fn draw(ball: &amp;Ball) -&gt; String {
+    let (column, row) = (ball.x.round() as usize, ball.y.round() as usize);
+    let mut frame = String::new();
+    for line in (0..HEIGHT).rev() {
+        for cell in 0..WIDTH {
+            frame.push(if (cell, line) == (column, row) { BALL } else { ' ' });
+        }
+        frame.push('\n');
+    }
+    frame + &amp;"─".repeat(WIDTH)
+}
+
 fn main() {
     let mut ball = Ball {
-        height: 8.0,
+        x: 0.0,
+        y: (HEIGHT - 1) as f64,
+        right: 15.0,
         up: 0.0,
     };
-    let mut heights = Vec::new();
-    for _ in 0..20 {
-        heights.push(ball.height.round() as i64);
-        ball.advance(0.2);
-    }
-    for row in (0..=8).rev() {
-        let cells: Vec&lt;&amp;str&gt; = heights
-            .iter()
-            .map(|&amp;height| if height == row { "•" } else { " " })
-            .collect();
-        println!("{}", cells.join(" ").trim_end());
+    loop {
+        println!("\x1b[H\x1b[2J{}", draw(&amp;ball));
+        ball.advance(0.05);
+        sleep(Duration::from_millis(50));
     }
 }</code></pre>
           <div class="run"><button type="button" class="runbtn" data-source="src-bounce" data-out="out-bounce" aria-label="Run bounce.rs" hidden></button><b>rawr run bounce.rs</b><span id="out-bounce" aria-live="polite"></span></div>

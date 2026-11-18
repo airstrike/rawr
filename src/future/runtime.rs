@@ -1086,14 +1086,16 @@ thread_local! {
 static OFFERED: Mutex<Option<Box<dyn FnOnce() + Send>>> = Mutex::new(None);
 /// Whether [`OFFERED`] holds an offer, read at each entry.
 static WAITING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-/// Whether native code has called into script code in this process.
+/// Whether this process has reached a point that admits a generation
+/// ([`admits`]).
 static ENTERED_ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Whether this process has reached a point that admits a generation
 /// [`offer`]ed: an outermost call from native code into script code, an
-/// executor's poll that runs a step of an async body among them. A program
-/// that never reaches one, as a `main` that loops in script code alone,
-/// would never run the new generation.
+/// executor's poll that runs a step of an async body among them, or a
+/// [`sleep`] outside every such call. A program that never reaches one, as
+/// a `main` that loops in script code alone and never sleeps, would never
+/// run the new generation.
 #[must_use]
 pub fn admits() -> bool {
     ENTERED_ONCE.load(std::sync::atomic::Ordering::Acquire)
@@ -1160,9 +1162,9 @@ pub fn trampoline() -> Option<Entry> {
     None
 }
 
-/// What the outermost entry from native code does first: note that native
-/// code called script code, and on the thread that owns the program, admit
-/// the generation offered last.
+/// What the outermost entry from native code, or a sleep outside every
+/// one, does first: note that the process reached a point that admits, and
+/// on the thread that owns the program, admit the generation offered last.
 fn admit_offered() {
     if !ENTERED_ONCE.load(std::sync::atomic::Ordering::Relaxed) {
         ENTERED_ONCE.store(true, std::sync::atomic::Ordering::Release);
@@ -1206,6 +1208,54 @@ impl Drop for Entry {
 #[must_use]
 pub fn outermost() -> bool {
     DEPTH.with(Cell::get) == 0
+}
+
+/// How a host waits out a sleep ([`on_sleep`]).
+type Sleep = Rc<dyn Fn(std::time::Duration)>;
+
+thread_local! {
+    /// How this thread waits out a sleep, when its host said ([`on_sleep`]).
+    static SLEEP: RefCell<Option<Sleep>> = const { RefCell::new(None) };
+}
+
+/// Wait out a `std::thread::sleep` of script code on this thread.
+///
+/// Outside every call from native code into script code, as a `main` that
+/// loops in script code is, a sleep is a point where the program waits on
+/// nothing of its own: it admits the generation [`offer`]ed last there, as
+/// an outermost entry does, so such a loop takes each reload at its next
+/// sleep. The thread then waits as its host said with [`on_sleep`], or as
+/// [`wait`] waits.
+pub fn sleep(duration: std::time::Duration) {
+    if outermost() {
+        admit_offered();
+    }
+    match SLEEP.with_borrow(Clone::clone) {
+        Some(sleep) => sleep(duration),
+        None => wait(duration),
+    }
+}
+
+/// Wait out each sleep of script code on this thread with `sleep`, as a
+/// page does that hands its event loop the time.
+pub fn on_sleep(sleep: impl Fn(std::time::Duration) + 'static) {
+    SLEEP.set(Some(Rc::new(sleep)));
+}
+
+/// Wait out `duration` on this thread, as std's sleep does.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn wait(duration: std::time::Duration) {
+    std::thread::sleep(duration);
+}
+
+/// Wait out `duration` on this thread. wasm32 has no sleep of its own: it
+/// waits on the clock.
+#[cfg(target_arch = "wasm32")]
+pub fn wait(duration: std::time::Duration) {
+    let until = crate::Instant::now() + duration;
+    while crate::Instant::now() < until {
+        std::hint::spin_loop();
+    }
 }
 
 /// A callable native code holds, by its function and the program that

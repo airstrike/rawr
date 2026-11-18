@@ -251,8 +251,10 @@ libc = "0.2.156"
 web-time = { version = "1.1.0" } # WASM implementation of std::time::Instant
 
 # A universe's browser entry (#1395), which a runner built for a page exports.
+# Its `run` is a JSPI export, so a sleep suspends it (wasm-bindgen 0.2.128).
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen = "0.2.105"
+js-sys = "0.3.105"
+wasm-bindgen = "0.2.128"
 
 [package.metadata.docs.rs]
 features = ["document-features", "metadata", "serde", "internals", "decimal", "debugging"]

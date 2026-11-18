@@ -17,6 +17,15 @@
 // body. Keys reach the program only while its frame has focus, which a
 // click or Tab gives it, and the frame draws an outline while it does.
 //
+// A `main` that loops in plain Rust and sleeps keeps its instance too: its
+// run starts `main` on a stack each `std::thread::sleep` suspends (JSPI,
+// `WebAssembly.promising`), so the page's events and the program's edits
+// run while it waits. What it prints from then on goes to a terminal in
+// its frame, which redraws in place from the cursor and erase escapes the
+// program writes (lib/terminal.ts). A browser without JSPI gets stand-ins
+// in the frame: every call runs to its end, as before JSPI, and only a
+// sleep on `main`'s stack stops the program, which says so in its frame.
+//
 // On Apple's WebKit (Safari, and every browser on iOS) the frame hides
 // `navigator.gpu` before the program starts, so wgpu draws with WebGL2:
 // WebKit's WebGPU fails a command buffer that copies twice out of one
@@ -30,6 +39,14 @@
 // (#1449). A real display at that scale doesn't: check scale 2 in a Chrome
 // started with `--force-device-scale-factor=2` and no viewport override.
 
+import { Screen } from "../lib/terminal.ts";
+
+/**
+ * What a program that sleeps on main's stack says in its frame in a
+ * browser without JSPI (WebAssembly JS Promise Integration).
+ */
+export const NO_JSPI = "This browser can't run a program that sleeps: it has no WebAssembly JS Promise Integration (JSPI).";
+
 /** The universe's files, beside rawr-web's (web/build.sh). */
 export const UNIVERSE_GLUE = "/web/universe.js";
 export const UNIVERSE_WASM = "/web/universe_bg.wasm";
@@ -39,7 +56,10 @@ export const UNIVERSE_MANIFEST = "/web/universe.toml";
 /** One instance's API (rawr::universe::browser). */
 export interface Instance {
   prepare(): void;
-  run(manifest: string, source: string): string;
+  /** The answer once `main` returns; meanwhile `sleeping` is true. */
+  run(manifest: string, source: string): Promise<string>;
+  sleeping(): boolean;
+  set_output(sink: (stream: string, text: string) => void): void;
   replace(source: string): string;
   panic_message(): string | undefined;
 }
@@ -71,8 +91,9 @@ export interface UniverseEnv {
  */
 const FRAME_STYLE = `html, body { margin: 0; height: 100%; overflow: hidden; background: transparent; }
 body { font: 13px/1.25 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: CanvasText; }
-body:has(> div > pre) { background: #111; color: #eee; }
+body:has(> div > pre), body:has(> pre.terminal) { background: #111; color: #eee; }
 pre { margin: 0; font: inherit; }
+pre.terminal { padding: 8px 12px; }
 :focus { outline: none; }
 canvas:focus-visible, [tabindex]:focus { outline: 2px solid #d43; outline-offset: -2px; }`;
 
@@ -84,6 +105,14 @@ export function frameDocument(glue: string): string {
   return `<!doctype html><html><head><meta charset="utf-8"><style>${FRAME_STYLE}</style></head>
 <body><div id="iced"></div><script type="module">
 import * as glue from ${JSON.stringify(glue)};
+// Without JSPI nothing suspends: a call runs to its end, and a sleep on
+// main's stack refuses with NO_JSPI, which stops the program there.
+if (typeof WebAssembly.Suspending !== "function") {
+  WebAssembly.Suspending = function () {
+    return () => { throw ${JSON.stringify(NO_JSPI)}; };
+  };
+  WebAssembly.promising = (call) => (...args) => new Promise((resolve) => resolve(call(...args)));
+}
 if (navigator.vendor === "Apple Computer, Inc.") {
   Object.defineProperty(navigator, "gpu", { value: undefined, configurable: true });
 }
@@ -148,6 +177,38 @@ function settled(element: HTMLIFrameElement): Promise<void> {
   return new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
 }
 
+/** An empty terminal in `frame`. */
+function terminalIn(frame: Frame): HTMLPreElement {
+  const page = frame.element.contentWindow!.document;
+  const pre = page.createElement("pre");
+  pre.className = "terminal";
+  page.body.append(pre);
+  return pre;
+}
+
+/**
+ * A terminal in `frame` that shows what its program prints from now on,
+ * and what it printed before, drawn once per animation frame.
+ */
+function terminal(frame: Frame): void {
+  const window = frame.element.contentWindow!;
+  const page = window.document;
+  const pre = terminalIn(frame);
+  const screen = new Screen();
+  let drawing = false;
+  frame.instance.set_output((_stream, text) => {
+    screen.write(text);
+    if (drawing) return;
+    drawing = true;
+    window.requestAnimationFrame(() => {
+      drawing = false;
+      pre.textContent = screen.text();
+      // A program that appends shows its latest rows.
+      page.scrollingElement?.scrollTo(0, page.scrollingElement.scrollHeight);
+    });
+  });
+}
+
 /** The page's universe: the module compiled once, an instance per frame. */
 export function universe({ document, fetch, compile }: UniverseEnv) {
   // The manifest alone, for a page that asks which snippets use crates
@@ -195,15 +256,30 @@ export function universe({ document, fetch, compile }: UniverseEnv) {
   /**
    * Show `frame` and run `code` in it: the server's text result, or a
    * compile error. A panic aborts the instance; its message is the error.
+   * A `main` that sleeps runs on in the frame and prints to its terminal:
+   * the answer is then a status of 0 with no output. Without JSPI it stops
+   * at its first sleep, and its frame says why.
    */
   const run = async (frame: Frame, code: string): Promise<any> => {
     const { manifest } = await load();
     frame.element.hidden = false;
     await settled(frame.element);
     try {
-      return JSON.parse(frame.instance.run(manifest, code));
+      const answer = frame.instance.run(manifest, code);
+      if (frame.instance.sleeping()) {
+        terminal(frame);
+        // A panic's message goes to the terminal.
+        answer.catch(() => {});
+        return { kind: "text", status: 0, output: [] };
+      }
+      return JSON.parse(await answer);
     } catch (error) {
       const message = frame.instance.panic_message?.() ?? String(error);
+      // A browser that can't suspend the program says so in its frame.
+      if (message === NO_JSPI) {
+        terminalIn(frame).textContent = message;
+        return { kind: "text", status: 101, output: [] };
+      }
       return { kind: "text", status: 101, output: [{ stream: "stderr", text: message + "\n" }] };
     }
   };
