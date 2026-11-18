@@ -3444,7 +3444,7 @@ fn definition<'graph>(
 ) -> Option<&'graph crate::api::model::Definition> {
     graph
         .definition_index(id)
-        .and_then(|index| graph.definitions().nth(index))
+        .and_then(|index| graph.definition_at(index))
 }
 
 fn alias_site(

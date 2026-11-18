@@ -187,10 +187,13 @@ where
 /// placement, raw evidence and accounting observations. The current contracts
 /// are still supplied unchanged. Profile classification requires its separate
 /// `Adapter::semantic_api` selection; this does not opt arbitrary callbacks in.
+/// `classification` is what an owner or a preparation keeps of the last
+/// classification, which a classification of this API takes each item from
+/// where it reads the same (#1618).
 #[cfg(feature = "rustc-driver")]
 pub fn evaluate_api_semantic<B, C, E, T>(
     graph: crate::api::Continuation,
-    kept: Option<&mut crate::api::Kept>,
+    classification: Option<&mut crate::classify::Kept>,
     adapter: &crate::profile::trusted::Adapter<T>,
     policy: &crate::classify::Policy,
     snapshot: crate::surface::Snapshot,
@@ -212,7 +215,7 @@ where
         snapshot,
         limits,
         true,
-        kept.map(crate::api::Kept::classification),
+        classification,
         execute,
     )
 }
@@ -365,7 +368,11 @@ where
                 })?;
                 let generic = acquire(generic, &generic_recipe, batch, || {
                     crate::progress::phase("classifying");
-                    Generic::capture(graph.graph(), policy, limits).map_err(failure)
+                    let earlier = classification
+                        .as_deref_mut()
+                        .map(crate::classify::kept::Kept::earlier)
+                        .unwrap_or_default();
+                    Generic::capture_from(graph.graph(), policy, limits, &earlier).map_err(failure)
                 })?;
                 let (facade_recipe, facade_outcome, parts) = match facade {
                     Some(prepared) => prepared,

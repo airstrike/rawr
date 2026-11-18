@@ -946,6 +946,44 @@ impl Settlement {
         self.settle_with(stable)
     }
 
+    /// Where a classification of the API these tables give keeps each
+    /// item's record (`classify::records`): beside each shared table in
+    /// rawr's home, and in the project whose Rawr directory this settles
+    /// for, for the rest.
+    #[must_use]
+    pub fn classification(&self) -> crate::classify::Sources {
+        let mut crates = Vec::new();
+        for entry in &self.entries {
+            let krate = match entry {
+                Settled::Extracted { key, publish, .. } => crate::classify::records::Crate {
+                    bindings: publish.bindings.clone(),
+                    key: key.clone(),
+                    crate_name: publish.meta.crate_name.clone(),
+                    stable_crate_id: Some(publish.meta.stable_crate_id.clone()),
+                    shared: publish.meta.inputs.is_some()
+                        && self.bindings.as_ref() == Some(&publish.bindings),
+                },
+                Settled::Read {
+                    directory,
+                    key,
+                    crate_name,
+                    ..
+                } => crate::classify::records::Crate {
+                    bindings: directory.clone(),
+                    key: key.clone(),
+                    crate_name: crate_name.clone(),
+                    stable_crate_id: None,
+                    shared: self.bindings.as_ref() == Some(directory),
+                },
+                Settled::Inventory { .. } | Settled::InventoryRead { .. } => continue,
+            };
+            if !crates.contains(&krate) {
+                crates.push(krate);
+            }
+        }
+        crate::classify::Sources::new(crates, self.rawr.as_deref())
+    }
+
     /// [`Settlement::settle`] after `rawr check`, whose project build is the
     /// `cargo check` beside it, as [`Observed`] read it when it ended
     /// (D609.4, #661).

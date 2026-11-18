@@ -204,7 +204,7 @@ type Key = (node::ActionKey, node::Digest);
 
 impl Kept {
     /// The classification this owner keeps beside its graph.
-    pub(crate) fn classification(&mut self) -> &mut crate::classify::kept::Kept {
+    pub fn classification(&mut self) -> &mut crate::classify::Kept {
         &mut self.classification
     }
 

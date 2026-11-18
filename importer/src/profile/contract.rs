@@ -944,7 +944,7 @@ fn evidence_matches_graph(
 ) -> bool {
     let index = usize::try_from(evidence.index).unwrap_or(usize::MAX);
     let digest = match evidence.kind {
-        Kind::Definition => graph.definitions().nth(index).map(|definition| {
+        Kind::Definition => graph.definition_at(index).map(|definition| {
             *crate::surface::identity::Definition::of(definition.id()).as_bytes()
         }),
         Kind::Export => graph.exports().nth(index).map(|export| match export {
@@ -957,8 +957,7 @@ fn evidence_matches_graph(
             }
         }),
         Kind::Implementation => graph
-            .implementations()
-            .nth(index)
+            .implementation_at(index)
             .and_then(|implementation| {
                 crate::surface::identity::Implementation::of(implementation).ok()
             })

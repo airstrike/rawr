@@ -29,6 +29,9 @@ use crate::runner::runtime;
 const DIRECTORY: &str = "formats";
 const BINDINGS: &str = "bindings";
 const INVENTORIES: &str = "inventories";
+/// Each crate's classification records, by classification version
+/// (`classify::records`).
+const CLASSIFIED: &str = "classified";
 const LOCK: &str = ".lock";
 /// The file digests rawr's home kept before they moved to each project's
 /// target directory; nothing reads it.
@@ -51,15 +54,18 @@ pub enum Kept {
     Extraction,
     /// The API content each capture's semantic inputs produced.
     Memo,
+    /// The classification records of the items no shared crate holds.
+    Classified,
 }
 
 impl Kept {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
         Self::Bindings,
         Self::Staged,
         Self::Inventories,
         Self::Extraction,
         Self::Memo,
+        Self::Classified,
     ];
 
     const fn name(self) -> &'static str {
@@ -69,6 +75,7 @@ impl Kept {
             Self::Inventories => INVENTORIES,
             Self::Extraction => "extraction",
             Self::Memo => "api-memo",
+            Self::Classified => CLASSIFIED,
         }
     }
 }
@@ -100,6 +107,13 @@ pub(crate) fn bindings(home: &Path) -> PathBuf {
 /// The shared inventories of this rawr's protocol under `home`.
 pub(crate) fn inventories(home: &Path) -> PathBuf {
     current(home, Base::Home).join(INVENTORIES)
+}
+
+/// The shared crates' classification records of this rawr's protocol
+/// beside its `bindings` directory, one directory per classification
+/// version.
+pub(crate) fn classified_beside(bindings: &Path) -> PathBuf {
+    bindings.with_file_name(CLASSIFIED)
 }
 
 /// Where the project whose Rawr directory is `rawr` keeps `kept` for this
@@ -179,6 +193,20 @@ fn retire(directory: &Path, keep: &Path, base: Base) {
     legacy(directory, &base.legacy());
     if matches!(base, Base::Home) {
         home::prune(&keep.join(INVENTORIES), ENTRY_IDLE);
+        prune_versions(&keep.join(CLASSIFIED), ENTRY_IDLE);
+    }
+}
+
+/// Remove the entries of each classification version under `classified`
+/// unused for `idle`.
+fn prune_versions(classified: &Path, idle: Duration) {
+    let Ok(versions) = fs::read_dir(classified) else {
+        return;
+    };
+    for version in versions.flatten() {
+        if !version.file_name().to_string_lossy().starts_with('.') {
+            home::prune(&version.path(), idle);
+        }
     }
 }
 
@@ -193,6 +221,7 @@ pub(crate) fn clean(home: &Path) {
             }
             home::prune(&entry.path().join(BINDINGS), CLEAN_IDLE);
             home::prune(&entry.path().join(INVENTORIES), CLEAN_IDLE);
+            prune_versions(&entry.path().join(CLASSIFIED), CLEAN_IDLE);
         }
     }
     runtime::prune(&formats, &[], CLEAN_IDLE);

@@ -17,6 +17,7 @@ pub(crate) mod keyed;
 pub(crate) mod layout;
 pub mod ledger;
 pub mod model;
+pub(crate) mod reads;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod selected;
 #[cfg(not(target_arch = "wasm32"))]
@@ -137,6 +138,8 @@ struct Memo {
     lookup: std::sync::OnceLock<Lookup>,
     /// Each definition's semantic identity, by its index.
     surface: std::sync::OnceLock<Box<[crate::surface::identity::Definition]>>,
+    /// Each entry's digest, for what a recorded read gave (`reads`).
+    digests: reads::Digests,
 }
 
 /// Indexes of a graph's definitions and implementations keyed by rustc's
@@ -156,6 +159,9 @@ struct Lookup {
     /// Each definition's relevant implementations, by its hash, in graph
     /// order.
     relevant: std::collections::HashMap<Box<str>, Box<[u32]>>,
+    /// The implementations whose self type is one of their own parameters,
+    /// in graph order.
+    blankets: Box<[u32]>,
 }
 
 /// Implementation indices by an identity's hash, one group for each
@@ -693,38 +699,65 @@ impl<P: Phase> Graph<P> {
 
     /// Canonical definitions, each present exactly once.
     pub fn definitions(&self) -> impl ExactSizeIterator<Item = &model::Definition> {
+        reads::ledger(reads::Ledger::Definitions);
         self.definitions.iter()
+    }
+
+    /// The definition at `index`, in graph order.
+    pub fn definition_at(&self, index: usize) -> Option<&model::Definition> {
+        let definition = self.definitions.get(index)?;
+        reads::definition(index);
+        Some(definition)
+    }
+
+    /// How many definitions the graph has: what a table of one entry per
+    /// definition sizes itself by, not a read of any.
+    pub fn definition_count(&self) -> usize {
+        self.definitions.len()
     }
 
     /// Canonically ordered selected-path outcomes.
     pub fn exports(&self) -> impl ExactSizeIterator<Item = &ledger::Path> {
+        reads::ledger(reads::Ledger::Exports);
         self.exports.iter()
     }
 
     /// Canonically ordered relevant implementation edges.
     pub fn implementations(&self) -> impl ExactSizeIterator<Item = &model::Implementation> {
+        reads::ledger(reads::Ledger::Implementations);
         self.implementations.iter()
+    }
+
+    /// The implementation at `index`, in graph order.
+    pub fn implementation_at(&self, index: usize) -> Option<&model::Implementation> {
+        let implementation = self.implementations.get(index)?;
+        reads::implementation(index);
+        Some(implementation)
     }
 
     /// Canonically ordered completed closed-scalar predicate queries.
     pub fn scalar_predicate_proofs(
         &self,
     ) -> impl ExactSizeIterator<Item = &model::ScalarPredicateProof> {
+        reads::ledger(reads::Ledger::ScalarProofs);
         self.scalar_predicate_proofs.iter()
     }
 
     /// Canonically ordered transitive-support outcomes.
     pub fn support(&self) -> impl ExactSizeIterator<Item = &ledger::Support> {
+        reads::ledger(reads::Ledger::Support);
         self.support.iter()
     }
 
     /// The name index of each dependency extracted from demand.
     pub fn name_index(&self) -> impl ExactSizeIterator<Item = &ledger::Index> {
+        reads::ledger(reads::Ledger::Index);
         self.index.iter()
     }
 
     /// Canonical compiler-authenticated imports that intentionally bind no name.
     pub fn anonymous_imports(&self) -> impl ExactSizeIterator<Item = &ledger::AnonymousImport> {
+        reads::ledger(reads::Ledger::Anonymous);
         self.anonymous.iter()
     }
 
@@ -1532,6 +1565,15 @@ impl<P: Phase> Graph<P> {
     /// A hash names one definition, so the sorted search runs only when two
     /// identities share one.
     pub(crate) fn definition_index(&self, id: &identity::Definition) -> Option<usize> {
+        let index = self.find_definition(id);
+        match index {
+            Some(index) => reads::definition(index),
+            None => reads::absent_definition(id),
+        }
+        index
+    }
+
+    fn find_definition(&self, id: &identity::Definition) -> Option<usize> {
         let index = *self.lookup().definitions.get(id.def_path_hash())? as usize;
         if self.definitions.get(index)?.id() == id {
             return Some(index);
@@ -1542,6 +1584,15 @@ impl<P: Phase> Graph<P> {
     }
 
     pub(crate) fn implementation_index(&self, id: &identity::Definition) -> Option<usize> {
+        let index = self.find_implementation(id);
+        match index {
+            Some(index) => reads::implementation(index),
+            None => reads::absent_implementation(id),
+        }
+        index
+    }
+
+    fn find_implementation(&self, id: &identity::Definition) -> Option<usize> {
         let index = *self.lookup().implementations.get(id.def_path_hash())? as usize;
         if self.implementations.get(index)?.id() == id {
             return Some(index);
@@ -1556,6 +1607,7 @@ impl<P: Phase> Graph<P> {
         &self,
         id: &identity::Definition,
     ) -> impl Iterator<Item = &model::Implementation> {
+        reads::group(reads::Group::Trait, id);
         self.implementation_group(&self.lookup().by_trait, id, trait_of)
     }
 
@@ -1565,6 +1617,7 @@ impl<P: Phase> Graph<P> {
         &self,
         id: &identity::Definition,
     ) -> impl Iterator<Item = &model::Implementation> {
+        reads::group(reads::Group::SelfType, id);
         self.implementation_group(&self.lookup().by_self, id, nominal_self_of)
     }
 
@@ -1590,11 +1643,25 @@ impl<P: Phase> Graph<P> {
             .map(|index| &self.implementations[*index as usize])
     }
 
+    /// The implementations whose self type is one of their own parameters,
+    /// as `impl<T: Display> ToString for T`, in graph order.
+    pub(crate) fn blanket_implementations(&self) -> impl Iterator<Item = &model::Implementation> {
+        reads::ledger(reads::Ledger::Blankets);
+        self.blanket_indices()
+            .iter()
+            .map(|index| &self.implementations[*index as usize])
+    }
+
+    pub(crate) fn blanket_indices(&self) -> &[u32] {
+        &self.lookup().blankets
+    }
+
     /// The implementations relevant to the definition `id`, in graph order.
     pub(crate) fn relevant_implementations(
         &self,
         id: &identity::Definition,
     ) -> impl Iterator<Item = &model::Implementation> {
+        reads::group(reads::Group::Relevant, id);
         let indices = self
             .lookup()
             .relevant
@@ -1609,6 +1676,11 @@ impl<P: Phase> Graph<P> {
     /// Each definition's semantic identity, by its index, digested once for
     /// the graph and its copies.
     pub(crate) fn surface_definitions(&self) -> &[crate::surface::identity::Definition] {
+        reads::ledger(reads::Ledger::Definitions);
+        self.surface_identities()
+    }
+
+    fn surface_identities(&self) -> &[crate::surface::identity::Definition] {
         self.lookup.surface.get_or_init(|| {
             self.definitions
                 .iter()
@@ -1623,8 +1695,10 @@ impl<P: Phase> Graph<P> {
         &self,
         id: &identity::Definition,
     ) -> crate::surface::identity::Definition {
-        self.definition_index(id)
-            .and_then(|index| self.surface_definitions().get(index).copied())
+        // The identity of `id` either way, digested once when the graph
+        // defines it: no read of the graph.
+        self.find_definition(id)
+            .and_then(|index| self.surface_identities().get(index).copied())
             .unwrap_or_else(|| crate::surface::identity::Definition::of(id))
     }
 
@@ -1660,6 +1734,16 @@ impl<P: Phase> Graph<P> {
                     }
                 }
             }
+            lookup.blankets = self
+                .implementations
+                .iter()
+                .enumerate()
+                .filter(|(_, implementation)| {
+                    matches!(implementation.self_type(),
+                        model::Type::Parameter { owner, .. } if owner == implementation.id())
+                })
+                .map(|(index, _)| index as u32)
+                .collect();
             lookup.by_trait = Group::seal(by_trait);
             lookup.by_self = Group::seal(by_self);
             lookup.relevant = relevant

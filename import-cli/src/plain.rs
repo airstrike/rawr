@@ -700,6 +700,10 @@ fn prepare_resolving(
     // what its last check kept for the next round's.
     let mut own_checker = None;
     let mut own_checked = rawr::package::import::Kept::default();
+    // What the last round's classification found of each item, when no
+    // owner keeps it: a round classifies only the items its demand
+    // changed (#1618).
+    let mut own_classification = rawr_import::classify::Kept::default();
     // A cache entry that goes stale while this run uses it is `Error::Stale`,
     // and `Plain::prepare` starts the run again, whose lookup rebuilds it.
     let (demand, profile_contract, cached, native) = loop {
@@ -905,16 +909,22 @@ fn prepare_resolving(
                         &mut own_copies,
                     ),
                 };
-                let (api, kept_api) = match kept_api {
-                    Some(kept) => (kept.graph(api).map_err(Error::cache)?, Some(kept)),
-                    None => (api, None),
+                let (api, classification) = match kept_api {
+                    Some(kept) => (
+                        kept.graph(api).map_err(Error::cache)?,
+                        kept.classification(),
+                    ),
+                    None => (api, &mut own_classification),
                 };
+                // A crate's items another round, run or project classified
+                // are taken from where its records are kept (#271).
+                classification.share(settlement.classification());
                 // Whether a check of the program ran and passed, rather than
                 // the cache replaying an earlier one.
                 let mut passed = false;
                 let completed = rawr_import::composition::evaluate_api_semantic(
                     api,
-                    kept_api,
+                    Some(classification),
                     adapter,
                     &policy,
                     expected,
