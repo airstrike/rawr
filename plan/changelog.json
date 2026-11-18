@@ -4,13 +4,18 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
-    "entries": [
-      {"text":"A program with dependencies runs again: rawr's shared runtime compiles, which it didn't on 0.4.11.","issues":[2244]},
-      {"text":"A workspace manifest edited while Cargo reads metadata is reported as drift, never paired with the old metadata.","issues":[656]},
-      {"text":"A running program sees a symlinked input pointed at another file, not only edits to the file it pointed at.","issues":[1172]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.4.12",
+      "date": "2026-11-18",
+      "entries": [
+        {"text":"A program with dependencies runs again: rawr's shared runtime compiles, which it didn't on 0.4.11.","issues":[2244]},
+        {"text":"A workspace manifest edited while Cargo reads metadata is reported as drift, never paired with the old metadata.","issues":[656]},
+        {"text":"A running program sees a symlinked input pointed at another file, not only edits to the file it pointed at.","issues":[1172]}
+      ]
+    },
     {
       "version": "0.4.11",
       "date": "2026-11-18",

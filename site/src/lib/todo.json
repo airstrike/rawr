@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-18",
-  "version": "0.4.11",
+  "version": "0.4.12",
   "examples": {
     "running": 56,
     "total": 56,
@@ -9,15 +9,17 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
-      "entries": [
-        {"text":"A program with dependencies runs again: rawr's shared runtime compiles, which it didn't on 0.4.11.","issues":[2244]},
-        {"text":"A workspace manifest edited while Cargo reads metadata is reported as drift, never paired with the old metadata.","issues":[656]},
-        {"text":"A running program sees a symlinked input pointed at another file, not only edits to the file it pointed at.","issues":[1172]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.12",
+        "date": "2026-11-18",
+        "entries": [
+          {"text":"A program with dependencies runs again: rawr's shared runtime compiles, which it didn't on 0.4.11.","issues":[2244]},
+          {"text":"A workspace manifest edited while Cargo reads metadata is reported as drift, never paired with the old metadata.","issues":[656]},
+          {"text":"A running program sees a symlinked input pointed at another file, not only edits to the file it pointed at.","issues":[1172]}
+        ]
+      },
       {
         "version": "0.4.11",
         "date": "2026-11-18",
@@ -3489,7 +3491,7 @@
     {"issue":653,"title":"std's PathBuf and io::Error are std's own types (D683.3)","state":"closed","category":"Divergences from rustc","release":"0.3.88"},
     {"issue":654,"title":"A stale stored baseline rebuilds silently (D683.7)","state":"closed","category":"Health"},
     {"issue":655,"title":"Stop re-running Cargo after each build to compare its output byte for byte","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.81"},
-    {"issue":656,"title":"Check the manifests behind Cargo metadata before capturing the workspace image, in both lanes","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":656,"title":"Check the manifests behind Cargo metadata before capturing the workspace image, in both lanes","state":"closed","category":"Shared dependency cache (D607)","release":"0.4.12"},
     {"issue":657,"title":"A real mid-build edit restarts preparation instead of erroring","state":"open","category":"Divergences from rustc"},
     {"issue":658,"title":"ResolutionDrift with no user edit: the program's own cargo check and ancestor manifests","state":"closed","category":"Shared dependency cache (D607)","release":"0.4.11"},
     {"issue":659,"title":"std::fs inside an async block","state":"closed","category":"Divergences from rustc"},
@@ -4005,7 +4007,7 @@
     {"issue":1169,"title":"A tuple of script values passed to a native generic crosses as an array","state":"open","category":"Divergences from rustc"},
     {"issue":1170,"title":"A marked binary with native modules or an async main beside its package's library names two crates the same way","state":"open","category":"Divergences from rustc"},
     {"issue":1171,"title":"A build input reached through a symlink is refused","state":"closed","category":"Health","release":"0.3.172"},
-    {"issue":1172,"title":"A live rawr run doesn't see a repointed symlink until the next run","state":"closed","category":"Health"},
+    {"issue":1172,"title":"A live rawr run doesn't see a repointed symlink until the next run","state":"closed","category":"Health","release":"0.4.12"},
     {"issue":1173,"title":"A rerun-if-changed path with `..` after a symlinked directory is read lexically","state":"closed","category":"Health","release":"0.4.11"},
     {"issue":1174,"title":"A build target whose source file is a symlink is refused","state":"closed","category":"Health"},
     {"issue":1175,"title":"rawr runs a Cargo package's [[bin]] file only as a lone file, without the package's dependencies","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
@@ -5076,7 +5078,7 @@
     {"issue":2241,"title":"A program's own `#[derive(thiserror::Error)]` is refused as an impl of an unknown trait path","state":"open","category":"No glue (D593)"},
     {"issue":2242,"title":"A later demand round writes each item it takes from an earlier classification into the stored…","state":"closed","category":"Shared dependency cache (D607)","release":"0.4.8"},
     {"issue":2243,"title":"`Itertools::sorted` on `RepeatN<String>` is E0599 under rawr check, which cargo accepts","state":"open","category":"Divergences from rustc"},
-    {"issue":2244,"title":"A program with dependencies runs again: rawr's shared runtime compiles, which it didn't on 0.4.11","state":"open","category":"Health"},
+    {"issue":2244,"title":"A program with dependencies runs again: rawr's shared runtime compiles, which it didn't on 0.4.11","state":"closed","category":"Health","release":"0.4.12"},
     {"issue":2245,"title":"A profile entry that decodes stale under its own key panics in the full path after the warm launch falls back","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
@@ -5361,7 +5363,7 @@
             {"number":2108,"title":"A program's lowered output is reused after a resolver change when the program's source is unchanged","state":"closed"},
             {"number":2226,"title":"A relative RAWR_HOME (`../home`) doubles the project path in the store's Cargo output path","state":"closed"},
             {"number":2245,"title":"A profile entry that decodes stale under its own key panics in the full path after the warm launch falls back","state":"open"},
-            {"number":2244,"title":"A program with dependencies runs again: rawr's shared runtime compiles, which it didn't on 0.4.11","state":"open"}
+            {"number":2244,"title":"A program with dependencies runs again: rawr's shared runtime compiles, which it didn't on 0.4.11","state":"closed"}
           ],
           "milestone": "0.4"
         },
