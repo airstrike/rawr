@@ -4,12 +4,17 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
-    "entries": [
-      {"text":"A change to the surface format evicts old resolved-demand entries when the store opens, instead of leaving them for size-based eviction.","issues":[2247]},
-      {"text":"Projects whose path has a space, braces or non-ASCII characters reuse Cargo's metadata and unit graph across source-only edits.","issues":[2249]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.4.16",
+      "date": "2026-11-18",
+      "entries": [
+        {"text":"A change to the surface format evicts old resolved-demand entries when the store opens, instead of leaving them for size-based eviction.","issues":[2247]},
+        {"text":"Projects whose path has a space, braces or non-ASCII characters reuse Cargo's metadata and unit graph across source-only edits.","issues":[2249]}
+      ]
+    },
     {
       "version": "0.4.15",
       "date": "2026-11-18",

@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
+
+## 0.4.16 (2026-11-18)
+
 - A change to the surface format evicts old resolved-demand entries when the store opens, instead of leaving them for size-based eviction. (#2247)
 - Projects whose path has a space, braces or non-ASCII characters reuse Cargo's metadata and unit graph across source-only edits. (#2249)
 
