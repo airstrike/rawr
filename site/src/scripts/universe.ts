@@ -5,14 +5,16 @@
 //
 // The page compiles the module once. Each run gets an instance of its own
 // in a frame of its own, in place of the run strip's output: a program that
-// hands its loop to the page (iced's `run` to its web shell, an async loop
-// to wasm-bindgen-futures' `spawn_local`, which polls it on the page's
-// events, as a ratatui program's loop that awaits its keys from ratzilla's
-// backend) keeps that instance, and winit
-// allows one event loop per instance. An edit replaces the running
-// program's text in its instance, which keeps its state (#1455); only an
-// edit that can't reload there, as `rawr run` restarts for one, gets a
-// fresh instance. In the frame, iced's shell puts its
+// hands its loop to the page keeps that instance, and winit allows one
+// event loop per instance. iced's `run` hands it to its web shell.
+// ratzilla's `draw_web` calls a closure of the program's on every
+// animation frame, and its key callback changes the state that closure
+// draws. wasm-bindgen-futures' `spawn_local` polls an async loop of the
+// program's on the page's events. An edit replaces the running program's
+// text in its instance, which keeps its state (#1455), and the next call
+// from the page runs the new code; only an edit that can't reload there,
+// as `rawr run` restarts for one, gets a fresh instance. In the frame,
+// iced's shell puts its
 // canvas in place of the element `#iced`, and ratzilla's terminal fills the
 // body. Keys reach the program only while its frame has focus, which a
 // click or Tab gives it, and the frame draws an outline while it does.
