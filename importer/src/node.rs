@@ -37,9 +37,10 @@ pub(crate) const fn reader_schema(codec: u32, versions: &[u32]) -> u32 {
     hash
 }
 
-/// A version string as one word for [`reader_schema`].
-pub(crate) const fn version_word(version: &str) -> u32 {
-    fold(0x811c_9dc5, version.as_bytes())
+/// A version string, or a format's magic bytes, as one word for
+/// [`reader_schema`].
+pub(crate) const fn version_word(version: &[u8]) -> u32 {
+    fold(0x811c_9dc5, version)
 }
 
 /// FNV-1a over `bytes`, continuing from `hash`.

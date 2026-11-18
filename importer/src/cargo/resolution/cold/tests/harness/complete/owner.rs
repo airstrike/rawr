@@ -1531,11 +1531,11 @@ fn resolved_warm_launch_equals_cold_without_the_api_graph() {
     fs::remove_dir_all(root).unwrap();
 }
 
-/// A profile entry under the resolved launch's key that decodes only under
-/// other inputs sends the warm launch back to the full path with its API
-/// continuation untouched, its graph still unbuilt (#538, #546).
+/// A profile entry's key holds every input and format its decoder compares,
+/// so one forged to decode only under other inputs is a rawr bug: the warm
+/// launch panics naming the invariant, as the full path does (D1045).
 #[test]
-fn a_stale_profile_entry_returns_the_warm_launch_to_the_full_path() {
+fn a_forged_stale_profile_entry_panics_in_the_warm_launch() {
     use crate::node::staging::{Input, Outcome, Owned, Recipe};
     use crate::node::Value as _;
 
@@ -1631,20 +1631,24 @@ fn a_stale_profile_entry_returns_the_warm_launch_to_the_full_path() {
                 crate::profile::cached::Product::decode(foreign.as_bytes()).unwrap(),
             )
             .unwrap();
-        let resolved = crate::composition::resolve_api_semantic(
-            api,
-            &adapter,
-            &policy,
-            source,
-            &limits,
-            |_| Ok::<_, ()>(()),
-        )
-        .unwrap();
-        let Err(api) = resolved else {
-            panic!("a stale profile entry is a miss for the resolved launch");
+        let resolved = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::composition::resolve_api_semantic(
+                api,
+                &adapter,
+                &policy,
+                source,
+                &limits,
+                |_| Ok::<_, ()>(()),
+            )
+            .map(drop)
+        }));
+        let Err(panic) = resolved else {
+            panic!("a stale profile entry under a complete key is not a miss");
         };
-        assert!(matches!(api.product, Owned::Current(_)));
-        assert!(matches!(api.graph, crate::api::retained::Lazy::Pending(_)));
+        assert_eq!(
+            panic.downcast_ref::<&str>().copied(),
+            Some("a cached profile entry went stale under a key that holds all its inputs")
+        );
     })
     .unwrap();
     drop(context);

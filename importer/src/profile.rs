@@ -21,6 +21,10 @@ pub use identity::{Identity, Version};
 
 const VERSION: u32 = 15;
 
+/// The format schema of a stored generated owner, which its decoder
+/// compares. Cached owners fold it into their key (D1045).
+const OWNER_SCHEMA: u32 = 9;
+
 #[cfg(feature = "test-fixtures")]
 const FIXTURE_LIFECYCLE_SOURCE: &[u8] = br#"
 mod __rawr_profile {
@@ -390,7 +394,7 @@ impl Proof {
         proof.product_lifecycle = true;
         proof.source = Box::from(FIXTURE_LIFECYCLE_SOURCE);
         let canonical = serde_json::to_vec(&OwnerCanonical {
-            schema: 9,
+            schema: OWNER_SCHEMA,
             identity: proof.identity.as_bytes(),
             version: proof.version.get(),
             rules: &proof.rules,
@@ -440,7 +444,7 @@ impl Proof {
 
     fn encode_owner(&self) -> Result<Box<[u8]>, Error> {
         let canonical = serde_json::to_vec(&OwnerCanonical {
-            schema: 9,
+            schema: OWNER_SCHEMA,
             identity: self.identity.as_bytes(),
             version: self.version.get(),
             rules: &self.rules,
@@ -479,7 +483,7 @@ impl Proof {
             serde_json::from_slice(bytes).map_err(|_| Error::Stale)?;
         let canonical = serde_json::to_vec(&stored).expect("a generated profile proof serializes");
         if canonical.as_slice() != bytes
-            || stored.schema != 9
+            || stored.schema != OWNER_SCHEMA
             || stored.identity != *demand.identity().as_bytes()
             || stored.version != demand.version().get()
             || stored.rules != *demand.rules_digest()

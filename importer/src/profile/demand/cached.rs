@@ -181,7 +181,7 @@ impl Product {
 
 impl node::Value for Product {
     const KIND: node::Kind = node::Kind::ProfileProof;
-    const SCHEMA: u32 = 1;
+    const SCHEMA: u32 = crate::profile::cached::schema(1);
 
     fn encode(&self) -> Result<Box<[u8]>, node::Error> {
         Ok(self.canonical.clone())
@@ -228,7 +228,7 @@ impl GeneratedProduct {
 
 impl node::Value for GeneratedProduct {
     const KIND: node::Kind = node::Kind::ProfileProof;
-    const SCHEMA: u32 = 2;
+    const SCHEMA: u32 = crate::profile::cached::schema(2);
 
     fn encode(&self) -> Result<Box<[u8]>, node::Error> {
         Ok(self.canonical.clone())
@@ -245,6 +245,12 @@ impl node::Value for GeneratedProduct {
         })
     }
 }
+
+// The demand and the generated owner share a kind, so their schemas differ.
+const _: () = assert!(
+    <Product as node::Value>::SCHEMA != <GeneratedProduct as node::Value>::SCHEMA,
+    "the demand and the generated owner keep distinct schemas in one kind"
+);
 
 #[cfg(test)]
 mod tests {

@@ -5,6 +5,10 @@ use sha2::{Digest as _, Sha256};
 
 use super::{Error, Identity, Version};
 
+/// The format schema of a stored classification contract, which its decoder
+/// compares. Cached contracts fold it into their key (D1045).
+pub(super) const SCHEMA: u32 = 7;
+
 /// Closed compiler-evidence class selectable by a profile.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
 pub enum Kind {
@@ -264,7 +268,7 @@ impl Parts {
         let stored: StoredCanonical = serde_json::from_slice(bytes).map_err(|_| Error::Stale)?;
         let canonical = serde_json::to_vec(&stored).expect("a profile contract serializes");
         if canonical.as_slice() != bytes
-            || stored.schema != 7
+            || stored.schema != SCHEMA
             || stored.identity != *identity.as_bytes()
             || stored.version != version.get()
             || stored.graph != *semantic.as_bytes()
@@ -342,7 +346,7 @@ impl Parts {
 impl Contract {
     pub(super) fn encode(&self) -> Result<Box<[u8]>, Error> {
         let canonical = serde_json::to_vec(&Canonical {
-            schema: 7,
+            schema: SCHEMA,
             identity: self.identity.as_bytes(),
             version: self.version.get(),
             graph: self.semantic_graph.as_bytes(),
@@ -905,7 +909,7 @@ impl<'graph, P: crate::api::Phase> Builder<'graph, P> {
 
     pub(crate) fn seal_parts(self) -> Result<Parts, Error> {
         let canonical = serde_json::to_vec(&Canonical {
-            schema: 7,
+            schema: SCHEMA,
             identity: self.identity.as_bytes(),
             version: self.version.get(),
             graph: self.graph.semantic_fingerprint().as_bytes(),
@@ -922,7 +926,7 @@ impl<'graph, P: crate::api::Phase> Builder<'graph, P> {
             version: self.version,
             graph: self.graph.fingerprint(),
             stored: StoredCanonical {
-                schema: 7,
+                schema: SCHEMA,
                 identity: *self.identity.as_bytes(),
                 version: self.version.get(),
                 graph: *self.graph.semantic_fingerprint().as_bytes(),

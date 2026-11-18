@@ -5,6 +5,10 @@ use sha2::{Digest as _, Sha256};
 
 use super::{contract, Contract, Error, Identity, Proof, Version};
 
+/// The format schema of a stored demand, which its decoder compares. Cached
+/// demands fold it into their key (D1045).
+pub(super) const SCHEMA: u32 = 7;
+
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod cached;
 
@@ -109,7 +113,7 @@ struct StoredCanonical {
 impl Demand {
     pub(super) fn encode(&self) -> Result<Box<[u8]>, Error> {
         let canonical = serde_json::to_vec(&Canonical {
-            schema: 7,
+            schema: SCHEMA,
             identity: self.identity.as_bytes(),
             version: self.version.get(),
             rules: &self.rules,
@@ -155,7 +159,7 @@ impl Demand {
         let stored: StoredCanonical = serde_json::from_slice(bytes).map_err(|_| Error::Stale)?;
         let canonical = serde_json::to_vec(&stored).expect("a profile demand serializes");
         if canonical.as_slice() != bytes
-            || stored.schema != 7
+            || stored.schema != SCHEMA
             || stored.identity != *contract.identity().as_bytes()
             || stored.version != contract.version().get()
             || stored.rules != *contract.rules_digest()
@@ -405,7 +409,7 @@ impl<'contract> Builder<'contract> {
 
     pub(crate) fn seal(self) -> Result<Demand, Error> {
         let canonical = serde_json::to_vec(&Canonical {
-            schema: 7,
+            schema: SCHEMA,
             identity: self.contract.identity().as_bytes(),
             version: self.contract.version().get(),
             rules: self.contract.rules_digest(),
@@ -536,7 +540,7 @@ impl<'demand> Generator<'demand> {
         let application = super::application_semantic(self.demand)
             .expect("a checked program's profile payload is its application identity");
         let canonical = serde_json::to_vec(&super::OwnerCanonical {
-            schema: 9,
+            schema: super::OWNER_SCHEMA,
             identity: self.demand.identity.as_bytes(),
             version: self.demand.version.get(),
             rules: &self.demand.rules,

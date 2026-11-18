@@ -223,21 +223,22 @@ where
             return Ok(None);
         };
         let api_fingerprint = crate::api::Fingerprint::from_bytes(header.api);
-        // The resolved product records the API it was resolved under; a
-        // profile entry that doesn't decode under it is stale, and the
-        // full path rebuilds it (#538).
-        let profile_parts = match profile.value().owned_resolved(
-            profile_identity.0,
-            profile_identity.1,
-            (
-                api_fingerprint,
-                crate::api::Fingerprint::from_bytes(header.semantic),
-            ),
-        ) {
-            Ok(parts) => parts,
-            Err(crate::profile::Error::Stale) => return Ok(None),
-            Err(error) => return Err(failure(&error)),
-        };
+        // The profile entry's key holds every input and format its decoder
+        // compares, so one that doesn't decode under the API the resolved
+        // product records is a rawr bug and panics, as on the full path
+        // (D1045).
+        let profile_parts = profile
+            .value()
+            .owned_resolved(
+                profile_identity.0,
+                profile_identity.1,
+                (
+                    api_fingerprint,
+                    crate::api::Fingerprint::from_bytes(header.semantic),
+                ),
+            )
+            .map_err(crate::profile::Error::fresh)
+            .map_err(|error| failure(&error))?;
         let authority = checked::authority(
             crate::contract::fingerprint::Fingerprint(header.contract),
             api_fingerprint,
