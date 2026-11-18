@@ -706,6 +706,7 @@ fn parameter_indices(ty: &convert::Type, found: &mut BTreeSet<u32>) {
         convert::Type::Unit
         | convert::Type::Never
         | convert::Type::Builtin(_)
+        | convert::Type::Constant(_)
         | convert::Type::Inferred => {}
     }
 }

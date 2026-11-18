@@ -1339,6 +1339,7 @@ impl<'a> Parser<'a> {
             .iter()
             .map(|generic| (generic.name.text.clone(), generic.bounds))
             .collect();
+        self.constants = const_generics(&implementation.generics);
         self.generic_traits = generic_traits(&implementation.generics);
         self.generic_trait_arguments = generic_trait_arguments(&implementation.generics);
         self.inference.equalities = generic_equalities(&implementation.generics);

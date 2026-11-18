@@ -155,13 +155,13 @@ impl<'a> Parser<'a> {
     /// `<A, B>` after a trait's name in a qualified path.
     pub(super) fn parse_trait_path_arguments(&mut self) -> Result<Vec<Ty>, Error> {
         self.expect(Token::LessThan, "'<' before a trait's arguments")?;
-        let mut types = vec![self.parse_local_type()?];
+        let mut types = vec![self.parse_local_argument()?];
         while matches!(self.peek(), Token::Comma) {
             self.next();
             if matches!(self.peek(), Token::GreaterThan | Token::RightShift) {
                 break;
             }
-            types.push(self.parse_local_type()?);
+            types.push(self.parse_local_argument()?);
         }
         self.expect_close_angle("'>' after a trait's arguments")?;
         Ok(types)

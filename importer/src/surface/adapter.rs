@@ -1166,7 +1166,10 @@ fn defaulted(ty: &convert::Type, parameters: &[signature::Parameter]) -> Option<
             payload: one(payload)?,
         },
         convert::Type::Inferred => convert::Type::Inferred,
-        convert::Type::Unit | convert::Type::Never | convert::Type::Builtin(_) => ty.clone(),
+        convert::Type::Unit
+        | convert::Type::Never
+        | convert::Type::Builtin(_)
+        | convert::Type::Constant(_) => ty.clone(),
         convert::Type::Object(object) => convert::Type::Object(Box::new(
             object
                 .try_map(|ty| defaulted(ty, parameters).ok_or(()))
@@ -1181,7 +1184,8 @@ fn clone_signature(source: &signature::Signature) -> Result<signature::Signature
 
 /// `source` at an instance's `constants`: each input `[T; N]` of a const
 /// parameter `N` is the array of the length the constant gives `N`, as the
-/// call's argument has it (#1330).
+/// call's argument has it (#1330), and `N` among a type's arguments, as
+/// `&Buf<N>` takes it, is the constant's value.
 fn clone_signature_at(
     source: &signature::Signature,
     constants: &[convert::Constant],
@@ -1202,28 +1206,31 @@ fn clone_signature_at(
             .map(|input| at_lengths(input, &lengths))
             .collect::<Result<_, _>>()?
     };
-    Ok(signature::Signature::new(
-        clone_parameters(source.parameters())?,
-        inputs,
-        clone_type(source.output())?,
+    let output = if lengths.is_empty() {
+        clone_type(source.output())?
+    } else {
+        at_lengths(source.output(), &lengths)?
+    };
+    Ok(
+        signature::Signature::new(clone_parameters(source.parameters())?, inputs, output)
+            .with_guard(source.guard())
+            .with_scope(source.scope())
+            .with_instance(source.instance().map(clone_type).transpose()?)
+            .with_through(source.through().map(clone_type).transpose()?)
+            // The trait object an opaque output that borrows its call's values is
+            // held as (`Opaque::principal`), and which inputs it borrows.
+            .with_opaques(source.opaques().into())
+            .with_lends(source.lends().into())
+            .with_statics(source.statics().into())
+            .with_regional(source.regional().into())
+            .with_keep_receiver(source.keep_receiver().into())
+            .with_lends_receiver(source.lends_receiver())
+            .with_lent_output(source.lent_output())
+            .with_lasting_receiver(source.lasting_receiver())
+            .with_detached_future(source.detached_future())
+            .with_assigns(source.assigns())
+            .with_pinned_receiver(source.pinned_receiver()),
     )
-    .with_guard(source.guard())
-    .with_scope(source.scope())
-    .with_instance(source.instance().map(clone_type).transpose()?)
-    .with_through(source.through().map(clone_type).transpose()?)
-    // The trait object an opaque output that borrows its call's values is
-    // held as (`Opaque::principal`), and which inputs it borrows.
-    .with_opaques(source.opaques().into())
-    .with_lends(source.lends().into())
-    .with_statics(source.statics().into())
-    .with_regional(source.regional().into())
-    .with_keep_receiver(source.keep_receiver().into())
-    .with_lends_receiver(source.lends_receiver())
-    .with_lent_output(source.lent_output())
-    .with_lasting_receiver(source.lasting_receiver())
-    .with_detached_future(source.detached_future())
-    .with_assigns(source.assigns())
-    .with_pinned_receiver(source.pinned_receiver()))
 }
 
 fn clone_parameters(source: &[signature::Parameter]) -> Result<Box<[signature::Parameter]>, Error> {
@@ -1266,6 +1273,7 @@ fn clone_types(source: &[convert::Type]) -> Result<Box<[convert::Type]>, Error> 
 fn clone_type(source: &convert::Type) -> Result<convert::Type, Error> {
     Ok(match source {
         convert::Type::Inferred => convert::Type::Inferred,
+        convert::Type::Constant(constant) => convert::Type::Constant(constant.clone()),
         convert::Type::Unit => convert::Type::Unit,
         convert::Type::Never => convert::Type::Never,
         convert::Type::Builtin(builtin) => convert::Type::Builtin(*builtin),
@@ -1363,6 +1371,28 @@ fn at_lengths(
             mutable: *mutable,
             ty: Box::new(at_lengths(ty, lengths)?),
         },
+        convert::Type::Parameter(parameter) => {
+            match lengths.iter().find(|(index, _)| index == parameter) {
+                Some((_, constant)) => convert::Type::Constant(clone_str(constant.value())?),
+                None => clone_type(ty)?,
+            }
+        }
+        convert::Type::Nominal {
+            definition,
+            arguments,
+        } => {
+            let mut converted = Vec::new();
+            converted
+                .try_reserve_exact(arguments.len())
+                .map_err(|_| Error::Allocation)?;
+            for argument in arguments {
+                converted.push(at_lengths(argument, lengths)?);
+            }
+            convert::Type::Nominal {
+                definition: *definition,
+                arguments: converted.into_boxed_slice(),
+            }
+        }
         ty => clone_type(ty)?,
     })
 }
@@ -1487,6 +1517,7 @@ fn type_dynamic_bytes(ty: &convert::Type) -> Option<usize> {
             path, arguments, ..
         } => type_slice_bytes(arguments)?.checked_add(path.len()),
         convert::Type::Inferred => Some(0),
+        convert::Type::Constant(value) => Some(value.len()),
         convert::Type::Unit
         | convert::Type::Never
         | convert::Type::Builtin(_)

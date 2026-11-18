@@ -1210,6 +1210,7 @@ fn type_bytes(ty: &convert::Type) -> Option<usize> {
                 .checked_add(type_bytes(argument)?)
         }),
         convert::Type::Inferred => Some(0),
+        convert::Type::Constant(value) => Some(value.len()),
         convert::Type::Unit
         | convert::Type::Never
         | convert::Type::Builtin(_)
@@ -1665,6 +1666,10 @@ impl Framed {
     fn converted_type(&mut self, ty: &convert::Type) {
         match ty {
             convert::Type::Inferred => self.byte(14),
+            convert::Type::Constant(value) => {
+                self.byte(23);
+                self.bytes(value.as_bytes());
+            }
             convert::Type::Unit => self.byte(0),
             convert::Type::Never => self.byte(16),
             convert::Type::Builtin(builtin) => {

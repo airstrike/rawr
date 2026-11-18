@@ -1579,6 +1579,7 @@ pub(crate) fn ty(source: &facade::Type) -> Result<host::type_ref::Type, Error> {
             host::type_ref::Type::imported_function_item(ty(input)?, ty(output)?)
         }
         facade::Type::Parameter(parameter) => host::type_ref::Type::parameter(parameter.as_ref())?,
+        facade::Type::Constant(value) => host::type_ref::Type::constant(value.as_ref().into()),
         facade::Type::Reference { mutable, target } => {
             host::type_ref::Type::reference(*mutable, ty(target)?)
         }

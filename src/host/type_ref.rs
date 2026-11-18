@@ -215,6 +215,10 @@ pub(crate) enum Shape {
         arguments: Box<[Type]>,
     },
     Parameter(host::path::Path),
+    /// A const generic argument's value among a crate type's arguments,
+    /// as `3` of `Buf<3>`.
+    #[cfg(feature = "rust-import")]
+    Constant(crate::ImmutableString),
 }
 
 /// The crate types a facade's items name: each it declares, with its
@@ -282,6 +286,7 @@ impl Type {
             Shape::Parameter(path) => path
                 .retained_bytes()
                 .and_then(|bytes| bytes.checked_sub(std::mem::size_of::<host::path::Path>())),
+            Shape::Constant(value) => Some(value.len()),
         }
     }
 
@@ -360,6 +365,7 @@ impl Type {
                 arguments: slice(arguments)?,
             },
             Shape::Parameter(path) => Shape::Parameter(path.try_clone()?),
+            Shape::Constant(value) => Shape::Constant(value.clone()),
         }))
     }
 
@@ -608,6 +614,13 @@ impl Type {
         }))
     }
 
+    /// Construct a const generic argument's value, as a crate type's
+    /// arguments hold it.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn constant(value: crate::ImmutableString) -> Self {
+        Self(Shape::Constant(value))
+    }
+
     /// Construct a reference to a signature type parameter.
     pub fn parameter(name: impl Into<crate::ImmutableString>) -> Result<Self, host::Error> {
         let path = host::path::Path::parse(name)?;
@@ -626,6 +639,8 @@ impl Type {
     ) -> Result<Self, host::Error> {
         match &self.0 {
             Shape::Unit => Ok(Self::unit()),
+            #[cfg(feature = "rust-import")]
+            Shape::Constant(_) => Ok(self.clone()),
             Shape::Tuple(members) => Ok(Self(Shape::Tuple(resolve_types(
                 members, root, declared, parameters, item,
             )?))),
@@ -778,7 +793,7 @@ impl Type {
         allocation: &mut A,
     ) -> Result<(), host::Error> {
         match &mut self.0 {
-            Shape::Unit | Shape::Builtin(_) => {}
+            Shape::Unit | Shape::Builtin(_) | Shape::Constant(_) => {}
             Shape::Tuple(members) | Shape::Keyed(_, members) => {
                 for member in members {
                     member.resolve_imported(root, declared, parameters, item, allocation)?;
@@ -984,6 +999,8 @@ impl Type {
                 }
             }
             Shape::Unit | Shape::Builtin(_) | Shape::Parameter(_) => {}
+            #[cfg(feature = "rust-import")]
+            Shape::Constant(_) => {}
         }
     }
 }
@@ -1169,6 +1186,11 @@ impl crate::digest::Write for Type {
             Shape::Parameter(path) => {
                 writer.tag(0x2306);
                 writer.text(&path.to_string());
+            }
+            #[cfg(feature = "rust-import")]
+            Shape::Constant(value) => {
+                writer.tag(0x2373);
+                writer.text(value);
             }
         }
         Ok(())

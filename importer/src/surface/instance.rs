@@ -1000,7 +1000,8 @@ fn concrete_type(ty: &convert::Type, depth: usize, limit: usize) -> Result<(), s
         convert::Type::Inferred
         | convert::Type::Unit
         | convert::Type::Never
-        | convert::Type::Builtin(_) => Ok(()),
+        | convert::Type::Builtin(_)
+        | convert::Type::Constant(_) => Ok(()),
         convert::Type::Object(object) => object
             .types()
             .try_for_each(|ty| concrete_type(ty, actual, limit)),

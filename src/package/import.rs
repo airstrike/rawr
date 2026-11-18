@@ -792,7 +792,12 @@ pub(crate) fn crossing_impls(
                 paths(output, found);
             }
             Type::Object(object) => object.types().for_each(|ty| paths(ty, found)),
-            Type::Unit | Type::Never | Type::Builtin(_) | Type::Parameter(_) | Type::Inferred => {}
+            Type::Unit
+            | Type::Never
+            | Type::Builtin(_)
+            | Type::Parameter(_)
+            | Type::Constant(_)
+            | Type::Inferred => {}
         }
     }
     if impls.is_empty() {
@@ -2331,7 +2336,12 @@ fn facade_named(facade: &Facade<'_>) -> std::collections::BTreeSet<[u8; 32]> {
                     walk(ty, named);
                 }
             }
-            Type::Inferred | Type::Unit | Type::Never | Type::Builtin(_) | Type::Parameter(_) => {}
+            Type::Inferred
+            | Type::Unit
+            | Type::Never
+            | Type::Builtin(_)
+            | Type::Parameter(_)
+            | Type::Constant(_) => {}
         }
     }
     fn outcome(
@@ -3648,7 +3658,7 @@ fn undeclared_parameter(
             output: second,
         } => undeclared(first).or_else(|| undeclared(second)),
         Type::Object(object) => object.types().find_map(undeclared),
-        Type::Unit | Type::Never | Type::Builtin(_) | Type::Inferred => None,
+        Type::Unit | Type::Never | Type::Builtin(_) | Type::Inferred | Type::Constant(_) => None,
     }
 }
 
@@ -3784,6 +3794,7 @@ fn written(
         Type::Unit => "()".into(),
         Type::Never => "!".into(),
         Type::Inferred => "_".into(),
+        Type::Constant(constant) => constant.to_string(),
         Type::Builtin(builtin) => builtin
             .rust_name()
             .map_or_else(|| format!("{builtin:?}"), Into::into),
@@ -4077,7 +4088,7 @@ fn ty_ok(
         Type::ProfileMessage { payload, .. } => ty_ok(payload, declared),
         // Its trait is the facade's trait header's.
         Type::Object(object) => object.types().all(|ty| ty_ok(ty, declared)),
-        Type::Inferred => true,
+        Type::Inferred | Type::Constant(_) => true,
         Type::Unit | Type::Never | Type::Builtin(_) | Type::Parameter(_) => true,
     }
 }
@@ -4152,9 +4163,20 @@ fn writes_declared(
                 .iter()
                 .find(|parameter| parameter.index() == *index)
                 .is_none_or(|parameter| parameter.kind() == Kind::Type),
-            Type::Nominal { arguments, .. }
-            | Type::Tuple(arguments)
-            | Type::Script { arguments, .. } => arguments.iter().all(|ty| declared(ty, parameters)),
+            // `N` among a type's arguments, as `&Buf<N>` takes it: a const
+            // parameter whose value the call's argument gives.
+            Type::Nominal { arguments, .. } => arguments.iter().all(|ty| match ty {
+                Type::Parameter(index) => parameters
+                    .iter()
+                    .find(|parameter| parameter.index() == *index)
+                    .is_none_or(|parameter| {
+                        matches!(parameter.kind(), Kind::Type | Kind::Constant)
+                    }),
+                ty => declared(ty, parameters),
+            }),
+            Type::Tuple(arguments) | Type::Script { arguments, .. } => {
+                arguments.iter().all(|ty| declared(ty, parameters))
+            }
             Type::Option(element)
             | Type::Borrowed { ty: element, .. }
             | Type::Range(element)
@@ -4174,7 +4196,9 @@ fn writes_declared(
                 output: second,
             } => declared(first, parameters) && declared(second, parameters),
             Type::Object(object) => object.types().all(|ty| declared(ty, parameters)),
-            Type::Unit | Type::Never | Type::Builtin(_) | Type::Inferred => true,
+            Type::Unit | Type::Never | Type::Builtin(_) | Type::Inferred | Type::Constant(_) => {
+                true
+            }
         }
     }
 
@@ -4309,6 +4333,7 @@ impl Types {
             ),
             Type::Unit => host::type_ref::Type::unit(),
             Type::Never => host::type_ref::Type::builtin(host::type_ref::Builtin::Never),
+            Type::Constant(constant) => host::type_ref::Type::constant(constant.as_ref().into()),
             Type::Builtin(builtin) => host::type_ref::Type::builtin(match builtin {
                 Builtin::Bool => host::type_ref::Builtin::Bool,
                 Builtin::Char => host::type_ref::Builtin::Char,
@@ -4839,7 +4864,7 @@ fn names_impl_parameter(ty: &representability::convert::Type) -> bool {
     use representability::convert::Type;
     match ty {
         Type::Parameter(index) => index & representability::signature::IMPL_PARAMETER != 0,
-        Type::Inferred => false,
+        Type::Inferred | Type::Constant(_) => false,
         Type::Unit | Type::Never | Type::Builtin(_) => false,
         Type::Nominal { arguments, .. }
         | Type::Tuple(arguments)
@@ -5054,6 +5079,7 @@ fn type_usage(
                 })?
         }
         Type::Inferred => (0, 0),
+        Type::Constant(constant) => (0, constant.len()),
         Type::Unit | Type::Never | Type::Builtin(_) => (0, 0),
     };
     Ok((

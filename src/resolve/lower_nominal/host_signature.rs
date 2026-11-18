@@ -2115,6 +2115,8 @@ impl<'a> Parser<'a> {
                 .entry(name.to_string().into())
                 .or_insert_with(|| self.inference.fresh())
                 .clone(),
+            #[cfg(feature = "rust-import")]
+            Shape::Constant(value) => Ty::Const(value.clone()),
             Shape::Registered { path, arguments } => {
                 let path = path.to_string();
                 let definition = self
@@ -2501,8 +2503,9 @@ impl<'a> Parser<'a> {
     }
 
     /// The values of an imported item's const parameters, in declared
-    /// order: each the length of the array its argument gave it (#1330).
-    /// `None` when one is unknown.
+    /// order: each the length of the array its argument gave it (#1330),
+    /// or the const argument of a type its argument has (`Buf<5>` of
+    /// `&Buf<N>`). `None` when one is unknown.
     #[cfg(feature = "rust-import")]
     pub(super) fn imported_constants(
         &self,
@@ -2515,12 +2518,18 @@ impl<'a> Parser<'a> {
                 let (_, ty, _) = requirements
                     .iter()
                     .find(|(candidate, _, _)| *candidate == name)?;
-                let Ty::Array {
-                    kind: sequence::Kind::Array(length),
-                    ..
-                } = self.inference.resolve(ty)
-                else {
-                    return None;
+                let length = match self.inference.resolve(ty) {
+                    Ty::Array {
+                        kind: sequence::Kind::Array(length),
+                        ..
+                    } => length,
+                    Ty::Const(value) => {
+                        return rawr_import::classify::representability::convert::Constant::checked(
+                            "const", &value,
+                        )
+                        .ok();
+                    }
+                    _ => return None,
                 };
                 rawr_import::classify::representability::convert::Constant::checked(
                     "usize",

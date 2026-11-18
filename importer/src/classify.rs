@@ -28,7 +28,7 @@ const CONTRACT_SCHEMA: u32 = 7;
 /// fingerprint, selects its bindings plan again and rebuilds its runners.
 /// A runner-only change bumps `GENERATOR_VERSION` instead, and a bindings
 /// plan change the facade's `SCHEMA` (#1766).
-const CLASSIFIER_VERSION: u32 = 276;
+const CLASSIFIER_VERSION: u32 = 278;
 
 /// The contract schema and classifier version every contract fingerprint
 /// carries.
@@ -5516,7 +5516,7 @@ fn field_type_nameable(
         } => members
             .iter()
             .all(|member| field_type_nameable(member, nominal)),
-        Type::Inferred => true,
+        Type::Inferred | Type::Constant(_) => true,
         Type::Unit | Type::Never | Type::Builtin(_) | Type::Parameter(_) => true,
         Type::Object(object) => object
             .types()
@@ -5691,7 +5691,8 @@ fn type_nameable(
         | representability::convert::Type::Script {
             arguments: members, ..
         } => all_nameable(members.iter(), root, names),
-        representability::convert::Type::Inferred => (true, false),
+        representability::convert::Type::Inferred
+        | representability::convert::Type::Constant(_) => (true, false),
         representability::convert::Type::Unit
         | representability::convert::Type::Never
         | representability::convert::Type::Builtin(_)
@@ -8312,6 +8313,24 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                         }
                         named.push(*index);
                     }
+                    // `N` of `impl<const N: usize> Buf<N>`: a
+                    // const parameter the receiver's instance gives, as a
+                    // type parameter is.
+                    model::Argument::Const(model::Const::Parameter { owner, index })
+                        if owner == implementation.id()
+                            && parameters.iter().any(|parameter| {
+                                parameter.index() == *index
+                                    && matches!(
+                                        parameter.kind(),
+                                        model::ParameterKind::Const { .. }
+                                    )
+                            }) =>
+                    {
+                        if named.last().is_some_and(|last| last >= index) {
+                            fixed = true;
+                        }
+                        named.push(*index);
+                    }
                     model::Argument::Type(model::Type::Parameter { .. }) => {
                         return Err(reject::Kind::GenericImplementation.into());
                     }
@@ -8352,6 +8371,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
             };
             let inherited = model::Generics::inherited(implementation.generics(), generics)
                 .map_err(|_| Error::Allocation)?;
+            let inherited = instance_constants(&inherited, implementation.id());
             // A method's receiver gives each parameter its type names, as a
             // `Map<W, F, A>` gives `F: Fn(A) -> B`: such a parameter is the
             // type the receiver holds, never a closure the call makes, so
@@ -9979,7 +9999,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
         use representability::convert::Type;
         match ty {
             Type::Inferred => false,
-            Type::Unit | Type::Never | Type::Builtin(_) => true,
+            Type::Unit | Type::Never | Type::Builtin(_) | Type::Constant(_) => true,
             Type::Nominal { definition, .. } => self
                 .surface_definitions()
                 .position(definition)
@@ -11591,25 +11611,38 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
                             .try_reserve_exact(arguments.len())
                             .map_err(|_| Error::Allocation)?;
                         for argument in arguments {
-                            let argument =
-                                match argument {
-                                    model::Argument::Type(argument) => argument,
-                                    // An early-bound lifetime is instantiated at
-                                    // `'static` (D558 tier 0).
-                                    model::Argument::Lifetime(
-                                        model::Lifetime::Static | model::Lifetime::Early { .. },
-                                    ) => continue,
-                                    // A scope frame's lifetime (D558 tier 1).
-                                    model::Argument::Lifetime(model::Lifetime::Late { .. })
-                                        if self.scope_lifetimes.get() =>
-                                    {
-                                        continue
-                                    }
-                                    _ => return Err(
+                            let argument = match argument {
+                                model::Argument::Type(argument) => argument,
+                                // A const argument: its value, or the
+                                // const parameter an instance gives.
+                                model::Argument::Const(model::Const::Literal { value, .. }) => {
+                                    converted.push(Type::Constant(value.clone()));
+                                    continue;
+                                }
+                                model::Argument::Const(model::Const::Parameter {
+                                    index, ..
+                                }) => {
+                                    converted.push(Type::Parameter(*index));
+                                    continue;
+                                }
+                                // An early-bound lifetime is instantiated at
+                                // `'static` (D558 tier 0).
+                                model::Argument::Lifetime(
+                                    model::Lifetime::Static | model::Lifetime::Early { .. },
+                                ) => continue,
+                                // A scope frame's lifetime (D558 tier 1).
+                                model::Argument::Lifetime(model::Lifetime::Late { .. })
+                                    if self.scope_lifetimes.get() =>
+                                {
+                                    continue
+                                }
+                                _ => {
+                                    return Err(
                                         representability::reject::Kind::UnsupportedGenericArgument
                                             .into(),
-                                    ),
-                                };
+                                    )
+                                }
+                            };
                             // Each borrow it holds is `held_borrow`'s.
                             let outer = self.type_argument.replace(true);
                             let argument = self.convert(argument);
@@ -15636,7 +15669,7 @@ fn names_other_parameter(ty: &representability::convert::Type, except: u32) -> b
     let other = |ty: &Type| names_other_parameter(ty, except);
     match ty {
         Type::Parameter(index) => *index != except,
-        Type::Inferred => false,
+        Type::Inferred | Type::Constant(_) => false,
         Type::Unit | Type::Never | Type::Builtin(_) => false,
         Type::Nominal { arguments, .. }
         | Type::Tuple(arguments)
@@ -15658,7 +15691,7 @@ fn names_parameter(ty: &representability::convert::Type, index: u32) -> bool {
     use representability::convert::Type;
     match ty {
         Type::Parameter(parameter) => *parameter == index,
-        Type::Inferred => false,
+        Type::Inferred | Type::Constant(_) => false,
         Type::Unit | Type::Never | Type::Builtin(_) => false,
         Type::Nominal { arguments, .. } => arguments
             .iter()
@@ -15833,7 +15866,9 @@ fn declares_its_parameters(plan: &representability::Representability) -> bool {
             Type::Parameter(index) => parameters
                 .iter()
                 .any(|parameter| parameter.index() == *index),
-            Type::Unit | Type::Never | Type::Builtin(_) | Type::Inferred => true,
+            Type::Unit | Type::Never | Type::Builtin(_) | Type::Inferred | Type::Constant(_) => {
+                true
+            }
             Type::Nominal { arguments, .. } | Type::Script { arguments, .. } => arguments
                 .iter()
                 .all(|argument| declared(argument, parameters)),
@@ -16433,6 +16468,35 @@ fn lifetime_parameters(generics: &model::Generics) -> u32 {
 
 /// Generics that declare only lifetimes, each instantiated at `'static`
 /// (D558 tier 0), and bound nothing but lifetimes.
+/// `generics` with each const parameter of the impl `owner` declared as a
+/// parameter the receiver's instance gives, as it gives a type parameter:
+/// `N` of `impl<const N: usize> Buf<N>` is the value the
+/// program's `Buf<3>` names, which the call's instance arguments hold as
+/// `convert::Type::Constant` and the bridge writes as `Buf<3>`.
+fn instance_constants(
+    generics: &model::Generics,
+    owner: &api::identity::Definition,
+) -> model::Generics {
+    let parameters = generics
+        .parameters()
+        .map(|parameter| match parameter.kind() {
+            model::ParameterKind::Const { .. } if parameter.owner() == owner => {
+                model::Parameter::new(
+                    parameter.owner().clone(),
+                    parameter.index(),
+                    parameter.name().into(),
+                    model::ParameterKind::Type {
+                        bounds: Box::default(),
+                        default: model::Default::Absent,
+                    },
+                )
+            }
+            _ => parameter.clone(),
+        })
+        .collect();
+    model::Generics::new(parameters, generics.predicates().cloned().collect())
+}
+
 fn lifetime_only(generics: &model::Generics) -> bool {
     generics.parameters().all(is_lifetime_parameter)
         && generics
@@ -18319,11 +18383,12 @@ mod tests {
             (
                 model::Type::Definition {
                     id: id.clone(),
-                    // A `'static` lifetime argument is admitted (D558 tier 0);
-                    // a const one is not.
-                    arguments: Box::from([model::Argument::Const(model::Const::Literal {
-                        ty: "usize".into(),
-                        value: "1".into(),
+                    // A `'static` lifetime argument is admitted (D558 tier 0),
+                    // and so is a const one's value; an unevaluated const is
+                    // not.
+                    arguments: Box::from([model::Argument::Const(model::Const::Unevaluated {
+                        definition: id.clone(),
+                        arguments: Box::default(),
                     })]),
                 },
                 Kind::UnsupportedGenericArgument,

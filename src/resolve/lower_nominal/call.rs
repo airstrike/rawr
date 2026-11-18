@@ -340,17 +340,28 @@ impl<'a> Parser<'a> {
         }
         let mut depth = 1usize;
         let mut arguments = 0;
+        // Inside a const argument's braces (`Buf::<{ 0 + 1 }>`), `<`
+        // and `>` compare and shift.
+        let mut braces = 0usize;
         while depth > 0 {
             let closing = match ahead.next() {
+                Some((Token::LeftBrace, _)) => {
+                    braces += 1;
+                    0
+                }
+                Some((Token::RightBrace, _)) if braces > 0 => {
+                    braces -= 1;
+                    0
+                }
+                Some((Token::EOF, _)) | None => return Ok(None),
+                Some(_) if braces > 0 => 0,
+                Some((Token::SemiColon, _)) => return Ok(None),
                 Some((Token::LessThan, _)) => {
                     depth += 1;
                     0
                 }
                 Some((Token::GreaterThan, _)) => 1,
                 Some((Token::RightShift, _)) => 2,
-                Some((Token::EOF | Token::SemiColon | Token::LeftBrace, _)) | None => {
-                    return Ok(None)
-                }
                 Some(_) => 0,
             };
             let Some(rest) = depth.checked_sub(closing) else {

@@ -47,6 +47,7 @@ pub(super) fn impl_surface_type(
             u32::try_from(generics.iter().position(|generic| generic == name)?).ok()?,
         ),
         Ty::Unit => Type::Unit,
+        Ty::Const(value) => Type::Constant(value.as_str().into()),
         // `&dyn Trait` of a crate's trait is the object's shared pointer,
         // as a script impl's `fn highlighter(&self) -> &dyn Highlighter<
         // Code>` gives one (D872, #1981).
@@ -459,6 +460,8 @@ pub(super) fn imported_surface_type(
         // view's widget gives: rustc infers it where the bridge calls the
         // item (D594).
         Ty::Infer(_) => Type::Inferred,
+        // `3` of `Buf<3>`: a const argument is its value.
+        Ty::Const(value) => Type::Constant(value.as_str().into()),
         // `!`, as a future that never completes gives its output: no value
         // of it is ever made, so the bridge names it as an output `!` is.
         Ty::Never => Type::Never,
@@ -1286,6 +1289,7 @@ pub(super) fn instance_surface_type(
             }
         }
         Ty::Infer(_) => Type::Inferred,
+        Ty::Const(value) => Type::Constant(value.as_str().into()),
         // `!`, as `imported_surface_type` has it.
         Ty::Never => Type::Never,
         Ty::Script(definition, arguments) => Type::Script {
@@ -1342,6 +1346,7 @@ pub(super) fn holds_value(ty: &rawr_import::classify::representability::convert:
         | Type::Unit
         | Type::Never
         | Type::Builtin(_)
+        | Type::Constant(_)
         | Type::FunctionItem { .. }
         | Type::Parameter(_) => false,
     }
@@ -1375,6 +1380,7 @@ pub(super) fn holds_crate_value(
         | Type::Unit
         | Type::Never
         | Type::Builtin(_)
+        | Type::Constant(_)
         | Type::FunctionItem { .. }
         | Type::Parameter(_) => false,
     }
@@ -1407,6 +1413,7 @@ pub(super) fn is_erased(ty: &rawr_import::classify::representability::convert::T
         Type::Unit
         | Type::Never
         | Type::Builtin(_)
+        | Type::Constant(_)
         | Type::FunctionItem { .. }
         | Type::Parameter(_) => false,
     }

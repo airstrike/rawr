@@ -622,7 +622,7 @@ impl<'a> Parser<'a> {
             generic = true;
             while !matches!(self.peek(), Token::GreaterThan | Token::RightShift) {
                 if !self.skip_lifetime() {
-                    arguments.push(self.parse_local_type()?);
+                    arguments.push(self.parse_local_argument()?);
                 }
                 if matches!(self.peek(), Token::Comma) {
                     self.next();
@@ -1413,7 +1413,7 @@ impl<'a> Parser<'a> {
             self.next();
             while !matches!(self.peek(), Token::GreaterThan | Token::RightShift) {
                 if !self.skip_lifetime() {
-                    arguments.push(self.parse_local_type()?);
+                    arguments.push(self.parse_local_argument()?);
                 }
                 if matches!(self.peek(), Token::Comma) {
                     self.next();
@@ -1455,15 +1455,88 @@ impl<'a> Parser<'a> {
         Ok(instantiate(&Ty::from_resolved(target), &substitution))
     }
 
+    /// A generic argument: a type, or a const argument's value as
+    /// `Ty::Const` (`4`, `-1`, `'a'`, `{ 0 + 1 + 1 }`, a `const`'s name),
+    /// which rustc evaluates while it compiles. `N` and `{ N }` of a const
+    /// parameter are the parameter, as a type parameter is.
+    pub(super) fn parse_local_argument(&mut self) -> Result<Ty, Error> {
+        let start = self.position();
+        let mut tokens = Vec::new();
+        match self.peek() {
+            Token::LeftBrace => {
+                self.next();
+                let mut depth = 1usize;
+                loop {
+                    let (token, _) = self.next();
+                    match token {
+                        Token::LeftBrace => depth += 1,
+                        Token::RightBrace => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        Token::EOF => return Err(self.unsupported("an unclosed const argument")),
+                        _ => {}
+                    }
+                    tokens.push(token);
+                }
+            }
+            Token::IntegerConstant(_) | Token::CharConstant(_) | Token::True | Token::False => {
+                tokens.push(self.next().0);
+            }
+            Token::Minus | Token::UnaryMinus => {
+                self.next();
+                tokens.push(Token::UnaryMinus);
+                tokens.push(self.next().0);
+            }
+            Token::Identifier(name) if self.names_constant(name.as_str()) => {
+                tokens.push(self.next().0);
+            }
+            _ => return self.parse_local_type(),
+        }
+        let pieces = crate::item::constant::pieces(&tokens);
+        if let Some([crate::item::constant::Piece::Name(name)]) = pieces.as_deref()
+            && self.constants.contains_key(name)
+        {
+            return Ok(Ty::Param(name.clone()));
+        }
+        let value = pieces.and_then(|pieces| {
+            crate::item::constant::evaluate(&pieces, &mut |name| self.constant_value(name, 0))
+        });
+        let Some(value) = value else {
+            return Err(Error::UnsupportedNominalSyntax {
+                construct: "a const generic argument other than a constant expression of \
+                            literals and `const` items"
+                    .into(),
+                source: span(start, self.position()),
+            });
+        };
+        Ok(Ty::Const(value.text().into()))
+    }
+
+    /// Whether `name`, read where a generic argument starts, is a `const`
+    /// of the program, which no type or local of the name shadows.
+    fn names_constant(&self, name: &str) -> bool {
+        !self.generics.contains_key(name)
+            && !self.bindings.contains_key(name)
+            && self.models.get(name).is_none()
+            && self.models.import(name).is_none()
+            && self
+                .models
+                .function(name)
+                .is_some_and(|function| function.definition.body.constant)
+    }
+
     /// The types of a turbofish after its `::<`, through its `>`.
     pub(super) fn parse_turbofish_types(&mut self) -> Result<Vec<Ty>, Error> {
-        let mut types = vec![self.parse_local_type()?];
+        let mut types = vec![self.parse_local_argument()?];
         while matches!(self.peek(), Token::Comma) {
             self.next();
             if matches!(self.peek(), Token::GreaterThan | Token::RightShift) {
                 break;
             }
-            types.push(self.parse_local_type()?);
+            types.push(self.parse_local_argument()?);
         }
         self.expect_close_angle("'>' after turbofish type arguments")?;
         Ok(types)

@@ -612,6 +612,7 @@ fn nominal_types(ty: &convert::Type, found: &mut Vec<convert::Type>) {
         | convert::Type::Never
         | convert::Type::Builtin(_)
         | convert::Type::Parameter(_)
+        | convert::Type::Constant(_)
         | convert::Type::Inferred => {}
     }
 }

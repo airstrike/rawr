@@ -784,6 +784,12 @@ pub(super) enum Ty {
     /// the type is known, else opaque with only the associated type's bounds
     /// (Rust's projection); any value at runtime.
     Projection(Box<Ty>, ImmutableString, ImmutableString),
+    /// A const generic argument's value as a type writes it: `4` of
+    /// `Buf<4>`, `true`, `'a'`. It stands where a type argument does, so a
+    /// generic item's arguments, their inference and their substitution
+    /// hold it as they hold a type; two are the same argument when their
+    /// values are.
+    Const(ImmutableString),
     Infer(usize),
     Unknown,
 }
@@ -906,6 +912,7 @@ impl Ty {
             | Self::Script(..)
             | Self::Dyn(..)
             | Self::Param(_)
+            | Self::Const(_)
             | Self::Infer(_)
             | Self::Unknown => {}
         }
@@ -1006,6 +1013,9 @@ impl Ty {
             type_ref::Type::Path(path) => match &path.target {
                 type_ref::Target::Builtin => match path.name.as_str() {
                     crate::item::type_ref::NEVER_TYPE => Self::Never,
+                    name if let Some(value) = crate::item::type_ref::const_value(name) => {
+                        Self::Const(value.text().into())
+                    }
                     "bool" => Self::Bool,
                     "char" => Self::Char,
                     "String" => Self::String,
@@ -1225,7 +1235,7 @@ impl Ty {
                     .join(", ")
             )
             .into(),
-            Self::Param(name) => name.clone(),
+            Self::Param(name) | Self::Const(name) => name.clone(),
             Self::Projection(base, _, name) => format!("{}::{name}", base.name(models)).into(),
             // rustc writes a type it has yet to infer as `_`. A value of any
             // type has no other name in Rust.
@@ -1317,6 +1327,7 @@ impl Ty {
             Self::Param(_)
             | Self::Projection(..)
             | Self::Dyn(..)
+            | Self::Const(_)
             | Self::Infer(_)
             | Self::Unknown => Some(TypeId::of::<Dynamic>()),
         }
@@ -1491,6 +1502,7 @@ impl Ty {
             | Self::Cell(..)
             | Self::Thread(..)
             | Self::Dyn(..)
+            | Self::Const(_)
             | Self::Infer(_)
             | Self::Unknown => crate::host::usage::Policy::Ordinary,
         }

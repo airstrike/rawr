@@ -78,6 +78,9 @@ pub(crate) enum Type {
         arguments: Box<[Type]>,
         owner: host::facade::Dependency,
     },
+    /// A const generic argument's value among a type's arguments, as `3`
+    /// of `Buf<3>`. No value is of this type.
+    Constant(ImmutableString),
 }
 
 /// One exact local runtime witness with an optional private semantic marker.
@@ -248,7 +251,7 @@ impl Type {
                 arguments: each(arguments)?,
                 owner: owner.clone(),
             },
-            Self::Unit | Self::Builtin { .. } | Self::Object(_) => self.clone(),
+            Self::Unit | Self::Builtin { .. } | Self::Object(_) | Self::Constant(_) => self.clone(),
         })
     }
 
@@ -312,7 +315,7 @@ impl Type {
                 arguments: each(own),
                 owner: owner.clone(),
             },
-            Self::Unit | Self::Object(_) | Self::Script { .. } => self.clone(),
+            Self::Unit | Self::Object(_) | Self::Script { .. } | Self::Constant(_) => self.clone(),
         }
     }
 
@@ -428,7 +431,7 @@ impl Type {
 
     pub(crate) fn runtime(&self) -> TypeId {
         match self {
-            Self::Unit => TypeId::of::<()>(),
+            Self::Unit | Self::Constant(_) => TypeId::of::<()>(),
             Self::Object(_) => TypeId::of::<Dynamic>(),
             Self::Array { .. } | Self::Tuple(_) => TypeId::of::<crate::Array>(),
             Self::Option(_) => TypeId::of::<crate::option::Value>(),
@@ -570,6 +573,7 @@ impl Type {
             | Self::Tuple(_)
             | Self::Callable { .. }
             | Self::Builtin { .. }
+            | Self::Constant(_)
             | Self::Object(_) => &[],
         }
     }
@@ -599,6 +603,7 @@ impl Type {
             | Self::Callable { .. }
             | Self::Builtin { .. }
             | Self::Object(_)
+            | Self::Constant(_)
             | Self::Counted { .. }
             | Self::Joined { .. }
             | Self::Script { .. } => None,
@@ -652,6 +657,11 @@ impl Type {
             // or one native code gave, which the adapter takes at its exact
             // type.
             Self::Object(name) if crate::resolve::type_ref::is_native_trait(name) => Ok(()),
+            // No value is of a const argument's type.
+            Self::Constant(_) => Err(Error::Representation {
+                expected: self.to_string().into(),
+                actual: value.type_name().into(),
+            }),
             Self::Object(_) => {
                 if value.read_lock::<crate::types::nominal::Struct>().is_some()
                     || value.read_lock::<crate::types::nominal::Enum>().is_some()
@@ -844,7 +854,11 @@ impl Type {
                     member.collect_dependencies(dependencies);
                 }
             }
-            Self::Unit | Self::Builtin { .. } | Self::Object(_) | Self::Script { .. } => {}
+            Self::Unit
+            | Self::Builtin { .. }
+            | Self::Object(_)
+            | Self::Script { .. }
+            | Self::Constant(_) => {}
         }
     }
 
@@ -1054,6 +1068,10 @@ impl crate::digest::Write for Type {
                 writer.tag(0x210e);
                 writer.text(name);
             }
+            Self::Constant(value) => {
+                writer.tag(0x2161);
+                writer.text(value);
+            }
             Self::Array { element, length } => {
                 writer.tag(0x210a);
                 element.write(writer)?;
@@ -1163,7 +1181,7 @@ impl fmt::Display for Type {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Unit => formatter.write_str("()"),
-            Self::Object(name) => formatter.write_str(name),
+            Self::Object(name) | Self::Constant(name) => formatter.write_str(name),
             Self::Array {
                 element,
                 length: Some(length),
