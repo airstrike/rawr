@@ -1,6 +1,6 @@
 {
   "repo": "airstrike/rawr",
-  "updated": "2026-11-17",
+  "updated": "2026-11-18",
   "version": "0.4.2",
   "examples": {
     "running": 56,
@@ -9,7 +9,13 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
+      "entries": [
+        {"text":"The browser's ratatui to-do list draws on every animation frame through ratzilla's `draw_web`, so an edit to `draw` shows at once, with its to-dos kept.","issues":[1457]},
+        {"text":"A method of a generic impl that names its type's parameters its own way, as ratzilla's `impl<T> WebRenderer for Terminal<T>` names `Terminal<B>`'s `B`, takes the receiver's type arguments, so `terminal.draw_web(..)` builds.","issues":[2228]}
+      ]
+    },
     "releases": [
       {
         "version": "0.4.2",
@@ -4206,7 +4212,7 @@
     {"issue":1454,"title":"A universe depending on a crate with a build-dependency panics: unit package absent from…","state":"closed","category":"Importer","release":"0.3.172"},
     {"issue":1455,"title":"The browser universe exports only prepare/run, so a good edit can't reload in place; every edit…","state":"closed","category":"Importer","release":"0.3.215"},
     {"issue":1456,"title":"`[T]::binary_search` isn't supported in marked code","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
-    {"issue":1457,"title":"A crate method whose closure takes `&mut` of a type with a lifetime (ratzilla's `draw_web`…","state":"open","category":"No glue (D593)"},
+    {"issue":1457,"title":"A crate method whose closure takes `&mut` of a type with a lifetime (ratzilla's `draw_web`…","state":"closed","category":"No glue (D593)"},
     {"issue":1458,"title":"A capturing closure inside an `if`/`match` value passed to native code reads its captures where…","state":"open","category":"No glue (D593)"},
     {"issue":1459,"title":"The playground deploy fails: universe_bg.wasm (52.6 MB) exceeds Cloudflare's asset size limit…","state":"closed","category":"Platforms","release":"0.3.172"},
     {"issue":1460,"title":"The ?play image with #1395's runner fails a docs snippet: missing runtime binding for…","state":"closed","category":"Platforms","release":"0.3.172"},
@@ -4975,7 +4981,11 @@
     {"issue":2224,"title":"Publishing a crate's classification entry rewrites the whole file whenever any record is fresh","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":2225,"title":"`&req.comparators[0]` on a crate struct's field is taken as a partial move: a later method call is a false E0382","state":"open","category":"Borrow checker (D572)"},
     {"issue":2226,"title":"A relative RAWR_HOME (`../home`) doubles the project path in the store's Cargo output path","state":"open","category":"Shared dependency cache (D607)"},
-    {"issue":2227,"title":"Two rawr-import classify lib tests fail on main","state":"open","category":"Health"}
+    {"issue":2227,"title":"Two rawr-import classify lib tests fail on main","state":"open","category":"Health"},
+    {"issue":2228,"title":"A method of a generic impl that names its type's parameters its own way, as ratzilla's…","state":"open","category":"No glue (D593)"},
+    {"issue":2229,"title":"A closure local that shadows a capture (`let c = c.borrow(); c.method()`) panics with \"Function not found\"","state":"open","category":"Divergences from rustc"},
+    {"issue":2230,"title":"A panic in a call the page makes into a running program aborts the instance with no message in its frame","state":"open","category":"Platforms"},
+    {"issue":2231,"title":"Two crate traits with a same-named method on one type make the generated call ambiguous (E0034)","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -5852,7 +5862,7 @@
             {"number":877,"title":"?play universe: a snippet that passes two different script functions to one call shape doesn't compile","state":"open"},
             {"number":1192,"title":"An update that calls retain on a field gives the slot a non-unit value","state":"open"},
             {"number":1434,"title":"A native value keeping a script closure under a non-generic type doesn't lend the arena when its…","state":"open"},
-            {"number":1457,"title":"A crate method whose closure takes `&mut` of a type with a lifetime (ratzilla's `draw_web`…","state":"open"},
+            {"number":1457,"title":"A crate method whose closure takes `&mut` of a type with a lifetime (ratzilla's `draw_web`…","state":"closed"},
             {"number":1458,"title":"A capturing closure inside an `if`/`match` value passed to native code reads its captures where…","state":"open"},
             {"number":1465,"title":"A marked fn on another thread can't keep a native value past its call, and trait-object calls…","state":"open"},
             {"number":1483,"title":"A script fn a crate calls at once inside a lifetime-carrying receiver's call …","state":"open"},
@@ -5981,7 +5991,9 @@
             {"number":1571,"title":"tracing_subscriber::fmt() can't be called from marked code: its default type parameters include a function pointer","state":"open"},
             {"number":1579,"title":"A const-generic block in a type, as tracing's field arrays, is refused in marked code","state":"open"},
             {"number":1580,"title":"`&T` as a crate function's type argument is refused in marked code","state":"open"},
-            {"number":2093,"title":"A trait associated function through a dependency type alias is not found: sha2 Sha256::digest fails E0599","state":"open"}
+            {"number":2093,"title":"A trait associated function through a dependency type alias is not found: sha2 Sha256::digest fails E0599","state":"open"},
+            {"number":2231,"title":"Two crate traits with a same-named method on one type make the generated call ambiguous (E0034)","state":"open"},
+            {"number":2228,"title":"A method of a generic impl that names its type's parameters its own way, as ratzilla's…","state":"open"}
           ]
         },
         {
@@ -7035,7 +7047,8 @@
             {"number":2104,"title":"`Trait::method(generic, ..)?` in a program's generic free function leaves the trait's associated output open (E0282)","state":"open"},
             {"number":2106,"title":"An `impl Trait<Assoc = T>` return bound doesn't fix its hidden type's inference: a literal in it takes i32","state":"open"},
             {"number":2214,"title":"A program's trait impl for an array type (`impl Total for [i32; 3]`) is refused as an inherent impl","state":"open"},
-            {"number":1555,"title":"A program's blanket impl: associated fns without self, two blanket impls sharing a method name, T::Item","state":"open"}
+            {"number":1555,"title":"A program's blanket impl: associated fns without self, two blanket impls sharing a method name, T::Item","state":"open"},
+            {"number":2229,"title":"A closure local that shadows a capture (`let c = c.borrow(); c.method()`) panics with \"Function not found\"","state":"open"}
           ]
         },
         {
@@ -7540,7 +7553,8 @@
             {"number":95,"title":"Bring pane_grid back to the playground through importer-generated bindings, when the playground…","state":"open"},
             {"number":463,"title":"The universe runner covers only its seed program's calls","state":"open"},
             {"number":464,"title":"Universe runs lack operation limits, interleaved output and rendered errors","state":"open"},
-            {"number":879,"title":"Find why the ?play universe runner accepted std::io::Error::other at 0.3.119 but not at 0.3.122","state":"open"}
+            {"number":879,"title":"Find why the ?play universe runner accepted std::io::Error::other at 0.3.119 but not at 0.3.122","state":"open"},
+            {"number":2230,"title":"A panic in a call the page makes into a running program aborts the instance with no message in its frame","state":"open"}
           ]
         },
         {

@@ -5,6 +5,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
+- The browser's ratatui to-do list draws on every animation frame through ratzilla's `draw_web`, so an edit to `draw` shows at once, with its to-dos kept. (#1457)
+- A method of a generic impl that names its type's parameters its own way, as ratzilla's `impl<T> WebRenderer for Terminal<T>` names `Terminal<B>`'s `B`, takes the receiver's type arguments, so `terminal.draw_web(..)` builds. (#2228)
 
 ## 0.4.2 (2026-11-17)
 
