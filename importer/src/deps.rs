@@ -22,12 +22,21 @@ pub(crate) fn directory(build: &Path) -> io::Result<PathBuf> {
 /// Held by every runner build in the project across its Cargo run and any
 /// read of what Cargo wrote, so no other Rawr build changes the shared files
 /// in between. It lives in `<target>/rawr`, which `cargo clean` removes with
-/// the rest. The nightly build has its own ([`nightly_lock`]).
-pub(crate) fn lock(rawr: &Path) -> io::Result<File> {
+/// the rest. A wait for it says so, naming the build that holds it. The
+/// nightly build has its own ([`nightly_lock`]).
+pub(crate) fn lock(rawr: &Path) -> io::Result<crate::blocking::Exclusive> {
     fs::create_dir_all(rawr)?;
-    let file = File::create(rawr.join("build.lock"))?;
-    file.lock()?;
-    Ok(file)
+    let path = rawr.join("build.lock");
+    crate::blocking::Exclusive::new(open_lock(&path)?, &path, BUILD_DIRECTORY)
+}
+
+/// The lock file at `path`, kept as it is: it names its holder.
+fn open_lock(path: &Path) -> io::Result<File> {
+    fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(path)
 }
 
 /// The pinned nightly's check build directory, which feeds extraction: one
@@ -43,41 +52,30 @@ pub(crate) fn nightly_directory(home: &Path) -> PathBuf {
 
 const NIGHTLY: &str = "nightly";
 
-/// What Cargo prints while another build holds its build directory. A wait
-/// for the nightly directory says the same, and nothing else (D664).
-#[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
-const BLOCKING: &str = "    Blocking waiting for file lock on build directory";
+/// What a wait for a build directory names, as Cargo's "Blocking waiting
+/// for file lock on build directory" does, with the holder's pid (D664).
+const BUILD_DIRECTORY: &str = "build directory";
 
 /// Lock the nightly `directory` for one Cargo run and the copy of what it
 /// wrote, so no other project's build rewrites those files in between and
-/// cleanup skips the directory. A wait says what Cargo says of its own.
-/// Records the directory's last use, which cleanup orders by.
+/// cleanup skips the directory. A wait says what Cargo says of its own,
+/// naming the build that holds it. Records the directory's last use, which
+/// cleanup orders by.
 #[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
-pub(crate) fn nightly_lock(directory: &Path) -> io::Result<File> {
+pub(crate) fn nightly_lock(directory: &Path) -> io::Result<crate::blocking::Exclusive> {
     use std::os::unix::fs::MetadataExt as _;
     let path = directory.join(".lock");
     loop {
         fs::create_dir_all(directory)?;
-        let file = fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(&path)?;
-        match file.try_lock() {
-            Ok(()) => {}
-            Err(fs::TryLockError::WouldBlock) => {
-                crate::progress::say(BLOCKING);
-                file.lock()?;
-            }
-            Err(fs::TryLockError::Error(error)) => return Err(error),
-        }
+        let file = open_lock(&path)?;
+        let opened = file.metadata()?.ino();
+        let held = crate::blocking::Exclusive::new(file, &path, BUILD_DIRECTORY)?;
         // Cleanup renames an unlocked directory aside before removing it; a
         // lock taken on the retired one is retaken on a new directory.
-        let held = file.metadata()?.ino();
-        if fs::metadata(&path).is_ok_and(|on_disk| on_disk.ino() == held) {
+        if fs::metadata(&path).is_ok_and(|on_disk| on_disk.ino() == opened) {
             let _ = File::open(directory)
                 .and_then(|entry| entry.set_modified(std::time::SystemTime::now()));
-            return Ok(file);
+            return Ok(held);
         }
     }
 }

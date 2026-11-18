@@ -46,6 +46,8 @@ mod xid;
 pub mod applicability;
 #[cfg(all(feature = "rustc-driver", not(target_arch = "wasm32")))]
 pub mod bindings;
+#[cfg(not(target_arch = "wasm32"))]
+mod blocking;
 #[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
 #[cfg(not(target_arch = "wasm32"))]
 pub mod cache;
