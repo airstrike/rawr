@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
+      "entries": [
+        {"text":"A library that is also built for a build script or a procedural macro of its closure shares its bindings and its intrinsic facts across projects, so a second project using it runs no nightly build.","issues":[471]}
+      ]
+    },
     "releases": [
       {
         "version": "0.4.9",
@@ -3225,7 +3230,7 @@
     {"issue":416,"title":"rand's random_range over a char range is untyped","state":"retired","category":"No glue (D593)"},
     {"issue":417,"title":"Widget::map, whose output names its callable F, is refused","state":"retired","category":"No glue (D593)"},
     {"issue":418,"title":"Widen tests of slots on generic-impl methods","state":"open","category":"No glue (D593)"},
-    {"issue":419,"title":"Path crates inside the project root keep no tables","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":419,"title":"Path crates inside the project root keep no tables","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":420,"title":"Load only what a demand needs from a large whole table","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.37"},
     {"issue":421,"title":"Binding store unit tests fail under parallel test threads","state":"open","category":"Health"},
     {"issue":422,"title":"`rawr check` accepts a crate method whose output names the closure it takes, as iced's…","state":"closed","category":"No glue (D593)","release":"0.3.30"},
@@ -3277,7 +3282,7 @@
     {"issue":468,"title":"A shared whole table lists only the external crates its publisher's probe reached","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":469,"title":"Trait-member answers are not in whole tables, so new member demand runs the nightly","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":470,"title":"Project-local tables are never replayed without the probe","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.177"},
-    {"issue":471,"title":"Find why a warm check sometimes takes the intrinsic-facts path","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":471,"title":"Find why a warm check sometimes takes the intrinsic-facts path","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":472,"title":"Reading iced's whole dependency set passes the semantic API byte limit","state":"closed","category":"No glue (D593)","release":"0.3.41"},
     {"issue":473,"title":"Delete the reload scheduler's test-only observation binding","state":"open","category":"No glue (D593)"},
     {"issue":474,"title":"Two crates sharing a target dir fail rawr check on a build script's OUT_DIR","state":"closed","category":"Shared dependency cache (D607)"},
@@ -3488,9 +3493,9 @@
     {"issue":679,"title":"std's Path is its own unsized type, not another name for PathBuf","state":"open","category":"Divergences from rustc"},
     {"issue":680,"title":"A crate function taking &mut PathBuf, or giving &io::Error, is bound","state":"closed","category":"Divergences from rustc","release":"0.3.117"},
     {"issue":681,"title":"compiler_ir_layout_keeps_parser_types_compact fails (648 vs 640)","state":"closed","category":"Health"},
-    {"issue":682,"title":"A second project with its own native modules still compiles its dependency closure on nightly","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":682,"title":"A second project with its own native modules still compiles its dependency closure on nightly","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":683,"title":"A module function taking a dependency's type checks","state":"open","category":"Divergences from rustc"},
-    {"issue":684,"title":"A cold check doesn't warn that the program's own crate bindings stay in the project","state":"open","category":"Health"},
+    {"issue":684,"title":"A cold check doesn't warn that the program's own crate bindings stay in the project","state":"closed","category":"Health"},
     {"issue":685,"title":"A program module's function whose signature names another crate's type has a binding","state":"closed","category":"No glue (D593)","release":"0.3.92"},
     {"issue":686,"title":"Write through a `&mut` from `Option::as_mut()` bound in a pattern","state":"closed","category":"Divergences from rustc","release":"0.3.91"},
     {"issue":687,"title":"A method returning `&[T]` borrowed from its receiver","state":"closed","category":"No glue (D593)","release":"0.3.93"},
@@ -5047,7 +5052,8 @@
     {"issue":2239,"title":"Store, pins, session, runtime and deps locks are released only when every copy of the file closes","state":"open","category":"Health"},
     {"issue":2240,"title":"iced::application with a u32 state and () message panics the runner generator","state":"open","category":"No glue (D593)"},
     {"issue":2241,"title":"A program's own `#[derive(thiserror::Error)]` is refused as an impl of an unknown trait path","state":"open","category":"No glue (D593)"},
-    {"issue":2242,"title":"A later demand round writes each item it takes from an earlier classification into the stored…","state":"closed","category":"Shared dependency cache (D607)","release":"0.4.8"}
+    {"issue":2242,"title":"A later demand round writes each item it takes from an earlier classification into the stored…","state":"closed","category":"Shared dependency cache (D607)","release":"0.4.8"},
+    {"issue":2243,"title":"`Itertools::sorted` on `RepeatN<String>` is E0599 under rawr check, which cargo accepts","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -5291,14 +5297,14 @@
           "name": "A new project runs no nightly",
           "start": 48,
           "size": 3,
-          "state": "next",
-          "note": "A first check reads what the machine's tables hold. Left: path crates inside the project (#419), members no demanded name reached (#469), the program's own unmarked modules (#682).",
+          "state": "now",
+          "note": "A check the shared tables answer runs no nightly: workspace members (#419), libraries also built for a host script (#471), a second project's native modules (#682). Left: guessed member names still probe (#469).",
           "issues": [
-            {"number":419,"title":"Path crates inside the project root keep no tables","state":"open"},
+            {"number":419,"title":"Path crates inside the project root keep no tables","state":"closed"},
             {"number":469,"title":"Trait-member answers are not in whole tables, so new member demand runs the nightly","state":"open"},
-            {"number":471,"title":"Find why a warm check sometimes takes the intrinsic-facts path","state":"open"},
-            {"number":682,"title":"A second project with its own native modules still compiles its dependency closure on nightly","state":"open"},
-            {"number":684,"title":"A cold check doesn't warn that the program's own crate bindings stay in the project","state":"open"}
+            {"number":471,"title":"Find why a warm check sometimes takes the intrinsic-facts path","state":"closed"},
+            {"number":682,"title":"A second project with its own native modules still compiles its dependency closure on nightly","state":"closed"},
+            {"number":684,"title":"A cold check doesn't warn that the program's own crate bindings stay in the project","state":"closed"}
           ],
           "milestone": "0.4"
         },
@@ -6062,7 +6068,8 @@
             {"number":2093,"title":"A trait associated function through a dependency type alias is not found: sha2 Sha256::digest fails E0599","state":"open"},
             {"number":2231,"title":"Two crate traits with a same-named method on one type make the generated call ambiguous (E0034)","state":"open"},
             {"number":2228,"title":"A method of a generic impl that names its type's parameters its own way, as ratzilla's…","state":"closed"},
-            {"number":2238,"title":"A chrono `Datelike` method (`date.year()`) is not found on `NaiveDate`","state":"open"}
+            {"number":2238,"title":"A chrono `Datelike` method (`date.year()`) is not found on `NaiveDate`","state":"open"},
+            {"number":2243,"title":"`Itertools::sorted` on `RepeatN<String>` is E0599 under rawr check, which cargo accepts","state":"open"}
           ]
         },
         {

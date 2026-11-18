@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
+- A library that is also built for a build script or a procedural macro of its closure shares its bindings and its intrinsic facts across projects, so a second project using it runs no nightly build. (#471)
 
 ## 0.4.9 (2026-11-18)
 

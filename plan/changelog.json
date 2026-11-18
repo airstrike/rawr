@@ -4,7 +4,9 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
-    "entries": []
+    "entries": [
+      {"text":"A library that is also built for a build script or a procedural macro of its closure shares its bindings and its intrinsic facts across projects, so a second project using it runs no nightly build.","issues":[471]}
+    ]
   },
   "releases": [
     {
