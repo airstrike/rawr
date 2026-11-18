@@ -12,7 +12,7 @@ pub mod wire;
 pub use crate::types::Rendered;
 #[cfg(any(feature = "sync", feature = "rust-import"))]
 pub(crate) use panic::located;
-pub use panic::{hooked, locate_panics_with, panic, panic_message, panicked, BACKTRACE_NOTE};
+pub use panic::{hooked, locate_panics_with, note, panic, panic_message, panicked, BACKTRACE_NOTE};
 pub use render::{render, render_with, show_paths_from, Color};
 pub use report::{
     Builder, Category, Error, ExternalLabel, ExternalPosition, Label, LabelKind, Report, Severity,

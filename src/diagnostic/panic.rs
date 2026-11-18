@@ -24,11 +24,18 @@ static NOTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new
 /// it is the first panic of the process to print it.
 #[must_use]
 pub fn hooked(report: &Report, thread: &str) -> String {
-    let panicked = panicked(report, thread);
+    format!("{}{}", panicked(report, thread), note())
+}
+
+/// What Rust's panic hook prints after a panic's message: the note on
+/// backtraces and its newline when this is the first panic of the process
+/// to print it, else nothing.
+#[must_use]
+pub fn note() -> String {
     if NOTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-        panicked
+        String::new()
     } else {
-        format!("{panicked}{BACKTRACE_NOTE}\n")
+        format!("{BACKTRACE_NOTE}\n")
     }
 }
 

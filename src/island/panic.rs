@@ -35,11 +35,7 @@ impl Caught {
             (Some(0), _) | (_, None) => return reply,
             (_, Some(report)) => report,
         };
-        let thread = std::thread::current();
-        eprint!(
-            "{}",
-            diagnostic::hooked(&report, thread.name().unwrap_or("<unnamed>"))
-        );
+        crate::package::test::panic::print(|thread| diagnostic::hooked(&report, thread));
         let message = diagnostic::panic_message(&report);
         let mut unwind = Vec::with_capacity(1 + message.len());
         unwind.push(UNWIND);
