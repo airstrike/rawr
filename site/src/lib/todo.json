@@ -3282,7 +3282,7 @@
     {"issue":466,"title":"A warm `rawr check` of a new iced program no longer reruns Cargo's resolution on each demand…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.37"},
     {"issue":467,"title":"Generated bindings read iced's whole dependency set: crates sharing a name (rustc-hash 1 and 2)…","state":"closed","category":"No glue (D593)","release":"0.3.37"},
     {"issue":468,"title":"A shared whole table lists only the external crates its publisher's probe reached","state":"closed","category":"Shared dependency cache (D607)"},
-    {"issue":469,"title":"Trait-member answers are not in whole tables, so new member demand runs the nightly","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":469,"title":"Trait-member answers are not in whole tables, so new member demand runs the nightly","state":"retired","category":"Shared dependency cache (D607)"},
     {"issue":470,"title":"Project-local tables are never replayed without the probe","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.177"},
     {"issue":471,"title":"Find why a warm check sometimes takes the intrinsic-facts path","state":"closed","category":"Shared dependency cache (D607)","release":"0.4.10"},
     {"issue":472,"title":"Reading iced's whole dependency set passes the semantic API byte limit","state":"closed","category":"No glue (D593)","release":"0.3.41"},
@@ -5299,11 +5299,11 @@
           "name": "A new project runs no nightly",
           "start": 48,
           "size": 3,
-          "state": "now",
-          "note": "A check the shared tables answer runs no nightly: workspace members (#419), libraries also built for a host script (#471), a second project's native modules (#682). Left: guessed member names still probe (#469).",
+          "state": "done",
+          "note": "A check the shared tables answer runs no nightly: workspace members (#419), libraries also built for a host script (#471), a second project's native modules (#682). Guessed member names probe once per machine (D1041).",
           "issues": [
             {"number":419,"title":"Path crates inside the project root keep no tables","state":"closed"},
-            {"number":469,"title":"Trait-member answers are not in whole tables, so new member demand runs the nightly","state":"open"},
+            {"number":469,"title":"Trait-member answers are not in whole tables, so new member demand runs the nightly","state":"retired"},
             {"number":471,"title":"Find why a warm check sometimes takes the intrinsic-facts path","state":"closed"},
             {"number":682,"title":"A second project with its own native modules still compiles its dependency closure on nightly","state":"closed"},
             {"number":684,"title":"A cold check doesn't warn that the program's own crate bindings stay in the project","state":"closed"}
