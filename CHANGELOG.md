@@ -5,6 +5,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
+- Remembered Cargo outputs aren't saved when a manifest, config or target directory Cargo read changed after Cargo started, so the next run asks Cargo again instead of pairing old metadata with the edited manifest. (#2246)
+- A build script without rerun-if inputs is proved by the files Cargo lists for its package (Git's tracked and unignored files, else a walk without hidden names, with `include` and `exclude`), so ignored files written at run time no longer re-resolve it. (#1209)
 
 ## 0.4.14 (2026-11-18)
 
