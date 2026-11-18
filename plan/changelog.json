@@ -4,11 +4,16 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
-    "entries": [
-      {"text":"Cached profile and checked entries written in an older format are evicted, never read, and a profile entry that doesn't decode under its own key stops the warm launch as a rawr bug, as the full path already did.","issues":[2245]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.4.14",
+      "date": "2026-11-18",
+      "entries": [
+        {"text":"Cached profile and checked entries written in an older format are evicted, never read, and a profile entry that doesn't decode under its own key stops the warm launch as a rawr bug, as the full path already did.","issues":[2245]}
+      ]
+    },
     {
       "version": "0.4.13",
       "date": "2026-11-18",
