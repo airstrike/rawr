@@ -128,7 +128,7 @@ pub fn project(rawr: &Path, kept: Kept) -> PathBuf {
 /// stale digests file and retires, in the background, what no installed
 /// rawr reaches.
 fn current(directory: &Path, base: Base) -> PathBuf {
-    static OPENED: Mutex<Vec<(PathBuf, Option<File>)>> = Mutex::new(Vec::new());
+    static OPENED: Mutex<Vec<(PathBuf, Option<home::Held>)>> = Mutex::new(Vec::new());
     let root = root(directory, crate::extract::protocol::SCHEMA);
     let mut opened = OPENED
         .lock()
@@ -158,7 +158,7 @@ fn root(directory: &Path, protocol: u32) -> PathBuf {
 /// lease, and its entries are misses for this run. One retired between
 /// this open and the lock took the lock file away, and the second attempt
 /// makes the format anew.
-fn lease(root: &Path) -> Option<File> {
+fn lease(root: &Path) -> Option<home::Held> {
     let path = root.join(LOCK);
     for _ in 0..2 {
         fs::create_dir_all(root).ok()?;
@@ -168,7 +168,7 @@ fn lease(root: &Path) -> Option<File> {
             .write(true)
             .open(&path)
             .ok()?;
-        lock.try_lock_shared().ok()?;
+        let lock = home::Held::shared(lock)?;
         // Held now, the lease is seen by any cleanup that would rename the
         // format after this point.
         if !path.exists() {
@@ -249,15 +249,13 @@ fn legacy(directory: &Path, names: &[&str]) {
 
 /// Every entry guard of the store at `directory`, held, or `None` when the
 /// store is not there or a reader or writer holds one. Never waits.
-fn vacant(directory: &Path) -> Option<Vec<File>> {
+fn vacant(directory: &Path) -> Option<Vec<home::Held>> {
     let mut guards = Vec::new();
     for entry in fs::read_dir(directory).ok()?.flatten() {
         if !entry.file_name().to_string_lossy().starts_with(LOCK) {
             continue;
         }
-        let guard = File::open(entry.path()).ok()?;
-        guard.try_lock().ok()?;
-        guards.push(guard);
+        guards.push(home::Held::exclusive(File::open(entry.path()).ok()?).ok()?);
     }
     Some(guards)
 }

@@ -342,6 +342,25 @@ impl Entry {
         &self.scripts
     }
 
+    /// An entry of no facts, captured where the nightly's build scripts
+    /// gave `scripts`.
+    #[cfg(test)]
+    pub(crate) fn fixture(key: [u8; 32], scripts: super::store::Scripts) -> Self {
+        Self {
+            schema: ENTRY_SCHEMA,
+            key,
+            crate_name: "fixture".into(),
+            exports: Box::default(),
+            facts: Facts {
+                definitions: Box::default(),
+                implementations: Box::default(),
+                partitions: Box::default(),
+            },
+            scripts,
+            fingerprint: OnceLock::new(),
+        }
+    }
+
     /// Whether `project`'s build gave each of `packages` the build-script
     /// outputs the nightly gave when this entry was captured.
     #[must_use]
