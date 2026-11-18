@@ -910,8 +910,8 @@ fn a_second_project_classifies_and_generates_nothing_of_a_crate_the_home_keeps()
         ["first", "second"].map(|name| crate::support::fresh(format!("classified-{name}")));
     for root in &projects {
         copy(Path::new(FIXTURE), root);
-        // Its check names `Version` and `VersionReq`; the trait methods it
-        // calls on them are demanded by a later round.
+        // The program names two of the crate's types, and the trait methods
+        // it calls on them are demanded by a later round.
         fs::write(
             root.join("src/main.rs"),
             "// rawr\nuse semver::{Version, VersionReq};\n\nfn main() {\n    let req = VersionReq::parse(\">=1.2.3, <2\").unwrap();\n    let version: Version = \"1.4.0\".parse().unwrap();\n    let text = version.to_string();\n    let newer = Version::new(1, 5, 0) > version;\n    println!(\"{text} {newer} {}\", req.matches(&version));\n}\n",
