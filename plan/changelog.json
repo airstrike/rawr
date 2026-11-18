@@ -4,11 +4,16 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
-    "entries": [
-      {"text":"`rawr test` catches a test that panics in a dependency's code, as `cargo test` does: the panic is printed on a thread named after the test with its output, that test fails alone, the others run on, and the failures list, result line and exit status are libtest's. With `--nocapture`, each test is named as libtest names it for the number of test threads.","issues":[2254]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.4.18",
+      "date": "2026-11-18",
+      "entries": [
+        {"text":"`rawr test` catches a test that panics in a dependency's code, as `cargo test` does: the panic is printed on a thread named after the test with its output, that test fails alone, the others run on, and the failures list, result line and exit status are libtest's. With `--nocapture`, each test is named as libtest names it for the number of test threads.","issues":[2254]}
+      ]
+    },
     {
       "version": "0.4.17",
       "date": "2026-11-18",
