@@ -5,8 +5,18 @@
 //! crate type it declares, a parameterless alias of one that is the only
 //! name of what it names, a type parameter, or a primitive. A header that
 //! names any other type is left out.
+//!
+//! Each header is written alone, a trait's, an impl's or the opaque types'
+//! of one function, and notes what it reads ([`record`]): the graph's
+//! entries, the definitions it looks up by semantic identity, and which
+//! types its facade declares. So a header kept from an earlier plan is the
+//! one a plan whose graph and facade read the same would write (#2222).
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+
+use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
 
 use crate::api::{self, model};
 use crate::classify::representability::{convert, signature};
@@ -66,7 +76,8 @@ pub fn headers<P: api::Phase>(
     opaque: &BTreeMap<[u8; 32], usize>,
     traits: &[(Box<str>, [u8; 32])],
 ) -> (Vec<TraitHeader>, Vec<ImplHeader>) {
-    let headers = Headers::new(graph, declared);
+    let models = Models::new(graph);
+    let headers = models.facade(declared, opaque);
     let mut trait_headers = traits
         .iter()
         .filter_map(|(path, identity)| headers.trait_header(path, identity))
@@ -78,52 +89,240 @@ pub fn headers<P: api::Phase>(
         .filter_map(|implementation| headers.impl_header(implementation))
         .collect::<Vec<_>>();
     for definition in graph.definitions() {
-        impls.extend(headers.opaque_headers(definition, opaque));
+        impls.extend(headers.opaque_headers(definition));
     }
     (trait_headers, impls)
 }
 
-struct Headers<'g, P: api::Phase> {
+/// One read of a header's work beyond the graph's accessors: what the
+/// graph's definitions give a semantic identity, and what the facade the
+/// header is for declares (#2222).
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub(crate) enum Key {
+    /// A read of the graph through its accessors.
+    Graph(api::reads::Read),
+    /// The definition whose semantic identity this is.
+    Model(#[serde(with = "crate::hex")] [u8; 32]),
+    /// Whether the facade declares the type of this identity.
+    Declared(#[serde(with = "crate::hex")] [u8; 32]),
+    /// How many parameters the facade declares this opaque type with.
+    Opaque(#[serde(with = "crate::hex")] [u8; 32]),
+    /// The facade's parameterless type aliases, each with what it names.
+    Aliases,
+    /// The crate type aliases that are the only name of their type.
+    InstanceAliases,
+}
+
+thread_local! {
+    static NOTED: RefCell<Vec<Key>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Note that the header being written on this thread read `key`.
+fn note(key: impl FnOnce() -> Key) {
+    if api::reads::recording() {
+        NOTED.with_borrow_mut(|noted| noted.push(key()));
+    }
+}
+
+/// Run `work`, one header's of `graph`, and give the keys it read, each
+/// once, in order.
+pub(crate) fn record<T, P: api::Phase>(
+    graph: &api::Graph<P>,
+    work: impl FnOnce() -> T,
+) -> (T, Vec<Key>) {
+    let mut saved = Saved(Some(NOTED.take()));
+    let (done, noted) = api::reads::record(work);
+    let own = NOTED.replace(
+        saved
+            .0
+            .take()
+            .expect("the outer keys stay set aside while the work runs"),
+    );
+    let mut keys = noted
+        .reads(graph)
+        .into_iter()
+        .map(Key::Graph)
+        .chain(own)
+        .collect::<Vec<_>>();
+    keys.sort_unstable();
+    keys.dedup();
+    (done, keys)
+}
+
+/// The keys noted before a [`record`], put back when it ends, by return or
+/// unwind.
+struct Saved(Option<Vec<Key>>);
+
+impl Drop for Saved {
+    fn drop(&mut self) {
+        if let Some(keys) = self.0.take() {
+            NOTED.replace(keys);
+        }
+    }
+}
+
+/// What every facade's headers read of a graph by identity, read once for
+/// a plan: each definition by its semantic identity, and each
+/// parameterless type alias.
+pub(crate) struct Models<'g, P: api::Phase> {
     graph: &'g api::Graph<P>,
+    /// Each definition's index, by its semantic identity.
+    models: BTreeMap<[u8; 32], usize>,
+    /// Each parameterless type alias's target, with the alias's identity.
+    aliases: Vec<(&'g model::Type, [u8; 32])>,
     /// The types only a crate's alias names (`classify::instance_aliases`).
     instances: std::cell::OnceCell<Box<[usize]>>,
-    models: BTreeMap<[u8; 32], &'g model::Definition>,
-    declared: &'g BTreeSet<[u8; 32]>,
+}
+
+impl<'g, P: api::Phase> Models<'g, P> {
+    /// What `graph` gives every facade's headers. Its reads are no
+    /// header's own: each header notes the identities it looks up.
+    pub(crate) fn new(graph: &'g api::Graph<P>) -> Self {
+        api::reads::paused(|| {
+            let identities = graph.surface_definitions();
+            let models = identities
+                .iter()
+                .enumerate()
+                .map(|(index, identity)| (*identity.as_bytes(), index))
+                .collect();
+            let aliases = graph
+                .definitions()
+                .zip(identities)
+                .filter_map(|(definition, identity)| match definition.kind() {
+                    model::Kind::TypeAlias { ty, generics } if generics.parameters().len() == 0 => {
+                        Some((ty, *identity.as_bytes()))
+                    }
+                    _ => None,
+                })
+                .collect();
+            Self {
+                graph,
+                models,
+                aliases,
+                instances: std::cell::OnceCell::new(),
+            }
+        })
+    }
+
+    /// The headers of the facade that declares `declared`, whose opaque
+    /// types `opaque` counts the parameters of.
+    pub(crate) fn facade<'f>(
+        &'f self,
+        declared: &'f BTreeSet<[u8; 32]>,
+        opaque: &'f BTreeMap<[u8; 32], usize>,
+    ) -> Headers<'g, 'f, P> {
+        Headers {
+            models: self,
+            declared,
+            opaque,
+            aliases: self
+                .aliases
+                .iter()
+                .filter(|(_, alias)| declared.contains(alias))
+                .copied()
+                .collect(),
+            aliases_digest: std::cell::OnceCell::new(),
+        }
+    }
+
+    /// The definition whose semantic identity is `identity`, read by no
+    /// header.
+    pub(crate) fn id(&self, identity: &[u8; 32]) -> Option<&'g api::identity::Definition> {
+        let index = *self.models.get(identity)?;
+        api::reads::paused(|| self.graph.definition_at(index)).map(model::Definition::id)
+    }
+
+    fn instances(&self) -> &[usize] {
+        note(|| Key::InstanceAliases);
+        self.instances
+            .get_or_init(|| api::reads::paused(|| crate::classify::instance_aliases(self.graph)))
+    }
+}
+
+/// The headers of one facade: the traits it names, and the impls whose
+/// types it can write. `opaque` gives the number of parameters the facade
+/// declares each opaque type with: an opaque type's impl by its bounds is
+/// kept only where it writes the type at as many.
+pub(crate) struct Headers<'g, 'f, P: api::Phase> {
+    models: &'f Models<'g, P>,
+    declared: &'f BTreeSet<[u8; 32]>,
+    opaque: &'f BTreeMap<[u8; 32], usize>,
     /// The declared parameterless aliases' targets, each with the alias's
     /// identity: the alias is that type's name (D604.5).
     aliases: Vec<(&'g model::Type, [u8; 32])>,
+    /// The digest of [`Key::Aliases`], once asked.
+    aliases_digest: std::cell::OnceCell<api::reads::Digest>,
 }
 
 fn identity(id: &api::identity::Definition) -> [u8; 32] {
     *crate::surface::identity::Definition::of(id).as_bytes()
 }
 
-impl<'g, P: api::Phase> Headers<'g, P> {
-    fn new(graph: &'g api::Graph<P>, declared: &'g BTreeSet<[u8; 32]>) -> Self {
-        let models = graph
-            .definitions()
-            .map(|model| (identity(model.id()), model))
-            .collect();
-        let aliases = graph
-            .definitions()
-            .filter_map(|definition| match definition.kind() {
-                model::Kind::TypeAlias { ty, generics } if generics.parameters().len() == 0 => {
-                    let alias = identity(definition.id());
-                    declared.contains(&alias).then_some((ty, alias))
+/// A digest that stands for a yes, beside [`api::reads::ABSENT`] for a no.
+const PRESENT: api::reads::Digest = [1; 32];
+
+impl<'g, P: api::Phase> Headers<'g, '_, P> {
+    /// What this facade and its graph give `key`.
+    pub(crate) fn digest(&self, key: &Key) -> api::reads::Digest {
+        let graph = self.models.graph;
+        api::reads::paused(|| match key {
+            Key::Graph(read) => graph.read_digest(read),
+            Key::Model(identity) => self
+                .models
+                .models
+                .get(identity)
+                .map_or(api::reads::ABSENT, |index| graph.definition_digest(*index)),
+            Key::Declared(identity) => {
+                if self.declared.contains(identity) {
+                    PRESENT
+                } else {
+                    api::reads::ABSENT
                 }
-                _ => None,
-            })
-            .collect();
-        Self {
-            graph,
-            instances: std::cell::OnceCell::new(),
-            models,
-            declared,
-            aliases,
-        }
+            }
+            Key::Opaque(identity) => match self.opaque.get(identity) {
+                Some(count) => Sha256::digest((*count as u64).to_le_bytes()).into(),
+                None => api::reads::ABSENT,
+            },
+            // Each alias's definition holds what it names.
+            Key::Aliases => *self.aliases_digest.get_or_init(|| {
+                let mut digest = Sha256::new();
+                for (_, alias) in &self.aliases {
+                    if let Some(index) = self.models.models.get(alias) {
+                        digest.update(graph.definition_digest(*index));
+                    }
+                }
+                digest.finalize().into()
+            }),
+            Key::InstanceAliases => {
+                let mut digest = Sha256::new();
+                for index in self.models.instances() {
+                    digest.update(graph.definition_digest(*index));
+                }
+                digest.finalize().into()
+            }
+        })
+    }
+
+    /// The graph this facade's headers read.
+    pub(crate) const fn graph(&self) -> &'g api::Graph<P> {
+        self.models.graph
+    }
+
+    /// The definition whose semantic identity is `identity`.
+    fn model(&self, identity: &[u8; 32]) -> Option<&'g model::Definition> {
+        note(|| Key::Model(*identity));
+        let index = *self.models.models.get(identity)?;
+        api::reads::paused(|| self.models.graph.definition_at(index))
+    }
+
+    /// Whether the facade declares the type whose identity is `identity`.
+    fn declares(&self, identity: &[u8; 32]) -> bool {
+        note(|| Key::Declared(*identity));
+        self.declared.contains(identity)
     }
 
     fn ty(&self, ty: &model::Type) -> Option<convert::Type> {
+        note(|| Key::Aliases);
         if let Some((_, alias)) = self.aliases.iter().find(|(target, _)| *target == ty) {
             return Some(convert::Type::Nominal {
                 definition: crate::surface::identity::Definition::authenticated(*alias),
@@ -141,12 +340,12 @@ impl<'g, P: api::Phase> Headers<'g, P> {
                 // A std type Rawr holds as its own, as iced's `impl<T>
                 // Widget for Option<T>` names `Option<T>`: the type the
                 // classifier converts it to, which every facade can write.
-                if let Some(model) = self.models.get(&definition).copied()
+                if let Some(model) = self.model(&definition)
                     && let Some(converted) = self.std_type(model, arguments)
                 {
                     return converted;
                 }
-                if !self.declared.contains(&definition) {
+                if !self.declares(&definition) {
                     return None;
                 }
                 // The facade declares a type's type and const parameters, as
@@ -219,8 +418,7 @@ impl<'g, P: api::Phase> Headers<'g, P> {
         trait_id: &api::identity::Definition,
         arguments: &[model::Argument],
     ) -> Option<Box<[convert::Type]>> {
-        let model::Kind::Trait { generics, .. } = self.models.get(&identity(trait_id))?.kind()
-        else {
+        let model::Kind::Trait { generics, .. } = self.model(&identity(trait_id))?.kind() else {
             return None;
         };
         // The parameters other than `Self` line up with the arguments'
@@ -273,8 +471,8 @@ impl<'g, P: api::Phase> Headers<'g, P> {
             .collect()
     }
 
-    fn trait_header(&self, path: &str, trait_identity: &[u8; 32]) -> Option<TraitHeader> {
-        let definition = self.models.get(trait_identity)?;
+    pub fn trait_header(&self, path: &str, trait_identity: &[u8; 32]) -> Option<TraitHeader> {
+        let definition = self.model(trait_identity)?;
         let model::Kind::Trait { generics, .. } = definition.kind() else {
             return None;
         };
@@ -304,8 +502,8 @@ impl<'g, P: api::Phase> Headers<'g, P> {
         }
         // The call at the trait's own parameters. An input may be a borrow,
         // as `Fn(Input, &Theme)`'s is.
-        let call = crate::classify::blanket_call(self.graph, definition.id(), &own).and_then(
-            |(inputs, output)| {
+        let call = crate::classify::blanket_call(self.models.graph, definition.id(), &own)
+            .and_then(|(inputs, output)| {
                 let input = |ty: &model::Type| match ty {
                     model::Type::Reference { mutability, ty, .. } => {
                         Some(convert::Type::Borrowed {
@@ -317,8 +515,7 @@ impl<'g, P: api::Phase> Headers<'g, P> {
                 };
                 let inputs = inputs.iter().map(input).collect::<Option<Box<[_]>>>()?;
                 Some((inputs, self.ty(&output)?))
-            },
-        );
+            });
         Some(TraitHeader {
             path: path.into(),
             identity: *trait_identity,
@@ -336,11 +533,7 @@ impl<'g, P: api::Phase> Headers<'g, P> {
     /// as any other impl. The self type is the opaque type at every type it
     /// captures. One the facade declares with other parameters (a capture
     /// left out, an associated type's value) has no such header.
-    fn opaque_headers(
-        &self,
-        definition: &model::Definition,
-        declared: &BTreeMap<[u8; 32], usize>,
-    ) -> Vec<ImplHeader> {
+    pub fn opaque_headers(&self, definition: &model::Definition) -> Vec<ImplHeader> {
         let model::Kind::Function {
             signature,
             generics,
@@ -368,7 +561,7 @@ impl<'g, P: api::Phase> Headers<'g, P> {
                 .iter()
                 .filter_map(|capture| match capture {
                     model::Argument::Type(model::Type::SelfType(owner))
-                        if self.models.get(&identity(owner)).is_some_and(|model| {
+                        if self.model(&identity(owner)).is_some_and(|model| {
                             matches!(model.kind(), model::Kind::Trait { .. })
                         }) =>
                     {
@@ -381,7 +574,8 @@ impl<'g, P: api::Phase> Headers<'g, P> {
             else {
                 continue;
             };
-            if declared.get(&opaque) != Some(&arguments.len()) {
+            note(|| Key::Opaque(opaque));
+            if self.opaque.get(&opaque) != Some(&arguments.len()) {
                 continue;
             }
             // The header's parameters are those the captures name, which
@@ -504,8 +698,7 @@ impl<'g, P: api::Phase> Headers<'g, P> {
                 generics,
                 ..
             }) = self
-                .models
-                .get(&identity(&trait_id))
+                .model(&identity(&trait_id))
                 .map(|definition| definition.kind())
             {
                 // The trait's parameters after `Self` take the bound's
@@ -530,7 +723,7 @@ impl<'g, P: api::Phase> Headers<'g, P> {
         seen
     }
 
-    fn impl_header(&self, implementation: &model::Implementation) -> Option<ImplHeader> {
+    pub fn impl_header(&self, implementation: &model::Implementation) -> Option<ImplHeader> {
         if implementation.polarity() != model::Polarity::Positive {
             return None;
         }
@@ -608,20 +801,16 @@ impl<'g, P: api::Phase> Headers<'g, P> {
         else {
             return None;
         };
-        let name = self
-            .models
-            .get(&identity(associated))?
-            .display_path()
-            .last()?;
+        let name = self.model(&identity(associated))?.display_path().last()?;
         let candidates = crate::classify::projection_candidates(
-            self.graph,
+            self.models.graph,
             trait_id,
-            self.instances
-                .get_or_init(|| crate::classify::instance_aliases(self.graph)),
+            self.models.instances(),
         );
         let mut cases = Vec::new();
         for candidate in &candidates {
-            let Some(at) = crate::classify::associated_at(self.graph, trait_id, name, candidate, 0)
+            let Some(at) =
+                crate::classify::associated_at(self.models.graph, trait_id, name, candidate, 0)
             else {
                 continue;
             };

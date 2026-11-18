@@ -635,15 +635,13 @@ impl Implementation {
         Self(framed.finish())
     }
 
-    pub(crate) fn of(
-        implementation: &model::Implementation,
-    ) -> Result<Self, crate::classify::Error> {
+    pub(crate) fn of(implementation: &model::Implementation) -> Self {
         let mut framed = Framed::new(IMPLEMENTATION_DOMAIN);
         framed.definition(implementation.id());
         framed.bytes(implementation.key().as_bytes());
         framed.trait_ref(implementation.trait_ref());
         framed.ty(implementation.self_type());
-        Ok(Self(framed.finish()))
+        Self(framed.finish())
     }
 
     /// Borrow the semantic digest bytes.
@@ -824,7 +822,7 @@ impl Identity {
     ) -> Result<Self, crate::classify::Error> {
         let definition = Definition::of(export.target());
         let export = Export::imported(export);
-        let implementation = implementation.map(Implementation::of).transpose()?;
+        let implementation = implementation.map(Implementation::of);
         Ok(Self::seal(
             Some(definition),
             export,

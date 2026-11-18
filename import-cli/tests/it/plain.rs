@@ -899,10 +899,12 @@ fn another_rawr_build_checks_and_its_runner_names_no_cargo_view() {
 
 /// A check whose later demand round adds paths classifies and generates
 /// only the items that round changed, taking the rest from the round
-/// before (#1618). A second project that checks the same program on the
-/// machine classifies and generates none of the crate's items: each one's
-/// classification and facade contribution are kept in rawr's home beside
-/// the crate's table (#271).
+/// before (#1618), and writes the headers and sites of only what changed
+/// (#2221). A second project that checks the same program on the machine
+/// classifies and generates none of the crate's items, and writes none of
+/// its headers and sites: each one's classification, facade contribution,
+/// header units and sites are kept in rawr's home beside the crate's table
+/// (#271, #2222).
 #[test]
 fn a_second_project_classifies_and_generates_nothing_of_a_crate_the_home_keeps() {
     let home = crate::support::fresh("classified-home");
@@ -918,8 +920,8 @@ fn a_second_project_classifies_and_generates_nothing_of_a_crate_the_home_keeps()
         )
         .unwrap();
     }
-    // Each round's definitions read, classified and paths generated, as
-    // `RAWR_VERBOSE` prints them.
+    // Each round's definitions read, classified, paths generated, header
+    // units and paths' sites written, as `RAWR_VERBOSE` prints them.
     let rounds = |root: &Path| {
         let checked = crate::support::rawr_import()
             .args(["check"])
@@ -952,17 +954,16 @@ fn a_second_project_classifies_and_generates_nothing_of_a_crate_the_home_keeps()
             .lines()
             .filter_map(|line| line.strip_prefix("rawr-import: round "))
             .map(|round| {
-                (
-                    count(round, "read"),
-                    count(round, "classified"),
-                    count(round, "generated"),
-                )
+                ["read", "classified", "generated", "headers", "sites"]
+                    .map(|stage| count(round, stage))
             })
             .collect::<Vec<_>>()
     };
     let [first, second] = &projects;
     let first = rounds(first);
-    let [(read, classified, _), .., (later_read, later_classified, _)] = first[..] else {
+    let [[read, classified, _, headers, sites], .., [later_read, later_classified, _, later_headers, later_sites]] =
+        first[..]
+    else {
         panic!("the check takes a later demand round: {first:?}");
     };
     assert_eq!(classified, read, "a fresh home classifies every item once");
@@ -970,13 +971,17 @@ fn a_second_project_classifies_and_generates_nothing_of_a_crate_the_home_keeps()
         later_read > read && later_classified < read,
         "a later round classifies only the items its demand changed: {first:?}"
     );
+    assert!(
+        headers > 0 && sites > 0 && later_headers < headers && later_sites < sites,
+        "a later round writes the headers and sites only of what its demand changed: {first:?}"
+    );
     let second = rounds(second);
     assert!(!second.is_empty());
-    for (_, classified, generated) in &second {
+    for [_, classified, generated, headers, sites] in &second {
         assert_eq!(
-            (*classified, *generated),
-            (0, 0),
-            "the home keeps every item: {second:?}"
+            [*classified, *generated, *headers, *sites],
+            [0; 4],
+            "the home keeps every item, header and site: {second:?}"
         );
     }
 }

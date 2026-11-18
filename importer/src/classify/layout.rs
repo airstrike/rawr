@@ -119,9 +119,9 @@ impl Implementations {
         identities
             .try_reserve_exact(graph.implementations().len())
             .map_err(|_| Error::Allocation)?;
-        for (index, implementation) in graph.implementations().enumerate() {
+        for (index, implementation) in graph.surface_implementations().iter().enumerate() {
             let index = u32::try_from(index).map_err(|_| Error::IndexOverflow)?;
-            identities.push((identity::Implementation::of(implementation)?, index));
+            identities.push((*implementation, index));
         }
         identities.sort_unstable();
         Ok(Self(identities.into_boxed_slice()))

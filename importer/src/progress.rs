@@ -628,7 +628,9 @@ pub fn work() -> Work {
 /// recorded inputs again, and how many took what this process kept (#1759).
 /// And how many API graphs it built from the store, and how many it framed
 /// from a kept graph of the same content under another build, and how many
-/// stored classifications it decoded (#1786).
+/// stored classifications it decoded (#1786). And how many units of the
+/// facades' headers (D604) and how many paths' sites its plans wrote,
+/// rather than taking an earlier plan's (#2222).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Round {
     harnessed: usize,
@@ -646,6 +648,8 @@ pub struct Round {
     rebuilt: usize,
     framed: usize,
     replayed: usize,
+    headers: usize,
+    sites: usize,
 }
 
 /// What one round's replays of a stored Cargo view did ([`View`]).
@@ -663,7 +667,8 @@ impl std::fmt::Display for Round {
             "harnesses {}, compiled {}, copied {}, sealed {}, probes {}, read {}, \
              canonicalized {}, classified {}, generated {}, parsed {}, lowered {}, \
              Cargo views parsed {}, compared {}, kept {}, \
-             API graphs rebuilt {}, framed {}, classifications replayed {}",
+             API graphs rebuilt {}, framed {}, classifications replayed {}, \
+             headers {}, sites {}",
             self.harnessed,
             self.compiled,
             self.copied,
@@ -681,6 +686,8 @@ impl std::fmt::Display for Round {
             self.rebuilt,
             self.framed,
             self.replayed,
+            self.headers,
+            self.sites,
         )
     }
 }
@@ -817,6 +824,16 @@ pub(crate) fn classified(definitions: usize) {
 /// Count the classified paths bindings were generated for in this round.
 pub(crate) fn generated(outcomes: usize) {
     count_round(|round| &mut round.generated, outcomes);
+}
+
+/// Count the units of the facades' headers a plan wrote in this round.
+pub(crate) fn headed(units: usize) {
+    count_round(|round| &mut round.headers, units);
+}
+
+/// Count the paths whose sites a plan wrote in this round.
+pub(crate) fn sited(paths: usize) {
+    count_round(|round| &mut round.sites, paths);
 }
 
 /// Count one resolution harness bound in this round.

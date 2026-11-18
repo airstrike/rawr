@@ -8,8 +8,10 @@ use crate::classify::representability::{self, Representability};
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod cached;
 pub(crate) mod contribution;
+mod headers;
 pub mod image;
 mod reexport;
+mod sites;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use cached::Cached;
@@ -44,7 +46,7 @@ pub struct Plan {
 }
 
 /// One compiler-authenticated source alias retained only for facade binding.
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct AliasSite {
     root: Box<str>,
     path: Box<str>,
@@ -61,7 +63,7 @@ pub struct AliasSite {
 }
 
 /// One compiler-authenticated alias site used only to prove a projection source.
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct ProjectionSourceSite {
     root: Box<str>,
     path: Box<str>,
@@ -83,7 +85,7 @@ pub struct ProjectionSourceSite {
 /// This record proves an exact public Rust shape without granting a Rawr-visible
 /// declaration or operation. Framework profiles may assign closed roles to
 /// selected sites after checking their own pinned source law.
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct AbiSite {
     root: Box<str>,
     path: Box<str>,
@@ -104,7 +106,7 @@ pub struct AbiSite {
 /// including the unit, full signature type trees, predicates, span, and
 /// origin. The ordered formal ledger remains explicit so a framework profile
 /// can prove one total specialization without making the item Rawr-nameable.
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct OperationSite {
     root: Box<str>,
     path: Box<str>,
@@ -227,7 +229,7 @@ pub struct Facade {
 /// identity, and its type parameters other than `Self` with their
 /// defaults, as `Widget<Message, Theme = crate::Theme, Renderer =
 /// crate::Renderer>` has.
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct TraitHeader {
     path: Box<str>,
     #[serde(with = "crate::hex")]
@@ -285,7 +287,7 @@ impl TraitHeader {
 /// and its type arguments other than `Self`, the self type, the bounds of
 /// its where-clauses that name a trait, and those that fix an associated
 /// type.
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct ImplHeader {
     parameters: Box<[Box<str>]>,
     #[serde(with = "crate::hex")]
@@ -300,7 +302,7 @@ pub struct ImplHeader {
 /// A where-clause bound of an [`ImplHeader`] that fixes an associated type:
 /// `<ty as Trait>::Name` is `value`, and is each case's second type where
 /// `ty` is its first (`headers::ImplProjection`).
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct ImplProjection {
     ty: Type,
     value: Type,
@@ -337,7 +339,7 @@ impl ImplProjection {
 }
 
 /// A where-clause bound of an [`ImplHeader`]: `ty: Trait<arguments>`.
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct ImplBound {
     ty: Type,
     #[serde(with = "crate::hex")]
@@ -1652,7 +1654,12 @@ impl Plan {
             facade.type_aliases = aliases.into_boxed_slice();
         }
         // The trait headers and impl headers each facade's types reach,
-        // which fix a type a trait's defaults leave open (D604).
+        // which fix a type a trait's defaults leave open (D604), each
+        // unit taken from an earlier plan where it reads the same.
+        let mut heads = headers::Writer::new(
+            graph,
+            earlier.map(|earlier| earlier.iter().map(|earlier| earlier.headers()).collect()),
+        );
         for facade in &mut facades {
             let declared = facade
                 .types
@@ -1672,115 +1679,21 @@ impl Plan {
                 .filter(|(root, _, _, _)| *root == facade.root)
                 .map(|(_, path, identity, _)| (path.clone(), *identity))
                 .collect::<Vec<_>>();
-            let (trait_headers, impls) =
-                super::headers::headers(graph, &declared, &opaque, &traits);
-            let mut converted = Vec::new();
-            for header in trait_headers {
-                let Ok(defaults) = header
-                    .defaults
-                    .iter()
-                    .map(|default| {
-                        default
-                            .as_ref()
-                            .map(|default| ty(default, &header.parameters))
-                            .transpose()
-                    })
-                    .collect::<Result<Box<[_]>, _>>()
-                else {
-                    continue;
-                };
-                // `Type::Callable` takes its inputs as one: unit, the one
-                // input, or their tuple.
-                let call = header.call.as_ref().and_then(|(inputs, output)| {
-                    let input = match &inputs[..] {
-                        [] => Type::Unit,
-                        [single] => ty(single, &header.parameters).ok()?,
-                        many => Type::Tuple(
-                            many.iter()
-                                .map(|input| ty(input, &header.parameters))
-                                .collect::<Result<Box<[_]>, _>>()
-                                .ok()?,
-                        ),
-                    };
-                    Some(Type::Callable {
-                        input: Box::new(input),
-                        output: Box::new(ty(output, &header.parameters).ok()?),
-                    })
-                });
-                let outputs = named_traits
+            let (mut trait_headers, impls) = heads.facade(&declared, &opaque, &traits)?;
+            for header in &mut trait_headers {
+                header.outputs = named_traits
                     .iter()
                     .find(|(root, _, identity, _)| {
                         *root == facade.root && *identity == header.identity
                     })
                     .and_then(|(_, _, _, outputs)| outputs.clone());
-                converted.push(TraitHeader {
-                    path: header.path,
-                    identity: header.identity,
-                    parameters: parameters(&header.parameters)?,
-                    defaults,
-                    call,
-                    outputs,
-                });
             }
-            facade.trait_headers = converted.into_boxed_slice();
-            let mut converted = Vec::new();
-            for header in impls {
-                let types = |types: &[representability::convert::Type]| {
-                    types
-                        .iter()
-                        .map(|source| ty(source, &header.parameters))
-                        .collect::<Result<Box<[_]>, _>>()
-                        .ok()
-                };
-                let (Some(arguments), Ok(self_type)) = (
-                    types(&header.arguments),
-                    ty(&header.self_type, &header.parameters),
-                ) else {
-                    continue;
-                };
-                let bounds = header
-                    .bounds
-                    .iter()
-                    .filter_map(|bound| {
-                        Some(ImplBound {
-                            ty: ty(&bound.ty, &header.parameters).ok()?,
-                            trait_identity: bound.trait_identity,
-                            arguments: types(&bound.arguments)?,
-                        })
-                    })
-                    .collect();
-                let projections = header
-                    .projections
-                    .iter()
-                    .filter_map(|projection| {
-                        Some(ImplProjection {
-                            ty: ty(&projection.ty, &header.parameters).ok()?,
-                            value: ty(&projection.value, &header.parameters).ok()?,
-                            cases: projection
-                                .cases
-                                .iter()
-                                .map(|(this, value)| {
-                                    Some((
-                                        ty(this, &header.parameters).ok()?,
-                                        ty(value, &header.parameters).ok()?,
-                                    ))
-                                })
-                                .collect::<Option<_>>()?,
-                            associated: None,
-                        })
-                    })
-                    .collect();
-                converted.push(ImplHeader {
-                    parameters: parameters(&header.parameters)?,
-                    trait_identity: header.trait_identity,
-                    arguments,
-                    self_type,
-                    bounds,
-                    projections,
-                });
-            }
-            facade.impls = converted.into_boxed_slice();
+            facade.trait_headers = trait_headers.into_boxed_slice();
+            facade.impls = impls.into_boxed_slice();
         }
+        let (headed, kept_headers) = heads.finish();
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::progress::headed(headed);
         for (root, path, identity, variant) in variants {
             let Ok(index) = facades.binary_search_by(|facade| facade.root.cmp(&root)) else {
                 continue;
@@ -1800,75 +1713,40 @@ impl Plan {
             }
             facade.variants = named.into_boxed_slice();
         }
-        let mut aliases = Vec::new();
-        let mut sources = Vec::<ProjectionSourceSite>::new();
-        let mut abis = Vec::<AbiSite>::new();
-        let mut operations = Vec::<OperationSite>::new();
-        for export in graph.exports() {
-            let crate::api::ledger::Path::Imported(export) = export else {
-                continue;
-            };
-            if let Some(site) = abi_site(graph, export)? {
-                match abis.binary_search_by_key(&site.selector, |candidate| candidate.selector) {
-                    // A selector digests the whole site: an equal one is
-                    // the same site, which two exports of one item give.
-                    Ok(_) => {}
-                    Err(position) => {
-                        abis.try_reserve_exact(1)
-                            .map_err(|_| super::Error::Allocation)?;
-                        abis.insert(position, site);
-                    }
-                }
-            }
-            if let Some(site) = operation_site(graph, export)? {
-                match operations
-                    .binary_search_by_key(&site.selector, |candidate| candidate.selector)
-                {
-                    Ok(_) => {}
-                    Err(position) => {
-                        operations
-                            .try_reserve_exact(1)
-                            .map_err(|_| super::Error::Allocation)?;
-                        operations.insert(position, site);
-                    }
-                }
-            }
-            let Some(alias) = alias_site(graph, export)? else {
-                continue;
-            };
-            match aliases
-                .binary_search_by_key(&alias.selector, |candidate: &AliasSite| candidate.selector)
-            {
-                Ok(_) => {}
-                Err(position) => {
-                    aliases
-                        .try_reserve_exact(1)
-                        .map_err(|_| super::Error::Allocation)?;
-                    aliases.insert(position, alias);
-                }
-            }
-            if let Some(source) = projection_source_site(graph, export)? {
-                match sources.binary_search_by_key(&source.selector, |candidate| candidate.selector)
-                {
-                    Ok(_) => {}
-                    Err(position) => {
-                        sources
-                            .try_reserve_exact(1)
-                            .map_err(|_| super::Error::Allocation)?;
-                        sources.insert(position, source);
-                    }
-                }
-            }
-        }
+        // Each path's sites, taken from an earlier plan where the path
+        // reads the same.
+        let sites = sites::sites(
+            graph,
+            earlier
+                .map(|earlier| {
+                    earlier
+                        .iter()
+                        .map(|earlier| earlier.sites())
+                        .collect::<Vec<_>>()
+                })
+                .as_deref(),
+        )?;
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::progress::sited(sites.fresh);
         let bytes = serde_json::to_vec(&Self {
             schema: SCHEMA,
-            aliases: aliases.into_boxed_slice(),
-            sources: sources.into_boxed_slice(),
-            abis: abis.into_boxed_slice(),
-            operations: operations.into_boxed_slice(),
+            aliases: sites.aliases.into_boxed_slice(),
+            sources: sites.sources.into_boxed_slice(),
+            abis: sites.abis.into_boxed_slice(),
+            operations: sites.operations.into_boxed_slice(),
             facades: facades.into_boxed_slice(),
         })
         .map_err(|_| super::Error::Encoding)?;
+        if let Some(generated) = &mut generated {
+            generated.keep_parts(
+                kept_headers.unwrap_or_default(),
+                sites.kept.unwrap_or_default(),
+                contribution::Written {
+                    headers: headed,
+                    sites: sites.fresh,
+                },
+            );
+        }
         Ok((bytes.into_boxed_slice(), generated))
     }
 

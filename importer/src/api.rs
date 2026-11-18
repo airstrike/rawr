@@ -18,6 +18,7 @@ pub(crate) mod layout;
 pub mod ledger;
 pub mod model;
 pub(crate) mod reads;
+pub(crate) mod recorded;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod selected;
 #[cfg(not(target_arch = "wasm32"))]
@@ -138,6 +139,8 @@ struct Memo {
     lookup: std::sync::OnceLock<Lookup>,
     /// Each definition's semantic identity, by its index.
     surface: std::sync::OnceLock<Box<[crate::surface::identity::Definition]>>,
+    /// Each implementation's semantic identity, by its index.
+    implementations: std::sync::OnceLock<Box<[crate::surface::identity::Implementation]>>,
     /// Each entry's digest, for what a recorded read gave (`reads`).
     digests: reads::Digests,
 }
@@ -1678,6 +1681,18 @@ impl<P: Phase> Graph<P> {
     pub(crate) fn surface_definitions(&self) -> &[crate::surface::identity::Definition] {
         reads::ledger(reads::Ledger::Definitions);
         self.surface_identities()
+    }
+
+    /// Each implementation's semantic identity, by its index, digested
+    /// once for the graph and its copies.
+    pub(crate) fn surface_implementations(&self) -> &[crate::surface::identity::Implementation] {
+        reads::ledger(reads::Ledger::Implementations);
+        self.lookup.implementations.get_or_init(|| {
+            self.implementations
+                .iter()
+                .map(crate::surface::identity::Implementation::of)
+                .collect()
+        })
     }
 
     fn surface_identities(&self) -> &[crate::surface::identity::Definition] {
