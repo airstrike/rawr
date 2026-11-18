@@ -7834,7 +7834,7 @@
           "name": "Input and waits agents rely on",
           "start": 56,
           "size": 1,
-          "state": "next",
+          "state": "now",
           "note": "rawr mcp's input reaches the program every time. Left: input stops after about 150 calls (#1453), long text (#1415).",
           "issues": [
             {"number":1415,"title":"`rawr mcp`'s `type` tool drops text past 722 characters without an error; take any length or…","state":"open"},
