@@ -11,8 +11,9 @@
 //! version and sources (which carry the lockfile its dependencies resolve
 //! from), the full `rustc -vV` of the project's compiler, which names its
 //! commit and host target, the runtime's manifest with its features and
-//! profile, the opt-level setting, and the hashing seed rawr's build script
-//! reads. A key that misses compiles a new entry, so a runner never links a
+//! profile, the `[profile.dev]` tables of the Cargo config files the build
+//! reads (the user's Cargo home among them), the opt-level setting, and the
+//! hashing seed rawr's build script reads. A key that misses compiles a new entry, so a runner never links a
 //! copy compiled for another key. An entry holds only copies of the
 //! libraries a runner links: every entry whose key agrees but for rawr's
 //! sources compiles in one shared cargo build directory (`build`), so a new
@@ -837,7 +838,8 @@ fn wrapper_manifest(root: &Path, dependency: &dyn toml_edit::TableLike, level: &
     dependencies.insert("rawr", toml_edit::value(rawr));
     document.insert("dependencies", Item::Table(dependencies));
     // One fixed profile for every project: nothing a project sets reaches
-    // the runtime, so the key needs none of it. Nothing is stripped, so
+    // the runtime. Cargo config files above the build directory still merge
+    // over it, and the key takes their tables. Nothing is stripped, so
     // cargo never runs `rust-objcopy`, which some toolchains ship broken.
     let mut dev = Table::new();
     dev.insert("debug", toml_edit::value(0));

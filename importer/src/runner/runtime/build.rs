@@ -61,6 +61,27 @@ impl Build {
         environment: &crate::cargo::config::Environment,
         host: &[u8; 32],
     ) -> Result<Self, node::Error> {
+        Self::plan_in(&builds()?, root, dependency, toolchain, environment, host)
+    }
+
+    /// [`Build::plan`] with its build directories in `builds`.
+    fn plan_in(
+        builds: &Path,
+        root: &Path,
+        dependency: &dyn toml_edit::TableLike,
+        toolchain: &Toolchain,
+        environment: &crate::cargo::config::Environment,
+        host: &[u8; 32],
+    ) -> Result<Self, node::Error> {
+        // Cargo merges the `[profile.dev]` of the config files it reads for
+        // a build directory, the Cargo home's among them, over the runtime's
+        // manifest. The runtime's environment drops the profile variables,
+        // so those tables are all of the profile the key does not fix.
+        let profile = crate::cargo::config::profile_settings(
+            builds,
+            environment.cargo_home()?.as_deref(),
+            "dev",
+        )?;
         let level = super::opt_level(environment)
             .map_err(|reason| node::Error::Transform(reason.into_boxed_str()))?;
         let lock = fs::read(root.join("Cargo.lock")).map_err(|source| node::Error::Io {
@@ -81,6 +102,7 @@ impl Build {
             toolchain.version.as_bytes(),
             // The manifest with no path: the build directory names its own.
             super::wrapper_manifest(Path::new(""), dependency, &level).as_bytes(),
+            &profile,
         ] {
             key.update((part.len() as u64).to_le_bytes());
             key.update(part);
@@ -95,7 +117,7 @@ impl Build {
             key.update(value.as_bytes());
         }
         let key = super::hex(&key.finalize());
-        let directory = builds()?.join(&key[..16]);
+        let directory = builds.join(&key[..16]);
         let source = if checkout {
             Source::Checkout(root.to_path_buf())
         } else {
@@ -485,6 +507,56 @@ pub(super) fn prune(runtimes: &Path, keep: &[&Path]) {
 mod tests {
     use std::fs;
     use std::path::PathBuf;
+
+    /// The `[profile.dev]` of the user's Cargo config reaches the runtime's
+    /// compile, so a change to it keys another build, while other settings
+    /// and other profiles key the same one.
+    #[test]
+    fn the_base_key_covers_the_cargo_home_s_dev_profile() {
+        let root = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../target/tests"))
+            .join(format!("rawr-runtime-profile-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let home = root.join("cargo-home");
+        let builds = root.join(super::BUILDS);
+        let rawr = root.join("rawr");
+        for directory in [&home, &builds, &rawr] {
+            fs::create_dir_all(directory).unwrap();
+        }
+        fs::write(rawr.join("Cargo.lock"), b"version = 4\n").unwrap();
+        let toolchain = super::Toolchain {
+            version: "rustc 1.0.0\n".into(),
+            rustc: PathBuf::from("rustc"),
+            cargo: PathBuf::from("cargo"),
+        };
+        let environment = crate::cargo::config::Environment::empty()
+            .setting("CARGO_HOME", home.to_str().unwrap())
+            .unwrap();
+        let manifest = "rawr = { path = \"/rawr\" }"
+            .parse::<toml_edit::DocumentMut>()
+            .unwrap();
+        let dependency = manifest["rawr"].as_table_like().unwrap();
+        let key = |config: &str| {
+            fs::write(home.join("config.toml"), config).unwrap();
+            super::Build::plan_in(
+                &builds,
+                &rawr,
+                dependency,
+                &toolchain,
+                &environment,
+                &[1; 32],
+            )
+            .unwrap()
+            .key
+        };
+        let plain = key("");
+        assert_eq!(key("[net]\noffline = true\n"), plain);
+        assert_eq!(key("[profile.release]\ndebug = 2\n"), plain);
+        let debug = key("[profile.dev]\ndebug = 2\n");
+        assert_ne!(debug, plain);
+        assert_ne!(key("[profile.dev.package.\"*\"]\nopt-level = 1\n"), plain);
+        assert_ne!(key("[profile.dev]\ndebug = 1\n"), debug);
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn a_build_directory_goes_once_no_entry_names_it() {

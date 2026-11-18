@@ -495,6 +495,7 @@ impl Request {
             &self.target,
         );
         drop(selected_units);
+        let local_closures = crate::extract::shared::local_closures(bytes.bytes(), &metadata);
         let documents = cargo::Documents::new(metadata_bytes, bytes);
         let mut extraction_plan = crate::extract::plan::Plan::prepare_in(
             layout,
@@ -510,6 +511,7 @@ impl Request {
         ))?
         .share(
             shared,
+            local_closures,
             crate::bindings::directory(cached.context.cargo_home()),
             format::project(cached.context.rawr(), format::Kept::Bindings),
             crate::bindings::staged(cached.context.rawr()),
