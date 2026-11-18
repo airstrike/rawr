@@ -3,7 +3,7 @@
   "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
   "tracked_from": "0.3.12",
   "unreleased": {
-    "notes": [],
+    "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
     "entries": [
       {"text":"Const generics work: a program's `struct S<const N: usize>`, `impl<const N: usize> S<N>` and `fn f<const N: usize>()` read `N` as a value, and a const argument may be a literal, a `{ .. }` block of constants or a `const`'s name. A crate's const-generic type, such as tokio's `Rotator::<3>`, is reached at each value the program names.","issues":[2210],"refs":[1152]}
     ]
