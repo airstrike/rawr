@@ -672,11 +672,12 @@ impl Evidence {
                         })?;
                     for path in output_values {
                         let path = Path::new(path.as_ref());
-                        if split_debuginfo(path) && !path.exists() {
+                        if split_debuginfo(path) && matches!(path.try_exists(), Ok(false)) {
                             // Cargo names a build script's packed debug info
                             // (`.dSYM`) in the target layout even when the
                             // build directory keeps it apart; Rawr never reads
-                            // debug info, so an absent one is no output.
+                            // debug info, so an absent one is no output. One
+                            // that can't be inspected is an error, not absence.
                             continue;
                         }
                         let path = canonical_path("Cargo built output", path)?;
