@@ -629,3 +629,60 @@ fn config_candidates_keep_their_spelling_and_other_inputs_resolve_symlinks() {
             })
     );
 }
+
+/// A package tree observed again lists the files its cold capture listed,
+/// and nothing Git ignores, so an unchanged package is no drift (#1209).
+#[test]
+fn a_package_tree_observed_again_matches_its_cold_listing() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../target/test-scratch")
+        .join(format!("observe-package-tree-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    for (path, contents) in [
+        ("Cargo.toml", "[package]\nname = \"tree\"\n"),
+        (".gitignore", "*.log\n"),
+        ("build.log", "ignored\n"),
+        ("src/lib.rs", "pub fn f() {}\n"),
+        ("src/a-b/c.rs", "\n"),
+        ("src/a/b.rs", "\n"),
+    ] {
+        let path = root.join(path);
+        fs::create_dir_all(path.parent().expect("a fixture path has a parent"))
+            .expect("fixture directory");
+        fs::write(path, contents).expect("fixture file");
+    }
+    let root = fs::canonicalize(root).expect("canonical fixture directory");
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .args(["init", "-q"])
+        .env_remove("GIT_DIR")
+        .status()
+        .expect("git runs");
+    assert!(status.success());
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .args(["add", "Cargo.toml"])
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_INDEX_FILE")
+        .status()
+        .expect("git runs");
+    assert!(status.success());
+    let recipe = || proof::Recipe::Directory {
+        role: proof::Role::DefaultPackageSource,
+        package_id: Some("pkg".into()),
+        path: root.clone(),
+    };
+    let actual = observe(&recipe(), &root).expect("current filesystem data");
+    let expected = reference(recipe());
+    let proof::Entry::Directory { files, .. } = &actual else {
+        panic!("a package tree is a directory entry");
+    };
+    assert_eq!(files.len(), 5, "the ignored log is left out");
+    assert_eq!(
+        serde_json::to_value(actual).expect("actual entry"),
+        serde_json::to_value(expected).expect("cold entry")
+    );
+    fs::remove_dir_all(root).expect("fixture retires");
+}

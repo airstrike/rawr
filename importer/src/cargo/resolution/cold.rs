@@ -307,6 +307,7 @@ impl Request {
             Some((recalled, outputs)) => (Some(recalled), Some(outputs)),
             None => (None, None),
         };
+        let started = super::remembered::Started::now();
         let workspace = self.workspace_before_metadata(limits)?;
         let mut produced = None;
         let (metadata_transport, candidate_lock, internal) = match placement.state {
@@ -464,6 +465,7 @@ impl Request {
                     units: bytes.clone(),
                 },
                 cached.context.rawr(),
+                started,
             );
         }
         let bytes = cargo_allocation.retain_transport(bytes)?;

@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
 use super::fingerprint::Fingerprint;
+use super::listing;
 use super::package;
 use super::stored::view::View;
 use super::walk::{self, Ancestors};
@@ -20,7 +21,7 @@ use crate::{Error, Result};
 
 pub(in crate::input) mod protected;
 
-pub(super) const SCHEMA: u32 = 11;
+pub(super) const SCHEMA: u32 = 12;
 
 /// Canonical freshness evidence consumed when a captured graph is published.
 #[derive(Clone, Serialize)]
@@ -1616,8 +1617,10 @@ pub(super) fn directory_entry(
     limits: &cargo::Limits,
 ) -> Result<Entry> {
     allocation.path(path)?;
-    let tree = role == Role::DefaultPackageSource;
     let root = super::canonical_directory("freshness directory", path)?;
+    if role == Role::DefaultPackageSource {
+        return package_tree(role, package_id, root, allocation);
+    }
     allocation.items(1)?;
     let mut pending = Vec::new();
     allocation.items(1)?;
@@ -1690,19 +1693,6 @@ pub(super) fn directory_entry(
             if followed && metadata.is_dir() && ancestors.encloses(&directory, &child_path) {
                 continue;
             }
-            if tree {
-                let omitted =
-                    walk::package_omits(&child.file_name(), depth, metadata.is_dir(), || {
-                        allocation.items(1)?;
-                        allocation.path(&child_path)?;
-                        Ok::<_, Error>(child_path.join("Cargo.toml").exists())
-                    })?;
-                // Cargo's listing skips what is neither a file nor a
-                // directory, and so does a package's walk.
-                if omitted || !metadata.is_dir() && !metadata.is_file() {
-                    continue;
-                }
-            }
             allocation.items(1)?;
             allocation.bytes(
                 prefix
@@ -1750,6 +1740,80 @@ pub(super) fn directory_entry(
             }
         }
     }
+    directories.sort_unstable();
+    files.sort_unstable();
+    allocation.items(1)?;
+    allocation.bytes(root.as_os_str().len())?;
+    if let Some(package_id) = package_id {
+        allocation.string(package_id)?;
+    }
+    Ok(Entry::Directory {
+        role,
+        package_id: package_id.map(Box::from),
+        path: super::path_text("freshness directory", &root)?.into(),
+        directories: directories.into_boxed_slice(),
+        files: files.into_boxed_slice(),
+    })
+}
+
+/// A package's source tree as Cargo lists it: each listed file with its
+/// length and digest, and the directories holding them.
+fn package_tree(
+    role: Role,
+    package_id: Option<&str>,
+    root: PathBuf,
+    allocation: &mut Allocation,
+) -> Result<Entry> {
+    let listed = listing::files(&root).map_err(|error| match error {
+        listing::Error::Io {
+            operation,
+            path,
+            source,
+        } => Error::Io {
+            operation,
+            path,
+            source,
+        },
+        error @ listing::Error::Manifest { .. } => Error::Input {
+            code: "package-listing-manifest",
+            reason: error.to_string().into_boxed_str(),
+        },
+    })?;
+    let mut directories = std::collections::BTreeSet::new();
+    let mut files = Vec::new();
+    for relative in &listed {
+        allocation.items(1)?;
+        allocation.path(relative)?;
+        for directory in relative.ancestors().skip(1) {
+            if directory.as_os_str().is_empty() || !directories.insert(directory) {
+                break;
+            }
+            allocation.items(1)?;
+        }
+        let path = root.join(relative);
+        let metadata = fs::metadata(&path).map_err(|source| Error::Io {
+            operation: "inspect freshness tree file",
+            path: path.clone(),
+            source,
+        })?;
+        let bytes = usize::try_from(metadata.len()).unwrap_or(usize::MAX);
+        allocation.bytes(bytes)?;
+        let digest = super::freshness_digest("freshness tree file", &path, bytes)?;
+        reserve(&mut files)?;
+        files.push(TreeFile {
+            path: super::path_text("freshness tree entry", relative)?.into(),
+            bytes,
+            digest,
+        });
+    }
+    let mut directories = directories
+        .into_iter()
+        .map(|directory| {
+            Ok(TreeDirectory {
+                path: super::path_text("freshness tree entry", directory)?.into(),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
     directories.sort_unstable();
     files.sort_unstable();
     allocation.items(1)?;
@@ -2685,8 +2749,8 @@ mod tests {
     #[test]
     fn prior_projection_schema_cannot_match_current_proof_freshness() {
         assert_eq!(
-            SCHEMA, 11,
-            "a file named through a symlink advances the input-proof wire shape"
+            SCHEMA, 12,
+            "a package tree listed as Cargo lists it advances the input-proof wire shape"
         );
         let limits = Limits::standard();
         let evaluate_projection = |schema| {

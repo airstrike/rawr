@@ -526,9 +526,9 @@ fn old_schema_unknown_pin_and_unknown_expected_schema_reject() {
 #[test]
 fn an_older_proof_schema_cannot_decode_as_current_evidence() {
     let mut bytes = encode(&data());
-    assert_eq!(proof::SCHEMA, 11);
+    assert_eq!(proof::SCHEMA, 12);
     let offset = proof_offset();
-    bytes[offset..offset + 4].copy_from_slice(&10_u32.to_le_bytes());
+    bytes[offset..offset + 4].copy_from_slice(&11_u32.to_le_bytes());
     assert!(decode(&bytes).is_err());
 }
 
