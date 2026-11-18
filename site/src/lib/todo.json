@@ -5147,7 +5147,7 @@
           "name": "Key and publish",
           "start": 43,
           "size": 3,
-          "state": "next",
+          "state": "now",
           "note": "Projects reuse verified extraction tables (#367). A new rawr build doesn't classify an unchanged API again (#1666, #1686). Left: generated bindings once per machine (#271). Three drift and lock cases remain (#1012, #1025, #1026).",
           "issues": [
             {"number":271,"title":"Generated bindings are built per project, so every project and script pays #255 again for the…","state":"open"},
@@ -5197,7 +5197,7 @@
           "name": "Re-key plan and headers",
           "start": 41,
           "size": 3,
-          "state": "next",
+          "state": "now",
           "note": "Classify per crate and compose per program, so a demand round costs only its new paths (#1618). A new rawr build no longer classifies an unchanged API again (#1686).",
           "issues": [
             {"number":1618,"title":"A demand round reclassifies and regenerates the whole API, when only new demanded paths were added","state":"open"}
