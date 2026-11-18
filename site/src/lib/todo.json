@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
+      "entries": [
+        {"text":"A later demand round writes each item it takes from an earlier classification into the stored classification as it was, and its plan takes each kept contribution without digesting outcomes again. On chrono, encoding and digests fall from 117 ms to 37 ms per round.","issues":[2242],"refs":[2221]}
+      ]
+    },
     "releases": [
       {
         "version": "0.4.7",
@@ -3704,7 +3709,7 @@
     {"issue":911,"title":"rawr accepts a recursive type without indirection (E0072) and an unchecked collect in an uncalled fn (E0277)","state":"closed","category":"Divergences from rustc","release":"0.3.136"},
     {"issue":912,"title":"layout: `canvas(..).width(size)` takes `impl Into<Length> + Copy`, refused as a crate's type argument","state":"closed","category":"Divergences from rustc","release":"0.3.135"},
     {"issue":913,"title":"Run a program's impl of a crate trait at a type holding a crate's opaque type (iced's loupe)","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
-    {"issue":914,"title":"A shared-bindings API is rebuilt whenever Cargo resolves again","state":"open","category":"Health"},
+    {"issue":914,"title":"A shared-bindings API is rebuilt whenever Cargo resolves again","state":"closed","category":"Health"},
     {"issue":915,"title":"A macro's own-crate segment in the remembered demand walks the whole crate a second time","state":"open","category":"Health"},
     {"issue":916,"title":"A held opaque value over a borrowing type names the facade's opaque alias in the runner","state":"closed","category":"Divergences from rustc"},
     {"issue":917,"title":"changelog: a borrowing opaque value's renderer stays `_` in its lent cell's proxy (E0121)","state":"closed","category":"Divergences from rustc"},
@@ -5030,7 +5035,8 @@
     {"issue":2238,"title":"A chrono `Datelike` method (`date.year()`) is not found on `NaiveDate`","state":"open","category":"No glue (D593)"},
     {"issue":2239,"title":"Store, pins, session, runtime and deps locks are released only when every copy of the file closes","state":"open","category":"Health"},
     {"issue":2240,"title":"iced::application with a u32 state and () message panics the runner generator","state":"open","category":"No glue (D593)"},
-    {"issue":2241,"title":"A program's own `#[derive(thiserror::Error)]` is refused as an impl of an unknown trait path","state":"open","category":"No glue (D593)"}
+    {"issue":2241,"title":"A program's own `#[derive(thiserror::Error)]` is refused as an impl of an unknown trait path","state":"open","category":"No glue (D593)"},
+    {"issue":2242,"title":"A later demand round writes each item it takes from an earlier classification into the stored…","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -5336,14 +5342,15 @@
           "start": 41,
           "size": 3,
           "state": "now",
-          "note": "A demand round classifies and generates only what its new paths change (#1618), and a crate's headers and sites are kept per crate (#2222). Left: the whole-API passes (#2221).",
+          "note": "A demand round classifies, encodes and generates only what its new paths change (#1618, #2242), and a crate's headers and sites are kept per crate (#2222). Left: record checks and the support ledger still digest the whole graph each round (#2221).",
           "issues": [
             {"number":1618,"title":"A demand round reclassifies and regenerates the whole API, when only new demanded paths were added","state":"closed"},
-            {"number":914,"title":"A shared-bindings API is rebuilt whenever Cargo resolves again","state":"open"},
+            {"number":914,"title":"A shared-bindings API is rebuilt whenever Cargo resolves again","state":"closed"},
             {"number":2221,"title":"A demand round still runs classification's and the plan's whole-API passes","state":"open"},
             {"number":2222,"title":"D604 headers and the facade plan's sites are computed per program, not kept per crate","state":"closed"},
             {"number":2233,"title":"A shared crate's paths whose outcome names no definition keep their facade contributions in the project","state":"closed"},
-            {"number":2232,"title":"Each demand round digests every impl's identity once, and writes the stored classification in…","state":"closed"}
+            {"number":2232,"title":"Each demand round digests every impl's identity once, and writes the stored classification in…","state":"closed"},
+            {"number":2242,"title":"A later demand round writes each item it takes from an earlier classification into the stored…","state":"open"}
           ],
           "milestone": "0.4"
         }

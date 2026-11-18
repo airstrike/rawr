@@ -4,7 +4,9 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
-    "entries": []
+    "entries": [
+      {"text":"A later demand round writes each item it takes from an earlier classification into the stored classification as it was, and its plan takes each kept contribution without digesting outcomes again. On chrono, encoding and digests fall from 117 ms to 37 ms per round.","issues":[2242],"refs":[2221]}
+    ]
   },
   "releases": [
     {

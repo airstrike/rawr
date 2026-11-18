@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
+- A later demand round writes each item it takes from an earlier classification into the stored classification as it was, and its plan takes each kept contribution without digesting outcomes again. On chrono, encoding and digests fall from 117 ms to 37 ms per round. (#2242; part of #2221)
 
 ## 0.4.7 (2026-11-18)
 
