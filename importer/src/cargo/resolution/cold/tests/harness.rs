@@ -399,6 +399,107 @@ fn fresh_request_uses_one_reserved_sequence_without_clearing_targets() {
     fixture.retire();
 }
 
+/// A workspace manifest above a path dependency that appears while Cargo
+/// reads metadata is drift: the image of the request's own manifests is
+/// taken before Cargo reads them, so the metadata is never paired with the
+/// edited workspace (#656, D684.2).
+#[test]
+fn a_workspace_manifest_edited_while_cargo_reads_metadata_is_drift() {
+    let mut fixture = Fixture::open();
+    let dependency = fixture.root.join("dependencies/member");
+    fs::create_dir_all(dependency.join("src")).expect("dependency source directory creates");
+    fs::write(
+        dependency.join("Cargo.toml"),
+        "[package]\nname = \"member\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .expect("dependency manifest writes");
+    fs::write(dependency.join("src/lib.rs"), b"").expect("dependency source writes");
+    let workspace = fixture.root.join("dependencies/Cargo.toml");
+    fixture.request = Request::builder(
+        &fixture.root.join("project"),
+        &fixture.root.join("project/target/rawr/cache"),
+        &Limits::standard(),
+    )
+    .expect("request builder seals")
+    .environment(fixture.request.config.environment().clone())
+    .cargo_authority(&fixture.root.join("authority/Cargo.toml"))
+    .policy(crate::extract::Policy::manifest().seal())
+    .dependency(config::Dependency::path("member", &dependency).expect("dependency seals"))
+    .build()
+    .expect("the request seals");
+    let request = &mut fixture.request;
+    Fixture::reserve_parts(&fixture.context, &fixture.store, |layout, native| {
+        let cached = cargo::CachedToolchain {
+            context: fixture.context.clone(),
+            attestation: fixture
+                .context
+                .cached_toolchain()
+                .expect("current fixture attestation"),
+        };
+        let (final_bytes, units) = documents(request, layout.final_form());
+        bind_universe(request, &cached);
+        let (provisional_bytes, _) = documents(request, layout.provisional());
+        let edited = workspace.clone();
+        let steps = vec![
+            expected_reply(
+                request,
+                native,
+                layout.provisional(),
+                Command::Metadata(false),
+                true,
+                move |_| {
+                    fs::write(edited, "[workspace]\nmembers = [\"member\"]\n")
+                        .expect("the workspace manifest writes while Cargo reads");
+                    test_launch::Reply::stdout(provisional_bytes)
+                },
+            ),
+            expected_reply(
+                request,
+                native,
+                layout.final_form(),
+                Command::Metadata(false),
+                true,
+                move |_| test_launch::Reply::stdout(final_bytes),
+            ),
+            expected_reply(
+                request,
+                native,
+                layout.final_form(),
+                Command::Units,
+                true,
+                move |_| test_launch::Reply::stdout(units),
+            ),
+        ];
+        let prepared = super::script(layout, steps).run_result(|| {
+            request.prepare_fresh_harness_in(
+                layout,
+                &cached,
+                &Limits::standard(),
+                &Limits::standard(),
+                unit::Allocation::begin(&Limits::standard()),
+            )
+        });
+        let error = match prepared {
+            Ok(Ok(_)) => panic!("metadata read while its workspace changed is drift"),
+            Ok(Err(error)) => error,
+            Err(failure) => panic!("the script ends at the drift: {failure:?}"),
+        };
+        assert!(
+            matches!(
+                error,
+                crate::Error::ResolutionDrift {
+                    field: "Cargo workspace manifest closure changed",
+                    ..
+                }
+            ),
+            "{error}"
+        );
+        Ok(())
+    });
+    fs::remove_file(workspace).expect("the edited workspace manifest retires");
+    fixture.retire();
+}
+
 #[test]
 fn reserved_cohort_preserves_legacy_identity_and_binds_config_contents() {
     let fixture = Fixture::open();

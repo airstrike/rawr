@@ -1248,6 +1248,7 @@ impl Request {
             let target_dir = harness_root.join("target");
 
             let manifest_path = harness_root.join(HARNESS_MANIFEST);
+            let workspace = self.workspace_before_metadata(limits)?;
             let metadata_bytes =
                 cargo_metadata(native, self, &manifest_path, &target_dir, false, limits)?;
             self.revalidate(limits, "initial metadata")?;
@@ -1307,7 +1308,7 @@ impl Request {
                 process::TAIL_BYTES,
             )?);
 
-            let workspace = self.capture_workspace(&metadata, limits)?;
+            let workspace = self.capture_workspace(workspace, &metadata, limits)?;
 
             let initial_bytes = cargo_units(native, self, &manifest_path, &initial_target, limits)?;
             let initial = unit::BuildGraph::parse(
@@ -1389,6 +1390,7 @@ impl Request {
         let manifest_path = harness_root.join(HARNESS_MANIFEST);
         let source_path = harness_root.join("src/lib.rs");
         let lock_path = harness_root.join("Cargo.lock");
+        let workspace = self.workspace_before_metadata(limits)?;
         let (
             metadata,
             selected,
@@ -1593,7 +1595,7 @@ impl Request {
         )?);
         let lock = candidate_lock.digest();
 
-        let workspace = self.capture_workspace(&metadata, limits)?;
+        let workspace = self.capture_workspace(workspace, &metadata, limits)?;
 
         #[cfg(feature = "rustc-driver")]
         let initial_target = harness_root.join(AUTHORITATIVE_TARGET_DIRECTORY);
@@ -1851,14 +1853,21 @@ impl Request {
 }
 
 impl Request {
+    /// The workspace image of this request's own manifests, taken before
+    /// Cargo's metadata reads them.
+    fn workspace_before_metadata(&self, limits: &Limits) -> Result<crate::input::workspace::Image> {
+        let mut account = crate::input::workspace::Account::bounded(limits);
+        crate::input::workspace::before_metadata(&self.inputs, &mut account)
+    }
+
     fn capture_workspace(
         &self,
+        before: crate::input::workspace::Image,
         metadata: &unit::Metadata,
         limits: &Limits,
     ) -> Result<crate::input::workspace::Image> {
         let mut account = crate::input::workspace::Account::bounded(limits);
-        let roots = crate::input::workspace::roots(&self.inputs, metadata, &mut account)?;
-        crate::input::workspace::capture(roots, &mut account)
+        before.extend(&self.inputs, metadata, &mut account)
     }
 
     #[allow(
