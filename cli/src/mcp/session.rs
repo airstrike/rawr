@@ -109,6 +109,9 @@ struct State {
     /// from here.
     given_event: u64,
     given_output: u64,
+    /// The newest `wait`'s number: a wait whose number is older was given
+    /// up by its client, which waits once at a time, and answers nothing.
+    waiter: u64,
 }
 
 /// One started program.
@@ -215,6 +218,7 @@ impl Sessions {
                 next_output: 0,
                 given_event: 0,
                 given_output: 0,
+                waiter: 0,
             }),
             changed: Condvar::new(),
         });
@@ -305,6 +309,35 @@ pub struct Answer {
 }
 
 impl Session {
+    /// A session already in `phase`, its program serving `socket`, with
+    /// no process of its own.
+    #[cfg(test)]
+    pub fn running_at(socket: PathBuf, phase: Phase) -> Self {
+        Self {
+            root: PathBuf::from("/p"),
+            path: PathBuf::from("/p"),
+            arguments: Vec::new(),
+            pid: 0,
+            socket,
+            events: PathBuf::from("/p/events"),
+            state: Mutex::new(State {
+                phase,
+                events: Vec::new(),
+                building: None,
+                failure: None,
+                paused: None,
+                exited: false,
+                output: VecDeque::new(),
+                output_bytes: 0,
+                next_output: 0,
+                given_event: 0,
+                given_output: 0,
+                waiter: 0,
+            }),
+            changed: Condvar::new(),
+        }
+    }
+
     fn state(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -475,25 +508,36 @@ impl Session {
     }
 
     /// Wait for the next event past `cursor` other than build progress, or
-    /// `cancel`.
+    /// `cancel`: the cursor the wait went on from, or `None` once a later
+    /// wait took its place. A client waits once at a time, so a wait that
+    /// comes while another is still blocked means the client gave the
+    /// first up (#1542): that one gives no events, and the later one
+    /// returns them.
     pub fn next(
         &self,
         cursor: Option<u64>,
         cancel: &process::Cancel,
         building: impl FnMut(&str, u64),
-    ) {
-        let after = cursor.unwrap_or_else(|| self.state().given_event);
+    ) -> Option<u64> {
+        let (after, ticket) = {
+            let mut state = self.state();
+            state.waiter += 1;
+            (cursor.unwrap_or(state.given_event), state.waiter)
+        };
+        self.changed.notify_all();
         self.block(
             after,
             cancel,
             |state, after| {
-                state
-                    .events
-                    .iter()
-                    .any(|(seq, event)| *seq > after && event["event"] != "building")
+                state.waiter != ticket
+                    || state
+                        .events
+                        .iter()
+                        .any(|(seq, event)| *seq > after && event["event"] != "building")
             },
             building,
         );
+        (self.state().waiter == ticket).then_some(after)
     }
 
     /// The session now: its phase, the events past `cursor` and the output
@@ -710,9 +754,11 @@ pub fn pause_text(paused: &serde_json::Map<String, Value>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Phase, State};
+    use super::{Phase, Session, State};
     use serde_json::json;
     use std::collections::VecDeque;
+    use std::path::PathBuf;
+    use std::sync::Arc;
 
     fn state() -> State {
         State {
@@ -727,6 +773,7 @@ mod tests {
             next_output: 0,
             given_event: 0,
             given_output: 0,
+            waiter: 0,
         }
     }
 
@@ -772,5 +819,36 @@ mod tests {
         let mut failing = super::tests::state();
         failing.record(json!({ "event": "failed", "diagnostics": [] }));
         assert_eq!(failing.phase, Phase::Failed);
+    }
+
+    /// A wait the client gave up on without cancelling, still blocked when
+    /// the next wait comes, gives that one the events (#1542).
+    #[test]
+    fn a_later_wait_takes_the_place_of_one_still_blocked() {
+        let session = Arc::new(Session::running_at(
+            PathBuf::from("/p/inspect.sock"),
+            Phase::Starting,
+        ));
+        let waiting = |session: &Arc<Session>| {
+            let session = Arc::clone(session);
+            std::thread::spawn(move || {
+                let cancel = super::process::Cancel::default();
+                let after = session.next(None, &cancel, |_, _| {});
+                after.map(|after| session.answer(Some(after), None).structured)
+            })
+        };
+        let given_up = waiting(&session);
+        while session.state().waiter < 1 {
+            std::thread::yield_now();
+        }
+        let later = waiting(&session);
+        assert_eq!(given_up.join().unwrap(), None);
+        session.state().record(json!({ "event": "swapped" }));
+        session.changed.notify_all();
+        let answer = later.join().unwrap().expect("the later wait answers");
+        assert_eq!(answer["events"][0]["event"], "swapped");
+        assert_eq!(answer["cursor"], 1);
+        // The next wait goes on from there.
+        assert_eq!(session.state().given_event, 1);
     }
 }
