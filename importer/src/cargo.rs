@@ -5380,6 +5380,36 @@ mod universe_placement_tests {
         );
     }
 
+    /// A side-by-side candidate whose attempt stopped before its receipt,
+    /// as one a file edited during the build stops, is built again in its
+    /// place, never read: the preparation that starts again under the same
+    /// request neither fails on it nor reuses it (D1043.5).
+    #[test]
+    fn a_candidate_whose_attempt_stopped_is_built_again() {
+        let limits = Limits::standard();
+        let project = Project::new("stopped-candidate");
+        let current = request(&project, false, &limits);
+        let catalog = universe::Catalog::new(definition());
+        let manifest = render_manifest(&current, None).expect("manifest renders");
+        let fixed = project.cache().join(HARNESS_DIRECTORY);
+        install_legacy(&fixed, &manifest, SEED);
+        install_current_receipt(&fixed, &current, catalog.current(), &manifest);
+        let changed = request(&project, true, &limits);
+        let changed_manifest = render_manifest(&changed, None).expect("changed manifest renders");
+        let first = select_placement(&changed, &catalog, &changed_manifest)
+            .expect("the changed request selects a candidate");
+        fs::create_dir_all(&first.root).expect("the stopped attempt's root creates");
+        fs::write(first.root.join("Cargo.lock"), SEED).expect("the stopped attempt's lock writes");
+        let again = select_placement(&changed, &catalog, &changed_manifest)
+            .expect("a stopped attempt's candidate is selected again");
+        assert!(matches!(again.state, PlacementState::Fresh));
+        assert!(again.exclusive);
+        assert_eq!(again.root, first.root);
+        prepare_versioned_roots(&changed, &again.root, again.exclusive)
+            .expect("the stopped attempt is retired under the lease");
+        assert!(!again.root.join("Cargo.lock").exists());
+    }
+
     #[test]
     fn current_receipt_lock_and_universe_skew_are_clean_misses() {
         let limits = Limits::standard();
