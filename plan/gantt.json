@@ -201,11 +201,16 @@
       "subtitle": "D557: a debugger any editor or MCP hooks into",
       "open": true,
       "rows": [
-        {"id":"read-values","name":"Read a running program's values","start":53,"size":3,"state":"next","note":"rawr mcp inspect works with or without dependencies, its screenshot is drawn by the program itself with no OS capture (#1989), and input waits for the first window (#1947). Next: rawr's menu bar items (#1990), locked and 2x capture checks (#1993); frames, types and the editor remain.","issues":[488,510,511,512,513,514,1989,1990,1993,1995,1996,2009,2017,532,533,541,573,575,2256,2257],"milestone":"0.5"},
+        {"id":"read-values","name":"Read a running program's values","start":53,"size":3,"state":"next","note":"rawr mcp inspect works with or without dependencies, its screenshot is drawn by the program itself with no OS capture (#1989), and input waits for the first window (#1947). Next: rawr's menu bar items (#1990), locked and 2x capture checks (#1993); frames, types and the editor remain.","issues":[488,510,511,512,513,1989,1990,1993,1995,1996,2009,2017,532,533,541,573,575,2256,2257],"milestone":"0.5"},
         {"id":"agent-input","name":"Input and waits agents rely on","start":56,"size":1,"state":"now","note":"rawr mcp's input reaches the program every time. Left: input stops after about 150 calls (#1453), long text (#1415).","issues":[1415,1453,1964,1542,2255],"milestone":"0.5"},
         {"id":"breakpoints","name":"Breakpoints and stepping","start":56,"size":4,"state":"done","note":"break, step, continue, clear, and a paused state","issues":[489,534,535],"milestone":"0.3"},
         {"id":"repl","name":"Evaluate in a paused frame","start":60,"size":3,"state":"now","note":"The same interpreter, the same errors","issues":[490,1207],"milestone":"0.5"},
-        {"id":"record-replay","name":"Record, replay and comet","start":63,"size":4,"state":"next","note":"Messages and state over time","issues":[491],"milestone":"0.5"}
+        {"id":"one-session","name":"One debugger, many shells","start":60,"size":3,"state":"next","note":"The run's owner hosts one session that any shell attaches to, with capabilities agreed at connect; rawr mcp becomes its first shell (D1053)","issues":[2258],"milestone":"0.5"},
+        {"id":"editor-adapter","name":"Editor debugging","start":63,"size":2,"state":"next","note":"A debug adapter shell: breakpoints, frames and values in any editor (#514)","issues":[514],"milestone":"0.5"},
+        {"id":"terminal-shell","name":"Terminal shell","start":65,"size":2,"state":"next","note":"A TUI on the same session","issues":[2259],"milestone":"0.5"},
+        {"id":"window-shell","name":"Window shell","start":67,"size":3,"state":"next","note":"A GUI in its own process, so it keeps working while the program is paused","issues":[2260],"milestone":"0.5"},
+        {"id":"record-replay","name":"Record turns and state","start":67,"size":3,"state":"next","note":"Each turn's message and state, while a shell listens (#491)","issues":[491],"milestone":"0.5"},
+        {"id":"rewind","name":"Rewind, replay and comet","start":70,"size":4,"state":"next","note":"Time travel when the state is pure, replay under edited code, and comet as a shell (D1053)","issues":[2261,2262],"milestone":"0.5"}
       ]
     },
     {
