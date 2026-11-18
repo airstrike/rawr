@@ -412,27 +412,33 @@ impl Plan {
 
     /// Drop the public fields `keep` refuses. A struct that lost one has no
     /// constructor, as with a private field, and `written` names the first
-    /// one it lost.
+    /// one it lost. The position of each field it lost.
     pub(crate) fn retain_fields(
         &mut self,
         mut keep: impl FnMut(&Field) -> bool,
         mut written: impl FnMut(&Field) -> Unsupported,
-    ) {
-        let before = self.fields.len();
+    ) -> Vec<u32> {
         let mut fields = std::mem::take(&mut self.fields).into_vec();
         let mut unsupported = self.unsupported.take();
+        let mut dropped = Vec::new();
+        let mut position = 0;
         fields.retain(|field| {
             let kept = keep(field);
-            if !kept && unsupported.is_none() {
-                unsupported = Some(written(field));
+            if !kept {
+                dropped.push(position);
+                if unsupported.is_none() {
+                    unsupported = Some(written(field));
+                }
             }
+            position += 1;
             kept
         });
         self.unsupported = unsupported;
-        if fields.len() != before {
+        if !dropped.is_empty() {
             self.constructible = false;
             self.constructor = None;
         }
         self.fields = fields.into_boxed_slice();
+        dropped
     }
 }

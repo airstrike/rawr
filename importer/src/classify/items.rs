@@ -7,11 +7,18 @@
 //! an item's record when the item is the same and every key it read has
 //! the same digest there: the item's classification would read the same,
 //! so it would be the same. The rest it classifies. What every item shares
-//! — the support ledger, the fields no path names, nameability, the
-//! canonical encoding — is computed again whole.
+//! — the support ledger, the fields no path names, nameability — is
+//! computed again whole.
+//!
+//! A record keeps the item's bytes in the canonical contract too, with
+//! their digest and what the passes over every item changed of its value
+//! ([`Fragment`]). A later classification that takes the record, and whose
+//! passes change the same of it, writes those bytes into its contract
+//! rather than encoding the item again, and a plan reads what the item
+//! gives it by their digest (`resolved`).
 
 use std::collections::BTreeMap;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use serde::{Deserialize, Serialize};
 
@@ -41,11 +48,51 @@ pub(crate) struct Items {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub(super) struct Digested(#[serde(with = "crate::hex")] pub(super) Digest);
 
-/// How many items a classification classified anew.
+/// How many items a classification classified anew, and how many plans
+/// and outcomes it encoded into its contract rather than taking their
+/// bytes from a record.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct Fresh {
     pub(crate) definitions: usize,
     pub(crate) exports: usize,
+    pub(crate) encoded: Encoded,
+}
+
+/// How many plans and outcomes a classification encoded.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct Encoded {
+    pub(crate) definitions: usize,
+    pub(crate) exports: usize,
+}
+
+/// An item's bytes in the canonical contract and their digest, once the
+/// passes over every item changed what `changed` says of the record's
+/// value: the positions of a plan's fields they dropped, or the places of
+/// an outcome's parts they rejected as unnameable.
+#[derive(Clone, Deserialize, Serialize)]
+pub(super) struct Fragment {
+    pub(super) bytes: Arc<serde_json::value::RawValue>,
+    #[serde(with = "crate::hex")]
+    pub(super) digest: Digest,
+    #[serde(default, skip_serializing_if = "<[u32]>::is_empty")]
+    pub(super) changed: Box<[u32]>,
+}
+
+impl Fragment {
+    /// The canonical bytes of `value`, a record's value once the passes
+    /// changed what `changed` says.
+    pub(super) fn of<T: Serialize + ?Sized>(value: &T, changed: Vec<u32>) -> Result<Self, Error> {
+        let text = serde_json::to_string(value).map_err(|_| Error::Encoding)?;
+        let digest = <sha2::Sha256 as sha2::Digest>::digest(text.as_bytes()).into();
+        let bytes = serde_json::value::RawValue::from_string(text)
+            .map_err(|_| Error::Encoding)?
+            .into();
+        Ok(Self {
+            bytes,
+            digest,
+            changed: changed.into_boxed_slice(),
+        })
+    }
 }
 
 /// One definition's classification.
@@ -60,6 +107,10 @@ pub(super) struct Definition {
     pub(super) opaque: Option<Opaque>,
     pub(super) charged: Charged,
     premises: Box<[u32]>,
+    /// The plan's canonical bytes, once the passes over every plan changed
+    /// what the fragment says of `representability`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) fragment: Option<Fragment>,
     /// Whether the classification that gave the record classified the item.
     #[serde(skip)]
     pub(super) fresh: bool,
@@ -83,6 +134,10 @@ pub(super) struct Export {
     pub(super) outcome: OutcomeRecord,
     pub(super) charged: Charged,
     premises: Box<[u32]>,
+    /// The outcome's canonical bytes, once nameability changed what the
+    /// fragment says of `outcome`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) fragment: Option<Fragment>,
     /// Whether the classification that gave the record classified the item.
     #[serde(skip)]
     pub(super) fresh: bool,
@@ -328,14 +383,15 @@ impl Gathered {
         );
     }
 
-    /// Gather the definition `id`, whose own digest is `own`.
+    /// Gather the definition `id`, whose own digest is `own`: the carried
+    /// record's canonical bytes, if it kept them.
     pub(super) fn definition(
         &mut self,
         id: &api::identity::Definition,
         own: Digest,
         found: Found<'_, Definition>,
         check: Option<&Check<'_>>,
-    ) {
+    ) -> Option<Fragment> {
         match found {
             Found::Fresh { mut record, keys } => {
                 self.fresh.definitions += 1;
@@ -343,24 +399,27 @@ impl Gathered {
                 record.fresh = true;
                 record.premises = self.premises(&keys);
                 self.definitions.insert(id.clone(), vec![record]);
+                None
             }
             Found::Carried(Carried { source, record }) => {
                 let earlier = check
                     .expect("a carried record is one of the checked items")
                     .source(source);
                 self.carry_definition(id, earlier, record);
+                record.fragment.clone()
             }
         }
     }
 
-    /// Gather the export `export`, whose own digest is `own`.
+    /// Gather the export `export`, whose own digest is `own`: the carried
+    /// record's canonical bytes, if it kept them.
     pub(super) fn export(
         &mut self,
         export: &api::identity::Export,
         own: Digest,
         found: Found<'_, Export>,
         check: Option<&Check<'_>>,
-    ) {
+    ) -> Option<Fragment> {
         match found {
             Found::Fresh { mut record, keys } => {
                 self.fresh.exports += 1;
@@ -368,14 +427,49 @@ impl Gathered {
                 record.fresh = true;
                 record.premises = self.premises(&keys);
                 self.exports.insert(export.clone(), vec![record]);
+                None
             }
             Found::Carried(Carried { source, record }) => {
                 let earlier = check
                     .expect("a carried record is one of the checked items")
                     .source(source);
                 self.carry_export(export, earlier, record);
+                record.fragment.clone()
             }
         }
+    }
+
+    /// Keep `fragment`, the canonical bytes of the plan of `id` as this
+    /// classification's record of it holds it.
+    pub(super) fn definition_fragment(
+        &mut self,
+        id: &api::identity::Definition,
+        fragment: Fragment,
+    ) {
+        if let Some(record) = self
+            .definitions
+            .get_mut(id)
+            .and_then(|records| records.first_mut())
+        {
+            record.fragment = Some(fragment);
+        }
+    }
+
+    /// Keep `fragment`, the canonical bytes of the outcome of `export` as
+    /// this classification's record of it holds it.
+    pub(super) fn export_fragment(&mut self, export: &api::identity::Export, fragment: Fragment) {
+        if let Some(record) = self
+            .exports
+            .get_mut(export)
+            .and_then(|records| records.first_mut())
+        {
+            record.fragment = Some(fragment);
+        }
+    }
+
+    /// Count the plans and outcomes this classification encoded.
+    pub(super) fn encoded(&mut self, encoded: Encoded) {
+        self.fresh.encoded = encoded;
     }
 
     /// The items, each fresh key's digest read in `context`, the graph and
@@ -428,6 +522,7 @@ impl Definition {
             opaque,
             charged,
             premises: Box::default(),
+            fragment: None,
             fresh: false,
         }
     }
@@ -441,6 +536,7 @@ impl Export {
             outcome,
             charged,
             premises: Box::default(),
+            fragment: None,
             fresh: false,
         }
     }
@@ -575,6 +671,113 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A later demand round's graph, one that names a path more than an
+    /// earlier one, classified from the earlier one's records, encodes into
+    /// its contract only the plans and outcomes it classifies anew: every
+    /// other item's bytes are its record's, and its contract is the one
+    /// each item encoded whole gives. Its plan reads each outcome's digest
+    /// from the classification and generates only the new paths (#2221).
+    #[test]
+    fn a_later_round_encodes_and_digests_only_the_items_it_classifies_anew() {
+        let limits = crate::limits::Limits::standard();
+        let authority = Authority::production(&limits);
+        let policy = Policy::standard();
+        let mut rounds = 0;
+        for fixture in fixtures() {
+            let full = crate::test_fixture::with_exports(&fixture, |_| true);
+            let (alone, _, _) = full
+                .classify_items_on(&policy, authority, 8, &[])
+                .expect("the grown graph classifies");
+            assert_eq!(
+                *alone.canonical,
+                *super::super::encoded_whole(&full, &alone, &policy),
+                "a contract spliced from fragments is the contract encoded whole"
+            );
+            for dropped in 0..fixture.exports().len() {
+                let earlier = crate::test_fixture::with_exports(&fixture, |index| index != dropped);
+                let (earlier_parts, _, items) = earlier
+                    .classify_items_on(&policy, authority, 8, &[])
+                    .expect("the earlier graph classifies");
+                let (_, contributions) =
+                    crate::surface::facade::Plan::encode_parts_from(&earlier, &earlier_parts, &[])
+                        .expect("the earlier plan encodes");
+                let (grown, _, carried) = full
+                    .classify_items_on(&policy, authority, 8, &[&items])
+                    .expect("the grown graph classifies from the earlier records");
+                assert_eq!(alone.canonical, grown.canonical, "export {dropped} dropped");
+                let fresh = carried.fresh();
+                // A carried item is encoded again only when the passes over
+                // every item change it otherwise than they did, as when the
+                // new path makes a type nameable: its bytes are new.
+                fn recast<K: Ord, R>(
+                    now: &std::collections::BTreeMap<K, Vec<R>>,
+                    then: &std::collections::BTreeMap<K, Vec<R>>,
+                    fresh: fn(&R) -> bool,
+                    fragment: fn(&R) -> Option<&super::Fragment>,
+                ) -> usize {
+                    let mut recast = 0;
+                    for (key, records) in now {
+                        let record = &records[0];
+                        let was = then
+                            .get(key)
+                            .and_then(|records| fragment(&records[0]))
+                            .map(|kept| kept.bytes.get());
+                        let is = fragment(record).map(|kept| kept.bytes.get());
+                        recast += usize::from(!fresh(record) && was != is);
+                    }
+                    recast
+                }
+                let definitions = recast(
+                    &carried.definitions,
+                    &items.definitions,
+                    |record: &super::Definition| record.fresh,
+                    |record: &super::Definition| record.fragment.as_ref(),
+                );
+                let exports = recast(
+                    &carried.exports,
+                    &items.exports,
+                    |record: &super::Export| record.fresh,
+                    |record: &super::Export| record.fragment.as_ref(),
+                );
+                assert_eq!(
+                    (fresh.encoded.definitions, fresh.encoded.exports),
+                    (fresh.definitions + definitions, fresh.exports + exports),
+                    "only the items classified anew or changed are encoded: export {dropped} dropped"
+                );
+                assert!(
+                    fresh.exports < full.exports().len() || full.exports().len() == 1,
+                    "the paths both graphs name are carried"
+                );
+                assert!(
+                    grown.resolved.is_some(),
+                    "the plan's digests come with the parts"
+                );
+                let (plan, generated) = crate::surface::facade::Plan::encode_parts_from(
+                    &full,
+                    &grown,
+                    &[&contributions],
+                )
+                .expect("the grown plan encodes from the earlier contributions");
+                assert_eq!(
+                    plan,
+                    crate::surface::facade::Plan::encode_parts(&full, &alone)
+                        .expect("the grown plan encodes"),
+                    "export {dropped} dropped"
+                );
+                // An outcome's digest is new only when its bytes or a plan
+                // it names are.
+                assert!(
+                    generated.fresh() <= fresh.encoded.exports + fresh.encoded.definitions,
+                    "the plan generates only outcomes encoded anew: {} of {:?}",
+                    generated.fresh(),
+                    fresh.encoded
+                );
+                rounds += 1;
+            }
+        }
+        assert!(rounds > 4, "the fixtures grow by a path {rounds} times");
     }
 
     /// `graph` sealed again without the definition at `dropped` and the

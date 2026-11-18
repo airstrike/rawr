@@ -220,6 +220,7 @@ impl ClassifiedParts {
             support: std::sync::Arc::clone(&self.support),
             canonical: std::sync::Arc::clone(&self.canonical),
             fingerprint: self.fingerprint,
+            resolved: self.resolved.clone(),
             allocation: crate::contract::Usage {
                 items: reseat(self.allocation.items, then.items, now.items)?,
                 bytes: reseat(self.allocation.bytes, then.bytes, now.bytes)?,

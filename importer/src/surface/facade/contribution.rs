@@ -722,12 +722,15 @@ mod tests {
                 .classify(&Policy::standard(), &limits)
                 .expect("the grown graph classifies");
             let alone = super::super::Plan::encode(&contract).expect("the grown plan encodes");
+            let resolved = contract
+                .resolved()
+                .expect("the grown graph's outcomes digest");
             // A plan of the same graph from its own takes every header
             // unit and every path's sites (#2222).
             let (_, own) = super::super::Plan::encode_outcomes(
                 contract.raw_graph(),
                 contract.outcomes(),
-                Some(&[]),
+                Some((&[], &resolved)),
             )
             .expect("the grown plan encodes");
             let own = own.expect("a plan asked to keep its contributions keeps them");
@@ -736,7 +739,7 @@ mod tests {
             let (again, taken) = super::super::Plan::encode_outcomes(
                 contract.raw_graph(),
                 contract.outcomes(),
-                Some(&[&own]),
+                Some((&[&own], &resolved)),
             )
             .expect("the grown plan encodes from its own");
             assert_eq!(alone, again);
@@ -747,17 +750,20 @@ mod tests {
                 let smaller = crate::test_fixture::with_exports(&fixture, |index| index != dropped)
                     .classify(&Policy::standard(), &limits)
                     .expect("the smaller graph classifies");
+                let smaller_resolved = smaller
+                    .resolved()
+                    .expect("the smaller graph's outcomes digest");
                 let (_, kept) = super::super::Plan::encode_outcomes(
                     smaller.raw_graph(),
                     smaller.outcomes(),
-                    Some(&[]),
+                    Some((&[], &smaller_resolved)),
                 )
                 .expect("the smaller plan encodes");
                 let kept = kept.expect("a plan asked to keep its contributions keeps them");
                 let (grown, generated) = super::super::Plan::encode_outcomes(
                     contract.raw_graph(),
                     contract.outcomes(),
-                    Some(&[&kept]),
+                    Some((&[&kept], &resolved)),
                 )
                 .expect("the grown plan encodes from the smaller plan's contributions");
                 assert_eq!(alone, grown, "export {dropped} dropped");
