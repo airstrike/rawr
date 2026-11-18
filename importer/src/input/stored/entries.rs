@@ -57,6 +57,7 @@ impl Writer<'_> {
                 role,
                 package_id,
                 path,
+                named,
                 bytes,
                 digest,
             } => {
@@ -64,6 +65,7 @@ impl Writer<'_> {
                 self.role(*role)?;
                 self.option(package_id.as_deref())?;
                 self.text(path)?;
+                self.option(named.as_deref())?;
                 self.count(*bytes)?;
                 self.raw(digest)
             }
@@ -293,6 +295,7 @@ impl Reader<'_, '_, '_> {
                 role: self.role()?,
                 package_id: self.option()?,
                 path: self.text_path()?,
+                named: self.option_path()?,
                 bytes: self.length()?,
                 digest: self.digest()?,
             },

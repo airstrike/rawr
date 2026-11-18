@@ -20,7 +20,7 @@ use crate::{Error, Result};
 
 pub(in crate::input) mod protected;
 
-pub(super) const SCHEMA: u32 = 10;
+pub(super) const SCHEMA: u32 = 11;
 
 /// Canonical freshness evidence consumed when a captured graph is published.
 #[derive(Clone, Serialize)]
@@ -449,6 +449,29 @@ fn followed(entry: &Entry) -> Option<Watch> {
         .map(Watch::Exact)
 }
 
+/// A file named through a symlink is also watched at the name: pointing the
+/// link at another file changes what is read, and the resolved path alone
+/// never sees it.
+fn named(entry: &Entry) -> Option<Watch> {
+    let Entry::File {
+        named: Some(named), ..
+    } = entry
+    else {
+        return None;
+    };
+    Some(Watch::Exact(PathBuf::from(named.as_ref())))
+}
+
+/// The spelling `path` was named by, when it reaches `resolved` through a
+/// symlink. A spelling with `..` isn't kept: after a symlinked directory it
+/// leaves the link's target, so its lexical form names no file read.
+pub(super) fn spelling(path: &Path, resolved: &Path) -> Option<PathBuf> {
+    let lexical = !path
+        .components()
+        .any(|component| component == std::path::Component::ParentDir);
+    (lexical && path != resolved).then(|| path.to_path_buf())
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Role {
@@ -481,6 +504,11 @@ pub(crate) enum Entry {
         #[serde(skip_serializing_if = "Option::is_none")]
         package_id: Option<Box<str>>,
         path: Box<str>,
+        /// The spelling the file was named by, when it reaches `path`
+        /// through a symlink: the link is watched too, so pointing it at
+        /// another file is seen while the program runs.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        named: Option<Box<str>>,
         bytes: usize,
         digest: [u8; 32],
     },
@@ -913,6 +941,7 @@ impl Proof {
                 role: Role::Harness,
                 package_id: None,
                 path: manifest_path.into(),
+                named: None,
                 bytes: manifest.len(),
                 digest: manifest_digest,
             },
@@ -920,6 +949,7 @@ impl Proof {
                 role: Role::Harness,
                 package_id: None,
                 path: lock_path.into(),
+                named: None,
                 bytes: lock.len(),
                 digest: lock_digest,
             },
@@ -1035,6 +1065,7 @@ impl Proof {
                         | Entry::Directive { .. } => None,
                     })
                     .chain(followed(entry))
+                    .chain(named(entry))
             })
     }
 
@@ -1118,6 +1149,7 @@ impl Proof {
                 path,
                 bytes,
                 digest,
+                ..
             } = entry
             else {
                 continue;
@@ -1482,10 +1514,12 @@ fn file_entry(
     allocation.path(path)?;
     // A config candidate keeps the path Cargo reads; Cargo follows a symlinked
     // `.cargo` directory or config file, and its content is read through it.
-    let path = if matches!(role, Role::Config) {
-        path.to_path_buf()
+    let (path, named) = if matches!(role, Role::Config) {
+        (path.to_path_buf(), None)
     } else {
-        super::canonical_file("freshness file", path)?
+        let resolved = super::canonical_file("freshness file", path)?;
+        let named = spelling(&super::normalized_absolute(path)?, &resolved);
+        (resolved, named)
     };
     let metadata = fs::metadata(&path).map_err(|source| Error::Io {
         operation: "inspect freshness file",
@@ -1501,10 +1535,18 @@ fn file_entry(
         allocation.string(package_id)?;
     }
     let text = super::path_text("freshness file", &path)?;
+    let named = match &named {
+        Some(named) => {
+            allocation.bytes(named.as_os_str().len())?;
+            Some(super::path_text("freshness file", named)?.into())
+        }
+        None => None,
+    };
     Ok(Entry::File {
         role,
         package_id: package_id.map(Box::from),
         path: text.into(),
+        named,
         bytes,
         digest,
     })
@@ -1924,6 +1966,7 @@ mod tests {
                 role: Role::DependencySource,
                 package_id: Some(consumer_id.clone().into_boxed_str()),
                 path: path.to_string_lossy().into_owned().into_boxed_str(),
+                named: None,
                 bytes: 85_344,
                 digest,
             }]),
@@ -2186,6 +2229,7 @@ mod tests {
             role,
             package_id: Some(package_id.into()),
             path: source.to_string_lossy().into_owned().into_boxed_str(),
+            named: None,
             bytes: 4,
             digest: [9; 32],
         };
@@ -2250,6 +2294,7 @@ mod tests {
                     .to_string_lossy()
                     .into_owned()
                     .into_boxed_str(),
+                named: None,
                 bytes: 4,
                 digest: [9; 32],
             }]),
@@ -2309,6 +2354,7 @@ mod tests {
                 role: Role::PackageManifest,
                 package_id: Some(project_id.clone().into_boxed_str()),
                 path: manifest.to_string_lossy().into_owned().into_boxed_str(),
+                named: None,
                 bytes: 17,
                 digest: [7; 32],
             }]),
@@ -2335,6 +2381,7 @@ mod tests {
                     .to_string_lossy()
                     .into_owned()
                     .into_boxed_str(),
+                named: None,
                 bytes: 17,
                 digest: [7; 32],
             }]),
@@ -2357,6 +2404,7 @@ mod tests {
                 role: Role::DependencySource,
                 package_id: Some(protected_id.into_boxed_str()),
                 path: manifest.to_string_lossy().into_owned().into_boxed_str(),
+                named: None,
                 bytes: 17,
                 digest: [7; 32],
             }]),
@@ -2423,6 +2471,7 @@ mod tests {
                 role: Role::DependencySource,
                 package_id: Some(child_id.into_boxed_str()),
                 path: source.to_string_lossy().into_owned().into_boxed_str(),
+                named: None,
                 bytes: 3,
                 digest: [4; 32],
             }]),
@@ -2592,6 +2641,7 @@ mod tests {
                 role: Role::DependencySource,
                 package_id: Some(package_id.into()),
                 path: "/fixture/importer/src/lib.rs".into(),
+                named: None,
                 bytes: 3,
                 digest: [7; 32],
             }]),
@@ -2631,8 +2681,8 @@ mod tests {
     #[test]
     fn prior_projection_schema_cannot_match_current_proof_freshness() {
         assert_eq!(
-            SCHEMA, 10,
-            "workspace determinants advance the input-proof wire shape"
+            SCHEMA, 11,
+            "a file named through a symlink advances the input-proof wire shape"
         );
         let limits = Limits::standard();
         let evaluate_projection = |schema| {
@@ -2842,6 +2892,57 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    /// #1172: a file named through a symlink records its target and the name
+    /// it was read by, and the watcher observes both, so pointing the link at
+    /// another file is seen while the program runs.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_named_through_a_symlink_watches_the_link_and_its_target() {
+        let root = std::env::temp_dir().join(format!(
+            "rawr-proof-file-link-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let root = std::fs::canonicalize(root).unwrap();
+        std::fs::write(root.join("first.txt"), b"first\n").unwrap();
+        let link = root.join("input.txt");
+        std::os::unix::fs::symlink(root.join("first.txt"), &link).unwrap();
+        let limits = Limits::standard();
+        let mut allocation = Allocation::new(&limits);
+        let recipe = Recipe::path(Role::DeclaredInput, &link, &mut allocation).unwrap();
+        let proof = evaluate(&[recipe], &limits, &mut allocation).expect("the link is read");
+        let target = root.join("first.txt");
+        assert!(matches!(
+            &proof.entries[..],
+            [Entry::File { path, named: Some(named), bytes: 6, .. }]
+                if path.as_ref() == target.to_str().unwrap()
+                    && named.as_ref() == link.to_str().unwrap()
+        ));
+        let watched = proof.watch().collect::<Vec<_>>();
+        assert!(
+            watched
+                == [
+                    super::Watch::Exact(target),
+                    super::Watch::Exact(link.clone())
+                ],
+            "{watched:?}"
+        );
+        let recipe = Recipe::path(
+            Role::DeclaredInput,
+            &root.join("first.txt"),
+            &mut allocation,
+        )
+        .unwrap();
+        let proof = evaluate(&[recipe], &limits, &mut allocation).expect("the target is read");
+        assert!(matches!(
+            &proof.entries[..],
+            [Entry::File { named: None, .. }]
+        ));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     /// A build script's `rerun-if-changed` path reached through symlinks (an
     /// SDK path under `xcrun --show-sdk-path`'s link) is the file or directory
     /// the links resolve to, as Cargo reads it. Its entry names the target,
@@ -2951,6 +3052,7 @@ mod tests {
             role: Role::DependencySource,
             package_id: None,
             path: path.into(),
+            named: None,
             bytes: 1,
             digest: [digest; 32],
         };
@@ -2997,6 +3099,7 @@ mod tests {
             role,
             package_id: None,
             path: path.into(),
+            named: None,
             bytes: 1,
             digest: [digest; 32],
         };

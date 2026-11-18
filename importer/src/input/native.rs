@@ -357,6 +357,7 @@ impl<'owner> Projection<'owner> {
                 path,
                 bytes,
                 digest,
+                ..
             } => {
                 let location = if *role == Role::Harness && package_id.is_none() {
                     let slot = harness_slot(Path::new(path.as_ref()), self.harness, budget)?
