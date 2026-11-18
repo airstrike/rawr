@@ -24,6 +24,7 @@ mod premise;
 #[cfg(all(feature = "rustc-driver", not(target_arch = "wasm32")))]
 pub(crate) mod records;
 pub mod representability;
+mod resolved;
 mod slice;
 pub mod std_binding;
 

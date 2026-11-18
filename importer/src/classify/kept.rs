@@ -22,6 +22,8 @@ use crate::node;
 pub struct Kept {
     held: Option<Held>,
     items: Option<std::sync::Arc<super::items::Items>>,
+    /// Each path's facade contribution of the last plan this owner made.
+    contributions: Option<std::sync::Arc<crate::surface::facade::contribution::Contributions>>,
     /// Where each crate's records are kept, and what was read of them, once
     /// a classification needs them.
     #[cfg(feature = "rustc-driver")]
@@ -108,10 +110,8 @@ impl Kept {
         });
     }
 
-    /// Each item's record a classification may take: the last one this
-    /// owner classified, then each crate's kept records, read now if not
-    /// yet.
-    pub(crate) fn earlier(&mut self) -> Vec<&super::items::Items> {
+    /// Read each crate's kept records and contributions, once.
+    fn load(&mut self) {
         #[cfg(feature = "rustc-driver")]
         if let Some(records) = &mut self.records
             && records.loaded.is_none()
@@ -119,6 +119,48 @@ impl Kept {
             records.sources.resolve();
             records.loaded = Some(records.sources.load());
         }
+    }
+
+    /// Each path's facade contribution a plan may take: the last plan's,
+    /// then each crate's kept ones, read now if not yet.
+    pub(crate) fn earlier_contributions(
+        &mut self,
+    ) -> Vec<&crate::surface::facade::contribution::Contributions> {
+        self.load();
+        let kept = self.contributions.as_deref().into_iter();
+        #[cfg(feature = "rustc-driver")]
+        let loaded = self
+            .records
+            .as_ref()
+            .and_then(|records| records.loaded.as_ref())
+            .into_iter()
+            .flat_map(super::records::Loaded::contributions);
+        #[cfg(not(feature = "rustc-driver"))]
+        let loaded = std::iter::empty();
+        kept.chain(loaded).collect()
+    }
+
+    /// Keep `contributions`, a plan's, for the next plan, and each crate's
+    /// where its records are kept.
+    pub(crate) fn keep_contributions(
+        &mut self,
+        contributions: crate::surface::facade::contribution::Contributions,
+    ) {
+        #[cfg(feature = "rustc-driver")]
+        if let (Some(records), Some(items)) = (&mut self.records, &self.items) {
+            let loaded = records.loaded.get_or_insert_with(Default::default);
+            records
+                .sources
+                .publish_facade(&contributions, items, loaded);
+        }
+        self.contributions = Some(std::sync::Arc::new(contributions));
+    }
+
+    /// Each item's record a classification may take: the last one this
+    /// owner classified, then each crate's kept records, read now if not
+    /// yet.
+    pub(crate) fn earlier(&mut self) -> Vec<&super::items::Items> {
+        self.load();
         let kept = self.items.as_deref().into_iter();
         #[cfg(feature = "rustc-driver")]
         let loaded = self

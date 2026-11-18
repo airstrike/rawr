@@ -128,6 +128,19 @@ impl Product {
         Self::capture(bytes)
     }
 
+    /// [`capture_parts`](Self::capture_parts), taking each outcome's
+    /// contribution from `earlier` where one of the same outcome is kept,
+    /// and giving each one the plan applied.
+    pub(crate) fn capture_parts_from(
+        graph: &crate::api::Graph<impl crate::api::Phase>,
+        parts: &crate::classify::ClassifiedParts,
+        earlier: &[&super::contribution::Contributions],
+    ) -> Result<(Self, super::contribution::Contributions), node::Error> {
+        let (bytes, contributions) = Plan::encode_parts_from(graph, parts, earlier)
+            .map_err(|error| node::Error::Transform(error.to_string().into_boxed_str()))?;
+        Ok((Self::capture(bytes)?, contributions))
+    }
+
     /// The plan's bytes, as `Plan::encode` gave them or the store kept
     /// them under their digest: they are never decoded and encoded again to
     /// prove them canonical. A consumer that reads the plan decodes it

@@ -7,6 +7,7 @@ use crate::classify::representability::{self, Representability};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod cached;
+pub(crate) mod contribution;
 pub mod image;
 mod reexport;
 
@@ -18,6 +19,13 @@ pub use cached::Cached;
 /// this module writes. A bump selects each plan again from the classified
 /// contract it keeps, so nothing is classified again (#1766).
 const SCHEMA: u32 = 80;
+
+/// The bindings plan's version (`SCHEMA`), which what a plan keeps of each
+/// outcome is of.
+#[cfg(feature = "rustc-driver")]
+pub(crate) const fn schema() -> u32 {
+    SCHEMA
+}
 const ALIAS_SITE_DOMAIN: &[u8] = b"rawr.import.surface.facade.alias-site/v2";
 const PROJECTION_SOURCE_SITE_DOMAIN: &[u8] =
     b"rawr.import.surface.facade.projection-source-site/v1";
@@ -389,7 +397,7 @@ impl ImplBound {
 
 /// One crate type alias: its path, relative to the root, its type
 /// parameters with their defaults, and the type it names.
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct TypeAlias {
     path: Box<str>,
     parameters: Box<[Box<str>]>,
@@ -624,6 +632,7 @@ pub fn std_reexports(
 /// One imported nominal definition and complete admitted shape at one of
 /// its paths. The paths a crate's type is reached at share its body, as
 /// an [`Item`]'s do.
+#[derive(Clone, Deserialize, Serialize)]
 pub struct TypeDefinition {
     path: Box<str>,
     body: std::sync::Arc<TypeBody>,
@@ -793,6 +802,7 @@ fn unsupported(
 /// One exact imported item overload at one of its paths. The paths a
 /// crate's item is reached at, through each re-export of it, share its
 /// body: the plan holds it once (`table`), and a runner converts it once.
+#[derive(Clone, Deserialize, Serialize)]
 pub struct Item {
     path: Box<str>,
     body: std::sync::Arc<ItemBody>,
@@ -1013,7 +1023,7 @@ impl Case {
 }
 
 /// Closed Rawr compiler type reference vocabulary.
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub enum Type {
     /// Unit.
     Unit,
@@ -1259,397 +1269,91 @@ impl Plan {
     pub fn encode(
         contract: &crate::Contract<crate::Classified>,
     ) -> Result<Box<[u8]>, super::Error> {
-        Self::encode_outcomes(contract.raw_graph(), contract.outcomes())
+        Self::encode_outcomes(contract.raw_graph(), contract.outcomes(), None)
+            .map(|(bytes, _)| bytes)
     }
 
     pub(crate) fn encode_parts(
         graph: &crate::api::Graph<impl crate::api::Phase>,
         parts: &crate::classify::ClassifiedParts,
     ) -> Result<Box<[u8]>, super::Error> {
-        Self::encode_outcomes(graph, parts.outcomes())
+        Self::encode_outcomes(graph, parts.outcomes(), None).map(|(bytes, _)| bytes)
     }
 
+    /// [`encode_parts`](Self::encode_parts), taking each outcome's
+    /// contribution from `earlier` where one of the same outcome is kept,
+    /// and giving each one this plan applied.
+    pub(crate) fn encode_parts_from(
+        graph: &crate::api::Graph<impl crate::api::Phase>,
+        parts: &crate::classify::ClassifiedParts,
+        earlier: &[&contribution::Contributions],
+    ) -> Result<(Box<[u8]>, contribution::Contributions), super::Error> {
+        let (bytes, contributions) = Self::encode_outcomes(graph, parts.outcomes(), Some(earlier))?;
+        Ok((bytes, contributions.unwrap_or_default()))
+    }
+
+    /// The plan of `outcomes`. With `earlier`, an outcome whose
+    /// contribution is kept there takes it, and the plan's contributions
+    /// are given.
     fn encode_outcomes<'a>(
         graph: &crate::api::Graph<impl crate::api::Phase>,
         outcomes: impl ExactSizeIterator<Item = crate::classify::Outcome<'a>>,
-    ) -> Result<Box<[u8]>, super::Error> {
-        #[cfg(not(target_arch = "wasm32"))]
-        crate::progress::generated(outcomes.len());
-        let mut facades = Vec::<Facade>::new();
+        earlier: Option<&[&contribution::Contributions]>,
+    ) -> Result<(Box<[u8]>, Option<contribution::Contributions>), super::Error> {
+        let mut generated = earlier.map(|_| contribution::Contributions::default());
         // Each re-exported variant: its root, its path, its enum and its
         // name, named through a path to the enum once every type is in.
-        let mut variants = Vec::<(Box<str>, Box<str>, [u8; 32], Box<str>)>::new();
+        let building_outcomes = outcomes.len();
+        let mut variants = Vec::<contribution::Variant>::new();
         // Each trait Rawr code names: its root, its path and its identity,
         // whose header is written once every type is in (D604).
-        let mut named_traits = Vec::<(
-            Box<str>,
-            Box<str>,
-            [u8; 32],
-            Option<representability::signature::Outputs>,
-        )>::new();
+        let mut named_traits = Vec::<contribution::NamedTrait>::new();
+        let mut building = Vec::<contribution::Building>::new();
         for outcome in outcomes {
-            let named_trait = matches!(
-                outcome.representability(),
-                Representability::Rejected(reason)
-                    if reason.kind() == representability::reject::Kind::Trait
-            );
-            // A module Rawr code names (`use crate::icon;`) is a module to
-            // Rawr, as a trait is, so an import that nothing below it uses
-            // resolves, as rustc's does (#1436).
-            let named_module = matches!(
-                outcome.representability(),
-                Representability::Rejected(reason)
-                    if reason.kind() == representability::reject::Kind::Module
-            );
-            let left_out = !named_trait
-                && !named_module
-                && matches!(
-                    outcome.representability(),
-                    Representability::Excluded(_) | Representability::Rejected(_)
-                );
             // A crate whose every item is left out still has its facade,
             // with nothing in it: the program's path into the crate finds
             // its module and says why the item can't be used yet (#1267).
             let root = outcome.export().root_alias();
-            let index = match facades.binary_search_by(|facade| facade.root.as_ref().cmp(root)) {
+            let index = match building.binary_search_by(|facade| facade.root.as_ref().cmp(root)) {
                 Ok(index) => index,
                 Err(index) => {
-                    facades
+                    building
                         .try_reserve(1)
                         .map_err(|_| super::Error::Allocation)?;
-                    facades.insert(
-                        index,
-                        Facade {
-                            root: copy(root)?,
-                            types: Box::default(),
-                            items: Box::default(),
-                            traits: Box::default(),
-                            builtins: Box::default(),
-                            variants: Box::default(),
-                            type_aliases: Box::default(),
-                            macros: Box::default(),
-                            derives: Box::default(),
-                            trait_headers: Box::default(),
-                            impls: Box::default(),
-                            std_reexports: Box::default(),
-                            reexports: Box::default(),
-                        },
-                    );
+                    building.insert(index, contribution::Building::new(copy(root)?));
                     index
                 }
             };
-            if left_out {
-                continue;
-            }
-            let relative = path(outcome.export().path());
-            let facade = &mut facades[index];
-            if named_trait {
-                if let Some(definition) = outcome.identity().definition() {
-                    named_traits
-                        .try_reserve(1)
-                        .map_err(|_| super::Error::Allocation)?;
-                    named_traits.push((
-                        copy(root)?,
-                        copy(&relative)?,
-                        *definition.as_bytes(),
-                        outcome.outputs().cloned(),
-                    ));
-                }
-                // The methods of the trait's impls for `&str`, each a
-                // function whose first input is Rawr's string
-                // (`surface::text`).
-                for associated in outcome
-                    .implementations()
-                    .flat_map(crate::classify::ImplementationOutcome::associated)
-                    .filter(|associated| super::text::is_member(associated.representability()))
-                {
-                    let path = super::text::path(&relative, associated.name());
-                    let Some(mut item) = item(&path, associated)? else {
-                        continue;
+            let contribution = match (earlier, &mut generated) {
+                (Some(earlier), Some(generated)) => {
+                    let digest = outcome.resolved_digest();
+                    let kept = earlier.iter().find_map(|earlier| earlier.get(digest));
+                    let contribution = match kept {
+                        Some(kept) => std::sync::Arc::clone(kept),
+                        None => std::sync::Arc::new(contribution::Contribution::of(outcome)?),
                     };
-                    if !matches!(item.body.kind, ItemKind::OwnedMethod) {
-                        continue;
-                    }
-                    let body = item.made_mut();
-                    body.kind = ItemKind::Function;
-                    let mut inputs = Vec::new();
-                    inputs
-                        .try_reserve_exact(body.signature.inputs.len() + 1)
-                        .map_err(|_| super::Error::Allocation)?;
-                    // The impl's `&str`, as rustc's `<&str as Trait>::
-                    // method(text)` takes it, apart from a `String` (#706).
-                    inputs.push(Type::Reference {
-                        mutable: false,
-                        target: Box::new(Type::String),
-                    });
-                    inputs.extend(std::mem::take(&mut body.signature.inputs).into_vec());
-                    body.signature.inputs = inputs.into_boxed_slice();
-                    let mut items = std::mem::take(&mut facade.items).into_vec();
-                    items.try_reserve(1).map_err(|_| super::Error::Allocation)?;
-                    items.push(item);
-                    facade.items = items.into_boxed_slice();
+                    generated.keep(
+                        digest,
+                        std::sync::Arc::clone(&contribution),
+                        outcome.identity().definition(),
+                        kept.is_none(),
+                    );
+                    contribution
                 }
-                // The trait's methods on its object, each a function of the
-                // object beside the trait (`surface::object`).
-                for associated in outcome
-                    .implementations()
-                    .flat_map(crate::classify::ImplementationOutcome::associated)
-                    .filter(|associated| super::object::of(associated.representability()))
-                {
-                    let path = super::object::path(&relative, associated.name());
-                    let Some(mut item) = item(&path, associated)? else {
-                        continue;
-                    };
-                    item.made_mut().kind = ItemKind::Function;
-                    let mut items = std::mem::take(&mut facade.items).into_vec();
-                    items.try_reserve(1).map_err(|_| super::Error::Allocation)?;
-                    items.push(item);
-                    facade.items = items.into_boxed_slice();
-                }
-                // The members of the trait's impls for a number, `bool` or
-                // `char`, each a function of the scalar beside the trait
-                // (`surface::scalar`).
-                for associated in outcome
-                    .implementations()
-                    .flat_map(crate::classify::ImplementationOutcome::associated)
-                {
-                    let Some(scalar) = super::scalar::of(associated.representability()) else {
-                        continue;
-                    };
-                    let path = super::scalar::path(&relative, scalar, associated.name());
-                    let Some(mut item) = item(&path, associated)? else {
-                        continue;
-                    };
-                    item.made_mut().kind = ItemKind::Function;
-                    let mut items = std::mem::take(&mut facade.items).into_vec();
-                    items.try_reserve(1).map_err(|_| super::Error::Allocation)?;
-                    items.push(item);
-                    facade.items = items.into_boxed_slice();
-                }
-                // The members a blanket impl's application to slices gives,
-                // each a function of the slice's borrow beside the trait
-                // (`surface::slice`).
-                for associated in outcome
-                    .implementations()
-                    .flat_map(crate::classify::ImplementationOutcome::associated)
-                    .filter(|associated| super::slice::is_member(associated.representability()))
-                {
-                    let path = super::slice::path(&relative, associated.name());
-                    let Some(mut item) = item(&path, associated)? else {
-                        continue;
-                    };
-                    item.made_mut().kind = ItemKind::Function;
-                    let mut items = std::mem::take(&mut facade.items).into_vec();
-                    items.try_reserve(1).map_err(|_| super::Error::Allocation)?;
-                    items.push(item);
-                    facade.items = items.into_boxed_slice();
-                }
-                // A provided method called on the program's own type is
-                // the same function over `Self` in the retained runner
-                // facade as it was during demand compilation.
-                if let Some(definition) = outcome.identity().definition() {
-                    for associated in outcome
-                        .implementations()
-                        .filter(|implementation| {
-                            super::member::is_members(implementation.identity(), &definition)
-                        })
-                        .flat_map(crate::classify::ImplementationOutcome::associated)
-                    {
-                        let path = super::member::path(&relative, associated.name());
-                        // The members of the opaque type it gives, as of a
-                        // function's (`surface::opaque`), as iced's
-                        // `Widget::explain` gives one whose `boxed` a
-                        // program calls.
-                        let owner = super::opaque::path(&path, 0);
-                        for member in associated
-                            .implementations()
-                            .flat_map(crate::classify::ImplementationOutcome::associated)
-                        {
-                            let member_path = format!("{owner}::{}", member.name());
-                            if let Some(item) = item(&member_path, member)? {
-                                let mut items = std::mem::take(&mut facade.items).into_vec();
-                                items.try_reserve(1).map_err(|_| super::Error::Allocation)?;
-                                items.push(item);
-                                facade.items = items.into_boxed_slice();
-                            }
-                        }
-                        let Some(mut item) = item(&path, associated)? else {
-                            continue;
-                        };
-                        item.made_mut().kind = ItemKind::Function;
-                        let mut items = std::mem::take(&mut facade.items).into_vec();
-                        items.try_reserve(1).map_err(|_| super::Error::Allocation)?;
-                        items.push(item);
-                        facade.items = items.into_boxed_slice();
-                    }
-                }
-            }
-            if named_trait || named_module {
-                let mut traits = std::mem::take(&mut facade.traits).into_vec();
-                if let Err(position) = traits.binary_search(&relative) {
-                    traits
-                        .try_reserve(1)
-                        .map_err(|_| super::Error::Allocation)?;
-                    traits.insert(position, relative);
-                }
-                facade.traits = traits.into_boxed_slice();
-                continue;
-            }
-            // A type alias of a builtin, as iced's `markdown::Uri` is
-            // `String`, names the builtin.
-            if let Representability::Value(plan) = outcome.representability()
-                && plan.parameters().is_empty()
-                && let Some(builtin) = builtin_alias(plan.ty())
-            {
-                let mut builtins = std::mem::take(&mut facade.builtins).into_vec();
-                if let Err(position) =
-                    builtins.binary_search_by(|(path, _)| path.as_ref().cmp(relative.as_ref()))
-                {
-                    builtins
-                        .try_reserve(1)
-                        .map_err(|_| super::Error::Allocation)?;
-                    builtins.insert(position, (copy(&relative)?, copy(builtin)?));
-                }
-                facade.builtins = builtins.into_boxed_slice();
-                continue;
-            }
-            // Any other type alias, as `pub type Result = std::result::Result<
-            // (), Error>;`, names its target with its own parameters.
-            if let Representability::Value(plan) = outcome.representability() {
-                let (Some(defaults), Some(target)) = (
-                    declared(defaults(plan.parameters()))?,
-                    declared(ty(plan.ty(), plan.parameters()))?,
-                ) else {
-                    continue;
-                };
-                let alias = TypeAlias {
-                    path: copy(&relative)?,
-                    parameters: parameters(plan.parameters())?,
-                    defaults,
-                    target,
-                };
-                let mut aliases = std::mem::take(&mut facade.type_aliases).into_vec();
-                if let Err(position) =
-                    aliases.binary_search_by(|alias| alias.path.as_ref().cmp(relative.as_ref()))
-                {
-                    aliases
-                        .try_reserve(1)
-                        .map_err(|_| super::Error::Allocation)?;
-                    aliases.insert(position, alias);
-                }
-                facade.type_aliases = aliases.into_boxed_slice();
-                // An alias that passes its parameters on to a type has that
-                // type's members (`classify`), as `widget::Text::new`.
-                for associated in outcome
-                    .implementations()
-                    .flat_map(crate::classify::ImplementationOutcome::associated)
-                {
-                    let associated_path = format!("{relative}::{}", associated.name());
-                    if let Some(item) = item(&associated_path, associated)?.filter(|item| {
-                        matches!(
-                            item.body.kind,
-                            ItemKind::AssociatedFunction | ItemKind::AssociatedConstant
-                        )
-                    }) {
-                        let mut items = std::mem::take(&mut facade.items).into_vec();
-                        items.try_reserve(1).map_err(|_| super::Error::Allocation)?;
-                        items.push(item);
-                        facade.items = items.into_boxed_slice();
-                    }
-                }
-                continue;
-            }
-            // A re-exported variant, as `pub use Alignment::Center;`, is its
-            // enum's variant.
-            if let Some(variant) = outcome.variant() {
-                if let Some(definition) = outcome.identity().definition() {
-                    variants
-                        .try_reserve(1)
-                        .map_err(|_| super::Error::Allocation)?;
-                    variants.push((
-                        copy(root)?,
-                        relative,
-                        *definition.as_bytes(),
-                        copy(variant)?,
-                    ));
-                }
-                continue;
-            }
-            if let Some(ty) = type_definition(&relative, outcome)? {
-                let mut types = std::mem::take(&mut facade.types).into_vec();
-                types.try_reserve(1).map_err(|_| super::Error::Allocation)?;
-                types.push(ty);
-                facade.types = types.into_boxed_slice();
-            }
-            if let Some(item) = item(&relative, outcome)? {
-                let mut items = std::mem::take(&mut facade.items).into_vec();
-                items.try_reserve(1).map_err(|_| super::Error::Allocation)?;
-                items.push(item);
-                facade.items = items.into_boxed_slice();
-            }
-            // The names of the type's associated items so far, by which an
-            // opaque type a method gives is apart from its namesakes'.
-            let mut seen = Vec::new();
-            for associated in outcome
-                .implementations()
-                .flat_map(crate::classify::ImplementationOutcome::associated)
-            {
-                let sibling = seen
-                    .iter()
-                    .filter(|name| **name == associated.name())
-                    .count();
-                seen.try_reserve(1).map_err(|_| super::Error::Allocation)?;
-                seen.push(associated.name());
-                // An impl that fixes some of its type's arguments is
-                // relevant to each type it names: iced's `impl TextEditor<
-                // 'a, PlainText, ..>` is `TextEditor`'s, not `PlainText`'s.
-                if let Representability::Invocation(plan) = associated.representability()
-                    && let Some(representability::convert::Type::Nominal { definition, .. }) =
-                        plan.signature().instance()
-                    && outcome.identity().definition() != Some(*definition)
-                {
-                    continue;
-                }
-                // A function's members are those of the opaque type it
-                // gives (`surface::opaque`).
-                let owner = if matches!(
-                    outcome.representability(),
-                    Representability::Function(_)
-                        | Representability::FunctionItem(_)
-                        | Representability::Invocation(_)
-                ) {
-                    super::opaque::path(&relative, 0)
-                } else {
-                    relative.to_string()
-                };
-                let associated_path = format!("{owner}::{}", associated.name());
-                if let Some(item) = item(&associated_path, associated)? {
-                    let mut items = std::mem::take(&mut facade.items).into_vec();
-                    items.try_reserve(1).map_err(|_| super::Error::Allocation)?;
-                    items.push(item);
-                    facade.items = items.into_boxed_slice();
-                }
-                // The members of the opaque type an inherent method gives,
-                // in its owner's module, as Rawr declares them, each impl's
-                // apart (`opaque::inherent_owner`).
-                let opaque = super::opaque::path(
-                    &super::opaque::inherent_owner(&owner, associated.name(), sibling),
-                    0,
-                );
-                for member in associated
-                    .implementations()
-                    .flat_map(crate::classify::ImplementationOutcome::associated)
-                {
-                    let member_path = format!("{opaque}::{}", member.name());
-                    if let Some(item) = item(&member_path, member)? {
-                        let mut items = std::mem::take(&mut facade.items).into_vec();
-                        items.try_reserve(1).map_err(|_| super::Error::Allocation)?;
-                        items.push(item);
-                        facade.items = items.into_boxed_slice();
-                    }
-                }
-            }
+                _ => std::sync::Arc::new(contribution::Contribution::of(outcome)?),
+            };
+            building[index].apply(&contribution, &mut variants, &mut named_traits)?;
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::progress::generated(
+            generated
+                .as_ref()
+                .map_or(building_outcomes, contribution::Contributions::fresh),
+        );
+        let mut facades = building
+            .into_iter()
+            .map(contribution::Building::into_facade)
+            .collect::<Vec<_>>();
         // A dependency's `macro_rules!` macros: Rawr expands their source.
         for (root, rules) in macros(graph)? {
             let index = match facades.binary_search_by(|facade| facade.root.cmp(&root)) {
@@ -2157,7 +1861,7 @@ impl Plan {
             facades: facades.into_boxed_slice(),
         })
         .map_err(|_| super::Error::Encoding)?;
-        Ok(bytes.into_boxed_slice())
+        Ok((bytes.into_boxed_slice(), generated))
     }
 
     /// The plan a generated runner embeds: its facades alone. A runner

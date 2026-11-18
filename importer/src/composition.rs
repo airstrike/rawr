@@ -377,8 +377,13 @@ where
                 let (facade_recipe, facade_outcome, parts) = match facade {
                     Some(prepared) => prepared,
                     None => {
-                        let parts = replay(classification, &generic, graph.graph(), policy)
-                            .map_err(failure)?;
+                        let parts = replay(
+                            classification.as_deref_mut(),
+                            &generic,
+                            graph.graph(),
+                            policy,
+                        )
+                        .map_err(failure)?;
                         let recipe = Recipe::<Facade>::from_inputs(
                             context,
                             &[generic.input()],
@@ -390,10 +395,21 @@ where
                         (recipe, outcome, parts)
                     }
                 };
+                let mut generated = None;
                 let facade = acquire(facade_outcome, &facade_recipe, batch, || {
                     crate::progress::phase("generating");
-                    Facade::capture_parts(graph.graph(), &parts)
+                    let earlier = classification
+                        .as_deref_mut()
+                        .map(crate::classify::kept::Kept::earlier_contributions)
+                        .unwrap_or_default();
+                    let (facade, contributions) =
+                        Facade::capture_parts_from(graph.graph(), &parts, &earlier)?;
+                    generated = Some(contributions);
+                    Ok(facade)
                 })?;
+                if let (Some(kept), Some(generated)) = (classification, generated) {
+                    kept.keep_contributions(generated);
+                }
                 let (checked_recipe, checked_outcome, profile_parts) = match prepared_checked {
                     Some(prepared) => prepared,
                     None => {

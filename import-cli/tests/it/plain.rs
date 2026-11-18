@@ -897,6 +897,90 @@ fn another_rawr_build_checks_and_its_runner_names_no_cargo_view() {
     check_with(&importer, "fifth");
 }
 
+/// A check whose later demand round adds paths classifies and generates
+/// only the items that round changed, taking the rest from the round
+/// before (#1618). A second project that checks the same program on the
+/// machine classifies and generates none of the crate's items: each one's
+/// classification and facade contribution are kept in rawr's home beside
+/// the crate's table (#271).
+#[test]
+fn a_second_project_classifies_and_generates_nothing_of_a_crate_the_home_keeps() {
+    let home = crate::support::fresh("classified-home");
+    let projects =
+        ["first", "second"].map(|name| crate::support::fresh(format!("classified-{name}")));
+    for root in &projects {
+        copy(Path::new(FIXTURE), root);
+        // Its check names `Version` and `VersionReq`; the trait methods it
+        // calls on them are demanded by a later round.
+        fs::write(
+            root.join("src/main.rs"),
+            "// rawr\nuse semver::{Version, VersionReq};\n\nfn main() {\n    let req = VersionReq::parse(\">=1.2.3, <2\").unwrap();\n    let version: Version = \"1.4.0\".parse().unwrap();\n    let text = version.to_string();\n    let newer = Version::new(1, 5, 0) > version;\n    println!(\"{text} {newer} {}\", req.matches(&version));\n}\n",
+        )
+        .unwrap();
+    }
+    // Each round's definitions read, classified and paths generated, as
+    // `RAWR_VERBOSE` prints them.
+    let rounds = |root: &Path| {
+        let checked = crate::support::rawr_import()
+            .args(["check"])
+            .arg(root)
+            .env("RAWR_HOME", &home)
+            .env("RAWR_RUNTIME_HOME", crate::support::runtime_home())
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("RUSTFLAGS")
+            .env("RAWR_VERBOSE", "1")
+            .output()
+            .unwrap();
+        let stderr = text(&checked.stderr);
+        assert!(
+            checked.status.success(),
+            "stdout:\n{}\nstderr:\n{stderr}",
+            text(&checked.stdout)
+        );
+        let count = |round: &str, stage: &str| {
+            round
+                .split(", ")
+                .find_map(|part| {
+                    part.strip_prefix(stage)?
+                        .strip_prefix(' ')?
+                        .parse::<usize>()
+                        .ok()
+                })
+                .unwrap_or_else(|| panic!("a round counts {stage}: {round}"))
+        };
+        stderr
+            .lines()
+            .filter_map(|line| line.strip_prefix("rawr-import: round "))
+            .map(|round| {
+                (
+                    count(round, "read"),
+                    count(round, "classified"),
+                    count(round, "generated"),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let [first, second] = &projects;
+    let first = rounds(first);
+    let [(read, classified, _), .., (later_read, later_classified, _)] = first[..] else {
+        panic!("the check takes a later demand round: {first:?}");
+    };
+    assert_eq!(classified, read, "a fresh home classifies every item once");
+    assert!(
+        later_read > read && later_classified < read,
+        "a later round classifies only the items its demand changed: {first:?}"
+    );
+    let second = rounds(second);
+    assert!(!second.is_empty());
+    for (_, classified, generated) in &second {
+        assert_eq!(
+            (*classified, *generated),
+            (0, 0),
+            "the home keeps every item: {second:?}"
+        );
+    }
+}
+
 /// A program with a module of its own selects its own crate, whose table
 /// stays with its project. A second project extracts only that crate: the
 /// dependency's table, trait members included, replays from rawr's home

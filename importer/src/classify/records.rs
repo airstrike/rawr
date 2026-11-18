@@ -1,31 +1,36 @@
-//! Each crate's classification records, kept beside its shared table in
-//! rawr's home, and the project's own (#271, #1618).
+//! Each crate's classification records and facade contributions, kept
+//! beside its shared table in rawr's home, and the project's own (#271,
+//! #1618).
 //!
 //! A selected crate shared per machine (D608.4) keeps the records of its
 //! items under its table's key, in a directory of the classification's
 //! version: the definitions of the crate, of the crates it reaches that a
-//! registry, a git commit or the toolchain give, and the paths to them. A
-//! later classification on the machine of an API that reads the same of
-//! any of them takes those records instead of classifying the items again
-//! (`items`), whatever project it is for. The items of the project's own
-//! crates, and of path crates it reaches, are kept in the project's Rawr
-//! directory instead, for its next round or run. A record is a cache: one
-//! that can't be read is a miss, and publishing is best effort.
+//! registry, a git commit or the toolchain give, and the paths to them. Its
+//! paths' facade contributions are kept the same way, in a directory of the
+//! facade plan's version. A later classification on the machine of an API
+//! that reads the same of any item takes its record instead of classifying
+//! it again (`items`), and a plan of an outcome kept takes its contribution
+//! (`surface::facade::contribution`), whatever project it is for. The items
+//! of the project's own crates, and of path crates it reaches, are kept in
+//! the project's Rawr directory instead, for its next round or run. An entry
+//! is a cache: one that can't be read is a miss, and publishing is best
+//! effort.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use super::items::Items;
 use super::{api, Policy};
 use crate::extract::engine::home;
+use crate::surface::facade::contribution::Contributions;
 
-/// The file an entry keeps its records in.
-const RECORDS: &str = "records.json";
-/// The records' own format: bump it when what a record holds changes.
-const RECORDS_SCHEMA: u32 = 1;
+/// The format of an entry's file: bump it when what a record or a
+/// contribution holds changes.
+const ENTRY_SCHEMA: u32 = 1;
 /// The project's own entry, under its classified directory.
 const PROJECT: &str = "project";
 
@@ -34,6 +39,7 @@ const PROJECT: &str = "project";
 #[derive(Clone, Debug, Default)]
 pub struct Sources {
     crates: Vec<Crate>,
+    /// The project's classified directory.
     project: Option<PathBuf>,
 }
 
@@ -51,19 +57,30 @@ pub(crate) struct Crate {
     pub(crate) shared: bool,
 }
 
-/// An entry's records as its file holds them: the compiler units they
-/// name once, and the records naming each unit by its place.
+/// What an entry keeps.
+#[derive(Clone, Copy)]
+enum Kind {
+    /// Each item's classification record (`items`).
+    Records,
+    /// Each path's facade contribution.
+    Facade,
+}
+
+/// An entry's file: the compiler units its contents name once, and the
+/// contents, naming each unit by its place.
 #[derive(Deserialize, Serialize)]
 struct Stored {
     schema: u32,
     units: Box<[Arc<api::identity::Unit>]>,
-    records: Box<serde_json::value::RawValue>,
+    contents: Box<serde_json::value::RawValue>,
 }
 
-/// The records one classification loaded, by the entry each came from.
+/// What a classification and its plan read of the entries, by the entry
+/// each came from.
 #[derive(Default)]
 pub(crate) struct Loaded {
-    entries: Vec<(Entry, Arc<Items>)>,
+    records: Vec<(Entry, Arc<Items>)>,
+    facade: Vec<(Entry, Arc<Contributions>)>,
 }
 
 /// Where one entry is kept.
@@ -73,13 +90,36 @@ enum Entry {
     Project,
 }
 
+impl Kind {
+    /// The directory of this kind's version under a classified directory:
+    /// an entry another classifier or plan made is in another directory.
+    fn version(self) -> String {
+        match self {
+            Self::Records => {
+                let policy = Policy::standard();
+                format!(
+                    "{}-{}-{}-{ENTRY_SCHEMA}",
+                    policy.schema, policy.classifier, policy.compiler_abi
+                )
+            }
+            Self::Facade => format!("facade-{}-{ENTRY_SCHEMA}", crate::surface::facade::schema()),
+        }
+    }
+
+    const fn file(self) -> &'static str {
+        match self {
+            Self::Records => "records.json",
+            Self::Facade => "facade.json",
+        }
+    }
+}
+
 impl Sources {
     /// The entries of `crates`, and the project's, under its Rawr directory
     /// `rawr`.
     pub(crate) fn new(crates: Vec<Crate>, rawr: Option<&Path>) -> Self {
         let project = rawr.map(|rawr| {
             crate::bindings::format::project(rawr, crate::bindings::format::Kept::Classified)
-                .join(version())
         });
         Self { crates, project }
     }
@@ -102,18 +142,18 @@ impl Sources {
         self.crates.retain(|krate| krate.stable_crate_id.is_some());
     }
 
-    fn place(&self, entry: &Entry) -> Option<(PathBuf, &str)> {
+    fn place(&self, entry: &Entry, kind: Kind) -> Option<(PathBuf, &str)> {
         match entry {
             Entry::Crate(index) => {
                 let krate = &self.crates[*index];
                 let directory = if krate.shared {
-                    crate::bindings::format::classified_beside(&krate.bindings).join(version())
+                    crate::bindings::format::classified_beside(&krate.bindings)
                 } else {
                     self.project.clone()?
                 };
-                Some((directory, &krate.key))
+                Some((directory.join(kind.version()), &krate.key))
             }
-            Entry::Project => Some((self.project.clone()?, PROJECT)),
+            Entry::Project => Some((self.project.as_ref()?.join(kind.version()), PROJECT)),
         }
     }
 
@@ -123,17 +163,22 @@ impl Sources {
             .chain(std::iter::once(Entry::Project))
     }
 
-    /// Every entry's records that can be read.
+    /// Every entry that can be read, of both kinds.
     pub(crate) fn load(&self) -> Loaded {
-        let entries = self
-            .entries()
+        Loaded {
+            records: self.load_kind(Kind::Records),
+            facade: self.load_kind(Kind::Facade),
+        }
+    }
+
+    fn load_kind<T: DeserializeOwned>(&self, kind: Kind) -> Vec<(Entry, Arc<T>)> {
+        self.entries()
             .filter_map(|entry| {
-                let (directory, key) = self.place(&entry)?;
-                let items = read(&directory, key)?;
-                Some((entry, Arc::new(items)))
+                let (directory, key) = self.place(&entry, kind)?;
+                let contents = read(&directory, key, kind)?;
+                Some((entry, Arc::new(contents)))
             })
-            .collect();
-        Loaded { entries }
+            .collect()
     }
 
     /// Keep each entry's part of `items`, a classification's records, in
@@ -143,34 +188,69 @@ impl Sources {
         let owners = Owners::of(self, items);
         for entry in self.entries() {
             let part = items.select(
-                |id, _| owners.definition(id) == Some(&entry),
-                |export| {
-                    export
-                        .target()
-                        .and_then(|target| owners.surface(target))
-                        .is_some_and(|owner| *owner == entry)
-                },
+                |id| owners.definition(id) == Some(&entry),
+                |export| owners.owns(&entry, export.target()),
             );
             if part.is_empty() || !part.any_fresh() {
                 continue;
             }
-            let Some((directory, key)) = self.place(&entry) else {
+            self.keep(
+                &entry,
+                Kind::Records,
+                &mut loaded.records,
+                part,
+                |kept, part| kept.with(part),
+            );
+        }
+    }
+
+    /// Keep each entry's part of `contributions`, a plan's, as
+    /// [`publish`](Self::publish) keeps records: each is its path's, whose
+    /// owner `items` tells.
+    pub(crate) fn publish_facade(
+        &self,
+        contributions: &Contributions,
+        items: &Items,
+        loaded: &mut Loaded,
+    ) {
+        let owners = Owners::of(self, items);
+        for entry in self.entries() {
+            let part = contributions.select(|target| owners.owns(&entry, target));
+            if part.is_empty() || !part.any_fresh() {
                 continue;
-            };
-            let position = loaded
-                .entries
-                .iter()
-                .position(|(loaded, _)| *loaded == entry);
-            let kept = match position {
-                Some(position) => loaded.entries[position].1.with(&part),
-                None => part,
-            };
-            write(&directory, key, &kept);
-            let kept = Arc::new(kept);
-            match position {
-                Some(position) => loaded.entries[position].1 = kept,
-                None => loaded.entries.push((entry, kept)),
             }
+            self.keep(
+                &entry,
+                Kind::Facade,
+                &mut loaded.facade,
+                part,
+                |kept, part| kept.with(part),
+            );
+        }
+    }
+
+    /// Write `part` as `entry`'s, joined to what `loaded` holds of it.
+    fn keep<T: Serialize>(
+        &self,
+        entry: &Entry,
+        kind: Kind,
+        loaded: &mut Vec<(Entry, Arc<T>)>,
+        part: T,
+        join: impl FnOnce(&T, &T) -> T,
+    ) {
+        let Some((directory, key)) = self.place(entry, kind) else {
+            return;
+        };
+        let position = loaded.iter().position(|(loaded, _)| loaded == entry);
+        let kept = match position {
+            Some(position) => join(&loaded[position].1, &part),
+            None => part,
+        };
+        write(&directory, key, kind, &kept);
+        let kept = Arc::new(kept);
+        match position {
+            Some(position) => loaded[position].1 = kept,
+            None => loaded.push((entry.clone(), kept)),
         }
     }
 }
@@ -178,7 +258,14 @@ impl Sources {
 impl Loaded {
     /// The records each entry holds.
     pub(crate) fn items(&self) -> impl Iterator<Item = &Items> {
-        self.entries.iter().map(|(_, items)| &**items)
+        self.records.iter().map(|(_, items)| &**items)
+    }
+
+    /// The contributions each entry holds.
+    pub(crate) fn contributions(&self) -> impl Iterator<Item = &Contributions> {
+        self.facade
+            .iter()
+            .map(|(_, contributions)| &**contributions)
     }
 }
 
@@ -231,55 +318,53 @@ impl Owners {
         self.definitions.get(id)
     }
 
-    fn surface(&self, definition: &crate::surface::identity::Definition) -> Option<&Entry> {
-        self.surface.get(definition)
+    /// Whether `entry` keeps what belongs to the path naming `target`: the
+    /// owner of its definition, or the project for a path naming none.
+    fn owns(&self, entry: &Entry, target: Option<&crate::surface::identity::Definition>) -> bool {
+        match target.and_then(|target| self.surface.get(target)) {
+            Some(owner) => owner == entry,
+            None => *entry == Entry::Project,
+        }
     }
 }
 
-/// The directory of this classification's version under a classified
-/// directory: records of another classifier are of another directory.
-fn version() -> String {
-    let policy = Policy::standard();
-    format!(
-        "{}-{}-{}-{RECORDS_SCHEMA}",
-        policy.schema, policy.classifier, policy.compiler_abi
-    )
-}
-
-/// The records of `key`'s entry under `directory`, read under its lease.
-fn read(directory: &Path, key: &str) -> Option<Items> {
+/// The contents of `key`'s entry of `kind` under `directory`, read under
+/// its lease.
+fn read<T: DeserializeOwned>(directory: &Path, key: &str, kind: Kind) -> Option<T> {
     let _lease = home::hold(directory, key)?;
-    let bytes = std::fs::read(directory.join(key).join(RECORDS)).ok()?;
+    let bytes = std::fs::read(directory.join(key).join(kind.file())).ok()?;
     let stored = crate::extract::sidecar::read::<Stored>(&bytes).ok()?;
-    if stored.schema != RECORDS_SCHEMA {
+    if stored.schema != ENTRY_SCHEMA {
         return None;
     }
     api::units::read(stored.units, || {
-        crate::extract::sidecar::read::<Items>(stored.records.get().as_bytes()).ok()
+        crate::extract::sidecar::read::<T>(stored.contents.get().as_bytes()).ok()
     })
 }
 
-/// Publish `items` as `key`'s entry under `directory`. Best effort.
-fn write(directory: &Path, key: &str, items: &Items) {
-    let (records, units) = api::units::write(|| serde_json::to_string(items));
-    let Ok(records) = records.and_then(serde_json::value::RawValue::from_string) else {
+/// Publish `contents` as `key`'s entry of `kind` under `directory`. Best
+/// effort.
+fn write<T: Serialize>(directory: &Path, key: &str, kind: Kind, contents: &T) {
+    let (encoded, units) = api::units::write(|| serde_json::to_string(contents));
+    let Ok(contents) = encoded.and_then(serde_json::value::RawValue::from_string) else {
         return;
     };
     let Ok(bytes) = serde_json::to_vec(&Stored {
-        schema: RECORDS_SCHEMA,
+        schema: ENTRY_SCHEMA,
         units,
-        records,
+        contents,
     }) else {
         return;
     };
     if std::fs::create_dir_all(directory).is_ok() {
-        let _ = home::publish(directory, key, &[(RECORDS, &bytes)]);
+        let _ = home::publish(directory, key, &[(kind.file(), &bytes)]);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::{Authority, Policy};
+    use super::Kind;
 
     /// Records written to an entry and read back are the records: a
     /// classification of the same graph from them classifies nothing, to
@@ -304,13 +389,26 @@ mod tests {
             let (first, _, items) = graph
                 .classify_items_on(&Policy::standard(), authority, 8, &[])
                 .expect("the fixture classifies");
-            super::write(&directory, &key, &items);
-            let read = super::read(&directory, &key).expect("the entry reads back");
+            super::write(&directory, &key, Kind::Records, &items);
+            let read: super::Items =
+                super::read(&directory, &key, Kind::Records).expect("the entry reads back");
             let (again, _, carried) = graph
                 .classify_items_on(&Policy::standard(), authority, 8, &[&read])
                 .expect("the fixture classifies from the records read back");
             assert_eq!(first.canonical, again.canonical);
             assert_eq!(carried.fresh(), super::super::items::Fresh::default());
+            let (plan, contributions) =
+                crate::surface::facade::Plan::encode_parts_from(&graph, &first, &[])
+                    .expect("the fixture's plan encodes");
+            assert_eq!(contributions.fresh(), graph.exports().len());
+            super::write(&directory, &key, Kind::Facade, &contributions);
+            let read: super::Contributions =
+                super::read(&directory, &key, Kind::Facade).expect("the facade entry reads back");
+            let (again, kept) =
+                crate::surface::facade::Plan::encode_parts_from(&graph, &first, &[&read])
+                    .expect("the fixture's plan encodes from its contributions");
+            assert_eq!(plan, again, "a plan of kept contributions is the plan");
+            assert_eq!(kept.fresh(), 0);
         }
         std::fs::remove_dir_all(&directory).expect("the scratch directory goes");
     }

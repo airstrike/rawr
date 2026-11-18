@@ -6,6 +6,35 @@ pub fn graph() -> api::Graph<api::Extracted> {
     graph_with_support(false)
 }
 
+/// `graph` sealed again with only the exports `keep` keeps: the API an
+/// earlier demand round had, before a later one named more paths.
+#[cfg(test)]
+pub(crate) fn with_exports(
+    graph: &api::Graph<api::Extracted>,
+    keep: impl Fn(usize) -> bool,
+) -> api::Graph<api::Extracted> {
+    let mut allocation = crate::extract::Allocation::with_limits(usize::MAX, usize::MAX);
+    api::Graph::seal(
+        &api::Context::fixture(),
+        Vec::new(),
+        graph.definitions().cloned().collect(),
+        graph
+            .exports()
+            .enumerate()
+            .filter(|(index, _)| keep(*index))
+            .map(|(_, path)| path.clone())
+            .collect(),
+        graph.implementations().cloned().collect(),
+        graph.scalar_predicate_proofs().cloned().collect(),
+        graph.support().cloned().collect(),
+        graph.anonymous_imports().cloned().collect(),
+        &mut allocation,
+    )
+    .expect("the fixture's parts seal again")
+    .publish(crate::input::proof::Proof::fixture())
+    .expect("the resealed fixture publishes")
+}
+
 /// Return classifier evidence with both complete and rejected recursive support.
 pub fn support_outcomes() -> api::Graph<api::Extracted> {
     graph_with_support(true)

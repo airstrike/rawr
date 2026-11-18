@@ -21,15 +21,16 @@ use super::{
     OutcomeRecord,
 };
 
-/// What a classification found for each item, and what each read.
+/// What classifications found for each item, and what each read: for an
+/// item classified under other reads, a record of each, newest first.
 #[derive(Default, Deserialize, Serialize)]
 pub(crate) struct Items {
     /// Every key an item read, with its digest in the classified graph.
     pub(super) keys: Box<[(Key, Digested)]>,
     #[serde(serialize_with = "entries", deserialize_with = "from_entries")]
-    pub(super) definitions: BTreeMap<api::identity::Definition, Definition>,
+    pub(super) definitions: BTreeMap<api::identity::Definition, Vec<Definition>>,
     #[serde(serialize_with = "entries", deserialize_with = "from_entries")]
-    pub(super) exports: BTreeMap<api::identity::Export, Export>,
+    pub(super) exports: BTreeMap<api::identity::Export, Vec<Export>>,
     /// How many definitions and exports the classification that gave
     /// these classified anew, rather than taking an earlier record.
     #[serde(skip)]
@@ -101,49 +102,48 @@ impl Items {
         self.fresh
     }
 
-    /// The records of these items that `keep_definition` and `keep_export`
-    /// keep, with the keys they read.
+    /// The records of the definitions `keep_definition` keeps and of the
+    /// exports `keep_export` keeps, with the keys they read.
     #[cfg(feature = "rustc-driver")]
     pub(super) fn select(
         &self,
-        mut keep_definition: impl FnMut(&api::identity::Definition, &Definition) -> bool,
+        mut keep_definition: impl FnMut(&api::identity::Definition) -> bool,
         mut keep_export: impl FnMut(&Export) -> bool,
     ) -> Self {
         let mut gathered = Gathered::default();
-        for (id, record) in &self.definitions {
-            if keep_definition(id, record) {
-                gathered.carry_definition(id, self, record);
+        for (id, records) in &self.definitions {
+            if keep_definition(id) {
+                for record in records {
+                    gathered.carry_definition(id, self, record);
+                }
             }
         }
-        for (export, record) in &self.exports {
-            if keep_export(record) {
+        for (export, records) in &self.exports {
+            for record in records.iter().filter(|record| keep_export(record)) {
                 gathered.carry_export(export, self, record);
             }
         }
         gathered.carried()
     }
 
-    /// These items with those of `later` in place of their own: what a
-    /// record of a crate's items holds once another classification of them
-    /// is done.
+    /// These items with those of `later` first: what a record of a crate's
+    /// items holds once another classification of them is done. An item's
+    /// record of other reads stays beside the later one, as another graph
+    /// may read the same as it did, up to [`CANDIDATES`] of them.
     #[cfg(feature = "rustc-driver")]
     pub(super) fn with(&self, later: &Self) -> Self {
         let mut gathered = Gathered::default();
-        for (id, record) in &self.definitions {
-            if !later.definitions.contains_key(id) {
-                gathered.carry_definition(id, self, record);
+        for items in [later, self] {
+            for (id, records) in &items.definitions {
+                for record in records {
+                    gathered.carry_definition(id, items, record);
+                }
             }
-        }
-        for (export, record) in &self.exports {
-            if !later.exports.contains_key(export) {
-                gathered.carry_export(export, self, record);
+            for (export, records) in &items.exports {
+                for record in records {
+                    gathered.carry_export(export, items, record);
+                }
             }
-        }
-        for (id, record) in &later.definitions {
-            gathered.carry_definition(id, later, record);
-        }
-        for (export, record) in &later.exports {
-            gathered.carry_export(export, later, record);
         }
         gathered.carried()
     }
@@ -151,8 +151,11 @@ impl Items {
     /// Whether the classification that gave these classified any of them.
     #[cfg(feature = "rustc-driver")]
     pub(super) fn any_fresh(&self) -> bool {
-        self.definitions.values().any(|record| record.fresh)
-            || self.exports.values().any(|record| record.fresh)
+        self.definitions
+            .values()
+            .flatten()
+            .any(|record| record.fresh)
+            || self.exports.values().flatten().any(|record| record.fresh)
     }
 
     /// Whether these hold no record.
@@ -191,9 +194,10 @@ impl<'items> Check<'items> {
             .iter()
             .enumerate()
             .find_map(|(source, (items, holds))| {
-                let record = items.definitions.get(id)?;
-                (record.own == own && hold(items, holds, &record.premises, context))
-                    .then_some(Carried { source, record })
+                let record = items.definitions.get(id)?.iter().find(|record| {
+                    record.own == own && hold(items, holds, &record.premises, context)
+                })?;
+                Some(Carried { source, record })
             })
     }
 
@@ -209,9 +213,10 @@ impl<'items> Check<'items> {
             .iter()
             .enumerate()
             .find_map(|(source, (items, holds))| {
-                let record = items.exports.get(export)?;
-                (record.own == own && hold(items, holds, &record.premises, context))
-                    .then_some(Carried { source, record })
+                let record = items.exports.get(export)?.iter().find(|record| {
+                    record.own == own && hold(items, holds, &record.premises, context)
+                })?;
+                Some(Carried { source, record })
             })
     }
 
@@ -258,9 +263,20 @@ pub(super) struct Gathered {
     /// Each key with its digest, by its index; none yet for a fresh item's
     /// key, whose digest is read once every item is found.
     keys: Vec<(Key, Option<Digest>)>,
-    definitions: BTreeMap<api::identity::Definition, Definition>,
-    exports: BTreeMap<api::identity::Export, Export>,
+    definitions: BTreeMap<api::identity::Definition, Vec<Definition>>,
+    exports: BTreeMap<api::identity::Export, Vec<Export>>,
     fresh: Fresh,
+}
+
+/// The most records an entry keeps of one item, each of other reads.
+const CANDIDATES: usize = 4;
+
+/// Add `record` to an item's `records` unless one of the same item and
+/// reads is there, or they hold [`CANDIDATES`] already.
+fn candidate<T>(records: &mut Vec<T>, record: T, same: impl Fn(&T, &T) -> bool) {
+    if records.len() < CANDIDATES && !records.iter().any(|kept| same(kept, &record)) {
+        records.push(record);
+    }
 }
 
 impl Gathered {
@@ -299,13 +315,21 @@ impl Gathered {
     ) {
         let mut record = record.clone();
         record.premises = self.carried_premises(earlier, &record.premises);
-        self.definitions.insert(id.clone(), record);
+        candidate(
+            self.definitions.entry(id.clone()).or_default(),
+            record,
+            |kept, record| kept.own == record.own && kept.premises == record.premises,
+        );
     }
 
     fn carry_export(&mut self, export: &api::identity::Export, earlier: &Items, record: &Export) {
         let mut record = record.clone();
         record.premises = self.carried_premises(earlier, &record.premises);
-        self.exports.insert(export.clone(), record);
+        candidate(
+            self.exports.entry(export.clone()).or_default(),
+            record,
+            |kept, record| kept.own == record.own && kept.premises == record.premises,
+        );
     }
 
     /// Gather the definition `id`, whose own digest is `own`.
@@ -322,7 +346,7 @@ impl Gathered {
                 record.own = own;
                 record.fresh = true;
                 record.premises = self.premises(&keys);
-                self.definitions.insert(id.clone(), record);
+                self.definitions.insert(id.clone(), vec![record]);
             }
             Found::Carried(Carried { source, record }) => {
                 let earlier = check
@@ -347,7 +371,7 @@ impl Gathered {
                 record.own = own;
                 record.fresh = true;
                 record.premises = self.premises(&keys);
-                self.exports.insert(export.clone(), record);
+                self.exports.insert(export.clone(), vec![record]);
             }
             Found::Carried(Carried { source, record }) => {
                 let earlier = check
@@ -484,34 +508,6 @@ mod tests {
     use super::super::{Authority, Policy};
     use crate::api;
 
-    /// `graph` sealed again with only the exports `keep` keeps: the API an
-    /// earlier demand round had, before a later one named more paths.
-    fn with_exports(
-        graph: &api::Graph<api::Extracted>,
-        keep: impl Fn(usize) -> bool,
-    ) -> api::Graph<api::Extracted> {
-        let mut allocation = crate::extract::Allocation::with_limits(usize::MAX, usize::MAX);
-        api::Graph::seal(
-            &api::Context::fixture(),
-            Vec::new(),
-            graph.definitions().cloned().collect(),
-            graph
-                .exports()
-                .enumerate()
-                .filter(|(index, _)| keep(*index))
-                .map(|(_, path)| path.clone())
-                .collect(),
-            graph.implementations().cloned().collect(),
-            graph.scalar_predicate_proofs().cloned().collect(),
-            graph.support().cloned().collect(),
-            graph.anonymous_imports().cloned().collect(),
-            &mut allocation,
-        )
-        .expect("the fixture's parts seal again")
-        .publish(crate::input::proof::Proof::fixture())
-        .expect("the resealed fixture publishes")
-    }
-
     fn fixtures() -> [api::Graph<api::Extracted>; 4] {
         [
             crate::test_fixture::iced_profile(),
@@ -555,12 +551,12 @@ mod tests {
         let authority = Authority::production(&limits);
         for fixture in fixtures() {
             let exports = fixture.exports().len();
-            let full = with_exports(&fixture, |_| true);
+            let full = crate::test_fixture::with_exports(&fixture, |_| true);
             let (alone, alone_scratch, _) = full
                 .classify_items_on(&Policy::standard(), authority, 8, &[])
                 .expect("the grown graph classifies");
             for dropped in 0..exports {
-                let earlier = with_exports(&fixture, |index| index != dropped);
+                let earlier = crate::test_fixture::with_exports(&fixture, |index| index != dropped);
                 let (_, _, items) = earlier
                     .classify_items_on(&Policy::standard(), authority, 8, &[])
                     .expect("the earlier graph classifies");
@@ -631,7 +627,7 @@ mod tests {
         let authority = Authority::production(&limits);
         let mut grown = 0;
         for fixture in fixtures() {
-            let full = with_exports(&fixture, |_| true);
+            let full = crate::test_fixture::with_exports(&fixture, |_| true);
             let (alone, alone_scratch, _) = full
                 .classify_items_on(&Policy::standard(), authority, 8, &[])
                 .expect("the grown graph classifies");
