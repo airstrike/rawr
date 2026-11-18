@@ -246,6 +246,38 @@ fn inputs_through_symlinks_are_their_targets_and_match_legacy() {
     assert!(after == reference(recipe(1, &tree.join("file-link"))));
 }
 
+/// A declared path with `..` after a symlinked directory names the link
+/// target's sibling, as Cargo and the OS read it, in the cold proof and the
+/// stored observation alike; a missing one keeps its lexical name (#1173).
+#[test]
+fn a_parent_after_a_symlinked_directory_is_the_targets_sibling() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = Fixture::new();
+    fs::create_dir_all(fixture.0.join("real/inner")).expect("real directory");
+    fs::write(fixture.0.join("real/input"), b"physical").expect("physical sibling");
+    fs::write(fixture.0.join("input"), b"lexical").expect("lexical sibling");
+    fs::create_dir(fixture.0.join("real/tree")).expect("physical tree");
+    symlink(fixture.0.join("real/inner"), fixture.0.join("link")).expect("directory link");
+    for (spelled, physical) in [
+        ("link/../input", Some(fixture.0.join("real/input"))),
+        ("link/../tree", Some(fixture.0.join("real/tree"))),
+        ("link/../absent", None),
+    ] {
+        let path = fixture.0.join(spelled);
+        let actual = observe(&recipe(1, &path), &fixture.0).expect("followed observation");
+        assert!(actual == reference(recipe(1, &path)), "{spelled}");
+        let named = match (&actual, &physical) {
+            (proof::Entry::File { path, bytes: 8, .. }, Some(_))
+            | (proof::Entry::Directory { path, .. }, Some(_))
+            | (proof::Entry::Missing { path, .. }, None) => path.as_ref().to_owned(),
+            (entry, _) => panic!("{spelled}: {}", serde_json::to_value(entry).expect("entry")),
+        };
+        let expected = physical.unwrap_or_else(|| fixture.0.join("absent"));
+        assert_eq!(named, expected.to_str().unwrap(), "{spelled}");
+    }
+}
+
 #[test]
 fn special_file_policy_remains_explicit() {
     let fixture = Fixture::new();

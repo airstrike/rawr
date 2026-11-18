@@ -8,6 +8,7 @@ pub mod profile;
 mod resolved;
 mod source;
 
+pub(crate) use resolved::Product as Resolved;
 #[cfg(feature = "rustc-driver")]
 pub use resolved::{record as record_resolved, resolve_api_semantic, Warm};
 

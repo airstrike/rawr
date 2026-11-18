@@ -1519,10 +1519,23 @@ fn path_entry(
 ) -> Result<Entry> {
     allocation.path(path)?;
     let normalized = super::normalized_absolute(path)?;
-    match fs::metadata(&normalized) {
-        Ok(metadata) if metadata.is_file() => file_entry(role, package_id, &normalized, allocation),
+    // `..` after a symlinked directory leaves the link's target, as Cargo
+    // and the OS read the path: it is inspected as given, and its lexical
+    // form only names it when it is missing. A config candidate keeps the
+    // lexical path Cargo reads it at.
+    let given = if matches!(role, Role::Config) {
+        normalized.clone()
+    } else {
+        std::path::absolute(path).map_err(|source| Error::Io {
+            operation: "read current directory",
+            path: path.to_path_buf(),
+            source,
+        })?
+    };
+    match fs::metadata(&given) {
+        Ok(metadata) if metadata.is_file() => file_entry(role, package_id, &given, allocation),
         Ok(metadata) if metadata.is_dir() => {
-            directory_entry(role, package_id, &normalized, allocation, limits)
+            directory_entry(role, package_id, &given, allocation, limits)
         }
         Ok(_) => Err(super::input(
             "unsupported-input-shape",

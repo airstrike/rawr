@@ -940,11 +940,23 @@ impl<'store> Evaluator<'store> {
                             transform(attempt).map_err(Error::fresh)?.into_parts();
                         let complete = recipe.complete(&discovered_inputs)?;
                         let payload = value.payload()?;
-                        if self
-                            .replay_discovered_scoped_exact(recipe, &validate, complete.action())?
-                            .is_some()
-                        {
-                            return Ok(crate::store::Reserved::Reuse((complete.action(), false)));
+                        // An older entry at this action that no longer
+                        // checks is replaced when this one publishes, as a
+                        // plain node's is (#614, #615).
+                        match self.replay_discovered_scoped_exact(
+                            recipe,
+                            &validate,
+                            complete.action(),
+                        ) {
+                            Ok(Some(_)) => {
+                                return Ok(crate::store::Reserved::Reuse((
+                                    complete.action(),
+                                    false,
+                                )));
+                            }
+                            Ok(None) => {}
+                            Err(error) if rebuilds(&error) => {}
+                            Err(error) => return Err(error),
                         }
                         Ok(crate::store::Reserved::Publish {
                             result: (complete.action(), true),
@@ -1368,7 +1380,10 @@ pub enum Error {
     Allocation,
     #[error("node store mutation requires bounded cleanup: {0}")]
     CleanupRequired(&'static str),
-    #[error("node evaluation failed and its reservation cleanup also failed")]
+    /// The failure is what the run reports, as it would alone; releasing
+    /// the reservation's failure follows it, since it can share the cause,
+    /// as a full disk does (#641, D664).
+    #[error("{failure}; releasing its build reservation also failed: {cleanup}")]
     Cleanup {
         #[source]
         failure: Box<Error>,

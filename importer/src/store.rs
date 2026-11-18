@@ -86,7 +86,7 @@ pub(crate) const FIXED_DIRECTORIES: &[&str] = &[
 #[must_use]
 pub fn home(cargo_home: &Path) -> PathBuf {
     if let Some(home) = std::env::var_os("RAWR_HOME") {
-        return home.into();
+        return absolute(home.into());
     }
     match TEST_HOME.get() {
         Some(test) if is_default_cargo_home(cargo_home) => test.clone(),
@@ -102,7 +102,17 @@ pub fn home(cargo_home: &Path) -> PathBuf {
 /// directory, and rawr's runtime compiles once for the suite.
 #[must_use]
 pub fn runtime_home(cargo_home: &Path) -> PathBuf {
-    std::env::var_os("RAWR_RUNTIME_HOME").map_or_else(|| home(cargo_home), PathBuf::from)
+    std::env::var_os("RAWR_RUNTIME_HOME")
+        .map_or_else(|| home(cargo_home), |home| absolute(home.into()))
+}
+
+/// A home a variable names, against the current directory when relative,
+/// as Cargo reads a relative `CARGO_HOME`. Every path rawr derives from the
+/// home is then absolute, so it names one place whichever directory a
+/// command that is handed it runs in (#2226). The path is as given when the
+/// current directory can't be read.
+fn absolute(home: PathBuf) -> PathBuf {
+    std::path::absolute(&home).unwrap_or(home)
 }
 
 /// A test process's stand-in for the real default home; fixture Cargo homes
@@ -681,10 +691,10 @@ impl Store {
         let envelope = Envelope::direct(recipe, digest, bytes.len())?.encode()?;
         // Every caller publishes after a miss recheck under the action's or
         // execution's lease, so an entry already at this action is one that
-        // check found stale or damaged: it is retired and replaced (#614).
-        if bundle.is_none()
-            && entry::existing_directory(&self.root, &action_relative(K::KIND, recipe.action()))?
-                .is_some()
+        // check found stale or damaged: it is retired and replaced, with its
+        // own bundle when it has one (#614, #615).
+        if entry::existing_directory(&self.root, &action_relative(K::KIND, recipe.action()))?
+            .is_some()
         {
             eviction::retire_replaced(
                 publication,

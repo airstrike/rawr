@@ -50,7 +50,13 @@ pub(in crate::input) fn joined(
     Ok(output)
 }
 
-fn absolute(path: &Path, base: &Path, budget: &mut Budget<'_>) -> Result<PathBuf> {
+/// `path` against `base` when relative, with its `..` kept for the OS to
+/// read after any symlink before it.
+pub(in crate::input) fn absolute(
+    path: &Path,
+    base: &Path,
+    budget: &mut Budget<'_>,
+) -> Result<PathBuf> {
     if path.is_absolute() {
         return budget.owned_path(path.as_os_str().as_encoded_bytes());
     }

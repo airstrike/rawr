@@ -351,3 +351,45 @@ fn watched_paths_are_in_the_order_the_stored_entry_reads() {
     };
     assert!(paths.windows(2).all(|pair| pair[0] < pair[1]), "{paths:?}");
 }
+
+/// A project that declares `[workspace]` is its own workspace's root, so
+/// Cargo searches no directory above it: a manifest there changing, as a
+/// checkout's around a project does, is no drift. Above a member that
+/// declares none, every ancestor is still observed (#894).
+#[test]
+fn a_change_above_a_workspace_root_is_no_drift() {
+    let fixture = Fixture::new();
+    let outer = fixture.file("Cargo.toml", "[workspace]\nmembers=[]\n");
+    let owner = fixture.file(
+        "project/Cargo.toml",
+        "[package]\nname='project'\nversion='1.0.0'\n[workspace]\n",
+    );
+    let limits = cargo::Limits::standard();
+    let mut allocation = Allocation::for_replay(&limits);
+    let mut account = Account::borrow(&mut allocation, &limits);
+    let before = capture(Box::from([owner]), &mut account).unwrap();
+    fs::write(&outer, "[workspace]\nmembers=[]\nresolver='3'\n").unwrap();
+    before.require(&mut account).unwrap();
+    let Entry::Workspace { paths, .. } = &before.entry else {
+        panic!("workspace entry")
+    };
+    assert!(!paths.iter().any(|path| Path::new(path.as_ref()) == outer));
+
+    // Cargo's search from a member ends at the first root above it.
+    let member = fixture.file("project/member/Cargo.toml", "[package]\nname='member'\n");
+    let before = capture(Box::from([member]), &mut account).unwrap();
+    fs::write(&outer, "[workspace]\nmembers=[]\nresolver='2'\n").unwrap();
+    before.require(&mut account).unwrap();
+
+    // Above a member with no root between, and above a root that excludes
+    // paths, the search goes on.
+    let member = fixture.file("member/Cargo.toml", "[package]\nname='member'\n");
+    let before = capture(Box::from([member]), &mut account).unwrap();
+    fs::write(&outer, "[workspace]\nmembers=['member']\n").unwrap();
+    assert!(before.require(&mut account).is_err());
+    let nested = fixture.file("excluding/member/Cargo.toml", "[package]\nname='nested'\n");
+    fixture.file("excluding/Cargo.toml", "[workspace]\nexclude=['other']\n");
+    let before = capture(Box::from([nested]), &mut account).unwrap();
+    fs::write(&outer, "[workspace]\nmembers=[]\n").unwrap();
+    assert!(before.require(&mut account).is_err());
+}

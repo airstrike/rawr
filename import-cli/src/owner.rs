@@ -1550,8 +1550,8 @@ fn prepare_on_lane(
                     // directory may be why: it is cleaned, and preparing
                     // again extracts afresh (D742).
                     Err(rerun) if restarts.again(&rerun) => continue,
-                    Err(rerun) => framework(format!("{rerun}\n\n{error}"), source.clone()),
-                    Ok(Some(drift)) => framework(format!("{drift}\n\n{error}"), source.clone()),
+                    Err(rerun) => framework(explained(&error, &rerun), source.clone()),
+                    Ok(Some(drift)) => framework(explained(&error, &drift), source.clone()),
                     Ok(None) => framework(error, source.clone()),
                 }
                 .into());
@@ -1732,8 +1732,29 @@ pub fn framework(
     crate::report::failure(crate::report::Task::Build, error, source.into())
 }
 
+/// A failed build's error, then a build-script difference that may be why:
+/// the build's own error leads, since the difference may have nothing to
+/// do with it (#1423).
+fn explained(error: &impl std::fmt::Display, cause: &impl std::fmt::Display) -> String {
+    format!("{error}\n\nThis may be why: {cause}")
+}
+
 /// A failure to watch the program's files for saves, reported against
 /// `source` as [`framework`] reports a failure.
 fn watching(error: impl std::fmt::Display, source: diagnostic::Source) -> diagnostic::Report {
     crate::report::failure(crate::report::Task::Watch, error, Some(source))
+}
+
+#[cfg(test)]
+mod tests {
+    /// A failed build reports its own error first, and a build-script
+    /// difference after it only as a possible cause (#1423).
+    #[test]
+    fn a_failed_build_leads_with_its_own_error() {
+        let shown = super::explained(&"error[E0425]: cannot find value `x`", &"`ring` differs");
+        assert_eq!(
+            shown,
+            "error[E0425]: cannot find value `x`\n\nThis may be why: `ring` differs"
+        );
+    }
 }

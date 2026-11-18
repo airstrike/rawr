@@ -3,7 +3,10 @@
 //! This is deliberately not a Cargo workspace selector. Every owner/ancestor
 //! candidate and recursively named workspace is observed, including unrelated
 //! malformed manifests. Cargo's own metadata and Build supply semantics; this
-//! image only proves that the manifests they read did not change.
+//! image only proves that the manifests they read did not change. The one
+//! rule of Cargo's it keeps is that the search for a workspace ends at a
+//! manifest declaring `[workspace]`, so a change above a workspace's root
+//! is no drift.
 
 use std::fs::{self, File};
 use std::io::Read as _;
@@ -212,17 +215,18 @@ fn insert(paths: &mut Slots<PathBuf>, path: &Path, account: &mut Account<'_>) ->
     Ok(())
 }
 
-fn ancestors(paths: &mut Slots<PathBuf>, manifest: &Path, account: &mut Account<'_>) -> Result<()> {
-    insert(paths, manifest, account)?;
-    let normalized = account.normalize(manifest)?;
-    insert(paths, &normalized, account)?;
-    for directory in manifest.ancestors().skip(2) {
-        let candidate = account.join(directory, Path::new("Cargo.toml"))?;
-        insert(paths, &candidate, account)?;
-        let normalized = account.normalize(&candidate)?;
-        insert(paths, &normalized, account)?;
-    }
-    Ok(())
+/// The candidate one directory above `manifest`'s, as spelled and
+/// normalized: where Cargo looks next for the workspace `manifest` may
+/// belong to. Each candidate that is not a workspace's root leads on to the
+/// one above it once it is observed, so the search ends where Cargo's does.
+fn above(paths: &mut Slots<PathBuf>, manifest: &Path, account: &mut Account<'_>) -> Result<()> {
+    let Some(directory) = manifest.parent().and_then(Path::parent) else {
+        return Ok(());
+    };
+    let candidate = account.join(directory, Path::new("Cargo.toml"))?;
+    insert(paths, &candidate, account)?;
+    let normalized = account.normalize(&candidate)?;
+    insert(paths, &normalized, account)
 }
 
 pub(crate) fn capture(roots: Box<[PathBuf]>, account: &mut Account<'_>) -> Result<Image> {
@@ -245,13 +249,15 @@ fn scan(
     account: &mut Account<'_>,
 ) -> Result<(Entry, Slots<PathBuf>)> {
     let mut hash = Sha256::new();
-    account.frame(&mut hash, b"rawr.cargo.workspace-observations/v1")?;
+    account.frame(&mut hash, b"rawr.cargo.workspace-observations/v2")?;
     account.frame(&mut hash, &(roots.len() as u64).to_le_bytes())?;
     let mut candidates = Slots::new();
     for root in roots {
         account.frame(&mut hash, root.as_os_str().as_encoded_bytes())?;
         if captured.is_none() {
-            ancestors(&mut candidates, root, account)?;
+            insert(&mut candidates, root, account)?;
+            let normalized = account.normalize(root)?;
+            insert(&mut candidates, &normalized, account)?;
         }
     }
     if let Some(captured) = captured {
@@ -310,6 +316,9 @@ fn scan(
             Ok(metadata) => metadata,
             Err(source) if absent(&source).is_some() => {
                 account.frame(&mut hash, absent(&source).expect("matched absence"))?;
+                if captured.is_none() {
+                    above(&mut candidates, &path, account)?;
+                }
                 continue;
             }
             Err(source) => return Err(io("inspect workspace candidate", &path, source)),
@@ -319,10 +328,11 @@ fn scan(
         account.frame(&mut hash, canonical.as_os_str().as_encoded_bytes())?;
         insert(&mut watched, &canonical, account)?;
         if !metadata.is_file() {
+            if captured.is_none() {
+                above(&mut candidates, &path, account)?;
+                above(&mut candidates, &canonical, account)?;
+            }
             continue;
-        }
-        if captured.is_none() {
-            ancestors(&mut candidates, &canonical, account)?;
         }
         let bytes = read(&canonical, account)?;
         account.frame(&mut hash, &bytes)?;
@@ -333,32 +343,56 @@ fn scan(
         if captured.is_some() {
             continue;
         }
-        let Ok(source) = std::str::from_utf8(&bytes) else {
-            continue;
-        };
-        let document = match document::parse(
-            source,
-            u32::try_from(account.limits.depth).unwrap_or(u32::MAX),
-            account,
-        ) {
-            Ok(document) => document,
-            Err(document::Error::Invalid(diagnostic)) => match diagnostic.tag {
-                document::Tag::Depth => {
-                    return Err(Error::Limit {
-                        resource: "workspace TOML depth",
-                        limit: account.limits.depth.min(80),
-                        actual: account.limits.depth.min(80) + 1,
-                    })
+        let document = match std::str::from_utf8(&bytes) {
+            Ok(source) => match document::parse(
+                source,
+                u32::try_from(account.limits.depth).unwrap_or(u32::MAX),
+                account,
+            ) {
+                Ok(document) => Some(document),
+                Err(document::Error::Invalid(diagnostic)) => match diagnostic.tag {
+                    document::Tag::Depth => {
+                        return Err(Error::Limit {
+                            resource: "workspace TOML depth",
+                            limit: account.limits.depth.min(80),
+                            actual: account.limits.depth.min(80) + 1,
+                        })
+                    }
+                    document::Tag::Internal => {
+                        return Err(graph_error(node::Error::State(
+                            "workspace TOML parser state",
+                        )))
+                    }
+                    _ => None,
+                },
+                Err(document::Error::Admission(error)) => return Err(error),
+                Err(document::Error::Allocation | document::Error::Overflow) => {
+                    return Err(overflow())
                 }
-                document::Tag::Internal => {
-                    return Err(graph_error(node::Error::State(
-                        "workspace TOML parser state",
-                    )))
-                }
-                _ => continue,
             },
-            Err(document::Error::Admission(error)) => return Err(error),
-            Err(document::Error::Allocation | document::Error::Overflow) => return Err(overflow()),
+            Err(_) => None,
+        };
+        // A manifest that declares `[workspace]` is a workspace's root: Cargo
+        // searches no directory above it, for itself or for a member below
+        // it. One that excludes paths may not hold the member, so the search
+        // goes on above it, as it does above any other manifest (#894).
+        let root = document.as_ref().is_some_and(|document| {
+            match document
+                .table()
+                .get("workspace")
+                .map(document::Spanned::value)
+            {
+                Some(document::Value::Table(workspace)) => workspace.get("exclude").is_none(),
+                Some(_) => true,
+                None => false,
+            }
+        });
+        if !root {
+            above(&mut candidates, &path, account)?;
+            above(&mut candidates, &canonical, account)?;
+        }
+        let Some(document) = document else {
+            continue;
         };
         let package = document
             .table()
@@ -395,7 +429,11 @@ fn scan(
                 .ok_or_else(|| drift("workspace manifest lacks parent"))?;
             let directory = account.join(parent, Path::new(redirect.as_str()))?;
             let manifest = account.join(&directory, Path::new("Cargo.toml"))?;
-            ancestors(&mut candidates, &manifest, account)?;
+            // Its ancestors are observed once it is read, unless it is a
+            // workspace's root.
+            insert(&mut candidates, &manifest, account)?;
+            let normalized = account.normalize(&manifest)?;
+            insert(&mut candidates, &normalized, account)?;
         }
     }
     // In the bytes' order, as the stored entry reads them back: a path's
