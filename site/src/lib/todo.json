@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-18",
-  "version": "0.4.14",
+  "version": "0.4.15",
   "examples": {
     "running": 56,
     "total": 56,
@@ -9,14 +9,16 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
-      "entries": [
-        {"text":"Remembered Cargo outputs aren't saved when a manifest, config or target directory Cargo read changed after Cargo started, so the next run asks Cargo again instead of pairing old metadata with the edited manifest.","issues":[2246]},
-        {"text":"A build script without rerun-if inputs is proved by the files Cargo lists for its package (Git's tracked and unignored files, else a walk without hidden names, with `include` and `exclude`), so ignored files written at run time no longer re-resolve it.","issues":[1209]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.15",
+        "date": "2026-11-18",
+        "entries": [
+          {"text":"Remembered Cargo outputs aren't saved when a manifest, config or target directory Cargo read changed after Cargo started, so the next run asks Cargo again instead of pairing old metadata with the edited manifest.","issues":[2246]},
+          {"text":"A build script without rerun-if inputs is proved by the files Cargo lists for its package (Git's tracked and unignored files, else a walk without hidden names, with `include` and `exclude`), so ignored files written at run time no longer re-resolve it.","issues":[1209]}
+        ]
+      },
       {
         "version": "0.4.14",
         "date": "2026-11-18",
@@ -4064,7 +4066,7 @@
     {"issue":1206,"title":"std::thread::sleep traps rawr-web","state":"closed","category":"Platforms","release":"0.4.1"},
     {"issue":1207,"title":"rawr-repl drops a Drop value at the end of the line that bound it","state":"open","category":"Divergences from rustc"},
     {"issue":1208,"title":"A root package's build script that declares no rerun-if input runs again only when the generated crate changes","state":"open","category":"Divergences from rustc"},
-    {"issue":1209,"title":"The package-tree witness of a build script without rerun-if inputs sees more files than Cargo lists","state":"closed","category":"Health"},
+    {"issue":1209,"title":"The package-tree witness of a build script without rerun-if inputs sees more files than Cargo lists","state":"closed","category":"Health","release":"0.4.15"},
     {"issue":1210,"title":"Decide the fate of input/membership, the unwired contained cargo-package listing","state":"open","category":"Health"},
     {"issue":1211,"title":"bindings::tests::a_difference_cleans_the_nightly_run_once_and_then_is_drift fails under the full lib suite","state":"closed","category":"Health"},
     {"issue":1212,"title":"An opaque iterator's next declared without its owner through a re-export; core's Iterator at an unstable path","state":"open","category":"Health"},
@@ -5100,7 +5102,7 @@
     {"issue":2243,"title":"`Itertools::sorted` on `RepeatN<String>` is E0599 under rawr check, which cargo accepts","state":"open","category":"Divergences from rustc"},
     {"issue":2244,"title":"A program with dependencies runs again: rawr's shared runtime compiles, which it didn't on 0.4.11","state":"closed","category":"Health","release":"0.4.12"},
     {"issue":2245,"title":"A profile entry that decodes stale under its own key panics in the full path after the warm launch falls back","state":"closed","category":"Shared dependency cache (D607)","release":"0.4.14"},
-    {"issue":2246,"title":"Remembered Cargo outputs can pair old metadata with a transitive manifest edited before they're saved","state":"closed","category":"Shared dependency cache (D607)"},
+    {"issue":2246,"title":"Remembered Cargo outputs can pair old metadata with a transitive manifest edited before they're saved","state":"closed","category":"Shared dependency cache (D607)","release":"0.4.15"},
     {"issue":2247,"title":"A surface schema change leaves old resolved entries unevicted, because RESOLVED_SCHEMA doesn't fold SURFACE_SCHEMA","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":2248,"title":"A check reaches its demand closure in many rounds, each paying probes, harness work and a resolution","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":2249,"title":"Remembered Cargo outputs are never kept for a root whose path has characters outside [A-Za-z0-9/._-]","state":"open","category":"Shared dependency cache (D607)"}
