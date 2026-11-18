@@ -5,6 +5,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
+- `use krate::{module::Type}` and nested groups, `self` and globs inside a `use` group reach a dependency's bindings, so a type a nested member binds no longer fails with E0433. iced's integration example builds and agrees with cargo again. (#2250)
+- A directory rustc searches that another build changes during extraction restarts the build, then reports "`<path>` changed during the build; run it again", instead of "internal error: rawr misread rustc's output". A completion that truly disagrees with what was observed is still a misread. (#2251)
 
 ## 0.4.16 (2026-11-18)
 
