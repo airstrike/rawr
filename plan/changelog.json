@@ -4,12 +4,17 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
-    "entries": [
-      {"text":"The browser's ratatui to-do list draws on every animation frame through ratzilla's `draw_web`, so an edit to `draw` shows at once, with its to-dos kept.","issues":[1457]},
-      {"text":"A method of a generic impl that names its type's parameters its own way, as ratzilla's `impl<T> WebRenderer for Terminal<T>` names `Terminal<B>`'s `B`, takes the receiver's type arguments, so `terminal.draw_web(..)` builds.","issues":[2228]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.4.3",
+      "date": "2026-11-18",
+      "entries": [
+        {"text":"The browser's ratatui to-do list draws on every animation frame through ratzilla's `draw_web`, so an edit to `draw` shows at once, with its to-dos kept.","issues":[1457]},
+        {"text":"A method of a generic impl that names its type's parameters its own way, as ratzilla's `impl<T> WebRenderer for Terminal<T>` names `Terminal<B>`'s `B`, takes the receiver's type arguments, so `terminal.draw_web(..)` builds.","issues":[2228]}
+      ]
+    },
     {
       "version": "0.4.2",
       "date": "2026-11-17",
