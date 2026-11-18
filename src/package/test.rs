@@ -1,9 +1,11 @@
 //! A crate's `#[test]` functions, as `rustc --test` collects them for its
 //! harness: each with its path from the crate root, what it must do to pass
 //! (`#[should_panic]`) and whether it is left out (`#[ignore]`), and the
-//! harness that runs them ([`harness`]).
+//! harness that runs them ([`harness`]), which catches and prints their
+//! panics as libtest does ([`panic`]).
 
 pub mod harness;
+pub mod panic;
 
 use std::path::Path;
 

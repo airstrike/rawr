@@ -2082,23 +2082,7 @@ fn rawr_test_of_a_program_with_a_dependency_reports_what_cargo_test_reports() {
         .output()
         .unwrap();
 
-    // What differs between two runs of one build: the time taken, and
-    // the id a panicking thread's name is printed with.
-    let report = |output: &Output| {
-        text(&output.stdout)
-            .lines()
-            .map(|line| match line.split_once(" finished in ") {
-                Some((result, _)) => result.to_owned(),
-                None => match (line.split_once("' ("), line.split_once(") panicked at ")) {
-                    (Some((thread, _)), Some((_, place))) => {
-                        format!("{thread}' panicked at {place}")
-                    }
-                    _ => line.to_owned(),
-                },
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
+    let report = libtest_report;
     assert!(
         report(&rawr).contains("test tests::compares ... FAILED"),
         "stdout:\n{}\nstderr:\n{}",
@@ -2114,6 +2098,94 @@ fn rawr_test_of_a_program_with_a_dependency_reports_what_cargo_test_reports() {
         "{}",
         text(&rawr.stderr)
     );
+}
+
+/// `output`'s report of libtest's, without what differs between two runs
+/// of one build: the time taken, and the id a panicking thread's name is
+/// printed with.
+fn libtest_report(output: &Output) -> String {
+    text(&output.stdout)
+        .lines()
+        .map(|line| match line.split_once(" finished in ") {
+            Some((result, _)) => result.to_owned(),
+            None => match (line.split_once("' ("), line.split_once(") panicked at ")) {
+                (Some((thread, _)), Some((_, place))) => {
+                    format!("{thread}' panicked at {place}")
+                }
+                _ => line.to_owned(),
+            },
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// A test that panics in a dependency's code fails alone under `rawr
+/// test`, as libtest's test thread catches it (#2254): the panic is
+/// printed on a thread named after the test, with the test's output, the
+/// tests after it run, a `#[should_panic]` test passes on a dependency's
+/// panic, and the report and status are `cargo test`'s.
+#[test]
+fn rawr_test_catches_a_panic_in_a_dependencys_code_per_test() {
+    let root = crate::support::fresh("plain-test-native-panic");
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::create_dir_all(root.join("checked/src")).unwrap();
+    fs::copy(
+        Path::new(FIXTURE).join("rust-toolchain.toml"),
+        root.join("rust-toolchain.toml"),
+    )
+    .unwrap();
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"native-panic\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\
+         publish = false\n\n[dependencies]\nchecked = { path = \"checked\" }\n\n[workspace]\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("checked/Cargo.toml"),
+        "[package]\nname = \"checked\"\nversion = \"0.1.0\"\nedition = \"2024\"\npublish = false\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("checked/src/lib.rs"),
+        "pub fn below_ten(n: u32) -> u32 {\n    assert!(n < 10, \"too big: {n}\");\n    n\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/main.rs"),
+        "// rawr\nfn main() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    \
+         fn a_panics_in_the_dependency() {\n        println!(\"checking\");\n        \
+         checked::below_ten(12);\n    }\n\n    #[test]\n    fn b_passes() {\n        \
+         assert_eq!(checked::below_ten(3), 3);\n    }\n\n    #[test]\n    \
+         #[should_panic(expected = \"too big\")]\n    fn c_expects_the_panic() {\n        \
+         checked::below_ten(11);\n    }\n}\n",
+    )
+    .unwrap();
+
+    // Captured, a test's lines read the same on any number of threads.
+    let rawr = rawr_import(&root, &["test"]);
+    let cargo = Command::new("cargo")
+        .args(["test", "--", "--test-threads=1"])
+        .current_dir(&root)
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RUSTUP_TOOLCHAIN")
+        .output()
+        .unwrap();
+
+    assert!(
+        libtest_report(&rawr).contains("test result: FAILED. 2 passed; 1 failed;"),
+        "stdout:\n{}\nstderr:\n{}",
+        text(&rawr.stdout),
+        text(&rawr.stderr)
+    );
+    assert_eq!(
+        libtest_report(&rawr),
+        libtest_report(&cargo),
+        "{}",
+        text(&cargo.stderr)
+    );
+    assert_eq!(rawr.status.code(), Some(101));
+    assert_eq!(rawr.status.code(), cargo.status.code());
 }
 
 /// `rawr test` links the package's `[dev-dependencies]` into its tests

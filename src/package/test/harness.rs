@@ -11,6 +11,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::time::Instant;
 
+use super::panic::Output;
 use super::{Expected, Test};
 use crate::{diagnostic, Dynamic, Engine, EvalAltResult};
 
@@ -35,6 +36,8 @@ pub struct Options {
     ignored: Ignored,
     /// `--nocapture`: tests print as they run.
     nocapture: bool,
+    /// `--test-threads`: how many threads libtest would run tests on.
+    threads: Option<usize>,
 }
 
 /// What becomes of the tests `#[ignore]` leaves out.
@@ -90,14 +93,16 @@ impl Options {
                 "--skip" => options
                     .skip
                     .push(arguments.next().ok_or("`--skip` needs a filter")?),
-                // Tests run one after another, as with one thread.
                 "--test-threads" => {
-                    arguments.next().ok_or("`--test-threads` needs a number")?;
+                    let threads = arguments.next().ok_or("`--test-threads` needs a number")?;
+                    options.threads = Some(threads_from(&threads)?);
                 }
                 option if option.starts_with("--skip=") => {
                     options.skip.push(option["--skip=".len()..].to_owned());
                 }
-                option if option.starts_with("--test-threads=") => {}
+                option if option.starts_with("--test-threads=") => {
+                    options.threads = Some(threads_from(&option["--test-threads=".len()..])?);
+                }
                 option if option.starts_with('-') => {
                     return Err(format!("unknown argument `{option}`"));
                 }
@@ -111,6 +116,26 @@ impl Options {
     #[must_use]
     pub const fn captures(&self) -> bool {
         !self.nocapture
+    }
+
+    /// Whether libtest would run tests on more than one thread, and so
+    /// print each test's name with its result rather than before it runs.
+    /// The harness runs them one after another on one thread either way.
+    fn concurrent(&self) -> bool {
+        let threads = self
+            .threads
+            .or_else(|| std::env::var("RUST_TEST_THREADS").ok()?.parse().ok())
+            .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, usize::from));
+        threads > 1
+    }
+
+    /// Where a test's panics are printed.
+    const fn output(&self) -> Output {
+        if self.nocapture {
+            Output::Printed
+        } else {
+            Output::Captured
+        }
     }
 
     /// Whether `test` runs or is reported, as libtest's filters select.
@@ -131,12 +156,24 @@ impl Options {
 /// Capture what programs `engine` runs print, for [`run`] to show with a
 /// test's failure.
 pub fn capture(engine: &mut Engine) {
-    engine.on_output(|_, text| {
-        CAPTURED
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push_str(text);
-    });
+    engine.on_output(|_, text| capture_text(text));
+}
+
+/// `threads`, `--test-threads`'s value, as libtest reads it.
+fn threads_from(threads: &str) -> Result<usize, String> {
+    threads
+        .parse()
+        .ok()
+        .filter(|threads| *threads > 0)
+        .ok_or_else(|| "argument for --test-threads must be a number > 0".to_owned())
+}
+
+/// Add `text` to what the running test printed.
+pub(super) fn capture_text(text: &str) {
+    CAPTURED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push_str(text);
 }
 
 /// What the tests printed since this was last asked.
@@ -158,8 +195,7 @@ pub fn run(tests: &[Test], options: &Options, place: &mut impl Tests) -> u8 {
     let started = Instant::now();
     let (mut passed, mut ignored) = (0, 0);
     let mut failures = Vec::new();
-    // Rust's panic hook notes backtraces after a process's first panic.
-    let mut noted = false;
+    let concurrent = options.concurrent();
     // What the top level printed is no test's.
     captured();
     for test in selected {
@@ -177,48 +213,51 @@ pub fn run(tests: &[Test], options: &Options, place: &mut impl Tests) -> u8 {
             ignored += 1;
             continue;
         }
-        print!("test {label} ... ");
-        let _ = std::io::stdout().flush();
-        let returned = place.call(test);
-        let mut output = captured();
+        // libtest names a test before it runs on one thread, else with
+        // its result.
+        if !concurrent {
+            print!("test {label} ... ");
+            let _ = std::io::stdout().flush();
+        }
+        let finished = |status: &str| {
+            if concurrent {
+                println!("test {label} ... {status}");
+            } else {
+                println!("{status}");
+            }
+        };
+        // A run-time failure, the program's panic, is printed while the
+        // test still runs on this thread; a panic that unwinds out of the
+        // call, from native code the test called, was printed as it
+        // happened.
+        let returned = super::panic::catch(test.name(), options.output(), || {
+            place.call(test).map_err(|error| {
+                let report = place.located(&error);
+                super::panic::print(|thread| diagnostic::hooked(&report, thread));
+                diagnostic::panic_message(&report)
+            })
+        });
         let panic = match returned {
-            Ok(value) => {
+            Ok(Ok(value)) => {
                 if let Some(Err(error)) = value.try_cast::<Result<Dynamic, Dynamic>>() {
+                    let mut output = captured();
                     output.push_str(&format!("Error: {error:?}\n"));
                     failures.push((test, output));
-                    println!("FAILED");
+                    finished("FAILED");
                     continue;
                 }
                 None
             }
-            Err(error) => {
-                let report = place.located(&error);
-                let message = diagnostic::panic_message(&report);
-                let mut text = format!("\n{}", diagnostic::panicked(&report, test.name()));
-                if !std::mem::replace(&mut noted, true) {
-                    text.push_str(&format!("{}\n", diagnostic::BACKTRACE_NOTE));
-                }
-                Some((message, text))
-            }
+            Ok(Err(message)) | Err(message) => Some(message),
         };
-        let printed = |output: &mut String, text: &str| {
-            if options.nocapture {
-                eprint!("{text}");
-            } else {
-                output.push_str(text);
-            }
-        };
+        let mut output = captured();
         let verdict = match (test.expected(), panic) {
             (Expected::Return, None) | (Expected::Panic(None), Some(_)) => Verdict::Passed,
-            (Expected::Return, Some((_, text))) => {
-                printed(&mut output, &text);
-                Verdict::Failed(output)
-            }
-            (Expected::Panic(Some(expected)), Some((message, text))) => {
+            (Expected::Return, Some(_)) => Verdict::Failed(output),
+            (Expected::Panic(Some(expected)), Some(message)) => {
                 if message.contains(&**expected) {
                     Verdict::Passed
                 } else {
-                    printed(&mut output, &text);
                     output.push_str(&format!(
                         "note: panic did not contain expected string\n      panic message: \
                          {message:?}\n expected substring: {expected:?}"
@@ -239,11 +278,11 @@ pub fn run(tests: &[Test], options: &Options, place: &mut impl Tests) -> u8 {
         };
         match verdict {
             Verdict::Passed => {
-                println!("ok");
+                finished("ok");
                 passed += 1;
             }
             Verdict::Failed(output) => {
-                println!("FAILED");
+                finished("FAILED");
                 failures.push((test, output));
             }
         }
