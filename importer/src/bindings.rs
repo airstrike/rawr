@@ -739,13 +739,13 @@ impl Settled {
                 .iter()
                 .map(|(package, outputs)| (package.as_str(), outputs.as_slice()))
                 .collect(),
+            Self::Inventory {
+                packages, entry, ..
+            } => recorded(packages, entry.scripts()),
             Self::InventoryRead {
                 packages, scripts, ..
-            } => packages
-                .iter()
-                .filter_map(|package| Some((package.as_ref(), scripts.get(package)?)))
-                .collect(),
-            Self::Extracted { nightly: None, .. } | Self::Inventory { .. } => Vec::new(),
+            } => recorded(packages, scripts),
+            Self::Extracted { nightly: None, .. } => Vec::new(),
         }
     }
 
@@ -757,15 +757,29 @@ impl Settled {
     }
 
     /// Remove this entry's table, so preparing again misses it: a table
-    /// this run extracted waits in `staged`.
+    /// this run extracted waits in `staged`, and facts this run captured
+    /// wait in the project's store.
     fn evict(&self, staged: &Path) {
         match self {
             Self::Extracted { key, .. } => home::evict(staged, key),
             Self::Read { directory, key, .. } => home::evict(directory, key),
             Self::InventoryRead { home, key, .. } => home::evict(home, key),
-            Self::Inventory { .. } => {}
+            Self::Inventory {
+                local, local_key, ..
+            } => home::evict(local, local_key),
         }
     }
+}
+
+/// Each of `packages` with the build-script outputs `scripts` records for it.
+fn recorded<'a>(
+    packages: &'a [Box<str>],
+    scripts: &'a crate::applicability::store::Scripts,
+) -> Vec<(&'a str, &'a [Script])> {
+    packages
+        .iter()
+        .filter_map(|package| Some((package.as_ref(), scripts.get(package)?)))
+        .collect()
 }
 
 pub(crate) struct Publish {
@@ -2606,6 +2620,55 @@ include!(concat!(env!("OUT_DIR"), "/generated.rs"));
             drift.contains("`demo`") && drift.contains("`fixture`"),
             "{drift}"
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Facts this run captured where a build script gave the nightly other
+    /// outputs than the project's build are a miss once, as a table is: the
+    /// project's copy goes, so no later run serves it, the nightly's run is
+    /// marked to clean, and the run prepares again to capture them afresh.
+    /// The same difference after that run is drift, and the facts stay
+    /// with the project (#1025).
+    #[test]
+    fn facts_captured_under_a_stale_output_are_captured_again() {
+        use crate::applicability::{inventory::Entry, store::Scripts};
+        let root = scratch("inventory-rerun");
+        let nightly = root.join("nightly");
+        let (shared, local) = (root.join("home"), root.join("local"));
+        let package = "registry+https://index#demo@1.0.0".to_owned();
+        let rawr = runner(
+            &root,
+            &BTreeMap::from([(package.clone(), vec![script("project")])]),
+        );
+        let local_key = crate::extract::engine::hex(&[3; 32]);
+        let settle = |output: &str| {
+            home::publish(&local, &local_key, &[("entry.json", b"{}")]).unwrap();
+            let entry = Entry::fixture(
+                [3; 32],
+                Scripts::from_map(BTreeMap::from([(package.clone(), vec![script(output)])])),
+            );
+            let mut settlement = Settlement {
+                nightly: Some(nightly.clone()),
+                ..Settlement::default()
+            };
+            let packages = [Box::from(package.as_str())];
+            settlement.inventory(&rawr, &shared, &[4; 32], &local, &packages, &entry);
+            settlement.settle()
+        };
+        let stale = super::Stale::of(&nightly);
+        let rerun = settle("other").unwrap_err();
+        assert!(rerun.is_stale());
+        assert!(
+            !local.join(&local_key).exists(),
+            "the stale facts stayed with the project"
+        );
+        assert_eq!(stale.pending(), ["demo"]);
+        stale.cleaned("demo");
+        // The run again gave the same: the toolchains differ.
+        settle("other").unwrap();
+        assert!(stale.pending().is_empty());
+        assert!(local.join(&local_key).exists());
+        assert!(!shared.join(crate::extract::engine::hex(&[4; 32])).exists());
         fs::remove_dir_all(root).unwrap();
     }
 }

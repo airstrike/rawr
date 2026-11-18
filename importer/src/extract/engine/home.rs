@@ -14,9 +14,36 @@ use std::time::{Duration, SystemTime};
 pub(crate) const TABLE: &str = "table.json";
 const GENERATION: &str = ".generation";
 
+/// A lock on a guard file, released when this goes. A process another
+/// thread starts holds a copy of every open descriptor until it execs, and
+/// closing a descriptor releases its lock only once every copy is closed,
+/// so dropping the file alone can leave the lock held for that moment.
+/// Unlocking releases it through every copy at once.
+pub(crate) struct Held(File);
+
+impl Held {
+    /// `file` locked shared, or `None` while an exclusive holder has it.
+    pub(crate) fn shared(file: File) -> Option<Self> {
+        file.try_lock_shared().ok()?;
+        Some(Self(file))
+    }
+
+    /// `file` locked exclusively: WouldBlock while anyone else holds it.
+    pub(crate) fn exclusive(file: File) -> io::Result<Self> {
+        file.try_lock().map_err(io::Error::from)?;
+        Ok(Self(file))
+    }
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
+}
+
 /// A hold on the exact publication whose files a reader consumes.
 pub(crate) struct Lease {
-    _lock: File,
+    _lock: Held,
     generation: String,
 }
 
@@ -39,8 +66,7 @@ fn guard(bindings: &Path, key: &str) -> io::Result<File> {
 }
 
 fn lease(bindings: &Path, key: &str) -> Option<Lease> {
-    let lock = guard(bindings, key).ok()?;
-    lock.try_lock_shared().ok()?;
+    let lock = Held::shared(guard(bindings, key).ok()?)?;
     let generation = fs::read_to_string(bindings.join(key).join(GENERATION)).ok()?;
     if generation.is_empty() {
         return None;
@@ -102,8 +128,7 @@ fn publish_with(
     files: &[(&str, &[u8])],
 ) -> io::Result<()> {
     fs::create_dir_all(bindings)?;
-    let lock = guard(bindings, key)?;
-    lock.try_lock().map_err(io::Error::from)?;
+    let _lock = Held::exclusive(guard(bindings, key)?)?;
     let id = unique();
     let staging = bindings.join(format!(".staging-{key}.{id}"));
     let mut moved = false;
@@ -166,8 +191,7 @@ pub(crate) fn extend(
     extend: impl FnOnce(&Path) -> io::Result<Extension>,
 ) -> io::Result<()> {
     fs::create_dir_all(bindings)?;
-    let lock = guard(bindings, key)?;
-    lock.try_lock().map_err(io::Error::from)?;
+    let _lock = Held::exclusive(guard(bindings, key)?)?;
     let entry = bindings.join(key);
     let Extension { kept, added } = extend(&entry)?;
     let id = unique();
@@ -219,10 +243,7 @@ fn replace(staging: &Path, entry: &Path, retired: &Path) -> io::Result<()> {
 
 /// Remove an entry only when no reader holds its stable guard.
 pub(crate) fn evict(bindings: &Path, key: &str) {
-    let Ok(lock) = guard(bindings, key) else {
-        return;
-    };
-    if lock.try_lock().is_ok() {
+    if let Ok(_lock) = guard(bindings, key).and_then(Held::exclusive) {
         let _ = fs::remove_dir_all(bindings.join(key));
     }
 }
@@ -259,12 +280,9 @@ pub(crate) fn prune(bindings: &Path, idle: Duration) {
         if !expired(&path, limit) {
             continue;
         }
-        let Ok(lock) = guard(bindings, &key) else {
+        let Ok(_lock) = guard(bindings, &key).and_then(Held::exclusive) else {
             continue;
         };
-        if lock.try_lock().is_err() {
-            continue;
-        }
         // Inspect current metadata again under the guard. A replacement or
         // use since the first look must be considered anew.
         if expired(&path, limit) {
@@ -303,7 +321,8 @@ fn unique() -> String {
 /// Whether test `name` (its path as the harness lists it) runs in this
 /// process. A process spawned by another thread holds a copy of every open
 /// descriptor until it execs, and with it any lock that descriptor holds,
-/// so a guard this test dropped can still be held for that moment. Outside
+/// so a lock this test took on a bare file and dropped without a
+/// [`Held`] can still be held for that moment. Outside
 /// its own process, this runs `name` alone in a fresh copy of the test
 /// binary, where no other test spawns, asserts that it passed, and answers
 /// false.
@@ -332,8 +351,9 @@ pub(crate) fn alone(name: &str) -> bool {
 mod tests {
     use std::path::PathBuf;
 
-    use super::{evict, generation, prune, publish, read, replace, unique, File, SystemTime};
+    use super::{evict, generation, guard, prune, publish, read, replace, unique};
     use super::{fs, io, Duration, TABLE};
+    use super::{File, Held, SystemTime};
 
     fn scratch() -> PathBuf {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -345,11 +365,6 @@ mod tests {
 
     #[test]
     fn a_reader_keeps_table_metadata_and_generation_together() {
-        if !super::alone(
-            "extract::engine::home::tests::a_reader_keeps_table_metadata_and_generation_together",
-        ) {
-            return;
-        }
         let root = scratch();
         publish(
             &root,
@@ -393,11 +408,6 @@ mod tests {
 
     #[test]
     fn pruning_and_a_writer_never_remove_a_readers_entry() {
-        if !super::alone(
-            "extract::engine::home::tests::pruning_and_a_writer_never_remove_a_readers_entry",
-        ) {
-            return;
-        }
         let root = scratch();
         publish(&root, "crate", &[(TABLE, b"old")]).unwrap();
         let (lease, _) = read(&root, "crate").unwrap();
@@ -412,6 +422,26 @@ mod tests {
         prune(&root, Duration::from_secs(1));
         assert!(!root.join("crate").exists());
         assert!(root.join(".lock-crate").is_file());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A copy of a guard's descriptor, as a process started meanwhile
+    /// holds one, keeps no lock its holder has let go: a reader's lease and
+    /// a writer's exclusive guard both end when they are dropped (#1026).
+    #[test]
+    fn a_copied_descriptor_keeps_no_lock_its_holder_let_go() {
+        let root = scratch();
+        publish(&root, "crate", &[(TABLE, b"old")]).unwrap();
+        let (lease, _) = read(&root, "crate").unwrap();
+        let reader = lease._lock.0.try_clone().unwrap();
+        drop(lease);
+        publish(&root, "crate", &[(TABLE, b"new")]).unwrap();
+        let writer = Held::exclusive(guard(&root, "crate").unwrap()).unwrap();
+        let copy = writer.0.try_clone().unwrap();
+        drop(writer);
+        let (lease, bytes) = read(&root, "crate").unwrap();
+        assert_eq!(bytes, b"new");
+        drop((lease, reader, copy));
         fs::remove_dir_all(root).unwrap();
     }
 
