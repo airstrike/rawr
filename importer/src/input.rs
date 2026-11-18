@@ -36,6 +36,7 @@ pub(crate) use dependency::scan::{escape_environment, escape_path};
 pub mod fingerprint;
 #[cfg(feature = "rustc-driver")]
 pub(crate) mod join;
+mod listing;
 #[cfg(test)]
 mod membership;
 pub(crate) mod native;

@@ -1,5 +1,5 @@
 //! The files Cargo watches for a build script that declares no `rerun-if`
-//! input: the whole package.
+//! input: every file Cargo lists for the package.
 
 use std::path::{Path, PathBuf};
 
@@ -22,16 +22,16 @@ thread_local! {
 
 /// A package whose build script Cargo reruns when any of its files changes.
 pub(crate) enum Set {
-    /// A path or Git package, read as its whole source tree.
+    /// A path or Git package, read as the files Cargo lists for it.
     Tree(Tree),
     /// A registry package, which Cargo never changes once extracted.
     Registry(Registry),
 }
 
-/// A path or Git package's source tree. Its entry walks the tree as Cargo's
-/// listing does, keeping every file Cargo could select: a change to
-/// any of them, or a file added or removed, changes the entry, so no
-/// `cargo package --list` is needed to replay it.
+/// A path or Git package's source tree. Its entry lists the files as
+/// Cargo's path source lists them: a change to any of them, or a listed
+/// file added or removed, changes the entry, and a file Cargo doesn't list
+/// is outside it.
 pub(crate) struct Tree {
     base_usage: Usage,
     usage: Usage,
@@ -588,28 +588,40 @@ mod tests {
         assert_eq!(OWNED_REGISTRY_SETS.with(std::cell::Cell::get), 1);
     }
 
-    /// A path package's tree keeps every file Cargo's listing could select,
-    /// ignored and hidden ones included, and leaves out its `.git`, its own
-    /// `target` and a nested package. A file added anywhere else changes it.
-    #[test]
-    fn a_package_tree_keeps_what_cargo_could_list_and_leaves_out_the_rest() {
-        let fixture = Fixture::new("tree");
-        let root = fixture.root.join("package");
+    /// A path package in a Git repository whose build script declares no
+    /// `rerun-if` input: its tree, the files Git tracks or would track.
+    fn git_tree(name: &str) -> (PathBuf, Set) {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../target/test-scratch")
+            .join(format!("package-tree-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
         for (path, contents) in [
             ("Cargo.toml", "[package]\nname = \"tree\"\n"),
             ("src/lib.rs", "pub fn f() {}\n"),
             (".gitignore", "*.log\n"),
             ("build.log", "ignored\n"),
-            (".hidden", "hidden\n"),
-            (".git/HEAD", "ref: refs/heads/main\n"),
             ("target/debug/out", "built\n"),
             ("nested/Cargo.toml", "[package]\nname = \"nested\"\n"),
             ("nested/src/lib.rs", "pub fn g() {}\n"),
-            ("assets/target/kept", "kept\n"),
         ] {
             let path = root.join(path);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, contents).unwrap();
+        }
+        let root = fs::canonicalize(root).unwrap();
+        for arguments in [
+            &["init", "-q"][..],
+            &["add", "Cargo.toml", "src", ".gitignore"],
+        ] {
+            let status = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&root)
+                .args(arguments)
+                .env_remove("GIT_DIR")
+                .env_remove("GIT_INDEX_FILE")
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {arguments:?}");
         }
         let package = Package::fixture(
             "path+file:///fixture/package#tree@0.1.0",
@@ -620,42 +632,61 @@ mod tests {
                 cargo_id: "path+file:///fixture/package".into(),
             },
         );
-        let limits = Limits::standard();
         let set = Set::capture_tree(
             toolchain::supported_cargo_commit(),
             &package,
             &root.join("Cargo.toml"),
             Usage { items: 0, bytes: 0 },
-            &limits,
+            &Limits::standard(),
         )
         .unwrap();
-        let entry = |set: &Set| set.entry(&mut Allocation::new(&limits), &limits).unwrap();
+        (root, set)
+    }
+
+    fn tree_entry(set: &Set) -> Entry {
+        let limits = Limits::standard();
+        set.entry(&mut Allocation::new(&limits), &limits).unwrap()
+    }
+
+    /// A package tree is the files Cargo lists: an ignored file, its own
+    /// `target` and a nested package are outside it, and a change to one of
+    /// them is no drift (#1209).
+    #[test]
+    fn a_change_to_a_file_cargo_does_not_list_is_no_drift() {
+        let (root, set) = git_tree("unlisted");
+        let before = tree_entry(&set);
         let Entry::Directory {
             directories, files, ..
-        } = entry(&set)
+        } = &before
         else {
             panic!("a package tree is a directory entry");
         };
         let directories: Vec<&str> = directories.iter().map(|value| &*value.path).collect();
         let files: Vec<&str> = files.iter().map(|value| &*value.path).collect();
-        assert_eq!(directories, ["assets", "assets/target", "src"]);
-        assert_eq!(
-            files,
-            [
-                ".gitignore",
-                ".hidden",
-                "Cargo.toml",
-                "assets/target/kept",
-                "build.log",
-                "src/lib.rs"
-            ]
-        );
-        let before = entry(&set);
+        assert_eq!(directories, ["src"]);
+        assert_eq!(files, [".gitignore", "Cargo.toml", "src/lib.rs"]);
+        fs::write(root.join("build.log"), "written while running\n").unwrap();
+        fs::write(root.join("trace.log"), "a new ignored file\n").unwrap();
         fs::write(root.join("target/debug/more"), "built\n").unwrap();
         fs::write(root.join("nested/src/more.rs"), "\n").unwrap();
-        fs::write(root.join(".git/index"), "index\n").unwrap();
-        assert!(entry(&set) == before);
+        assert!(tree_entry(&set) == before);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A change to a file Cargo lists, or a file Git would track appearing,
+    /// is drift (#1209).
+    #[test]
+    fn a_change_to_a_listed_file_is_drift() {
+        let (root, set) = git_tree("listed");
+        let before = tree_entry(&set);
+        fs::write(root.join("src/lib.rs"), "pub fn f() { let _ = 1; }\n").unwrap();
+        let edited = tree_entry(&set);
+        assert!(edited != before, "an edited tracked file");
         fs::write(root.join("src/new.rs"), "\n").unwrap();
-        assert!(entry(&set) != before);
+        assert!(
+            tree_entry(&set) != edited,
+            "a new untracked file Git would track"
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 }

@@ -5,6 +5,7 @@ use std::rc::Rc;
 
 use super::super::{Budget, Result};
 use super::{io, package, path, read, slots, Error};
+use crate::input::listing;
 use crate::input::proof::{Entry, Role, TreeDirectory, TreeFile};
 use crate::input::walk::{self, Ancestors};
 
@@ -129,15 +130,60 @@ fn follow(child: &Path, budget: &mut Budget<'_>) -> Result<Option<(PathBuf, look
     Ok(Some((target, lookup::Metadata::from_metadata(&metadata))))
 }
 
-/// Whether `directory` holds a `Cargo.toml`, as Cargo's `exists` sees it:
-/// any failure to inspect it reads as absent.
-fn nested(directory: &Path, budget: &mut Budget<'_>) -> Result<bool> {
-    let manifest = path::joined(directory, Path::new("Cargo.toml"), budget)?;
-    match path::metadata(&manifest, false, budget) {
-        Ok(_) => Ok(true),
-        Err(super::super::Error::Observation(Error::Io { .. })) => Ok(false),
-        Err(error) => Err(error),
+/// A package's source tree as Cargo lists it, observed as its cold capture
+/// observed it: each listed file with its length and digest, and the
+/// directories holding them.
+fn package_tree(
+    role: Role,
+    package_id: Option<&str>,
+    root: &Path,
+    budget: &mut Budget<'_>,
+) -> Result<Entry> {
+    budget.check()?;
+    let listed = listing::files(root).map_err(|error| match error {
+        listing::Error::Io {
+            operation, source, ..
+        } => io(operation, source),
+        listing::Error::Manifest { .. } => Error::Policy("package-listing-manifest").into(),
+    })?;
+    let mut directories = std::collections::BTreeSet::new();
+    let mut files = slots::Slots::new();
+    for relative in &listed {
+        for directory in relative.ancestors().skip(1) {
+            if directory.as_os_str().is_empty() || !directories.insert(directory) {
+                break;
+            }
+            budget.storage(1, directory.as_os_str().len())?;
+        }
+        let child = path::joined(root, relative, budget)?;
+        let metadata = path::metadata(&child, false, budget)?;
+        let bytes = read::length(metadata.len(), budget)?;
+        let digest = read::digest(&child, bytes, budget)?;
+        files.push(
+            TreeFile {
+                path: path::text(relative, budget)?,
+                bytes,
+                digest,
+            },
+            budget,
+        )?;
     }
+    let mut kept = slots::Slots::new();
+    for directory in directories {
+        kept.push(
+            TreeDirectory {
+                path: path::text(directory, budget)?,
+            },
+            budget,
+        )?;
+    }
+    Ok(Entry::Directory {
+        role,
+        package_id: package(package_id, budget)?,
+        path: path::text(root, budget)?,
+        directories: kept.sorted(budget)?,
+        files: files.sorted(budget)?,
+    })
 }
 
 pub(super) fn entry(
@@ -158,8 +204,10 @@ fn walk(
     budget: &mut Budget<'_>,
     mut collected: impl FnMut(&Path) -> Result<()>,
 ) -> Result<Entry> {
-    let tree = role == Role::DefaultPackageSource;
     let root = path::canonical(source, base, true, budget)?;
+    if role == Role::DefaultPackageSource {
+        return package_tree(role, package_id, &root, budget);
+    }
     let mut pending = slots::Slots::new();
     budget.storage(1, root.as_os_str().len())?;
     pending.push(
@@ -201,17 +249,6 @@ fn walk(
             };
             if followed && metadata.is_dir() && ancestors.encloses(&directory, &child) {
                 continue;
-            }
-            if tree {
-                let omitted =
-                    walk::package_omits(native_name.as_os_str(), depth, metadata.is_dir(), || {
-                        nested(&child, budget)
-                    })?;
-                // Cargo's listing skips what is neither a file nor a
-                // directory, and so does a package's walk.
-                if omitted || !metadata.is_dir() && !metadata.is_file() {
-                    continue;
-                }
             }
             let spelled = path::joined(&prefix, native_name, budget)?;
             let relative = path::text(&spelled, budget)?;

@@ -952,6 +952,11 @@ mod tests {
     #[test]
     fn a_package_tree_is_rechecked_before_api_replay() {
         let (root, mut baseline, build, current) = fixture();
+        fs::write(
+            root.join("source/Cargo.toml"),
+            "[package]\nname = \"source\"\n",
+        )
+        .unwrap();
         let mut recipes = baseline.recipes.into_vec();
         recipes.push(proof::Recipe::Directory {
             role: proof::Role::DefaultPackageSource,
