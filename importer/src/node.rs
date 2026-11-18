@@ -644,6 +644,37 @@ impl<'store> Evaluator<'store> {
         }
     }
 
+    /// Publish `value` at the recipe's action over the entry already there,
+    /// as an entry written for other inputs would sit under this key.
+    #[cfg(test)]
+    pub(crate) fn overwrite_direct<K: Value>(
+        &self,
+        recipe: &Direct<K>,
+        value: K,
+    ) -> Result<Validated<K>, Error> {
+        self.store.with_ownership(|ownership| {
+            self.store.with_action_lease(recipe.action, || {
+                let in_flight = recipe.in_flight(self.store)?;
+                let (value, published) = self.store.with_action_reservation(
+                    ownership,
+                    recipe,
+                    in_flight.as_ref(),
+                    || {
+                        let payload = value.payload()?;
+                        Ok(crate::store::Reserved::Publish {
+                            result: value,
+                            recipe: recipe.clone(),
+                            payload,
+                            bundle: None,
+                        })
+                    },
+                )?;
+                replay::Replayed::published(recipe, value, published, self.store.graph_budget())?
+                    .validate_published(recipe)
+            })
+        })
+    }
+
     fn execute_direct<K: Value>(
         &self,
         ownership: &crate::store::Ownership<'_>,
