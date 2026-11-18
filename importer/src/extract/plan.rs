@@ -152,6 +152,10 @@ pub(crate) struct Sharing {
     /// The bound plan of the probe that grew these tables, which a later
     /// demand of the same build runs again (#1618).
     pub(crate) reprobe: Option<Reprobe>,
+    /// Every registry and git package of the resolution whose closure
+    /// reaches a path package (`shared::local_closures`): a crate of one
+    /// keeps its records with the project, whatever names it (#2235).
+    pub(crate) local_closures: Box<[Box<str>]>,
 }
 
 impl Sharing {
@@ -611,14 +615,17 @@ impl Plan {
     }
 
     /// Share these selected crates' tables per machine: their keys, by
-    /// unit key, and the home's bindings directory.
+    /// unit key, and the home's bindings directory. `local_closures` are
+    /// the resolution's registry and git packages that reach a path one.
     pub(crate) fn share(
         mut self,
         keys: BTreeMap<Box<str>, crate::extract::shared::Shared>,
+        local_closures: Box<[Box<str>]>,
         bindings: PathBuf,
         local: PathBuf,
         staged: PathBuf,
     ) -> Self {
+        self.sharing.local_closures = local_closures;
         self.sharing.local = Some(local);
         self.sharing.staged = Some(staged);
         for entry in self.entries.iter() {
@@ -1130,6 +1137,7 @@ impl Plan {
                 bindings: self.sharing.bindings.clone(),
                 local: self.sharing.local.clone(),
                 staged: self.sharing.staged.clone(),
+                local_closures: self.sharing.local_closures.clone(),
                 ..Sharing::default()
             },
             allocation: Allocation::new(limits),
@@ -1144,6 +1152,12 @@ impl Plan {
             .values()
             .map(|shared| shared.key.as_ref())
             .collect()
+    }
+
+    /// The registry and git packages whose closure reaches a path package
+    /// (`Sharing::local_closures`).
+    pub(crate) fn local_closures(&self) -> &[Box<str>] {
+        &self.sharing.local_closures
     }
 
     fn bind(
@@ -2184,6 +2198,12 @@ impl Capture {
     /// Where this project's unsettled tables wait (`Sharing::staged`).
     pub(crate) fn staged(&self) -> Option<&Path> {
         self.sharing.staged.as_deref()
+    }
+
+    /// The registry and git packages whose closure reaches a path package
+    /// (`Sharing::local_closures`).
+    pub(crate) fn local_closures(&self) -> &[Box<str>] {
+        &self.sharing.local_closures
     }
 
     /// The key of every shared table this plan names.

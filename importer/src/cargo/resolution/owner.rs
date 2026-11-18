@@ -74,8 +74,15 @@ impl Ready {
             .lock()
             .map(|mut settled| std::mem::take(&mut *settled))
             .unwrap_or_default();
+        let local_closures = self
+            .evaluation
+            .local_closures
+            .lock()
+            .map(|local| local.clone())
+            .unwrap_or_default();
         crate::bindings::Settlement {
             entries,
+            local_closures,
             bindings: Some(crate::bindings::directory(
                 self.evaluation.cached.context.cargo_home(),
             )),
@@ -426,6 +433,9 @@ struct Evaluation {
     captured: Mutex<Captured>,
     /// The shared tables a cold extraction of this evaluation left.
     settled: Mutex<Vec<crate::bindings::Settled>>,
+    /// The registry and git packages of that extraction's resolution whose
+    /// closure reaches a path package (`shared::local_closures`).
+    local_closures: Mutex<Box<[Box<str>]>>,
     /// What shared bindings gave in place of a cold extraction.
     shared: Mutex<Option<Shared>>,
     /// What a cold build's check recorded when it stopped before its
@@ -631,6 +641,7 @@ fn evaluate(
             built: None,
         }),
         settled: Mutex::new(Vec::new()),
+        local_closures: Mutex::default(),
         shared: Mutex::new(None),
         recorded: Mutex::new(None),
         current,
@@ -715,6 +726,7 @@ fn remembered(state: Arc<Evaluation>, parts: Shared, attestation: &[u8; 32]) -> 
             native: &parts.native,
             files: &parts.files,
             settled: &parts.settled,
+            local_closures: &parts.local_closures,
             generations: &parts.generations,
             materials: &parts.materials,
         },
@@ -1148,6 +1160,11 @@ impl Evaluation {
         if let Ok(mut settled) = self.settled.lock() {
             *settled = std::mem::take(&mut completed.settlement);
         }
+        if let (Some(capture), Ok(mut local)) =
+            (completed.capture.as_ref(), self.local_closures.lock())
+        {
+            *local = capture.local_closures().into();
+        }
         let reprobe = completed
             .capture
             .as_mut()
@@ -1320,6 +1337,9 @@ pub(crate) struct Shared {
     materials: Materials,
     identity: [u8; 32],
     settled: Vec<crate::bindings::Settled>,
+    /// The resolution's registry and git packages whose closure reaches a
+    /// path package (`shared::local_closures`).
+    local_closures: Box<[Box<str>]>,
     generations: Vec<(String, String)>,
     proof: input::proof::Proof,
     /// The files `proof` names, and the digest of the run's native inputs,
@@ -1447,6 +1467,7 @@ impl Evaluation {
             },
             identity: shared.identity,
             settled: shared.settled,
+            local_closures: harness.plan.local_closures().into(),
             generations: shared.generations,
             proof: input::proof::Proof::shared(
                 entries.into_boxed_slice(),
@@ -1486,12 +1507,16 @@ impl SharedReady {
     /// The shared tables this run used, whose build scripts the runner's
     /// build settles.
     pub(crate) fn settlement(&mut self) -> crate::bindings::Settlement {
-        let entries = match &mut self.parts {
-            Parts::Read(parts) => std::mem::take(&mut parts.settled),
-            Parts::Remembered(memo) => memo.settled(),
+        let (entries, local_closures) = match &mut self.parts {
+            Parts::Read(parts) => (
+                std::mem::take(&mut parts.settled),
+                parts.local_closures.clone(),
+            ),
+            Parts::Remembered(memo) => (memo.settled(), memo.local_closures().into()),
         };
         crate::bindings::Settlement {
             entries,
+            local_closures,
             bindings: Some(crate::bindings::directory(
                 self.evaluation.cached.context.cargo_home(),
             )),

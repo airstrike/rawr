@@ -27,7 +27,7 @@ use sha2::{Digest as _, Sha256};
 use crate::bindings::{Script, Settled};
 use crate::input::proof::{Entry, Proof, Role};
 
-const SCHEMA: u32 = 6;
+const SCHEMA: u32 = 7;
 /// Kept beside the harness copies a shared resolution leaves.
 const FILE: &str = "shared/remembered.json";
 /// The sidecar document the tables replayed, beside it.
@@ -114,6 +114,9 @@ pub(super) struct Memo {
     native: String,
     files: Vec<File>,
     entries: Vec<Used>,
+    /// The resolution's registry and git packages whose closure reaches a
+    /// path package (`shared::local_closures`).
+    local_closures: Box<[Box<str>]>,
     /// Current file and directory proofs produced while validating `entries`.
     #[serde(skip)]
     witnesses: Vec<Proof>,
@@ -133,12 +136,18 @@ struct Written<'a> {
     native: String,
     files: &'a [File],
     entries: Vec<Used>,
+    local_closures: &'a [Box<str>],
     document: (u64, String),
     external: &'a [crate::extract::ExternalBinding],
     context: &'a crate::api::Context,
 }
 
 impl Memo {
+    /// The registry and git packages whose closure reaches a path package.
+    pub(super) fn local_closures(&self) -> &[Box<str>] {
+        &self.local_closures
+    }
+
     /// The identity of the sidecar document the tables replayed.
     pub(super) fn identity(&self) -> Option<[u8; 32]> {
         unhex(&self.identity)
@@ -198,6 +207,7 @@ pub(super) struct Resolution<'a> {
     pub(super) native: &'a [u8; 32],
     pub(super) files: &'a [File],
     pub(super) settled: &'a [Settled],
+    pub(super) local_closures: &'a [Box<str>],
     pub(super) generations: &'a [(String, String)],
     pub(super) materials: &'a super::Materials,
 }
@@ -258,6 +268,7 @@ pub(super) fn remember(rawr: &Path, resolution: &Resolution<'_>) {
         native: hex(resolution.native),
         files: resolution.files,
         entries,
+        local_closures: resolution.local_closures,
         document: (materials.document.len() as u64, hex(&document)),
         external: &materials.external,
         context: &materials.context,
@@ -472,6 +483,7 @@ mod tests {
                 native: &[4; 32],
                 files: &files,
                 settled: &settled,
+                local_closures: &[],
                 generations: &generations,
                 materials: &super::super::Materials {
                     document: b"{\"schema\":1}".to_vec(),
@@ -549,6 +561,7 @@ mod tests {
                 native: &[4; 32],
                 files: &files,
                 settled: &settled,
+                local_closures: &[],
                 generations: &generations,
                 materials: &super::super::Materials {
                     document: b"old document".to_vec(),

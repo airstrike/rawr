@@ -792,6 +792,10 @@ pub(crate) struct Publish {
 #[derive(Default)]
 pub struct Settlement {
     pub(crate) entries: Vec<Settled>,
+    /// The resolution's registry and git packages whose closure reaches a
+    /// path package (`extract::shared::local_closures`): their crates keep
+    /// their records with the project, whatever entry names them.
+    pub(crate) local_closures: Box<[Box<str>]>,
     pub(crate) bindings: Option<PathBuf>,
     /// The project's Rawr directory, where the runner builds.
     pub(crate) rawr: Option<PathBuf>,
@@ -1011,7 +1015,12 @@ impl Settlement {
                 crates.push(krate);
             }
         }
-        crate::classify::Sources::new(crates, self.rawr.as_deref(), self.bindings.as_deref())
+        crate::classify::Sources::new(
+            crates,
+            self.local_closures.clone(),
+            self.rawr.as_deref(),
+            self.bindings.as_deref(),
+        )
     }
 
     /// [`Settlement::settle`] after `rawr check`, whose project build is the
@@ -1701,6 +1710,7 @@ mod tests {
         };
         Settlement {
             entries: vec![extracted("first"), extracted("second")],
+            local_closures: Box::default(),
             bindings: Some(bindings.clone()),
             rawr: Some(first.clone()),
             nightly: None,
@@ -1729,6 +1739,7 @@ mod tests {
         // The same results in another project use the table.
         Settlement {
             entries: vec![read()],
+            local_closures: Box::default(),
             bindings: Some(bindings.clone()),
             rawr: Some(first),
             nightly: None,
@@ -1744,6 +1755,7 @@ mod tests {
         );
         let refused = Settlement {
             entries: vec![read()],
+            local_closures: Box::default(),
             bindings: Some(bindings.clone()),
             rawr: Some(second),
             nightly: None,
@@ -1801,6 +1813,7 @@ mod tests {
         };
         Settlement {
             entries: vec![extracted],
+            local_closures: Box::default(),
             bindings: Some(bindings.clone()),
             rawr: Some(rawr),
             nightly: None,
@@ -1975,6 +1988,7 @@ mod tests {
         let settle = |entry: Settled| {
             Settlement {
                 entries: vec![entry],
+                local_closures: Box::default(),
                 bindings: Some(bindings.clone()),
                 rawr: Some(rawr.clone()),
                 nightly: None,
@@ -2076,6 +2090,7 @@ mod tests {
                 scripts: nightly,
                 inputs: crate::input::bindings::Inputs::fixture(),
             }],
+            local_closures: Box::default(),
             bindings: Some(home.clone()),
             rawr: Some(rawr),
             nightly: None,
@@ -2133,6 +2148,7 @@ mod tests {
                     }),
                     unshared: None,
                 }],
+                local_closures: Box::default(),
                 bindings: Some(bindings.clone()),
                 rawr: Some(rawr.clone()),
                 nightly: None,
@@ -2166,6 +2182,7 @@ mod tests {
                 }),
                 unshared: None,
             }],
+            local_closures: Box::default(),
             bindings: Some(bindings.clone()),
             rawr: Some(rawr.clone()),
             nightly: None,
@@ -2187,6 +2204,7 @@ mod tests {
                 }),
                 unshared: None,
             }],
+            local_closures: Box::default(),
             bindings: Some(bindings.clone()),
             rawr: Some(rawr),
             nightly: None,
@@ -2234,6 +2252,7 @@ mod tests {
                     scripts: scripts.clone(),
                     inputs: crate::input::bindings::Inputs::fixture(),
                 }],
+                local_closures: Box::default(),
                 bindings: Some(bindings.clone()),
                 rawr: Some(rawr),
                 nightly: None,
@@ -2376,6 +2395,7 @@ include!(concat!(env!("OUT_DIR"), "/generated.rs"));
                     }),
                     unshared: None,
                 }],
+                local_closures: Box::default(),
                 bindings: Some(bindings.clone()),
                 rawr: Some(rawr.clone()),
                 nightly: None,
@@ -2469,6 +2489,7 @@ include!(concat!(env!("OUT_DIR"), "/generated.rs"));
         let settle = |entry: Settled, observed: &super::Observed| {
             Settlement {
                 entries: vec![entry],
+                local_closures: Box::default(),
                 bindings: Some(bindings.clone()),
                 rawr: Some(rawr.clone()),
                 nightly: None,
@@ -2561,6 +2582,7 @@ include!(concat!(env!("OUT_DIR"), "/generated.rs"));
         };
         let settlement = |entry: Settled| Settlement {
             entries: vec![entry],
+            local_closures: Box::default(),
             bindings: Some(bindings.clone()),
             rawr: Some(rawr.clone()),
             nightly: Some(nightly.clone()),

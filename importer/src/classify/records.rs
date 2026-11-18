@@ -62,6 +62,9 @@ const PROJECT: &str = "project";
 #[derive(Clone, Debug, Default)]
 pub struct Sources {
     crates: Vec<Crate>,
+    /// The registry and git packages whose closure reaches a path package,
+    /// by Cargo id: a crate of one is kept with the project (D608.4).
+    local_closures: BTreeSet<Box<str>>,
     /// The project's classified directory.
     project: Option<PathBuf>,
     /// The classified directory in rawr's home, beside its bindings.
@@ -215,12 +218,20 @@ impl Kind {
 impl Sources {
     /// The entries of `crates`, and the project's, under its Rawr directory
     /// `rawr`, with the shared ones beside the home's `bindings`.
-    pub(crate) fn new(crates: Vec<Crate>, rawr: Option<&Path>, bindings: Option<&Path>) -> Self {
+    /// `local_closures` are the registry and git packages whose closure
+    /// reaches a path package.
+    pub(crate) fn new(
+        crates: Vec<Crate>,
+        local_closures: Box<[Box<str>]>,
+        rawr: Option<&Path>,
+        bindings: Option<&Path>,
+    ) -> Self {
         let project = rawr.map(|rawr| {
             crate::bindings::format::project(rawr, crate::bindings::format::Kept::Classified)
         });
         Self {
             crates,
+            local_closures: local_closures.into_vec().into_iter().collect(),
             project,
             home: bindings.map(crate::bindings::format::classified_beside),
         }
@@ -230,6 +241,7 @@ impl Sources {
     pub(crate) fn covers(&self, other: &Self) -> bool {
         self.project == other.project
             && (other.home.is_none() || self.home == other.home)
+            && other.local_closures.is_subset(&self.local_closures)
             && other
                 .crates
                 .iter()
@@ -244,6 +256,7 @@ impl Sources {
         if other.home.is_some() {
             self.home = other.home;
         }
+        self.local_closures.extend(other.local_closures);
         for krate in other.crates {
             if !self.crates.iter().any(|known| known.names(&krate)) {
                 self.crates.push(krate);
@@ -282,7 +295,8 @@ impl Sources {
     /// The entry of `unit`'s crate: shared when it is a selected crate
     /// whose table is; else, as for a crate reached or one a later round's
     /// settlement no longer names, when a registry, a git commit or the
-    /// toolchain gives it and rawr's home keeps entries.
+    /// toolchain gives it, no path package is in its closure, and rawr's
+    /// home keeps entries.
     fn unit_entry(&self, unit: &api::identity::Unit) -> Entry {
         let selected = self.crates.iter().find(|krate| {
             krate.crate_name == unit.crate_name()
@@ -292,8 +306,9 @@ impl Sources {
             Some(krate) => krate.shared,
             None => {
                 let given = unit.package().is_none_or(|package| {
-                    package.source().starts_with("registry+")
-                        || package.source().starts_with("git+")
+                    (package.source().starts_with("registry+")
+                        || package.source().starts_with("git+"))
+                        && !self.local_closures.contains(package.cargo_id())
                 });
                 given && self.home.is_some()
             }
@@ -696,6 +711,62 @@ mod tests {
                 (name, inode)
             })
             .collect()
+    }
+
+    /// A registry crate no settlement names is kept in rawr's home, unless
+    /// its closure reaches a path package, as a `[patch]` makes it: then it
+    /// stays with the project, as a path crate does (#2235).
+    #[test]
+    fn a_registry_crate_reaching_a_path_package_keeps_its_records_in_the_project() {
+        use crate::api::identity::{Authority, Compilation, Package, Unit};
+        let registry = "registry+https://github.com/rust-lang/crates.io-index";
+        let unit = |name: &str, source: &str| {
+            let id = format!("{source}#{name}@1.0.0");
+            Unit::new(
+                Authority::Cargo(Package::new(
+                    id.into(),
+                    name.into(),
+                    "1.0.0".into(),
+                    source.into(),
+                )),
+                format!("/{name}/src/lib.rs").into(),
+                "lib".into(),
+                name.into(),
+                Compilation::Target,
+                Box::default(),
+                "0123456789abcdef".into(),
+            )
+        };
+        let patched = unit("patched", registry);
+        let plain = unit("plain", registry);
+        let path = unit("path", "path+file:///project/path");
+        let sources = super::Sources::new(
+            Vec::new(),
+            Box::from([patched.package().unwrap().cargo_id().into()]),
+            Some(std::path::Path::new("/project/target/rawr")),
+            Some(std::path::Path::new("/home/rawr/bindings")),
+        );
+        let shared = |unit: &Unit| {
+            matches!(
+                sources.unit_entry(unit),
+                super::Entry::Crate { shared: true, .. }
+            )
+        };
+        assert!(shared(&plain));
+        assert!(!shared(&path));
+        assert!(!shared(&patched));
+        let mut joined = super::Sources::new(
+            Vec::new(),
+            Box::default(),
+            Some(std::path::Path::new("/project/target/rawr")),
+            Some(std::path::Path::new("/home/rawr/bindings")),
+        );
+        assert!(!joined.covers(&sources));
+        joined.join(sources.clone());
+        assert!(matches!(
+            joined.unit_entry(&patched),
+            super::Entry::Crate { shared: false, .. }
+        ));
     }
 
     /// Publishing a part smaller than the entry's newest layer adds a layer
