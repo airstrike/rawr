@@ -393,7 +393,13 @@ impl Parser<'_> {
         let call = span(name_span.start(), text_end(end, " "));
         let remaining = self.nest_expansion(&name, call)?;
         if let Some(laid_out) = self.models.laid_out(name_span.start()) {
-            let expansion = laid_out.to_vec();
+            // Its tokens are lexed where it is laid out, so an imported
+            // variant's name among them is read as its path here, as the
+            // body's own tokens were when they were lexed.
+            let mut expansion = laid_out.to_vec();
+            if self.models.imports_variants() {
+                expansion = expand_imported_variants(&self.models, expansion);
+            }
             self.splice_expanded(expansion, name_span.start(), end, place, remaining);
             return Ok(());
         }
