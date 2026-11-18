@@ -20,6 +20,7 @@ fn expected() -> Box<[proof::Entry]> {
             role: proof::Role::Authority,
             package_id: Some("pkg".into()),
             path: "/unobserved/input".into(),
+            named: None,
             bytes: 3,
             digest: [1; 32],
         },
@@ -523,11 +524,11 @@ fn old_schema_unknown_pin_and_unknown_expected_schema_reject() {
 }
 
 #[test]
-fn pre_workspace_proof_schema_cannot_decode_as_current_evidence() {
+fn an_older_proof_schema_cannot_decode_as_current_evidence() {
     let mut bytes = encode(&data());
-    assert_eq!(proof::SCHEMA, 10);
+    assert_eq!(proof::SCHEMA, 11);
     let offset = proof_offset();
-    bytes[offset..offset + 4].copy_from_slice(&9_u32.to_le_bytes());
+    bytes[offset..offset + 4].copy_from_slice(&10_u32.to_le_bytes());
     assert!(decode(&bytes).is_err());
 }
 

@@ -326,6 +326,7 @@ fn project<'evidence, A: Account>(
                 path,
                 bytes,
                 digest,
+                ..
             } if matches!(
                 role,
                 Role::PackageManifest

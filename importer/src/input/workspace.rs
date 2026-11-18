@@ -194,17 +194,34 @@ pub(crate) fn roots(
     metadata: &cargo::unit::Metadata,
     account: &mut Account<'_>,
 ) -> Result<Box<[PathBuf]>> {
+    sorted_roots(authority, metadata.workspace_manifests()?, account)
+}
+
+fn sorted_roots<'path>(
+    authority: &'path [cargo::Input],
+    named: impl Iterator<Item = &'path Path>,
+    account: &mut Account<'_>,
+) -> Result<Box<[PathBuf]>> {
     let mut roots = Slots::new();
-    for input in authority {
-        if let Some(manifest) = input.manifest() {
-            insert(&mut roots, manifest, account)?;
-        }
-    }
-    for manifest in metadata.workspace_manifests()? {
+    let owned = authority.iter().filter_map(cargo::Input::manifest);
+    for manifest in owned.chain(named) {
         insert(&mut roots, manifest, account)?;
     }
     roots.values.sort_unstable();
     account.boxed(roots)
+}
+
+/// The image of the request's own manifests, captured before Cargo reads
+/// them: an edit Cargo's metadata could miss is then drift when the image is
+/// [extended](Image::extend) with the manifests that metadata names.
+pub(crate) fn before_metadata(
+    authority: &[cargo::Input],
+    account: &mut Account<'_>,
+) -> Result<Image> {
+    capture(
+        sorted_roots(authority, std::iter::empty(), account)?,
+        account,
+    )
 }
 
 fn insert(paths: &mut Slots<PathBuf>, path: &Path, account: &mut Account<'_>) -> Result<()> {
@@ -465,6 +482,19 @@ fn scan(
 }
 
 impl Image {
+    /// The image of every manifest behind `metadata`, once this one, taken
+    /// before Cargo read them, still holds: a manifest edited while Cargo
+    /// read it is drift, never metadata paired with the edited bytes.
+    pub(crate) fn extend(
+        self,
+        authority: &[cargo::Input],
+        metadata: &cargo::unit::Metadata,
+        account: &mut Account<'_>,
+    ) -> Result<Self> {
+        self.require(account)?;
+        capture(roots(authority, metadata, account)?, account)
+    }
+
     pub(crate) fn require(&self, account: &mut Account<'_>) -> Result<()> {
         if scan(&self.roots, Some(&self.candidates), account)?.0 != self.entry {
             return Err(drift("Cargo workspace manifest closure changed"));

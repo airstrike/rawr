@@ -63,6 +63,7 @@ impl File {
                 role,
                 package_id: None,
                 path: self.path.as_str().into(),
+                named: None,
                 bytes: *bytes,
                 digest: unhex(digest)?,
             },

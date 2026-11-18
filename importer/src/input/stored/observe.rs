@@ -92,18 +92,26 @@ pub(in crate::input) fn file(
     budget.check()?;
     // A config candidate keeps the path Cargo reads; Cargo follows a symlinked
     // `.cargo` directory or config file, and its content is read through it.
-    let source = if follows(role) {
-        path::normalized(source, base, budget)?
+    let (source, named) = if follows(role) {
+        (path::normalized(source, base, budget)?, None)
     } else {
-        path::canonical(source, base, false, budget)?
+        let resolved = path::canonical(source, base, false, budget)?;
+        let named =
+            crate::input::proof::spelling(&path::normalized(source, base, budget)?, &resolved);
+        (resolved, named)
     };
     let metadata = path::metadata(&source, false, budget)?;
     let bytes = read::length(metadata.len(), budget)?;
     let digest = read::digest(&source, bytes, budget)?;
+    let named = match &named {
+        Some(named) => Some(path::text(named, budget)?),
+        None => None,
+    };
     Ok(Entry::File {
         role,
         package_id: package(package_id, budget)?,
         path: path::text(&source, budget)?,
+        named,
         bytes,
         digest,
     })

@@ -1411,6 +1411,7 @@ impl Evaluation {
                         role,
                         package_id: None,
                         path: text.into(),
+                        named: None,
                         bytes: bytes.len(),
                         digest,
                     });

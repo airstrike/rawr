@@ -1531,6 +1531,127 @@ fn resolved_warm_launch_equals_cold_without_the_api_graph() {
     fs::remove_dir_all(root).unwrap();
 }
 
+/// A profile entry under the resolved launch's key that decodes only under
+/// other inputs sends the warm launch back to the full path with its API
+/// continuation untouched, its graph still unbuilt (#538, #546).
+#[test]
+fn a_stale_profile_entry_returns_the_warm_launch_to_the_full_path() {
+    use crate::node::staging::{Input, Outcome, Owned, Recipe};
+    use crate::node::Value as _;
+
+    let Fixture {
+        root,
+        request,
+        context,
+        store,
+    } = api_continuation_fixture(&Limits::standard());
+    let limits = Limits::standard();
+    let universe = request.universe.clone();
+    let cached = || cargo::CachedToolchain {
+        context: context.clone(),
+        attestation: context.cached_toolchain().unwrap(),
+    };
+    let policy = crate::classify::Policy::standard();
+    let adapter = api_adapter();
+    let source = api_source(&limits);
+    let retain = |request, script| {
+        owner::evaluate_scripted(request, cached(), &limits, &crate::metrics::Current, script)
+            .unwrap()
+            .retain_api(&limits)
+            .unwrap()
+    };
+    let complete = |api| {
+        crate::composition::evaluate_api_semantic(
+            api,
+            None,
+            &adapter,
+            &policy,
+            source,
+            &limits,
+            |contract: &crate::Contract<crate::Classified>, _, _| {
+                Ok::<_, ()>((
+                    contract
+                        .compiler((), source, &limits)
+                        .unwrap()
+                        .seal()
+                        .unwrap(),
+                    ApiChecked,
+                ))
+            },
+        )
+        .unwrap()
+    };
+    let completed = complete(retain(request, script));
+    let cold = completed
+        .checked
+        .replay_demand((), &completed.contract, source, &limits)
+        .unwrap()
+        .with_trusted_runner(true, &completed.facade, &completed.contract)
+        .unwrap();
+    crate::composition::record_resolved(&completed.contract, &cold, &adapter, &policy).unwrap();
+    drop((completed, cold));
+    let request = || {
+        let mut request = Fixture::request(&root, context.environment().clone());
+        request.universe = universe.clone();
+        request
+    };
+    test_launch::Script::new(
+        root.clone(),
+        test_launch::FileLimits { count: 0, bytes: 0 },
+        Vec::new(),
+    )
+    .unwrap()
+    .run(|| {
+        let api = retain(request(), no_cold);
+        let Owned::Current(api_node) = &api.product else {
+            panic!("an unchanged owner's API is current");
+        };
+        let parent = node::Parent::validated(api_node);
+        let recipe = Recipe::<crate::profile::cached::Product>::from_inputs(
+            &context,
+            &[Input::current(&parent)],
+            &crate::profile::cached::authority(adapter.identity(), adapter.version(), None)
+                .unwrap(),
+        )
+        .unwrap();
+        let store = context.open_store().unwrap();
+        let evaluator = node::Evaluator::new(&store, &crate::metrics::Current);
+        let Outcome::Hit(Owned::Current(profile)) = recipe.lookup_owned(&evaluator).unwrap() else {
+            panic!("the full path recorded the profile entry");
+        };
+        // The same canonical contract, sealed for the profile's next version.
+        let bytes = profile.value().encode().unwrap();
+        let text = std::str::from_utf8(&bytes).unwrap();
+        assert_eq!(text.matches("\"version\":1").count(), 1);
+        let foreign = text.replace("\"version\":1", "\"version\":2");
+        drop(profile);
+        recipe
+            .overwrite(
+                &evaluator,
+                crate::profile::cached::Product::decode(foreign.as_bytes()).unwrap(),
+            )
+            .unwrap();
+        let resolved = crate::composition::resolve_api_semantic(
+            api,
+            &adapter,
+            &policy,
+            source,
+            &limits,
+            |_| Ok::<_, ()>(()),
+        )
+        .unwrap();
+        let Err(api) = resolved else {
+            panic!("a stale profile entry is a miss for the resolved launch");
+        };
+        assert!(matches!(api.product, Owned::Current(_)));
+        assert!(matches!(api.graph, crate::api::retained::Lazy::Pending(_)));
+    })
+    .unwrap();
+    drop(context);
+    store.retire_fixture().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn retained_api_rejects_owner_drift_before_source_callback() {
     let Fixture {

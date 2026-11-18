@@ -332,6 +332,7 @@ mod tests {
                 role: Role::Authority,
                 package_id: None,
                 path: path.to_str().unwrap().into(),
+                named: None,
                 bytes: original.len(),
                 digest: Sha256::digest(original).into(),
             }],

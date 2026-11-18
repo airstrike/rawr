@@ -15,6 +15,7 @@ fn fixture() -> (Box<[Entry]>, Evidence, cargo::universe::MetadataProof) {
             role: Role::DependencySource,
             package_id: Some(id.into()),
             path: "/fixture/importer/src/lib.rs".into(),
+            named: None,
             bytes: 3,
             digest: [7; 32],
         },

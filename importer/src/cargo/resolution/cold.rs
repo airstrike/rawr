@@ -307,6 +307,7 @@ impl Request {
             Some((recalled, outputs)) => (Some(recalled), Some(outputs)),
             None => (None, None),
         };
+        let workspace = self.workspace_before_metadata(limits)?;
         let mut produced = None;
         let (metadata_transport, candidate_lock, internal) = match placement.state {
             cargo::PlacementState::Fresh => {
@@ -436,7 +437,7 @@ impl Request {
             crate::process::TAIL_BYTES,
         )?);
         let lock = candidate_lock.digest();
-        let workspace = self.capture_workspace(&metadata, limits)?;
+        let workspace = self.capture_workspace(workspace, &metadata, limits)?;
         let bytes = match &reuse {
             Some(reuse) => reuse.units.clone(),
             None => units(&native, self, layout, limits)?,

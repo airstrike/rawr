@@ -198,6 +198,12 @@ impl<K: Value> Recipe<K> {
         batch.resume(&self.direct, miss, execute)
     }
 
+    /// See [`Evaluator::overwrite_direct`].
+    #[cfg(test)]
+    pub(crate) fn overwrite(&self, evaluator: &Evaluator<'_>, value: K) -> Result<(), Error> {
+        evaluator.overwrite_direct(&self.direct, value).map(drop)
+    }
+
     pub(crate) fn evaluate(
         &self,
         batch: &mut crate::store::Batch<'_>,

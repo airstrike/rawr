@@ -122,6 +122,7 @@ fn fixture() -> (Evidence, universe::MetadataProof, Vec<Entry>) {
             role,
             package_id: Some(ID.into()),
             path: format!("{ROOT}/{path}").into(),
+            named: None,
             bytes: 9,
             digest: [3; 32],
         });
@@ -238,6 +239,7 @@ fn fixture() -> (Evidence, universe::MetadataProof, Vec<Entry>) {
             role: Role::Authority,
             package_id: None,
             path: "/ignored/authority".into(),
+            named: None,
             bytes: 17,
             digest: [6; 32],
         },
@@ -271,6 +273,7 @@ fn generated_sources_bind_execution_and_content_without_physical_output_roots() 
             role: Role::DependencySource,
             package_id: Some(ID.into()),
             path: format!("{root}/nested/generated.rs").into(),
+            named: None,
             bytes: 17,
             digest: [42; 32],
         }];
@@ -318,6 +321,7 @@ fn generated_sources_reject_ambiguous_or_unassociated_output_owners() {
             role: Role::DependencySource,
             package_id: Some(ID.into()),
             path: path.into(),
+            named: None,
             bytes: 1,
             digest: [1; 32],
         }];
@@ -345,6 +349,7 @@ fn target_generated_output_uses_host_compiled_script_without_erasing_execution_p
         role: Role::DependencySource,
         package_id: Some(ID.into()),
         path: format!("{output}/generated.rs").into(),
+        named: None,
         bytes: 1,
         digest: [1; 32],
     }];
@@ -398,6 +403,7 @@ fn unprotected_generated_source_is_not_promoted_into_protected_evidence() {
         role: Role::DependencySource,
         package_id: Some(ID.into()),
         path: format!("{OUT}/generated.rs").into(),
+        named: None,
         bytes: 1,
         digest: [1; 32],
     }];
@@ -428,6 +434,7 @@ fn unprotected_source_outside_every_package_root_is_not_refused() {
         role: Role::DependencySource,
         package_id: Some(ID.into()),
         path: "/fixture/project/src/model.rs".into(),
+        named: None,
         bytes: 1,
         digest: [1; 32],
     }];
@@ -460,6 +467,7 @@ fn cold_comparisons_use_original_work_budget_without_claiming_owned_bytes() {
         role: Role::DependencySource,
         package_id: Some(ID.into()),
         path: format!("{OUT}/generated.rs").into(),
+        named: None,
         bytes: 1,
         digest: [1; 32],
     }];

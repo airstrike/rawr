@@ -597,6 +597,7 @@ fn config_candidates_keep_their_spelling_and_other_inputs_resolve_symlinks() {
         role: proof::Role::Config,
         package_id: None,
         path: spelled.to_str().unwrap().into(),
+        named: None,
         bytes: content.len(),
         digest: Sha256::digest(content).into(),
     };
@@ -622,6 +623,7 @@ fn config_candidates_keep_their_spelling_and_other_inputs_resolve_symlinks() {
                 role: proof::Role::DeclaredInput,
                 package_id: None,
                 path: shared.join("second.toml").to_str().unwrap().into(),
+                named: Some(spelled.to_str().unwrap().into()),
                 bytes: 7,
                 digest: Sha256::digest(b"second!").into(),
             })

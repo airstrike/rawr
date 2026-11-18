@@ -8,7 +8,10 @@ pub mod profile;
 mod resolved;
 mod source;
 
-pub(crate) use resolved::Product as Resolved;
+/// The schema of a sealed resolved demand. Every build of rawr keeps it as
+/// current, with or without the warm launch that writes it, so a process
+/// that never resolves one never evicts one another process wrote.
+pub(crate) const RESOLVED_SCHEMA: u32 = 0x5245_0001;
 #[cfg(feature = "rustc-driver")]
 pub use resolved::{record as record_resolved, resolve_api_semantic, Warm};
 

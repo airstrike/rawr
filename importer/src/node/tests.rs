@@ -5825,7 +5825,7 @@ impl<const SCHEMA: u32> Value for Checked<SCHEMA> {
 #[test]
 fn a_store_keeps_each_current_schema_of_a_kind_and_evicts_older_ones() {
     const CHECKED: u32 = <crate::checked::Product as Value>::SCHEMA;
-    const RESOLVED: u32 = <crate::composition::Resolved as Value>::SCHEMA;
+    const RESOLVED: u32 = crate::composition::RESOLVED_SCHEMA;
     const OLD: u32 = 0x5245_0000;
     let root = temporary("store-unreadable-schemas");
     let context = prepare_fixture(&root);
