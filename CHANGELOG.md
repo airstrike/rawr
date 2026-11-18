@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
+- A program with dependencies runs again: rawr's shared runtime compiles, which it didn't on 0.4.11. (#2244)
+- A workspace manifest edited while Cargo reads metadata is reported as drift, never paired with the old metadata. (#656)
+- A running program sees a symlinked input pointed at another file, not only edits to the file it pointed at. (#1172)
 
 ## 0.4.11 (2026-11-18)
 

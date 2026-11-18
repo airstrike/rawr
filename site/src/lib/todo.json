@@ -9,7 +9,14 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
+      "entries": [
+        {"text":"A program with dependencies runs again: rawr's shared runtime compiles, which it didn't on 0.4.11.","issues":[2244]},
+        {"text":"A workspace manifest edited while Cargo reads metadata is reported as drift, never paired with the old metadata.","issues":[656]},
+        {"text":"A running program sees a symlinked input pointed at another file, not only edits to the file it pointed at.","issues":[1172]}
+      ]
+    },
     "releases": [
       {
         "version": "0.4.11",
@@ -3372,7 +3379,7 @@
     {"issue":543,"title":"?play loops a GIF of a program that never settles, or notes that it was cut","state":"open","category":"No glue (D593)"},
     {"issue":544,"title":"Arity errors for functions and closures read as rustc's E0061","state":"closed","category":"Divergences from rustc","release":"0.3.57"},
     {"issue":545,"title":"Refuse a closure whose output type Rust can't name before generation","state":"closed","category":"Importer","release":"0.3.57"},
-    {"issue":546,"title":"Test the warm launch's fallback when a cached profile entry is stale","state":"open","category":"Importer"},
+    {"issue":546,"title":"Test the warm launch's fallback when a cached profile entry is stale","state":"closed","category":"Importer"},
     {"issue":547,"title":"RequestAllocation counts items and bytes that nothing reads","state":"closed","category":"Importer","release":"0.3.58"},
     {"issue":548,"title":"Remove the limit figures that no longer bound anything","state":"open","category":"Importer"},
     {"issue":549,"title":"Generator panicked on every program whose closures cross as slots","state":"closed","category":"Importer","release":"0.3.57"},
@@ -3482,7 +3489,7 @@
     {"issue":653,"title":"std's PathBuf and io::Error are std's own types (D683.3)","state":"closed","category":"Divergences from rustc","release":"0.3.88"},
     {"issue":654,"title":"A stale stored baseline rebuilds silently (D683.7)","state":"closed","category":"Health"},
     {"issue":655,"title":"Stop re-running Cargo after each build to compare its output byte for byte","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.81"},
-    {"issue":656,"title":"Check the manifests behind Cargo metadata before capturing the workspace image, in both lanes","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":656,"title":"Check the manifests behind Cargo metadata before capturing the workspace image, in both lanes","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":657,"title":"A real mid-build edit restarts preparation instead of erroring","state":"open","category":"Divergences from rustc"},
     {"issue":658,"title":"ResolutionDrift with no user edit: the program's own cargo check and ancestor manifests","state":"closed","category":"Shared dependency cache (D607)","release":"0.4.11"},
     {"issue":659,"title":"std::fs inside an async block","state":"closed","category":"Divergences from rustc"},
@@ -3998,7 +4005,7 @@
     {"issue":1169,"title":"A tuple of script values passed to a native generic crosses as an array","state":"open","category":"Divergences from rustc"},
     {"issue":1170,"title":"A marked binary with native modules or an async main beside its package's library names two crates the same way","state":"open","category":"Divergences from rustc"},
     {"issue":1171,"title":"A build input reached through a symlink is refused","state":"closed","category":"Health","release":"0.3.172"},
-    {"issue":1172,"title":"A live rawr run doesn't see a repointed symlink until the next run","state":"open","category":"Health"},
+    {"issue":1172,"title":"A live rawr run doesn't see a repointed symlink until the next run","state":"closed","category":"Health"},
     {"issue":1173,"title":"A rerun-if-changed path with `..` after a symlinked directory is read lexically","state":"closed","category":"Health","release":"0.4.11"},
     {"issue":1174,"title":"A build target whose source file is a symlink is refused","state":"closed","category":"Health"},
     {"issue":1175,"title":"rawr runs a Cargo package's [[bin]] file only as a lone file, without the package's dependencies","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
@@ -4933,7 +4940,7 @@
     {"issue":2105,"title":"A method call on a value a function's `impl Trait` gives, and `Trait::method(&value)`, call the…","state":"closed","category":"Divergences from rustc","release":"0.3.217"},
     {"issue":2106,"title":"An `impl Trait<Assoc = T>` return bound doesn't fix its hidden type's inference: a literal in it takes i32","state":"open","category":"Divergences from rustc"},
     {"issue":2107,"title":"Resolver state keyed by token position collides in macro bodies, whose tokens all take the call's position","state":"open","category":"Divergences from rustc"},
-    {"issue":2108,"title":"A program's lowered output is reused after a resolver change when the program's source is unchanged","state":"open","category":"Divergences from rustc"},
+    {"issue":2108,"title":"A program's lowered output is reused after a resolver change when the program's source is unchanged","state":"closed","category":"Divergences from rustc"},
     {"issue":2109,"title":"The current toolchain's nightly check directory in the rawr home keeps every superseded dependency unit","state":"open","category":"Divergences from rustc"},
     {"issue":2110,"title":"A marked module's glob of its parent doesn't reach a native module the parent binds through its own glob","state":"closed","category":"Divergences from rustc","release":"0.3.217"},
     {"issue":2111,"title":"iced parity compares a frame drawn from elapsed wall-clock time as if it were fixed","state":"open","category":"Divergences from rustc"},
@@ -5068,7 +5075,9 @@
     {"issue":2240,"title":"iced::application with a u32 state and () message panics the runner generator","state":"open","category":"No glue (D593)"},
     {"issue":2241,"title":"A program's own `#[derive(thiserror::Error)]` is refused as an impl of an unknown trait path","state":"open","category":"No glue (D593)"},
     {"issue":2242,"title":"A later demand round writes each item it takes from an earlier classification into the stored…","state":"closed","category":"Shared dependency cache (D607)","release":"0.4.8"},
-    {"issue":2243,"title":"`Itertools::sorted` on `RepeatN<String>` is E0599 under rawr check, which cargo accepts","state":"open","category":"Divergences from rustc"}
+    {"issue":2243,"title":"`Itertools::sorted` on `RepeatN<String>` is E0599 under rawr check, which cargo accepts","state":"open","category":"Divergences from rustc"},
+    {"issue":2244,"title":"A program with dependencies runs again: rawr's shared runtime compiles, which it didn't on 0.4.11","state":"open","category":"Health"},
+    {"issue":2245,"title":"A profile entry that decodes stale under its own key panics in the full path after the warm launch falls back","state":"open","category":"Shared dependency cache (D607)"}
   ],
   "groups": [
     {
@@ -5329,28 +5338,30 @@
           "start": 48,
           "size": 3,
           "state": "next",
-          "note": "Stale, damaged or older entries rebuild quietly: workspace roots (#894), symlinked parents (#1173), damaged memos (#484), bundled entries (#615), older schemas (#631), relative RAWR_HOME (#2226). Left: #546, #656, #657, #1172, #1209, #2108.",
+          "note": "Stale, damaged or older entries rebuild quietly: workspace roots (#894), symlinked parents and links (#1173, #1172), damaged memos (#484), bundled entries (#615), older schemas (#631), relative RAWR_HOME (#2226), metadata after capture (#656). Left: #657 (D1043), #1209, #2245.",
           "issues": [
             {"number":411,"title":"One-time 'workspace manifest closure changed' drift on a fresh path-crate project","state":"closed"},
             {"number":484,"title":"An unreadable cached dependency build is a user error, not a cache miss","state":"closed"},
             {"number":615,"title":"A stale bundled node at the same action as a fresh build fails on publish","state":"closed"},
             {"number":631,"title":"Profile, profile-proof and checked store entries from an older rawr aren't evicted by version","state":"closed"},
             {"number":632,"title":"Confirm whether a cold context against a warm resolution reports false drift","state":"closed"},
-            {"number":656,"title":"Check the manifests behind Cargo metadata before capturing the workspace image, in both lanes","state":"open"},
+            {"number":656,"title":"Check the manifests behind Cargo metadata before capturing the workspace image, in both lanes","state":"closed"},
             {"number":658,"title":"ResolutionDrift with no user edit: the program's own cargo check and ancestor manifests","state":"closed"},
             {"number":1423,"title":"A failed runner build is explained as build-script drift even when the failure has nothing to do…","state":"closed"},
-            {"number":546,"title":"Test the warm launch's fallback when a cached profile entry is stale","state":"open"},
+            {"number":546,"title":"Test the warm launch's fallback when a cached profile entry is stale","state":"closed"},
             {"number":641,"title":"A store node's failed evaluation and failed reservation cleanup surface as a framework error","state":"closed"},
             {"number":654,"title":"A stale stored baseline rebuilds silently (D683.7)","state":"closed"},
             {"number":657,"title":"A real mid-build edit restarts preparation instead of erroring","state":"open"},
             {"number":739,"title":"A development rawr-import reuses a project's cached runner after rawr's source changes","state":"closed"},
             {"number":894,"title":"rawr's workspace observation reads ancestor manifests outside the project's own workspace","state":"closed"},
-            {"number":1172,"title":"A live rawr run doesn't see a repointed symlink until the next run","state":"open"},
+            {"number":1172,"title":"A live rawr run doesn't see a repointed symlink until the next run","state":"closed"},
             {"number":1173,"title":"A rerun-if-changed path with `..` after a symlinked directory is read lexically","state":"closed"},
             {"number":1174,"title":"A build target whose source file is a symlink is refused","state":"closed"},
             {"number":1209,"title":"The package-tree witness of a build script without rerun-if inputs sees more files than Cargo lists","state":"open"},
-            {"number":2108,"title":"A program's lowered output is reused after a resolver change when the program's source is unchanged","state":"open"},
-            {"number":2226,"title":"A relative RAWR_HOME (`../home`) doubles the project path in the store's Cargo output path","state":"closed"}
+            {"number":2108,"title":"A program's lowered output is reused after a resolver change when the program's source is unchanged","state":"closed"},
+            {"number":2226,"title":"A relative RAWR_HOME (`../home`) doubles the project path in the store's Cargo output path","state":"closed"},
+            {"number":2245,"title":"A profile entry that decodes stale under its own key panics in the full path after the warm launch falls back","state":"open"},
+            {"number":2244,"title":"A program with dependencies runs again: rawr's shared runtime compiles, which it didn't on 0.4.11","state":"open"}
           ],
           "milestone": "0.4"
         },
