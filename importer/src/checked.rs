@@ -294,7 +294,7 @@ impl Product {
 
 impl node::Value for Product {
     const KIND: node::Kind = node::Kind::Checked;
-    const SCHEMA: u32 = 1;
+    const SCHEMA: u32 = schema(MAGIC, HEADER_BYTES, crate::surface::SURFACE_SCHEMA);
 
     fn encode(&self) -> Result<Box<[u8]>, node::Error> {
         let length = self.encoded_len();
@@ -370,6 +370,21 @@ impl node::Value for Product {
     }
 }
 
+/// The checked value's schema. Its decoder compares the header's magic and
+/// length, and the demand it replays compares the surface schema, so each is
+/// folded in: the schema is part of the key, and a format change gives every
+/// checked entry a new one (D1045).
+const fn schema(magic: &[u8], header: usize, surface: u32) -> u32 {
+    // The header is a fixed few dozen bytes, so the word holds its length.
+    node::reader_schema(1, &[node::version_word(magic), header as u32, surface])
+}
+
+// The checked and resolved values share a kind, so their schemas differ.
+const _: () = assert!(
+    <Product as node::Value>::SCHEMA != crate::composition::RESOLVED_SCHEMA,
+    "the checked and resolved values keep distinct schemas in one kind"
+);
+
 fn usize_at(bytes: &[u8], offset: usize, reason: &'static str) -> Result<usize, node::Error> {
     let encoded: [u8; 8] = bytes
         .get(offset..offset.saturating_add(8))
@@ -424,6 +439,48 @@ mod tests {
     use crate::node::Value as _;
 
     use super::{Cached, Product};
+
+    /// A checked value whose format moves, one schema at a time.
+    struct Moved<const SCHEMA: u32>;
+
+    impl<const SCHEMA: u32> crate::node::Value for Moved<SCHEMA> {
+        const KIND: crate::node::Kind = crate::node::Kind::Checked;
+        const SCHEMA: u32 = SCHEMA;
+
+        fn encode(&self) -> Result<Box<[u8]>, crate::node::Error> {
+            Ok(Box::default())
+        }
+
+        fn decode(_bytes: &[u8]) -> Result<Self, crate::node::Error> {
+            Ok(Self)
+        }
+    }
+
+    fn key<K: crate::node::Value>() -> crate::node::ActionKey {
+        crate::node::Direct::<K>::capture([7; 32], b"checked-key", &[])
+            .expect("the checked recipe seals")
+            .action()
+    }
+
+    /// The header's magic and length and the surface schema of the demand a
+    /// checked entry replays are part of its key, so an entry an older
+    /// format wrote is a miss under another key (D1045).
+    #[test]
+    fn a_checked_format_change_gives_its_entries_another_key() {
+        use super::{schema, HEADER_BYTES, MAGIC};
+        const SURFACE: u32 = crate::surface::SURFACE_SCHEMA;
+
+        let current = key::<Product>();
+        assert!(current == key::<Moved<{ schema(MAGIC, HEADER_BYTES, SURFACE) }>>());
+        let moved = [
+            key::<Moved<{ schema(b"RAWRCHK0", HEADER_BYTES, SURFACE) }>>(),
+            key::<Moved<{ schema(MAGIC, HEADER_BYTES + 8, SURFACE) }>>(),
+            key::<Moved<{ schema(MAGIC, HEADER_BYTES, SURFACE + 1) }>>(),
+        ];
+        for (index, moved) in moved.iter().enumerate() {
+            assert!(*moved != current, "format {index} is in the checked key");
+        }
+    }
 
     struct Checked;
     struct Definition;

@@ -158,7 +158,7 @@ impl Schemas {
             SUPPORTED_UNIT_SCHEMA,
             SUPPORTED_GRAPH_SCHEMA,
             if cfg!(feature = "rustc-driver") {
-                crate::node::version_word(env!("CARGO_PKG_VERSION"))
+                crate::node::version_word(env!("CARGO_PKG_VERSION").as_bytes())
             } else {
                 0
             },

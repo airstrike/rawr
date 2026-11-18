@@ -6,6 +6,28 @@ use super::{Checked, Contract, Definition, Error};
 
 const DOMAIN: &[u8] = b"rawr.profile.classification/v2";
 
+/// The profile's version and every format schema its cached values' decoders
+/// compare: the contract's, the demand's and the generated owner's.
+const FORMATS: [u32; 4] = [
+    super::VERSION,
+    super::contract::SCHEMA,
+    super::demand::SCHEMA,
+    super::OWNER_SCHEMA,
+];
+
+/// A cached profile value's schema: its own revision with [`FORMATS`] folded
+/// in. The schema is part of the value's key, so a format change gives each
+/// value a new key, and the store evicts the entries an older format wrote
+/// (D1042, D1045). Under a key that holds every format, a hit that doesn't
+/// decode is a rawr bug.
+pub(crate) const fn schema(revision: u32) -> u32 {
+    schema_under(revision, FORMATS)
+}
+
+const fn schema_under(revision: u32, formats: [u32; 4]) -> u32 {
+    node::reader_schema(revision, &formats)
+}
+
 pub(super) fn classify<C: Checked, D: Definition<C>>(
     definition: &D,
     graph: &crate::api::Graph<crate::api::Extracted>,
@@ -107,7 +129,7 @@ impl Product {
 
 impl node::Value for Product {
     const KIND: node::Kind = node::Kind::Profile;
-    const SCHEMA: u32 = 2;
+    const SCHEMA: u32 = schema(2);
 
     fn encode(&self) -> Result<Box<[u8]>, node::Error> {
         Ok(self.canonical.clone())
@@ -212,8 +234,8 @@ mod tests {
             .owned(identity, version, &graph)
             .expect("owned classification validates its exact graph identity");
         assert_eq!(replay.encode().expect("parts encode"), expected);
-        // Read under other inputs, a stored contract is stale: the replay
-        // rebuilds it, and no message reaches the program (#538).
+        // Read under other inputs, a stored contract is stale. Its key holds
+        // every input, so a cached read that meets this panics (D1045).
         let stale = |result: Result<crate::profile::contract::Parts, crate::profile::Error>| {
             matches!(result, Err(crate::profile::Error::Stale))
         };
@@ -228,6 +250,54 @@ mod tests {
         trailing.push(b' ');
         let product = Product::decode(&trailing).expect("bounded framing");
         assert!(stale(product.owned(identity, version, &graph)));
+    }
+
+    /// A profile value whose format moves, one schema at a time.
+    struct Moved<const SCHEMA: u32>;
+
+    impl<const SCHEMA: u32> crate::node::Value for Moved<SCHEMA> {
+        const KIND: crate::node::Kind = crate::node::Kind::Profile;
+        const SCHEMA: u32 = SCHEMA;
+
+        fn encode(&self) -> Result<Box<[u8]>, crate::node::Error> {
+            Ok(Box::default())
+        }
+
+        fn decode(_bytes: &[u8]) -> Result<Self, crate::node::Error> {
+            Ok(Self)
+        }
+    }
+
+    fn key<K: crate::node::Value>() -> crate::node::ActionKey {
+        crate::node::Direct::<K>::capture([7; 32], b"profile-key", &[])
+            .expect("the profile recipe seals")
+            .action()
+    }
+
+    /// Each format schema a cached profile value's decoder compares is part
+    /// of its key, so an entry an older format wrote is a miss under another
+    /// key, never a hit that decodes stale (D1045).
+    #[test]
+    fn a_profile_format_change_gives_its_entries_another_key() {
+        use super::{schema_under, FORMATS};
+
+        const fn moved(index: usize) -> u32 {
+            let mut formats = FORMATS;
+            formats[index] += 1;
+            schema_under(2, formats)
+        }
+
+        let current = key::<Product>();
+        assert!(current == key::<Moved<{ super::schema(2) }>>());
+        let moved = [
+            key::<Moved<{ moved(0) }>>(),
+            key::<Moved<{ moved(1) }>>(),
+            key::<Moved<{ moved(2) }>>(),
+            key::<Moved<{ moved(3) }>>(),
+        ];
+        for (index, moved) in moved.iter().enumerate() {
+            assert!(*moved != current, "format {index} is in the profile's key");
+        }
     }
 
     /// An entry keyed by every input it decodes under can't be stale, so a
