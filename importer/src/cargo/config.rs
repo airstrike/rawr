@@ -1398,6 +1398,43 @@ fn validate_config_authority(document: &DocumentMut, path: &Path) -> Result<()> 
     Ok(())
 }
 
+/// The `[profile.<profile>]` table of every config file Cargo reads for a
+/// build whose directory is `start`, framed in Cargo's order of precedence:
+/// the nearest directory's first, the Cargo home's last. A file with no
+/// such table adds nothing, so settings of other kinds or other profiles
+/// leave the bytes as they were.
+pub(crate) fn profile_settings(
+    start: &Path,
+    cargo_home: Option<&Path>,
+    profile: &str,
+) -> Result<Vec<u8>> {
+    let mut candidates = Vec::new();
+    append_hierarchy_candidates(&mut candidates, start)?;
+    if let Some(cargo_home) = cargo_home {
+        let home_start = candidates.len();
+        append_pair_candidates(&mut candidates, cargo_home)?;
+        prefer_extensionless(&mut candidates, home_start);
+    }
+    let mut settings = Vec::new();
+    let mut seen = Vec::<&Path>::with_capacity(candidates.len());
+    for candidate in &candidates {
+        if !matches!(candidate.state, State::Present(_)) || seen.contains(&candidate.path.as_path())
+        {
+            continue;
+        }
+        seen.push(&candidate.path);
+        let bytes = read_config(&candidate.path, MAX_VALUE_BYTES)?;
+        let document = parse_config(&candidate.path, &bytes)?;
+        if let Some(table) = document
+            .get("profile")
+            .and_then(|profiles| profiles.get(profile))
+        {
+            append_framed(&mut settings, table.to_string().as_bytes());
+        }
+    }
+    Ok(settings)
+}
+
 fn append_hierarchy_candidates(candidates: &mut Vec<Candidate>, start: &Path) -> Result<usize> {
     let count = start.ancestors().count().saturating_mul(2);
     candidates.reserve_exact(count);
