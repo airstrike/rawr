@@ -5,6 +5,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
+- A shared crate's bindings entry lists only the crates its table names. (#1128)
+- A later demand round classifies and generates only the items its new paths change, and a second project classifies and generates none of a crate another project already did: each item's classification and facade contribution are kept beside the crate's shared table in rawr's home. (#1618, #271)
 
 ## 0.4.1 (2026-11-17)
 

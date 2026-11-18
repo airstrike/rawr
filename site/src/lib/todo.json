@@ -9,7 +9,13 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
+      "entries": [
+        {"text":"A shared crate's bindings entry lists only the crates its table names.","issues":[1128]},
+        {"text":"A later demand round classifies and generates only the items its new paths change, and a second project classifies and generates none of a crate another project already did: each item's classification and facade contribution are kept beside the crate's shared table in rawr's home.","issues":[1618,271]}
+      ]
+    },
     "releases": [
       {
         "version": "0.4.1",
@@ -3012,7 +3018,7 @@
     {"issue":268,"title":"The docs (`site/src/content/docs`) don't describe running a crate like iced through generated…","state":"closed","category":"No glue (D593)","release":"0.2.9"},
     {"issue":269,"title":"A lone `.rs` file can't declare dependencies","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.2"},
     {"issue":270,"title":"Built crates aren't shared across lone files","state":"closed","category":"Shared dependency cache (D607)"},
-    {"issue":271,"title":"Generated bindings are built per project, so every project and script pays #255 again for the…","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":271,"title":"Generated bindings are built per project, so every project and script pays #255 again for the…","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":272,"title":"The shared cache needs removal by last use, and a reinstall must keep entries whose binding…","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.18"},
     {"issue":273,"title":"A crate with Cargo dependencies is refused unless it adds `rust-toolchain.toml` and…","state":"closed","category":"Shared dependency cache (D607)"},
     {"issue":274,"title":"`src/project/marker.rs` reads the marker only on the file's first line, so a file with a shebang…","state":"closed","category":"Shared dependency cache (D607)","release":"0.2.8"},
@@ -3869,7 +3875,7 @@
     {"issue":1125,"title":"A marked module can't name a direct proc-macro dependency's macros","state":"closed","category":"Divergences from rustc","release":"0.3.232"},
     {"issue":1126,"title":"A direct dependency whose only library is a Rust dylib stops the build","state":"open","category":"Health"},
     {"issue":1127,"title":"A native main announces a restart on a changed field but keeps running the old program","state":"closed","category":"Health","release":"0.3.172"},
-    {"issue":1128,"title":"A shared entry's meta lists every crate its session loaded, not only those its table names","state":"open","category":"Health"},
+    {"issue":1128,"title":"A shared entry's meta lists every crate its session loaded, not only those its table names","state":"closed","category":"Health"},
     {"issue":1129,"title":"progress_bar: a transition moved into a row! in one branch and a column! in the other fails with a lent-value mismatch","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":1130,"title":"A slot whose input borrows a crate value panics the generator","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":1131,"title":"Embedding: Engine::script refuses an inline module","state":"closed","category":"Divergences from rustc","release":"0.3.170"},
@@ -4359,7 +4365,7 @@
     {"issue":1615,"title":"An operator on a type without an impl of its trait reports rawr's own message or E0308 where rustc reports E0369","state":"closed","category":"Divergences from rustc","release":"0.3.177"},
     {"issue":1616,"title":"Classification re-read every trait impl per projection bound and hashed every definition per lookup","state":"closed","category":"No glue (D593)","release":"0.3.176"},
     {"issue":1617,"title":"let t = theme().into(); of a crate value is accepted where rustc gives E0283","state":"closed","category":"Divergences from rustc","release":"0.3.177"},
-    {"issue":1618,"title":"A demand round reclassifies and regenerates the whole API, when only new demanded paths were added","state":"open","category":"No glue (D593)"},
+    {"issue":1618,"title":"A demand round reclassifies and regenerates the whole API, when only new demanded paths were added","state":"closed","category":"No glue (D593)"},
     {"issue":1619,"title":"A borrow of a local crate value isn't a loan in rawr's borrow facts","state":"open","category":"Divergences from rustc"},
     {"issue":1620,"title":"A local borrowed for a crate's &'static dyn field fails at run time; #1594's fix was reverted for real tracing","state":"closed","category":"Divergences from rustc","release":"0.3.178"},
     {"issue":1621,"title":"&format_args!(..) needed as &dyn Value where a crate call takes &dyn Value","state":"closed","category":"No glue (D593)","release":"0.3.177"},
@@ -4960,7 +4966,14 @@
     {"issue":2217,"title":"An enum variant imported by `use` can be passed to a macro, as…","state":"closed","category":"Divergences from rustc","release":"0.4.1"},
     {"issue":2218,"title":"Plain `rawr run` restarts a single file on save instead of reloading a looping `main` in place","state":"open","category":"Hot reload of a marked `main` (D555)"},
     {"issue":2219,"title":"A browser with neither JSPI nor exnref can't compile the browser's universe module","state":"open","category":"Platforms"},
-    {"issue":2220,"title":"`rawr run --web` packages block the page on a sleep and append output instead of drawing a terminal","state":"open","category":"Platforms"}
+    {"issue":2220,"title":"`rawr run --web` packages block the page on a sleep and append output instead of drawing a terminal","state":"open","category":"Platforms"},
+    {"issue":2221,"title":"A demand round still runs classification's and the plan's whole-API passes","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":2222,"title":"D604 headers and the facade plan's sites are computed per program, not kept per crate","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":2223,"title":"A dependency several selected crates reach keeps its classification records under the first one's key","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":2224,"title":"Publishing a crate's classification entry rewrites the whole file whenever any record is fresh","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":2225,"title":"`&req.comparators[0]` on a crate struct's field is taken as a partial move: a later method call is a false E0382","state":"open","category":"Borrow checker (D572)"},
+    {"issue":2226,"title":"A relative RAWR_HOME (`../home`) doubles the project path in the store's Cargo output path","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":2227,"title":"Two rawr-import classify lib tests fail on main","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -5161,7 +5174,7 @@
           "state": "now",
           "note": "Projects reuse verified extraction tables (#367). A new rawr build doesn't classify an unchanged API again (#1666, #1686). Left: generated bindings once per machine (#271). Three drift and lock cases remain (#1012, #1025, #1026).",
           "issues": [
-            {"number":271,"title":"Generated bindings are built per project, so every project and script pays #255 again for the…","state":"open"},
+            {"number":271,"title":"Generated bindings are built per project, so every project and script pays #255 again for the…","state":"closed"},
             {"number":367,"title":"Reuse verified crate extraction tables across projects","state":"closed"},
             {"number":369,"title":"Substitute blanket provided-method types on concrete receivers","state":"closed"},
             {"number":370,"title":"An unused ambiguous method family poisons retained bindings","state":"closed"},
@@ -5172,7 +5185,8 @@
             {"number":1026,"title":"Shared bindings locks are briefly held by any process rawr starts","state":"open"},
             {"number":474,"title":"Two crates sharing a target dir fail rawr check on a build script's OUT_DIR","state":"open"},
             {"number":1408,"title":"A rawr blocked on another rawr's shared runtime or API build says so once, naming the builder's…","state":"open"},
-            {"number":942,"title":"Build the std bindings once per machine, not once per process (0.4)","state":"open"}
+            {"number":942,"title":"Build the std bindings once per machine, not once per process (0.4)","state":"open"},
+            {"number":2224,"title":"Publishing a crate's classification entry rewrites the whole file whenever any record is fresh","state":"open"}
           ],
           "milestone": "0.4"
         },
@@ -5188,10 +5202,11 @@
             {"number":254,"title":"With `RAWR_HOME` set to a folder beside the project (`../rawr-foo-home` for `../rawr-foo`)…","state":"closed"},
             {"number":276,"title":"`importer/src/store.rs:68` still says rawr's home holds \"the typed store (`v1`), shared deps…","state":"closed"},
             {"number":1097,"title":"A shared extraction table holds definitions from crates outside its key; another project replays crates it never loaded","state":"closed"},
-            {"number":1128,"title":"A shared entry's meta lists every crate its session loaded, not only those its table names","state":"open"},
+            {"number":1128,"title":"A shared entry's meta lists every crate its session loaded, not only those its table names","state":"closed"},
             {"number":304,"title":"A user's `~/.cargo/config.toml` profile settings aren't in the runtime's key, so a change to…","state":"open"},
             {"number":468,"title":"A shared whole table lists only the external crates its publisher's probe reached","state":"open"},
-            {"number":1525,"title":"Shared bindings compare the build scripts of packages reached only as build-dependencies","state":"open"}
+            {"number":1525,"title":"Shared bindings compare the build scripts of packages reached only as build-dependencies","state":"open"},
+            {"number":2223,"title":"A dependency several selected crates reach keeps its classification records under the first one's key","state":"open"}
           ],
           "milestone": "0.4"
         },
@@ -5237,7 +5252,8 @@
             {"number":1173,"title":"A rerun-if-changed path with `..` after a symlinked directory is read lexically","state":"open"},
             {"number":1174,"title":"A build target whose source file is a symlink is refused","state":"open"},
             {"number":1209,"title":"The package-tree witness of a build script without rerun-if inputs sees more files than Cargo lists","state":"open"},
-            {"number":2108,"title":"A program's lowered output is reused after a resolver change when the program's source is unchanged","state":"open"}
+            {"number":2108,"title":"A program's lowered output is reused after a resolver change when the program's source is unchanged","state":"open"},
+            {"number":2226,"title":"A relative RAWR_HOME (`../home`) doubles the project path in the store's Cargo output path","state":"open"}
           ],
           "milestone": "0.4"
         },
@@ -5263,8 +5279,10 @@
           "state": "now",
           "note": "Classify per crate and compose per program, so a demand round costs only its new paths (#1618). A new rawr build no longer classifies an unchanged API again (#1686).",
           "issues": [
-            {"number":1618,"title":"A demand round reclassifies and regenerates the whole API, when only new demanded paths were added","state":"open"},
-            {"number":914,"title":"A shared-bindings API is rebuilt whenever Cargo resolves again","state":"open"}
+            {"number":1618,"title":"A demand round reclassifies and regenerates the whole API, when only new demanded paths were added","state":"closed"},
+            {"number":914,"title":"A shared-bindings API is rebuilt whenever Cargo resolves again","state":"open"},
+            {"number":2221,"title":"A demand round still runs classification's and the plan's whole-API passes","state":"open"},
+            {"number":2222,"title":"D604 headers and the facade plan's sites are computed per program, not kept per crate","state":"open"}
           ],
           "milestone": "0.4"
         }
@@ -6802,7 +6820,8 @@
             {"number":870,"title":"Drop a temporary at the end of its statement","state":"open"},
             {"number":3,"title":"A non-primitive `op=` through a guard evaluates its right side before `write()`, which rustc…","state":"open"},
             {"number":410,"title":"An out-of-range element borrow panics at first use, not at the borrow","state":"open"},
-            {"number":2074,"title":"A `&mut self -> &mut Self` chain on a temporary of a program's own type is refused","state":"open"}
+            {"number":2074,"title":"A `&mut self -> &mut Self` chain on a temporary of a program's own type is refused","state":"open"},
+            {"number":2225,"title":"`&req.comparators[0]` on a crate struct's field is taken as a partial move: a later method call is a false E0382","state":"open"}
           ]
         },
         {
@@ -7331,7 +7350,8 @@
             {"number":1856,"title":"Three owner suffix tests fail on main: Overlay must reuse content","state":"open"},
             {"number":1862,"title":"The islands tests download the published driver for the current version, which a local build hasn't published","state":"open"},
             {"number":1917,"title":"Four rawr-import unit tests fail on main: epoch ownership, nightly identity, wrapped control graph, driver manifest","state":"open"},
-            {"number":1900,"title":"Each fresh test rawr home builds rawr's runtime from scratch at opt-level 3","state":"open"}
+            {"number":1900,"title":"Each fresh test rawr home builds rawr's runtime from scratch at opt-level 3","state":"open"},
+            {"number":2227,"title":"Two rawr-import classify lib tests fail on main","state":"open"}
           ]
         },
         {
