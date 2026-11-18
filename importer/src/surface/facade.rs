@@ -1345,9 +1345,10 @@ impl Plan {
                     generated.keep(
                         digest,
                         std::sync::Arc::clone(&contribution),
+                        outcome.export(),
                         outcome.identity().definition(),
                         kept.is_none(),
-                    );
+                    )?;
                     contribution
                 }
                 _ => std::sync::Arc::new(contribution::Contribution::of(outcome)?),

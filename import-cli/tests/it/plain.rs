@@ -920,45 +920,7 @@ fn a_second_project_classifies_and_generates_nothing_of_a_crate_the_home_keeps()
         )
         .unwrap();
     }
-    // Each round's definitions read, classified, paths generated, header
-    // units and paths' sites written, as `RAWR_VERBOSE` prints them.
-    let rounds = |root: &Path| {
-        let checked = crate::support::rawr_import()
-            .args(["check"])
-            .arg(root)
-            .env("RAWR_HOME", &home)
-            .env("RAWR_RUNTIME_HOME", crate::support::runtime_home())
-            .env_remove("CARGO_TARGET_DIR")
-            .env_remove("RUSTFLAGS")
-            .env("RAWR_VERBOSE", "1")
-            .output()
-            .unwrap();
-        let stderr = text(&checked.stderr);
-        assert!(
-            checked.status.success(),
-            "stdout:\n{}\nstderr:\n{stderr}",
-            text(&checked.stdout)
-        );
-        let count = |round: &str, stage: &str| {
-            round
-                .split(", ")
-                .find_map(|part| {
-                    part.strip_prefix(stage)?
-                        .strip_prefix(' ')?
-                        .parse::<usize>()
-                        .ok()
-                })
-                .unwrap_or_else(|| panic!("a round counts {stage}: {round}"))
-        };
-        stderr
-            .lines()
-            .filter_map(|line| line.strip_prefix("rawr-import: round "))
-            .map(|round| {
-                ["read", "classified", "generated", "headers", "sites"]
-                    .map(|stage| count(round, stage))
-            })
-            .collect::<Vec<_>>()
-    };
+    let rounds = |root: &Path| rounds(root, &home);
     let [first, second] = &projects;
     let first = rounds(first);
     let [[read, classified, _, headers, sites], .., [later_read, later_classified, _, later_headers, later_sites]] =
@@ -982,6 +944,120 @@ fn a_second_project_classifies_and_generates_nothing_of_a_crate_the_home_keeps()
             [*classified, *generated, *headers, *sites],
             [0; 4],
             "the home keeps every item, header and site: {second:?}"
+        );
+    }
+}
+
+/// Each round's definitions read, classified, paths generated, header
+/// units and paths' sites written, as `RAWR_VERBOSE` prints them, of a
+/// check of the project at `root` with rawr's home at `home`.
+fn rounds(root: &Path, home: &Path) -> Vec<[usize; 5]> {
+    let checked = crate::support::rawr_import()
+        .args(["check"])
+        .arg(root)
+        .env("RAWR_HOME", home)
+        .env("RAWR_RUNTIME_HOME", crate::support::runtime_home())
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env("RAWR_VERBOSE", "1")
+        .output()
+        .unwrap();
+    let stderr = text(&checked.stderr);
+    assert!(
+        checked.status.success(),
+        "stdout:\n{}\nstderr:\n{stderr}",
+        text(&checked.stdout)
+    );
+    let count = |round: &str, stage: &str| {
+        round
+            .split(", ")
+            .find_map(|part| {
+                part.strip_prefix(stage)?
+                    .strip_prefix(' ')?
+                    .parse::<usize>()
+                    .ok()
+            })
+            .unwrap_or_else(|| panic!("a round counts {stage}: {round}"))
+    };
+    stderr
+        .lines()
+        .filter_map(|line| line.strip_prefix("rawr-import: round "))
+        .map(|round| {
+            ["read", "classified", "generated", "headers", "sites"].map(|stage| count(round, stage))
+        })
+        .collect()
+}
+
+/// A crate that two selected crates reach keeps its items' records in an
+/// entry of its own, not the first selecting crate's, and a path that
+/// names no definition is kept by the crate its root selects, not the
+/// project (#2223, #2233). A second project that checks the same program
+/// classifies, generates and writes none of either in any round: every
+/// round's records are kept where the next project reads them, though a
+/// later round reads tables its project has not settled yet.
+#[test]
+fn a_crate_two_selected_crates_reach_is_kept_under_its_own_key() {
+    let home = crate::support::fresh("reached-home");
+    // Both random generators reach the crate of the traits they implement,
+    // the first through its own re-export of it. The path to a derive macro
+    // names no definition: its crate is a procedural macro.
+    let program = "// rawr\nuse rand_pcg::rand_core::{Rng, SeedableRng};\n\n#[derive(serde::Serialize)]\nstruct Seed {\n    value: u64,\n}\n\nfn main() {\n    let mut pcg = rand_pcg::Pcg32::seed_from_u64(1);\n    println!(\"{}\", pcg.next_u32());\n    println!(\"{}\", Seed { value: 3 }.value);\n    let xorshift: Option<rand_xorshift::XorShiftRng> = None;\n    println!(\"{}\", xorshift.is_none());\n}\n";
+    let projects = ["first", "second"].map(|name| {
+        let root = crate::support::fresh(format!("reached-{name}"));
+        copy(Path::new(FIXTURE), &root);
+        let manifest = fs::read_to_string(root.join("Cargo.toml"))
+            .unwrap()
+            .replace(
+                "semver = \"1\"",
+                "rand_pcg = \"0.10\"\nrand_xorshift = \"0.5\"\nserde = { version = \"1\", features = [\"derive\"] }",
+            );
+        fs::write(root.join("Cargo.toml"), manifest).unwrap();
+        fs::write(root.join("src/main.rs"), program).unwrap();
+        root
+    });
+    let [first, second] = &projects;
+    let rounds_of_first = rounds(first, &home);
+    assert!(
+        rounds_of_first.len() > 1,
+        "the check takes a later demand round: {rounds_of_first:?}"
+    );
+    // Each entry of rawr's home, and whether one of its layers holds the
+    // contribution of a path naming no definition.
+    let classified = home_format(&home, "classified");
+    let entries = fs::read_dir(&classified)
+        .unwrap()
+        .flatten()
+        .filter(|version| !version.file_name().to_string_lossy().starts_with('.'))
+        .flat_map(|version| fs::read_dir(version.path()).unwrap().flatten())
+        .map(|entry| entry.path())
+        .filter(|entry| entry.is_dir())
+        .map(|entry| {
+            let unnamed = fs::read_dir(&entry).unwrap().flatten().any(|layer| {
+                fs::read_to_string(layer.path()).is_ok_and(|text| text.contains("\"unnamed\":\""))
+            });
+            let name = entry.file_name().unwrap().to_string_lossy().into_owned();
+            (name, unnamed)
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        entries
+            .iter()
+            .any(|(name, _)| name.starts_with("rand_core-")),
+        "the crate both generators reach keeps its own entry: {entries:?}"
+    );
+    assert!(
+        entries
+            .iter()
+            .any(|(name, unnamed)| *unnamed && name.starts_with("serde-")),
+        "the derive's crate keeps the path naming no definition: {entries:?}"
+    );
+    let rounds_of_second = rounds(second, &home);
+    assert!(!rounds_of_second.is_empty());
+    for [_, classified, generated, headers, sites] in &rounds_of_second {
+        assert_eq!(
+            [*classified, *generated, *headers, *sites],
+            [0; 4],
+            "the home keeps every item, path, header and site: {rounds_of_second:?}"
         );
     }
 }

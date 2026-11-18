@@ -142,6 +142,62 @@ fn publish_with(
     written
 }
 
+/// What a publication keeps of the generation it replaces, and adds.
+#[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
+pub(crate) struct Extension {
+    /// The names of the current generation's files the new one keeps.
+    pub(crate) kept: Vec<String>,
+    /// Each file the new generation adds, by its name.
+    pub(crate) added: Vec<(String, Vec<u8>)>,
+}
+
+/// Publish a generation that keeps files of the current one and adds
+/// others. `extend` reads the current entry's directory, which may not
+/// exist, under the key's exclusive guard, and says which of its files the
+/// new generation keeps and which it adds. A kept file is linked, not
+/// written again: files are never changed once published, so the link is
+/// the same bytes, and publishing costs only what it adds. A reader of this
+/// key makes the publication return WouldBlock; the existing entry remains
+/// unchanged.
+#[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
+pub(crate) fn extend(
+    bindings: &Path,
+    key: &str,
+    extend: impl FnOnce(&Path) -> io::Result<Extension>,
+) -> io::Result<()> {
+    fs::create_dir_all(bindings)?;
+    let lock = guard(bindings, key)?;
+    lock.try_lock().map_err(io::Error::from)?;
+    let entry = bindings.join(key);
+    let Extension { kept, added } = extend(&entry)?;
+    let id = unique();
+    let staging = bindings.join(format!(".staging-{key}.{id}"));
+    let written = (|| -> io::Result<()> {
+        fs::create_dir(&staging)?;
+        fs::write(staging.join(GENERATION), &id)?;
+        for name in &kept {
+            let (from, to) = (entry.join(name), staging.join(name));
+            if fs::hard_link(&from, &to).is_err() {
+                fs::copy(&from, &to)?;
+            }
+        }
+        for (name, bytes) in &added {
+            let mut file = io::BufWriter::new(File::create(staging.join(name))?);
+            file.write_all(bytes)?;
+            file.flush()?;
+        }
+        replace(
+            &staging,
+            &entry,
+            &bindings.join(format!(".retired-{key}.{id}")),
+        )
+    })();
+    if written.is_err() {
+        let _ = fs::remove_dir_all(&staging);
+    }
+    written
+}
+
 /// The exclusive key guard stays held across both renames and rollback.
 fn replace(staging: &Path, entry: &Path, retired: &Path) -> io::Result<()> {
     let replaced = match fs::rename(entry, retired) {

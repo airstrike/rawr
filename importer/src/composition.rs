@@ -370,7 +370,7 @@ where
                     crate::progress::phase("classifying");
                     let earlier = classification
                         .as_deref_mut()
-                        .map(crate::classify::kept::Kept::earlier)
+                        .map(|kept| kept.earlier(graph.graph()))
                         .unwrap_or_default();
                     Generic::capture_from(graph.graph(), policy, limits, &earlier).map_err(failure)
                 })?;
@@ -400,7 +400,7 @@ where
                     crate::progress::phase("generating");
                     let earlier = classification
                         .as_deref_mut()
-                        .map(crate::classify::kept::Kept::earlier_contributions)
+                        .map(|kept| kept.earlier_contributions(graph.graph()))
                         .unwrap_or_default();
                     let (facade, contributions) =
                         Facade::capture_parts_from(graph.graph(), &parts, &earlier)?;
@@ -408,7 +408,7 @@ where
                     Ok(facade)
                 })?;
                 if let (Some(kept), Some(generated)) = (classification, generated) {
-                    kept.keep_contributions(generated);
+                    kept.keep_contributions(generated, graph.graph());
                 }
                 let (checked_recipe, checked_outcome, profile_parts) = match prepared_checked {
                     Some(prepared) => prepared,
