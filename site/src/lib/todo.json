@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-19",
-  "version": "0.4.35",
+  "version": "0.4.36",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,15 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.36",
+        "date": "2026-11-19",
+        "entries": [
+          {"text":"A step into a closure whose body ends in a tail expression pauses at that expression, as rustc's debuggers do.","issues":[2300]},
+          {"text":"A breakpoint one thread reaches while another thread answers a debugger read pauses the program instead of being passed.","issues":[2301]},
+          {"text":"Scoped threads that borrow the same local read it at the same time, as in Rust, instead of failing with a data race under load.","issues":[2303]}
+        ]
+      },
       {
         "version": "0.4.35",
         "date": "2026-11-19",
@@ -5316,10 +5325,10 @@
     {"issue":2297,"title":"A base-language `rawr run` restarts its program to register a debugger","state":"open","category":"Health"},
     {"issue":2298,"title":"A `mut` binding of a `&mut` parameter is a step stop on the signature line","state":"closed","category":"Health","release":"0.4.35"},
     {"issue":2299,"title":"rawr dap tells a breakpoint a save moved as removed and new, not changed","state":"closed","category":"Health","release":"0.4.35"},
-    {"issue":2300,"title":"A step into a closure whose body is only a tail expression never pauses in it","state":"open","category":"Health"},
-    {"issue":2301,"title":"inspect::tests::a_step_out_of_a_call_from_native_code_pauses_in_an_evaluation_already_running hangs now and then","state":"open","category":"Health"},
+    {"issue":2300,"title":"A step into a closure whose body is only a tail expression never pauses in it","state":"closed","category":"Health","release":"0.4.36"},
+    {"issue":2301,"title":"inspect::tests::a_step_out_of_a_call_from_native_code_pauses_in_an_evaluation_already_running hangs now and then","state":"closed","category":"Health","release":"0.4.36"},
     {"issue":2302,"title":"AppKit input test each_button_keeps_its_number_and_every_pointer_event_lands_where_it_was_sent fails now and then","state":"open","category":"Health"},
-    {"issue":2303,"title":"std_method_tests::a_sync_channel_a_scope_and_a_builder_run_as_std_s fails now and then under the full lib suite","state":"open","category":"Health"},
+    {"issue":2303,"title":"std_method_tests::a_sync_channel_a_scope_and_a_builder_run_as_std_s fails now and then under the full lib suite","state":"closed","category":"Health","release":"0.4.36"},
     {"issue":2304,"title":"The playground's debugger icon swaps in a debugger build of the browser module and restarts the program under it","state":"open","category":"Platforms"}
   ],
   "groups": [
@@ -7738,7 +7747,7 @@
             {"number":2283,"title":"24 rawr lib tests fail on main, from before 0.4.24","state":"closed"},
             {"number":2289,"title":"End-to-end test lanes and started projects beyond the warm set outlive a killed or failing run and fill the disk","state":"closed"},
             {"number":2302,"title":"AppKit input test each_button_keeps_its_number_and_every_pointer_event_lands_where_it_was_sent fails now and then","state":"open"},
-            {"number":2303,"title":"std_method_tests::a_sync_channel_a_scope_and_a_builder_run_as_std_s fails now and then under the full lib suite","state":"open"}
+            {"number":2303,"title":"std_method_tests::a_sync_channel_a_scope_and_a_builder_run_as_std_s fails now and then under the full lib suite","state":"closed"}
           ]
         },
         {
@@ -8096,8 +8105,8 @@
             {"number":2297,"title":"A base-language `rawr run` restarts its program to register a debugger","state":"open"},
             {"number":2298,"title":"A `mut` binding of a `&mut` parameter is a step stop on the signature line","state":"closed"},
             {"number":2299,"title":"rawr dap tells a breakpoint a save moved as removed and new, not changed","state":"closed"},
-            {"number":2300,"title":"A step into a closure whose body is only a tail expression never pauses in it","state":"open"},
-            {"number":2301,"title":"inspect::tests::a_step_out_of_a_call_from_native_code_pauses_in_an_evaluation_already_running hangs now and then","state":"open"}
+            {"number":2300,"title":"A step into a closure whose body is only a tail expression never pauses in it","state":"closed"},
+            {"number":2301,"title":"inspect::tests::a_step_out_of_a_call_from_native_code_pauses_in_an_evaluation_already_running hangs now and then","state":"closed"}
           ],
           "milestone": "0.5"
         },
