@@ -66,10 +66,18 @@ impl Prelude {
     /// that `host`'s facades hold no item at: a proc macro, whose crate has
     /// no API to extract, or one a library re-exports from its proc macro
     /// crate. rustc resolves the path when it expands the call, and names
-    /// it in its error when it holds no macro there.
+    /// it in its error when it holds no macro there. A macro is a module's
+    /// item, so a path below a function or a type the facades hold names
+    /// none: `dep::function::name` is an unresolved import.
     pub(crate) fn crate_macro(&self, host: &crate::host::Registry, path: &str) -> bool {
         path.split_once("::")
             .is_some_and(|(root, _)| self.dependency(root))
+            && path.match_indices("::").skip(1).all(|(end, _)| {
+                matches!(
+                    host.entry(&path[..end]),
+                    None | Some(crate::host::Entry::Module | crate::host::Entry::ModuleItem(_))
+                )
+            })
             && !host
                 .overloads(path)
                 .is_some_and(|items| items.iter().any(|item| item.kind().is_macro()))
