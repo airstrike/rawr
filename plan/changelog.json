@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.4.29",
+      "date": "2026-11-19",
+      "entries": [
+        {"text":"A shell that attaches to a plain `rawr run` gets the debugger without a restart: the program registers it at its next call from native code and keeps its state. Screenshots, window input and menus need no debugger and no longer restart the program.","issues":[2266]}
+      ]
+    },
+    {
       "version": "0.4.28",
       "date": "2026-11-19",
       "entries": [

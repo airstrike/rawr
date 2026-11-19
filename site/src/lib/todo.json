@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-19",
-  "version": "0.4.28",
+  "version": "0.4.29",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.29",
+        "date": "2026-11-19",
+        "entries": [
+          {"text":"A shell that attaches to a plain `rawr run` gets the debugger without a restart: the program registers it at its next call from native code and keeps its state. Screenshots, window input and menus need no debugger and no longer restart the program.","issues":[2266]}
+        ]
+      },
       {
         "version": "0.4.28",
         "date": "2026-11-19",
@@ -5229,7 +5236,7 @@
     {"issue":2263,"title":"eval in a caller's frame","state":"open","category":"Health"},
     {"issue":2264,"title":"eval in a program with Rust dependencies, end to end","state":"open","category":"Health"},
     {"issue":2265,"title":"eval paused at a match arm or another expression position fails to parse","state":"open","category":"Health"},
-    {"issue":2266,"title":"A shell attaching to a plain `rawr run` restarts the program to register a debugger, losing its state","state":"open","category":"Health"},
+    {"issue":2266,"title":"A shell attaching to a plain `rawr run` restarts the program to register a debugger, losing its state","state":"closed","category":"Health","release":"0.4.29"},
     {"issue":2267,"title":"rawr mcp's `wait` returns a started program's output only with the next event","state":"open","category":"Health"},
     {"issue":2268,"title":"The inspector runs in the browser universe behind a feature, with pauses suspended through JSPI","state":"open","category":"Platforms"},
     {"issue":2269,"title":"Pause inside a browser callback (iced's update and view, ratzilla's draw) in the playground debugger","state":"open","category":"Platforms"},
@@ -5258,7 +5265,9 @@
     {"issue":2292,"title":"Eval at a pause in an iced callback fails: cannot use `iced::run`'s `W` here, type annotations needed","state":"closed","category":"Health","release":"0.4.28"},
     {"issue":2293,"title":"After a step in an iced callback, the window shows no frames or bindings and 'No such file or directory (os error 2)'","state":"closed","category":"Health","release":"0.4.27"},
     {"issue":2294,"title":"Continue after a step in an iced callback never answers the window","state":"closed","category":"Health","release":"0.4.27"},
-    {"issue":2295,"title":"rawr gui shows the previous stop's frames and bindings at a new pause","state":"closed","category":"Health","release":"0.4.28"}
+    {"issue":2295,"title":"rawr gui shows the previous stop's frames and bindings at a new pause","state":"closed","category":"Health","release":"0.4.28"},
+    {"issue":2296,"title":"Input that arrives while the debugger registers passes a breakpoint just set","state":"open","category":"Health"},
+    {"issue":2297,"title":"A base-language `rawr run` restarts its program to register a debugger","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -8025,9 +8034,11 @@
           "note": "The run's owner hosts one session any number of shells attach to, with capabilities listed at hello; rawr mcp is its first shell and attaches to terminal runs (#2258, D1053). Left: attaching keeps the program's state (#2266).",
           "issues": [
             {"number":2258,"title":"One debugger session per run that any number of shells attach to, with rawr mcp as its first shell","state":"closed"},
-            {"number":2266,"title":"A shell attaching to a plain `rawr run` restarts the program to register a debugger, losing its state","state":"open"},
+            {"number":2266,"title":"A shell attaching to a plain `rawr run` restarts the program to register a debugger, losing its state","state":"closed"},
             {"number":2278,"title":"The session tells shells when breakpoints change","state":"open"},
-            {"number":2288,"title":"A run started in a terminal tells its output to the session","state":"open"}
+            {"number":2288,"title":"A run started in a terminal tells its output to the session","state":"open"},
+            {"number":2296,"title":"Input that arrives while the debugger registers passes a breakpoint just set","state":"open"},
+            {"number":2297,"title":"A base-language `rawr run` restarts its program to register a debugger","state":"open"}
           ],
           "milestone": "0.5"
         },
