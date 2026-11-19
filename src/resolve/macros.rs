@@ -178,6 +178,29 @@ impl Table {
         sites(self.expansions(source), Span::new(at, at)).map(|site| site.start())
     }
 
+    /// Where a location macro's call at `at` in `source` is, as rustc reads
+    /// `line!()` and `column!()`: a call laid out in an expansion is where
+    /// the token that starts it came from, and one an expansion's own
+    /// tokens make is at the outermost call the file writes.
+    pub(crate) fn written(&self, source: source::Id, at: Position) -> Position {
+        let expansions = self.expansions(source);
+        let mut at = at;
+        // Each step reads a token from an expansion laid out before.
+        for _ in 0..expansions.len() {
+            let Some(origin) = expansions.iter().find_map(|expansion| {
+                expansion
+                    .locations
+                    .iter()
+                    .find(|(laid, _)| *laid == at)
+                    .map(|(_, origin)| *origin)
+            }) else {
+                break;
+            };
+            at = origin;
+        }
+        self.sites(source, at).last().unwrap_or(at)
+    }
+
     /// Every definition.
     pub(crate) fn definitions(&self) -> impl Iterator<Item = &Definition> {
         self.definitions.iter()

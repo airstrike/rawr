@@ -12400,6 +12400,32 @@ run()"#,
 }
 
 #[test]
+fn language_a_laid_out_expansions_line_is_where_rustc_puts_it() {
+    // A call whose expansion names a path is laid out past the file's
+    // lines. Its own `line!()` and `column!()` are where its outermost
+    // call is, and a `line!()` its caller passes in is where the caller
+    // wrote it, as rustc reads them.
+    let value = run_string(
+        r#"macro_rules! at {
+    ($value:expr) => { (std::line!(), core::column!(), line!(), $value) };
+}
+macro_rules! outer {
+    () => { at!(line!()) };
+}
+pub fn run() -> String {
+    let first = at!(line!());
+    let second = at!(
+        line!()
+    );
+    let nested = outer!();
+    format!("{first:?} {second:?} {nested:?}")
+}
+run()"#,
+    );
+    assert_eq!(value, "(8, 17, 8, 8) (9, 18, 9, 10) (12, 18, 12, 12)");
+}
+
+#[test]
 fn language_format_args_writes_its_text_as_fmt_arguments_does() {
     // `fmt::Arguments`'s `Debug` and `Display` both write the text, never
     // quoted, and ignore width and precision (#1561).

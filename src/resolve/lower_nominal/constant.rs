@@ -142,7 +142,10 @@ impl<'a> Parser<'a> {
                     })
                 }
             };
-            let at = name_span.start();
+            let at = self
+                .models
+                .macros
+                .written(self.models.context, name_span.start());
             let text = match name {
                 "line" => at.line().unwrap_or_default().to_string(),
                 "column" => at.position().unwrap_or_default().to_string(),
