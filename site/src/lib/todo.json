@@ -8063,8 +8063,8 @@
           "name": "Window shell",
           "start": 67,
           "size": 3,
-          "state": "now",
-          "note": "`rawr gui`: a window in its own process with frame, highlighted source, gutter breakpoints, bindings and eval (#2260, #2286); a step on an iced program now pauses (#2287). Left from the live run: #2292, #2293, #2294.",
+          "state": "done",
+          "note": "0.4.28. `rawr gui`: a window in its own process with frame, highlighted source, gutter breakpoints, frames, bindings, eval, step, continue and pause; its live test passes on an iced counter (#2260, #2286, #2287, #2292, #2293, #2294, #2295).",
           "issues": [
             {"number":2260,"title":"A window shell (GUI) in its own process on the shared debugger session","state":"closed"},
             {"number":2287,"title":"A step on a paused iced program never reaches a new pause","state":"closed"},
