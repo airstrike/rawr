@@ -122,6 +122,7 @@ mod parts;
 mod screenshot;
 mod stops;
 
+use std::cell::Cell;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Condvar, Mutex, PoisonError};
@@ -775,6 +776,14 @@ impl Home {
     }
 }
 
+thread_local! {
+    /// The callback is answering on this thread: steps of the `Debug` code
+    /// and the code it runs are not answered and don't pause. Evaluations on
+    /// other threads go on calling back, so one that reaches a breakpoint or
+    /// a step's end meanwhile pauses there.
+    static ANSWERING: Cell<bool> = const { Cell::new(false) };
+}
+
 #[derive(Default)]
 struct State {
     pending: Vec<Request>,
@@ -830,9 +839,6 @@ struct Shared {
     stepping: AtomicBool,
     /// The program waits at its first statement until a `release`.
     entry: AtomicBool,
-    /// The callback is answering: steps of the `Debug` code it runs are not
-    /// answered and don't pause.
-    answering: AtomicBool,
     /// One step of the program pauses at a time.
     one: Mutex<()>,
     /// Where the running program's steps are, once it compiled.
@@ -938,7 +944,6 @@ impl Inspector {
             breaks: Arc::default(),
             stepping: AtomicBool::new(false),
             entry: AtomicBool::new(false),
-            answering: AtomicBool::new(false),
             one: Mutex::new(()),
             locate: Mutex::new(None),
             #[cfg(feature = "sync")]
@@ -1444,7 +1449,7 @@ impl Shared {
         node: crate::ast::ASTNode,
         position: Position,
     ) -> DebuggerCommand {
-        if self.answering.load(Ordering::Acquire) {
+        if ANSWERING.get() {
             return DebuggerCommand::Continue;
         }
         // A native call's end has no bindings of the program's to read.
@@ -1582,7 +1587,7 @@ impl Shared {
                 self.rouse(&state);
                 let paused = state.paused.clone();
                 drop(state);
-                self.answering.store(true, Ordering::Release);
+                ANSWERING.set(true);
                 for request in pending {
                     if let Some(code) = &request.code {
                         let _ = request
@@ -1598,7 +1603,7 @@ impl Shared {
                         }));
                     }
                 }
-                self.answering.store(false, Ordering::Release);
+                ANSWERING.set(false);
                 state = self.state();
                 continue;
             }
@@ -1629,7 +1634,7 @@ impl Shared {
     /// At a step of the program: answer each waiting request this step
     /// matches.
     fn answer(&self, context: &mut EvalContext, position: Position) {
-        if self.answering.swap(true, Ordering::AcqRel) {
+        if ANSWERING.replace(true) {
             return;
         }
         let mut matched = Vec::new();
@@ -1649,7 +1654,7 @@ impl Shared {
         for request in matched {
             self.reply(context, &request, position);
         }
-        self.answering.store(false, Ordering::Release);
+        ANSWERING.set(false);
     }
 
     /// Whether `request` reads where `context` is, at `position`: the
