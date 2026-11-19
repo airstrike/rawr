@@ -17,6 +17,8 @@ pub mod color;
 pub mod dap;
 pub mod diagnostic;
 pub mod events;
+#[cfg(unix)]
+pub mod gui;
 pub mod harness;
 pub mod init;
 pub mod layer;
@@ -80,6 +82,16 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
         Ok(Request::Tui { .. }) => {
             eprintln!(
                 "{}: rawr tui runs on Unix only",
+                color::label(color::Level::Error)
+            );
+            ExitCode::FAILURE
+        }
+        #[cfg(unix)]
+        Ok(Request::Gui { path }) => gui::open(path.as_ref()),
+        #[cfg(not(unix))]
+        Ok(Request::Gui { .. }) => {
+            eprintln!(
+                "{}: rawr gui runs on Unix",
                 color::label(color::Level::Error)
             );
             ExitCode::FAILURE
@@ -248,6 +260,10 @@ enum Request {
     },
     /// `rawr tui [path]`: the terminal debugger on the program's run.
     Tui {
+        path: Option<PathBuf>,
+    },
+    /// `rawr gui [path]`: the debugger window on the program's run.
+    Gui {
         path: Option<PathBuf>,
     },
     /// `rawr init [--claude] [--codex] [path]`.
@@ -430,7 +446,7 @@ fn parse_command(arguments: &[OsString]) -> Result<Request, String> {
         }),
         Some("-h" | "--help" | "help") => Ok(Request::Help),
         Some("-V" | "--version") => Ok(Request::Version),
-        Some("run" | "check" | "doctor" | "mcp" | "dap" | "tui" | "init") if asks_help => {
+        Some("run" | "check" | "doctor" | "mcp" | "dap" | "tui" | "gui" | "init") if asks_help => {
             Ok(Request::Help)
         }
         Some("run") => path(&arguments[1..]).map(|path| Request::Program {
@@ -457,6 +473,7 @@ fn parse_command(arguments: &[OsString]) -> Result<Request, String> {
         Some("mcp") => path(&arguments[1..]).map(|path| Request::Mcp { path }),
         Some("dap") => path(&arguments[1..]).map(|path| Request::Dap { path }),
         Some("tui") => path(&arguments[1..]).map(|path| Request::Tui { path }),
+        Some("gui") => path(&arguments[1..]).map(|path| Request::Gui { path }),
         Some("init") => parse_init(&arguments[1..]),
         Some(word) if word.starts_with('-') => Err(format!("unknown argument `{word}`")),
         Some(_) if is_path(&arguments[0]) => path(arguments).map(|path| Request::Program {
@@ -506,6 +523,8 @@ fn help(installed: &[layer::Installed]) -> String {
          rawr dap [path]               Serve an editor's debugger over DAP on stdio\n  \
          rawr tui [path]               Debug the program's run in the terminal, attached to\n                                \
          its run or starting one\n  \
+         rawr gui [path]               Open a debugger window on the program's run,\n                                \
+         starting one when none is going\n  \
          rawr init [--claude] [--codex] [path]\n                                \
          Register `rawr mcp` in the project's agent config\n",
     );
