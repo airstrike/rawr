@@ -45,8 +45,11 @@
 //!   "native": true}` once it went on into the native code that called the
 //!   program, its pause told as an event at the next statement the program
 //!   runs; `{"op": "continue"}`,
-//!   answered once it runs on: `{"paused": null}`; either `{"error": "not
-//!   paused"}` on a program that isn't.
+//!   answered once it runs on: `{"paused": null}`. A continue while a step
+//!   or a pause is under way ends it: the program runs on, and the step
+//!   waiting for its pause is answered `{"paused": null}`. Either is
+//!   `{"error": "not paused"}` on a program that is neither paused nor
+//!   stepping.
 //! - `{"op": "pause"}` on a running program: answered at once, `{"paused":
 //!   null}`, and it pauses at the next statement it runs, with the reason
 //!   `pause`; on a paused one, `{"paused": ..}` where it is.
@@ -754,6 +757,8 @@ struct State {
     last: Value,
     /// How many steps went on into native code before they paused.
     departures: u64,
+    /// How many steps a continue ended before they paused.
+    ended: u64,
     resume: Option<Resume>,
     stepping: Option<Stepping>,
     /// The requests the program's event loop answers, which a pause gives
@@ -1019,9 +1024,6 @@ impl Shared {
 
     /// Evaluate code where the program is paused: answered by the pause.
     fn evaluate(&self, request: &Value, gone: &Interrupt) -> Value {
-        if self.state().paused.is_none() {
-            return json!({ "error": "not paused" });
-        }
         self.inspect(request, gone)
     }
 
@@ -1096,7 +1098,14 @@ impl Shared {
         gone.on_fire(move || {
             let _ = giving_up.send(Value::Null);
         });
-        self.state().pending.push(Request {
+        let mut state = self.state();
+        // Code waits only in a pause, which answers every request it finds
+        // before it goes on: one asked of a running program would wait for
+        // the next.
+        if request.get("code").is_some() && state.paused.is_none() {
+            return json!({ "error": "not paused" });
+        }
+        state.pending.push(Request {
             id,
             name: text("name"),
             file: text("file"),
@@ -1109,6 +1118,7 @@ impl Shared {
             shape: Shape::of(request),
             reply,
         });
+        drop(state);
         self.wake.store(true, Ordering::Release);
         self.changed.notify_all();
         match answer.recv() {
@@ -1195,19 +1205,28 @@ impl Shared {
     /// it can't stop in: `{"paused": null, "native": true}`, its pause told
     /// as an event at the next statement the program runs. A continue is
     /// answered once the program runs on; either, once the tool went away.
+    /// A continue while a step runs ends the step, whose wait is answered,
+    /// so a step that never pauses holds no tool.
     fn resume(&self, resume: Resume, gone: &Interrupt) -> Value {
         let mut state = self.state();
         if state.paused.is_none() {
+            if matches!(resume, Resume::Continue) && state.stepping.take().is_some() {
+                self.stepping.store(false, Ordering::Release);
+                state.ended += 1;
+                self.rouse(&state);
+                self.changed.notify_all();
+                return json!({ "paused": null });
+            }
             return json!({ "error": "not paused" });
         }
-        let seen = (state.pauses, state.departures);
+        let seen = (state.pauses, state.departures, state.ended);
         let step = matches!(resume, Resume::Step(_));
         state.resume = Some(resume);
         self.changed.notify_all();
         if !step {
             return json!({ "paused": null });
         }
-        while (state.pauses, state.departures) == seen {
+        while (state.pauses, state.departures, state.ended) == seen {
             if gone.is_fired() {
                 return json!({ "paused": null });
             }
@@ -1221,6 +1240,10 @@ impl Shared {
         // came before this wait looked is told as its event.
         if state.departures != seen.1 {
             return json!({ "paused": null, "native": true });
+        }
+        if state.pauses == seen.0 {
+            // A continue ended the step before it paused.
+            return json!({ "paused": null });
         }
         json!({ "paused": state.last })
     }
@@ -2213,6 +2236,51 @@ mod tests {
             assert_eq!(steps.last().unwrap()["native"], true, "{steps:?}");
             assert_eq!(next["paused"]["function"], "spin", "{next}");
             assert_eq!(next["paused"]["reason"], "step", "{next}");
+        });
+    }
+
+    /// A step that never pauses, out of a loop that runs on, is ended by a
+    /// continue: both are answered, and the program runs on.
+    #[cfg(unix)]
+    #[test]
+    fn a_continue_ends_a_step_that_never_pauses_and_answers_both() {
+        use serde_json::json;
+        let going = Arc::new(AtomicBool::new(true));
+        let called = Called::new("step-ended", &going);
+        let socket = called.socket.clone();
+        let cleared = ask(&socket, &json!({ "op": "clear" }));
+        assert_eq!(cleared["cleared"], 1, "{cleared}");
+        let set = ask(&socket, &json!({ "op": "break", "function": "spin" }));
+        assert!(set.get("error").is_none(), "{set}");
+        std::thread::scope(|scope| {
+            let (engine, ast) = (&called.engine, &called.ast);
+            let spinning = scope.spawn(move || {
+                engine
+                    .call_fn::<i64>(&mut crate::Scope::new(), ast, "spin", ())
+                    .unwrap_or_else(|error| panic!("{error}"))
+            });
+            let paused = ask(&socket, &json!({ "name": "nothing" }));
+            assert_eq!(paused["paused"]["function"], "spin", "{paused}");
+            ask(&socket, &json!({ "op": "clear" }));
+            // Out of `spin`, which native code called and whose loop runs
+            // while `going()` says so: the step pauses nowhere.
+            let stepping = {
+                let socket = socket.clone();
+                scope.spawn(move || ask(&socket, &json!({ "op": "step", "kind": "out" })))
+            };
+            // The step took the program on once no pause is left.
+            while !ask(&socket, &json!({ "op": "clear", "line": 0 }))["paused"].is_null() {
+                std::thread::yield_now();
+            }
+            let continued = ask(&socket, &json!({ "op": "continue" }));
+            let stepped = stepping.join().unwrap();
+            going.store(false, Ordering::Release);
+            assert!(spinning.join().unwrap() > 0);
+            assert_eq!(continued, json!({ "paused": null }));
+            assert_eq!(stepped, json!({ "paused": null }));
+            // Nothing is paused or stepping now: a continue says so.
+            let again = ask(&socket, &json!({ "op": "continue" }));
+            assert_eq!(again["error"], "not paused", "{again}");
         });
     }
 

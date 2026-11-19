@@ -479,10 +479,12 @@ impl Shared {
 
     /// The answer to `request` from the program's inspector. A program
     /// that ends while it holds the request leaves it to the next one.
+    /// Control requests take turns; `pause` and `continue` go at once, as
+    /// they end a step that waits for a pause the program may never reach.
     fn forward(&self, request: &Value, cancel: &Cancel) -> Result<Value, Refusal> {
         let control = matches!(
             request["op"].as_str(),
-            Some("break" | "clear" | "step" | "continue" | "eval" | "input")
+            Some("break" | "clear" | "step" | "eval" | "input")
         );
         let _turn = control.then(|| self.control.lock().unwrap_or_else(PoisonError::into_inner));
         let mut gone = None;
@@ -702,6 +704,38 @@ mod tests {
             "{answer}"
         );
         assert_eq!(line.trim(), request.to_string());
+        drop(host);
+    }
+
+    /// A step the program holds, waiting for a pause it may never reach,
+    /// keeps no continue waiting behind it.
+    #[test]
+    fn a_continue_reaches_the_program_while_a_step_waits() {
+        let (host, place) = host("continue", true);
+        host.0.record(json!({ "event": "running" }));
+        let inspector = UnixListener::bind(place.inspector()).unwrap();
+        let _told = serve(&place);
+        let shell = Shell::connect(&place.socket());
+        shell.hello();
+        shell.send(&json!({
+            "jsonrpc": "2.0", "id": 1, "method": "program", "params": { "op": "step" }
+        }));
+        let (step, _) = inspector.accept().unwrap();
+        let mut line = String::new();
+        let mut held = BufReader::new(&step);
+        held.read_line(&mut line).unwrap();
+        shell.send(&json!({
+            "jsonrpc": "2.0", "id": 2, "method": "program", "params": { "op": "continue" }
+        }));
+        let (go, _) = inspector.accept().unwrap();
+        line.clear();
+        BufReader::new(&go).read_line(&mut line).unwrap();
+        assert_eq!(line.trim(), json!({ "op": "continue" }).to_string());
+        writeln!(&go, "{}", json!({ "paused": null })).unwrap();
+        writeln!(&step, "{}", json!({ "paused": null })).unwrap();
+        let mut answered = [shell.next()["id"].clone(), shell.next()["id"].clone()];
+        answered.sort_by_key(|id| id.as_u64());
+        assert_eq!(answered, [json!(1), json!(2)]);
         drop(host);
     }
 

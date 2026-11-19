@@ -22,9 +22,10 @@
 //!   [`NOT_RUNNING`] with the session's `state` when no program will. A
 //!   request made while the program starts or restarts goes to the program
 //!   that comes of it, and one whose program ended while it held it goes to
-//!   the next. Control requests (`break`, `clear`, `step`, `continue`,
-//!   `eval` and input) reach the program one at a time, in turn; `pause`
-//!   reaches it at once, so it can end a step that runs long.
+//!   the next. Control requests (`break`, `clear`, `step`, `eval` and
+//!   input) reach the program one at a time, in turn; `pause` and
+//!   `continue` reach it at once, so they can end a step that runs long or
+//!   never pauses.
 //! - `cancel` (a notification, `{"id"}`): that request ends with the error
 //!   [`CANCELLED`]. A connection that closes cancels its requests.
 //! - `output` (a notification, `{"stream", "text"}`): from the shell that

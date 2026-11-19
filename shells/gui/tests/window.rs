@@ -9,7 +9,7 @@ use iced::keyboard::key::Named;
 use iced::theme::Mode;
 use iced_test::{simulator, Simulator};
 use rawr_gui::app::Message;
-use rawr_gui::session::{Event, Link, Transport};
+use rawr_gui::session::{Event, Link, Phase, Transport};
 use rawr_gui::{console, source, App};
 use serde_json::{json, Value};
 
@@ -343,4 +343,80 @@ fn a_step_that_pauses_where_it_started_reads_the_frame_again() {
         }),
     );
     assert!(shows(&app, "3"), "the window shows the new value");
+}
+
+#[test]
+fn a_step_into_native_code_keeps_the_pause_its_event_told_first() {
+    let script = Arc::new(Script::default());
+    let mut app = paused(&script);
+    interact(&mut app, |ui| {
+        let _ = ui.click("Step over").unwrap();
+    });
+    let step = script.request("step");
+    // The program runs on once asked: only a pause can be asked of it, as
+    // a step may wait long for its pause.
+    assert_eq!(*app.phase(), Phase::Running);
+    interact(&mut app, |ui| {
+        let _ = ui.click("Continue").unwrap();
+    });
+    assert!(
+        script
+            .sent
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .all(|sent| sent["params"]["op"] != "continue"),
+        "a running program is asked no continue"
+    );
+    // The step went on into native code, which called the program again:
+    // the pause it led to is told before the step's answer comes.
+    let _ = app.update(line(&json!({
+        "jsonrpc": "2.0", "method": "event",
+        "params": { "event": "paused", "seq": 3, "file": FILE, "line": 10,
+                    "function": "p::main", "reason": "step" },
+    })));
+    let read = script.inspect();
+    reply(
+        &mut app,
+        &read,
+        json!({
+            "reached": true, "frame": 0, "file": FILE, "line": 10, "function": "p::main",
+            "bindings": [], "unread": null,
+            "frames": [{ "function": "p::main", "file": FILE, "line": 10 }],
+        }),
+    );
+    reply(&mut app, &step, json!({ "paused": null, "native": true }));
+    assert_eq!(
+        app.phase().stop().and_then(|stop| stop.line),
+        Some(10),
+        "the step's answer leaves the pause its event told"
+    );
+    assert!(shows(&app, "p::main"), "the new pause's frames show");
+
+    // Continue reaches the program from the new pause.
+    interact(&mut app, |ui| {
+        let _ = ui.click("Continue").unwrap();
+    });
+    assert_eq!(script.request("continue")["params"]["op"], "continue");
+    assert_eq!(*app.phase(), Phase::Running);
+}
+
+#[test]
+fn each_capture_writes_a_file_of_its_own() {
+    let script = Arc::new(Script::default());
+    let mut app = paused(&script);
+    let first = script.request("screenshot");
+    // A restart starts the program again, which the window draws again
+    // while the first capture may still be on its way.
+    for (seq, event) in [(3, "restarting"), (4, "running")] {
+        let _ = app.update(line(&json!({
+            "jsonrpc": "2.0", "method": "event", "params": { "event": event, "seq": seq },
+        })));
+    }
+    let second = script.request("screenshot");
+    assert_ne!(first["id"], second["id"]);
+    assert_ne!(
+        first["params"]["file"], second["params"]["file"],
+        "two captures in flight never share a file"
+    );
 }

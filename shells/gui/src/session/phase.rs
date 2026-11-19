@@ -100,14 +100,15 @@ impl Phase {
     }
 
     /// The phase after a debugger answer that says where the program is
-    /// paused, or that it runs: the session's own event says the same once
-    /// it comes.
+    /// paused: the session's own event says the same once it comes. An
+    /// answer that names no pause leaves the phase as the events told it,
+    /// as a pause it led to may be told before the answer comes.
     #[must_use]
     pub fn answered(&self, paused: &Value) -> Self {
         if !matches!(self, Self::Running | Self::Paused(_)) {
             return self.clone();
         }
-        Stop::from_json(paused).map_or(Self::Running, Self::Paused)
+        Stop::from_json(paused).map_or_else(|| self.clone(), Self::Paused)
     }
 }
 
