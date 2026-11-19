@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.4.46",
+      "date": "2026-11-19",
+      "entries": [
+        {"text":"`rawr tui` reads bindings with their parts from the inspector, so a map opens to one row per key, and `rawr gui` shows its Frame pane only once the program shows a window, giving the call stack and bindings the whole column otherwise.","issues":[2317]}
+      ]
+    },
+    {
       "version": "0.4.45",
       "date": "2026-11-19",
       "entries": [

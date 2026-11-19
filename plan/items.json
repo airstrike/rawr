@@ -2315,6 +2315,7 @@
     {"t":"T2313","issue":2313,"title":"T2313: The debugger reads a map, set or sequence holding a program's own structs or enums as Rust's…","state":"closed","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":"0.4.44"},
     {"t":"T2314","issue":2314,"title":"T2314: Superseded builds of rawr's own crates pile up in target/debug despite #1732's prune","state":"closed","category":"Health","labels":["health"],"gantt":{"group":"ship","row":"steady-suites"},"decisions":[],"commit":"7f021a87f","release":null},
     {"t":"T2315","issue":2315,"title":"T2315: A debugger attached to a running program names the function it pauses in and reads that…","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":"0.4.45"},
-    {"t":"T2316","issue":2316,"title":"T2316: A root unit function compiled by Engine::compile gives native code its last statement's value","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":{"group":"no-glue","row":"program-impls-cross"},"decisions":[],"commit":null,"release":null}
+    {"t":"T2316","issue":2316,"title":"T2316: A root unit function compiled by Engine::compile gives native code its last statement's value","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":{"group":"no-glue","row":"program-impls-cross"},"decisions":[],"commit":null,"release":null},
+    {"t":"T2317","issue":2317,"title":"T2317: `rawr tui` reads bindings with their parts from the inspector, so a map opens to one row per…","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":"0.4.46"}
   ]
 }

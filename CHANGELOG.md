@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.46 (2026-11-19)
+
+- `rawr tui` reads bindings with their parts from the inspector, so a map opens to one row per key, and `rawr gui` shows its Frame pane only once the program shows a window, giving the call stack and bindings the whole column otherwise. (#2317)
+
 ## 0.4.45 (2026-11-19)
 
 - A debugger attached to a running program names the function it pauses in and reads that function's locals by their declared types: a `HashMap` reads as `{k: v}` with one row per key, and the frame says `main`, not `?`. A root function native code calls by its own name reads by its declared types too. (#2315)

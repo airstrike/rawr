@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-19",
-  "version": "0.4.45",
+  "version": "0.4.46",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.46",
+        "date": "2026-11-19",
+        "entries": [
+          {"text":"`rawr tui` reads bindings with their parts from the inspector, so a map opens to one row per key, and `rawr gui` shows its Frame pane only once the program shows a window, giving the call stack and bindings the whole column otherwise.","issues":[2317]}
+        ]
+      },
       {
         "version": "0.4.45",
         "date": "2026-11-19",
@@ -5405,7 +5412,8 @@
     {"issue":2313,"title":"The debugger reads a map, set or sequence holding a program's own structs or enums as Rust's…","state":"closed","category":"Divergences from rustc","release":"0.4.44"},
     {"issue":2314,"title":"Superseded builds of rawr's own crates pile up in target/debug despite #1732's prune","state":"closed","category":"Health"},
     {"issue":2315,"title":"A debugger attached to a running program names the function it pauses in and reads that…","state":"closed","category":"Health","release":"0.4.45"},
-    {"issue":2316,"title":"A root unit function compiled by Engine::compile gives native code its last statement's value","state":"open","category":"No glue (D593)"}
+    {"issue":2316,"title":"A root unit function compiled by Engine::compile gives native code its last statement's value","state":"open","category":"No glue (D593)"},
+    {"issue":2317,"title":"`rawr tui` reads bindings with their parts from the inspector, so a map opens to one row per…","state":"closed","category":"Health","release":"0.4.46"}
   ],
   "groups": [
     {
