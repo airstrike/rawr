@@ -8,8 +8,10 @@
 // JSON messages are read from Cargo's stdout (everything else on it, a test's
 // or a program's output, passes through) and recorded as the build's key:
 // its arguments before `--`, the directory it ran in, its toolchain and its
-// flags. A run of a key replaces the key's record. A build that did not
-// finish adds what it reached to the record instead, so a compile error
+// flags. A `--message-format` of `human` or `short` becomes Cargo's JSON with
+// diagnostics rendered that way on stderr; a JSON one passes its messages
+// through as well. A run of a key replaces the key's record. A build that did
+// not finish adds what it reached to the record instead, so a compile error
 // costs no rebuild. Any other subcommand is plain Cargo.
 //
 // Records live in `<target>/.rawr-builds/<profile>`. Each carries two
@@ -19,7 +21,9 @@
 //
 // - A unit of a workspace crate stays while a record of the current
 //   workspace generation names it. So a version bump makes every older unit
-//   unnamed, and each key's first run after it replaces its record.
+//   unnamed, and each key's first run after it replaces its record. A unit
+//   no wrapped run made (a plain `cargo`, an editor's check) is named by no
+//   record and goes with the rest (#2314).
 // - A dependency's unit is left alone until the dependencies' generation
 //   changes. Then it stays only when a record of the new or the previous
 //   generation names it, and records of older ones are deleted. A version bump
@@ -35,9 +39,10 @@
 //
 // - In a target directory rawr also builds into (a `rawr` directory beside
 //   the profile's), rawr's runner units share the profile directory and
-//   crate names with Cargo's (#1778). There a unit goes only when some
-//   wrapped run recorded its hash, and the incremental directories rawr's
-//   runners list are left to rawr.
+//   crate names with Cargo's (#1778). Each runner build records the units it
+//   used in `<target>/rawr-units` while it holds `rawr/build.lock`, so the
+//   prune holds that lock too and keeps every unit those records name. The
+//   incremental directories rawr's runners list are left to rawr.
 //
 // Nothing is removed by age. The prune holds Cargo's locks on the profile
 // directory, and it waits for the last of the wrapped runs going at once:
@@ -45,7 +50,9 @@
 //
 // `scripts/cargo.mjs --hook` is a Claude Code PreToolUse hook for Bash. It
 // sends a command's `cargo <subcommand>` for the subcommands above through
-// this script, so sessions keep typing plain `cargo`.
+// this script, so sessions keep typing plain `cargo`, after any variable
+// assignments and `env`, `time`, `nice` or `timeout <duration>`. The git
+// hooks' Clippy runs through it too.
 
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -60,13 +67,13 @@ function wrap(args) {
   const toolchain = args[0]?.startsWith("+") ? [args[0]] : [];
   const rest = args.slice(toolchain.length);
   const separator = rest.indexOf("--");
-  const options = separator < 0 ? rest : rest.slice(0, separator);
-  const plain = !RECORDED.has(rest[0]) || options.some((arg) => arg.startsWith("--message-format"));
-  const metadata = plain ? null : workspace(toolchain);
+  const given = separator < 0 ? rest : rest.slice(0, separator);
+  const metadata = RECORDED.has(rest[0]) ? workspace(toolchain) : null;
   if (!metadata) {
     const { status, signal } = spawnSync("cargo", args, { stdio: "inherit" });
     exit(status, signal);
   }
+  const { options, format, json } = messageFormat(given);
   const state = join(targetDirectory(options, metadata.target_directory), ".rawr-builds");
   const running = join(state, "running", String(process.pid));
   fs.mkdirSync(dirname(running), { recursive: true });
@@ -74,19 +81,22 @@ function wrap(args) {
 
   // Ctrl-C reaches Cargo too; wait for it to stop, then record what it reached.
   process.on("SIGINT", () => {});
-  const cargo = spawn("cargo", [...toolchain, rest[0], "--message-format=json-render-diagnostics", ...rest.slice(1)], {
+  const tail = separator < 0 ? [] : rest.slice(separator);
+  const cargo = spawn("cargo", [...toolchain, rest[0], `--message-format=${format}`, ...options.slice(1), ...tail], {
     stdio: ["inherit", "pipe", "inherit"],
   });
   const messages = [];
   let line = "";
   // A line that may still become a Cargo message waits for its end; any other
-  // goes out as it comes, so a test's partial line shows at once.
+  // goes out as it comes, so a test's partial line shows at once. A caller
+  // that asked for JSON reads the messages too.
   const take = (text) => {
     for (const part of text.split(/(?<=\n)/)) {
       line += part;
       if (line.endsWith("\n")) {
-        if (line.startsWith('{"reason":')) messages.push(JSON.parse(line));
-        else process.stdout.write(line);
+        const message = line.startsWith('{"reason":');
+        if (message) messages.push(JSON.parse(line));
+        if (!message || json) process.stdout.write(line);
         line = "";
       } else if (!'{"reason":'.startsWith(line.slice(0, 10))) {
         process.stdout.write(line);
@@ -97,11 +107,27 @@ function wrap(args) {
   cargo.stdout.setEncoding("utf8").on("data", take);
   cargo.on("close", (status, signal) => {
     if (line) process.stdout.write(line);
-    const profile = record(state, metadata.workspace_root, toolchain, options, messages);
+    const profile = record(state, metadata, toolchain, options, messages);
     fs.rmSync(running, { force: true });
     if (profile) locked(profile, [process.execPath, fileURLToPath(import.meta.url), "--prune", state, profile]);
     exit(status, signal);
   });
+}
+
+// The options without their `--message-format`s, and the format Cargo runs
+// with: JSON on stdout, with diagnostics rendered on stderr as `human` or
+// `short` would print them, or the caller's own JSON format, which it reads.
+export function messageFormat(given) {
+  const options = [];
+  const values = [];
+  for (let at = 0; at < given.length; at += 1) {
+    if (given[at] === "--message-format") values.push(...(given[++at] ?? "").split(","));
+    else if (given[at].startsWith("--message-format=")) values.push(...given[at].split("=")[1].split(","));
+    else options.push(given[at]);
+  }
+  if (values.some((value) => value.startsWith("json"))) return { options, format: values.join(","), json: true };
+  const short = values.includes("short") ? ",json-diagnostic-short" : "";
+  return { options, format: `json-render-diagnostics${short}`, json: false };
 }
 
 function exit(status, signal) {
@@ -162,7 +188,8 @@ const size = (path) => fs.statSync(path, { throwIfNoEntry: false })?.size ?? -1;
 
 // Write this build's record and return its profile directory, or none when
 // the build produced no unit.
-function record(state, root, toolchain, options, messages) {
+function record(state, metadata, toolchain, options, messages) {
+  const root = metadata.workspace_root;
   const lock = fs.readFileSync(join(root, "Cargo.lock"), "utf8");
   const rustc = spawnSync(process.env.RUSTC ?? "rustc", [...toolchain, "-vV"], { encoding: "utf8" }).stdout ?? "";
   const dependencies = lock
@@ -173,7 +200,13 @@ function record(state, root, toolchain, options, messages) {
 
   let profile = null;
   const units = new Set();
-  const crates = new Set();
+  // The workspace's crates are its packages' and their targets' names, so a
+  // unit of one this build never reached is still judged as the workspace's.
+  const crates = new Set(
+    (metadata.packages ?? [])
+      .flatMap((found) => [found.name, ...found.targets.map((target) => target.name)])
+      .map((name) => name.replaceAll("-", "_")),
+  );
   const incremental = {};
   const uplifted = [];
   for (const message of messages) {
@@ -261,9 +294,11 @@ function read(file) {
 
 // Run `command` holding Cargo's locks on `profile`, as a build does, in
 // Cargo's order: the build directory's, then the artifact directory's two.
+// rawr's build lock, which a runner build holds across its Cargo run and
+// the record of what it used, comes first, as a runner build takes it.
 function locked(profile, command) {
-  const locks = [".cargo-build-lock", ".cargo-lock", ".cargo-artifact-lock"]
-    .map((name) => join(profile, name))
+  const locks = [join(profile, "..", "rawr", "build.lock")]
+    .concat([".cargo-build-lock", ".cargo-lock", ".cargo-artifact-lock"].map((name) => join(profile, name)))
     .filter((path) => fs.existsSync(path));
   const holder = `
 import fcntl, subprocess, sys
@@ -276,7 +311,7 @@ sys.exit(subprocess.call(sys.argv[at + 1:]))
   spawnSync("python3", ["-I", "-c", holder, ...locks, "--", ...command], { stdio: "inherit" });
 }
 
-function prune(state, profile) {
+export function prune(state, profile) {
   for (const path of entries(join(state, "running"))) {
     try {
       process.kill(Number(basename(path)), 0);
@@ -295,13 +330,14 @@ function prune(state, profile) {
   fs.writeFileSync(join(records, "dependencies"), JSON.stringify(kept));
 
   // A target directory rawr builds into (`<target>/rawr` beside the profile)
-  // holds rawr's runner units of the same crates, which no record of this
-  // script's names (#1778). There only units some wrapped run recorded are
-  // ever removed: `recorded` holds every hash a record named, folded in here
-  // before any record goes.
+  // holds rawr's runner units of the same crates (#1778). Each runner build
+  // names the units it used in its record in `<target>/rawr-units`, written
+  // under rawr's build lock, which this prune holds: what those name stays.
   const rawr = fs.existsSync(join(profile, "..", "rawr"));
-  const recordedFile = join(records, "recorded");
-  const recorded = new Set(read(recordedFile) ?? []);
+  const runners = new Set();
+  for (const file of entries(join(profile, "..", "rawr-units")).filter((path) => path.endsWith(".json"))) {
+    read(file)?.named?.forEach((unit) => runners.add(unit));
+  }
 
   const workspace = new Set();
   const dependencies = new Set();
@@ -309,7 +345,6 @@ function prune(state, profile) {
   const incremental = new Map();
   for (const file of entries(records).filter((path) => path.endsWith(".json"))) {
     const entry = read(file);
-    entry?.units.forEach((unit) => recorded.add(unit));
     if (!entry || !kept.includes(entry.dependencies)) {
       fs.rmSync(file, { force: true });
       continue;
@@ -329,20 +364,15 @@ function prune(state, profile) {
     fs.rmSync(path, { recursive: true, force: true });
     removed += 1;
   };
-  const present = new Set();
   for (const directory of DIRECTORIES) {
     for (const path of entries(join(profile, directory))) {
       const name = basename(path);
       const found = hash(name);
-      if (!found) continue;
-      if (rawr && !recorded.has(found)) continue;
+      if (!found || runners.has(found)) continue;
       const stale = crates.has(crate(name)) ? !workspace.has(found) : changed && !dependencies.has(found);
       if (stale) remove(path);
-      else present.add(found);
     }
   }
-  // A hash whose unit is gone is never seen again.
-  if (rawr) fs.writeFileSync(recordedFile, JSON.stringify([...recorded].filter((unit) => present.has(unit))));
   // Each incremental compile of a unit leaves a new set of codegen objects
   // beside its output (macOS keeps debug info in them), and the earlier sets
   // stay. The current set is the one the unit's rlib holds or its binary's
@@ -500,28 +530,37 @@ function linked(path) {
   });
 }
 
-// Rewrite the Bash command of the PreToolUse event on stdin: each `cargo`
-// that starts a command, after any variable assignments, and runs a recorded
-// subcommand runs this script instead.
+// `command` with each `cargo` that starts a command (in a `( )` or `{ }`
+// group too), after any variable
+// assignments and `env`, `time`, `nice` or `timeout <duration>`, and runs a
+// recorded subcommand running `script` instead.
+export function rewrite(command, script) {
+  const quoted = script.replaceAll("'", "'\\''");
+  const subcommands = [...RECORDED].join("|");
+  const prefix = "(?:[A-Za-z_][A-Za-z0-9_]*=\\S*|env|time|nice|timeout(?:\\s+-\\S+)*\\s+\\d\\S*)\\s+";
+  const pattern = new RegExp(
+    `(^|[;&|({\\n]\\s*|\\bthen\\s+|\\bdo\\s+)((?:${prefix})*)cargo((?:\\s+\\+\\S+)?\\s+(?:${subcommands})(?=\\s|$|[;&|)]))`,
+    "g",
+  );
+  return command.replace(pattern, `$1$2'${quoted}'$3`);
+}
+
+// Rewrite the Bash command of the PreToolUse event on stdin.
 function hook() {
   const event = JSON.parse(fs.readFileSync(0, "utf8"));
   const command = event.tool_input?.command ?? "";
-  const script = fileURLToPath(import.meta.url).replaceAll("'", "'\\''");
-  const subcommands = [...RECORDED].join("|");
-  const pattern = new RegExp(
-    `(^|[;&|(\\n]\\s*|\\bthen\\s+|\\bdo\\s+)((?:[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*)cargo((?:\\s+\\+\\S+)?\\s+(?:${subcommands})(?=\\s|$|[;&|)]))`,
-    "g",
-  );
-  const rewritten = command.replace(pattern, `$1$2'${script}'$3`);
+  const rewritten = rewrite(command, fileURLToPath(import.meta.url));
   if (rewritten === command) return;
   const updatedInput = { ...event.tool_input, command: rewritten };
   console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", updatedInput } }));
 }
 
-if (process.argv[2] === "--hook") {
+// Imported (by its tests), it only defines.
+const main = process.argv[1] && real(process.argv[1]) === real(fileURLToPath(import.meta.url));
+if (main && process.argv[2] === "--hook") {
   hook();
-} else if (process.argv[2] === "--prune") {
+} else if (main && process.argv[2] === "--prune") {
   prune(...process.argv.slice(3));
-} else {
+} else if (main) {
   wrap(process.argv.slice(2));
 }

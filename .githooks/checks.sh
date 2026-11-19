@@ -81,9 +81,11 @@ check_rust() {
         fi
     fi
     # Clippy compiles the working tree as a whole, so another agent's
-    # unfinished code in a shared checkout can still fail it.
+    # unfinished code in a shared checkout can still fail it. It runs through
+    # scripts/cargo.mjs, which records its units and removes the ones a
+    # newer build supersedes (#2314).
     echo "Running cargo clippy $* ..."
-    if ! cargo "+$clippy_toolchain" clippy -q "$@" --all-targets -- -D warnings; then
+    if ! node "$(git rev-parse --show-toplevel)/scripts/cargo.mjs" "+$clippy_toolchain" clippy -q "$@" --all-targets -- -D warnings; then
         echo "ERROR: Clippy found issues (D114: fix them; only narrow, named, documented exceptions)."
         return 1
     fi
