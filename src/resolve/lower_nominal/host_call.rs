@@ -38,13 +38,14 @@ impl<'a> Parser<'a> {
             operands.push((receiver.ty.clone(), receiver.span, true));
         }
         // Imported static operands leave the argument list; there are none
-        // without the importer.
+        // without the importer. Each moves into the pending operation, whose
+        // instance key holds the crate function it passes whether or not
+        // native uses are collected. Final inference must settle before
+        // native-use evidence is materialized.
         arguments.retain_mut(|argument| {
             if argument.ty.is_imported_static_operand() {
                 #[cfg(feature = "rust-import")]
-                if self.imported.is_some() {
-                    // Move the existing static proof into the pending operation. Final
-                    // inference must settle before native-use evidence is materialized.
+                {
                     let ty = std::mem::replace(&mut argument.ty, Ty::Unknown);
                     operands.push((ty, argument.span, false));
                 }

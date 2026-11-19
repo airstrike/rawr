@@ -120,9 +120,20 @@ fn used<'a>(uses: &'a [ImportedUse], path: &str) -> &'a ImportedUse {
     uses.iter().find(|used| used.path == path).unwrap()
 }
 
-/// The instance key the generated runner binds `used`'s adapter under.
+/// The instance key the generated runner binds `used`'s adapter under:
+/// each crate function it passes is part of it (#2003).
 fn instance(used: &ImportedUse) -> [u8; 32] {
-    rawr_import::surface::instance::key_with_constants(&used.types, &used.constants, &used.slots)
+    let items = used
+        .functions
+        .iter()
+        .map(|function| (function.position, function.selector.fingerprint()))
+        .collect::<Vec<_>>();
+    rawr_import::surface::instance::key_with_items(
+        &used.types,
+        &used.constants,
+        &used.slots,
+        &items,
+    )
 }
 
 #[test]
@@ -172,15 +183,22 @@ fn executable_use_collection_retains_concrete_types_and_static_operands() {
         )
         .unwrap();
     assert!(runtime.accepts_imported(&selector(3).fingerprint()));
+    // A call that passes a crate function reaches the adapter of that
+    // function's instance (#2003).
     runtime
-        .bind_imported(selector(3).fingerprint(), |_, args| {
-            assert_eq!(
-                args.len(),
-                1,
-                "static function operands never enter runtime dispatch"
-            );
-            Ok(Dynamic::from(args[0].as_int().unwrap() + 1))
-        })
+        .bind_imported_instance(
+            apply.selector.fingerprint(),
+            instance(apply),
+            &apply.path,
+            |_, args| {
+                assert_eq!(
+                    args.len(),
+                    1,
+                    "static function operands never enter runtime dispatch"
+                );
+                Ok(Dynamic::from(args[0].as_int().unwrap() + 1))
+            },
+        )
         .unwrap();
     let mut registry = host::runtime::Registry::new();
     registry.install(runtime.finish()).unwrap();
@@ -225,12 +243,15 @@ fn imported_function_called_by_name_and_full_path_runs() {
         )
         .unwrap();
     assert!(runtime.accepts_imported(&selector(3).fingerprint()));
+    let apply = used(&collected.uses, "native::apply");
     runtime
-        .bind_imported(selector(3).fingerprint(), |_, args| {
-            Ok(Dynamic::from(args[0].take().as_int().unwrap() + 1))
-        })
+        .bind_imported_instance(
+            apply.selector.fingerprint(),
+            instance(apply),
+            &apply.path,
+            |_, args| Ok(Dynamic::from(args[0].take().as_int().unwrap() + 1)),
+        )
         .unwrap();
-    assert!(!runtime.accepts_imported(&selector(3).fingerprint()));
     let mut registry = host::runtime::Registry::new();
     registry.install(runtime.finish()).unwrap();
     let result = authority
