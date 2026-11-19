@@ -37,7 +37,8 @@ impl Shell {
         ])
         .areas(side);
 
-        let header = format!(" rawr tui · {} · {}", self.root, self.phase);
+        // The phase first, so a long root is what a narrow terminal cuts.
+        let header = format!(" rawr tui · {} · {}", self.phase, self.root);
         screen.render_widget(
             Paragraph::new(header).style(Style::new().add_modifier(Modifier::BOLD)),
             top,
@@ -61,10 +62,18 @@ impl Shell {
 
     fn draw_source(&self, screen: &mut Screen, area: Rect) {
         let path = self.source.path.as_deref();
-        // A file of the program's package is named from the package's root.
+        // A file of the program's package is named from the package's root;
+        // a single-file program by its name.
         let title = path.map_or_else(String::new, |path| {
-            let shown = path.strip_prefix(&self.root).unwrap_or(path);
-            format!(" {} ", shown.display())
+            let shown = path
+                .strip_prefix(&self.root)
+                .ok()
+                .filter(|shown| !shown.as_os_str().is_empty())
+                .map_or_else(
+                    || file_name(&path.to_string_lossy()),
+                    |shown| shown.display().to_string(),
+                );
+            format!(" {shown} ")
         });
         let block = self.pane(title, Some(Focus::Source));
         let inner = block.inner(area);
