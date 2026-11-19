@@ -2287,6 +2287,7 @@
     {"t":"T2285","issue":2285,"title":"T2285: A native module reading a private field through a value whose type it never names isn't counted as seeing it","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":{"group":"no-glue","row":"program-impls-cross"},"decisions":[],"commit":null,"release":null},
     {"t":"T2286","issue":2286,"title":"T2286: `rawr gui` and `rawr tui` draw the source in syntax colours, and the window follows the system's…","state":"closed","category":"Health","labels":["health"],"gantt":{"group":"debug","row":"window-shell"},"decisions":[],"commit":null,"release":"0.4.24"},
     {"t":"T2287","issue":2287,"title":"T2287: A step on a paused iced program never reaches a new pause","state":"open","category":"Health","labels":["health"],"gantt":{"group":"debug","row":"window-shell"},"decisions":[],"commit":null,"release":null},
-    {"t":"T2288","issue":2288,"title":"T2288: A run started in a terminal tells its output to the session","state":"open","category":"Health","labels":["health"],"gantt":{"group":"debug","row":"one-session"},"decisions":[],"commit":null,"release":null}
+    {"t":"T2288","issue":2288,"title":"T2288: A run started in a terminal tells its output to the session","state":"open","category":"Health","labels":["health"],"gantt":{"group":"debug","row":"one-session"},"decisions":[],"commit":null,"release":null},
+    {"t":"T2289","issue":2289,"title":"T2289: End-to-end test lanes and started projects outlive a killed or failing run and fill the disk","state":"open","category":"Health","labels":["health"],"gantt":{"group":"ship","row":"steady-suites"},"decisions":[],"commit":null,"release":null}
   ]
 }
