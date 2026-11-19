@@ -141,6 +141,9 @@ pub fn run(
     let name = program_name(&loaded.target);
     let mut watcher = Watcher::open(&loaded.graph);
     let mut started_from = contents(&loaded.graph);
+    // Shells attach to the run here (D1053.2).
+    #[cfg(unix)]
+    let _session = crate::events::session::open(&crate::events::session::root(&loaded.target));
     drop(loaded);
     // The program shares this process's group, which the watch ends when
     // this process's parent dies.
@@ -178,6 +181,18 @@ pub fn run(
                     return ExitCode::FAILURE;
                 }
             }
+        }
+        // A shell asked for the debugger of a program that runs without
+        // one: it starts again with one.
+        #[cfg(unix)]
+        if crate::events::session::take_restart()
+            && let Some(running) = child.take()
+        {
+            child = again(running, &location, &name, arguments);
+            if child.is_none() {
+                return ExitCode::FAILURE;
+            }
+            continue;
         }
         let Some(watching) = watcher.as_ref() else {
             // Nothing to watch: wait for the program.
@@ -240,6 +255,35 @@ pub fn run(
     }
 }
 
+/// End `running` and start the program again, now with the debugger a
+/// shell asked for: `None`, said on stderr, when it can't start.
+#[cfg(unix)]
+fn again(
+    mut running: Child,
+    location: &Path,
+    name: &OsStr,
+    arguments: &[OsString],
+) -> Option<Child> {
+    let reason = "a debugger attached";
+    eprintln!("rawr: {reason}; restarting the program");
+    crate::events::restarting(reason);
+    let _ = running.kill();
+    let _ = running.wait();
+    match start(location, name, arguments) {
+        Ok(child) => {
+            crate::events::running();
+            Some(child)
+        }
+        Err(error) => {
+            eprintln!(
+                "{}: cannot start the program: {error}",
+                color::label(color::Level::Error)
+            );
+            None
+        }
+    }
+}
+
 /// This executable again, running the program at `location` once, with
 /// `name` and `arguments` as its arguments.
 fn start(location: &Path, name: &OsStr, arguments: &[OsString]) -> std::io::Result<Child> {
@@ -253,6 +297,8 @@ fn start(location: &Path, name: &OsStr, arguments: &[OsString]) -> std::io::Resu
     let _ = name;
     rawr::project::cargo::features::Selection::selected().hand(&mut command);
     crate::color::hand(&mut command);
+    #[cfg(unix)]
+    crate::events::session::prepare(&mut command);
     command
         .args(arguments)
         .env(PROGRAM, location)

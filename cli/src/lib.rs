@@ -35,6 +35,9 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
     if let Some(code) = supervise::child() {
         return code;
     }
+    // Before any process starts, so none inherits it.
+    #[cfg(unix)]
+    events::session::adopt();
     let arguments = match target_arguments(arguments) {
         Ok(arguments) => arguments,
         Err(message) => {
@@ -840,6 +843,8 @@ fn hand_off(binary: &Path, arguments: &[OsString]) -> ExitCode {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt as _;
+        // The binary hosts the run's session in this one's place.
+        events::session::pass_on(&mut command);
         let error = command.exec();
         eprintln!(
             "{}: cannot run {}: {error}",

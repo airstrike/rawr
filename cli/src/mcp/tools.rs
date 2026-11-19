@@ -3,12 +3,11 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::Duration;
 
 use serde_json::{json, Value};
 
 use super::process::{self, Cancel};
-use super::{content, extension, session, Progress, Server, POLL};
+use super::{content, extension, session, Progress, Server};
 use crate::layer;
 
 /// Core's tool names: an extension's tool by one of these names is not
@@ -518,7 +517,7 @@ pub fn call(server: &Server, params: &Value, cancel: &Cancel) -> Value {
                 &progress,
             )
         }),
-        "wait" => session(server, text("path")).map(|session| {
+        "wait" => session(server, text("path"), cancel).map(|session| {
             let after = session.next(
                 arguments.get("cursor").and_then(Value::as_u64),
                 cancel,
@@ -543,7 +542,7 @@ pub fn call(server: &Server, params: &Value, cancel: &Cancel) -> Value {
             );
             content::success(answer.structured, answer.summary, Vec::new())
         }),
-        "status" => Ok(status(server, text("path"))),
+        "status" => Ok(status(server, text("path"), cancel)),
         "stop" => stop(server, text("path")),
         "inspect" => inspect(
             server,
@@ -708,32 +707,31 @@ fn start(
     }
     let session = server
         .sessions
-        .start(
-            &place.root,
-            &place.path,
-            arguments,
-            stdin,
-            &place.directory(),
-        )
+        .start(&place.root, &place.path, arguments, stdin, cancel)
         .map_err(|error| format!("cannot start rawr run: {error}"))?;
     session.settle(cancel, |stage, percent| {
         progress.send(percent as f64, Some(100.0), stage);
     });
     let answer = session.answer(None, None);
-    Ok(content::success(
-        answer.structured,
-        answer.summary,
-        Vec::new(),
-    ))
+    let mut summary = answer.summary;
+    if !session.is_started() {
+        summary.insert_str(
+            0,
+            "A `rawr run` started elsewhere serves this program, so `start` attached to it. That run keeps its own arguments and input.\n",
+        );
+    }
+    Ok(content::success(answer.structured, summary, Vec::new()))
 }
 
-/// The session for `path`, or why there is none.
+/// The session for `path`, the server's or one it attaches to, or why
+/// there is none.
 fn session(
     server: &Server,
     path: Option<&str>,
+    cancel: &Cancel,
 ) -> Result<std::sync::Arc<session::Session>, String> {
     let place = place(server, path)?;
-    server.sessions.get(&place.root).ok_or_else(|| {
+    server.sessions.get(&place.root, cancel).ok_or_else(|| {
         format!(
             "nothing was started for {}: call `start` first",
             place.root.display()
@@ -741,9 +739,9 @@ fn session(
     })
 }
 
-fn status(server: &Server, path: Option<&str>) -> Value {
+fn status(server: &Server, path: Option<&str>, cancel: &Cancel) -> Value {
     let sessions = match path {
-        Some(_) => session(server, path)
+        Some(_) => session(server, path, cancel)
             .map(|session| vec![session])
             .unwrap_or_default(),
         None => server.sessions.all(),
@@ -755,7 +753,7 @@ fn status(server: &Server, path: Option<&str>) -> Value {
                 "root": session.root,
                 "path": session.path,
                 "args": session.arguments,
-                "pid": session.pid,
+                "pid": session.pid(),
                 "state": session.phase().name(),
                 "paused": session.paused(),
             })
@@ -792,10 +790,20 @@ fn stop(server: &Server, path: Option<&str>) -> Result<Value, String> {
             Vec::new(),
         ));
     };
+    if !session.is_started() {
+        return Ok(content::success(
+            json!({ "stopped": false, "detached": true, "root": session.root, "pid": session.pid() }),
+            format!(
+                "detached from {}; the `rawr run` started elsewhere keeps running",
+                session.root.display()
+            ),
+            Vec::new(),
+        ));
+    }
     // The group has its grace to end, then is killed.
     session.wait_exit();
     Ok(content::success(
-        json!({ "stopped": true, "root": session.root, "pid": session.pid }),
+        json!({ "stopped": true, "root": session.root, "pid": session.pid() }),
         format!("stopped {}", session.root.display()),
         Vec::new(),
     ))
@@ -810,7 +818,7 @@ fn inspect(
     frame: u64,
     cancel: &Cancel,
 ) -> Result<Value, String> {
-    let session = session(server, path)?;
+    let session = session(server, path, cancel)?;
     let file = file.map(|file| absolute(server, Some(file)));
     let request = json!({
         "name": name,
@@ -917,7 +925,7 @@ fn evaluate(
     code: &str,
     cancel: &Cancel,
 ) -> Result<Value, String> {
-    let session = session(server, path)?;
+    let session = session(server, path, cancel)?;
     let answer = ask(&session, &json!({ "op": "eval", "code": code }), cancel)?;
     match (answer["value"].as_str(), answer["error"].as_str()) {
         (Some(value), _) => Ok(content::success(
@@ -936,7 +944,11 @@ fn evaluate(
 /// `break`, `step`, `continue` and `clear`: ask the started program over
 /// its socket, and say where it paused.
 fn debug(server: &Server, tool: &str, arguments: &Value, cancel: &Cancel) -> Result<Value, String> {
-    let session = session(server, arguments.get("path").and_then(Value::as_str))?;
+    let session = session(
+        server,
+        arguments.get("path").and_then(Value::as_str),
+        cancel,
+    )?;
     let file = arguments
         .get("file")
         .and_then(Value::as_str)
@@ -1031,7 +1043,11 @@ fn debug(server: &Server, tool: &str, arguments: &Value, cancel: &Cancel) -> Res
 /// program over its socket to hand its window the input, and say what it
 /// reached.
 fn input(server: &Server, tool: &str, arguments: &Value, cancel: &Cancel) -> Result<Value, String> {
-    let session = session(server, arguments.get("path").and_then(Value::as_str))?;
+    let session = session(
+        server,
+        arguments.get("path").and_then(Value::as_str),
+        cancel,
+    )?;
     let mut request = arguments.clone();
     if !request.is_object() {
         request = json!({});
@@ -1098,107 +1114,22 @@ fn input(server: &Server, tool: &str, arguments: &Value, cancel: &Cancel) -> Res
     Ok(content::success(structured, summary, Vec::new()))
 }
 
-/// One request and its answer over the started program's socket, or why
-/// there is none.
+/// One request and its answer from the started program, through its run's
+/// session, or why there is none. The session gives a request made while
+/// the program starts or restarts to the program that comes of it, not the
+/// one it retires (#1964).
 fn ask(session: &session::Session, request: &Value, cancel: &Cancel) -> Result<Value, String> {
-    let unreachable = |error: std::io::Error| {
-        let phase = session.phase();
-        if phase.is_live() {
-            format!("cannot reach the running program: {error}")
-        } else {
-            format!(
+    session
+        .ask(request, cancel)
+        .map_err(|refusal| match refusal {
+            session::Refusal::NotRunning => format!(
                 "the program started for {} isn't running (state: {})",
                 session.root.display(),
-                phase.name()
-            )
-        }
-    };
-    // A request made while the program starts or restarts is for the
-    // program that comes of it, not the one it retires (#1964).
-    session.settle(cancel, |_, _| {});
-    exchange(session, request, cancel).map_err(unreachable)
-}
-
-/// [`ask`]'s exchange. A program that just started or restarted serves the
-/// socket once it compiled, and answers once it reached what the request
-/// waits for; closing the socket gives the request up. The program answers
-/// every request it reads, so the end before an answer is the end of the
-/// process that read it, as a restart retires it (#1964): the request goes
-/// again to the program that serves the socket next, while the session
-/// still has one.
-#[cfg(unix)]
-fn exchange(
-    session: &session::Session,
-    request: &Value,
-    cancel: &Cancel,
-) -> std::io::Result<Value> {
-    loop {
-        match exchange_once(session, request, cancel) {
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::BrokenPipe
-                ) && !cancel.is_cancelled()
-                    && (session.phase().is_live() || session.phase().is_pending()) => {}
-            outcome => return outcome,
-        }
-    }
-}
-
-/// One connection's request and answer, for [`exchange`].
-#[cfg(unix)]
-fn exchange_once(
-    session: &session::Session,
-    request: &Value,
-    cancel: &Cancel,
-) -> std::io::Result<Value> {
-    use std::io::{BufRead as _, BufReader, Write as _};
-    let cancelled = || std::io::Error::other("cancelled");
-    let mut stream = loop {
-        match std::os::unix::net::UnixStream::connect(&session.socket) {
-            Ok(stream) => break stream,
-            Err(_) if cancel.is_cancelled() => return Err(cancelled()),
-            Err(error) if !session.phase().is_live() && !session.phase().is_pending() => {
-                return Err(error);
-            }
-            Err(_) => std::thread::sleep(Duration::from_millis(20)),
-        }
-    };
-    writeln!(stream, "{request}")?;
-    // The read wakes at each poll to see the cancel.
-    stream.set_read_timeout(Some(POLL))?;
-    let mut reader = BufReader::new(stream);
-    let mut line = Vec::new();
-    loop {
-        match reader.read_until(b'\n', &mut line) {
-            Ok(0) => return Err(std::io::ErrorKind::UnexpectedEof.into()),
-            Ok(_) if line.ends_with(b"\n") => break,
-            Ok(_) => {}
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    std::io::ErrorKind::WouldBlock
-                        | std::io::ErrorKind::TimedOut
-                        | std::io::ErrorKind::Interrupted
-                ) =>
-            {
-                if cancel.is_cancelled() {
-                    return Err(cancelled());
-                }
-            }
-            Err(error) => return Err(error),
-        }
-    }
-    serde_json::from_slice(&line).map_err(std::io::Error::other)
-}
-
-#[cfg(not(unix))]
-fn exchange(
-    _session: &session::Session,
-    _request: &Value,
-    _cancel: &Cancel,
-) -> std::io::Result<Value> {
-    Err(std::io::Error::other("reading values needs a Unix socket"))
+                session.phase().name()
+            ),
+            session::Refusal::Error(error) => error,
+            session::Refusal::Cancelled => "cancelled".to_owned(),
+        })
 }
 
 /// `screenshot`: an extension's own capture first, else the started
@@ -1213,7 +1144,7 @@ fn screenshot(
     progress: &Progress<'_>,
 ) -> Result<Value, String> {
     let place = place(server, path)?;
-    let session = server.sessions.get(&place.root);
+    let session = server.sessions.get(&place.root, cancel);
     let installed = layer::installed();
     let mut reasons = Vec::new();
     if let Some(offered) = extension::find(&installed, "screenshot") {
@@ -1221,7 +1152,7 @@ fn screenshot(
             arguments: json!({ "title": title }),
             root: place.root.clone(),
             target_dir: place.target_dir.clone(),
-            pid: session.as_ref().map(|session| session.pid),
+            pid: session.as_ref().map(|session| session.pid()),
         };
         let result = extension::call(&offered.binary, "screenshot", &call, cancel, |record| {
             relay(progress, record)
@@ -1281,7 +1212,7 @@ fn screenshot(
         json!({
             "file": file,
             "title": answer["title"],
-            "pid": session.pid,
+            "pid": session.pid(),
             "points": { "width": answer["width"], "height": answer["height"] },
             "scale": answer["scale"],
             "windows": answer["windows"],
@@ -1332,7 +1263,10 @@ fn extension_call(
         arguments: arguments.clone(),
         root: place.root.clone(),
         target_dir: place.target_dir.clone(),
-        pid: server.sessions.get(&place.root).map(|session| session.pid),
+        pid: server
+            .sessions
+            .get(&place.root, cancel)
+            .map(|session| session.pid()),
     };
     Ok(extension::call(
         &offered.binary,
@@ -1341,46 +1275,4 @@ fn extension_call(
         cancel,
         |record| relay(progress, record),
     ))
-}
-
-#[cfg(all(test, unix))]
-mod tests {
-    use std::io::{BufRead as _, BufReader, Write as _};
-    use std::os::unix::net::UnixListener;
-
-    use serde_json::json;
-
-    use super::session::{Phase, Session};
-    use super::{exchange, Cancel};
-
-    /// A program that ends while it holds a request, as a restart retires
-    /// it, leaves the request to the program that serves the socket next
-    /// (#1964).
-    #[test]
-    fn a_request_the_ending_program_held_goes_to_the_next_one() {
-        let directory = std::env::temp_dir().join(format!("rawr-exchange-{}", std::process::id()));
-        std::fs::create_dir_all(&directory).unwrap();
-        let socket = directory.join("inspect.sock");
-        let _ = std::fs::remove_file(&socket);
-        let listener = UnixListener::bind(&socket).unwrap();
-        let serving = std::thread::spawn(move || {
-            // The retiring program reads the request and ends.
-            let (ending, _) = listener.accept().unwrap();
-            let mut line = String::new();
-            BufReader::new(&ending).read_line(&mut line).unwrap();
-            drop(ending);
-            // The next one answers it.
-            let (mut next, _) = listener.accept().unwrap();
-            let mut again = String::new();
-            BufReader::new(&next).read_line(&mut again).unwrap();
-            writeln!(next, "{}", json!({ "answered": again.trim() })).unwrap();
-            line
-        });
-        let session = Session::running_at(socket, Phase::Running);
-        let request = json!({ "op": "screenshot" });
-        let answer = exchange(&session, &request, &Cancel::default()).unwrap();
-        assert_eq!(answer["answered"], request.to_string());
-        assert_eq!(serving.join().unwrap().trim(), request.to_string());
-        let _ = std::fs::remove_dir_all(&directory);
-    }
 }

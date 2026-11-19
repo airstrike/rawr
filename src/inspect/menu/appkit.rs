@@ -17,6 +17,7 @@ use serde_json::{json, Value};
 use super::{Action, Entry, Menu, MENUS};
 use crate::inspect::input::appkit::{self, msg, Id, Runtime, Sel};
 use crate::inspect::input::Error;
+use crate::inspect::Interrupt;
 
 /// The identifier each of rawr's menus' items in the menu bar carries, so
 /// rawr finds them again.
@@ -377,7 +378,7 @@ fn about(runtime: &Runtime) {
 
 /// The program's menu bar, and `action` chosen from it, on the main
 /// thread; `None` once `interrupted` gave it up.
-pub(super) fn answer(action: Option<Action>, interrupted: &dyn Fn() -> bool) -> Option<Value> {
+pub(super) fn answer(action: Option<Action>, interrupted: &Interrupt) -> Option<Value> {
     let Some(runtime) = Runtime::get() else {
         return Some(json!({ "error": "the program shows no menu bar" }));
     };

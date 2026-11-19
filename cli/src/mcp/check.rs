@@ -55,6 +55,12 @@ impl Checks {
             }
             Arc::clone(jobs.get(root).expect("inserted above"))
         };
+        let waking = Arc::clone(&job);
+        cancel.on_cancel(move || {
+            // The wait below looks at the cancel under this lock.
+            drop(waking.done.lock().unwrap_or_else(PoisonError::into_inner));
+            waking.finished.notify_all();
+        });
         let mut done = job.done.lock().unwrap_or_else(PoisonError::into_inner);
         loop {
             if let Some(result) = done.as_ref() {
@@ -72,9 +78,8 @@ impl Checks {
             }
             done = job
                 .finished
-                .wait_timeout(done, super::POLL)
-                .unwrap_or_else(PoisonError::into_inner)
-                .0;
+                .wait(done)
+                .unwrap_or_else(PoisonError::into_inner);
         }
     }
 

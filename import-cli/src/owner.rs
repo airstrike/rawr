@@ -290,6 +290,8 @@ pub fn run_program(
         arguments: arguments.to_vec(),
         prepare: Some(prepare),
     };
+    // Shells attach to the run here (D1053.2).
+    let _session = rawr_cli::events::session::open(&rawr_cli::events::session::root(target));
     // The program hears its reload outcomes on this stream (#1166). A
     // program runs without it when it can't be made.
     let reload = rawr_cli::events::reload::Stream::open()
@@ -476,13 +478,15 @@ pub fn run_tests(
 }
 
 /// What each runner's command gets before it spawns: the program's reload
-/// stream. No hook runs in the child, so std spawns it with `posix_spawn`
-/// and copies none of this process's memory. The runner clears the signal
-/// mask it inherits itself.
+/// stream, and its debugger's sockets once a shell asked for one. No hook
+/// runs in the child, so std spawns it with `posix_spawn` and copies none
+/// of this process's memory. The runner clears the signal mask it inherits
+/// itself.
 fn prepare(command: &mut std::process::Command) {
     if let Some(path) = rawr_cli::events::reload::path() {
         command.env(rawr_cli::events::reload::VARIABLE, path);
     }
+    rawr_cli::events::session::prepare(command);
 }
 
 /// The contents of the program's files: its sources, its native modules
@@ -660,6 +664,14 @@ fn session(
                 }
                 Some(ended) => return Ok(ended),
                 None => {}
+            }
+            // A shell asked for the debugger of a program that runs
+            // without one: it starts again with one.
+            if rawr_cli::events::session::take_restart() {
+                let reason = "a debugger attached";
+                rawr_import::process::say(format_args!("rawr: {reason}; restarting the program"));
+                rawr_cli::events::restarting(reason);
+                return Ok(Ended::Restart(reason.to_owned(), None));
             }
 
             adapter.poll();

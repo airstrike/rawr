@@ -24,6 +24,13 @@ pub struct Offered {
     pub tool: Tool,
 }
 
+/// What a call's child says, until it stops or the call is cancelled.
+enum Heard {
+    Record(Value),
+    Ended,
+    Cancelled,
+}
+
 /// The tools `installed` extensions offer: a core name wins over an
 /// extension's, and the first extension over a later one.
 #[must_use]
@@ -120,31 +127,38 @@ pub fn call(
             });
     }
     let stderr = child.stderr.take().map(Tail::read).unwrap_or_default();
-    let (lines, received) = mpsc::channel::<Value>();
-    if let Some(stdout) = child.stdout.take() {
-        let _ = std::thread::Builder::new()
-            .name("rawr-mcp-call-output".into())
-            .spawn(move || {
-                for line in BufReader::new(stdout).lines() {
-                    let Ok(line) = line else {
-                        break;
-                    };
-                    if let Ok(record) = serde_json::from_str::<Value>(&line)
-                        && lines.send(record).is_err()
-                    {
-                        break;
+    let (lines, received) = mpsc::channel::<Heard>();
+    let cancelled = lines.clone();
+    cancel.on_cancel(move || {
+        let _ = cancelled.send(Heard::Cancelled);
+    });
+    match child.stdout.take() {
+        Some(stdout) => {
+            let _ = std::thread::Builder::new()
+                .name("rawr-mcp-call-output".into())
+                .spawn(move || {
+                    for line in BufReader::new(stdout).lines() {
+                        let Ok(line) = line else {
+                            break;
+                        };
+                        if let Ok(record) = serde_json::from_str::<Value>(&line)
+                            && lines.send(Heard::Record(record)).is_err()
+                        {
+                            return;
+                        }
                     }
-                }
-            });
+                    let _ = lines.send(Heard::Ended);
+                });
+        }
+        None => {
+            let _ = lines.send(Heard::Ended);
+        }
     }
     let mut result = None;
     let mut ended = false;
     loop {
-        if cancel.is_cancelled() {
-            break;
-        }
-        match received.recv_timeout(super::POLL) {
-            Ok(record) => {
+        match received.recv() {
+            Ok(Heard::Record(record)) => {
                 if let Some(answer) = record.get("result") {
                     result = Some(answer.clone());
                     break;
@@ -153,8 +167,8 @@ pub fn call(
                     progress(&record);
                 }
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
+            Ok(Heard::Cancelled) => break,
+            Ok(Heard::Ended) | Err(mpsc::RecvError) => {
                 ended = true;
                 break;
             }
