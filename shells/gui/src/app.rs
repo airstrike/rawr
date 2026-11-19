@@ -175,6 +175,10 @@ impl App {
             Message::Session(session::Event::Line(line)) => match self.client.receive(&line) {
                 Some(Incoming::Reply { kind, result }) => self.answered(kind, result),
                 Some(Incoming::Event(event)) => {
+                    // Each pause is a new one, even where the last was.
+                    if event["event"] == "paused" {
+                        self.inspected = None;
+                    }
                     let phase = self.phase.after(&event);
                     self.moved(phase)
                 }
@@ -417,8 +421,11 @@ impl App {
                     None => Task::none(),
                 }
             }
+            // A step ends at a new pause, even one where it started: a
+            // loop's line, or a breakpoint it came back to.
             Asked::Step => {
                 self.note = None;
+                self.inspected = None;
                 let phase = self.phase.answered(&answer["paused"]);
                 self.moved(phase)
             }

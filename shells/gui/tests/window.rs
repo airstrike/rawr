@@ -312,3 +312,35 @@ fn a_stop_draws_its_rust_source_in_the_colours_of_the_windows_mode() {
         std::fs::read(&light).unwrap()
     );
 }
+
+#[test]
+fn a_step_that_pauses_where_it_started_reads_the_frame_again() {
+    let script = Arc::new(Script::default());
+    let mut app = paused(&script);
+    let first = script.inspect();
+    interact(&mut app, |ui| {
+        let _ = ui.click("Step over").unwrap();
+    });
+    let step = script.request("step");
+    assert_eq!(step["params"]["kind"], "over");
+    // A loop comes back to the breakpoint it stepped from: the answer
+    // names the same place, and the values there are new.
+    reply(
+        &mut app,
+        &step,
+        json!({ "paused": { "file": FILE, "line": 5, "function": "p::tick", "reason": "breakpoint" } }),
+    );
+    let read = script.inspect();
+    assert_ne!(read["id"], first["id"], "the new pause's frame is read");
+    reply(
+        &mut app,
+        &read,
+        json!({
+            "reached": true, "frame": 0, "file": FILE, "line": 5, "function": "p::tick",
+            "bindings": [{ "name": "count", "value": "3" }],
+            "unread": null,
+            "frames": [{ "function": "p::tick", "file": FILE, "line": 5 }],
+        }),
+    );
+    assert!(shows(&app, "3"), "the window shows the new value");
+}
