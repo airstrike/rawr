@@ -26,6 +26,7 @@ fn main() -> ExitCode {
         .title(App::title)
         .theme(App::theme)
         .subscription(App::subscription)
+        .fonts([rawr_gui::icon::FONT])
         .window_size((1200.0, 820.0))
         .run();
     match ran {

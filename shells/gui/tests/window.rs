@@ -7,10 +7,11 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use iced::keyboard::key::Named;
 use iced::theme::Mode;
-use iced_test::{simulator, Simulator};
+use iced_test::Simulator;
 use rawr_gui::app::Message;
+use rawr_gui::control::{Control, Step};
 use rawr_gui::session::{Event, Link, Phase, Transport};
-use rawr_gui::{console, source, App};
+use rawr_gui::{console, icon, source, App};
 use serde_json::{json, Value};
 
 const FILE: &str = "/p/src/main.rs";
@@ -129,6 +130,10 @@ fn paused(script: &Arc<Script>) -> App {
     }));
     let inspect = script.inspect();
     assert_eq!(inspect["params"]["frame"], 0, "{inspect}");
+    assert_eq!(
+        inspect["params"]["children"], true,
+        "the window asks for each value's parts, to draw it as a tree"
+    );
     reply(
         &mut app,
         &inspect,
@@ -136,7 +141,10 @@ fn paused(script: &Arc<Script>) -> App {
             "reached": true, "frame": 0, "file": FILE, "line": 5, "function": "p::tick",
             "bindings": [
                 { "name": "count", "value": "2" },
-                { "name": "point", "value": "Point { x: 1, y: 2 }" },
+                { "name": "point", "value": "Point { x: 1, y: 2 }", "children": [
+                    { "name": "x", "value": "1" },
+                    { "name": "y", "value": "2" },
+                ] },
             ],
             "unread": null,
             "frames": [
@@ -146,6 +154,21 @@ fn paused(script: &Arc<Script>) -> App {
         }),
     );
     app
+}
+
+/// The window's view in a simulator of the window's size, with the icons'
+/// font loaded.
+fn ui(app: &App) -> Simulator<'_, Message> {
+    let settings = iced::Settings {
+        fonts: vec![icon::FONT.into()],
+        ..iced::Settings::default()
+    };
+    Simulator::with_size(settings, (1200.0, 820.0), app.view())
+}
+
+/// Click `control`'s icon in the toolbar.
+fn press(ui: &mut Simulator<'_, Message>, control: Control) {
+    let _ = ui.click(control.glyph()).unwrap();
 }
 
 /// Draw the window as it is now into `name`, for a person to look at, in
@@ -164,7 +187,7 @@ fn snapshot(app: &App, name: &str) -> PathBuf {
             let _ = std::fs::remove_file(entry.path());
         }
     }
-    let mut ui = simulator(app.view());
+    let mut ui = ui(app);
     let shot = ui.snapshot(&app.theme()).unwrap();
     assert!(shot.matches_image(&path).unwrap());
     // The renderer's name goes after the one given.
@@ -185,7 +208,7 @@ fn snapshot(app: &App, name: &str) -> PathBuf {
 /// Drive the window with `act`, then hand it the messages that made.
 fn interact(app: &mut App, act: impl FnOnce(&mut Simulator<'_, Message>)) {
     let messages: Vec<Message> = {
-        let mut ui = simulator(app.view());
+        let mut ui = ui(app);
         act(&mut ui);
         ui.into_messages().collect()
     };
@@ -196,7 +219,7 @@ fn interact(app: &mut App, act: impl FnOnce(&mut Simulator<'_, Message>)) {
 
 /// Whether the window shows `text`.
 fn shows(app: &App, text: &str) -> bool {
-    simulator(app.view()).find(text).is_ok()
+    ui(app).find(text).is_ok()
 }
 
 #[test]
@@ -213,11 +236,12 @@ fn a_stop_shows_its_frames_source_and_bindings_which_fold_open() {
     ] {
         assert!(shows(&app, shown), "the window shows {shown:?}");
     }
+    assert!(!shows(&app, "x"), "a value's parts show once it opens");
     interact(&mut app, |ui| {
-        let _ = ui.click("▸").unwrap();
+        let _ = ui.click("point").unwrap();
     });
     assert!(shows(&app, "x"), "the open value shows its field");
-    assert!(shows(&app, "Point {"));
+    assert!(shows(&app, "y"));
     snapshot(&app, "stop.png");
 
     // A caller's frame reads its own bindings.
@@ -325,7 +349,7 @@ fn the_console_evaluates_where_the_program_is_paused_and_a_step_moves_the_stop()
     snapshot(&app, "eval.png");
 
     interact(&mut app, |ui| {
-        let _ = ui.click("Step over").unwrap();
+        press(ui, Control::Step(Step::Over));
     });
     let step = script.request("step");
     assert_eq!(step["params"]["kind"], "over");
@@ -379,7 +403,7 @@ fn a_step_that_pauses_where_it_started_reads_the_frame_again() {
     let mut app = paused(&script);
     let first = script.inspect();
     interact(&mut app, |ui| {
-        let _ = ui.click("Step over").unwrap();
+        press(ui, Control::Step(Step::Over));
     });
     let step = script.request("step");
     assert_eq!(step["params"]["kind"], "over");
@@ -410,14 +434,14 @@ fn a_step_into_native_code_keeps_the_pause_its_event_told_first() {
     let script = Arc::new(Script::default());
     let mut app = paused(&script);
     interact(&mut app, |ui| {
-        let _ = ui.click("Step over").unwrap();
+        press(ui, Control::Step(Step::Over));
     });
     let step = script.request("step");
     // The program runs on once asked: only a pause can be asked of it, as
     // a step may wait long for its pause.
     assert_eq!(*app.phase(), Phase::Running);
     interact(&mut app, |ui| {
-        let _ = ui.click("Continue").unwrap();
+        press(ui, Control::Continue);
     });
     assert!(
         script
@@ -455,7 +479,7 @@ fn a_step_into_native_code_keeps_the_pause_its_event_told_first() {
 
     // Continue reaches the program from the new pause.
     interact(&mut app, |ui| {
-        let _ = ui.click("Continue").unwrap();
+        press(ui, Control::Continue);
     });
     assert_eq!(script.request("continue")["params"]["op"], "continue");
     assert_eq!(*app.phase(), Phase::Running);
@@ -496,14 +520,14 @@ fn each_pause_reads_its_frame_and_shows_only_the_newest_answer() {
     let script = Arc::new(Script::default());
     let mut app = paused(&script);
     interact(&mut app, |ui| {
-        let _ = ui.click("Continue").unwrap();
+        press(ui, Control::Continue);
     });
     // The program pauses in `tick`, and the window reads that pause; it
     // goes on and pauses in `main` before the first read is answered.
     let _ = app.update(line(&paused_at(3, 6, "p::tick")));
     let first = script.inspect();
     interact(&mut app, |ui| {
-        let _ = ui.click("Continue").unwrap();
+        press(ui, Control::Continue);
     });
     let _ = app.update(line(&json!({
         "jsonrpc": "2.0", "method": "event", "params": { "event": "resumed", "seq": 4 },
@@ -543,4 +567,74 @@ fn each_pause_reads_its_frame_and_shows_only_the_newest_answer() {
         !shows(&app, "p::tick"),
         "an earlier pause's frames are gone"
     );
+}
+
+/// A map's binding opens to a row per key, each key's value beside it,
+/// and a value with parts of its own opens again under its key; a long
+/// value keeps its whole text.
+#[test]
+fn a_map_binding_opens_to_a_row_per_key() {
+    let script = Arc::new(Script::default());
+    let mut app = paused(&script);
+    let long = format!("\"{}\"", "word ".repeat(30).trim_end());
+    // The innermost frame, read again, holds a map.
+    interact(&mut app, |ui| {
+        let _ = ui.click("p::tick").unwrap();
+    });
+    reply(
+        &mut app,
+        &script.inspect(),
+        json!({
+            "reached": true, "frame": 0, "file": FILE, "line": 5, "function": "p::tick",
+            "bindings": [
+                { "name": "scores", "value": format!(r#"{{"ann": 3, "bo": Point {{ x: 1, y: 2 }}, "cy": {long}}}"#),
+                  "children": [
+                    { "name": "\"ann\"", "value": "3" },
+                    { "name": "\"bo\"", "value": "Point { x: 1, y: 2 }", "children": [
+                        { "name": "x", "value": "1" },
+                        { "name": "y", "value": "2" },
+                    ] },
+                    { "name": "\"cy\"", "value": long },
+                ] },
+            ],
+            "unread": null,
+            "frames": [{ "function": "p::tick", "file": FILE, "line": 5 }],
+        }),
+    );
+    assert!(!shows(&app, "\"ann\""), "a folded map shows no keys");
+    interact(&mut app, |ui| {
+        let _ = ui.click("scores").unwrap();
+    });
+    for key in ["\"ann\"", "\"bo\"", "\"cy\""] {
+        assert!(shows(&app, key), "the open map shows its key {key}");
+    }
+    assert!(shows(&app, "3"), "a key's value shows beside it");
+    assert!(
+        shows(&app, long.as_str()),
+        "a long value keeps its whole text"
+    );
+    assert!(
+        !shows(&app, "x"),
+        "an entry's own parts wait for it to open"
+    );
+    interact(&mut app, |ui| {
+        let _ = ui.click("\"bo\"").unwrap();
+    });
+    assert!(
+        shows(&app, "x") && shows(&app, "y"),
+        "an entry opens to its parts"
+    );
+    let dark = snapshot(&app, "map.png");
+
+    // The system turning light keeps what is open.
+    let _ = app.update(Message::Mode(Mode::Light));
+    assert!(shows(&app, "\"ann\""));
+    let light = snapshot(&app, "map-light.png");
+    let screens = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .parent()
+        .unwrap()
+        .join("screens");
+    std::fs::create_dir_all(&screens).unwrap();
+    std::fs::copy(&dark, screens.join("gui-map.png")).unwrap();
+    std::fs::copy(&light, screens.join("gui-map-light.png")).unwrap();
 }

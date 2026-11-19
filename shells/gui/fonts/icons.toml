@@ -1,0 +1,14 @@
+# The debugger window's icons, each a Lucide icon by its name: build.rs
+# makes src/icon.rs and a font of only these, fonts/lucide.ttf.
+
+module = "icon"
+
+[icons]
+resume = "play"
+pause = "pause"
+step_over = "redo-dot"
+step_into = "arrow-down-to-dot"
+step_out = "arrow-up-from-dot"
+refresh = "refresh-cw"
+chevron_right = "chevron-right"
+chevron_down = "chevron-down"
