@@ -212,7 +212,8 @@ try {
   // An eval where it is paused.
   await clickOn(`${panel}.querySelector('input[aria-label="Evaluate"]')`);
   await on("Input.insertText", { text: "depth + 1" });
-  await on("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+  // Enter with its text submits the form, as a typed Enter does.
+  await on("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, text: "\r" });
   await on("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
   await until("the eval", `!!${panel}.querySelector(".evaluated li")`, 5000);
   const evaluated = await evaluate(`${panel}.querySelector(".evaluated li:last-child").textContent`);
