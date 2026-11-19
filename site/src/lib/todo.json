@@ -5229,7 +5229,7 @@
     {"issue":2286,"title":"`rawr gui` and `rawr tui` draw the source in syntax colours, and the window follows the system's…","state":"closed","category":"Health","release":"0.4.24"},
     {"issue":2287,"title":"A step on a paused iced program never reaches a new pause","state":"open","category":"Health"},
     {"issue":2288,"title":"A run started in a terminal tells its output to the session","state":"open","category":"Health"},
-    {"issue":2289,"title":"End-to-end test lanes and started projects outlive a killed or failing run and fill the disk","state":"open","category":"Health"},
+    {"issue":2289,"title":"End-to-end test lanes and started projects beyond the warm set outlive a killed or failing run and fill the disk","state":"closed","category":"Health"},
     {"issue":2290,"title":"A crate macro call sent to rustc keeps hidden-segment paths in its input","state":"open","category":"No glue (D593)"},
     {"issue":2291,"title":"rustc's expansion of a crate macro call gives line!() at the expansion input, not the call","state":"open","category":"No glue (D593)"}
   ],
@@ -7647,7 +7647,7 @@
             {"number":2227,"title":"Two rawr-import classify lib tests fail on main","state":"open"},
             {"number":2281,"title":"marked::a_marked_module_of_the_library_runs_from_the_native_binary expects Shape::change to name a new item","state":"open"},
             {"number":2283,"title":"Five rawr package lib tests fail on main before tonight's merges","state":"open"},
-            {"number":2289,"title":"End-to-end test lanes and started projects outlive a killed or failing run and fill the disk","state":"open"}
+            {"number":2289,"title":"End-to-end test lanes and started projects beyond the warm set outlive a killed or failing run and fill the disk","state":"closed"}
           ]
         },
         {
