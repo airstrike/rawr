@@ -7976,20 +7976,6 @@
             {"number":2260,"title":"A window shell (GUI) in its own process on the shared debugger session","state":"open"}
           ],
           "milestone": "0.5"
-        },
-        {
-          "id": "playground-debugger",
-          "name": "Debugger in the playground",
-          "start": 70,
-          "size": 3,
-          "state": "next",
-          "note": "The inspector in the browser universe behind a feature, pausing through JSPI; then the window shell built for wasm (D1057)",
-          "issues": [
-            {"number":2268,"title":"The inspector runs in the browser universe behind a feature, with pauses suspended through JSPI","state":"open"},
-            {"number":2269,"title":"Pause inside a browser callback (iced's update and view, ratzilla's draw) in the playground debugger","state":"open"},
-            {"number":2270,"title":"The playground's iced debugger shell: the window shell built for wasm","state":"open"}
-          ],
-          "milestone": "0.5"
         }
       ]
     },
@@ -8040,6 +8026,19 @@
             {"number":491,"title":"Record and replay messages, with iced's comet","state":"open"},
             {"number":2261,"title":"Rewind to a past state, and replay recorded turns under edited code","state":"open"},
             {"number":2262,"title":"iced's own debug tools (comet, and its time machine where the program enables it) work under rawr run","state":"open"}
+          ]
+        },
+        {
+          "id": "playground-debugger",
+          "name": "Debugger in the playground (stretch)",
+          "start": 0,
+          "size": 3,
+          "state": "next",
+          "note": "An end goal, not a priority (Andy, D1057): the inspector in the browser universe behind a feature, pausing through JSPI, then the window shell built for wasm.",
+          "issues": [
+            {"number":2268,"title":"The inspector runs in the browser universe behind a feature, with pauses suspended through JSPI","state":"open"},
+            {"number":2269,"title":"Pause inside a browser callback (iced's update and view, ratzilla's draw) in the playground debugger","state":"open"},
+            {"number":2270,"title":"The playground's iced debugger shell: the window shell built for wasm","state":"open"}
           ]
         }
       ]

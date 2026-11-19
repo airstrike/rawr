@@ -208,8 +208,7 @@
         {"id":"one-session","name":"One debugger, many shells","start":60,"size":3,"state":"now","note":"The run's owner hosts one session any number of shells attach to, with capabilities listed at hello; rawr mcp is its first shell and attaches to terminal runs (#2258, D1053). Left: attaching keeps the program's state (#2266).","issues":[2258,2266],"milestone":"0.5"},
         {"id":"editor-adapter","name":"Editor debugging","start":63,"size":2,"state":"now","note":"A debug adapter shell: breakpoints, frames and values in any editor (#514)","issues":[514],"milestone":"0.5"},
         {"id":"terminal-shell","name":"Terminal shell","start":65,"size":2,"state":"next","note":"A TUI on the same session","issues":[2259],"milestone":"0.5"},
-        {"id":"window-shell","name":"Window shell","start":67,"size":3,"state":"next","note":"A GUI in its own process, so it keeps working while the program is paused","issues":[2260],"milestone":"0.5"},
-        {"id":"playground-debugger","name":"Debugger in the playground","start":70,"size":3,"state":"next","note":"The inspector in the browser universe behind a feature, pausing through JSPI; then the window shell built for wasm (D1057)","issues":[2268,2269,2270],"milestone":"0.5"}
+        {"id":"window-shell","name":"Window shell","start":67,"size":3,"state":"next","note":"A GUI in its own process, so it keeps working while the program is paused","issues":[2260],"milestone":"0.5"}
       ]
     },
     {
@@ -220,7 +219,8 @@
       "rows": [
         {"id":"editor-integration","name":"Previews and editor saves","start":90,"size":3,"state":"next","note":"#[preview] items render nowhere since rawr-iced went (#1090). The editor could tell rawr run a file changed (#78).","issues":[78,1090,1095]},
         {"id":"misc","name":"Unplaced","start":90,"size":1,"state":"next","note":"Issues no row's outcome needs yet","issues":[210,221,825,1042,1142,1417,1511]},
-        {"id":"time-travel","name":"Comet and time travel (stretch)","start":0,"size":2,"state":"next","note":"Off the Debugger milestone (D1055): rawr records no history and infers no purity. Where a program's own stack has a time machine, as iced's time-travel with comet, rawr lets it work under rawr run.","issues":[491,2261,2262]}
+        {"id":"time-travel","name":"Comet and time travel (stretch)","start":0,"size":2,"state":"next","note":"Off the Debugger milestone (D1055): rawr records no history and infers no purity. Where a program's own stack has a time machine, as iced's time-travel with comet, rawr lets it work under rawr run.","issues":[491,2261,2262]},
+        {"id":"playground-debugger","name":"Debugger in the playground (stretch)","start":0,"size":3,"state":"next","note":"An end goal, not a priority (Andy, D1057): the inspector in the browser universe behind a feature, pausing through JSPI, then the window shell built for wasm.","issues":[2268,2269,2270]}
       ]
     }
   ]
