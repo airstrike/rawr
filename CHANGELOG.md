@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.25 (2026-11-19)
+
+- A dependency's macro that calls std's macros through its own re-export of them, as `$crate::__support::format_args!(.., $crate::__support::line!())` does, expands again in marked code. A macro's `line!()` and `column!()` are where cargo's build puts them: the macro's own at its outermost call, and one its caller passes in where the caller wrote it. (#2284)
+
 ## 0.4.24 (2026-11-19)
 
 - `rawr tui [path]` opens a terminal debugger on a program's run. It attaches to the run's shared debugger session, or starts one, and shows the phase and output, the source at the stop with breakpoints marked, the frames and their bindings, and an eval prompt. Keys set breakpoints, pause, step and continue, and it keeps working while another shell such as `rawr mcp` drives the same run. (#2259)

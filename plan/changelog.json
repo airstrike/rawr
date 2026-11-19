@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.4.25",
+      "date": "2026-11-19",
+      "entries": [
+        {"text":"A dependency's macro that calls std's macros through its own re-export of them, as `$crate::__support::format_args!(.., $crate::__support::line!())` does, expands again in marked code. A macro's `line!()` and `column!()` are where cargo's build puts them: the macro's own at its outermost call, and one its caller passes in where the caller wrote it.","issues":[2284]}
+      ]
+    },
+    {
       "version": "0.4.24",
       "date": "2026-11-19",
       "entries": [
