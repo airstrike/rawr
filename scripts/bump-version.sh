@@ -21,7 +21,7 @@ import sys
 
 CRATES = [".", "codegen", "canonical", "cli", "importer", "directory",
           "toml", "import-cli", "hot", "macros", "location", "play", "reload", "watch",
-          "web", "shells/tui"]
+          "web", "shells/tui", "shells/gui"]
 
 def package_version(text):
     package = text[text.index("[package]"):]
