@@ -147,12 +147,12 @@ fn the_window_attaches_to_a_run_stops_at_its_breakpoint_steps_and_continues() {
         *app.phase() == Phase::Running
     });
 
-    // Pause stops it where it runs next, and leaves no breakpoint behind.
+    // Pause stops it at the next statement it runs.
     window.interact(|ui| {
         let _ = ui.click("Pause").unwrap();
     });
     window.until("the pause", |app| {
-        app.phase().stop().is_some() && shows(app, &binding) && !shows(app, "●")
+        matches!(app.phase().stop(), Some(stop) if stop.reason == "pause") && shows(app, &binding)
     });
     window.snapshot("attached-pause.png");
     window.interact(|ui| {

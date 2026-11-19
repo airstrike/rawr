@@ -39,8 +39,6 @@ pub struct App {
     inspected: Option<Stop>,
     /// The line breakpoints set, each a file and a line.
     breakpoints: Vec<(String, u64)>,
-    /// The line a pause set a breakpoint at, cleared once it stops there.
-    pausing: Option<(String, u64)>,
     /// The last thing that went wrong, until the next.
     note: Option<String>,
     source: source::State,
@@ -66,7 +64,6 @@ enum Asked {
     Step,
     Continue,
     Pause,
-    PauseAt,
     Eval { entry: usize },
     Screenshot,
 }
@@ -131,7 +128,6 @@ impl App {
             selected: 0,
             inspected: None,
             breakpoints: Vec::new(),
-            pausing: None,
             note: None,
             source: source::State::default(),
             console: console::State::default(),
@@ -222,9 +218,7 @@ impl App {
                 Task::none()
             }
             Message::Pause => {
-                // The inspector pauses at breakpoints alone: the line the
-                // program runs next gets one, which comes off at the stop.
-                self.ask(json!({}), Asked::Pause);
+                self.ask(json!({ "op": "pause" }), Asked::Pause);
                 Task::none()
             }
             Message::Refresh => {
@@ -276,15 +270,6 @@ impl App {
         self.phase = phase;
         match self.phase.stop().cloned() {
             Some(stop) if self.inspected.as_ref() != Some(&stop) => {
-                if let (Some(file), Some(line)) = (&stop.file, stop.line)
-                    && self.pausing.as_ref() == Some(&(file.clone(), line))
-                {
-                    self.pausing = None;
-                    self.ask(
-                        json!({ "op": "clear", "file": file, "line": line }),
-                        Asked::Breakpoints,
-                    );
-                }
                 self.selected = 0;
                 self.ask(json!({ "frame": 0 }), Asked::Inspect { frame: 0 });
                 let task = match &stop.file {
@@ -424,23 +409,15 @@ impl App {
                 self.capture();
                 moved
             }
+            // The program pauses at its next statement, which its `paused`
+            // event tells; one already paused says where.
             Asked::Pause => {
-                let (Some(file), Some(line)) = (answer["file"].as_str(), answer["line"].as_u64())
-                else {
-                    self.note = Some("the program ran none of its own code".to_owned());
-                    return Task::none();
-                };
-                let point = (file.to_owned(), line);
-                if !self.breakpoints.contains(&point) {
-                    self.ask(
-                        json!({ "op": "break", "file": file, "line": line }),
-                        Asked::PauseAt,
-                    );
-                    self.pausing = Some(point);
+                let phase = self.phase.answered(&answer["paused"]);
+                if phase.stop().is_some() {
+                    return self.moved(phase);
                 }
                 Task::none()
             }
-            Asked::PauseAt => Task::none(),
             Asked::Eval { entry } => {
                 let result = match (answer["value"].as_str(), answer["error"].as_str()) {
                     (Some(value), _) => Ok(value.to_owned()),
