@@ -5,10 +5,10 @@
 //! working beside other shells that drive the same run.
 //!
 //! Keys: `b` sets or clears a breakpoint at the cursor's line and `B`
-//! asks where to break; `s` steps over, `i` into, `o` out, and `c`
-//! continues; `e` evaluates Rust where the program is paused; Tab moves
-//! between the source, the frames and the bindings, where the arrows move
-//! and Enter opens a value; `q` quits.
+//! asks where to break; `p` pauses a running program; `s` steps over,
+//! `i` into, `o` out, and `c` continues; `e` evaluates Rust where the
+//! program is paused; Tab moves between the source, the frames and the
+//! bindings, where the arrows move and Enter opens a value; `q` quits.
 
 #![cfg(unix)]
 

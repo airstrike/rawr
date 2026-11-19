@@ -1,18 +1,122 @@
 {
   "name": "rawr",
   "displayName": "Rawr",
-  "description": "Rawr for marked .rs files: the home of a future preview pane.",
-  "version": "0.0.2",
+  "description": "Rawr for marked .rs files: a debugger through `rawr dap`, and the home of a future preview pane.",
+  "version": "0.0.3",
   "publisher": "rawr-local",
   "private": true,
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/airstrike/rawr"
+  },
   "engines": {
     "vscode": "^1.75.0"
   },
   "categories": [
+    "Debuggers",
     "Other"
   ],
   "activationEvents": [
-    "onLanguage:rust"
+    "onLanguage:rust",
+    "onDebug"
   ],
-  "main": "./extension.js"
+  "main": "./extension.js",
+  "files": [
+    "extension.js"
+  ],
+  "contributes": {
+    "configuration": {
+      "title": "Rawr",
+      "properties": {
+        "rawr.path": {
+          "type": "string",
+          "default": "rawr",
+          "description": "The `rawr` command the debugger runs as `rawr dap`: a name on PATH, or a path."
+        }
+      }
+    },
+    "breakpoints": [
+      {
+        "language": "rust"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "rawr",
+        "label": "Rawr",
+        "languages": [
+          "rust"
+        ],
+        "configurationAttributes": {
+          "launch": {
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "The program to run: a crate's directory or Cargo.toml, or one .rs file. Relative paths start at `cwd`.",
+                "default": "${workspaceFolder}"
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The program's arguments.",
+                "default": []
+              },
+              "cwd": {
+                "type": "string",
+                "description": "Where relative paths start.",
+                "default": "${workspaceFolder}"
+              }
+            }
+          },
+          "attach": {
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "The program a `rawr run` started elsewhere runs, as in a terminal: its crate's directory or Cargo.toml, or its .rs file.",
+                "default": "${workspaceFolder}"
+              },
+              "cwd": {
+                "type": "string",
+                "description": "Where relative paths start.",
+                "default": "${workspaceFolder}"
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "rawr",
+            "request": "launch",
+            "name": "Rawr: run",
+            "program": "${workspaceFolder}"
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "Rawr: run",
+            "description": "Run a program under rawr's debugger; a save reloads it.",
+            "body": {
+              "type": "rawr",
+              "request": "launch",
+              "name": "Rawr: run",
+              "program": "^\"\\${workspaceFolder}\""
+            }
+          },
+          {
+            "label": "Rawr: attach",
+            "description": "Attach to a `rawr run` started in a terminal.",
+            "body": {
+              "type": "rawr",
+              "request": "attach",
+              "name": "Rawr: attach",
+              "program": "^\"\\${workspaceFolder}\""
+            }
+          }
+        ]
+      }
+    ]
+  }
 }

@@ -2934,7 +2934,7 @@ checksum = "20675572f6f24e9e76ef639bc5552774ed45f1c30e2951e1e99c59888861c539"
 
 [[package]]
 name = "rawr"
-version = "0.4.22"
+version = "0.4.23"
 dependencies = [
  "ahash",
  "annotate-snippets",
@@ -2971,14 +2971,14 @@ dependencies = [
 
 [[package]]
 name = "rawr-canonical"
-version = "0.4.22"
+version = "0.4.23"
 dependencies = [
  "thiserror 2.0.19",
 ]
 
 [[package]]
 name = "rawr-cli"
-version = "0.4.22"
+version = "0.4.23"
 dependencies = [
  "anstream",
  "nix 0.27.1",
@@ -2992,7 +2992,7 @@ dependencies = [
 
 [[package]]
 name = "rawr-directory"
-version = "0.4.22"
+version = "0.4.23"
 dependencies = [
  "libc",
  "thiserror 2.0.19",
@@ -3000,7 +3000,7 @@ dependencies = [
 
 [[package]]
 name = "rawr-hot"
-version = "0.4.22"
+version = "0.4.23"
 dependencies = [
  "futures-channel",
  "futures-core",
@@ -3008,7 +3008,7 @@ dependencies = [
 
 [[package]]
 name = "rawr-import"
-version = "0.4.22"
+version = "0.4.23"
 dependencies = [
  "anstream",
  "fd-lock",
@@ -3043,7 +3043,7 @@ dependencies = [
 
 [[package]]
 name = "rawr-import-cli"
-version = "0.4.22"
+version = "0.4.23"
 dependencies = [
  "nix 0.27.1",
  "rawr",
@@ -3057,14 +3057,14 @@ dependencies = [
 
 [[package]]
 name = "rawr-location"
-version = "0.4.22"
+version = "0.4.23"
 dependencies = [
  "rawr-toml-edit",
 ]
 
 [[package]]
 name = "rawr-macros"
-version = "0.4.22"
+version = "0.4.23"
 
 [[package]]
 name = "rawr-notify"
@@ -3092,7 +3092,7 @@ dependencies = [
 
 [[package]]
 name = "rawr-play"
-version = "0.4.22"
+version = "0.4.23"
 dependencies = [
  "aes",
  "base64",
@@ -3111,7 +3111,7 @@ dependencies = [
 
 [[package]]
 name = "rawr-reload"
-version = "0.4.22"
+version = "0.4.23"
 
 [[package]]
 name = "rawr-snippet"
@@ -3122,7 +3122,7 @@ dependencies = [
 
 [[package]]
 name = "rawr-toml"
-version = "0.4.22"
+version = "0.4.23"
 dependencies = [
  "serde_json",
  "thiserror 2.0.19",
@@ -3145,7 +3145,7 @@ dependencies = [
 
 [[package]]
 name = "rawr-tui"
-version = "0.4.22"
+version = "0.4.23"
 dependencies = [
  "crossterm",
  "ratatui",
@@ -3154,7 +3154,7 @@ dependencies = [
 
 [[package]]
 name = "rawr-watch"
-version = "0.4.22"
+version = "0.4.23"
 dependencies = [
  "rawr",
  "rawr-import",
@@ -3163,7 +3163,7 @@ dependencies = [
 
 [[package]]
 name = "rawr-web"
-version = "0.4.22"
+version = "0.4.23"
 dependencies = [
  "console_error_panic_hook",
  "getrandom 0.3.4",
@@ -3176,7 +3176,7 @@ dependencies = [
 
 [[package]]
 name = "rawr_codegen"
-version = "0.4.22"
+version = "0.4.23"
 dependencies = [
  "proc-macro2",
  "quote",

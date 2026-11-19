@@ -14,7 +14,7 @@ use super::update::file_name;
 use super::{Breakpoint, Focus, Kind, Purpose, Shell};
 
 const KEYS: &str =
-    "b break · B break at · s step · i into · o out · c continue · e eval · Tab pane · q quit";
+    "b break · B break at · p pause · s step · i into · o out · c continue · e eval · Tab pane · q quit";
 
 impl Shell {
     /// Draw the shell on `screen`.

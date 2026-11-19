@@ -68,6 +68,7 @@ impl Shell {
             KeyCode::Char('i') => self.resume(json!({ "op": "step", "kind": "into" })),
             KeyCode::Char('o') => self.resume(json!({ "op": "step", "kind": "out" })),
             KeyCode::Char('c') => self.resume(json!({ "op": "continue" })),
+            KeyCode::Char('p') => self.pause(),
             _ => {}
         }
         Flow::Continue
@@ -214,6 +215,19 @@ impl Shell {
             return;
         }
         self.program(request, Pending::Resume);
+    }
+
+    /// Pause the running program at the next statement it runs; its
+    /// `paused` event says where.
+    fn pause(&mut self) {
+        if !self.phase.is_live() {
+            self.status = Some("the program isn't running".to_owned());
+            return;
+        }
+        if self.phase.stop().is_some() {
+            return;
+        }
+        self.program(json!({ "op": "pause" }), Pending::Resume);
     }
 
     fn evaluate(&mut self, code: String) {

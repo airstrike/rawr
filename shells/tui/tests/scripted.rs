@@ -333,3 +333,31 @@ fn an_eval_shows_its_code_and_its_value_in_the_console() {
     rig.hear(2);
     assert!(rig.screen().contains("· running"));
 }
+
+#[test]
+fn a_pause_stops_the_running_program_where_its_event_says() {
+    let mut rig = Rig::new("pause");
+    rig.attach();
+    rig.press(KeyCode::Char('p'));
+    let pause = rig.session.request();
+    assert_eq!(pause["params"], json!({ "op": "pause" }));
+    rig.session.answer(&pause, json!({ "paused": null }));
+    rig.hear(1);
+    assert!(rig.screen().contains("· running"));
+    rig.pause(8, "pause", 1);
+    let screen = rig.screen();
+    assert!(
+        screen.contains("paused at main.rs:8 in `app::update` (pause)"),
+        "{screen}"
+    );
+    assert!(
+        line_with(&screen, "app.items.push").contains("8 ▶"),
+        "{screen}"
+    );
+    // A paused program takes no second pause: the next request is the
+    // continue.
+    rig.press(KeyCode::Char('p'));
+    rig.press(KeyCode::Char('c'));
+    let next = rig.session.request();
+    assert_eq!(next["params"], json!({ "op": "continue" }));
+}
