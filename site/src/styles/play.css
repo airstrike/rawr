@@ -31,41 +31,98 @@ body.play { font-size: var(--fs-base); line-height: 1.5; }
 .out.framed pre { padding: 0 16px 16px; }
 .term .err { color: var(--red); }
 .term .exit, .term .none, .term .note { color: var(--quiet); }
+/* The split bars (panes.tsx's SplitBar): on a wide screen, the line between */
+/* two panes, with an 8px grip around it, as elevato's iced_split divider; */
+/* the accent, 3px wide, while hovered or dragged. A phone stacks the panes */
+/* and draws no bars. */
+@media (min-width: 768px) {
+  .playmain { grid-template-columns: var(--columns); }
+}
+.split { display: none; }
+@media (min-width: 768px) {
+  .split { display: block; position: relative; z-index: 2; touch-action: none; outline: none; }
+  .split[data-split="columns"] { background: var(--grid); cursor: col-resize; }
+  .split[data-split="columns"]::before { content: ""; position: absolute; inset: 0 -4px; }
+  .split[data-split="rows"] { flex: none; height: 8px; cursor: row-resize; }
+  .split::after { content: ""; position: absolute; border-radius: 1.5px; background: transparent; transition: background-color 80ms; }
+  .split[data-split="columns"]::after { top: 0; bottom: 0; left: -1px; width: 3px; }
+  .split[data-split="rows"]::after { left: 0; right: 0; top: 2.5px; height: 3px; }
+  .split:hover::after, .split[data-dragging]::after, .split:focus-visible::after { background: var(--red); }
+  body:has(.split[data-dragging]) { user-select: none; }
+  body:has(.split[data-dragging="true"][data-split="columns"]) { cursor: col-resize; }
+  body:has(.split[data-dragging="true"][data-split="rows"]) { cursor: row-resize; }
+  /* An iframe under the pointer would take the drag's moves from the bar. */
+  body:has(.split[data-dragging]) iframe { pointer-events: none; }
+}
+
 /* The debugger's panel (Playground.tsx's DebugPanel), right of the output, */
-/* and its console under the code, while the debugger is on. */
-.debugger { font-size: 13px; overflow: auto; }
+/* and its console under the code, while the debugger is on: dense, as */
+/* DevTools' sources sidebar and console. */
+.debugger { font: 12px/1.4 var(--sans); overflow: hidden; }
+.debugger .note, .debugger .error { font-size: 12px; line-height: 1.4; margin: 2px 0; }
 .debugger .note { color: var(--quiet); }
 .debugger .error { color: var(--red); }
-.debugger .where { font: 13px/1.55 var(--mono); color: var(--ink); }
-.debugger h3 { font-size: var(--fs-label); font-weight: var(--w-strong); letter-spacing: var(--track-label); text-transform: uppercase; color: var(--quiet); margin-bottom: 4px; }
-.debugger .frames-list button { font: 13px/1.55 var(--mono); color: var(--ink); background: none; border: 0; padding: 0; cursor: pointer; text-align: left; }
-.debugger .frames-list button[aria-current="true"] { color: var(--red); }
-.debugger .bindings { font: 13px/1.55 var(--mono); }
-.debugger .bindings > div { display: flex; gap: 8px; }
-.debugger .bindings dt { color: var(--quiet); }
-.debugger .bindings dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
-.debugger .err { color: var(--red); }
-.debugger .phase { font: 13px/1.55 var(--mono); color: var(--quiet); overflow-wrap: anywhere; }
+.debugger .phase { font: 12px/1.4 var(--mono); color: var(--quiet); min-width: 0; }
+.debugger .where { font: 12px/1.4 var(--mono); color: var(--ink); padding-top: 2px; padding-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.debugger .sections { border-top: 1px solid var(--grid); margin-top: 4px; }
+.debugger h3 { font-size: 11px; line-height: 18px; font-weight: var(--w-strong); letter-spacing: var(--track-label); text-transform: uppercase; color: var(--quiet); background: var(--wash); border-top: 1px solid var(--grid); border-bottom: 1px solid var(--grid); padding: 0 12px; }
+.debugger .where + h3 { border-top: 0; }
+.debugger .frames-list { padding: 1px 0; }
+.debugger .frames-list button { display: flex; width: 100%; gap: 8px; font: 12px/18px var(--mono); color: var(--ink); background: none; border: 0; padding: 0 12px 0 22px; cursor: pointer; text-align: left; position: relative; }
+.debugger .frames-list button:hover { background: var(--wash); }
+.debugger .frames-list .fn { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.debugger .frames-list .line { color: var(--quiet); }
+.debugger .frames-list button[aria-current="true"] { background: color-mix(in srgb, var(--red) 12%, transparent); }
+.debugger .frames-list button[aria-current="true"]::before { content: ""; position: absolute; left: 9px; top: 6px; border: 3.5px solid transparent; border-left: 5px solid var(--red); border-right: 0; }
 /* The toolbar's actions: glyphs, as DevTools draws them, in the ink colour. */
-.debugger .actions button { display: grid; place-items: center; width: 28px; height: 28px; border: 1px solid transparent; background: none; color: var(--ink); cursor: pointer; }
+.debugger .actions button { display: grid; place-items: center; width: 26px; height: 26px; border: 1px solid transparent; background: none; color: var(--ink); cursor: pointer; }
 .debugger .actions button:hover:not(:disabled) { border-color: var(--grid); background: var(--wash); }
 .debugger .actions button:focus-visible { outline: 2px solid var(--red); outline-offset: 1px; }
 .debugger .actions button:disabled { color: var(--quiet); opacity: 0.45; cursor: default; }
-.console { border: 1px solid var(--grid); background: var(--wash); }
-.console .fold { display: flex; width: 100%; align-items: center; gap: 6px; padding: 6px 12px; background: none; border: 0; cursor: pointer; text-align: left; }
+
+/* A value tree (panes.tsx's ValueTable): a name and a one-line value a row, */
+/* a value's parts indented under it while it is open. */
+.tree { width: 100%; border-collapse: collapse; font: 12px/18px var(--mono); }
+.tree td { padding: 0 8px 0 0; vertical-align: top; white-space: nowrap; }
+.tree tr.opens { cursor: pointer; }
+.tree tr:hover { background: var(--wash); }
+.tree .name { color: var(--syn-attr); }
+.tree .name::after { content: ":"; color: var(--quiet); }
+.tree .value { width: 100%; max-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--ink); }
+.tree .value.str { color: var(--syn-str); }
+.tree .value.num { color: var(--syn-num); }
+.tree .value.err { color: var(--red); }
+.twisty { display: inline-block; width: 12px; height: 18px; vertical-align: top; padding: 0; border: 0; background: none; color: var(--quiet); cursor: pointer; position: relative; }
+button.twisty::before { content: ""; position: absolute; left: 2px; top: 5.5px; border: 3.5px solid transparent; border-left: 5px solid currentColor; border-right: 0; transition: transform 80ms; transform-origin: 2px 3.5px; }
+button.twisty[aria-expanded="true"]::before { transform: rotate(90deg); }
+button.twisty:hover { color: var(--ink); }
+
+/* The console under the code: rows as tight as DevTools', the prompt right */
+/* after the last; on a wide screen the bar over it sets its height. */
+.console { border: 1px solid var(--grid); background: var(--wash); display: flex; flex-direction: column; min-height: 0; }
+@media (min-width: 768px) {
+  .console:not(.folded) { height: var(--console-height); flex: none; }
+}
+.console .fold { display: flex; flex: none; width: 100%; align-items: center; gap: 6px; padding: 2px 8px; line-height: 18px; background: none; border: 0; cursor: pointer; text-align: left; }
 .console .fold::after { content: ""; margin-left: auto; width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(45deg); }
 .console .fold[aria-expanded="false"]::after { transform: rotate(-45deg); }
-.console .pane-body { border-top: 1px solid var(--grid); }
-.console .scrollback { max-height: 168px; overflow: auto; font: 13px/1.55 var(--mono); }
+.console .pane-body { border-top: 1px solid var(--grid); overflow: auto; flex: 1; min-height: 0; font: 12px/18px var(--mono); }
+@media (max-width: 767px) { .console .pane-body { max-height: 200px; } }
 .console .scrollback:empty { display: none; }
-.console .entry { border-bottom: 1px solid var(--grid); padding: 2px 12px 2px 28px; }
+.console .entry { border-bottom: 1px solid var(--grid); padding: 0 8px 0 22px; }
 .console .entry pre { margin: 0; font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; position: relative; }
 .console .entry .in { color: var(--ink); }
-.console .entry .in::before, .console .entry .answer::before { position: absolute; left: -16px; color: var(--quiet); }
+.console .entry .in::before, .console .entry .out-line::before { position: absolute; left: -14px; color: var(--quiet); }
 .console .entry .in::before { content: ">"; }
-.console .entry .answer::before { content: "<"; }
-.console .entry .answer { color: var(--quiet); }
+.console .entry .out-line { display: flex; position: relative; }
+.console .entry .out-line::before { content: "<"; }
+.console .entry .out-line.opens { cursor: pointer; }
+.console .entry .out-line .twisty { margin-left: -2px; flex: none; }
+.console .entry .answer { color: var(--quiet); flex: 1; min-width: 0; }
+.console .entry .answer.elided { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink); }
 .console .entry .answer.err { color: var(--red); }
-.console .prompt { display: flex; gap: 8px; padding: 4px 12px 6px; font: 13px/1.55 var(--mono); }
+.console .entry .parts { margin-bottom: 1px; }
+.console .prompt { display: flex; gap: 8px; padding: 1px 8px 2px; font: 12px/18px var(--mono); }
 .console .prompt .mark { color: var(--red); }
 .console .prompt .input { flex: 1; min-width: 0; }
+@media (max-width: 767px) { .console { margin-top: 12px; } }

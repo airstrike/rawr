@@ -49,7 +49,9 @@ function answers(pause: boolean) {
       case "continue":
         return { paused: null };
       case "eval":
-        return { value: "7" };
+        return request.code === "seen"
+          ? { value: '{"a": 1}', children: [{ name: '"a"', value: "1" }] }
+          : { value: "7" };
       default:
         return {
           reached: true,
@@ -99,9 +101,13 @@ test("a pause reads its frames and bindings, another frame's on a click, and an 
   assert.deepEqual(debug.state.bindings, [{ name: "depth", value: "3" }]);
   await debug.select(1);
   assert.deepEqual(debug.state.bindings, [{ name: "depth", value: "4" }]);
+  assert.deepEqual(page.asked.at(-1), { frame: 1, children: true }, "a frame's bindings come with their parts");
   await debug.evaluate("depth + 3");
-  assert.deepEqual(page.asked.at(-1), { op: "eval", code: "depth + 3" });
+  assert.deepEqual(page.asked.at(-1), { op: "eval", code: "depth + 3", children: true });
   assert.deepEqual(debug.state.evaluated, [{ code: "depth + 3", value: "7" }]);
+  // A value with parts keeps them, for the console's tree.
+  await debug.evaluate("seen");
+  assert.deepEqual(debug.state.evaluated.at(-1), { code: "seen", value: '{"a": 1}', children: [{ name: '"a"', value: "1" }] });
   await debug.continue();
   page.tell({ event: "resumed" });
   assert.equal(debug.state.phase, "running");

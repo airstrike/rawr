@@ -171,9 +171,9 @@ export function setDoc(view: EditorView, doc: string): void {
 }
 
 const consoleLook = EditorView.theme({
-  "&": { backgroundColor: "transparent", color: "var(--ink)", fontSize: "13px" },
+  "&": { backgroundColor: "transparent", color: "var(--ink)", fontSize: "12px" },
   "&.cm-focused": { outline: "none" },
-  ".cm-scroller": { fontFamily: "var(--mono)", lineHeight: "1.55" },
+  ".cm-scroller": { fontFamily: "var(--mono)", lineHeight: "1.4" },
   ".cm-content": { padding: "0", caretColor: "var(--red)" },
   ".cm-line": { padding: "0" },
   ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--red)", borderLeftWidth: "2px" },
