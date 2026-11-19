@@ -2,6 +2,8 @@
 
 #[cfg(feature = "rust-import")]
 mod item_macro;
+#[cfg(test)]
+mod tests;
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -60,6 +62,10 @@ pub struct Package {
     /// marked code: the shadow crate stands trampolines for the marked
     /// modules, the root among them, as a native root's does (D510).
     marked_uses: bool,
+    /// What native modules below each marked module name of its private
+    /// items, which Rust lets a child module see of its ancestors': the
+    /// shadow crate stands those items too.
+    below: super::island::Below,
 }
 
 /// One `use` declaration of a marked module that a native module's path
@@ -664,7 +670,7 @@ impl Graph {
                 (source.modules(), source.path(), source.text(), unit.items())
             }),
             self.native_root_items(),
-            &self.native_modules(),
+            &self.entry_package().below,
             called,
             opaque.as_ref(),
         ))
@@ -692,15 +698,6 @@ impl Graph {
         Some((module_root, sources))
     }
 
-    /// The module path of each native module of the entry package.
-    fn native_modules(&self) -> Vec<&[ImmutableString]> {
-        self.entry_package()
-            .rust_modules
-            .iter()
-            .map(|module| &*module.modules)
-            .collect()
-    }
-
     /// The `use` declarations of the native crate root, which name marked
     /// types by other paths, as `pub use theme::Theme;` does.
     fn native_root_items(&self) -> &[crate::item::Parsed] {
@@ -721,7 +718,7 @@ impl Graph {
         super::island::native_statics(
             sources.map(|(source, unit)| (source.modules(), source.text(), unit.items())),
             self.native_root_items(),
-            &self.native_modules(),
+            &self.entry_package().below,
         )
     }
 
@@ -736,7 +733,7 @@ impl Graph {
         super::island::mirrors(
             sources.map(|(source, unit)| (source.modules(), source.text(), unit.items())),
             self.native_root_items(),
-            &self.native_modules(),
+            &self.entry_package().below,
         )
     }
 
@@ -1075,6 +1072,7 @@ impl<'a> Builder<'a> {
             script,
             re_exports: Vec::new(),
             marked_uses: false,
+            below: super::island::Below::new(),
         });
 
         let module_root = request
@@ -1209,9 +1207,7 @@ impl<'a> Builder<'a> {
                 };
             self.attach_cargo(package, cargo, own_library);
         }
-        if self.packages[package.0].native_root.is_none() {
-            self.find_marked_uses(package);
-        }
+        self.find_marked_uses(package);
         Ok(package)
     }
 
@@ -1715,12 +1711,14 @@ impl<'a> Builder<'a> {
         Ok(())
     }
 
-    /// In a crate whose root is marked, find whether native code uses
-    /// marked code: a native module's `crate::…` or `super::…` path lands
-    /// in a marked module (the crate root included). Its shadow crate then
-    /// stands trampolines for the marked modules, as a native root's does
-    /// (D510), and native code calls into the interpreter through them.
-    /// Without one it holds the native modules alone, and records the
+    /// Find where native code uses marked code: a native module's
+    /// `crate::…` or `super::…` path lands in a marked module (the crate
+    /// root included). Each path from a module below the marked one names
+    /// a private item it sees there ([`super::island::Seen`]). In a crate
+    /// whose root is marked, a path that is no re-export makes its shadow
+    /// crate stand trampolines for the marked modules, as a native root's
+    /// does (D510), and native code calls into the interpreter through
+    /// them. Without one it holds the native modules alone, and records the
     /// marked modules' `use` declarations their paths go through.
     fn find_marked_uses(&mut self, package: Id) {
         let name = self.packages[package.0].name.clone();
@@ -1759,7 +1757,8 @@ impl<'a> Builder<'a> {
         };
         let mut uses = false;
         let mut re_exports = Vec::new();
-        'modules: for module in &self.packages[package.0].rust_modules {
+        let mut below = super::island::Below::new();
+        for module in &self.packages[package.0].rust_modules {
             for reference in super::polyglot::references(&module.text, features) {
                 if reference.disabled {
                     continue;
@@ -1785,7 +1784,24 @@ impl<'a> Builder<'a> {
                     absolute.extend(reference.segments[supers..].iter().cloned());
                     absolute
                 };
-                if tree.landing(&absolute).is_none() {
+                let Some((owner, length)) = tree.landing(&absolute) else {
+                    continue;
+                };
+                // A module below the marked one sees its private items, by
+                // the name after the module's path, or all of them when
+                // the path names the module itself (`use super::*;`).
+                let ancestor = base.len() > length
+                    && base
+                        .iter()
+                        .zip(&absolute[..length])
+                        .all(|(left, right)| left == right);
+                if ancestor {
+                    below
+                        .entry(marked[owner].modules.clone().into_boxed_slice())
+                        .or_default()
+                        .name(absolute.get(length).map(String::as_str));
+                }
+                if uses {
                     continue;
                 }
                 let mut chain = Vec::new();
@@ -1794,8 +1810,13 @@ impl<'a> Builder<'a> {
                     continue;
                 }
                 uses = true;
-                break 'modules;
             }
+        }
+        self.packages[package.0].below = below;
+        // A native root's shadow crate stands trampolines whatever its
+        // native modules use.
+        if self.packages[package.0].native_root.is_some() {
+            return;
         }
         re_exports.sort_unstable_by(|left: &ReExport, right| {
             (&left.modules, &left.declaration).cmp(&(&right.modules, &right.declaration))
