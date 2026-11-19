@@ -1216,7 +1216,10 @@ impl Shared {
                 .wait(state)
                 .unwrap_or_else(PoisonError::into_inner);
         }
-        if state.pauses == seen.0 {
+        // A step ends at its first pause or its departure, which no later
+        // one follows without a resume: a pause the departure led to that
+        // came before this wait looked is told as its event.
+        if state.departures != seen.1 {
             return json!({ "paused": null, "native": true });
         }
         json!({ "paused": state.last })
@@ -2129,6 +2132,18 @@ mod tests {
     #[cfg(unix)]
     fn step_out_of_update(socket: &std::path::Path) -> (Vec<serde_json::Value>, serde_json::Value) {
         use serde_json::json;
+        /// Lets a program the tool left paused go on when one of its checks
+        /// fails, so the native code that called it ends too.
+        struct Release<'a>(&'a std::path::Path);
+        impl Drop for Release<'_> {
+            fn drop(&mut self) {
+                if std::thread::panicking() {
+                    let _ = ask(self.0, &json!({ "op": "clear" }));
+                    let _ = ask(self.0, &json!({ "op": "continue" }));
+                }
+            }
+        }
+        let _release = Release(socket);
         let paused = ask(socket, &json!({ "name": "nothing" }));
         assert_eq!(paused["paused"]["function"], "update", "{paused}");
         let cleared = ask(socket, &json!({ "op": "clear" }));
@@ -2191,9 +2206,10 @@ mod tests {
             let tool = scope.spawn(move || step_out_of_update(&socket));
             // Native code calls the program once, then waits.
             called.update(&mut counter);
-            let (steps, next) = tool.join().unwrap();
+            let seen = tool.join();
             going.store(false, Ordering::Release);
             assert!(spinning.join().unwrap() > 0);
+            let (steps, next) = seen.unwrap();
             assert_eq!(steps.last().unwrap()["native"], true, "{steps:?}");
             assert_eq!(next["paused"]["function"], "spin", "{next}");
             assert_eq!(next["paused"]["reason"], "step", "{next}");
