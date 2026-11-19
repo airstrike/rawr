@@ -325,6 +325,48 @@ fn main() {
         assert_eq!(printed, "1 10\n4 10\n");
     }
 
+    /// A frame with a shared and a mutable borrow and an immutable binding.
+    const BORROWS: &str = "// rawr
+fn bump(shared: &u64, unique: &mut u64) {
+    let fixed = 1;
+    println!(\"{shared} {unique} {fixed}\");
+}
+
+fn main() {
+    let a: u64 = 1;
+    let mut b: u64 = 2;
+    bump(&a, &mut b);
+    println!(\"{a} {b}\");
+}
+";
+
+    #[test]
+    fn code_writes_through_a_mutable_borrow_and_not_a_shared_one_or_an_immutable_binding() {
+        let (answers, printed) = evaluated(
+            BORROWS,
+            4,
+            &["*shared = 5;", "fixed = 5;", "*unique += 10;"],
+        );
+        let error = |answer: &Value| answer["error"].as_str().unwrap_or_default().to_owned();
+        assert!(
+            error(&answers[0]).starts_with(
+                "error[E0594]: cannot assign to `*shared`, which is behind a `&` reference"
+            ),
+            "{}",
+            answers[0]
+        );
+        assert!(
+            error(&answers[1])
+                .starts_with("error[E0384]: cannot assign twice to immutable variable `fixed`"),
+            "{}",
+            answers[1]
+        );
+        assert_eq!(answers[2], json!({ "value": "()" }));
+        // The frame and its caller go on with the write the borrow allowed,
+        // and without the two it refused.
+        assert_eq!(printed, "1 12 1\n1 12\n");
+    }
+
     #[test]
     fn code_is_refused_as_rustc_refuses_it_where_the_program_is_paused() {
         let (answers, _) = evaluated(PROGRAM, 7, &["count + \"a\"", "v.push(5)"]);
