@@ -1632,7 +1632,7 @@ impl Told {
             return Some(Self::File(path));
         }
         let mut session = std::os::unix::net::UnixStream::connect(&path).ok()?;
-        let serve = json!({ "jsonrpc": "2.0", "method": "serve", "params": { "socket": socket } });
+        let serve = json!({ "jsonrpc": "2.0", "method": "serve", "params": { "socket": socket.to_string_lossy() } });
         writeln!(session, "{serve}").ok()?;
         Some(Self::Session(Mutex::new(session)))
     }
