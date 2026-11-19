@@ -2384,6 +2384,92 @@ mod tests {
         );
     }
 
+    /// A program whose std containers hold its own derived struct.
+    const PLAYERS: &str = "use std::collections::{BTreeMap, HashMap};\n\
+         #[derive(Debug, Clone)]\n\
+         struct Player { score: u32, level: u8, tags: Vec<&'static str> }\n\
+         fn look() -> i64 {\n\
+             let mut players: HashMap<&str, Player> = HashMap::new();\n\
+             players.insert(\"ann\", Player { score: 3, level: 1, tags: vec![\"new\"] });\n\
+             let mut ranks: BTreeMap<u8, Player> = BTreeMap::new();\n\
+             ranks.insert(2, Player { score: 4, level: 2, tags: vec![] });\n\
+             ranks.insert(1, Player { score: 9, level: 5, tags: vec![\"top\"] });\n\
+             let list = vec![Player { score: 5, level: 3, tags: vec![\"a\"] }];\n\
+             println!(\"{players:?} {ranks:?} {list:?}\");\n\
+             0\n\
+         }\n\
+         pub fn run() -> i64 { look() }\n\
+         run()";
+
+    #[test]
+    fn a_container_of_program_structs_reads_as_its_debug_prints_it() {
+        let printed = Arc::new(Mutex::new(String::new()));
+        let printing = Arc::clone(&printed);
+        let mut engine = crate::Engine::new();
+        engine.on_output(move |_, text| printing.lock().unwrap().push_str(text));
+        engine
+            .eval::<i64>(PLAYERS)
+            .unwrap_or_else(|error| panic!("{error}"));
+        let players = "{\"ann\": Player { score: 3, level: 1, tags: [\"new\"] }}";
+        let ranks = "{1: Player { score: 9, level: 5, tags: [\"top\"] }, \
+                     2: Player { score: 4, level: 2, tags: [] }}";
+        let list = "[Player { score: 5, level: 3, tags: [\"a\"] }]";
+        assert_eq!(
+            *printed.lock().unwrap(),
+            format!("{players} {ranks} {list}\n")
+        );
+        let seen = at_steps(PLAYERS, "look", |context| shown(context, 0));
+        assert_eq!(
+            seen.last().map(String::as_str),
+            Some(format!("players={players} ranks={ranks} list={list}").as_str())
+        );
+    }
+
+    #[test]
+    fn a_map_of_program_structs_reads_as_one_child_per_key_with_its_fields() {
+        let seen = at_steps(PLAYERS, "look", |context| {
+            let found = read(context, 0, 0, Some("ranks")).and_then(Result::ok);
+            found
+                .as_deref()
+                .and_then(<[super::Binding]>::first)
+                .map(|ranks| ranks.to_json(super::Shape::Parts).to_string())
+                .unwrap_or_default()
+        });
+        let player = |score: u32, level: u8, tag: Option<&str>| {
+            let tags = match tag {
+                Some(tag) => serde_json::json!({
+                    "name": "tags",
+                    "value": format!("[{tag:?}]"),
+                    "children": [{ "name": "[0]", "value": format!("{tag:?}") }],
+                }),
+                None => serde_json::json!({ "name": "tags", "value": "[]", "children": [] }),
+            };
+            serde_json::json!([
+                { "name": "score", "value": score.to_string() },
+                { "name": "level", "value": level.to_string() },
+                tags,
+            ])
+        };
+        let ranks = serde_json::json!({
+            "name": "ranks",
+            "value": "{1: Player { score: 9, level: 5, tags: [\"top\"] }, \
+                      2: Player { score: 4, level: 2, tags: [] }}",
+            "children": [
+                {
+                    "name": "1",
+                    "value": "Player { score: 9, level: 5, tags: [\"top\"] }",
+                    "children": player(9, 5, Some("top")),
+                },
+                {
+                    "name": "2",
+                    "value": "Player { score: 4, level: 2, tags: [] }",
+                    "children": player(4, 2, None),
+                },
+            ],
+        });
+        assert_eq!(seen.last(), Some(&ranks.to_string()));
+    }
+
     #[test]
     fn a_receiver_lent_to_an_expression_on_itself_reads_or_says_why() {
         let seen = at_steps(
