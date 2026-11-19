@@ -106,6 +106,19 @@ impl Fragment {
         self.envelop(original, true);
     }
 
+    /// Mark every origin in this fragment as code the compiler wrote, as
+    /// [`Self::cover_written`] marks its own envelope.
+    pub(super) fn mark_written(&mut self) {
+        let mut pending = vec![&mut self.0.sites];
+        while let Some(sites) = pending.pop() {
+            let sites = Shared::make_mut(sites);
+            for origin in &mut sites.local {
+                origin.written = true;
+            }
+            pending.extend(sites.children.iter_mut().map(|child| &mut child.sites));
+        }
+    }
+
     fn envelop(&mut self, original: Span, written: bool) {
         if self.0.text.is_empty() {
             return;

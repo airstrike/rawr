@@ -2666,6 +2666,22 @@ impl<'a> Parser<'a> {
         self.output.push(rendered);
         self.output.push_text("\n");
     }
+
+    /// Run `parse` over statements the compiler spliced in itself, such as
+    /// a parameter's binding where a body starts, and mark every origin it
+    /// writes as written: an error in them is located where the tokens
+    /// were placed, but a debugger doesn't stop at them.
+    pub(super) fn parse_written<T>(
+        &mut self,
+        parse: impl FnOnce(&mut Self) -> Result<T, Error>,
+    ) -> Result<T, Error> {
+        let start = self.output.len();
+        let parsed = parse(self)?;
+        let mut written = self.output.split_off(start);
+        written.mark_written();
+        self.output.push(written);
+        Ok(parsed)
+    }
 }
 
 /// `=` or a compound assignment.

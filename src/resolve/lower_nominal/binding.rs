@@ -35,7 +35,7 @@ impl<'a> Parser<'a> {
                     identifier(parameter.name.text.as_str()),
                     (Token::SemiColon, at),
                 ]);
-                self.parse_binding(true)?;
+                self.parse_written(|parser| parser.parse_binding(true))?;
                 continue;
             }
             let syntax = self.parameter_pattern_syntax(pattern)?;
@@ -52,21 +52,23 @@ impl<'a> Parser<'a> {
                     ),
                     (Token::SemiColon, at.end()),
                 ]);
-                let pending = self.field_entries.len();
-                let value_start = self.flow().value_start();
-                let subject = self.parse_expr()?;
-                self.expect(Token::SemiColon, "';' after a parameter's value")?;
-                let matched = self.matched(&subject, value_start);
-                self.bind_let_pattern(
-                    pattern::Site::Argument,
-                    at.start(),
-                    &syntax,
-                    subject,
-                    Some(matched),
-                    None,
-                    at.end(),
-                    pending,
-                )?;
+                self.parse_written(|parser| {
+                    let pending = parser.field_entries.len();
+                    let value_start = parser.flow().value_start();
+                    let subject = parser.parse_expr()?;
+                    parser.expect(Token::SemiColon, "';' after a parameter's value")?;
+                    let matched = parser.matched(&subject, value_start);
+                    parser.bind_let_pattern(
+                        pattern::Site::Argument,
+                        at.start(),
+                        &syntax,
+                        subject,
+                        Some(matched),
+                        None,
+                        at.end(),
+                        pending,
+                    )
+                })?;
                 continue;
             }
             let statements = self.destructure(&syntax, &parameter.name.text, &ty)?;

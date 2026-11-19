@@ -261,14 +261,36 @@ impl Spec {
 /// A breakpoint and the steps it pauses at in the compiled program.
 #[derive(Clone, Debug)]
 pub(super) struct Point {
+    /// What names this breakpoint while its line moves: the revision of
+    /// the breakpoints that set it.
+    pub id: u64,
     pub spec: Spec,
     pub at: Vec<Position>,
 }
 
-/// A breakpoint set on `spec` in the program `stops` holds, or why it
+impl Point {
+    /// The breakpoint as the breakpoints file and its events list it: its
+    /// spec's fields and its `id`.
+    pub fn to_json(&self) -> Value {
+        let mut listed = self.spec.to_json();
+        listed["id"] = json!(self.id);
+        listed
+    }
+
+    /// A breakpoint the breakpoints file lists, its steps not yet placed.
+    pub fn from_json(value: &Value) -> Option<Self> {
+        Some(Self {
+            id: value.get("id")?.as_u64()?,
+            spec: Spec::from_json(value)?,
+            at: Vec::new(),
+        })
+    }
+}
+
+/// A breakpoint `id` set on `spec` in the program `stops` holds, or why it
 /// can't be. Without `stops`, the program hasn't compiled yet and the
 /// breakpoint waits for it.
-pub(super) fn set(spec: Spec, stops: Option<&Stops>) -> Result<Point, String> {
+pub(super) fn set(id: u64, spec: Spec, stops: Option<&Stops>) -> Result<Point, String> {
     let spec = match spec {
         Spec::Line { file, line, .. } => {
             let text = std::fs::read_to_string(&file)
@@ -290,6 +312,7 @@ pub(super) fn set(spec: Spec, stops: Option<&Stops>) -> Result<Point, String> {
     };
     let Some(stops) = stops else {
         return Ok(Point {
+            id,
             spec,
             at: Vec::new(),
         });
@@ -308,11 +331,12 @@ pub(super) fn set(spec: Spec, stops: Option<&Stops>) -> Result<Point, String> {
             }
         });
     }
-    Ok(Point { spec, at })
+    Ok(Point { id, spec, at })
 }
 
 /// `point` in a program compiled again: its line moved to where its text
-/// is now, and its steps there. `None` when its line's text is gone.
+/// is now, and its steps there, under the same id. `None` when its line's
+/// text is gone.
 pub(super) fn moved(point: &Point, stops: &Stops) -> Option<Point> {
     let spec = match &point.spec {
         Spec::Line { file, line, text } => {
@@ -328,6 +352,7 @@ pub(super) fn moved(point: &Point, stops: &Stops) -> Option<Point> {
         spec @ Spec::Function { .. } => spec.clone(),
     };
     Some(Point {
+        id: point.id,
         at: positions(&spec, stops),
         spec,
     })
