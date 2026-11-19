@@ -12,8 +12,10 @@
 // the page keeps running its timers while it waits, and the pause answers
 // a read of each frame, an `eval`, a step and a continue, after which the
 // loop pauses again on its next turn and runs on once cleared. Then, in a
-// fresh instance, iced's counter answers a read of its `view` at the view
-// a click runs, with no pause. CHROME names the browser when it is not in
+// fresh instance, `hello` says a pause can wait, and a program held before
+// its run pauses at a breakpoint the page set meanwhile on its first
+// statement. Then iced's counter answers a read of its `view` at the view
+// a click runs, with no pause, and names a crate value without `Debug`. CHROME names the browser when it is not in
 // the usual place.
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -54,8 +56,9 @@ fn main() {
 `;
 
 /**
- * iced's counter example, as the universe covers it, its `view` with a
- * binding of its own, which no other function of it makes.
+ * iced's counter example, as the universe covers it, its `view` with
+ * bindings of its own, which no other function of it makes: a number, and
+ * a crate value whose type has no `Debug`.
  */
 const COUNTER = `use iced::Center;
 use iced::widget::{Widget, button, column, text};
@@ -89,10 +92,11 @@ impl Counter {
 
     fn view(&self) -> impl Widget<Message> {
         let shown = self.value;
+        let lower = button("Decrement").on_press(Message::Decrement);
         column![
             button("Increment").on_press(Message::Increment),
             text(shown).size(50),
-            button("Decrement").on_press(Message::Decrement)
+            lower
         ]
         .padding(20)
         .align_x(Center)
@@ -242,12 +246,34 @@ try {
   await until("more turns", `output.length > ${turns}`, 5000);
   check(true, "cleared and continued, main loops on");
 
+  // A held start (#2304): hello says up front that a pause can wait, and a
+  // program held before `run` waits at its first statement while the page
+  // sets a breakpoint there, then pauses on it once released.
+  await open();
+  const hello = await ask({ op: "hello" });
+  check(hello.debugger === true && hello.pause === true, "hello says Chrome's pause can wait", hello);
+  check((await ask({ op: "hold" })).held === true, "a hold before the run holds it");
+  await evaluate(`start(${JSON.stringify(LOOPING)})`);
+  await sleep(200);
+  check(await evaluate(`output === ""`), "the held program runs nothing", await evaluate(`output`));
+  const first = await ask({ op: "break", file: ROOT, line: 12 });
+  check(first.set?.text === "let mut turn = 0;", "a breakpoint goes on its first statement while held", first);
+  check(JSON.stringify(await ask({ op: "release" })) === `{"released":true}`, "release answers at once");
+  const begun = await ask({ name: "nothing" });
+  check(begun.paused?.line === 12 && begun.paused?.reason === "breakpoint", "and it pauses there once released", begun);
+  check((await ask({ op: "hold" })).held === false, "a hold once it runs holds nothing");
+  await ask({ op: "clear" });
+  await ask({ op: "continue" });
+  await until("its turns once released", `output.includes("turn 2:")`, 5000);
+  check(true, "cleared and continued, the released program loops");
+
   // iced's counter: a read of its view answered at the view a click runs.
   await open();
   check(!(await evaluate(`start(${JSON.stringify(COUNTER)})`)), "iced's run hands its loop to the page");
   await until("the counter's canvas", `!!document.querySelector("canvas")`);
   await sleep(500);
   const read = evaluate(`ask({ name: "shown" })`);
+  const crate = evaluate(`ask({ name: "lower" })`);
   // The Increment button, at the top of the column inside its padding.
   const box = await evaluate(`(() => { const r = document.querySelector("canvas").getBoundingClientRect(); return { x: r.x + 60, y: r.y + 35 }; })()`);
   for (const type of ["mouseMoved", "mousePressed", "mouseReleased"]) {
@@ -256,6 +282,10 @@ try {
   const view = await Promise.race([read, sleep(10000).then(() => ({ timedOut: "no view ran after the click" }))]);
   check(view.reached === true && view.function?.endsWith("view") && !view.paused, "inspect on iced's view answers without a pause", view);
   check(value(view, "shown") === "1", "and reads the view's binding after the click's update", view);
+  const lower = (await crate).bindings?.find((binding: { name: string }) => binding.name === "lower");
+  // The runner names it, as a native one does: its type has no `Debug`, or
+  // the native call the view runs in holds the program's crate values.
+  check(/doesn't implement `Debug`|can't be read at this step/.test(String(lower?.error ?? "")), "a crate value without Debug says why it has no text (#2304)", lower);
 } catch (error) {
   check(false, String(error));
 } finally {

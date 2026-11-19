@@ -908,3 +908,48 @@ fn a_debugged_program_pauses_two_calls_deep_and_evaluates_where_it_is() {
     assert_eq!(ask(json!({ "op": "continue" })), json!({ "paused": null }));
     assert_eq!(running.join().unwrap(), 0);
 }
+
+/// A program a hosted debugger holds at its start, as a page holds one
+/// while it sets its breakpoints (#2304): it waits through its host for
+/// the release, and a breakpoint set meanwhile on its first statement
+/// pauses it there.
+#[cfg(feature = "browser-debugger")]
+#[test]
+fn a_held_program_waits_through_its_host_for_the_release() {
+    use serde_json::json;
+    let host = std::sync::Arc::new(Suspending {
+        woken: std::sync::Mutex::new(false),
+        changed: std::sync::Condvar::new(),
+    });
+    let inspector = crate::inspect::Inspector::hosted(host, |_: &serde_json::Value| {});
+    let ask = |request: serde_json::Value| {
+        let (reply, answer) = std::sync::mpsc::channel();
+        inspector.ask(&request, move |value| {
+            let _ = reply.send(value);
+        });
+        answer.recv().unwrap()
+    };
+    let file = "/universe-held/src/main.rs";
+    inspector.hold();
+    let attached = inspector.clone();
+    let (loaded, ready) = std::sync::mpsc::channel();
+    let running = std::thread::spawn(move || {
+        let mut universe = Universe::new(&Plain, Access::none()).unwrap();
+        assert!(universe.attach(attached));
+        let program = universe
+            .program(PathBuf::from(file), DEBUGGED, Vec::new())
+            .unwrap();
+        loaded.send(()).unwrap();
+        program.run()
+    });
+    ready.recv().unwrap();
+    let set = ask(json!({ "op": "break", "file": file, "line": 13 }));
+    assert_eq!(set["set"]["text"], "let mut turn = 0;", "{set}");
+    assert_eq!(ask(json!({ "op": "release" })), json!({ "released": true }));
+    let paused = ask(json!({ "name": "nothing" }));
+    assert_eq!(paused["paused"]["line"], 13, "{paused}");
+    assert_eq!(paused["paused"]["reason"], "breakpoint", "{paused}");
+    ask(json!({ "op": "clear" }));
+    assert_eq!(ask(json!({ "op": "continue" })), json!({ "paused": null }));
+    assert_eq!(running.join().unwrap(), 0);
+}

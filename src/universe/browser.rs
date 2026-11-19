@@ -148,6 +148,13 @@ pub(super) fn suspend(promise: &js_sys::Promise) -> Result<(), JsValue> {
     suspended.map(drop)
 }
 
+/// Whether the prepared universe has run no program yet: what a hold
+/// before `run` needs.
+#[cfg(feature = "browser-debugger")]
+pub(super) fn unstarted() -> bool {
+    UNIVERSE.with_borrow(Option::is_some)
+}
+
 /// Whether this call runs on `main`'s stack, which [`suspend`] suspends.
 #[cfg(feature = "browser-debugger")]
 pub(super) fn on_main_stack() -> bool {

@@ -223,6 +223,11 @@ pub(crate) fn rendering_key<B: crate::surface::Runner>(
     digest.update(profile.owner_fingerprint());
     digest.update(semantic);
     digest.update([u8::from(crate::universe::enabled())]);
+    // A runner with the browser debugger has a `main` of its own; one
+    // without it keeps the key it always had.
+    if crate::universe::debugged() {
+        digest.update(b"browser-debugger");
+    }
     let limits = request.allocation.limits();
     digest.update(u64::try_from(limits.0).unwrap_or(u64::MAX).to_le_bytes());
     digest.update(u64::try_from(limits.1).unwrap_or(u64::MAX).to_le_bytes());

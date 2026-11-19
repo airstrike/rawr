@@ -2,11 +2,15 @@
 // syntax classes (lib/highlight.ts), so its colours are the docs' in either
 // theme. Its look comes from the theme's CSS variables, so a change of theme
 // needs nothing here.
+//
+// While the debugger is on (setDebugging), the editor shows line numbers: a
+// click on one sets or clears a breakpoint there, each breakpoint's number
+// is marked, and the line the program is paused at is highlighted.
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { rustLanguage } from "@codemirror/lang-rust";
 import { LanguageSupport, bracketMatching, indentUnit, syntaxHighlighting, syntaxTree } from "@codemirror/language";
-import { EditorState, RangeSetBuilder } from "@codemirror/state";
-import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate, drawSelection, keymap } from "@codemirror/view";
+import { Compartment, EditorState, RangeSet, RangeSetBuilder, StateEffect, StateField } from "@codemirror/state";
+import { Decoration, type DecorationSet, EditorView, GutterMarker, ViewPlugin, type ViewUpdate, drawSelection, gutterLineClass, keymap, lineNumbers } from "@codemirror/view";
 import { eachRefined, highlighter, rustTags } from "../lib/highlight.ts";
 
 // The static highlighter's grammar: lezer's Rust with highlight.ts's tags.
@@ -58,7 +62,71 @@ const look = EditorView.theme({
     backgroundColor: "color-mix(in srgb, var(--red) 28%, transparent)",
   },
   ".cm-matchingBracket, &.cm-focused .cm-matchingBracket": { backgroundColor: "transparent", outline: "1px solid var(--quiet)" },
+  ".cm-gutters": { backgroundColor: "var(--wash)", color: "var(--quiet)", borderRight: "1px solid var(--grid)" },
+  ".cm-lineNumbers .cm-gutterElement": { padding: "0 6px 0 14px", cursor: "pointer", position: "relative" },
+  ".cm-lineNumbers .cm-gutterElement.cm-breakpoint": { color: "var(--ink)" },
+  ".cm-lineNumbers .cm-gutterElement.cm-breakpoint::before": {
+    content: '""', position: "absolute", left: "3px", top: "50%", width: "7px", height: "7px", marginTop: "-3.5px", borderRadius: "50%", backgroundColor: "var(--red)",
+  },
+  ".cm-paused": { backgroundColor: "color-mix(in srgb, var(--red) 16%, transparent)" },
 });
+
+/** The debugger's lines: its breakpoints, and where the program is paused. */
+interface Marks {
+  breakpoints: number[];
+  paused: number | null;
+}
+
+const marked = StateEffect.define<Marks>();
+const marksField = StateField.define<Marks>({
+  create: () => ({ breakpoints: [], paused: null }),
+  update: (marks, transaction) => transaction.effects.reduce((marks, effect) => (effect.is(marked) ? effect.value : marks), marks),
+});
+
+class Breakpoint extends GutterMarker {
+  elementClass = "cm-breakpoint";
+}
+const breakpoint = new Breakpoint();
+const pausedLine = Decoration.line({ class: "cm-paused" });
+
+/** A line's start, or null past the document's end. */
+function lineStart(state: EditorState, line: number): number | null {
+  return line >= 1 && line <= state.doc.lines ? state.doc.line(line).from : null;
+}
+
+/** The debugger's gutter and highlight, which call `toggle` with a clicked line's number. */
+function debugging(toggle: (line: number) => void) {
+  return [
+    lineNumbers({
+      domEventHandlers: {
+        mousedown: (view, block) => {
+          toggle(view.state.doc.lineAt(block.from).number);
+          return true;
+        },
+      },
+    }),
+    gutterLineClass.compute([marksField], (state) => {
+      const starts = state.field(marksField).breakpoints.map((line) => lineStart(state, line)).filter((at) => at !== null);
+      return RangeSet.of([...new Set(starts)].sort((a, b) => a - b).map((at) => breakpoint.range(at)));
+    }),
+    EditorView.decorations.compute([marksField], (state) => {
+      const at = lineStart(state, state.field(marksField).paused ?? 0);
+      return at === null ? Decoration.none : Decoration.set([pausedLine.range(at)]);
+    }),
+  ];
+}
+
+const debugCompartment = new Compartment();
+
+/** Turn the debugger's gutter on, its clicks going to `toggle`, or off with null. */
+export function setDebugging(view: EditorView, toggle: ((line: number) => void) | null): void {
+  view.dispatch({ effects: debugCompartment.reconfigure(toggle ? debugging(toggle) : []) });
+}
+
+/** Mark `breakpoints` and the line the program is `paused` at. */
+export function setMarks(view: EditorView, breakpoints: number[], paused: number | null): void {
+  view.dispatch({ effects: marked.of({ breakpoints, paused }) });
+}
 
 export interface EditorOptions {
   parent: HTMLElement;
@@ -82,6 +150,8 @@ export function createEditor({ parent, doc, onChange, onRun }: EditorOptions): E
         rust,
         syntaxHighlighting(highlighter),
         refinement,
+        marksField,
+        debugCompartment.of([]),
         look,
         EditorView.contentAttributes.of({ "aria-label": "Code", autocapitalize: "off", autocorrect: "off", spellcheck: "false" }),
         EditorView.updateListener.of((update) => {
