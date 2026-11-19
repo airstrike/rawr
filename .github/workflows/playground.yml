@@ -59,16 +59,24 @@ jobs:
         id: key
         run: echo "deps=$(scripts/deps-key.sh)" >> "$GITHUB_OUTPUT"
 
-      - name: Restore the wasm build
+      # Keyed by commit and restored from the newest earlier save, so each run
+      # starts from the last one's build and recompiles only what changed:
+      # rawr-import and its driver in target/release, and both universes in
+      # target/wasm. A key that never changed would restore one stale build
+      # and recompile all of rawr's own crates every run.
+      - name: Restore the builds
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
+            target/release
             target/wasm
-          key: web-${{ steps.key.outputs.deps }}
-          restore-keys: web-
+          key: web-${{ steps.key.outputs.deps }}-${{ github.sha }}
+          restore-keys: |
+            web-${{ steps.key.outputs.deps }}-
+            web-
 
       # The browser's universe (#1395) is built by rawr-import, which reads
       # the universe with its driver on the extraction nightly, as the bot
