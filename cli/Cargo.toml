@@ -19,6 +19,7 @@ toml_edit = { package = "rawr-toml-edit", path = "../toml/edit", default-feature
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.27.1", features = ["fs", "process", "signal", "user"] }
+rawr-tui = { path = "../shells/tui" }
 
 [[bin]]
 name = "rawr"
