@@ -6618,10 +6618,6 @@ fn language_slice_and_rest_patterns() {
             "pattern requires at least 2 elements but array has 1",
         ),
         (
-            "fn f(v: &[i64]) -> i64 { match v { [] | [_, ..] => 0, [..] => 1 } }",
-            "unreachable",
-        ),
-        (
             "fn f(v: &[i64]) -> i64 { let [a, b] = v; *a }",
             "refutable pattern",
         ),
@@ -6637,6 +6633,13 @@ fn language_slice_and_rest_patterns() {
         let error = rejected(&format!("{source} pub fn run() -> i64 {{ 0 }} run()"));
         assert!(error.contains(expected), "{source}: {error}");
     }
+    // An arm the arms before it cover is checked, never runs and is no
+    // error, as rustc only warns of it.
+    let unreachable = run(
+        "fn f(v: &[i64]) -> i64 { match v { [] | [_, ..] => 0, [..] => 1 } } \
+         pub fn run() -> i64 { f(&[]) + f(&[1, 2]) } run()",
+    );
+    assert_eq!(unreachable, 0);
 }
 
 #[test]
