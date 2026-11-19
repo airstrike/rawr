@@ -5196,7 +5196,9 @@
     {"issue":2271,"title":"eval fails with E0308 on a view returning `impl Widget<Message>` built by `column![…]`","state":"open","category":"Health"},
     {"issue":2272,"title":"A step pauses on statements the lowering wrote: a `&mut` parameter's signature line, or the same line again","state":"open","category":"Health"},
     {"issue":2273,"title":"A Zed extension that registers `rawr dap` as a debug adapter","state":"open","category":"Health"},
-    {"issue":2274,"title":"DAP launch holds the program until configurationDone","state":"open","category":"Health"}
+    {"issue":2274,"title":"DAP launch holds the program until configurationDone","state":"open","category":"Health"},
+    {"issue":2275,"title":"The VS Code debugger's F5 without a launch.json runs the workspace's root crate, not the active file's","state":"open","category":"Health"},
+    {"issue":2276,"title":"A marked root's native modules can't call marked code: lift D510's trampolines to a marked root","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -6241,7 +6243,8 @@
             {"number":1956,"title":"A runner's holder of a script type lacks the Eq, Hash and Ord the type derives or writes, but for fieldless Copy enums","state":"open"},
             {"number":2212,"title":"A generic impl's trait method that takes a witness can't be called through dynamic dispatch","state":"open"},
             {"number":1592,"title":"A value only a generic or std-type impl covers can't coerce to a crate trait's &dyn","state":"open"},
-            {"number":2241,"title":"A program's own `#[derive(thiserror::Error)]` is refused as an impl of an unknown trait path","state":"open"}
+            {"number":2241,"title":"A program's own `#[derive(thiserror::Error)]` is refused as an impl of an unknown trait path","state":"open"},
+            {"number":2276,"title":"A marked root's native modules can't call marked code: lift D510's trampolines to a marked root","state":"open"}
           ]
         },
         {
@@ -7965,7 +7968,8 @@
           "issues": [
             {"number":514,"title":"Debug adapter: an editor reads a running program's values","state":"closed"},
             {"number":2273,"title":"A Zed extension that registers `rawr dap` as a debug adapter","state":"open"},
-            {"number":2274,"title":"DAP launch holds the program until configurationDone","state":"open"}
+            {"number":2274,"title":"DAP launch holds the program until configurationDone","state":"open"},
+            {"number":2275,"title":"The VS Code debugger's F5 without a launch.json runs the workspace's root crate, not the active file's","state":"open"}
           ],
           "milestone": "0.5"
         },

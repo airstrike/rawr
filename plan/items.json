@@ -2273,6 +2273,8 @@
     {"t":"T2271","issue":2271,"title":"T2271: eval fails with E0308 on a view returning `impl Widget<Message>` built by `column![…]`","state":"open","category":"Health","labels":["health"],"gantt":{"group":"debug","row":"repl"},"decisions":[],"commit":null,"release":null},
     {"t":"T2272","issue":2272,"title":"T2272: A step pauses on statements the lowering wrote: a `&mut` parameter's signature line, or the same line again","state":"open","category":"Health","labels":["health"],"gantt":{"group":"debug","row":"read-values"},"decisions":[],"commit":null,"release":null},
     {"t":"T2273","issue":2273,"title":"T2273: A Zed extension that registers `rawr dap` as a debug adapter","state":"open","category":"Health","labels":["health"],"gantt":{"group":"debug","row":"editor-adapter"},"decisions":[],"commit":null,"release":null},
-    {"t":"T2274","issue":2274,"title":"T2274: DAP launch holds the program until configurationDone","state":"open","category":"Health","labels":["health"],"gantt":{"group":"debug","row":"editor-adapter"},"decisions":[],"commit":null,"release":null}
+    {"t":"T2274","issue":2274,"title":"T2274: DAP launch holds the program until configurationDone","state":"open","category":"Health","labels":["health"],"gantt":{"group":"debug","row":"editor-adapter"},"decisions":[],"commit":null,"release":null},
+    {"t":"T2275","issue":2275,"title":"T2275: The VS Code debugger's F5 without a launch.json runs the workspace's root crate, not the active file's","state":"open","category":"Health","labels":["health"],"gantt":{"group":"debug","row":"editor-adapter"},"decisions":[],"commit":null,"release":null},
+    {"t":"T2276","issue":2276,"title":"T2276: A marked root's native modules can't call marked code: lift D510's trampolines to a marked root","state":"open","category":"No glue (D593)","labels":["no glue"],"gantt":{"group":"no-glue","row":"program-impls-cross"},"decisions":["D510","D461"],"commit":null,"release":null}
   ]
 }
