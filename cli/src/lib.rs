@@ -14,6 +14,7 @@ pub mod base;
 pub mod cargo;
 pub mod cells;
 pub mod color;
+pub mod dap;
 pub mod diagnostic;
 pub mod events;
 pub mod harness;
@@ -70,6 +71,7 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
             create(path, template.as_deref(), &arguments)
         }
         Ok(Request::Mcp { path }) => serve(path),
+        Ok(Request::Dap { path }) => debug(path),
         Ok(Request::Init {
             claude,
             codex,
@@ -225,6 +227,11 @@ enum Request {
     New(New),
     /// `rawr mcp [path]`: serve agents, with relative paths from `path`.
     Mcp {
+        path: Option<PathBuf>,
+    },
+    /// `rawr dap [path]`: serve an editor's debugger, with relative paths
+    /// from `path`.
+    Dap {
         path: Option<PathBuf>,
     },
     /// `rawr init [--claude] [--codex] [path]`.
@@ -407,7 +414,7 @@ fn parse_command(arguments: &[OsString]) -> Result<Request, String> {
         }),
         Some("-h" | "--help" | "help") => Ok(Request::Help),
         Some("-V" | "--version") => Ok(Request::Version),
-        Some("run" | "check" | "doctor" | "mcp" | "init") if asks_help => Ok(Request::Help),
+        Some("run" | "check" | "doctor" | "mcp" | "dap" | "init") if asks_help => Ok(Request::Help),
         Some("run") => path(&arguments[1..]).map(|path| Request::Program {
             check: false,
             path,
@@ -430,6 +437,7 @@ fn parse_command(arguments: &[OsString]) -> Result<Request, String> {
         Some("doctor") => path(&arguments[1..]).map(|path| Request::Doctor { path }),
         Some("new") => parse_new(&arguments[1..]).map(Request::New),
         Some("mcp") => path(&arguments[1..]).map(|path| Request::Mcp { path }),
+        Some("dap") => path(&arguments[1..]).map(|path| Request::Dap { path }),
         Some("init") => parse_init(&arguments[1..]),
         Some(word) if word.starts_with('-') => Err(format!("unknown argument `{word}`")),
         Some(_) if is_path(&arguments[0]) => path(arguments).map(|path| Request::Program {
@@ -476,6 +484,7 @@ fn help(installed: &[layer::Installed]) -> String {
          rawr new <path>               Create a crate with a marked `src/main.rs`\n  \
          rawr doctor [path]            Report on the environment and the project\n  \
          rawr mcp [path]               Serve coding agents over MCP on stdio\n  \
+         rawr dap [path]               Serve an editor's debugger over DAP on stdio\n  \
          rawr init [--claude] [--codex] [path]\n                                \
          Register `rawr mcp` in the project's agent config\n",
     );
@@ -885,6 +894,24 @@ fn serve(path: Option<PathBuf>) -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("{}: rawr mcp: {error}", color::label(color::Level::Error));
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// `rawr dap [path]`.
+fn debug(path: Option<PathBuf>) -> ExitCode {
+    let root = match path.map_or_else(std::env::current_dir, Ok) {
+        Ok(root) => std::fs::canonicalize(&root).unwrap_or(root),
+        Err(error) => {
+            eprintln!("{}: rawr dap: {error}", color::label(color::Level::Error));
+            return ExitCode::FAILURE;
+        }
+    };
+    match dap::serve(root) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("{}: rawr dap: {error}", color::label(color::Level::Error));
             ExitCode::FAILURE
         }
     }

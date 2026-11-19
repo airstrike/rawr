@@ -19,6 +19,8 @@
 //!   `{"reached": false, "paused": .., "depth": ..}` when the program is
 //!   paused where the request doesn't match. A request waits for its step
 //!   as long as that takes; the tool closing the socket gives it up.
+//!   With `"children": true`, each value also lists its parts, as its
+//!   `{:?}` text writes them (see [`parts`]); so does an `eval` answer.
 //!
 //! A `&mut` parameter or `self`, which the compiled function holds as its
 //! receiver, reads under the name the program gave it (#534). A caller's
@@ -42,6 +44,9 @@
 //!   answered where the step pauses: `{"paused": ..}`; `{"op": "continue"}`,
 //!   answered once it runs on: `{"paused": null}`; either `{"error": "not
 //!   paused"}` on a program that isn't.
+//! - `{"op": "pause"}` on a running program: answered at once, `{"paused":
+//!   null}`, and it pauses at the next statement it runs, with the reason
+//!   `pause`; on a paused one, `{"paused": ..}` where it is.
 //!
 //! It also sends the program's window input (#989), with `{"op": "input",
 //! "action": ..}`: a pointer move, a click, a drag, a scroll, a key press or
@@ -85,6 +90,7 @@ mod evaluate;
 mod input;
 mod interrupt;
 pub mod menu;
+mod parts;
 mod screenshot;
 mod stops;
 
@@ -118,10 +124,39 @@ pub struct Binding {
     pub value: Result<String, String>,
 }
 
+/// Whether an answer splits each value into its parts, for a tool that
+/// shows values as trees.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Shape {
+    Text,
+    Parts,
+}
+
+impl Shape {
+    fn of(request: &Value) -> Self {
+        if request.get("children").and_then(Value::as_bool) == Some(true) {
+            Self::Parts
+        } else {
+            Self::Text
+        }
+    }
+
+    /// `answer` with `children` beside its `value`, when this shape asks
+    /// for parts and the value has them.
+    fn add(self, mut answer: Value) -> Value {
+        if self == Self::Parts
+            && let Some(children) = answer["value"].as_str().and_then(parts::of)
+        {
+            answer["children"] = Value::from(children);
+        }
+        answer
+    }
+}
+
 impl Binding {
-    fn to_json(&self) -> Value {
+    fn to_json(&self, shape: Shape) -> Value {
         match &self.value {
-            Ok(text) => json!({ "name": self.name, "value": text }),
+            Ok(text) => shape.add(json!({ "name": self.name, "value": text })),
             Err(reason) => json!({ "name": self.name, "error": reason }),
         }
     }
@@ -646,6 +681,7 @@ struct Request {
     frame: usize,
     /// Code to evaluate where the program is paused (#490).
     code: Option<String>,
+    shape: Shape,
     reply: mpsc::Sender<Value>,
 }
 
@@ -658,6 +694,9 @@ enum Step {
     Into,
     /// To the next statement in a function it returns to.
     Out,
+    /// To the next statement it runs, wherever that is: a tool asked it to
+    /// pause.
+    Pause,
 }
 
 enum Resume {
@@ -926,6 +965,7 @@ impl Shared {
             Some("break") => self.set(request),
             Some("clear") => self.clear(request),
             Some("continue") => self.resume(Resume::Continue, gone),
+            Some("pause") => self.interrupt(),
             Some("step") => self.resume(
                 Resume::Step(match request.get("kind").and_then(Value::as_str) {
                     Some("into") => Step::Into,
@@ -1009,6 +1049,7 @@ impl Shared {
                 .and_then(|frame| usize::try_from(frame).ok())
                 .unwrap_or(0),
             code: text("code"),
+            shape: Shape::of(request),
             reply,
         });
         self.wake.store(true, Ordering::Release);
@@ -1120,6 +1161,29 @@ impl Shared {
         json!({ "paused": state.last })
     }
 
+    /// Pause the running program at the next statement it runs, answered
+    /// at once: the pause it is in already, if any. A program waiting in
+    /// native code, as a window's event loop, pauses when that code calls
+    /// into it again.
+    fn interrupt(&self) -> Value {
+        let mut state = self.state();
+        if state.paused.is_some() {
+            return json!({ "paused": state.paused });
+        }
+        state.stepping = Some(Stepping {
+            step: Step::Pause,
+            depth: 0,
+            position: Position::NONE,
+            file: String::new(),
+            line: 0,
+            anywhere: true,
+        });
+        self.stepping.store(true, Ordering::Release);
+        // The engine calls back at its next step, which goes on stepping.
+        self.wake.store(true, Ordering::Release);
+        json!({ "paused": null })
+    }
+
     /// Break at every breakpoint's steps.
     fn armed(&self, state: &State) {
         self.breaks.set(
@@ -1182,8 +1246,14 @@ impl Shared {
                         self.state()
                             .stepping
                             .as_ref()
-                            .is_some_and(|stepping| ends(stepping, depth, position, &stop))
-                            .then_some("step")
+                            .filter(|stepping| ends(stepping, depth, position, &stop))
+                            .map(|stepping| {
+                                if stepping.step == Step::Pause {
+                                    "pause"
+                                } else {
+                                    "step"
+                                }
+                            })
                     };
                     if let Some(reason) = reason {
                         self.pause(context, position, stop, reason);
@@ -1375,7 +1445,9 @@ impl Shared {
         };
         match program {
             #[cfg(feature = "sync")]
-            Some(program) => evaluate::answer(context, &program, position, code),
+            Some(program) => request
+                .shape
+                .add(evaluate::answer(context, &program, position, code)),
             _ => {
                 json!({ "error": "this run kept none of the program's files, which compiling code into it takes" })
             }
@@ -1410,7 +1482,10 @@ impl Shared {
             "file": location.as_ref().map(|(file, _)| file),
             "line": location.as_ref().map(|(_, line)| line),
             "function": function,
-            "bindings": found.iter().map(Binding::to_json).collect::<Vec<_>>(),
+            "bindings": found
+                .iter()
+                .map(|binding| binding.to_json(request.shape))
+                .collect::<Vec<_>>(),
             "unread": unread,
             "frames": frames,
         }));
@@ -1494,6 +1569,7 @@ fn ends(stepping: &Stepping, depth: usize, position: Position, stop: &stops::Sto
         Step::Into => depth != stepping.depth || moved,
         Step::Over => depth < stepping.depth || depth == stepping.depth && moved,
         Step::Out => depth < stepping.depth,
+        Step::Pause => true,
     }
 }
 

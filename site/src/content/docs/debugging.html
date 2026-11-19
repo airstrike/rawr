@@ -1,0 +1,88 @@
+<meta name="description" content="Debug a rawr program from VS Code, Helix, Neovim or Zed with rawr dap: breakpoints, steps, the call stack, values field by field and evaluation, while a save still reloads the program.">
+<article>
+<h1>Debugging</h1>
+<p class="lede">Debug a rawr program from your editor: set breakpoints, step, read the call stack and expand values field by field, while each save still reloads the program.</p>
+<p><code>rawr dap</code> is a Debug Adapter Protocol server on stdio. It comes with <code>rawr</code> itself. Like <a href="/docs/agents"><code>rawr mcp</code></a>, it is one shell of the run&rsquo;s debugger session, so an editor and an agent can work on the same run at once.</p>
+
+<h2 id="what">What it does</h2>
+<ul>
+  <li><strong>Launch</strong> starts <code>rawr run</code> on <code>program</code>, a crate&rsquo;s directory or <code>Cargo.toml</code>, or one <code>.rs</code> file, with <code>args</code>. Relative paths start at <code>cwd</code>.</li>
+  <li><strong>Attach</strong> reaches a <code>rawr run</code> started in a terminal for <code>program</code>. A run started in a terminal has no debugger until a shell asks, so it restarts once with one.</li>
+  <li>Breakpoints go on lines and on functions. A line with no statement is refused, with why.</li>
+  <li>Next, step in and step out stop at the program&rsquo;s next statement. Pause stops a running program at the next statement it runs. A program waiting in a window&rsquo;s event loop pauses when the loop calls into it again.</li>
+  <li>The call stack names each frame by its Rust path, such as <code>counter::App::update</code>.</li>
+  <li>Variables show each binding as Rust&rsquo;s <code>{:?}</code> prints it. A struct, a tuple, a list or a map expands into its fields or items, and those expand in turn.</li>
+  <li>The Debug Console and watch expressions evaluate Rust where the program is paused, as if it were a block written just before the paused statement. rustc&rsquo;s rules for that line apply. See <a href="/docs/agents#break">eval</a>.</li>
+  <li>A save reloads the program as at a terminal. The Debug Console says when it reloaded, restarted or failed. Breakpoints follow their line&rsquo;s text across saves.</li>
+  <li>The program&rsquo;s output goes to the Debug Console.</li>
+</ul>
+
+<h2 id="vscode">VS Code</h2>
+<p>The Rawr extension in <code>editors/vscode-rawr</code> adds a debugger of type <code>rawr</code>. Package and install it:</p>
+<div class="block"><pre><code>cd editors/vscode-rawr
+npx @vscode/vsce package --skip-license --out rawr.vsix
+code --install-extension rawr.vsix</code></pre></div>
+<p>Press F5 in a Rawr file to run it, or add a configuration to <code>.vscode/launch.json</code>. The <em>Rawr: run</em> and <em>Rawr: attach</em> snippets write these:</p>
+<div class="block"><pre><code>{
+  "type": "rawr",
+  "request": "launch",
+  "name": "Rawr: run",
+  "program": "${workspaceFolder}"
+}</code></pre></div>
+<p>For attach, <code>"request": "attach"</code> with the same <code>program</code>. The <code>rawr.path</code> setting names the <code>rawr</code> command when it isn&rsquo;t on <code>PATH</code>.</p>
+
+<h2 id="neovim">Neovim</h2>
+<p>With <a href="https://github.com/mfussenegger/nvim-dap">nvim-dap</a>:</p>
+<div class="block"><pre><code>local dap = require("dap")
+dap.adapters.rawr = { type = "executable", command = "rawr", args = { "dap" } }
+dap.configurations.rust = dap.configurations.rust or {}
+table.insert(dap.configurations.rust,
+  { type = "rawr", request = "launch", name = "rawr run", program = "${workspaceFolder}" })
+table.insert(dap.configurations.rust,
+  { type = "rawr", request = "attach", name = "rawr attach", program = "${workspaceFolder}" })</code></pre></div>
+
+<h2 id="helix">Helix</h2>
+<p>In the project&rsquo;s <code>.helix/languages.toml</code>. It replaces Helix&rsquo;s debugger for Rust in that project only:</p>
+<div class="block"><pre><code>[[language]]
+name = "rust"
+
+[language.debugger]
+name = "rawr"
+transport = "stdio"
+command = "rawr"
+args = ["dap"]
+
+[[language.debugger.templates]]
+name = "rawr run"
+request = "launch"
+completion = [{ name = "program", completion = "filename", default = "." }]
+args = { program = "{0}" }
+
+[[language.debugger.templates]]
+name = "rawr attach"
+request = "attach"
+completion = [{ name = "program", completion = "filename", default = "." }]
+args = { program = "{0}" }</code></pre></div>
+<p>Then <code>:debug-start rawr run</code>, or <code>Space g</code> for the debug menu.</p>
+
+<h2 id="zed">Zed</h2>
+<p>Zed takes a debug adapter from an extension. An extension whose <code>extension.toml</code> declares <code>[debug_adapters.rawr]</code> answers <code>get_dap_binary</code> with the command <code>rawr</code> and the arguments <code>["dap"]</code>, over stdio. rawr ships no Zed extension yet. With one installed, <code>.zed/debug.json</code> names it:</p>
+<div class="block"><pre><code>[
+  { "label": "rawr run", "adapter": "rawr", "request": "launch", "program": "$ZED_WORKTREE_ROOT" },
+  { "label": "rawr attach", "adapter": "rawr", "request": "attach", "program": "$ZED_WORKTREE_ROOT" }
+]</code></pre></div>
+
+<h2 id="with-agents">With an agent on the same run</h2>
+<p>Every shell attached to a run hears each pause, resume and reload. An agent&rsquo;s <code>click</code> through <code>rawr mcp</code> that reaches a breakpoint stops the editor there too, and a <code>continue</code> from the editor lets the agent&rsquo;s program go on. The run&rsquo;s output reaches every shell when a shell started the run.</p>
+
+<h2 id="limits">Limits</h2>
+<ul>
+  <li>The protocol sees one thread: the one that runs the program&rsquo;s code.</li>
+  <li>Code in Rust dependencies runs whole. A step can&rsquo;t stop inside a crate&rsquo;s function, and its lines take no breakpoints.</li>
+  <li>A pause inside a call from native code, such as a window&rsquo;s event loop, holds that loop. The window doesn&rsquo;t redraw or take input until the program goes on.</li>
+  <li>Evaluation works only in the frame the program is paused in, the top of the stack.</li>
+  <li>A value whose <code>Debug</code> text isn&rsquo;t in the shapes the standard derives write, as a hand-written impl may print, shows whole, without fields.</li>
+  <li>A launch starts the program at once, so a breakpoint on a line that runs before the program&rsquo;s debugger is ready can be passed. Breakpoints in code that runs later, such as an app&rsquo;s <code>update</code>, are set in time.</li>
+  <li>Launch refuses a program that draws a terminal UI. Run it with <code>rawr run</code> in a terminal and attach.</li>
+</ul>
+</article>
