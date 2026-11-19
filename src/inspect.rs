@@ -89,8 +89,11 @@
 //! while the connection stays open, or a file, a line each.
 //!
 //! The breakpoints live in [`BREAKPOINTS`] beside the socket, as
-//! `{"revision": n, "breakpoints": [{"file", "line", "text"} or
-//! {"function"}]}`, so a program started again there has them. Each change
+//! `{"revision": n, "breakpoints": [{"id", "file", "line", "text"} or
+//! {"id", "function"}]}`, so a program started again there has them. A
+//! breakpoint's `id` is the revision that set it, and it keeps it while a
+//! compile moves its line, so a shell tells a moved one from a new one.
+//! Each change
 //! to them, a set, a clear that took one or a compile that moved one,
 //! writes that file and tells it as a `breakpoints` event with the same
 //! fields (#2278). The revision counts the changes, across restarts, so a
@@ -922,11 +925,7 @@ impl Inspector {
             .as_array()
             .into_iter()
             .flatten()
-            .filter_map(stops::Spec::from_json)
-            .map(|spec| stops::Point {
-                spec,
-                at: Vec::new(),
-            })
+            .filter_map(stops::Point::from_json)
             .collect();
         let shared = Arc::new(Shared {
             state: Mutex::new(State {
@@ -1271,13 +1270,18 @@ impl Shared {
             }
         };
         let mut state = self.state();
-        let point = match stops::set(spec, state.stops.as_deref()) {
+        // Named by the revision this set makes.
+        let mut point = match stops::set(state.revision + 1, spec, state.stops.as_deref()) {
             Ok(point) => point,
             Err(error) => return json!({ "error": error }),
         };
         let compiled = state.stops.is_some();
         let lines = lines(&state, &point);
-        let spec = point.spec.to_json();
+        // A breakpoint set again keeps its id.
+        if let Some(held) = state.points.iter().find(|held| held.spec == point.spec) {
+            point.id = held.id;
+        }
+        let spec = point.to_json();
         state.points.retain(|held| held.spec != point.spec);
         state.points.push(point);
         self.armed(&state);
@@ -1812,11 +1816,7 @@ impl Told {
 /// The breakpoints as [`BREAKPOINTS`] keeps them: `{"revision",
 /// "breakpoints"}`.
 fn told(state: &State) -> Value {
-    let specs: Vec<Value> = state
-        .points
-        .iter()
-        .map(|point| point.spec.to_json())
-        .collect();
+    let specs: Vec<Value> = state.points.iter().map(stops::Point::to_json).collect();
     json!({ "revision": state.revision, "breakpoints": specs })
 }
 
@@ -2439,7 +2439,7 @@ mod tests {
         let kept = || serde_json::from_slice::<Value>(&std::fs::read(&file).unwrap()).unwrap();
         assert_eq!(
             kept(),
-            json!({ "revision": 1, "breakpoints": [{ "function": "update" }] })
+            json!({ "revision": 1, "breakpoints": [{ "function": "update", "id": 1 }] })
         );
         let set = ask(
             &called.socket,
@@ -2461,7 +2461,7 @@ mod tests {
             &json!({ "op": "clear", "function": "update" }),
         );
         assert_eq!(cleared["revision"], 3, "{cleared}");
-        assert_eq!(cleared["left"], json!([{ "function": "view" }]));
+        assert_eq!(cleared["left"], json!([{ "function": "view", "id": 2 }]));
         assert_eq!(kept()["breakpoints"], cleared["left"]);
         let again = super::Inspector::bind(&called.directory.join("again")).unwrap();
         let state = again.0.state();
@@ -2800,6 +2800,47 @@ mod tests {
         });
         let _ = std::fs::remove_dir_all(&directory);
         seen
+    }
+
+    /// A compile that moves a breakpoint's line keeps the breakpoint's id,
+    /// so a shell tells it moved, not cleared and set again (#2299).
+    #[cfg(unix)]
+    #[test]
+    fn a_breakpoint_a_compile_moves_keeps_its_id() {
+        use serde_json::{json, Value};
+        let directory = std::env::temp_dir().join(format!("rawr-moved-id-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let file = directory.join("main.rs");
+        std::fs::write(&file, STEPPED).unwrap();
+        let socket = directory.join("s");
+        let inspector = super::Inspector::bind(&socket).unwrap();
+        let mut engine = crate::Engine::new();
+        inspector.attach(&mut engine);
+        let path = file.to_string_lossy().into_owned();
+        let compile = |source: &str| {
+            let executable = engine
+                .compile_executable(source)
+                .unwrap_or_else(|error| panic!("{error}"));
+            let located = executable.located().unwrap();
+            let (ast, _) = executable.into_ast_with_positions();
+            let at = path.clone();
+            inspector.locate_with(move |position| {
+                located.line(position).map(|(_, line)| (at.clone(), line))
+            });
+            inspector.compiled(&ast);
+        };
+        compile(STEPPED);
+        let set = ask(&socket, &json!({ "op": "break", "file": path, "line": 18 }));
+        assert!(set["set"]["id"].is_u64(), "{set}");
+        let moved = format!("\n{STEPPED}");
+        std::fs::write(&file, &moved).unwrap();
+        compile(&moved);
+        let kept: Value =
+            serde_json::from_slice(&std::fs::read(directory.join(super::BREAKPOINTS)).unwrap())
+                .unwrap();
+        assert_eq!(kept["breakpoints"][0]["line"], 19, "{kept}");
+        assert_eq!(kept["breakpoints"][0]["id"], set["set"]["id"], "{kept}");
+        let _ = std::fs::remove_dir_all(&directory);
     }
 
     #[cfg(unix)]

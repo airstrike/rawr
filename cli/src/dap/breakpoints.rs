@@ -1,10 +1,11 @@
 //! The breakpoints the client knows, each by the id the protocol gives it,
 //! kept in step with the list the session tells (#2278). A newer list than
 //! the client's tells it, as `breakpoint` events, the breakpoints another
-//! shell set (`new`) and cleared (`removed`). While the client's own
-//! `setBreakpoints` or `setFunctionBreakpoints` runs, the breakpoints it
-//! names are its own: their answer gives their ids, and no event tells
-//! them.
+//! shell set (`new`) and cleared (`removed`), and those a save moved to
+//! another line (`changed`), which the list names by the same inspector
+//! id. While the client's own `setBreakpoints` or `setFunctionBreakpoints`
+//! runs, the breakpoints it names are its own: their answer gives their
+//! ids, and no event tells them.
 
 use serde_json::{json, Value};
 
@@ -19,8 +20,27 @@ pub enum Point {
 /// What a newer list changed of the breakpoints the client knows.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Change {
-    New { id: u64, point: Point },
-    Removed { id: u64 },
+    New {
+        id: u64,
+        point: Point,
+    },
+    /// A breakpoint the client knows now on another line.
+    Changed {
+        id: u64,
+        point: Point,
+    },
+    Removed {
+        id: u64,
+    },
+}
+
+/// A breakpoint the client knows: the inspector's id for it in the list,
+/// where it is, and the protocol's id.
+#[derive(Debug)]
+struct Entry {
+    listed: Option<u64>,
+    point: Point,
+    id: u64,
 }
 
 /// The breakpoints the client knows, and the list they follow.
@@ -30,7 +50,7 @@ pub struct Known {
     revision: u64,
     /// The last id given.
     given: u64,
-    points: Vec<(Point, u64)>,
+    entries: Vec<Entry>,
     /// The breakpoints the client's request in flight sets or clears.
     asked: Vec<Point>,
 }
@@ -68,15 +88,19 @@ impl Known {
     /// The id the client knows `point` by.
     #[must_use]
     pub fn id(&self, point: &Point) -> Option<u64> {
-        self.points
+        self.entries
             .iter()
-            .find(|(known, _)| known == point)
-            .map(|(_, id)| *id)
+            .find(|entry| entry.point == *point)
+            .map(|entry| entry.id)
     }
 
     /// Follow `told`, `{"revision", "breakpoints": [..]}`, when it is newer
     /// than the list the client's breakpoints follow: the changes to tell
     /// the client, which leave out the breakpoints its own request names.
+    ///
+    /// A breakpoint the client knows is the list's entry with the same
+    /// inspector id, which a save that moved its line keeps, or else one
+    /// on the same place, which a request set again.
     pub fn follow(&mut self, told: &Value) -> Vec<Change> {
         let Some(revision) = told["revision"]
             .as_u64()
@@ -85,23 +109,56 @@ impl Known {
             return Vec::new();
         };
         self.revision = revision;
-        let now: Vec<Point> = told["breakpoints"]
+        let now: Vec<(Option<u64>, Point)> = told["breakpoints"]
             .as_array()
             .into_iter()
             .flatten()
-            .filter_map(Point::from_json)
+            .filter_map(|listed| Some((listed["id"].as_u64(), Point::from_json(listed)?)))
             .collect();
-        let mut changes = Vec::new();
-        let asked = &self.asked;
-        self.points.retain(|(point, id)| {
-            let kept = now.contains(point);
-            if !kept && !asked.contains(point) {
-                changes.push(Change::Removed { id: *id });
+        let mut found: Vec<Option<usize>> = self
+            .entries
+            .iter()
+            .map(|entry| {
+                let listed = entry.listed?;
+                now.iter().position(|(id, _)| *id == Some(listed))
+            })
+            .collect();
+        let mut taken = vec![false; now.len()];
+        for index in found.iter().flatten() {
+            taken[*index] = true;
+        }
+        for (slot, entry) in found.iter_mut().zip(&self.entries) {
+            if slot.is_none() {
+                *slot = (0..now.len()).find(|index| !taken[*index] && now[*index].1 == entry.point);
+                if let Some(index) = *slot {
+                    taken[index] = true;
+                }
             }
-            kept
-        });
-        for point in now {
-            if self.id(&point).is_some() {
+        }
+        let mut changes = Vec::new();
+        let mut entries = Vec::with_capacity(now.len());
+        for (entry, slot) in std::mem::take(&mut self.entries).into_iter().zip(found) {
+            let Some(index) = slot else {
+                if !self.asked.contains(&entry.point) {
+                    changes.push(Change::Removed { id: entry.id });
+                }
+                continue;
+            };
+            let (listed, point) = &now[index];
+            if *point != entry.point && !self.asked.contains(point) {
+                changes.push(Change::Changed {
+                    id: entry.id,
+                    point: point.clone(),
+                });
+            }
+            entries.push(Entry {
+                listed: *listed,
+                point: point.clone(),
+                id: entry.id,
+            });
+        }
+        for ((listed, point), taken) in now.into_iter().zip(taken) {
+            if taken {
                 continue;
             }
             self.given += 1;
@@ -111,8 +168,13 @@ impl Known {
                     point: point.clone(),
                 });
             }
-            self.points.push((point, self.given));
+            entries.push(Entry {
+                listed,
+                point,
+                id: self.given,
+            });
         }
+        self.entries = entries;
         changes
     }
 }
@@ -121,25 +183,19 @@ impl Change {
     /// The protocol's `breakpoint` event body, with lines as the client
     /// counts them by `line_out`.
     pub fn body(&self, line_out: impl Fn(u64) -> u64) -> Value {
-        match self {
-            Self::New {
-                id,
-                point: Point::Line { file, line },
-            } => json!({
-                "reason": "new",
-                "breakpoint": {
-                    "id": id, "verified": true,
-                    "source": { "path": file }, "line": line_out(*line),
-                },
-            }),
-            Self::New {
-                id,
-                point: Point::Function(_),
-            } => json!({ "reason": "new", "breakpoint": { "id": id, "verified": true } }),
+        let (reason, id, point) = match self {
+            Self::New { id, point } => ("new", id, point),
+            Self::Changed { id, point } => ("changed", id, point),
             Self::Removed { id } => {
-                json!({ "reason": "removed", "breakpoint": { "id": id, "verified": false } })
+                return json!({ "reason": "removed", "breakpoint": { "id": id, "verified": false } });
             }
+        };
+        let mut breakpoint = json!({ "id": id, "verified": true });
+        if let Point::Line { file, line } = point {
+            breakpoint["source"] = json!({ "path": file });
+            breakpoint["line"] = json!(line_out(*line));
         }
+        json!({ "reason": reason, "breakpoint": breakpoint })
     }
 }
 
@@ -198,5 +254,53 @@ mod tests {
             Change::Removed { id: own }.body(|line| line)["reason"],
             "removed"
         );
+    }
+
+    /// The list's entries as the inspector names them: `(id, line)`.
+    fn listed(revision: u64, entries: &[(u64, u64)]) -> serde_json::Value {
+        let specs: Vec<_> = entries
+            .iter()
+            .map(|(id, line)| json!({ "id": id, "file": "/p/src/main.rs", "line": line }))
+            .collect();
+        json!({ "revision": revision, "breakpoints": specs })
+    }
+
+    #[test]
+    fn a_breakpoint_listed_by_the_same_id_on_another_line_is_changed() {
+        let mut known = Known::default();
+        let changes = known.follow(&listed(1, &[(1, 3), (2, 5)]));
+        let ids: Vec<u64> = changes
+            .iter()
+            .map(|change| match change {
+                Change::New { id, .. } => *id,
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        // A save moves the first onto the second's old line and the second
+        // down: each keeps its id, matched by the inspector's.
+        assert_eq!(
+            known.follow(&listed(2, &[(1, 5), (2, 6)])),
+            [
+                Change::Changed {
+                    id: ids[0],
+                    point: line(5)
+                },
+                Change::Changed {
+                    id: ids[1],
+                    point: line(6)
+                },
+            ]
+        );
+        assert_eq!(
+            Change::Changed {
+                id: ids[0],
+                point: line(5)
+            }
+            .body(|line| line)["reason"],
+            "changed"
+        );
+        // Set again where it is, under a new inspector id: the same one.
+        assert_eq!(known.follow(&listed(3, &[(1, 5), (4, 6)])), []);
+        assert_eq!(known.id(&line(6)), Some(ids[1]));
     }
 }

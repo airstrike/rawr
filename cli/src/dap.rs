@@ -7,8 +7,9 @@
 //! [`crate::mcp::session`]. Breakpoints, steps, a pause, values and `eval`
 //! are the program's inspector's ([`rawr::inspect`]); the session's events
 //! become `stopped`, `continued`, `output` and `terminated`, and the
-//! breakpoints another shell sets or clears become `breakpoint` events. A save still
-//! reloads the program, and the adapter says so as output.
+//! breakpoints another shell sets or clears, and those a save moves,
+//! become `breakpoint` events. A save still reloads the program, and the
+//! adapter says so as output.
 //!
 //! The protocol counts one thread: the one that runs the program's code,
 //! which the inspector pauses. Frames are the inspector's, innermost first,
@@ -198,5 +199,46 @@ mod tests {
             removed["body"]["breakpoint"]["id"],
             new["body"]["breakpoint"]["id"]
         );
+    }
+
+    /// A save that moves a breakpoint to another line, which the session's
+    /// `breakpoints` event lists under the same inspector id, reaches the
+    /// client as `changed` with the id it knows, so the client keeps its
+    /// own breakpoint (#2299).
+    #[test]
+    fn a_breakpoint_a_save_moved_is_told_as_changed() {
+        let (session, other) = Session::running_at(Phase::Running);
+        let (written, read) = std::os::unix::net::UnixStream::pair().unwrap();
+        let adapter = Arc::new(Adapter::new(
+            PathBuf::from("/p"),
+            wire::Writer::new(written),
+        ));
+        let following = Arc::clone(&adapter);
+        let followed = std::thread::spawn(move || following.follow(&session));
+        let mut heard = BufReader::new(read);
+        let mut breakpoint = |revision: u64, line: u64| {
+            let listed =
+                json!({ "id": 3, "file": "/p/src/main.rs", "line": line, "text": "tick();" });
+            let event =
+                json!({ "event": "breakpoints", "revision": revision, "breakpoints": [listed] });
+            let told = json!({ "jsonrpc": "2.0", "method": "event", "params": event });
+            writeln!(&other, "{told}").unwrap();
+            // The next `breakpoint` event, past the run's own output.
+            loop {
+                let message = wire::read(&mut heard).unwrap().unwrap();
+                if message["event"] == "breakpoint" {
+                    return message["body"].clone();
+                }
+            }
+        };
+        let new = breakpoint(1, 7);
+        assert_eq!(new["reason"], "new", "{new}");
+        let changed = breakpoint(2, 9);
+        assert_eq!(changed["reason"], "changed", "{changed}");
+        assert_eq!(changed["breakpoint"]["id"], new["breakpoint"]["id"]);
+        assert_eq!(changed["breakpoint"]["line"], 9, "{changed}");
+        assert_eq!(changed["breakpoint"]["source"]["path"], "/p/src/main.rs");
+        other.shutdown(std::net::Shutdown::Both).unwrap();
+        followed.join().unwrap();
     }
 }
