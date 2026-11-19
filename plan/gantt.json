@@ -220,7 +220,7 @@
         {"id":"editor-integration","name":"Previews and editor saves","start":90,"size":3,"state":"next","note":"#[preview] items render nowhere since rawr-iced went (#1090). The editor could tell rawr run a file changed (#78).","issues":[78,1090,1095]},
         {"id":"misc","name":"Unplaced","start":90,"size":1,"state":"next","note":"Issues no row's outcome needs yet","issues":[210,221,825,1042,1142,1417,1511]},
         {"id":"time-travel","name":"Comet and time travel (stretch)","start":0,"size":2,"state":"next","note":"Off the Debugger milestone (D1055): rawr records no history and infers no purity. Where a program's own stack has a time machine, as iced's time-travel with comet, rawr lets it work under rawr run.","issues":[491,2261,2262]},
-        {"id":"playground-debugger","name":"Debugger in the playground (stretch)","start":0,"size":3,"state":"next","note":"An end goal, not a priority (Andy, D1057): the inspector in the browser universe behind a feature, pausing through JSPI, then the window shell built for wasm.","issues":[2268,2269,2270]}
+        {"id":"playground-debugger","name":"Debugger in the playground (stretch)","start":0,"size":3,"state":"now","note":"D1071: the playground stays as it is; a debugger icon swaps in a debugger build of the browser module (#2304). The inspector in the browser first (#2268), then the panel (#2270) and callback pauses (#2269).","issues":[2268,2269,2270,2304]}
       ]
     }
   ]
