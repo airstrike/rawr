@@ -11,14 +11,21 @@ speaks the Debug Adapter Protocol on stdio as one shell of the run's debugger
 session, so `rawr mcp` and a terminal can reach the same run at once.
 
 - **Launch** (`"request": "launch"`) starts `rawr run` on `program` with
-  `args`. A save still reloads the program; the Debug Console says so.
+  `args`. The program waits at its first statement until VS Code has set
+  the breakpoints, so a breakpoint in code that runs at startup is hit. A
+  save still reloads the program; the Debug Console says so.
 - **Attach** (`"request": "attach"`) reaches a `rawr run` started in a
   terminal for `program`.
 
 Breakpoints on lines and on functions, stepping over, in and out, pause, the
 call stack named by Rust paths, variables you can expand field by field, and
 evaluation in the paused function all go through rawr's inspector. Press F5
-with no `launch.json` to run the active Rawr file, or the workspace folder.
+with no `launch.json` to run the crate the active Rawr file belongs to, by
+the nearest `Cargo.toml` above it, or the file alone when there is none. An
+active `.rs` file that isn't marked runs nothing and says so. With no Rust
+file active, F5 runs the workspace folder.
+
+The extension's own tests run with `node --test` in this directory.
 
 ```json
 {
@@ -55,13 +62,13 @@ code --install-extension rawr.vsix
 Or, with no build step, link or copy this directory into the extension
 directory for your editor, then reload the editor window:
 
-- VS Code: `~/.vscode/extensions/rawr-0.0.3`
-- VS Codium: `~/.vscode-oss/extensions/rawr-0.0.3`
+- VS Code: `~/.vscode/extensions/rawr-0.0.4`
+- VS Codium: `~/.vscode-oss/extensions/rawr-0.0.4`
 
 For example, from this directory on macOS or Linux:
 
 ```sh
-ln -s "$(pwd)" ~/.vscode/extensions/rawr-0.0.3
+ln -s "$(pwd)" ~/.vscode/extensions/rawr-0.0.4
 ```
 
 Remove the linked or copied directory to uninstall it.

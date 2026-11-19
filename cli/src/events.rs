@@ -46,6 +46,12 @@ pub const DEBUG_EVENTS: &str = rawr::inspect::EVENTS;
 /// for the program, not before (#2266).
 pub const DEBUGGER_ON_REQUEST: &str = "RAWR_DEBUGGER_ON_REQUEST";
 
+/// Set by a shell that starts a run and sets its breakpoints before the
+/// program runs (#2274): the owner gives it to the first program it
+/// starts, which waits at its first statement until the shell releases it
+/// ([`rawr::inspect::HOLD`]).
+pub const HOLD: &str = rawr::inspect::HOLD;
+
 /// How often a watched process looks at its parent.
 const WATCH: Duration = Duration::from_millis(100);
 

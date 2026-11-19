@@ -126,6 +126,16 @@ pub struct Session {
     changed: Condvar,
 }
 
+/// How the program of a run [`Sessions::start`] starts goes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Entry {
+    /// It runs at once.
+    Run,
+    /// It waits at its first statement until the shell sends `release`,
+    /// once its breakpoints are in (#2274).
+    Hold,
+}
+
 /// The sessions, one per project root.
 #[derive(Debug, Default)]
 pub struct Sessions(Mutex<HashMap<PathBuf, Arc<Session>>>);
@@ -163,14 +173,16 @@ impl Sessions {
     }
 
     /// Start `rawr run <path> -- arguments` for `root`, replacing the
-    /// session the server started there. A run started elsewhere that
-    /// serves `root` is attached to instead.
+    /// session the server started there, its program going as `entry`
+    /// says. A run started elsewhere that serves `root` is attached to
+    /// instead.
     pub fn start(
         &self,
         root: &Path,
         path: &Path,
         arguments: &[String],
         stdin: Option<&str>,
+        entry: Entry,
         cancel: &process::Cancel,
     ) -> std::io::Result<Arc<Session>> {
         if let Some(old) = self.lock().remove(root) {
@@ -207,6 +219,9 @@ impl Sessions {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         session::hand(&mut command, &listener);
+        if entry == Entry::Hold {
+            command.env(crate::events::HOLD, "1");
+        }
         let mut child = process::spawn(&mut command)?;
         drop(listener);
         // The kernel holds the connection until the run accepts it.
