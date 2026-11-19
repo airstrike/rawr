@@ -368,17 +368,18 @@ fn entries<'c>(context: &'c EvalContext, frame: usize) -> Option<Result<Vec<Entr
 
 /// The bindings of frame `frame` where `context` is, the last of each name,
 /// in the order they were made; or one binding, `name`. Each prints by the
-/// type its function declares it with (#512), the frame at `line` of its
-/// file when that is known (0 when not). `Err` says why the frame's
-/// bindings can't be read. `None` when the program isn't that deep.
+/// type `function`, the frame's by the name the program runs it under,
+/// declares it with (#512), the frame at `line` of its file when that is
+/// known (0 when not). `Err` says why the frame's bindings can't be read.
+/// `None` when the program isn't that deep.
 fn read(
     context: &mut EvalContext,
+    function: Option<&crate::ImmutableString>,
     frame: usize,
     line: usize,
     name: Option<&str>,
 ) -> Option<Result<Vec<Binding>, String>> {
     let mut seen = HashSet::new();
-    let function = frame_symbol(context, frame);
     let entries = match entries(context, frame)? {
         Ok(entries) => entries,
         Err(why) => return Some(Err(why)),
@@ -396,7 +397,7 @@ fn read(
         .into_iter()
         .map(|(name, value)| Binding {
             value: value.and_then(|value| {
-                let declared = function.as_ref().map(|function| Declared {
+                let declared = function.map(|function| Declared {
                     function,
                     name: &name,
                     line,
@@ -411,17 +412,22 @@ fn read(
 /// The bindings in scope where `context` is, the last of each name, in the
 /// order they were made.
 pub fn bindings(context: &mut EvalContext) -> Vec<Binding> {
-    read(context, 0, 0, None)
+    let function = frame_symbol(context, 0);
+    read(context, function.as_ref(), 0, 0, None)
         .and_then(Result::ok)
         .unwrap_or_default()
 }
 
 /// The binding `name` in scope where `context` is.
 pub fn binding(context: &mut EvalContext, name: &str) -> Option<Binding> {
-    read(context, 0, 0, Some(name))?.ok()?.pop()
+    let function = frame_symbol(context, 0);
+    read(context, function.as_ref(), 0, 0, Some(name))?
+        .ok()?
+        .pop()
 }
 
-/// The name frame `frame`'s function runs under where `context` is.
+/// The name frame `frame`'s function runs under where `context` is, when
+/// its call is on the debugger's call stack.
 fn frame_symbol(context: &EvalContext, frame: usize) -> Option<crate::ImmutableString> {
     let index = *script_frames(context).get(frame)?;
     let stack = context.global_runtime_state().debugger.call_stack();
@@ -1885,7 +1891,7 @@ impl Shared {
         let at = json!({
             "file": stop.file,
             "line": stop.line,
-            "function": self.frame_name(context, 0),
+            "function": self.frame_name(context, 0, position),
             "reason": reason,
         });
         let mut state = self.state();
@@ -2017,10 +2023,39 @@ impl Shared {
         self.locate(frame_position(context, frame, position)?)
     }
 
-    /// The function of frame `frame` where `context` is, as Rust names it:
-    /// a closure by the function it is written in (`Stops::function_name`).
-    fn frame_name(&self, context: &EvalContext, frame: usize) -> Option<String> {
-        let symbol = frame_symbol(context, frame)?;
+    /// The name frame `frame`'s function runs under where `context` is, at
+    /// `position`. A call entered before the debugger attached isn't on its
+    /// call stack (D1075), and then the innermost frame's function is the
+    /// one whose body holds `position`.
+    fn frame_symbol(
+        &self,
+        context: &EvalContext,
+        frame: usize,
+        position: Position,
+    ) -> Option<crate::ImmutableString> {
+        if let Some(symbol) = frame_symbol(context, frame) {
+            return Some(symbol);
+        }
+        if frame > 0 {
+            return None;
+        }
+        self.state()
+            .stops
+            .as_ref()?
+            .function_at(position)
+            .map(crate::ImmutableString::from)
+    }
+
+    /// The function of frame `frame` where `context` is, at `position`, as
+    /// Rust names it: a closure by the function it is written in
+    /// (`Stops::function_name`).
+    fn frame_name(
+        &self,
+        context: &EvalContext,
+        frame: usize,
+        position: Position,
+    ) -> Option<String> {
+        let symbol = self.frame_symbol(context, frame, position)?;
         let stops = self.state().stops.clone();
         Some(stops.map_or_else(
             || crate::resolve::lower_nominal::function_display_name(&symbol).to_owned(),
@@ -2072,15 +2107,28 @@ impl Shared {
             .map(|index| {
                 let at = self.frame_line(context, index, position);
                 json!({
-                    "function": self.frame_name(context, index),
+                    "function": self.frame_name(context, index, position),
                     "file": at.as_ref().map(|(file, _)| file),
                     "line": at.as_ref().map(|(_, line)| line),
                 })
             })
             .collect();
-        let function = self.frame_name(context, frame);
+        let function = self.frame_name(context, frame, position);
+        let symbol = self.frame_symbol(context, frame, position);
+        let stops = self.state().stops.clone();
+        let declaring = symbol.map(|symbol| match &stops {
+            Some(stops) => crate::ImmutableString::from(stops.declaring(&symbol)),
+            None => symbol,
+        });
         let line = location.as_ref().map_or(0, |(_, line)| *line);
-        let (found, unread) = match read(context, frame, line, request.name.as_deref()) {
+        let read = read(
+            context,
+            declaring.as_ref(),
+            frame,
+            line,
+            request.name.as_deref(),
+        );
+        let (found, unread) = match read {
             Some(Ok(found)) => (found, None),
             Some(Err(why)) => (Vec::new(), Some(why)),
             None => (Vec::new(), None),
@@ -2192,7 +2240,7 @@ fn ends(stepping: &Stepping, depth: usize, position: Position, stop: &stops::Sto
 
 #[cfg(test)]
 mod tests {
-    use super::{depth_of, frame_function, read, short_type_name, undebuggable};
+    use super::{depth_of, frame_function, frame_symbol, read, short_type_name, undebuggable};
     use crate::Dynamic;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
@@ -2234,7 +2282,8 @@ mod tests {
     }
 
     fn shown(context: &mut crate::EvalContext, frame: usize) -> String {
-        read(context, frame, 0, None).map_or_else(
+        let function = frame_symbol(context, frame);
+        read(context, function.as_ref(), frame, 0, None).map_or_else(
             || "none".to_owned(),
             |found| {
                 let found = match found {
@@ -2428,7 +2477,8 @@ mod tests {
     #[test]
     fn a_map_of_program_structs_reads_as_one_child_per_key_with_its_fields() {
         let seen = at_steps(PLAYERS, "look", |context| {
-            let found = read(context, 0, 0, Some("ranks")).and_then(Result::ok);
+            let function = frame_symbol(context, 0);
+            let found = read(context, function.as_ref(), 0, 0, Some("ranks")).and_then(Result::ok);
             found
                 .as_deref()
                 .and_then(<[super::Binding]>::first)
@@ -2891,6 +2941,107 @@ mod tests {
         // The program kept counting from where the read found it.
         assert!(running.join().unwrap() >= counted);
         let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// `main` keeps a map of its own struct while `going()` says so.
+    const KEEPING: &str = "use std::collections::HashMap;\n\
+        #[derive(Debug)]\n\
+        struct Player { score: u32 }\n\
+        fn main() {\n\
+        \x20   let mut players: HashMap<&str, Player> = HashMap::new();\n\
+        \x20   players.insert(\"ann\", Player { score: 3 });\n\
+        \x20   let mut count = 0;\n\
+        \x20   while going() {\n\
+        \x20       count += 1;\n\
+        \x20   }\n\
+        \x20   players.insert(\"bo\", Player { score: count });\n\
+        }\n";
+
+    /// The read of `players` once `KEEPING`'s `main` is paused in its loop,
+    /// its debugger attached before `main` is entered when `first`, and
+    /// once `main` is in its loop when not.
+    #[cfg(unix)]
+    fn players_in_main(first: bool) -> serde_json::Value {
+        use serde_json::json;
+        let directory =
+            std::env::temp_dir().join(format!("rawr-entered-{first}-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let socket = directory.join("s");
+        let inspector = super::Inspector::bind(&socket).unwrap();
+        let going = Arc::new(AtomicBool::new(true));
+        let mut engine = crate::Engine::new();
+        let reading = Arc::clone(&going);
+        // `main` is in its loop once it asks.
+        let (entered, looping) = std::sync::mpsc::sync_channel(1);
+        engine.register_fn("going", move || {
+            let _ = entered.try_send(());
+            reading.load(Ordering::Acquire)
+        });
+        inspector.prepare(&mut engine);
+        let engine: &'static crate::Engine = Box::leak(Box::new(engine));
+        let ast: &'static crate::AST = Box::leak(Box::new(
+            engine
+                .compile(KEEPING)
+                .unwrap_or_else(|error| panic!("{error}")),
+        ));
+        inspector.locate_with(|position| Some(("main.rs".to_owned(), position.line()?)));
+        let registering = inspector.clone();
+        inspector.register_on_request(move || {
+            registering.compiled(ast);
+            assert!(registering.attach_running(engine));
+        });
+        if first {
+            let cleared = ask(&socket, &json!({ "op": "clear" }));
+            assert!(cleared.get("error").is_none(), "{cleared}");
+        }
+        // Native code calls `main` by its own name, as a runner does.
+        let running = std::thread::spawn(|| {
+            engine
+                .call_fn::<crate::Dynamic>(&mut crate::Scope::new(), ast, "main", ())
+                .unwrap_or_else(|error| panic!("{error}"))
+        });
+        looping.recv().unwrap();
+        let paused = ask(&socket, &json!({ "op": "pause" }));
+        assert!(paused.get("error").is_none(), "{paused}");
+        let read = ask(&socket, &json!({ "name": "players", "children": true }));
+        going.store(false, Ordering::Release);
+        let continued = ask(&socket, &json!({ "op": "continue" }));
+        assert!(continued["paused"].is_null(), "{continued}");
+        let _ = running.join().unwrap();
+        let _ = std::fs::remove_dir_all(&directory);
+        read
+    }
+
+    /// A function entered before the debugger attached is named by where
+    /// the program pauses in it, and its locals read by the types it
+    /// declares them with, as when it attached first: a map as `{k: v}`,
+    /// one child per key, not the sequence of pairs it runs as.
+    #[cfg(unix)]
+    #[test]
+    fn a_function_entered_before_the_attach_is_named_and_reads_by_its_declared_types() {
+        use serde_json::json;
+        for first in [false, true] {
+            let read = players_in_main(first);
+            assert_eq!(read["function"], "main", "{read}");
+            let frames = read["frames"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{read}"));
+            assert_eq!(frames.len(), 1, "{read}");
+            assert_eq!(frames[0]["function"], "main", "{read}");
+            assert_eq!(
+                read["bindings"],
+                json!([{
+                    "name": "players",
+                    "value": "{\"ann\": Player { score: 3 }}",
+                    "children": [{
+                        "name": "\"ann\"",
+                        "value": "Player { score: 3 }",
+                        "children": [{ "name": "score", "value": "3" }],
+                    }],
+                }]),
+                "{read}"
+            );
+        }
     }
 
     /// A program held at its start runs nothing until released, and a

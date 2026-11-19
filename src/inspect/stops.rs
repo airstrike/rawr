@@ -49,6 +49,13 @@ pub(super) struct Stops {
     functions: Vec<(String, Position)>,
     /// The function each closure is written in, by the closure's name.
     closures: HashMap<String, String>,
+    /// The function, by the name the program runs it under, whose body
+    /// holds each step: a closure's own, not the one it is written in, and
+    /// a root function's own name, which native code calls, not its path.
+    within: HashMap<Position, String>,
+    /// The path of each root function the program also names by its own
+    /// name, by that name: its locals' types are declared under the path.
+    paths: HashMap<String, String>,
 }
 
 impl Stops {
@@ -69,15 +76,24 @@ impl Stops {
         let mut firsts = HashMap::new();
         let mut index = 0;
         while let Some(closure) = running.get(index).cloned() {
-            if let Some(first) = stops.collect(closure.body.iter(), locate) {
+            if let Some(first) = stops.collect(closure.body.iter(), Some(&closure.name), locate) {
                 firsts.insert(closure.name.clone(), first);
             }
             closures(closure.body.statements(), &mut running);
             index += 1;
         }
-        stops.collect(ast.statements().iter(), locate);
+        stops.collect(ast.statements().iter(), None, locate);
+        stops.paths = paths(ast);
+        let names: HashMap<String, String> = stops
+            .paths
+            .iter()
+            .map(|(name, path)| (path.clone(), name.clone()))
+            .collect();
         for function in ast.iter_fn_def() {
-            let first = stops.collect(function.body.iter(), locate);
+            let runs_as = names
+                .get(function.name.as_str())
+                .map_or(function.name.as_str(), String::as_str);
+            let first = stops.collect(function.body.iter(), Some(runs_as), locate);
             if let Some(first) = first.or_else(|| firsts.get(&function.name).copied()) {
                 let name =
                     crate::resolve::lower_nominal::function_display_name(&function.name).to_owned();
@@ -117,10 +133,24 @@ impl Stops {
         }
     }
 
-    /// Add the stops in `statements`; the first one's position.
+    /// The function whose body holds the step at `position`, by the name
+    /// the program runs it under; `None` for code outside any function.
+    pub fn function_at(&self, position: Position) -> Option<&str> {
+        self.within.get(&position).map(String::as_str)
+    }
+
+    /// The name the locals of the function the program runs as `name` are
+    /// declared under: a root function's path for its own name.
+    pub fn declaring<'a>(&'a self, name: &'a str) -> &'a str {
+        self.paths.get(name).map_or(name, String::as_str)
+    }
+
+    /// Add the stops in `statements`, the body of `function` when they are
+    /// one; the first one's position.
     fn collect<'a>(
         &mut self,
         statements: impl Iterator<Item = &'a Stmt>,
+        function: Option<&str>,
         locate: &dyn Fn(Position) -> Option<(String, usize)>,
     ) -> Option<Position> {
         let mut first = None;
@@ -130,6 +160,13 @@ impl Stops {
                 let Some((node, outer)) = path.split_last() else {
                     return true;
                 };
+                if let Some(function) = function
+                    && !node.position().is_none()
+                {
+                    self.within
+                        .entry(node.position())
+                        .or_insert_with(|| function.to_owned());
+                }
                 let candidate = match node {
                     ASTNode::Stmt(Stmt::Expr(..) | Stmt::Block(..) | Stmt::Noop(..)) => false,
                     ASTNode::Stmt(..) => true,
@@ -215,6 +252,28 @@ impl Stops {
             .map(|(_, position)| *position)
             .collect()
     }
+}
+
+/// The path of each root function `ast` also names by its own name, by
+/// that name: the two definitions have one body, and the path ends in the
+/// name.
+fn paths(ast: &AST) -> HashMap<String, String> {
+    let by_body: HashMap<Position, &str> = ast
+        .iter_fn_def()
+        .filter(|function| function.name.contains("::") && !function.body.position().is_none())
+        .map(|function| (function.body.position(), function.name.as_str()))
+        .collect();
+    ast.iter_fn_def()
+        .filter(|function| !function.name.contains("::"))
+        .filter_map(|function| {
+            let path = by_body.get(&function.body.position())?;
+            let shown = crate::resolve::lower_nominal::function_display_name(path);
+            shown
+                .strip_suffix(function.name.as_str())?
+                .ends_with("::")
+                .then(|| (function.name.to_string(), (*path).to_owned()))
+        })
+        .collect()
 }
 
 /// Add to `found` each closure that `statements` make a pointer to, by the
