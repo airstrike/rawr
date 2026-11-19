@@ -90,6 +90,7 @@ impl Files {
     }
 
     /// Read from `snapshot` from now on, when these are the compiled files.
+    #[cfg(feature = "sync")]
     pub(super) fn compiled_from(&self, snapshot: Option<&Snapshot>) {
         if let Self::Compiled(compiled) = self {
             *compiled.lock().unwrap_or_else(PoisonError::into_inner) = snapshot.cloned();

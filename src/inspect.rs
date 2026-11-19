@@ -666,6 +666,8 @@ pub struct Located {
     entry: crate::diagnostic::Source,
     positions: Arc<crate::program::Positions>,
     /// The files it was compiled from, when a debugger was registered.
+    // Only a `sync` build's debugger reads them.
+    #[cfg_attr(not(feature = "sync"), allow(dead_code))]
     snapshot: Option<crate::package::snapshot::Snapshot>,
 }
 
@@ -1183,9 +1185,11 @@ impl Inspector {
     /// The program that runs next is the generation `located` places,
     /// compiled as `ast`: code evaluated at a pause compiles into it, a
     /// hosted inspector reads lines from the files it compiled from, and
-    /// [`Self::compiled`] moves the breakpoints to it.
+    /// [`Self::compiled`] moves the breakpoints to it. The locator reads
+    /// `located`'s sources from the socket's threads, and only `sync`
+    /// shares sources between threads.
+    #[cfg(feature = "sync")]
     pub fn compiled_from(&self, located: &Arc<Located>, ast: &crate::AST) {
-        #[cfg(feature = "sync")]
         if let Some(program) = located.program() {
             self.evaluate_in(program);
         }
