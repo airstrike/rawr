@@ -63,7 +63,7 @@ impl Generator<'_> {
                     continue;
                 };
                 let path = path_of(source.modules, &declared.name.text);
-                if declared.header.visibility.is_some()
+                if source.shows(&declared.header)
                     && opaque.contains(&path)
                     && self.crossing.contains(&path)
                     && !held.contains(&path)
@@ -85,7 +85,7 @@ impl Generator<'_> {
         let mut functions = Vec::new();
         for item in source.items {
             match item {
-                item::Parsed::Function(declared) if declared.header.visibility.is_some() => {
+                item::Parsed::Function(declared) if source.shows(&declared.header) => {
                     functions.push((declared, None));
                 }
                 item::Parsed::Impl(declared) => {
@@ -94,7 +94,7 @@ impl Generator<'_> {
                         _ => None,
                     };
                     for function in &declared.functions {
-                        if declared.trait_.is_some() || function.header.visibility.is_some() {
+                        if declared.trait_.is_some() || source.shows(&function.header) {
                             functions.push((function, owner));
                         }
                     }

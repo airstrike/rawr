@@ -288,7 +288,10 @@ fn script_project(entry: &super::graph::Package) -> rawr_import::Result<()> {
 /// root and native modules copied under `target/rawr/crate/src/`, the root
 /// with the island's runtime support at its end, and in place of each
 /// marked file its generated trampolines (`island::shadow`). A save that
-/// changes no trampoline rewrites nothing, so nothing is built again.
+/// changes no trampoline rewrites nothing, so nothing is built again. A
+/// marked root whose native modules use marked code is laid out the same
+/// way, its root a generated file too, with the support at its end: native
+/// code calls the marked items it names through their trampolines.
 ///
 /// A program that runs from the package's library has a native binary
 /// beside it (#1107): the library is laid out with trampolines, as a
@@ -398,8 +401,8 @@ fn app_crate(
     let package = cargo.path.parent().unwrap_or(entry.root());
     let sources = directory.join("src");
     let mut instances = Vec::new();
-    let mut files = if let Some(root) = entry.native_root() {
-        let shadow = graph
+    let mut files = if entry.has_trampolines() {
+        let mut shadow = graph
             .island_shadow()
             .unwrap_or_else(|| super::island::Shadow {
                 files: Vec::new(),
@@ -414,30 +417,50 @@ fn app_crate(
                 reason: shadow.refused.join("\n").into_boxed_str(),
             });
         }
-        let relative = root
-            .path()
+        let root_path = entry
+            .native_root()
+            .map_or(graph.entry_source().path(), super::graph::RustModule::path);
+        let relative = root_path
             .strip_prefix(&module_root)
-            .unwrap_or(root.path());
+            .unwrap_or(root_path)
+            .to_path_buf();
         instances = graph.instance_entries(&shadow.generic);
+        // A native root is copied; a marked root's generated file stands
+        // for it, as each marked module's does, and the program's `main`
+        // is Rawr's, with its runtime's entry when it is async (D513.4).
+        let root_text = match entry.native_root() {
+            Some(root) => native_root(
+                root,
+                package,
+                !entry.is_library(),
+                Some(&shadow),
+                &instances,
+            ),
+            None => {
+                let at = shadow.files.iter().position(|(path, _)| *path == relative);
+                let mut text = at.map_or_else(String::new, |at| shadow.files.remove(at).1);
+                text.push_str(&super::island::support(
+                    false,
+                    &shadow.objects,
+                    &shadow.handles,
+                    &instances,
+                ));
+                if let Some(attribute) = entry.entry() {
+                    text.push_str(&super::entry::source(attribute));
+                }
+                text
+            }
+        };
         let mut files = support_package(&directory);
         files.extend([
             (
                 directory.join("Cargo.toml"),
                 with_support(
-                    app_manifest(cargo, &Path::new("src").join(relative)),
+                    app_manifest(cargo, &Path::new("src").join(&relative)),
                     &directory,
                 ),
             ),
-            (
-                sources.join(relative),
-                native_root(
-                    root,
-                    package,
-                    !entry.is_library(),
-                    Some(&shadow),
-                    &instances,
-                ),
-            ),
+            (sources.join(&relative), root_text),
         ]);
         files.extend(
             shadow
@@ -496,7 +519,7 @@ fn app_crate(
         files.extend(build_script(cargo, &directory, entry.features())?);
     }
     write_changed(files, &mut copies.written)?;
-    if entry.native_root().is_some() || !entry.rust_modules().is_empty() {
+    if entry.has_trampolines() || !entry.rust_modules().is_empty() {
         link_assets(&module_root, &sources, &mut copies.linked)?;
     }
     // The features Cargo enabled for the package under the command's
@@ -506,7 +529,7 @@ fn app_crate(
         .package(&cargo.package)?
         .features(features(), false)?];
     let mut recorded = Vec::new();
-    if entry.native_root().is_some() || entry.bin().is_some() {
+    if entry.has_trampolines() || entry.bin().is_some() {
         recorded.push(directory.clone());
     }
     if let Some(bin) = entry.bin() {

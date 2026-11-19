@@ -1,6 +1,5 @@
-//! Native Rust that uses an item of the marked crate root. Cargo builds
-//! this crate, and Rawr refuses it: Rawr builds the native modules without
-//! the marked ones.
+//! Native Rust that uses an item of the marked crate root, as Cargo builds
+//! it. Rawr's copy of the crate stands a trampoline for each marked item.
 use crate::Item;
 
 pub fn doubled(item: &Item) -> i64 {

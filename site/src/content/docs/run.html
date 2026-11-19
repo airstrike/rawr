@@ -42,8 +42,7 @@ fn main() {
   <li>The crate root may be marked or native. A crate with a native root runs when a module it declares is marked. If no file is marked, <code>rawr run</code> stops with <code>RAWR-ENVIRONMENT-MISSING-SOURCE</code>.</li>
   <li>In a package with both <code>src/main.rs</code> and <code>src/lib.rs</code>, the marker may go in either crate&rsquo;s tree. <a href="#library">A library and a thin main</a> says how rawr runs a marked module of the library.</li>
   <li>Marked code may call native modules.</li>
-  <li>Native code may call marked modules when the crate root is native.</li>
-  <li>With a marked root, native code can&rsquo;t use code from marked files yet. rawr reports an error if it does.</li>
+  <li>Native code may call marked code, whether the crate root is native or marked. A native module below a marked root names the root&rsquo;s items as a Rust module names its parent&rsquo;s, public or not. The calls go through the same trampolines as <a href="#native-main">a native main</a>&rsquo;s, so a save of the marked code reaches the next call.</li>
   <li>A path dependency is compiled natively, even if its files start with <code>// rawr</code>. Only the crate you run is interpreted.</li>
 </ul>
 <p>Inner attributes go after the marker, as comments may come before them in Rust:</p>
@@ -122,6 +121,7 @@ fn main() {
 <ul>
   <li>A native module other than the root can&rsquo;t declare a marked module.</li>
   <li>Marked code can&rsquo;t call items written in the native root itself.</li>
+  <li>A private marked function that returns <code>impl Trait</code> or is <code>async</code> has no trampoline. A native module below that calls it gets rustc&rsquo;s error for a missing item.</li>
 </ul>
 
 <h3 id="library">A library and a thin main</h3>
