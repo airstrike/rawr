@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-18",
-  "version": "0.4.20",
+  "version": "0.4.21",
   "examples": {
     "running": 56,
     "total": 56,
@@ -9,14 +9,16 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
-      "entries": [
-        {"text":"`rawr mcp` has `eval`: Rust code runs where the program is paused, with the bindings in scope there. It is compiled as a block written before the paused statement, so a type error, or a borrow that conflicts with one the program holds, is refused with rustc's error. The last expression's value prints as `{:?}` prints it, without moving it, and a change the code makes stays.","issues":[490]},
-        {"text":"rawr-repl runs its entries as the statements of one body: items and bindings from earlier entries keep their types, and a local whose type implements `Drop` lives until the session ends, then drops newest first, while temporaries, `let _` and `drop(x)` drop where Rust drops them.","issues":[1207]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.21",
+        "date": "2026-11-18",
+        "entries": [
+          {"text":"`rawr mcp` has `eval`: Rust code runs where the program is paused, with the bindings in scope there. It is compiled as a block written before the paused statement, so a type error, or a borrow that conflicts with one the program holds, is refused with rustc's error. The last expression's value prints as `{:?}` prints it, without moving it, and a change the code makes stays.","issues":[490]},
+          {"text":"rawr-repl runs its entries as the statements of one body: items and bindings from earlier entries keep their types, and a local whose type implements `Drop` lives until the session ends, then drops newest first, while temporaries, `let _` and `drop(x)` drop where Rust drops them.","issues":[1207]}
+        ]
+      },
       {
         "version": "0.4.20",
         "date": "2026-11-18",
@@ -3395,7 +3397,7 @@
     {"issue":487,"title":"Delete the dead host-profile request path","state":"closed","category":"Importer","release":"0.3.47"},
     {"issue":488,"title":"Read a running program's values from rawr mcp and the editor","state":"closed","category":"Health","release":"0.3.47"},
     {"issue":489,"title":"Breakpoints and stepping under rawr run","state":"closed","category":"Health","release":"0.3.53"},
-    {"issue":490,"title":"Evaluate Rust in a paused frame","state":"closed","category":"Health"},
+    {"issue":490,"title":"Evaluate Rust in a paused frame","state":"closed","category":"Health","release":"0.4.21"},
     {"issue":491,"title":"Record and replay messages, with iced's comet","state":"open","category":"Health"},
     {"issue":492,"title":"CI runs fail only when the code is broken","state":"closed","category":"Health","release":"0.3.47"},
     {"issue":493,"title":"Run the ?play release on each release push to main","state":"retired","category":"Health"},
@@ -4112,7 +4114,7 @@
     {"issue":1204,"title":"A marked module can't reach a private field of its native crate root's struct","state":"open","category":"Divergences from rustc"},
     {"issue":1205,"title":"rawr has no timeouts of its own: remove every deadline from the protocol, the owner and the test harness","state":"closed","category":"Health","release":"0.3.172"},
     {"issue":1206,"title":"std::thread::sleep traps rawr-web","state":"closed","category":"Platforms","release":"0.4.1"},
-    {"issue":1207,"title":"rawr-repl drops a Drop value at the end of the line that bound it","state":"closed","category":"Divergences from rustc"},
+    {"issue":1207,"title":"rawr-repl drops a Drop value at the end of the line that bound it","state":"closed","category":"Divergences from rustc","release":"0.4.21"},
     {"issue":1208,"title":"A root package's build script that declares no rerun-if input runs again only when the generated crate changes","state":"open","category":"Divergences from rustc"},
     {"issue":1209,"title":"The package-tree witness of a build script without rerun-if inputs sees more files than Cargo lists","state":"closed","category":"Health","release":"0.4.15"},
     {"issue":1210,"title":"Decide the fate of input/membership, the unwired contained cargo-package listing","state":"open","category":"Health"},
