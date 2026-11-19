@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
+
+## 0.4.22 (2026-11-18)
+
 - `rawr mcp` reaches a program run with `rawr run` in a terminal: a tool naming it attaches to that run, `start` attaches instead of starting a second one, and `stop` lets go of it. Any number of servers attach to one run, and each `wait` returns every event from its own cursor, so a pause one server causes reaches the others. (#2258)
 - `rawr mcp`'s calls wait on what they need, not on a clock: a read, a step, an input or a screenshot answers as soon as the program does, and a cancelled call ends at once. (#2258)
 

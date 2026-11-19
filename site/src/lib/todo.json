@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-18",
-  "version": "0.4.21",
+  "version": "0.4.22",
   "examples": {
     "running": 56,
     "total": 56,
@@ -9,14 +9,16 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
-      "entries": [
-        {"text":"`rawr mcp` reaches a program run with `rawr run` in a terminal: a tool naming it attaches to that run, `start` attaches instead of starting a second one, and `stop` lets go of it. Any number of servers attach to one run, and each `wait` returns every event from its own cursor, so a pause one server causes reaches the others.","issues":[2258]},
-        {"text":"`rawr mcp`'s calls wait on what they need, not on a clock: a read, a step, an input or a screenshot answers as soon as the program does, and a cancelled call ends at once.","issues":[2258]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.22",
+        "date": "2026-11-18",
+        "entries": [
+          {"text":"`rawr mcp` reaches a program run with `rawr run` in a terminal: a tool naming it attaches to that run, `start` attaches instead of starting a second one, and `stop` lets go of it. Any number of servers attach to one run, and each `wait` returns every event from its own cursor, so a pause one server causes reaches the others.","issues":[2258]},
+          {"text":"`rawr mcp`'s calls wait on what they need, not on a clock: a read, a step, an input or a screenshot answers as soon as the program does, and a cancelled call ends at once.","issues":[2258]}
+        ]
+      },
       {
         "version": "0.4.21",
         "date": "2026-11-18",
@@ -5170,7 +5172,7 @@
     {"issue":2255,"title":"rawr mcp input and screenshot say 'the program shows no window' when its only window is minimized","state":"open","category":"Health"},
     {"issue":2256,"title":"inspect reads `self` deeper inside an expression on it","state":"open","category":"Health"},
     {"issue":2257,"title":"inspect lists a compiler-made `i` binding and drops a moved parameter at some steps","state":"open","category":"Health"},
-    {"issue":2258,"title":"One debugger session per run that any number of shells attach to, with rawr mcp as its first shell","state":"closed","category":"Health"},
+    {"issue":2258,"title":"One debugger session per run that any number of shells attach to, with rawr mcp as its first shell","state":"closed","category":"Health","release":"0.4.22"},
     {"issue":2259,"title":"A terminal shell (TUI) on the shared debugger session","state":"open","category":"Health"},
     {"issue":2260,"title":"A window shell (GUI) in its own process on the shared debugger session","state":"open","category":"Health"},
     {"issue":2261,"title":"Rewind to a past state, and replay recorded turns under edited code","state":"open","category":"Health"},
