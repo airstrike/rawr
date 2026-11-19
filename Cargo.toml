@@ -131,6 +131,12 @@ metadata = ["serde", "rawr_codegen/metadata", "smartstring/serde"]
 internals = []
 ## Enable the debugging interface (implies [`internals`](#feature-internals)).
 debugging = ["internals"]
+## Run every program a universe loads under a debugger its host asks
+## (D1057, D1071). In a browser: an inspector without a socket, attached
+## from the run's start, a `debug` export that takes its requests, and
+## pauses that suspend `main` through JSPI. Only the debugger build of the
+## browser universe enables it; the plain one has none of it.
+browser-debugger = ["debugging"]
 ## Features and dependencies required by `bin` tools: `decimal`, `metadata`, `serde`, `debugging` and [`rustyline`](https://crates.io/crates/rustyline).
 bin-features = ["decimal", "metadata", "serde", "debugging", "rustyline"]
 ## Enable fuzzing via the [`arbitrary`](https://crates.io/crates/arbitrary) crate.

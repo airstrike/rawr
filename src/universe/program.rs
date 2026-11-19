@@ -61,6 +61,10 @@ struct State {
     current: Mutex<Current>,
     /// Who hears each outcome ([`Program::outcomes`]).
     listeners: Mutex<Vec<mpsc::Sender<Outcome>>>,
+    /// The debugger it runs under, which each generation it takes is
+    /// placed for.
+    #[cfg(feature = "browser-debugger")]
+    inspector: Option<crate::inspect::Inspector>,
 }
 
 /// The text the program runs, or will once the owner takes it, and the
@@ -160,6 +164,8 @@ impl Program {
         } = sources;
         let snapshot = Snapshot::new(entry.clone(), files.clone())?.with_features(features.clone());
         let candidate = compile(&universe.engine, &snapshot)?;
+        #[cfg(feature = "browser-debugger")]
+        let candidate = placed(universe.inspector.as_ref(), candidate);
         let generation = candidate.generation().clone();
         let bootstrap = bind(&universe.engine, candidate, universe.bind_runtime())?;
         bootstrap.evaluate_top_level().map_err(Error::Evaluate)?;
@@ -176,6 +182,8 @@ impl Program {
                     refused: None,
                 }),
                 listeners: Mutex::new(Vec::new()),
+                #[cfg(feature = "browser-debugger")]
+                inspector: universe.inspector.clone(),
             }),
             owner: PhantomData,
         })
@@ -329,6 +337,8 @@ impl Reloader {
         // The owner takes it at its next call from native code; a newer
         // reload's replaces it first.
         future::offer(move || {
+            #[cfg(feature = "browser-debugger")]
+            let candidate = placed(state.inspector.as_ref(), candidate);
             let outcome = match swap(&state.engine, candidate) {
                 Ok(None) => Outcome::Swapped,
                 Ok(Some(reason)) => Outcome::Restarting { reason },
@@ -374,6 +384,24 @@ impl State {
         lock(&self.listeners).retain(|listener| listener.send(outcome.clone()).is_ok());
         outcome
     }
+}
+
+/// `candidate`, its steps placed for `inspector` as the generation that
+/// runs next: where its statements are, the files it compiled from, and
+/// what code evaluated at a pause compiles into.
+#[cfg(feature = "browser-debugger")]
+fn placed(
+    inspector: Option<&crate::inspect::Inspector>,
+    candidate: reload::Candidate,
+) -> reload::Candidate {
+    let Some(inspector) = inspector else {
+        return candidate;
+    };
+    let (candidate, ast) = candidate.with_top_level();
+    if let Some(located) = candidate.located() {
+        inspector.compiled_from(located, &ast);
+    }
+    candidate
 }
 
 /// Bind `candidate` to the runtime: `first`, the universe's own, for the

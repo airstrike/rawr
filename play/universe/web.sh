@@ -11,6 +11,11 @@
 # RAWR_UNIVERSE_RUNNER makes the runner a universe's, which runs every
 # snippet whose native calls it covers, and the profile variables optimize
 # it for size, as rawr-web is.
+#
+# With RAWR_UNIVERSE_DEBUGGER=1 the runner has rawr's browser debugger
+# (D1071), and is packed into target/wasm/universe/site-debugger instead:
+# every program it runs is under a debugger the page asks through its
+# `debug` export. The plain build is the one ?play loads.
 set -eu
 cd "$(dirname "$0")/../.."
 import="${1:-rawr-import}"
@@ -33,5 +38,9 @@ export RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-nightly-2026-07-11}" \
   CARGO_PROFILE_DEV_DEBUG_ASSERTIONS=false \
   CARGO_PROFILE_DEV_OVERFLOW_CHECKS=false \
   RAWR_UNIVERSE_RUNNER=1
-"$import" run --web --out "$copy/site" "$copy"
-echo "web.sh: packed $copy/site"
+site="$copy/site"
+if [ "${RAWR_UNIVERSE_DEBUGGER:-}" = 1 ]; then
+  site="$copy/site-debugger"
+fi
+"$import" run --web --out "$site" "$copy"
+echo "web.sh: packed $site"

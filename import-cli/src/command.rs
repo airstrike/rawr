@@ -46,6 +46,11 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
     if std::env::var_os(rawr_import::universe::VARIABLE).is_some_and(|value| value == "1") {
         rawr_import::universe::set();
     }
+    // The browser universe's debugger build (D1071).
+    if std::env::var_os(rawr_import::universe::DEBUGGER_VARIABLE).is_some_and(|value| value == "1")
+    {
+        rawr_import::universe::debug();
+    }
     // The directory its caller takes the runner from (#1752), a universe's
     // or a project's that `run --web` serves.
     if let Some(directory) = std::env::var_os(rawr_import::universe::DIRECTORY) {

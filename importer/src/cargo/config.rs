@@ -430,12 +430,13 @@ impl Dependency {
         // (D620). A run that `rawr mcp` didn't start registers no
         // debugger: each step checks that one `Option` and goes on, as
         // `rawr run` does for a program without dependencies.
-        let features: Box<[Box<str>]> = Box::from([
-            Box::<str>::from("debugging"),
-            Box::<str>::from("rust-import"),
-            Box::<str>::from("std"),
-            Box::<str>::from("sync"),
-        ]);
+        // `browser-debugger` is the browser universe's debugger build's
+        // alone (D1071).
+        let debugger = crate::universe::debugged().then(|| Box::<str>::from("browser-debugger"));
+        let features: Box<[Box<str>]> = debugger
+            .into_iter()
+            .chain(["debugging", "rust-import", "std", "sync"].map(Box::<str>::from))
+            .collect();
         Ok(Self {
             alias: validated_alias(INTERNAL_ALIAS)?,
             package: Some("rawr".into()),

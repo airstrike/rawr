@@ -10,6 +10,7 @@
     "release:worker": "./release.sh --worker",
     "test": "node --test test/stats.test.ts test/play.test.ts test/todo.test.ts test/deploy.test.ts test/start.test.ts test/https.test.ts",
     "test:browser": "node test/browser.ts",
+    "test:debugger": "node test/debugger.ts",
     "check": "tsc --noEmit"
   },
   "dependencies": {

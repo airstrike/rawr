@@ -16,6 +16,13 @@
 //! sets it itself before it compiles a program, so both compile the
 //! program alike.
 //!
+//! The browser's universe is also built a second time with its debugger
+//! (D1071): `RAWR_UNIVERSE_DEBUGGER=1` gives every runner this process
+//! builds rawr's `browser-debugger` feature, which runs each program the
+//! universe loads in a browser under a debugger the page asks. The
+//! feature is in the runner's manifest, so a runner with it is never one
+//! built without it.
+//!
 //! A caller that takes the runner elsewhere, as ?play's image and the
 //! browser's universe do, names a directory in `RAWR_UNIVERSE_OUT`. Each
 //! runner `rawr-import` builds or reuses is then written there as `runner`
@@ -31,11 +38,16 @@ use std::sync::OnceLock;
 
 static UNIVERSE: AtomicBool = AtomicBool::new(false);
 
+static DEBUGGER: AtomicBool = AtomicBool::new(false);
+
 #[cfg(not(target_arch = "wasm32"))]
 static DESTINATION: OnceLock<PathBuf> = OnceLock::new();
 
 /// The variable that makes `rawr-import` build a universe runner.
 pub const VARIABLE: &str = "RAWR_UNIVERSE_RUNNER";
+
+/// The variable that gives each runner rawr's browser debugger.
+pub const DEBUGGER_VARIABLE: &str = "RAWR_UNIVERSE_DEBUGGER";
 
 /// The variable that names the directory a universe runner is written to.
 pub const DIRECTORY: &str = "RAWR_UNIVERSE_OUT";
@@ -56,6 +68,17 @@ pub fn set() {
 #[must_use]
 pub fn enabled() -> bool {
     UNIVERSE.load(Ordering::Relaxed)
+}
+
+/// Give each runner this process builds rawr's browser debugger.
+pub fn debug() {
+    DEBUGGER.store(true, Ordering::Relaxed);
+}
+
+/// Whether each runner this process builds has rawr's browser debugger.
+#[must_use]
+pub fn debugged() -> bool {
+    DEBUGGER.load(Ordering::Relaxed)
 }
 
 /// Write each universe runner this process builds to `directory`, made

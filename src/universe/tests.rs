@@ -799,3 +799,112 @@ fn main() {}
     assert_eq!(named(&program), 20);
     assert_eq!(last(&outcomes), Some(Outcome::Swapped));
 }
+
+/// A host whose program runs on a thread of the test's: a wait blocks that
+/// thread until a wake, as a page suspends `main`'s stack until its next
+/// request.
+#[cfg(feature = "browser-debugger")]
+struct Suspending {
+    woken: std::sync::Mutex<bool>,
+    changed: std::sync::Condvar,
+}
+
+#[cfg(feature = "browser-debugger")]
+impl crate::inspect::Host for std::sync::Arc<Suspending> {
+    fn can_wait(&self) -> bool {
+        true
+    }
+
+    fn wait(&self) -> Result<(), String> {
+        let woken = self.woken.lock().unwrap();
+        let mut woken = self.changed.wait_while(woken, |woken| !*woken).unwrap();
+        *woken = false;
+        Ok(())
+    }
+
+    fn wake(&self) {
+        *self.woken.lock().unwrap() = true;
+        self.changed.notify_all();
+    }
+}
+
+#[cfg(feature = "browser-debugger")]
+const DEBUGGED: &str = "// rawr
+fn inner(depth: i64) -> i64 {
+    let deep = depth * 2;
+    deep
+}
+
+fn outer(turn: i64) -> i64 {
+    let total = inner(turn) + 1;
+    total
+}
+
+fn main() {
+    let mut turn = 0;
+    while turn < 3 {
+        turn += 1;
+        outer(turn);
+    }
+}
+";
+
+/// A program a universe runs under a hosted debugger, as a page's runs
+/// (D1057.5): a breakpoint on a line, its text read from the files the
+/// program compiled from, pauses `main`'s loop two calls deep, where code
+/// is evaluated, a step goes on a line and a continue lets the loop pause
+/// again on its next turn.
+#[cfg(feature = "browser-debugger")]
+#[test]
+fn a_debugged_program_pauses_two_calls_deep_and_evaluates_where_it_is() {
+    use serde_json::json;
+    let host = std::sync::Arc::new(Suspending {
+        woken: std::sync::Mutex::new(false),
+        changed: std::sync::Condvar::new(),
+    });
+    let inspector = crate::inspect::Inspector::hosted(host, |_: &serde_json::Value| {});
+    let ask = |request: serde_json::Value| {
+        let (reply, answer) = std::sync::mpsc::channel();
+        inspector.ask(&request, move |value| {
+            let _ = reply.send(value);
+        });
+        answer.recv().unwrap()
+    };
+    let file = "/universe-debugged/src/main.rs";
+    let (loaded, ready) = std::sync::mpsc::channel();
+    let (go, started) = std::sync::mpsc::channel::<()>();
+    let attached = inspector.clone();
+    let running = std::thread::spawn(move || {
+        let mut universe = Universe::new(&Plain, Access::none()).unwrap();
+        assert!(universe.attach(attached));
+        let program = universe
+            .program(PathBuf::from(file), DEBUGGED, Vec::new())
+            .unwrap();
+        loaded.send(()).unwrap();
+        started.recv().unwrap();
+        program.run()
+    });
+    ready.recv().unwrap();
+    let set = ask(json!({ "op": "break", "file": file, "line": 3 }));
+    assert!(set.get("error").is_none(), "{set}");
+    assert_eq!(set["set"]["text"], "let deep = depth * 2;", "{set}");
+    go.send(()).unwrap();
+    let paused = ask(json!({ "name": "nothing" }));
+    assert_eq!(paused["paused"]["line"], 3, "{paused}");
+    assert_eq!(paused["depth"], 3, "{paused}");
+    let evaluated = ask(json!({ "op": "eval", "code": "depth + 1" }));
+    assert_eq!(evaluated["value"], "2", "{evaluated}");
+    let step = ask(json!({ "op": "step", "kind": "over" }));
+    assert_eq!(step["paused"]["line"], 4, "{step}");
+    let deep = ask(json!({ "name": "deep" }));
+    assert_eq!(deep["bindings"][0]["value"], "2", "{deep}");
+    assert_eq!(ask(json!({ "op": "continue" })), json!({ "paused": null }));
+    // Only a pause answers a name the program never binds.
+    let again = ask(json!({ "name": "nothing" }));
+    assert_eq!(again["paused"]["line"], 3, "{again}");
+    let again = ask(json!({ "name": "depth" }));
+    assert_eq!(again["bindings"][0]["value"], "2", "{again}");
+    ask(json!({ "op": "clear" }));
+    assert_eq!(ask(json!({ "op": "continue" })), json!({ "paused": null }));
+    assert_eq!(running.join().unwrap(), 0);
+}

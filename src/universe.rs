@@ -24,6 +24,8 @@
 
 #[cfg(target_arch = "wasm32")]
 pub mod browser;
+#[cfg(all(target_arch = "wasm32", feature = "browser-debugger"))]
+pub mod debugger;
 mod error;
 mod outcome;
 mod program;
@@ -77,6 +79,9 @@ pub struct Universe {
     /// The runtime the first program binds. Each later one binds a next
     /// generation of it.
     runtime: RefCell<Option<Registry>>,
+    /// The debugger its programs run under, when one is attached.
+    #[cfg(feature = "browser-debugger")]
+    inspector: Option<crate::inspect::Inspector>,
 }
 
 impl Universe {
@@ -95,6 +100,8 @@ impl Universe {
         Ok(Self {
             engine,
             runtime: RefCell::new(Some(runtime)),
+            #[cfg(feature = "browser-debugger")]
+            inspector: None,
         })
     }
 
@@ -159,6 +166,21 @@ impl Universe {
         Shared::get_mut(&mut self.engine)
             .map(|engine| engine.on_output(output))
             .is_some()
+    }
+
+    /// Run every program it loads under `inspector`, from its start: each
+    /// generation compiled keeps what reading and evaluating need, and
+    /// places its steps for the inspector once it is the one that runs.
+    /// Attach before the first program loads, while the engine is the
+    /// universe's alone; `false` once a program shares it.
+    #[cfg(feature = "browser-debugger")]
+    pub fn attach(&mut self, inspector: crate::inspect::Inspector) -> bool {
+        let Some(engine) = Shared::get_mut(&mut self.engine) else {
+            return false;
+        };
+        inspector.attach(engine);
+        self.inspector = Some(inspector);
+        true
     }
 
     /// The runtime the next program loaded binds: the first one, and a

@@ -103,6 +103,13 @@
 //! closing its connection wakes the wait, and so does a pause, for a
 //! request the program's event loop answers.
 //!
+//! A host with no socket, as a browser page, makes an inspector with
+//! [`Inspector::hosted`] and hands it each request with [`Inspector::ask`],
+//! which never waits: the answer goes to a callback when the program gives
+//! it. Its pause waits through the host, which suspends the program's
+//! stack until the next request, and its breakpoints read their lines from
+//! the files the program compiled from (see [`host`], D1057.2).
+//!
 //! A pause holds the thread that runs the program's code inside the
 //! debugger callback. Native code that called into the program, such as a
 //! window's event loop, waits in that call until the program goes on. A
@@ -115,6 +122,7 @@
 // What it compiles code with is shared between threads.
 #[cfg(feature = "sync")]
 mod evaluate;
+mod host;
 mod input;
 mod interrupt;
 pub mod menu;
@@ -125,13 +133,14 @@ mod stops;
 use std::cell::Cell;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Condvar, Mutex, PoisonError};
+use std::sync::{mpsc, Arc, Condvar, Mutex, MutexGuard, PoisonError, TryLockError};
 
 use serde_json::{json, Value};
 
 use crate::debugger::{BreakPositions, DebuggerCommand, DebuggerEvent};
 use crate::types::dynamic::Union;
 use crate::{Dynamic, Engine, EvalAltResult, EvalContext, Position};
+use host::{Files, Reply, Waits};
 use interrupt::Interrupt;
 
 /// The variable naming where the program says it paused and went on: the
@@ -151,6 +160,7 @@ pub const BREAKPOINTS: &str = "breakpoints.json";
 
 #[cfg(feature = "sync")]
 pub use evaluate::Program;
+pub use host::Host;
 
 /// One binding as a tool reads it: its name and its `Debug` text, or why it
 /// has none.
@@ -712,6 +722,8 @@ impl Located {
 }
 
 struct Request {
+    // A socket's request gives itself up by its id.
+    #[cfg_attr(not(unix), allow(dead_code))]
     id: u64,
     name: Option<String>,
     file: Option<String>,
@@ -721,7 +733,7 @@ struct Request {
     /// Code to evaluate where the program is paused (#490).
     code: Option<String>,
     shape: Shape,
-    reply: mpsc::Sender<Value>,
+    reply: Reply,
 }
 
 /// How a paused program goes on.
@@ -741,6 +753,51 @@ enum Step {
 enum Resume {
     Continue,
     Step(Step),
+}
+
+/// Where the pauses, departures and step ends stood when a step began:
+/// the step's answer waits for one of them to move.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Seen {
+    pauses: u64,
+    departures: u64,
+    ended: u64,
+}
+
+impl Seen {
+    fn of(state: &State) -> Self {
+        Self {
+            pauses: state.pauses,
+            departures: state.departures,
+            ended: state.ended,
+        }
+    }
+
+    /// The answer to the step that began here, once `state` moved past
+    /// it. A step ends at its first pause or its departure, which no later
+    /// one follows without a resume: a pause the departure led to is told
+    /// as its event.
+    fn answer(self, state: &State) -> Option<Value> {
+        let now = Self::of(state);
+        if now == self {
+            return None;
+        }
+        Some(if now.departures != self.departures {
+            json!({ "paused": null, "native": true })
+        } else if now.pauses == self.pauses {
+            // A continue ended the step before it paused.
+            json!({ "paused": null })
+        } else {
+            json!({ "paused": state.last })
+        })
+    }
+}
+
+/// A host's step waiting for its answer, which the program gives at a
+/// later step.
+struct Stepped {
+    seen: Seen,
+    reply: Reply,
 }
 
 /// A step that pauses again at the next statement it reaches.
@@ -806,6 +863,24 @@ struct State {
     /// The requests the program's event loop answers, which a pause gives
     /// up: the pause holds that loop.
     held: Vec<Arc<Interrupt>>,
+    /// A hosted inspector's steps, answered once the program pauses or
+    /// goes on.
+    steps: Vec<Stepped>,
+}
+
+impl State {
+    /// Answer each host's step the program moved past.
+    fn settle_steps(&mut self) {
+        let (settled, waiting): (Vec<Stepped>, Vec<Stepped>) = std::mem::take(&mut self.steps)
+            .into_iter()
+            .partition(|stepped| stepped.seen.answer(self).is_some());
+        self.steps = waiting;
+        for stepped in settled {
+            if let Some(answer) = stepped.seen.answer(self) {
+                stepped.reply.send(answer);
+            }
+        }
+    }
 }
 
 /// What a request that reads or controls the program does while no
@@ -820,6 +895,18 @@ enum Wanted {
     Attached,
 }
 
+/// Where a request goes for its answer.
+enum Route {
+    /// It has its answer.
+    Answered(Value),
+    /// The program's window answers it: `input`, `screenshot` or `menu`.
+    Window(&'static str),
+    /// The program's next matching step answers it, or its pause.
+    Read,
+    /// It resumes a paused program.
+    Resume(Resume),
+}
+
 /// Where the program tells that it paused and went on (#535).
 enum Told {
     /// The run's session, on a connection that first said where this
@@ -828,6 +915,8 @@ enum Told {
     Session(Mutex<std::os::unix::net::UnixStream>),
     /// A file, one event per line.
     File(std::path::PathBuf),
+    /// A host's callback, which takes each event.
+    Host(Box<dyn Fn(&Value) + Send + Sync>),
 }
 
 struct Shared {
@@ -847,15 +936,86 @@ struct Shared {
     /// compiled.
     #[cfg(feature = "sync")]
     program: Mutex<Option<Arc<Program>>>,
-    /// Where the breakpoints are kept across restarts.
-    saved: std::path::PathBuf,
+    /// Where the breakpoints are kept across restarts, when they are.
+    saved: Option<std::path::PathBuf>,
     told: Option<Told>,
     wanted: Mutex<Wanted>,
+    /// How a pause waits.
+    waits: Waits,
+    /// Where a breakpoint reads its line's text.
+    files: Files,
+}
+
+/// What tells an inspector's requests and pauses apart from another's: its
+/// host seams and where it keeps its breakpoints.
+struct Seams {
+    saved: Option<std::path::PathBuf>,
+    told: Option<Told>,
+    waits: Waits,
+    files: Files,
 }
 
 impl Shared {
-    fn state(&self) -> std::sync::MutexGuard<'_, State> {
+    /// An inspector with no engine yet, holding `state`, through `seams`.
+    fn new(state: State, seams: Seams) -> Self {
+        let Seams {
+            saved,
+            told,
+            waits,
+            files,
+        } = seams;
+        Self {
+            state: Mutex::new(state),
+            changed: Condvar::new(),
+            wake: Arc::default(),
+            breaks: Arc::default(),
+            stepping: AtomicBool::new(false),
+            entry: AtomicBool::new(false),
+            one: Mutex::new(()),
+            locate: Mutex::new(None),
+            #[cfg(feature = "sync")]
+            program: Mutex::new(None),
+            saved,
+            told,
+            wanted: Mutex::new(Wanted::Wait),
+            waits,
+            files,
+        }
+    }
+
+    fn state(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Wake every wait on a change: each request's thread, and a pause
+    /// waiting through its host.
+    fn notify(&self) {
+        self.changed.notify_all();
+        if let Waits::Host(host) = &self.waits {
+            host.wake();
+        }
+    }
+
+    /// Wait in the program for a change, `state` let go meanwhile: on the
+    /// `Condvar`, or suspended by the host. `Err` says why the host
+    /// couldn't suspend it, `state` held again.
+    fn park<'s>(
+        &'s self,
+        state: MutexGuard<'s, State>,
+    ) -> Result<MutexGuard<'s, State>, (MutexGuard<'s, State>, String)> {
+        match &self.waits {
+            Waits::Thread => Ok(self
+                .changed
+                .wait(state)
+                .unwrap_or_else(PoisonError::into_inner)),
+            Waits::Host(host) => {
+                drop(state);
+                match host.wait() {
+                    Ok(()) => Ok(self.state()),
+                    Err(reason) => Err((self.state(), reason)),
+                }
+            }
+        }
     }
 
     fn wanted(&self) -> std::sync::MutexGuard<'_, Wanted> {
@@ -933,27 +1093,22 @@ impl Inspector {
             .flatten()
             .filter_map(stops::Point::from_json)
             .collect();
-        let shared = Arc::new(Shared {
-            state: Mutex::new(State {
-                points,
-                revision: kept["revision"].as_u64().unwrap_or(0),
-                ..State::default()
-            }),
-            changed: Condvar::new(),
-            wake: Arc::default(),
-            breaks: Arc::default(),
-            stepping: AtomicBool::new(false),
-            entry: AtomicBool::new(false),
-            one: Mutex::new(()),
-            locate: Mutex::new(None),
-            #[cfg(feature = "sync")]
-            program: Mutex::new(None),
-            saved,
-            told: std::env::var_os(EVENTS)
-                .filter(|path| !path.is_empty())
-                .and_then(|path| Told::open(std::path::PathBuf::from(path), socket)),
-            wanted: Mutex::new(Wanted::Wait),
-        });
+        let state = State {
+            points,
+            revision: kept["revision"].as_u64().unwrap_or(0),
+            ..State::default()
+        };
+        let shared = Arc::new(Shared::new(
+            state,
+            Seams {
+                saved: Some(saved),
+                told: std::env::var_os(EVENTS)
+                    .filter(|path| !path.is_empty())
+                    .and_then(|path| Told::open(std::path::PathBuf::from(path), socket)),
+                waits: Waits::Thread,
+                files: Files::Disk,
+            },
+        ));
         let listening = Arc::clone(&shared);
         std::thread::Builder::new()
             .name("rawr-inspect".into())
@@ -970,6 +1125,65 @@ impl Inspector {
             inspector.hold();
         }
         Ok(inspector)
+    }
+
+    /// An inspector with no socket, whose host hands it each request with
+    /// [`Inspector::ask`], as a browser page does (D1057.2). A pause waits
+    /// through `host`, each event goes to `tell`, and a breakpoint reads
+    /// its line from the files the running program compiled from. Its
+    /// breakpoints last as long as it does.
+    pub fn hosted(
+        host: impl Host + 'static,
+        tell: impl Fn(&Value) + Send + Sync + 'static,
+    ) -> Self {
+        Self(Arc::new(Shared::new(
+            State::default(),
+            Seams {
+                saved: None,
+                told: Some(Told::Host(Box::new(tell))),
+                waits: Waits::Host(Box::new(host)),
+                files: Files::Compiled(Mutex::new(None)),
+            },
+        )))
+    }
+
+    /// Take `request`, one line of the socket's protocol, and hand its
+    /// answer to `reply` without waiting: at once when it has one, or at
+    /// the program's step that answers it. A host's request is never given
+    /// up. Window input, screenshots and menus reach a window this
+    /// inspector doesn't serve, and are answered with an error.
+    pub fn ask(&self, request: &Value, reply: impl FnOnce(Value) + Send + 'static) {
+        let shared = &self.0;
+        let reply = Reply::new(reply);
+        match shared.route(request) {
+            Route::Answered(answer) => reply.send(answer),
+            Route::Window(op) => reply.send(json!({
+                "error": format!("`{op}` reaches a window this inspector doesn't serve")
+            })),
+            // A refusal goes back through `reply` too.
+            Route::Read => {
+                let _ = shared.queue(request, reply);
+            }
+            Route::Resume(resume) => match shared.resume(resume) {
+                Ok(answer) => reply.send(answer),
+                Err((mut state, seen)) => state.steps.push(Stepped { seen, reply }),
+            },
+        }
+    }
+
+    /// The program that runs next is the generation `located` places,
+    /// compiled as `ast`: code evaluated at a pause compiles into it, a
+    /// hosted inspector reads lines from the files it compiled from, and
+    /// [`Self::compiled`] moves the breakpoints to it.
+    pub fn compiled_from(&self, located: &Arc<Located>, ast: &crate::AST) {
+        #[cfg(feature = "sync")]
+        if let Some(program) = located.program() {
+            self.evaluate_in(program);
+        }
+        self.0.files.compiled_from(located.snapshot.as_ref());
+        let placed = Arc::clone(located);
+        self.locate_with(move |position| placed.line(position));
+        self.compiled(ast);
     }
 
     /// Hold the program at the first statement it wrote until a `release`
@@ -1040,7 +1254,7 @@ impl Inspector {
         let points: Vec<stops::Point> = state
             .points
             .iter()
-            .filter_map(|point| stops::moved(point, &stops))
+            .filter_map(|point| stops::moved(point, &stops, &shared.files))
             .collect();
         let changed = points.len() != state.points.len()
             || points
@@ -1109,35 +1323,42 @@ impl Shared {
     /// The answer to one request, which `gone` gives up.
     #[cfg(unix)]
     fn respond(&self, request: &Value, gone: &Arc<Interrupt>) -> Value {
-        let op = request.get("op").and_then(Value::as_str);
-        if !matches!(op, Some("input" | "screenshot" | "menu")) {
-            self.want();
-        }
-        match op {
-            Some("input") => self.input(request, gone),
-            Some("screenshot") => self.screenshot(request, gone),
-            Some("menu") => self.menu(request, gone),
-            Some("eval") => self.evaluate(request, gone),
-            Some("break") => self.set(request),
-            Some("clear") => self.clear(request),
-            Some("continue") => self.resume(Resume::Continue, gone),
-            Some("pause") => self.interrupt(),
-            Some("release") => self.let_go(),
-            Some("step") => self.resume(
-                Resume::Step(match request.get("kind").and_then(Value::as_str) {
-                    Some("into") => Step::Into,
-                    Some("out") => Step::Out,
-                    _ => Step::Over,
-                }),
-                gone,
-            ),
-            _ => self.inspect(request, gone),
+        match self.route(request) {
+            Route::Answered(answer) => answer,
+            Route::Window("input") => self.input(request, gone),
+            Route::Window("screenshot") => self.screenshot(request, gone),
+            Route::Window(_) => self.menu(request, gone),
+            Route::Read => self.inspect(request, gone),
+            Route::Resume(resume) => self.resumed(resume, gone),
         }
     }
 
-    /// Evaluate code where the program is paused: answered by the pause.
-    fn evaluate(&self, request: &Value, gone: &Interrupt) -> Value {
-        self.inspect(request, gone)
+    /// What `request` asks for: an answer made now, or one the window,
+    /// a step of the program or a step's pause gives.
+    fn route(&self, request: &Value) -> Route {
+        let op = request.get("op").and_then(Value::as_str);
+        match op {
+            Some("input") => return Route::Window("input"),
+            Some("screenshot") => return Route::Window("screenshot"),
+            Some("menu") => return Route::Window("menu"),
+            _ => self.want(),
+        }
+        match op {
+            Some("break") => Route::Answered(self.set(request)),
+            Some("clear") => Route::Answered(self.clear(request)),
+            Some("continue") => Route::Resume(Resume::Continue),
+            Some("pause") => Route::Answered(self.interrupt()),
+            Some("release") => Route::Answered(self.let_go()),
+            Some("step") => Route::Resume(Resume::Step(
+                match request.get("kind").and_then(Value::as_str) {
+                    Some("into") => Step::Into,
+                    Some("out") => Step::Out,
+                    _ => Step::Over,
+                },
+            )),
+            // A read, or code evaluated where the program is paused.
+            _ => Route::Read,
+        }
     }
 
     /// Hold `gone` for a pause to give up too, unless the program is
@@ -1199,24 +1420,56 @@ impl Shared {
         })
     }
 
-    /// Read values: answered at the program's next matching step, or where
-    /// it is paused, unless the tool goes away first.
+    /// Wait for the answer to a read: at the program's next matching step,
+    /// or where it is paused, unless the tool goes away first.
     fn inspect(&self, request: &Value, gone: &Interrupt) -> Value {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let text = |key: &str| request.get(key).and_then(Value::as_str).map(str::to_owned);
-        let id = NEXT.fetch_add(1, Ordering::Relaxed);
         let (reply, answer) = mpsc::channel();
         // Every answer is an object: null says the tool went away.
         let giving_up = reply.clone();
         gone.on_fire(move || {
             let _ = giving_up.send(Value::Null);
         });
+        let replying = Reply::new(move |value| {
+            let _ = reply.send(value);
+        });
+        let Some(id) = self.queue(request, replying) else {
+            return answer
+                .try_iter()
+                .find(|value| !value.is_null())
+                .unwrap_or_else(|| json!({ "reached": false }));
+        };
+        match answer.recv() {
+            Ok(Value::Null) | Err(_) => {}
+            Ok(value) => return value,
+        }
+        {
+            let mut state = self.state();
+            state.pending.retain(|request| request.id != id);
+            self.rouse(&state);
+            drop(state);
+        }
+        // An answer made while the request was being given up.
+        answer
+            .try_iter()
+            .find(|value| !value.is_null())
+            .unwrap_or_else(|| json!({ "reached": false }))
+    }
+
+    /// Queue a read for the program's next matching step, or its pause,
+    /// which answers it through `reply`; its id. `None` when it is refused,
+    /// the refusal sent through `reply`.
+    fn queue(&self, request: &Value, reply: Reply) -> Option<u64> {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let text = |key: &str| request.get(key).and_then(Value::as_str).map(str::to_owned);
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
         let mut state = self.state();
         // Code waits only in a pause, which answers every request it finds
         // before it goes on: one asked of a running program would wait for
         // the next.
         if request.get("code").is_some() && state.paused.is_none() {
-            return json!({ "error": "not paused" });
+            drop(state);
+            reply.send(json!({ "error": "not paused" }));
+            return None;
         }
         state.pending.push(Request {
             id,
@@ -1233,22 +1486,8 @@ impl Shared {
         });
         drop(state);
         self.wake.store(true, Ordering::Release);
-        self.changed.notify_all();
-        match answer.recv() {
-            Ok(Value::Null) | Err(_) => {}
-            Ok(value) => return value,
-        }
-        {
-            let mut state = self.state();
-            state.pending.retain(|request| request.id != id);
-            self.rouse(&state);
-            drop(state);
-        }
-        // An answer made while the request was being given up.
-        answer
-            .try_iter()
-            .find(|value| !value.is_null())
-            .unwrap_or_else(|| json!({ "reached": false }))
+        self.notify();
+        Some(id)
     }
 
     /// Set a breakpoint. The program pauses when it reaches it; the answer
@@ -1276,7 +1515,12 @@ impl Shared {
         };
         let mut state = self.state();
         // Named by the revision this set makes.
-        let mut point = match stops::set(state.revision + 1, spec, state.stops.as_deref()) {
+        let mut point = match stops::set(
+            state.revision + 1,
+            spec,
+            state.stops.as_deref(),
+            &self.files,
+        ) {
             Ok(point) => point,
             Err(error) => return json!({ "error": error }),
         };
@@ -1327,33 +1571,18 @@ impl Shared {
         })
     }
 
-    /// Resume a paused program. A step is answered where it pauses, or
-    /// once it went on into the native code that called the program, which
-    /// it can't stop in: `{"paused": null, "native": true}`, its pause told
-    /// as an event at the next statement the program runs. A continue is
-    /// answered once the program runs on; either, once the tool went away.
-    /// A continue while a step runs ends the step, whose wait is answered,
-    /// so a step that never pauses holds no tool.
-    fn resume(&self, resume: Resume, gone: &Interrupt) -> Value {
-        let mut state = self.state();
-        if state.paused.is_none() {
-            if matches!(resume, Resume::Continue) && state.stepping.take().is_some() {
-                self.stepping.store(false, Ordering::Release);
-                state.ended += 1;
-                self.rouse(&state);
-                self.changed.notify_all();
-                return json!({ "paused": null });
+    /// Resume a paused program, and wait for a step's answer unless the
+    /// tool goes away first (see [`Self::resume`]).
+    #[cfg(unix)]
+    fn resumed(&self, resume: Resume, gone: &Interrupt) -> Value {
+        let (mut state, seen) = match self.resume(resume) {
+            Ok(answer) => return answer,
+            Err(stepping) => stepping,
+        };
+        loop {
+            if let Some(answer) = seen.answer(&state) {
+                return answer;
             }
-            return json!({ "error": "not paused" });
-        }
-        let seen = (state.pauses, state.departures, state.ended);
-        let step = matches!(resume, Resume::Step(_));
-        state.resume = Some(resume);
-        self.changed.notify_all();
-        if !step {
-            return json!({ "paused": null });
-        }
-        while (state.pauses, state.departures, state.ended) == seen {
             if gone.is_fired() {
                 return json!({ "paused": null });
             }
@@ -1362,17 +1591,46 @@ impl Shared {
                 .wait(state)
                 .unwrap_or_else(PoisonError::into_inner);
         }
-        // A step ends at its first pause or its departure, which no later
-        // one follows without a resume: a pause the departure led to that
-        // came before this wait looked is told as its event.
-        if state.departures != seen.1 {
-            return json!({ "paused": null, "native": true });
+    }
+
+    /// Resume a paused program. A step is answered where it pauses, or
+    /// once it went on into the native code that called the program, which
+    /// it can't stop in: `{"paused": null, "native": true}`, its pause told
+    /// as an event at the next statement the program runs. A continue is
+    /// answered once the program runs on. A continue while a step runs
+    /// ends the step, whose wait is answered, so a step that never pauses
+    /// holds no tool. `Err` is a step under way, with the state held and
+    /// where it began, which [`Seen::answer`] answers once it moved.
+    fn resume(&self, resume: Resume) -> Result<Value, (MutexGuard<'_, State>, Seen)> {
+        let mut state = self.state();
+        if state.paused.is_none() {
+            // A step the paused program hasn't taken up yet is under way
+            // too: the continue takes its place.
+            let taken_up = matches!(state.resume, Some(Resume::Step(_)));
+            if matches!(resume, Resume::Continue) && (taken_up || state.stepping.take().is_some()) {
+                if taken_up {
+                    state.resume = Some(Resume::Continue);
+                }
+                self.stepping.store(false, Ordering::Release);
+                state.ended += 1;
+                state.settle_steps();
+                self.rouse(&state);
+                self.notify();
+                return Ok(json!({ "paused": null }));
+            }
+            return Ok(json!({ "error": "not paused" }));
         }
-        if state.pauses == seen.0 {
-            // A continue ended the step before it paused.
-            return json!({ "paused": null });
+        let seen = Seen::of(&state);
+        let step = matches!(resume, Resume::Step(_));
+        state.resume = Some(resume);
+        // The program runs on from now: a request after this one is the
+        // running program's, which the pause no longer answers.
+        state.paused = None;
+        self.notify();
+        if !step {
+            return Ok(json!({ "paused": null }));
         }
-        json!({ "paused": state.last })
+        Err((state, seen))
     }
 
     /// Pause the running program at the next statement it runs, answered
@@ -1405,18 +1663,19 @@ impl Shared {
         let released = self.entry.swap(false, Ordering::AcqRel);
         self.rouse(&state);
         drop(state);
-        self.changed.notify_all();
+        self.notify();
         json!({ "released": released })
     }
 
-    /// Wait at the program's first statement until a `release`.
+    /// Wait at the program's first statement until a `release`, or until
+    /// the host can't wait.
     fn wait_entry(&self) {
         let mut state = self.state();
         while self.entry.load(Ordering::Acquire) {
-            state = self
-                .changed
-                .wait(state)
-                .unwrap_or_else(PoisonError::into_inner);
+            state = match self.park(state) {
+                Ok(state) => state,
+                Err(_) => return,
+            };
         }
     }
 
@@ -1435,7 +1694,9 @@ impl Shared {
     fn save(&self, state: &mut State) {
         state.revision += 1;
         let mut told = told(state);
-        let _ = std::fs::write(&self.saved, told.to_string());
+        if let Some(saved) = &self.saved {
+            let _ = std::fs::write(saved, told.to_string());
+        }
         told["event"] = json!("breakpoints");
         self.emit(&told);
     }
@@ -1540,14 +1801,33 @@ impl Shared {
         stepping.home = None;
         stepping.anywhere = true;
         state.departures += 1;
+        state.settle_steps();
         self.rouse(&state);
         drop(state);
-        self.changed.notify_all();
+        self.notify();
     }
 
     /// The statement a step is at, if it is one the program wrote.
     fn stop(&self, position: Position, node: &crate::ast::ASTNode) -> Option<stops::Stop> {
         self.state().stops.as_ref()?.get(position, node).cloned()
+    }
+
+    /// The lock one pause holds while it lasts: waited for on a thread of
+    /// the program's own. A host suspends the program's stack while it is
+    /// paused, and runs its own events meanwhile, which may enter the
+    /// program on another stack; a second lock taken there would panic, so
+    /// a step that can't wait, or finds the lock held, doesn't pause
+    /// (D1057.7).
+    fn one(&self) -> Option<MutexGuard<'_, ()>> {
+        match &self.waits {
+            Waits::Thread => Some(self.one.lock().unwrap_or_else(PoisonError::into_inner)),
+            Waits::Host(host) if !host.can_wait() => None,
+            Waits::Host(_) => match self.one.try_lock() {
+                Ok(one) => Some(one),
+                Err(TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner()),
+                Err(TryLockError::WouldBlock) => None,
+            },
+        }
     }
 
     /// Hold the program at `stop` until a tool resumes it, answering reads
@@ -1559,7 +1839,9 @@ impl Shared {
         stop: stops::Stop,
         reason: &str,
     ) {
-        let _one = self.one.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(_one) = self.one() else {
+            return;
+        };
         let at = json!({
             "file": stop.file,
             "line": stop.line,
@@ -1577,11 +1859,16 @@ impl Shared {
         state.last = at;
         state.pauses += 1;
         state.resume = None;
+        state.settle_steps();
         for held in state.held.drain(..) {
             held.fire();
         }
-        self.changed.notify_all();
+        self.notify();
+        let mut gave_up = None;
         let resume = loop {
+            if let Some(resume) = state.resume.take() {
+                break resume;
+            }
             if !state.pending.is_empty() {
                 let pending = std::mem::take(&mut state.pending);
                 self.rouse(&state);
@@ -1589,34 +1876,38 @@ impl Shared {
                 drop(state);
                 ANSWERING.set(true);
                 for request in pending {
-                    if let Some(code) = &request.code {
-                        let _ = request
-                            .reply
-                            .send(self.evaluated(context, &request, code, position));
+                    let answer = if let Some(code) = &request.code {
+                        self.evaluated(context, &request, code, position)
                     } else if self.matches(context, &request, position) {
-                        self.reply(context, &request, position);
+                        self.read_at(context, &request, position)
                     } else {
-                        let _ = request.reply.send(json!({
+                        json!({
                             "reached": false,
                             "paused": paused,
                             "depth": depth_of(context),
-                        }));
-                    }
+                        })
+                    };
+                    request.reply.send(answer);
                 }
                 ANSWERING.set(false);
                 state = self.state();
                 continue;
             }
-            if let Some(resume) = state.resume.take() {
-                break resume;
+            match self.park(state) {
+                Ok(parked) => state = parked,
+                // The host couldn't suspend the program: it goes on.
+                Err((parked, reason)) => {
+                    state = parked;
+                    gave_up = Some(reason);
+                    break Resume::Continue;
+                }
             }
-            state = self
-                .changed
-                .wait(state)
-                .unwrap_or_else(PoisonError::into_inner);
         };
         state.paused = None;
-        self.emit(&json!({ "event": "resumed" }));
+        self.emit(&match gave_up {
+            Some(reason) => json!({ "event": "resumed", "error": reason }),
+            None => json!({ "event": "resumed" }),
+        });
         if let Resume::Step(step) = resume {
             state.stepping = Some(Stepping {
                 step,
@@ -1652,7 +1943,8 @@ impl Shared {
             self.rouse(&state);
         }
         for request in matched {
-            self.reply(context, &request, position);
+            let answer = self.read_at(context, &request, position);
+            request.reply.send(answer);
         }
         ANSWERING.set(false);
     }
@@ -1730,9 +2022,9 @@ impl Shared {
         }
     }
 
-    /// Answer `request` with the values of its frame where `context` is, at
-    /// `position`, and where each frame is.
-    fn reply(&self, context: &mut EvalContext, request: &Request, position: Position) {
+    /// The answer to `request`: the values of its frame where `context` is,
+    /// at `position`, and where each frame is.
+    fn read_at(&self, context: &mut EvalContext, request: &Request, position: Position) -> Value {
         let frame = request.frame;
         let location = self.frame_line(context, frame, position);
         let frames: Vec<Value> = (0..depth_of(context))
@@ -1752,7 +2044,7 @@ impl Shared {
             Some(Err(why)) => (Vec::new(), Some(why)),
             None => (Vec::new(), None),
         };
-        let _ = request.reply.send(json!({
+        json!({
             "reached": true,
             "frame": frame,
             "file": location.as_ref().map(|(file, _)| file),
@@ -1764,7 +2056,7 @@ impl Shared {
                 .collect::<Vec<_>>(),
             "unread": unread,
             "frames": frames,
-        }));
+        })
     }
 
     /// Tell `event` where [`EVENTS`] says.
@@ -1805,6 +2097,7 @@ impl Told {
                     "{told}"
                 );
             }
+            Self::Host(tell) => tell(event),
             Self::File(path) => {
                 if let Ok(mut file) = std::fs::OpenOptions::new()
                     .create(true)
@@ -2912,6 +3205,246 @@ mod tests {
         assert_eq!(seen[5]["line"], 18, "{seen:?}");
         // `(a, b)` is bound from the closure's argument at its header.
         assert_eq!(seen[6]["line"], 15, "{seen:?}");
+    }
+
+    /// A host whose program runs on a thread of the test's: a wait blocks
+    /// that thread until a wake, as a page's suspends `main`'s stack until
+    /// its next request. `waits` says whether the step can wait at all.
+    struct Suspending {
+        waits: bool,
+        woken: Mutex<bool>,
+        changed: std::sync::Condvar,
+    }
+
+    impl Suspending {
+        fn new(waits: bool) -> Arc<Self> {
+            Arc::new(Self {
+                waits,
+                woken: Mutex::new(false),
+                changed: std::sync::Condvar::new(),
+            })
+        }
+    }
+
+    impl super::Host for Arc<Suspending> {
+        fn can_wait(&self) -> bool {
+            self.waits
+        }
+
+        fn wait(&self) -> Result<(), String> {
+            let woken = self.woken.lock().unwrap();
+            let mut woken = self.changed.wait_while(woken, |woken| !*woken).unwrap();
+            *woken = false;
+            Ok(())
+        }
+
+        fn wake(&self) {
+            *self.woken.lock().unwrap() = true;
+            self.changed.notify_all();
+        }
+    }
+
+    /// A program whose `run` loops while `going()` says so, each turn two
+    /// calls deep in `inner`.
+    const LOOPING: &str = "fn inner(depth: i64) -> i64 {\n\
+        \x20   let deep = depth * 2;\n\
+        \x20   deep\n\
+        }\n\
+        fn outer(turn: i64) -> i64 {\n\
+        \x20   let total = inner(turn) + 1;\n\
+        \x20   total\n\
+        }\n\
+        pub fn run() -> i64 {\n\
+        \x20   let mut turn = 0;\n\
+        \x20   while going() {\n\
+        \x20       turn += 1;\n\
+        \x20       outer(turn);\n\
+        \x20   }\n\
+        \x20   turn\n\
+        }\n";
+
+    /// [`LOOPING`] compiled on an engine a hosted inspector answers for,
+    /// through `host`; what it tells goes to the receiver.
+    fn hosted(
+        host: Arc<Suspending>,
+        going: &Arc<AtomicBool>,
+    ) -> (
+        super::Inspector,
+        crate::Engine,
+        crate::AST,
+        std::sync::mpsc::Receiver<serde_json::Value>,
+    ) {
+        let (told, events) = std::sync::mpsc::channel();
+        let told = Mutex::new(told);
+        let inspector = super::Inspector::hosted(host, move |event: &serde_json::Value| {
+            let _ = told.lock().unwrap().send(event.clone());
+        });
+        let mut engine = crate::Engine::new();
+        let going = Arc::clone(going);
+        engine.register_fn("going", move || going.load(Ordering::Acquire));
+        inspector.attach(&mut engine);
+        let executable = engine
+            .compile_executable(LOOPING)
+            .unwrap_or_else(|error| panic!("{error}"));
+        let located = executable.located().unwrap();
+        let (ast, _) = executable.into_ast_with_positions();
+        inspector.locate_with(move |position| {
+            located
+                .line(position)
+                .map(|(_, line)| ("main.rs".to_owned(), line))
+        });
+        inspector.compiled(&ast);
+        (inspector, engine, ast, events)
+    }
+
+    /// Ends a [`LOOPING`] run once its test is done, a failed one too: its
+    /// loop stops, and a pause it was left in goes on.
+    struct Ending<'a>(&'a super::Inspector, &'a AtomicBool);
+
+    impl Drop for Ending<'_> {
+        fn drop(&mut self) {
+            self.1.store(false, Ordering::Release);
+            self.0.ask(&serde_json::json!({ "op": "clear" }), drop);
+            self.0.ask(&serde_json::json!({ "op": "continue" }), drop);
+        }
+    }
+
+    /// Ask `inspector` `request`: `ask` hands the answer over later, so the
+    /// receiver waits for it.
+    fn asked(
+        inspector: &super::Inspector,
+        request: &serde_json::Value,
+    ) -> std::sync::mpsc::Receiver<serde_json::Value> {
+        let (reply, answer) = std::sync::mpsc::channel();
+        inspector.ask(request, move |value| {
+            let _ = reply.send(value);
+        });
+        answer
+    }
+
+    /// A hosted pause waits through its host, two calls deep in a loop that
+    /// runs on, and answers each request by its callback: a read, a step
+    /// and a continue, each handed over without waiting (D1057.2).
+    #[test]
+    fn a_hosted_pause_waits_through_its_host_and_answers_by_callback() {
+        use serde_json::json;
+        let going = Arc::new(AtomicBool::new(true));
+        let host = Suspending::new(true);
+        let (inspector, engine, ast, events) = hosted(Arc::clone(&host), &going);
+        let set = asked(&inspector, &json!({ "op": "break", "function": "inner" }))
+            .recv()
+            .unwrap();
+        assert!(set.get("error").is_none(), "{set}");
+        std::thread::scope(|scope| {
+            let _ending = Ending(&inspector, &going);
+            let running = scope.spawn(|| {
+                engine
+                    .call_fn::<i64>(&mut crate::Scope::new(), &ast, "run", ())
+                    .unwrap_or_else(|error| panic!("{error}"))
+            });
+            // A name it never binds: only the pause answers it.
+            let paused = asked(&inspector, &json!({ "name": "nothing" }))
+                .recv()
+                .unwrap();
+            assert_eq!(paused["paused"]["function"], "main::inner", "{paused}");
+            assert_eq!(paused["paused"]["line"], 2, "{paused}");
+            assert_eq!(paused["depth"], 3, "{paused}");
+            let told = events.recv().unwrap();
+            assert_eq!(told["event"], "breakpoints", "{told}");
+            let told = events.recv().unwrap();
+            assert_eq!(told["event"], "paused", "{told}");
+            // The caller's caller, while the pause waits.
+            let read = asked(&inspector, &json!({ "frame": 2 })).recv().unwrap();
+            assert_eq!(read["reached"], true, "{read}");
+            let functions: Vec<&serde_json::Value> = read["frames"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|frame| &frame["function"])
+                .collect();
+            assert_eq!(functions, ["main::inner", "main::outer", "run"], "{read}");
+            let turn = read["bindings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|binding| binding["name"] == "turn");
+            assert_eq!(turn.map(|turn| &turn["value"]), Some(&json!("1")), "{read}");
+            let step = asked(&inspector, &json!({ "op": "step", "kind": "over" }))
+                .recv()
+                .unwrap();
+            assert_eq!(step["paused"]["line"], 3, "{step}");
+            let deep = asked(&inspector, &json!({ "name": "deep" }))
+                .recv()
+                .unwrap();
+            assert_eq!(deep["bindings"][0]["value"], "2", "{deep}");
+            asked(&inspector, &json!({ "op": "clear" })).recv().unwrap();
+            let continued = asked(&inspector, &json!({ "op": "continue" }))
+                .recv()
+                .unwrap();
+            assert_eq!(continued, json!({ "paused": null }));
+            going.store(false, Ordering::Release);
+            assert!(running.join().unwrap() >= 1);
+        });
+        let told: Vec<serde_json::Value> = events
+            .try_iter()
+            .map(|event| event["event"].clone())
+            .collect();
+        assert!(told.contains(&json!("resumed")), "{told:?}");
+    }
+
+    /// A step a hosted inspector can't wait at goes on without pausing, and
+    /// a read is still answered there, as the page's call into a program
+    /// whose `main` doesn't wait answers one (D1057.4).
+    #[test]
+    fn a_hosted_step_that_cant_wait_runs_on_and_still_answers_reads() {
+        use serde_json::json;
+        let going = Arc::new(AtomicBool::new(true));
+        let (inspector, engine, ast, events) = hosted(Suspending::new(false), &going);
+        asked(&inspector, &json!({ "op": "break", "function": "inner" }))
+            .recv()
+            .unwrap();
+        std::thread::scope(|scope| {
+            let _ending = Ending(&inspector, &going);
+            let running = scope.spawn(|| {
+                engine
+                    .call_fn::<i64>(&mut crate::Scope::new(), &ast, "run", ())
+                    .unwrap_or_else(|error| panic!("{error}"))
+            });
+            let read = asked(&inspector, &json!({ "name": "deep" }))
+                .recv()
+                .unwrap();
+            assert_eq!(read["reached"], true, "{read}");
+            assert_eq!(read["function"], "main::inner", "{read}");
+            going.store(false, Ordering::Release);
+            running.join().unwrap();
+        });
+        let told: Vec<serde_json::Value> = events
+            .try_iter()
+            .map(|event| event["event"].clone())
+            .collect();
+        assert!(!told.contains(&json!("paused")), "{told:?}");
+    }
+
+    /// A hosted inspector serves no window: input, screenshots and menus are
+    /// answered at once with an error.
+    #[test]
+    fn a_hosted_inspector_answers_window_requests_with_an_error() {
+        use serde_json::json;
+        let going = Arc::new(AtomicBool::new(false));
+        let (inspector, ..) = hosted(Suspending::new(true), &going);
+        for op in ["input", "screenshot", "menu"] {
+            let answer = asked(&inspector, &json!({ "op": op })).recv().unwrap();
+            assert!(
+                answer["error"]
+                    .as_str()
+                    .is_some_and(|error| error.contains(op)),
+                "{answer}"
+            );
+        }
+        let answer = asked(&inspector, &json!({ "op": "eval", "code": "1" }))
+            .recv()
+            .unwrap();
+        assert_eq!(answer, json!({ "error": "not paused" }));
     }
 
     /// Bodies whose last statement is a tail expression: a closure's whose
