@@ -11,7 +11,10 @@ use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph};
 use ratatui::Frame as Screen;
 
 use super::update::file_name;
-use super::{Breakpoint, Focus, Kind, Purpose, Shell};
+use super::{colours, Breakpoint, Focus, Kind, Purpose, Shell};
+
+/// The background of the line the program stopped at.
+const STOPPED: Color = Color::Rgb(0x3b, 0x42, 0x52);
 
 const KEYS: &str =
     "b break · B break at · p pause · s step · i into · o out · c continue · e eval · Tab pane · q quit";
@@ -90,37 +93,55 @@ impl Shell {
             .stop()
             .filter(|stop| path.is_some_and(|path| path == Path::new(stop.file())))
             .map(|stop| stop.line());
-        let lines: Vec<Text> = self
-            .source
-            .lines
-            .iter()
-            .enumerate()
-            .skip(top)
-            .take(height)
-            .map(|(index, text)| {
-                let number = index + 1;
-                let marked = path.is_some_and(|path| self.has_breakpoint(path, number));
-                let here = stopped == Some(number);
-                let mut style = Style::new();
-                if here {
-                    style = style.fg(Color::Yellow);
-                }
-                if index == self.cursor {
-                    style = style.add_modifier(if self.focus == Focus::Source {
-                        Modifier::REVERSED
+        let shown = |pieces: &[colours::Pieces]| -> Vec<Text<'_>> {
+            self.source
+                .lines
+                .iter()
+                .enumerate()
+                .skip(top)
+                .take(height)
+                .map(|(index, text)| {
+                    let number = index + 1;
+                    let marked = path.is_some_and(|path| self.has_breakpoint(path, number));
+                    let here = stopped == Some(number);
+                    let mut style = Style::new();
+                    if here {
+                        style = style.bg(STOPPED);
+                    }
+                    if index == self.cursor {
+                        style = style.add_modifier(if self.focus == Focus::Source {
+                            Modifier::REVERSED
+                        } else {
+                            Modifier::UNDERLINED
+                        });
+                    }
+                    let gutter = if here {
+                        Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD)
                     } else {
-                        Modifier::UNDERLINED
-                    });
-                }
-                Text::from(vec![
-                    Span::styled(if marked { "●" } else { " " }, Style::new().fg(Color::Red)),
-                    Span::raw(format!("{number:>width$}")),
-                    Span::raw(if here { " ▶ " } else { "   " }),
-                    Span::raw(text.clone()),
-                ])
-                .style(style)
-            })
-            .collect();
+                        Style::new()
+                    };
+                    let mut spans = vec![
+                        Span::styled(if marked { "●" } else { " " }, Style::new().fg(Color::Red)),
+                        Span::styled(format!("{number:>width$}"), gutter),
+                        Span::styled(if here { " ▶ " } else { "   " }, gutter),
+                    ];
+                    match pieces.get(index) {
+                        Some(pieces) => spans.extend(pieces.iter().map(|(bytes, colour)| {
+                            Span::styled(&text[bytes.clone()], Style::new().fg(*colour))
+                        })),
+                        None => spans.push(Span::raw(text.as_str())),
+                    }
+                    Text::from(spans).style(style)
+                })
+                .collect()
+        };
+        let lines = match path {
+            Some(path) => self
+                .source
+                .colours
+                .with(path, &self.source.lines, top + height, shown),
+            None => shown(&[]),
+        };
         screen.render_widget(Paragraph::new(lines), inner);
     }
 

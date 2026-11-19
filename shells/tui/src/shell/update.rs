@@ -451,11 +451,16 @@ impl Shell {
 
     /// Show `path`, with the cursor on one-based `line`.
     pub(super) fn show(&mut self, path: &Path, line: usize) {
-        // A file is read again each time, as a save may have changed it.
-        self.source.lines = std::fs::read_to_string(path)
+        // A file is read again each time, as a save may have changed it;
+        // its colours are kept while its text is the same.
+        let lines: Vec<String> = std::fs::read_to_string(path)
             .map(|text| text.lines().map(str::to_owned).collect())
             .unwrap_or_default();
-        self.source.path = Some(path.to_path_buf());
+        if self.source.path.as_deref() != Some(path) || self.source.lines != lines {
+            self.source.colours.forget();
+            self.source.lines = lines;
+            self.source.path = Some(path.to_path_buf());
+        }
         self.cursor = line
             .saturating_sub(1)
             .min(self.source.lines.len().saturating_sub(1));

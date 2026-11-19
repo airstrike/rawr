@@ -12,3 +12,4 @@ license = "MIT OR Apache-2.0"
 crossterm.workspace = true
 ratatui.workspace = true
 serde_json = "1.0.45"
+syntect = { version = "5.3.0", default-features = false, features = ["default-syntaxes", "default-themes", "regex-fancy"] }

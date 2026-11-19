@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use iced::keyboard::key::Named;
-use iced::Theme;
+use iced::theme::Mode;
 use iced_test::{simulator, Simulator};
 use rawr_gui::app::Message;
 use rawr_gui::session::{Event, Link, Transport};
@@ -135,8 +135,9 @@ fn paused(script: &Arc<Script>) -> App {
     app
 }
 
-/// Draw the window as it is now into `name`, for a person to look at.
-fn snapshot(app: &App, name: &str) {
+/// Draw the window as it is now into `name`, for a person to look at, in
+/// the window's own theme: the file it wrote.
+fn snapshot(app: &App, name: &str) -> PathBuf {
     let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("rawr-gui");
     std::fs::create_dir_all(&directory).unwrap();
     let path = directory.join(name);
@@ -151,8 +152,21 @@ fn snapshot(app: &App, name: &str) {
         }
     }
     let mut ui = simulator(app.view());
-    let shot = ui.snapshot(&Theme::Dark).unwrap();
+    let shot = ui.snapshot(&app.theme()).unwrap();
     assert!(shot.matches_image(&path).unwrap());
+    // The renderer's name goes after the one given.
+    let stem = name.trim_end_matches(".png");
+    std::fs::read_dir(&directory)
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|written| {
+            written.file_stem().is_some_and(|file| {
+                let file = file.to_string_lossy();
+                file == stem || file.starts_with(&format!("{stem}-"))
+            })
+        })
+        .expect("the snapshot wrote its image")
 }
 
 /// Drive the window with `act`, then hand it the messages that made.
@@ -181,7 +195,7 @@ fn a_stop_shows_its_frames_source_and_bindings_which_fold_open() {
         "p::main",
         "count",
         "Point { x: 1, y: 2 }",
-        "    let next = count + 1;",
+        "   5",
         "ticking\n",
     ] {
         assert!(shows(&app, shown), "the window shows {shown:?}");
@@ -264,4 +278,37 @@ fn the_console_evaluates_where_the_program_is_paused_and_a_step_moves_the_stop()
     assert!(shows(&app, "paused (step) at line 6"));
     // The new stop's frame is read.
     assert_eq!(script.inspect()["params"]["frame"], 0);
+}
+
+#[test]
+fn a_stop_draws_its_rust_source_in_the_colours_of_the_windows_mode() {
+    let script = Arc::new(Script::default());
+    let mut app = paused(&script);
+    // The stop's line keeps its breakpoint's dot among the colours.
+    interact(&mut app, |ui| {
+        let _ = ui.click("   5").unwrap();
+    });
+    reply(
+        &mut app,
+        &script.request("break"),
+        json!({ "set": { "file": FILE, "line": 5 }, "lines": [], "compiled": true, "paused": null }),
+    );
+    assert!(shows(&app, "●"));
+    let dark = snapshot(&app, "highlighted.png");
+    let screens = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .parent()
+        .unwrap()
+        .join("screens");
+    std::fs::create_dir_all(&screens).unwrap();
+    std::fs::copy(&dark, screens.join("gui-highlighted.png")).unwrap();
+
+    // The system turning light turns the window and its source light.
+    let _ = app.update(Message::Mode(Mode::Light));
+    assert_eq!(app.theme(), iced::Theme::Light);
+    let light = snapshot(&app, "lit.png");
+    std::fs::copy(&light, screens.join("gui-highlighted-light.png")).unwrap();
+    assert_ne!(
+        std::fs::read(&dark).unwrap(),
+        std::fs::read(&light).unwrap()
+    );
 }
