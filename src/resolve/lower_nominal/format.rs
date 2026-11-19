@@ -531,6 +531,15 @@ pub(super) fn debug_text(value: &Dynamic, models: &Models, spec: Option<&DebugSp
                     .join(", ")
             )
         }
+        // A sequence writes each item through this same text, so a
+        // program's struct or enum inside it prints by its derive.
+        Union::Array(values, ..) => {
+            let items = values
+                .iter()
+                .map(|value| debug_value_spec(value, models, spec))
+                .collect::<Vec<_>>();
+            format!("[{}]", items.join(", "))
+        }
         _ => match spec {
             Some(spec) => spec.leaf(value, DebugLeaf::of_value(value)),
             None => format!("{value:?}"),
@@ -642,10 +651,12 @@ pub(super) fn debug_typed(
 /// Whether a local of type `ty` prints otherwise by its type than by its
 /// runtime value alone: a tuple (an array at runtime), an `Ordering` (an
 /// integer), an unsigned 64-bit integer, an `f32` or a parse error (its
-/// message), or a value holding one.
+/// message), a map or set (a sequence of its entries, which only its type
+/// writes as `{k: v}`), or a value holding one.
 pub(super) fn needs_declared(ty: &Ty) -> bool {
     match ty {
         Ty::Tuple(_)
+        | Ty::Keyed(..)
         | Ty::Ordering
         | Ty::ParseError(_)
         | Ty::Int(Int::U64 | Int::Usize)
@@ -657,7 +668,6 @@ pub(super) fn needs_declared(ty: &Ty) -> bool {
         | Ty::Counted(_, inner)
         | Ty::Reverse(inner) => needs_declared(inner),
         Ty::Result(ok, err) => needs_declared(ok) || needs_declared(err),
-        Ty::Keyed(_, arguments) => arguments.iter().any(needs_declared),
         _ => false,
     }
 }
