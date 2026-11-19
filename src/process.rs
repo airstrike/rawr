@@ -26,11 +26,6 @@ pub fn unblock_signals() {
 /// `rawr run` starts the program again (#1990).
 pub const RESTART: i32 = 76;
 
-/// The status a runner ends with when a shell asked for the debugger of a
-/// program that can't take one in place: `rawr run` starts the program
-/// again with one (#2266).
-pub const DEBUGGER: i32 = 77;
-
 /// End the runner with `status` once its owner has ended it, to restart
 /// the program or because it refused a generation: what it wrote reaches
 /// stdout and stderr, and no exit handler runs. The owner starts the next

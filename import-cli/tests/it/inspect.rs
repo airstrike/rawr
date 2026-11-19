@@ -160,3 +160,65 @@ fn inspect_reads_a_callbacks_bindings_in_a_runner_with_crate_values() {
     fs::write(&stop, "").unwrap();
     let _ = fs::remove_dir_all(&directory);
 }
+
+const LOOP_FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/inspect-loop");
+
+/// The value of `count` a read through `socket` answers with.
+fn count(socket: &Path) -> u64 {
+    let read = ask(socket, &json!({ "name": "count" }));
+    assert_eq!(read["reached"], true, "{read}");
+    read["bindings"][0]["value"]
+        .as_str()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or_else(|| panic!("{read}"))
+}
+
+/// A marked `main` that loops in script code, calling its dependency and
+/// never returning to native code, started without a debugger as a
+/// session starts it: the first read registers the debugger with the
+/// engine that runs it (#2308). The read answers in the loop, the count
+/// goes on from where the program had it, and the process is the one
+/// that started.
+#[test]
+fn a_read_registers_the_debugger_in_a_marked_main_that_never_returns_to_native_code() {
+    crate::support::driver();
+    let root = crate::support::fresh("inspect-loop");
+    copy(Path::new(LOOP_FIXTURE), &root);
+    // A Unix socket's path is short: under the system's temp directory, as
+    // `rawr mcp` makes it.
+    let directory = std::env::temp_dir().join(format!("rawr-inspect-loop-{}", std::process::id()));
+    fs::create_dir_all(&directory).unwrap();
+    let socket = directory.join("s");
+    let mut run = start(
+        &root,
+        &[
+            ("RAWR_MCP_INSPECT", socket.clone()),
+            ("RAWR_DEBUGGER_ON_REQUEST", "1".into()),
+        ],
+    );
+    let pid: i32 = run
+        .until(|line| line.starts_with("pid "))
+        .trim_start_matches("pid ")
+        .trim()
+        .parse()
+        .unwrap();
+
+    let first = count(&socket);
+    let second = count(&socket);
+    assert!(second >= first, "the count went from {first} to {second}");
+    // A restart would have ended the process that printed its pid.
+    assert!(
+        nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok(),
+        "the runner that started is gone: {}",
+        run.seen.join("\n")
+    );
+    assert!(
+        !run.seen
+            .iter()
+            .any(|line| line.starts_with("pid ") && !line.ends_with(&pid.to_string())),
+        "{}",
+        run.seen.join("\n")
+    );
+
+    let _ = fs::remove_dir_all(&directory);
+}

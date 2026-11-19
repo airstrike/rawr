@@ -1253,17 +1253,6 @@ fn reaped(
             rawr_cli::events::restarting(reason);
             Ok(Some(Ended::Restart(reason.to_owned(), None)))
         }
-        // A shell asked for the debugger of a program that can't take a
-        // generation with one in place, such as an async `main`'s runtime
-        // entry, and the runner said so: it starts again with one (#2266).
-        Err(crate::native::Error::Process(rawr_import::process::RunnerError::Exit(Some(
-            rawr::process::DEBUGGER,
-        )))) if lifecycle == rawr_import::process::Lifecycle::Run => {
-            let reason = "a debugger attached";
-            rawr_import::process::say(format_args!("rawr: {reason}; restarting the program"));
-            rawr_cli::events::restarting(reason);
-            Ok(Some(Ended::Restart(reason.to_owned(), None)))
-        }
         // rawr's Restart item in the program's menu bar asked for a new
         // start (#1990), and the runner said so.
         Err(crate::native::Error::Process(rawr_import::process::RunnerError::Exit(Some(
