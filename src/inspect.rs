@@ -2914,6 +2914,31 @@ mod tests {
         assert_eq!(seen[6]["line"], 15, "{seen:?}");
     }
 
+    /// Bodies whose last statement is a tail expression: a closure's whose
+    /// body is only that, and a function's.
+    const TAILED: &str = "fn twice(n: u64) -> u64 {\n\
+        \x20   n * 2\n\
+        }\n\
+        pub fn run() -> u64 {\n\
+        \x20   let f = |(a, b): (u64, u64)| {\n\
+        \x20       a + b\n\
+        \x20   };\n\
+        \x20   let one = f((0, 1));\n\
+        \x20   one + twice(one)\n\
+        }\n";
+
+    /// A tail expression is a statement a step stops at, as rustc's
+    /// debuggers stop at it (#2300).
+    #[cfg(unix)]
+    #[test]
+    fn a_step_pauses_at_a_tail_expression() {
+        let seen = stepped_in(TAILED, "step-tail", 8, &["into", "over", "into"]);
+        assert_eq!(seen[0]["line"], 8, "{seen:?}");
+        assert_eq!(seen[1]["line"], 6, "{seen:?}");
+        assert_eq!(seen[2]["line"], 9, "{seen:?}");
+        assert_eq!(seen[3]["line"], 2, "{seen:?}");
+    }
+
     #[test]
     fn type_names_are_trimmed_as_rustc_writes_them() {
         assert_eq!(short_type_name("app::Window"), "Window");

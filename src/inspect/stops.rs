@@ -56,9 +56,28 @@ impl Stops {
     /// the outer one pauses for the line.
     pub fn of(ast: &AST, locate: &dyn Fn(Position) -> Option<(String, usize)>) -> Self {
         let mut stops = Self::default();
+        // A closure runs the body its pointer holds, as the parser wrote it,
+        // not the optimized copy among the functions, where a tail call is a
+        // statement of its own kind: its stops come from that body first, so
+        // each has the node the engine steps on.
+        let mut running = Vec::new();
+        closures(ast.statements(), &mut running);
+        for function in ast.iter_fn_def() {
+            closures(function.body.statements(), &mut running);
+        }
+        let mut firsts = HashMap::new();
+        let mut index = 0;
+        while let Some(closure) = running.get(index).cloned() {
+            if let Some(first) = stops.collect(closure.body.iter(), locate) {
+                firsts.insert(closure.name.clone(), first);
+            }
+            closures(closure.body.statements(), &mut running);
+            index += 1;
+        }
         stops.collect(ast.statements().iter(), locate);
         for function in ast.iter_fn_def() {
-            if let Some(first) = stops.collect(function.body.iter(), locate) {
+            let first = stops.collect(function.body.iter(), locate);
+            if let Some(first) = first.or_else(|| firsts.get(&function.name).copied()) {
                 let name =
                     crate::resolve::lower_nominal::function_display_name(&function.name).to_owned();
                 stops.functions.push((name, first));
@@ -194,6 +213,25 @@ impl Stops {
             })
             .map(|(_, position)| *position)
             .collect()
+    }
+}
+
+/// Add to `found` each closure that `statements` make a pointer to, by the
+/// function the pointer calls, once each.
+fn closures(statements: &[Stmt], found: &mut Vec<crate::Shared<crate::ast::ScriptFuncDef>>) {
+    let mut path = Vec::new();
+    for statement in statements {
+        statement.walk(&mut path, &mut |path: &[ASTNode]| {
+            if let Some(ASTNode::Expr(Expr::DynamicConstant(value, _))) = path.last()
+                && let Some(pointer) = value.read_lock::<crate::FnPtr>()
+                && let crate::types::fn_ptr::FnPtrType::Script(function) = &pointer.typ
+                && !found.iter().any(|known| known.name == function.name)
+            {
+                found.push(crate::Shared::clone(function));
+            }
+            true
+        });
+        path.clear();
     }
 }
 
