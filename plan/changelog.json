@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.4.30",
+      "date": "2026-11-19",
+      "entries": [
+        {"text":"A debugger step stops only at statements the program wrote, once per line: step into a function with a `&mut` parameter pauses at its first body line, not its signature, and a step or continue from a breakpoint no longer pauses on the same line again.","issues":[2272]}
+      ]
+    },
+    {
       "version": "0.4.29",
       "date": "2026-11-19",
       "entries": [

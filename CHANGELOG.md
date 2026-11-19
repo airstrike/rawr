@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.30 (2026-11-19)
+
+- A debugger step stops only at statements the program wrote, once per line: step into a function with a `&mut` parameter pauses at its first body line, not its signature, and a step or continue from a breakpoint no longer pauses on the same line again. (#2272)
+
 ## 0.4.29 (2026-11-19)
 
 - A shell that attaches to a plain `rawr run` gets the debugger without a restart: the program registers it at its next call from native code and keeps its state. Screenshots, window input and menus need no debugger and no longer restart the program. (#2266)
