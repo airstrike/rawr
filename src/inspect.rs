@@ -79,8 +79,9 @@
 //! items in it, with `{"op": "menu"}` (#1990, see [`menu`]).
 //!
 //! A paused program evaluates Rust where it is paused, with `{"op":
-//! "eval", "code": ..}`: `{"value": ..}` or `{"error": ..}` (#490, see
-//! [`evaluate`]); `{"error": "not paused"}` on a program that isn't.
+//! "eval", "code": .., "frame": ..}`: `{"value": ..}` or `{"error": ..}`
+//! (#490, see [`evaluate`]); `{"error": "not paused"}` on a program that
+//! isn't. `frame` picks the call it runs in, as a read's does (#2309).
 //!
 //! A pause and its end are also told as `paused` (with the file, line,
 //! function and reason) and `resumed` events where [`EVENTS`] says, so
@@ -132,6 +133,7 @@ mod stops;
 
 use std::cell::Cell;
 use std::collections::HashSet;
+use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Condvar, Mutex, MutexGuard, PoisonError, TryLockError};
 
@@ -240,35 +242,30 @@ fn depth_of(context: &EvalContext) -> usize {
 /// there.
 type Entry<'c> = (&'c str, Result<&'c Dynamic, String>);
 
-/// The scope frame `frame` keeps its bindings in where `context` is, and
-/// where its own entries end in it. `None` when it can't be read there.
-fn scope_of<'c>(
-    context: &'c EvalContext,
-    stack: &'c [crate::debugger::CallStackFrame],
+/// The scope frame `frame` keeps its bindings in, where the innermost
+/// frame's is `base`, and where its own entries end in it. `None` when it
+/// can't be reached there. A caller's is the pointer its call was lent
+/// (`Lent`), so a reader takes a shared reference through it and code
+/// evaluated in the frame a unique one, each only inside one step's
+/// callback.
+fn scope_of(
+    base: NonNull<crate::Scope<'static>>,
+    stack: &[crate::debugger::CallStackFrame],
     frames: &[usize],
     frame: usize,
-) -> Option<(&'c crate::Scope<'c>, usize)> {
+) -> Option<(NonNull<crate::Scope<'static>>, usize)> {
     if frame == 0 {
-        return Some((context.scope(), usize::MAX));
+        return Some((base, usize::MAX));
     }
     let index = *frames.get(frame)?;
     let call = stack.get(index + 1)?;
     match call.caller.as_ref()?.scope {
-        // SAFETY: the call at `index + 1` is on the call stack, so it runs
-        // on this thread below the step `context` is at. Its caller lent
-        // it this pointer after its last use of its scope before the call,
-        // and uses it again only when the call returns (`Lent`), so no
-        // live `&mut` aliases it. The reference ends with `context`'s
-        // borrow, inside this step's callback.
-        Some(scope) => Some((
-            unsafe { scope.cast::<crate::Scope<'c>>().as_ref() },
-            usize::MAX,
-        )),
+        Some(scope) => Some((scope, usize::MAX)),
         // The call extended this frame's scope: it is the next frame in,
         // whose entries start where this frame's end.
         None if frames.get(frame - 1) == Some(&(index + 1)) => {
             let end = call.bindings.as_ref()?.start;
-            scope_of(context, stack, frames, frame - 1).map(|(scope, _)| (scope, end))
+            scope_of(base, stack, frames, frame - 1).map(|(scope, _)| (scope, end))
         }
         None => None,
     }
@@ -311,15 +308,22 @@ fn entries<'c>(context: &'c EvalContext, frame: usize) -> Option<Result<Vec<Entr
     let index = frames[frame];
     let call = stack.get(index + 1)?;
     let callee = crate::resolve::lower_nominal::function_display_name(&call.fn_name);
-    let (Some(lent), Some((scope, end))) = (
-        call.caller.as_ref(),
-        scope_of(context, stack, &frames, frame),
-    ) else {
+    let base = NonNull::from(context.scope()).cast::<crate::Scope<'static>>();
+    let (Some(lent), Some((scope, end))) =
+        (call.caller.as_ref(), scope_of(base, stack, &frames, frame))
+    else {
         return Some(Err(format!(
             "its bindings can't be read while it calls `{callee}`: rawr doesn't keep them for \
              this call"
         )));
     };
+    // SAFETY: the scope is the innermost frame's own, or a caller's whose
+    // call is on the call stack, so it runs on this thread below the step
+    // `context` is at. That caller lent it after its last use of its scope
+    // before the call, and uses it again only when the call returns
+    // (`Lent`), so no live `&mut` aliases it. The reference ends with
+    // `context`'s borrow, inside this step's callback.
+    let scope: &'c crate::Scope<'c> = unsafe { scope.cast().as_ref() };
     let borrowed = |name: &str| format!("`{name}` is borrowed by the call to `{callee}`");
     let places: Vec<(&'c str, *const Dynamic)> = scope
         .places()
@@ -2015,8 +2019,8 @@ impl Shared {
         ))
     }
 
-    /// The answer to `code`, evaluated where `context` is paused, at
-    /// `position`.
+    /// The answer to `code`, evaluated in the request's frame where
+    /// `context` is paused, at `position`.
     fn evaluated(
         &self,
         context: &mut EvalContext,
@@ -2024,9 +2028,6 @@ impl Shared {
         code: &str,
         position: Position,
     ) -> Value {
-        if request.frame > 0 {
-            return json!({ "error": "code is evaluated only in the function the program is paused in, frame 0" });
-        }
         #[cfg(feature = "sync")]
         let program = self
             .program
@@ -2035,14 +2036,18 @@ impl Shared {
             .clone();
         #[cfg(not(feature = "sync"))]
         let program: Option<()> = {
-            let _ = (context, code, position);
+            let _ = (context, code, position, request.frame);
             None
         };
         match program {
             #[cfg(feature = "sync")]
-            Some(program) => request
-                .shape
-                .add(evaluate::answer(context, &program, position, code)),
+            Some(program) => request.shape.add(evaluate::answer(
+                context,
+                &program,
+                request.frame,
+                position,
+                code,
+            )),
             _ => {
                 json!({ "error": "this run kept none of the program's files, which compiling code into it takes" })
             }

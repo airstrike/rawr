@@ -103,7 +103,7 @@ clear    {"path": "counter"}</code></pre></div>
   <li>A pause inside a call from native code, such as a window&rsquo;s event loop, holds that call. The window doesn&rsquo;t redraw or take input until the program goes on.</li>
   <li><code>eval</code> compiles its code as a block written just before the paused statement, so the bindings in scope there are in scope for it. rustc&rsquo;s rules for that line apply. Changing a binding that isn&rsquo;t <code>mut</code> is refused, and so is a borrow that conflicts with one the program still holds, each with rustc&rsquo;s error.</li>
   <li><code>eval</code> reads its last expression through a borrow, so <code>eval</code> of a binding doesn&rsquo;t move it. A change it makes stays, and the program goes on with it. Bindings the code makes end with it.</li>
-  <li><code>eval</code> works only in the function the program is paused in.</li>
+  <li><code>eval</code> with <code>frame</code> runs in a caller, numbered as <code>inspect</code> numbers them. Its code is a block written just before the caller&rsquo;s statement that makes the call the program is in, and a change it makes stays in that caller. A binding that call borrows, such as one passed as <code>&amp;mut</code>, is refused until the call returns.</li>
   <li>A breakpoint stays across saves while its line&rsquo;s text is still in the file. When lines move, it moves to the nearest line with that text. When no line has that text, it is removed.</li>
 </ul>
 

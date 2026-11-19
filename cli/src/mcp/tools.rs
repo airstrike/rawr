@@ -285,12 +285,13 @@ pub fn list() -> Vec<Value> {
         }),
         json!({
             "name": "eval",
-            "description": "Evaluate Rust where the started program is paused, as if the code were a block written just before the statement it is paused at: it reads and can change the bindings in scope there, and rustc's rules for that line apply, so a type error or a borrow that conflicts with one the program holds is refused with rustc's error. Returns the value of its last expression as Rust's `{:?}` prints it, read through a borrow so nothing moves; bindings the code makes end with it. Only the function the program is paused in, frame 0.",
+            "description": "Evaluate Rust where the started program is paused, as if the code were a block written just before the statement it is paused at: it reads and can change the bindings in scope there, and rustc's rules for that line apply, so a type error or a borrow that conflicts with one the program holds is refused with rustc's error. Returns the value of its last expression as Rust's `{:?}` prints it, read through a borrow so nothing moves; bindings the code makes end with it. With `frame`, it runs in a caller instead, as a block written before the statement making the call the program is in: a binding that call borrows is refused while it runs.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "path": path_schema(),
                     "code": { "type": "string", "description": "Rust statements and an optional last expression, such as `items.len() * 2` or `let n = count + 1; n * n`" },
+                    "frame": { "type": "integer", "minimum": 0, "default": 0, "description": "Which call it runs in: 0 for the function the program is paused in, 1 for its caller, and on, as `inspect` numbers them" },
                 },
                 "required": ["code"],
             },
@@ -558,6 +559,7 @@ pub fn call(server: &Server, params: &Value, cancel: &Cancel) -> Value {
             server,
             text("path"),
             text("code").unwrap_or_default(),
+            arguments.get("frame").and_then(Value::as_u64).unwrap_or(0),
             cancel,
         ),
         "break" | "step" | "continue" | "clear" => debug(server, name, &arguments, cancel),
@@ -927,15 +929,18 @@ fn inspect(
     Ok(content::success(structured, summary.trim_end(), Vec::new()))
 }
 
-/// `eval`: ask the paused program to evaluate `code` where it is paused.
+/// `eval`: ask the paused program to evaluate `code` in frame `frame`
+/// where it is paused.
 fn evaluate(
     server: &Server,
     path: Option<&str>,
     code: &str,
+    frame: u64,
     cancel: &Cancel,
 ) -> Result<Value, String> {
     let session = session(server, path, cancel)?;
-    let answer = ask(&session, &json!({ "op": "eval", "code": code }), cancel)?;
+    let request = json!({ "op": "eval", "code": code, "frame": frame });
+    let answer = ask(&session, &request, cancel)?;
     match (answer["value"].as_str(), answer["error"].as_str()) {
         (Some(value), _) => Ok(content::success(
             json!({ "root": session.root, "value": value }),

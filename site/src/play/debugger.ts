@@ -221,11 +221,11 @@ export class Debugger {
     this.set({ bindings: answer.bindings ?? [], unread: answer.unread ?? null, frames: answer.frames ?? this.state.frames });
   }
 
-  /** Evaluate `code` where the program is paused, in its innermost frame. */
+  /** Evaluate `code` where the program is paused, in the selected frame. */
   async evaluate(code: string): Promise<void> {
     const run = this.run;
     if (!this.ask || !code.trim()) return;
-    const answer = await this.ask({ op: "eval", code, children: true });
+    const answer = await this.ask({ op: "eval", code, frame: this.state.frame, children: true });
     if (run !== this.run) return;
     const evaluated: Evaluated = answer.error !== undefined
       ? { code, error: String(answer.error) }

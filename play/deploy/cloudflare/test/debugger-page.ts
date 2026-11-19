@@ -302,23 +302,24 @@ try {
   check(JSON.stringify(titles) === JSON.stringify(["Continue (F8)", "Pause (F8)", "Step over (F10)", "Step into (F11)", "Step out (Shift+F11)"]), "the toolbar's glyphs name their action and key", titles);
   check(await evaluate(`${control("Pause")}.disabled && !${control("Continue")}.disabled`), "paused, Pause is off and Continue on");
 
-  // The console under the code: a typed Enter evaluates where it is paused.
+  // The console under the code: a typed Enter evaluates where it is paused,
+  // in the frame picked above, `main`'s.
   check(await evaluate(`!!document.querySelector("#playground section.pane #console") && !${panel}.querySelector("#console")`), "the console sits under the code, not in the panel");
   await clickOn(`document.querySelector("#console .prompt .cm-content")`);
-  await on("Input.insertText", { text: "depth + 1" });
+  await on("Input.insertText", { text: "turn + 1" });
   await press("Enter", "Enter", 13, 0, "\r");
   await until("the eval", `document.querySelectorAll("#console .scrollback .entry").length === 1`, 5000);
-  check(JSON.stringify(await evaluate(entries)) === JSON.stringify([["depth + 1", String(depth + 1)]]), "an eval answers in the paused frame", await evaluate(entries));
+  check(JSON.stringify(await evaluate(entries)) === JSON.stringify([["turn + 1", String(depth + 1)]]), "an eval answers in the selected frame, main's", await evaluate(entries));
   check(await evaluate(`document.querySelector("#console .prompt").textContent === ">"`), "and the prompt empties");
   // Shift+Enter adds a line; the eval and its answer join the scrollback.
-  await on("Input.insertText", { text: "depth" });
+  await on("Input.insertText", { text: "turn" });
   await press("Enter", "Enter", 13, SHIFT, "\r");
   check(await evaluate(`document.querySelectorAll("#console .prompt .cm-line").length === 2`), "Shift+Enter adds a line to the prompt");
   await on("Input.insertText", { text: "* 3" });
   await press("Enter", "Enter", 13, 0, "\r");
   await until("the second eval", `document.querySelectorAll("#console .scrollback .entry").length === 2`, 5000);
   const scrolled: string[][] = await evaluate(entries);
-  check(scrolled[0][0] === "depth + 1" && scrolled[1][0].startsWith("depth\n") && scrolled[1][0].endsWith("* 3") && scrolled[1][1] === String(depth * 3), "a two-line eval answers under the first in the scrollback", scrolled);
+  check(scrolled[0][0] === "turn + 1" && scrolled[1][0].startsWith("turn\n") && scrolled[1][0].endsWith("* 3") && scrolled[1][1] === String(depth * 3), "a two-line eval answers under the first in the scrollback", scrolled);
   await shot("debugger-dark.png");
   await on("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "light" }] });
   await until("the light theme", `document.documentElement.dataset.theme === "light"`, 5000);

@@ -234,7 +234,8 @@ impl App {
             Message::Console(message) => {
                 let action = self.console.update(message);
                 if let Some(console::Instruction::Eval { entry, code }) = action.instruction {
-                    self.ask(json!({ "op": "eval", "code": code }), Asked::Eval { entry });
+                    let request = json!({ "op": "eval", "code": code, "frame": self.selected });
+                    self.ask(request, Asked::Eval { entry });
                 }
                 action.task.map(Message::Console)
             }

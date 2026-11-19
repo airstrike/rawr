@@ -103,7 +103,7 @@ test("a pause reads its frames and bindings, another frame's on a click, and an 
   assert.deepEqual(debug.state.bindings, [{ name: "depth", value: "4" }]);
   assert.deepEqual(page.asked.at(-1), { frame: 1, children: true }, "a frame's bindings come with their parts");
   await debug.evaluate("depth + 3");
-  assert.deepEqual(page.asked.at(-1), { op: "eval", code: "depth + 3", children: true });
+  assert.deepEqual(page.asked.at(-1), { op: "eval", code: "depth + 3", frame: 1, children: true }, "code runs in the selected frame");
   assert.deepEqual(debug.state.evaluated, [{ code: "depth + 3", value: "7" }]);
   // A value with parts keeps them, for the console's tree.
   await debug.evaluate("seen");
