@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-19",
-  "version": "0.4.36",
+  "version": "0.4.37",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.37",
+        "date": "2026-11-19",
+        "entries": [
+          {"text":"The browser module can carry a debugger: built with `browser-debugger`, a page can pause a running program at a breakpoint, read its frames, evaluate, step and continue while the page stays live. The playground's own module is unchanged.","issues":[2268]}
+        ]
+      },
       {
         "version": "0.4.36",
         "date": "2026-11-19",
@@ -5293,7 +5300,7 @@
     {"issue":2265,"title":"eval paused at a match arm or another expression position fails to parse","state":"open","category":"Health"},
     {"issue":2266,"title":"A shell attaching to a plain `rawr run` restarts the program to register a debugger, losing its state","state":"closed","category":"Health","release":"0.4.29"},
     {"issue":2267,"title":"rawr mcp's `wait` returns a started program's output only with the next event","state":"open","category":"Health"},
-    {"issue":2268,"title":"The inspector runs in the browser universe behind a feature, with pauses suspended through JSPI","state":"open","category":"Platforms"},
+    {"issue":2268,"title":"The inspector runs in the browser universe behind a feature, with pauses suspended through JSPI","state":"closed","category":"Platforms","release":"0.4.37"},
     {"issue":2269,"title":"Pause inside a browser callback (iced's update and view, ratzilla's draw) in the playground debugger","state":"open","category":"Platforms"},
     {"issue":2270,"title":"The playground's iced debugger shell: the window shell built for wasm","state":"open","category":"Platforms"},
     {"issue":2271,"title":"eval fails with E0308 on a view returning `impl Widget<Message>` built by `column![…]`","state":"closed","category":"Health"},
@@ -8214,7 +8221,7 @@
           "state": "now",
           "note": "D1071: the playground stays as it is; a debugger icon swaps in a debugger build of the browser module (#2304). The inspector in the browser first (#2268), then the panel (#2270) and callback pauses (#2269).",
           "issues": [
-            {"number":2268,"title":"The inspector runs in the browser universe behind a feature, with pauses suspended through JSPI","state":"open"},
+            {"number":2268,"title":"The inspector runs in the browser universe behind a feature, with pauses suspended through JSPI","state":"closed"},
             {"number":2269,"title":"Pause inside a browser callback (iced's update and view, ratzilla's draw) in the playground debugger","state":"open"},
             {"number":2270,"title":"The playground's iced debugger shell: the window shell built for wasm","state":"open"},
             {"number":2304,"title":"The playground's debugger icon swaps in a debugger build of the browser module and restarts the program under it","state":"open"}

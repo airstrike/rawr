@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.37 (2026-11-19)
+
+- The browser module can carry a debugger: built with `browser-debugger`, a page can pause a running program at a breakpoint, read its frames, evaluate, step and continue while the page stays live. The playground's own module is unchanged. (#2268)
+
 ## 0.4.36 (2026-11-19)
 
 - A step into a closure whose body ends in a tail expression pauses at that expression, as rustc's debuggers do. (#2300)
