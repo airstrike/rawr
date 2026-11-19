@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.4.43",
+      "date": "2026-11-19",
+      "entries": [
+        {"text":"The playground's Crates group has iced examples that run in the browser: a counter, a to-do list, a pick list and an animated arc.","issues":[2311]}
+      ]
+    },
+    {
       "version": "0.4.42",
       "date": "2026-11-19",
       "entries": [

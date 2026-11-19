@@ -1,7 +1,7 @@
 {
   "$schema": "schema/gantt.schema.json",
   "updated": "2026-11-19",
-  "version": "0.4.42",
+  "version": "0.4.43",
   "examples": {
     "running": 56,
     "total": 56,
@@ -180,7 +180,7 @@
         {"id":"bot-prebuilt-bindings","name":"Prebuilt bindings for the bot","start":53,"size":5,"state":"done","note":"iced snippets render frames, tokio runs, and GIFs play at the program's pace","issues":[434,436,465,507,515],"milestone":"0.3"},
         {"id":"browser-wasm-bindings","name":"rawr on wasm with declared packages","start":58,"size":6,"state":"now","note":"`rawr run --web` runs any Cargo project, cargo script or plain program in the browser and reloads saves there with state kept (#2119, #2122, #2123), with cargo's wasm32 cfg (#2121) and its own runner rebuilt for an uncovered crate use. The landing page's ratatui snippet runs in the browser (#1384). Next: ratzilla's resize (#2116, upstream) and the engine's per-frame preparation (#1520, #1529).","issues":[435,1384,1393,1394,1395,1454,1456,1497,1498,1507,1508,1512,1513,1516,1517,1518,1519,1520,1526,1380,1385,1387,1392,1396,1424,1448,1449,1455,1459,1460,1529,1752,1753,2027,2028,2116,2117,2120,2121,2122,2126,2137,94,1206,1248,2219,2220]},
         {"id":"play-universe-limits","name":"?play on a small CPU","start":71,"size":3,"state":"done","note":"Check-time errors, a wider universe, no deadline while idle, every frame drawn at the program's pace","issues":[863,872,880,888,889,890,918,919,920],"milestone":"0.3"},
-        {"id":"universe-coverage","name":"?play covers what the examples use","start":86,"size":2,"state":"next","note":"solar_system's canvas, timed(..) and theme(..) are in the universe (#1000). Left: a builder call that takes a crate function item (#1029). A snippet's locals don't drop at its end (#1247).","issues":[1000,1019,1020,1021,1024,1028,1029,1065,1247,95,463,464,879,2230]},
+        {"id":"universe-coverage","name":"?play covers what the examples use","start":86,"size":2,"state":"next","note":"solar_system's canvas, timed(..) and theme(..) are in the universe (#1000). Left: a builder call that takes a crate function item (#1029). A snippet's locals don't drop at its end (#1247).","issues":[1000,1019,1020,1021,1024,1028,1029,1065,1247,95,463,464,879,2230,2312]},
         {"id":"share-and-gifs","name":"Share previews and GIFs","start":88,"size":1,"state":"next","note":"Left: an image in a shared snippet's preview (#530), a GIF that loops a program that never settles (#543).","issues":[530,543]}
       ]
     },

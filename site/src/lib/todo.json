@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-19",
-  "version": "0.4.42",
+  "version": "0.4.43",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.43",
+        "date": "2026-11-19",
+        "entries": [
+          {"text":"The playground's Crates group has iced examples that run in the browser: a counter, a to-do list, a pick list and an animated arc.","issues":[2311]}
+        ]
+      },
       {
         "version": "0.4.42",
         "date": "2026-11-19",
@@ -5378,7 +5385,9 @@
     {"issue":2307,"title":"The playground's debugger and console are denser: bindings and console answers open as trees (a…","state":"closed","category":"Platforms","release":"0.4.39"},
     {"issue":2308,"title":"A runner registers its debugger in its running engine, replacing the debugger generation","state":"closed","category":"Health","release":"0.4.41"},
     {"issue":2309,"title":"The debugger evaluates only in the innermost frame, even with another frame selected","state":"closed","category":"Health","release":"0.4.40"},
-    {"issue":2310,"title":"`rawr gui`'s debugger window splits into panes you resize by dragging (source, console, frame…","state":"closed","category":"Health","release":"0.4.42"}
+    {"issue":2310,"title":"`rawr gui`'s debugger window splits into panes you resize by dragging (source, console, frame…","state":"closed","category":"Health","release":"0.4.42"},
+    {"issue":2311,"title":"The playground's Crates group has iced examples that run in the browser: a counter, a to-do…","state":"closed","category":"Platforms","release":"0.4.43"},
+    {"issue":2312,"title":"The browser universe binds no iced text_input, so a playground snippet can't take typed input","state":"open","category":"Platforms"}
   ],
   "groups": [
     {
@@ -7985,7 +7994,8 @@
             {"number":463,"title":"The universe runner covers only its seed program's calls","state":"open"},
             {"number":464,"title":"Universe runs lack operation limits, interleaved output and rendered errors","state":"open"},
             {"number":879,"title":"Find why the ?play universe runner accepted std::io::Error::other at 0.3.119 but not at 0.3.122","state":"open"},
-            {"number":2230,"title":"A panic in a call the page makes into a running program aborts the instance with no message in its frame","state":"open"}
+            {"number":2230,"title":"A panic in a call the page makes into a running program aborts the instance with no message in its frame","state":"open"},
+            {"number":2312,"title":"The browser universe binds no iced text_input, so a playground snippet can't take typed input","state":"open"}
           ]
         },
         {
