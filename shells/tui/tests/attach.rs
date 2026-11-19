@@ -14,6 +14,8 @@
 
 #![cfg(unix)]
 
+#[path = "shared/pane.rs"]
+mod pane;
 #[path = "shared/picture.rs"]
 mod picture;
 
@@ -174,20 +176,30 @@ fn the_shell_attaches_to_a_run_stops_at_its_breakpoint_and_opens_a_binding() {
     let mark = format!("● {name}:{line}");
     live.until("the breakpoint", |screen| screen.contains(&mark));
 
+    // The binding is looked for in the bindings pane alone: the source
+    // beside it names the binding too, as `players: HashMap<..>` does.
     let stopped = format!("paused at {name}:{line}");
     let opened = format!("{binding} = ");
     let unreadable = format!("{binding}: ");
+    let listed = |screen: &str| {
+        pane::pane(screen, "bindings").is_some_and(|rows| {
+            rows.lines().any(|row| {
+                let row = row.trim_start().trim_start_matches(['▸', '▾', ' ']);
+                row.starts_with(&opened) || row.starts_with(&unreadable)
+            })
+        })
+    };
     live.until("the stop and its bindings", |screen| {
         screen
             .lines()
             .next()
             .is_some_and(|top| top.contains(&stopped))
-            && (screen.contains(&opened) || screen.contains(&unreadable))
+            && listed(screen)
     });
     let closed = format!("▸ {opened}");
     let screen = live.screen();
     assert!(
-        screen.contains(&closed),
+        pane::pane(&screen, "bindings").is_some_and(|rows| rows.contains(&closed)),
         "`{binding}` has a value to open:\n{screen}"
     );
 

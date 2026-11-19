@@ -64,13 +64,10 @@ impl Shell {
         if !expanded {
             return;
         }
-        for (index, child) in node.children().iter().enumerate() {
-            let key = child
-                .key()
-                .map_or_else(|| format!("[{index}]"), str::to_owned);
+        for (key, child) in node.children() {
             let mut child_path = path.clone();
             child_path.push(key.clone());
-            self.node_rows(rows, child_path, depth + 1, &key, child);
+            self.node_rows(rows, child_path, depth + 1, key, child);
         }
     }
 }
