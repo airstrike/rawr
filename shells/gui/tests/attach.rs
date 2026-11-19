@@ -5,11 +5,13 @@
 //!
 //! - `RAWR_GUI_SOCKET`: the run's session socket;
 //! - `RAWR_GUI_LINE`: the line of the program's entry file to stop at;
-//! - `RAWR_GUI_BINDING`: a binding the stop shows.
+//! - `RAWR_GUI_BINDING`: a binding the stop shows, which the console
+//!   evaluates there.
 //!
 //! The program reaches the line by itself, or by input another shell
 //! sends it. Snapshots of the window go to `target/tmp/rawr-gui`.
 
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
@@ -123,13 +125,6 @@ fn the_window_attaches_to_a_run_stops_at_its_breakpoint_steps_and_continues() {
     });
     window.snapshot("attached-stop.png");
 
-    window.interact(|ui| {
-        let _ = ui.click("Step over").unwrap();
-    });
-    window.until("the step", |app| {
-        matches!(app.phase().stop(), Some(stop) if stop.reason == "step") && shows(app, &binding)
-    });
-
     // The console evaluates the binding where the program stopped.
     window.update(Message::Console(console::Message::Input(binding.clone())));
     window.interact(|ui| {
@@ -139,13 +134,30 @@ fn the_window_attaches_to_a_run_stops_at_its_breakpoint_steps_and_continues() {
     window.until("the eval's answer", |app| {
         shows(app, &format!("> {binding}")) && !shows(app, "…")
     });
-    window.snapshot("attached-step.png");
 
-    // The breakpoint comes off, so the program runs on.
+    // The breakpoint comes off while its line is shown, so the program
+    // runs on after the step.
     window.interact(|ui| {
         let _ = ui.click(gutter.as_str()).unwrap();
     });
     window.until("the breakpoint to clear", |app| !shows(app, "●"));
+
+    // The step pauses again, wherever the program goes next: a step out
+    // of a function native code called pauses in the program's next call
+    // from it, where the stop's bindings may be out of scope.
+    let stop = window.app.phase().stop().cloned();
+    let went_on = Cell::new(false);
+    window.interact(|ui| {
+        let _ = ui.click("Step over").unwrap();
+    });
+    window.until("the step", |app| {
+        went_on.set(went_on.get() || *app.phase() == Phase::Running);
+        app.phase()
+            .stop()
+            .is_some_and(|now| went_on.get() || Some(now) != stop.as_ref())
+    });
+    window.snapshot("attached-step.png");
+
     window.interact(|ui| {
         let _ = ui.click("Continue").unwrap();
     });
@@ -157,9 +169,10 @@ fn the_window_attaches_to_a_run_stops_at_its_breakpoint_steps_and_continues() {
     window.interact(|ui| {
         let _ = ui.click("Pause").unwrap();
     });
-    window.until("the pause", |app| {
-        matches!(app.phase().stop(), Some(stop) if stop.reason == "pause") && shows(app, &binding)
-    });
+    window.until(
+        "the pause",
+        |app| matches!(app.phase().stop(), Some(stop) if stop.reason == "pause"),
+    );
     window.snapshot("attached-pause.png");
     window.interact(|ui| {
         let _ = ui.click("Continue").unwrap();

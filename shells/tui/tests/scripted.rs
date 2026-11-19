@@ -11,6 +11,7 @@ use std::sync::mpsc;
 
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::backend::TestBackend;
+use ratatui::style::{Color, Modifier};
 use ratatui::Terminal;
 use rawr_tui::client::Client;
 use rawr_tui::{Input, Shell};
@@ -360,4 +361,64 @@ fn a_pause_stops_the_running_program_where_its_event_says() {
     rig.press(KeyCode::Char('c'));
     let next = rig.session.request();
     assert_eq!(next["params"], json!({ "op": "continue" }));
+}
+
+/// A cell's colour as `#rrggbb`, or its name for one of the terminal's own.
+fn colour(color: Color) -> String {
+    match color {
+        Color::Rgb(red, green, blue) => format!("#{red:02x}{green:02x}{blue:02x}"),
+        other => format!("{other:?}"),
+    }
+}
+
+#[test]
+fn the_source_draws_rust_in_colour_with_its_breakpoint_and_stop() {
+    let mut rig = Rig::new("colour");
+    rig.attach();
+    rig.break_at_seven();
+    rig.pause(7, "breakpoint", 1);
+    let screen = rig.screen();
+    let buffer = rig.terminal.backend().buffer().clone();
+    let (row, line) = screen
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.contains("fn update(app: &mut App)"))
+        .expect("the source shows `update`");
+    let column = line[..line.find("fn update").unwrap()].chars().count();
+    let at = |x: usize| {
+        buffer
+            .cell((u16::try_from(x).unwrap(), u16::try_from(row).unwrap()))
+            .unwrap()
+            .fg
+    };
+    // `fn` is a keyword and `update` a function's name: each in its own
+    // colour, neither the terminal's.
+    let keyword = at(column);
+    let name = at(column + 3);
+    assert!(matches!(keyword, Color::Rgb(..)), "{keyword:?}");
+    assert!(matches!(name, Color::Rgb(..)), "{name:?}");
+    assert_ne!(keyword, name);
+    assert_eq!(at(column + 1), keyword);
+
+    // The stop's line keeps its breakpoint's dot and the arrow.
+    let seven = line_with(&screen, "app.count += 1;");
+    assert!(seven.contains("● 7 ▶"), "{seven}");
+
+    // The screen's cells, for a picture of it.
+    let screens = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .parent()
+        .unwrap()
+        .join("screens");
+    std::fs::create_dir_all(&screens).unwrap();
+    let mut cells = format!("{}\t{}\n", buffer.area.width, buffer.area.height);
+    for cell in &buffer.content {
+        let bold = cell.modifier.contains(Modifier::BOLD);
+        cells.push_str(&format!(
+            "{}\t{}\t{}\t{bold}\n",
+            cell.symbol(),
+            colour(cell.fg),
+            colour(cell.bg)
+        ));
+    }
+    std::fs::write(screens.join("tui-highlighted.cells"), cells).unwrap();
 }

@@ -3,6 +3,7 @@
 //! input, a key or a message, and [`Shell::draw`] shows the state.
 
 mod bindings;
+mod colours;
 mod update;
 mod view;
 
@@ -128,11 +129,12 @@ enum Kind {
     Note,
 }
 
-/// A file's lines, read when it is shown.
+/// A file's lines, read when it is shown, and their colours.
 #[derive(Debug, Default)]
 struct Source {
     path: Option<PathBuf>,
     lines: Vec<String>,
+    colours: colours::Colours,
 }
 
 /// One call of the paused program.

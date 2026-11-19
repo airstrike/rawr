@@ -22,7 +22,7 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     }
     let socket = PathBuf::from(socket);
-    let ran = iced::application(move || App::new(socket.clone()), App::update, App::view)
+    let ran = iced::application(move || App::boot(socket.clone()), App::update, App::view)
         .title(App::title)
         .theme(App::theme)
         .subscription(App::subscription)

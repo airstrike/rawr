@@ -8,6 +8,7 @@
 
 use std::path::PathBuf;
 
+use iced::theme::Mode;
 use iced::widget::{button, column, container, image, row, rule, scrollable, text};
 use iced::{Element, Fill, Font, Length, Subscription, Task, Theme};
 use serde_json::{json, Value};
@@ -44,6 +45,8 @@ pub struct App {
     source: source::State,
     console: console::State,
     bindings: bindings::State,
+    /// The system draws light: the window follows it.
+    light: bool,
 }
 
 /// One of the program's calls: its function's Rust path and where it is.
@@ -88,6 +91,8 @@ pub enum Message {
     Pause,
     Refresh,
     Captured(Result<Vec<u8>, String>),
+    /// The system's light or dark mode.
+    Mode(Mode),
 }
 
 impl Step {
@@ -132,7 +137,14 @@ impl App {
             source: source::State::default(),
             console: console::State::default(),
             bindings: bindings::State::default(),
+            light: false,
         }
+    }
+
+    /// The window for the session listening on `socket`, with the task
+    /// that reads the system's light or dark mode.
+    pub fn boot(socket: PathBuf) -> (Self, Task<Message>) {
+        (Self::new(socket), iced::system::theme().map(Message::Mode))
     }
 
     /// Where the program is, as the session told it.
@@ -147,7 +159,10 @@ impl App {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        Subscription::run_with(self.socket.clone(), session::connect).map(Message::Session)
+        Subscription::batch([
+            Subscription::run_with(self.socket.clone(), session::connect).map(Message::Session),
+            iced::system::theme_changes().map(Message::Mode),
+        ])
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
@@ -160,6 +175,10 @@ impl App {
             Message::Session(session::Event::Line(line)) => match self.client.receive(&line) {
                 Some(Incoming::Reply { kind, result }) => self.answered(kind, result),
                 Some(Incoming::Event(event)) => {
+                    // Each pause is a new one, even where the last was.
+                    if event["event"] == "paused" {
+                        self.inspected = None;
+                    }
                     let phase = self.phase.after(&event);
                     self.moved(phase)
                 }
@@ -231,6 +250,11 @@ impl App {
             }
             Message::Captured(Err(error)) => {
                 self.note = Some(error);
+                Task::none()
+            }
+            Message::Mode(mode) => {
+                self.light = mode == Mode::Light;
+                self.source.follow(self.light);
                 Task::none()
             }
         }
@@ -397,8 +421,11 @@ impl App {
                     None => Task::none(),
                 }
             }
+            // A step ends at a new pause, even one where it started: a
+            // loop's line, or a breakpoint it came back to.
             Asked::Step => {
                 self.note = None;
+                self.inspected = None;
                 let phase = self.phase.answered(&answer["paused"]);
                 self.moved(phase)
             }
@@ -557,7 +584,11 @@ impl App {
 
     #[must_use]
     pub fn theme(&self) -> Theme {
-        Theme::Dark
+        if self.light {
+            Theme::Light
+        } else {
+            Theme::Dark
+        }
     }
 }
 
