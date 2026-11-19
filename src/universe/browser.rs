@@ -21,6 +21,9 @@
 //! [`run`]'s answer then waits for `main` to return; [`sleeping`] says at
 //! once that it runs on. An edit reloads it while it sleeps, and `main`
 //! goes on in the new code from its next statement (`island::follow`).
+//!
+//! Built with the `browser-debugger` feature, the universe runs every
+//! program under a debugger the page asks (`super::debugger`).
 
 // wasm-bindgen marks its JSPI attribute and call deprecated, as experimental.
 #![allow(deprecated)]
@@ -134,6 +137,23 @@ fn sleep(duration: std::time::Duration) {
     SUSPENDABLE.set(true);
 }
 
+/// Suspend `main`'s stack until `promise` settles, the page running its
+/// events meanwhile: what a pause waits in. `Err` is the page's reason it
+/// can't, as a page without JSPI gives.
+#[cfg(feature = "browser-debugger")]
+pub(super) fn suspend(promise: &js_sys::Promise) -> Result<(), JsValue> {
+    SUSPENDABLE.set(false);
+    let suspended = js_sys::futures::jspi_block_on_promise(promise);
+    SUSPENDABLE.set(true);
+    suspended.map(drop)
+}
+
+/// Whether this call runs on `main`'s stack, which [`suspend`] suspends.
+#[cfg(feature = "browser-debugger")]
+pub(super) fn on_main_stack() -> bool {
+    SUSPENDABLE.get()
+}
+
 /// Send what the program writes to `sink` as it writes it, rather than
 /// with the answer of the call it wrote it in: a program that runs on the
 /// page's events writes between calls from the page. What it wrote before
@@ -172,6 +192,8 @@ pub fn prepare() -> Result<(), JsError> {
     };
     // A snippet reaches none of the page's files or environment.
     let mut universe = Universe::new(bindings, Access::none())?;
+    #[cfg(feature = "browser-debugger")]
+    super::debugger::attach(&mut universe);
     universe.on_output(|stream, text| {
         let sent = SINK.with_borrow(|sink| {
             sink.as_ref()
