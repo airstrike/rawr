@@ -7,7 +7,7 @@
 <h2 id="what">What it does</h2>
 <ul>
   <li><strong>Launch</strong> starts <code>rawr run</code> on <code>program</code>, a crate&rsquo;s directory or <code>Cargo.toml</code>, or one <code>.rs</code> file, with <code>args</code>. Relative paths start at <code>cwd</code>. The program waits at its first statement until the editor has set its breakpoints and sent <code>configurationDone</code>, so a breakpoint in code that runs at startup is hit.</li>
-  <li><strong>Attach</strong> reaches a <code>rawr run</code> started in a terminal for <code>program</code>. A run started in a terminal has no debugger until a shell asks, so it restarts once with one.</li>
+  <li><strong>Attach</strong> reaches a <code>rawr run</code> started in a terminal for <code>program</code>. A run started in a terminal has no debugger until a shell asks, and then a program with Rust dependencies takes one at its next call from native code, keeping its state. A program on the base language, or one that can't take it in place, restarts once with it.</li>
   <li>Breakpoints go on lines and on functions. A line with no statement is refused, with why.</li>
   <li>Next, step in and step out stop at the program&rsquo;s next statement. Pause stops a running program at the next statement it runs. A program waiting in a window&rsquo;s event loop pauses when the loop calls into it again. A step past the end of a function the event loop called goes on into the loop and stops at the next statement the program runs, such as the next <code>view</code> or <code>update</code>.</li>
   <li>The call stack names each frame by its Rust path, such as <code>counter::App::update</code>.</li>
