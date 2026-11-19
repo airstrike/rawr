@@ -1,0 +1,14 @@
+[package]
+name = "rawr-tui"
+version = "0.4.23"
+rust-version = "1.95.0"
+edition = "2024"
+publish = false
+description = "A terminal debugger shell on a rawr run's shared debugger session"
+repository = "https://github.com/airstrike/rawr"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+crossterm.workspace = true
+ratatui.workspace = true
+serde_json = "1.0.45"

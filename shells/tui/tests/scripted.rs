@@ -1,0 +1,363 @@
+//! The shell against a scripted session: the test plays the session's
+//! side of the socket, answering each request as a run's session would,
+//! and reads what the shell draws on ratatui's test backend.
+
+#![cfg(unix)]
+
+use std::io::{BufRead as _, BufReader, Write as _};
+use std::os::unix::net::UnixStream;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc;
+
+use crossterm::event::{KeyCode, KeyEvent};
+use ratatui::backend::TestBackend;
+use ratatui::Terminal;
+use rawr_tui::client::Client;
+use rawr_tui::{Input, Shell};
+use serde_json::{json, Value};
+
+const SOURCE: &str = "\
+struct App {
+    count: u32,
+    items: Vec<u32>,
+}
+
+fn update(app: &mut App) {
+    app.count += 1;
+    app.items.push(app.count);
+}
+
+fn main() {
+    let mut app = App { count: 0, items: Vec::new() };
+    update(&mut app);
+}
+";
+
+/// The session's end of the socket.
+struct Session {
+    reader: BufReader<UnixStream>,
+    writer: UnixStream,
+}
+
+impl Session {
+    /// The next request the shell sent, past its notifications.
+    fn request(&mut self) -> Value {
+        loop {
+            let mut line = String::new();
+            self.reader.read_line(&mut line).unwrap();
+            let message: Value = serde_json::from_str(&line).unwrap();
+            if message.get("id").is_some() {
+                return message;
+            }
+        }
+    }
+
+    fn answer(&mut self, request: &Value, result: Value) {
+        let answer = json!({ "jsonrpc": "2.0", "id": request["id"], "result": result });
+        writeln!(self.writer, "{answer}").unwrap();
+    }
+
+    fn event(&mut self, event: Value) {
+        let told = json!({ "jsonrpc": "2.0", "method": "event", "params": event });
+        writeln!(self.writer, "{told}").unwrap();
+    }
+}
+
+/// A shell on a scripted session, with the inputs it hears.
+struct Rig {
+    shell: Shell,
+    inputs: mpsc::Receiver<Input>,
+    session: Session,
+    terminal: Terminal<TestBackend>,
+    file: PathBuf,
+    saved: PathBuf,
+}
+
+impl Rig {
+    fn new(name: &str) -> Self {
+        let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
+        std::fs::create_dir_all(&directory).unwrap();
+        let file = directory.join("main.rs");
+        std::fs::write(&file, SOURCE).unwrap();
+        let saved = directory.join("breakpoints.json");
+        let _ = std::fs::remove_file(&saved);
+        let (ours, theirs) = UnixStream::pair().unwrap();
+        let (send, inputs) = mpsc::channel();
+        let client = Client::new(ours, send, Input::Session).unwrap();
+        let shell = Shell::new(client, file.clone(), saved.clone());
+        let session = Session {
+            reader: BufReader::new(theirs.try_clone().unwrap()),
+            writer: theirs,
+        };
+        Self {
+            shell,
+            inputs,
+            session,
+            terminal: Terminal::new(TestBackend::new(110, 30)).unwrap(),
+            file,
+            saved,
+        }
+    }
+
+    /// Let the shell take the next `count` messages the session sent.
+    fn hear(&mut self, count: usize) {
+        for _ in 0..count {
+            let input = self.inputs.recv().unwrap();
+            self.shell.handle(input);
+        }
+    }
+
+    fn press(&mut self, code: KeyCode) {
+        self.shell.handle(Input::Key(KeyEvent::from(code)));
+    }
+
+    fn type_text(&mut self, text: &str) {
+        for char in text.chars() {
+            self.press(KeyCode::Char(char));
+        }
+        self.press(KeyCode::Enter);
+    }
+
+    /// The screen, one line per row.
+    fn screen(&mut self) -> String {
+        self.terminal
+            .draw(|screen| self.shell.draw(screen))
+            .unwrap();
+        let buffer = self.terminal.backend().buffer();
+        let mut text = String::new();
+        for y in 0..buffer.area.height {
+            let row: String = (0..buffer.area.width)
+                .map(|x| buffer.cell((x, y)).map_or(" ", |cell| cell.symbol()))
+                .collect();
+            text.push_str(row.trim_end());
+            text.push('\n');
+        }
+        text
+    }
+
+    fn file(&self) -> String {
+        self.file.to_string_lossy().into_owned()
+    }
+
+    /// The paused program's answer to a read of frame 0, with `count`.
+    fn frame(&self, line: u64, count: u32) -> Value {
+        json!({
+            "reached": true,
+            "frame": 0,
+            "file": self.file(),
+            "line": line,
+            "function": "app::update",
+            "bindings": [
+                { "name": "app", "value": format!("App {{ count: {count}, items: [1, 2] }}") },
+                { "name": "secret", "error": "`Secret` has no `Debug`" },
+            ],
+            "unread": null,
+            "frames": [
+                { "function": "app::update", "file": self.file(), "line": line },
+                { "function": "app::main", "file": self.file(), "line": 13 },
+            ],
+        })
+    }
+
+    /// Attach: the session says the program runs and gives its output.
+    fn attach(&mut self) {
+        let hello = self.session.request();
+        assert_eq!(hello["method"], "hello", "{hello}");
+        self.session.answer(
+            &hello,
+            json!({
+                "protocol": 1,
+                "root": "/p/app",
+                "capabilities": ["events", "inspect", "eval", "break", "step", "continue"],
+                "events": [{ "event": "running", "seq": 1 }],
+                "output": [{ "stream": "stdout", "text": "started\n" }],
+            }),
+        );
+        self.hear(1);
+    }
+
+    /// Break at line 7 through the prompt, as the inspector answers it.
+    fn break_at_seven(&mut self) {
+        self.press(KeyCode::Char('B'));
+        self.type_text("7");
+        let request = self.session.request();
+        assert_eq!(
+            request["params"],
+            json!({ "op": "break", "file": self.file(), "line": 7 })
+        );
+        let spec = json!({ "file": self.file(), "line": 7, "text": "app.count += 1;" });
+        std::fs::write(&self.saved, json!([spec]).to_string()).unwrap();
+        self.session.answer(
+            &request,
+            json!({ "set": spec, "lines": [spec], "compiled": true, "paused": null }),
+        );
+        self.hear(1);
+    }
+
+    /// The program pauses at `line`, as another shell's click or a step
+    /// makes it, and the shell reads its innermost frame.
+    fn pause(&mut self, line: u64, reason: &str, count: u32) {
+        self.session.event(json!({
+            "event": "paused", "file": self.file(), "line": line,
+            "function": "app::update", "reason": reason, "seq": 2,
+        }));
+        self.hear(1);
+        let read = self.session.request();
+        assert_eq!(read["params"], json!({ "frame": 0 }), "{read}");
+        let frame = self.frame(line, count);
+        self.session.answer(&read, frame);
+        self.hear(1);
+    }
+}
+
+fn line_with<'s>(screen: &'s str, needle: &str) -> &'s str {
+    screen
+        .lines()
+        .find(|line| line.contains(needle))
+        .unwrap_or_else(|| panic!("the screen shows `{needle}`:\n{screen}"))
+}
+
+#[test]
+fn a_stop_shows_the_source_the_frames_and_the_bindings() {
+    let mut rig = Rig::new("stop");
+    rig.attach();
+    rig.break_at_seven();
+    rig.pause(7, "breakpoint", 1);
+    let screen = rig.screen();
+    println!("{screen}");
+    assert!(
+        screen.contains("paused at main.rs:7 in `app::update` (breakpoint)"),
+        "{screen}"
+    );
+    // The breakpoint's mark and the stop's arrow are on line 7.
+    let seven = line_with(&screen, "app.count += 1;");
+    assert!(seven.contains("● 7 ▶"), "{seven}");
+    assert!(line_with(&screen, "#0 app::update main.rs:7").contains("> "));
+    assert!(screen.contains("#1 app::main main.rs:13"), "{screen}");
+    assert!(
+        screen.contains("▸ app = App { count: 1, items: [1, 2] }"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains("secret: `Secret` has no `Debug`"),
+        "{screen}"
+    );
+    assert!(screen.contains("● main.rs:7"), "{screen}");
+    assert!(screen.contains("started"), "{screen}");
+
+    // The value opens into its fields.
+    rig.press(KeyCode::Tab);
+    rig.press(KeyCode::Tab);
+    rig.press(KeyCode::Enter);
+    let screen = rig.screen();
+    assert!(screen.contains("▾ app = App {"), "{screen}");
+    assert!(screen.contains("count = 1"), "{screen}");
+    assert!(screen.contains("▸ items = [1, 2]"), "{screen}");
+}
+
+#[test]
+fn a_step_moves_the_stop_and_keeps_an_open_value_open() {
+    let mut rig = Rig::new("step");
+    rig.attach();
+    rig.break_at_seven();
+    rig.pause(7, "breakpoint", 1);
+    rig.press(KeyCode::Tab);
+    rig.press(KeyCode::Tab);
+    rig.press(KeyCode::Enter);
+
+    rig.press(KeyCode::Char('s'));
+    let step = rig.session.request();
+    assert_eq!(step["params"], json!({ "op": "step", "kind": "over" }));
+    rig.session.event(json!({ "event": "resumed", "seq": 3 }));
+    rig.hear(1);
+    let screen = rig.screen();
+    assert!(screen.contains("· running"), "{screen}");
+    assert!(!screen.contains("#0 app::update"), "{screen}");
+    rig.pause(8, "step", 2);
+    let at = json!({ "file": rig.file(), "line": 8, "function": "app::update", "reason": "step" });
+    rig.session.answer(&step, json!({ "paused": at }));
+    rig.hear(1);
+    let screen = rig.screen();
+    println!("{screen}");
+    assert!(
+        screen.contains("paused at main.rs:8 in `app::update` (step)"),
+        "{screen}"
+    );
+    assert!(
+        line_with(&screen, "app.items.push").contains("8 ▶"),
+        "{screen}"
+    );
+    assert!(
+        line_with(&screen, "app.count += 1;").contains("● 7   "),
+        "{screen}"
+    );
+    assert!(screen.contains("▾ app = App {"), "{screen}");
+    assert!(screen.contains("count = 2"), "{screen}");
+}
+
+#[test]
+fn an_eval_shows_its_code_and_its_value_in_the_console() {
+    let mut rig = Rig::new("eval");
+    rig.attach();
+    rig.pause(7, "breakpoint", 1);
+    rig.press(KeyCode::Char('e'));
+    rig.type_text("app.count * 2");
+    let eval = rig.session.request();
+    assert_eq!(
+        eval["params"],
+        json!({ "op": "eval", "code": "app.count * 2" })
+    );
+    rig.session.answer(&eval, json!({ "value": "2" }));
+    rig.hear(1);
+    rig.press(KeyCode::Char('e'));
+    rig.type_text("app.missing");
+    let eval = rig.session.request();
+    rig.session.answer(
+        &eval,
+        json!({ "error": "error[E0609]: no field `missing` on type `&mut App`" }),
+    );
+    rig.hear(1);
+    let screen = rig.screen();
+    println!("{screen}");
+    assert!(screen.contains("> app.count * 2"), "{screen}");
+    assert!(screen.contains("= 2"), "{screen}");
+    assert!(screen.contains("> app.missing"), "{screen}");
+    assert!(screen.contains("no field `missing`"), "{screen}");
+
+    // A continue answered at once; the program runs on.
+    rig.press(KeyCode::Char('c'));
+    let resume = rig.session.request();
+    assert_eq!(resume["params"], json!({ "op": "continue" }));
+    rig.session.answer(&resume, json!({ "paused": null }));
+    rig.session.event(json!({ "event": "resumed", "seq": 3 }));
+    rig.hear(2);
+    assert!(rig.screen().contains("· running"));
+}
+
+#[test]
+fn a_pause_stops_the_running_program_where_its_event_says() {
+    let mut rig = Rig::new("pause");
+    rig.attach();
+    rig.press(KeyCode::Char('p'));
+    let pause = rig.session.request();
+    assert_eq!(pause["params"], json!({ "op": "pause" }));
+    rig.session.answer(&pause, json!({ "paused": null }));
+    rig.hear(1);
+    assert!(rig.screen().contains("· running"));
+    rig.pause(8, "pause", 1);
+    let screen = rig.screen();
+    assert!(
+        screen.contains("paused at main.rs:8 in `app::update` (pause)"),
+        "{screen}"
+    );
+    assert!(
+        line_with(&screen, "app.items.push").contains("8 ▶"),
+        "{screen}"
+    );
+    // A paused program takes no second pause: the next request is the
+    // continue.
+    rig.press(KeyCode::Char('p'));
+    rig.press(KeyCode::Char('c'));
+    let next = rig.session.request();
+    assert_eq!(next["params"], json!({ "op": "continue" }));
+}

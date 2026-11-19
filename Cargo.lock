@@ -2985,6 +2985,7 @@ dependencies = [
  "rawr",
  "rawr-location",
  "rawr-toml-edit",
+ "rawr-tui",
  "rawr-watch",
  "serde_json",
 ]
@@ -3140,6 +3141,15 @@ dependencies = [
  "toml_parser",
  "toml_writer",
  "winnow",
+]
+
+[[package]]
+name = "rawr-tui"
+version = "0.4.23"
+dependencies = [
+ "crossterm",
+ "ratatui",
+ "serde_json",
 ]
 
 [[package]]
