@@ -415,6 +415,25 @@ struct Source<'a> {
     path: &'a Path,
     text: &'a str,
     items: &'a [item::Parsed],
+    /// A native module is below it, which sees its private items as a
+    /// child module sees its ancestors' ([`below`]).
+    below: bool,
+}
+
+impl Source<'_> {
+    /// Whether native code sees this source's item declared with `header`:
+    /// it is visible outside the module, or a native module below sees it.
+    const fn shows(&self, header: &item::Header) -> bool {
+        header.visibility.is_some() || self.below
+    }
+}
+
+/// Whether one of the native modules `native` is below the module
+/// `modules`, as a marked crate root's are below it.
+fn below(modules: &[ImmutableString], native: &[&[ImmutableString]]) -> bool {
+    native
+        .iter()
+        .any(|native| native.len() > modules.len() && native.starts_with(modules))
 }
 
 /// How a value crosses for one parameter.
@@ -609,6 +628,7 @@ enum Owner<'o> {
 pub(crate) fn native_statics<'a>(
     sources: impl IntoIterator<Item = (&'a [ImmutableString], &'a str, &'a [item::Parsed])>,
     root: &'a [item::Parsed],
+    native: &[&[ImmutableString]],
 ) -> Vec<Vec<ImmutableString>> {
     let sources = sources
         .into_iter()
@@ -617,6 +637,7 @@ pub(crate) fn native_statics<'a>(
             path: Path::new(""),
             text,
             items,
+            below: below(modules, native),
         })
         .collect::<Vec<_>>();
     let generator = Generator::new(&sources, root);
@@ -637,7 +658,7 @@ pub(crate) fn native_statics<'a>(
                 .into_iter()
                 .any(|name| name == "Self" || generator.names_type(name));
             if declared.constant
-                && declared.header.visibility.is_some()
+                && source.shows(&declared.header)
                 && keyword.split_whitespace().last() == Some("static")
                 && !marked
             {
@@ -660,6 +681,7 @@ pub(crate) fn native_statics<'a>(
 pub(crate) fn mirrors<'a>(
     sources: impl IntoIterator<Item = (&'a [ImmutableString], &'a str, &'a [item::Parsed])>,
     root: &'a [item::Parsed],
+    native: &[&[ImmutableString]],
 ) -> Vec<Vec<ImmutableString>> {
     let sources = sources
         .into_iter()
@@ -668,6 +690,7 @@ pub(crate) fn mirrors<'a>(
             path: Path::new(""),
             text,
             items,
+            below: below(modules, native),
         })
         .collect::<Vec<_>>();
     Generator::new(&sources, root)
@@ -677,15 +700,19 @@ pub(crate) fn mirrors<'a>(
         .collect()
 }
 
-/// Generate the shadow files of the marked sources of a crate whose root
-/// is native. `module_root` is the directory of the crate root; `sources`
-/// yields each marked source's module path, file, text and items. Only the
-/// functions `called` names get their trampolines' bodies, when it names
-/// any ([`Generator::called`]); the shape is the same either way.
+/// Generate the shadow files of the marked sources of a crate whose
+/// native code calls marked code: a native root's, or a marked root's
+/// whose native modules use it. `module_root` is the directory of the
+/// crate root; `sources` yields each marked source's module path, file,
+/// text and items, and `native` each native module's path, which sees the
+/// private items of the marked modules above it. Only the functions
+/// `called` names get their trampolines' bodies, when it names any
+/// ([`Generator::called`]); the shape is the same either way.
 pub(crate) fn shadow<'a>(
     module_root: &Path,
     sources: impl IntoIterator<Item = (&'a [ImmutableString], &'a Path, &'a str, &'a [item::Parsed])>,
     root: &'a [item::Parsed],
+    native: &[&[ImmutableString]],
     called: Option<&'a BTreeSet<String>>,
     opaque: Option<&BTreeSet<String>>,
 ) -> Shadow {
@@ -696,6 +723,7 @@ pub(crate) fn shadow<'a>(
             path,
             text,
             items,
+            below: below(modules, native),
         })
         .collect::<Vec<_>>();
     let mut generator = Generator::new(&sources, root);
@@ -922,6 +950,7 @@ impl<'a> Generator<'a> {
             path: Path::new(""),
             text: "",
             items: root,
+            below: false,
         };
         let uses = uses(sources.iter().chain([&root]));
         let mut types = BTreeMap::new();
@@ -942,7 +971,7 @@ impl<'a> Generator<'a> {
                     named.insert(path_of(source.modules, &name.text));
                 }
                 let (name, generics, fields) = match item {
-                    item::Parsed::Struct(declared) if declared.header.visibility.is_some() => (
+                    item::Parsed::Struct(declared) if source.shows(&declared.header) => (
                         declared.name.text.as_str(),
                         !declared.generics.is_empty(),
                         declared
@@ -951,7 +980,7 @@ impl<'a> Generator<'a> {
                             .map(|field| field.ty.clone())
                             .collect(),
                     ),
-                    item::Parsed::Enum(declared) if declared.header.visibility.is_some() => (
+                    item::Parsed::Enum(declared) if source.shows(&declared.header) => (
                         declared.name.text.as_str(),
                         !declared.generics.is_empty(),
                         declared
@@ -966,7 +995,7 @@ impl<'a> Generator<'a> {
                             .entry(declared.name.text.as_str())
                             .or_default()
                             .push(path_of(source.modules, &declared.name.text));
-                        if declared.header.visibility.is_some() {
+                        if source.shows(&declared.header) {
                             shown.insert(declared.name.text.as_str());
                         }
                         continue;
@@ -1924,7 +1953,7 @@ impl<'a> Generator<'a> {
                         },
                     );
                 }
-                item::Parsed::Struct(declared) if declared.header.visibility.is_some() => {
+                item::Parsed::Struct(declared) if file.shows(&declared.header) => {
                     self.mirror(file, &declared.name, declared.span, None, &mut items, shape);
                     if self
                         .crossing
@@ -1944,7 +1973,7 @@ impl<'a> Generator<'a> {
                         append(shape, &path_of(file.modules, &declared.name.text), &text);
                     }
                 }
-                item::Parsed::Enum(declared) if declared.header.visibility.is_some() => {
+                item::Parsed::Enum(declared) if file.shows(&declared.header) => {
                     self.mirror(file, &declared.name, declared.span, None, &mut items, shape);
                     if self
                         .crossing
@@ -1955,7 +1984,7 @@ impl<'a> Generator<'a> {
                         append(shape, &path_of(file.modules, &declared.name.text), &text);
                     }
                 }
-                item::Parsed::TypeAlias(declared) if declared.header.visibility.is_some() => {
+                item::Parsed::TypeAlias(declared) if file.shows(&declared.header) => {
                     self.mirror(
                         file,
                         &declared.name,
@@ -1965,7 +1994,7 @@ impl<'a> Generator<'a> {
                         shape,
                     );
                 }
-                item::Parsed::Function(declared) if declared.header.visibility.is_some() => {
+                item::Parsed::Function(declared) if file.shows(&declared.header) => {
                     if declared.constant {
                         self.mirror(
                             file,
@@ -1975,6 +2004,11 @@ impl<'a> Generator<'a> {
                             &mut items,
                             shape,
                         );
+                        continue;
+                    }
+                    // A marked crate root's `main` is the program's, which
+                    // the runner calls.
+                    if file.modules.is_empty() && declared.name.text == "main" {
                         continue;
                     }
                     let path = path_of(file.modules, &declared.name.text);
@@ -1989,10 +2023,14 @@ impl<'a> Generator<'a> {
                                 },
                             );
                         }
+                        // A private function no trampoline can stand for is
+                        // left out: a native module below that names it gets
+                        // rustc's error for the missing item.
+                        Err(_) if declared.header.visibility.is_none() => {}
                         Err(reason) => refused.push(reason),
                     }
                 }
-                item::Parsed::Trait(declared) if declared.header.visibility.is_some() => {
+                item::Parsed::Trait(declared) if file.shows(&declared.header) => {
                     let text = self.declaration(file, declared);
                     items.push_str(&text);
                     shape.insert(
@@ -2022,8 +2060,9 @@ impl<'a> Generator<'a> {
         let named = identifiers(&items);
         let mut text = String::new();
         for declared in uses {
-            // A re-export is part of what native code sees.
-            if declared.header.visibility.is_some() {
+            // A re-export is part of what native code sees, and so is
+            // each import for a native module below.
+            if file.shows(&declared.header) {
                 let line = without_rawr_attributes(slice(file.text, declared.span));
                 let _ = writeln!(text, "{line}");
                 shape.insert(
@@ -2199,7 +2238,7 @@ impl<'a> Generator<'a> {
         let functions = declared
             .functions
             .iter()
-            .filter(|function| trait_.is_some() || function.header.visibility.is_some())
+            .filter(|function| trait_.is_some() || file.shows(&function.header))
             .collect::<Vec<_>>();
         if functions.is_empty() && trait_.is_none() {
             return;
@@ -2269,6 +2308,8 @@ impl<'a> Generator<'a> {
                         },
                     );
                 }
+                // As a private free function's ([`Generator::body`]).
+                Err(_) if trait_.is_none() && function.header.visibility.is_none() => {}
                 Err(reason) => refused.push(reason),
             }
             beside.extend(self.entries.borrow_mut().drain(..));
@@ -3525,16 +3566,17 @@ impl<'a> Generator<'a> {
 
 /// Whether a field of `declared`, written in `file`, is visible outside
 /// its module: a field's span starts at its name, after any `pub` or
-/// `pub(..)`.
+/// `pub(..)`. A native module below sees every field.
 fn visible_fields(file: &Source<'_>, declared: &item::Struct) -> bool {
-    declared.fields.iter().any(|field| {
-        let before = slice(
-            file.text,
-            Span::new(declared.span.start(), field.span.start()),
-        )
-        .trim_end();
-        before.ends_with("pub") || before.ends_with(')')
-    })
+    file.below
+        || declared.fields.iter().any(|field| {
+            let before = slice(
+                file.text,
+                Span::new(declared.span.start(), field.span.start()),
+            )
+            .trim_end();
+            before.ends_with("pub") || before.ends_with(')')
+        })
 }
 
 /// `trampoline`, the text of `function`'s, `#[inline]` unless `function`
@@ -7869,6 +7911,7 @@ mod tests {
                 unit.items(),
             )],
             &[],
+            &[],
             called,
             opaque,
         )
@@ -8201,6 +8244,77 @@ mod tests {
                 "physics::scale",
             ]
         );
+    }
+
+    /// A native module below a marked crate root sees the root's private
+    /// items, as a child module sees its ancestors': each gets its
+    /// trampoline or its copy, and each of the root's imports stays, which
+    /// a native `use super::*;` reaches. The root's `main` is the
+    /// program's, and a private function no trampoline can stand for is
+    /// left out, not refused.
+    #[test]
+    fn a_marked_roots_private_items_are_seen_by_its_native_modules() {
+        let source = "// rawr\nmod charts;\nuse std::collections::BTreeMap;\n\
+                      struct Item {\n    cents: i64,\n}\n\
+                      fn colors(item: &Item) -> i64 { item.cents }\n\
+                      impl Item {\n    fn doubled(&self) -> i64 { self.cents * 2 }\n}\n\
+                      fn later() -> impl Fn() { || {} }\n\
+                      pub fn main() { println!(\"{}\", charts::draw()); }\n";
+        let unit = crate::Engine::new().parse_unit(source).unwrap();
+        let charts = [ImmutableString::from("charts")];
+        let shadow = shadow(
+            Path::new("/crate/src"),
+            [(
+                &[][..],
+                Path::new("/crate/src/main.rs"),
+                source,
+                unit.items(),
+            )],
+            &[],
+            &[&charts[..]],
+            None,
+            None,
+        );
+        assert!(shadow.refused.is_empty(), "{:?}", shadow.refused);
+        let [(path, text)] = shadow.files.as_slice() else {
+            panic!("{:?}", shadow.files);
+        };
+        assert_eq!(path, Path::new("main.rs"));
+        assert!(text.contains("use std::collections::BTreeMap;\n"), "{text}");
+        assert!(text.contains("pub mod charts;\n"), "{text}");
+        assert!(text.contains("struct Item {\n    cents: i64,\n}"), "{text}");
+        assert!(
+            text.contains(
+                "fn colors(__a0: &Item) -> i64 {\n    \
+                 let mut __call = crate::__rawr_island::call(\"colors\", false);\n"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("crate::__rawr_island::call(\"Item::doubled\", true);"),
+            "{text}"
+        );
+        assert!(!text.contains("fn later"), "{text}");
+        assert!(!text.contains("fn main"), "{text}");
+
+        // Without a native module below, the root's private items are its own.
+        let unseen = super::shadow(
+            Path::new("/crate/src"),
+            [(
+                &[][..],
+                Path::new("/crate/src/main.rs"),
+                source,
+                unit.items(),
+            )],
+            &[],
+            &[],
+            None,
+            None,
+        );
+        let [(_, unseen)] = unseen.files.as_slice() else {
+            panic!("{:?}", unseen.files);
+        };
+        assert!(!unseen.contains("fn colors"), "{unseen}");
     }
 
     /// A `&self` method of a marked type copied whole, as inboard's

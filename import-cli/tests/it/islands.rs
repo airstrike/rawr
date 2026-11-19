@@ -887,6 +887,64 @@ fn a_marked_module_names_the_items_of_its_native_crate_root() {
     );
 }
 
+/// A native module below a marked crate root calls the root's private
+/// function and builds its private struct, as rustc lets a child module:
+/// `rawr run` prints what `cargo run` prints, and a body edit of the marked
+/// function reaches the running `main` at its next call through the
+/// trampoline, with no new native build (#2276).
+#[test]
+fn a_marked_roots_native_module_calls_it_and_sees_a_body_edit() {
+    const FIXTURE: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/marked-root-native"
+    );
+    crate::support::driver();
+    let root = crate::support::fresh("marked-root-native");
+    copy(Path::new(FIXTURE), &root);
+    let native = std::process::Command::new("cargo")
+        .args(["run", "--quiet"])
+        .current_dir(&root)
+        .env("ISLANDS_TICKS", "3")
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .output()
+        .unwrap();
+    assert!(
+        native.status.success(),
+        "{}",
+        String::from_utf8_lossy(&native.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&native.stdout),
+        "1 value 1\n2 value 2\n3 value 3\n"
+    );
+
+    let main = root.join("src/main.rs");
+    let mut run = start(&root, &[("ISLANDS_STOP", root.join("stop"))]);
+    for tick in 1..=3 {
+        let seen = run.until(|_| true);
+        assert_eq!(
+            seen,
+            format!("{tick} value {tick}"),
+            "{}",
+            run.seen.join("\n")
+        );
+    }
+    edit(&main, "    tick * SCALE\n", "    tick * SCALE * 100\n");
+    let swapped = run.until(|line| parse(line).is_some_and(|(tick, value)| value == tick * 100));
+    let (tick, _) = parse(&swapped).unwrap();
+    assert!(tick > 3, "{}", run.seen.join("\n"));
+    assert!(
+        !run.seen.iter().any(|line| line.contains("restarting")),
+        "{}",
+        run.seen.join("\n")
+    );
+
+    fs::write(root.join("stop"), "").unwrap();
+    let status = run.wait();
+    assert!(status.success(), "{status}\n{}", run.seen.join("\n"));
+}
+
 /// A marked leaf module names the items of a native module that is not the
 /// crate root, as rustc lets any module of the crate: its trait, function,
 /// constant and a nested module's alias and constant, through `crate::`,

@@ -236,29 +236,23 @@ fn an_unmarked_root_that_declares_a_marked_module_is_a_project() {
     );
 }
 
-/// With a marked crate root, native code must not use marked code: Rawr
-/// builds the native modules without the marked ones. Cargo builds the
-/// same crate. (A native root calls its marked modules through rawr.)
+/// With a marked crate root, a native module may use marked code, as Cargo
+/// builds it: rawr's copy of the crate then stands trampolines for the
+/// marked modules, the root among them, as a native root's does (D510).
+/// A crate whose native modules use only native code keeps a copy of
+/// those alone.
 #[test]
-fn native_code_cannot_use_marked_code() {
+fn native_code_uses_marked_code_through_trampolines() {
     let sandbox = Sandbox::new("marked-direction");
     let root = copy("rs-marker-direction", &sandbox.work());
     let pricing = root.join("src/pricing.rs");
 
-    let error = graph(&root, None).unwrap_err();
-
-    assert!(
-        error.contains(&format!(
-            "native module `crate::pricing` cannot use `crate::Item`, which is in the marked \
-             module `crate` (`{}`): native modules cannot use marked code when the crate root \
-             is marked. \
-             Move the item into a native module, mark `{}` with `// rawr`, \
-             or leave the crate root unmarked so native code calls marked modules through rawr.",
-            root.join("src/main.rs").display(),
-            pricing.display()
-        )),
-        "{error}"
-    );
+    let graph_now = graph(&root, None).unwrap();
+    let package = graph_now.entry_package();
+    assert!(package.native_root().is_none());
+    assert!(package.has_trampolines());
+    // The marked `main` is the program's: no shape a native `main` swaps by.
+    assert!(graph_now.island_shape().is_none());
 
     // A native module may use another native module, through `crate` or
     // `super`, and a test module's `super` is its own module.
@@ -281,7 +275,10 @@ fn native_code_cannot_use_marked_code() {
         text.replace("mod pricing;", "mod money;\nmod pricing;"),
     )
     .unwrap();
-    graph(&root, None).unwrap();
+    assert!(!graph(&root, None)
+        .unwrap()
+        .entry_package()
+        .has_trampolines());
 
     // A marked module is marked code too, reached through `super`.
     fs::write(
@@ -289,19 +286,33 @@ fn native_code_cannot_use_marked_code() {
         "// rawr\npub fn twice(cents: i64) -> i64 { cents * 2 }\n",
     )
     .unwrap();
-    let error = graph(&root, None).unwrap_err();
-    assert!(
-        error.contains("native module `crate::pricing` cannot use `crate::money::twice`")
-            && error.contains("is in the marked module `crate::money`"),
-        "{error}"
-    );
+    assert!(graph(&root, None)
+        .unwrap()
+        .entry_package()
+        .has_trampolines());
+
+    // So is a glob of the marked root.
+    fs::write(
+        root.join("src/money.rs"),
+        "pub fn twice(cents: i64) -> i64 { cents * 2 }\n",
+    )
+    .unwrap();
+    fs::write(
+        &pricing,
+        "use super::*;\npub fn doubled(item: &Item) -> i64 { item.cents }\n",
+    )
+    .unwrap();
+    assert!(graph(&root, None)
+        .unwrap()
+        .entry_package()
+        .has_trampolines());
 }
 
 /// A native module's path through the marked root's `use` of an extern
 /// crate or of a native module is no use of marked code: rustc resolves
 /// `crate::wgpu` to custom_shader's `use iced::wgpu;`, so the app crate
-/// declares that `use` too (#1932). A `use` of a marked item is still
-/// marked code.
+/// declares that `use` too (#1932). A `use` of a marked item is marked
+/// code, which the native module reaches through its trampoline.
 #[test]
 fn native_code_uses_the_marked_roots_reexports() {
     let sandbox = Sandbox::new("marked-reexports");
@@ -326,11 +337,10 @@ fn native_code_uses_the_marked_roots_reexports() {
          fn main() { println!(\"{}\", pricing::doubled(2)); }\n",
     )
     .unwrap();
-    let error = graph(&root, None).unwrap_err();
-    assert!(
-        error.contains("native module `crate::pricing` cannot use `crate::Count`"),
-        "{error}"
-    );
+    assert!(graph(&root, None)
+        .unwrap()
+        .entry_package()
+        .has_trampolines());
 
     let main = root.join("src/main.rs");
     let text = fs::read_to_string(&main).unwrap();
@@ -342,7 +352,10 @@ fn native_code_uses_the_marked_roots_reexports() {
         ),
     )
     .unwrap();
-    graph(&root, None).unwrap();
+    let graph = graph(&root, None).unwrap();
+    let package = graph.entry_package();
+    assert!(!package.has_trampolines());
+    assert!(!package.re_exports().is_empty());
 }
 
 /// A package with a library and a binary whose marked modules are all in

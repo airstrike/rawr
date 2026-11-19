@@ -56,6 +56,10 @@ pub struct Package {
     /// `use iced::wgpu;` (#1932): the app crate declares them where the
     /// marked modules stand.
     re_exports: Vec<ReExport>,
+    /// The crate root is marked and a native module's path lands in
+    /// marked code: the shadow crate stands trampolines for the marked
+    /// modules, the root among them, as a native root's does (D510).
+    marked_uses: bool,
 }
 
 /// One `use` declaration of a marked module that a native module's path
@@ -252,6 +256,14 @@ impl Package {
     #[must_use]
     pub fn native_root(&self) -> Option<&RustModule> {
         self.native_root.as_ref().map(|root| &root.module)
+    }
+
+    /// Whether the shadow crate stands trampolines for the marked modules,
+    /// which native code calls into the interpreter through: the crate
+    /// root is native, or it is marked and native code uses marked code.
+    #[must_use]
+    pub const fn has_trampolines(&self) -> bool {
+        self.native_root.is_some() || self.marked_uses
     }
 
     /// The package's native binary, when the program runs from its native
@@ -616,13 +628,16 @@ impl Graph {
 
     /// What native code sees of the marked modules, when the crate root is
     /// native Rust (D501): a save that changes it needs a new native build.
+    /// A marked root's `main` is the program's, so a save that changes what
+    /// its native modules see restarts it as any new native build does.
     #[must_use]
     pub fn island_shape(&self) -> Option<super::island::Shape> {
+        self.entry_package().native_root()?;
         self.island_shadow_for(None).map(|shadow| shadow.shape)
     }
 
-    /// The generated files that stand for the marked modules in a native
-    /// root's shadow crate, each trampoline's body only for a function the
+    /// The generated files that stand for the marked modules in a shadow
+    /// crate with trampolines, each trampoline's body only for a function the
     /// last check recorded native code naming (`package::called`, #1807).
     #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
     pub(crate) fn island_shadow(&self) -> Option<super::island::Shadow> {
@@ -642,23 +657,48 @@ impl Graph {
         let opaque = super::called::opaque_in(&self.rawr_directory());
         #[cfg(not(all(feature = "rust-import", not(target_arch = "wasm32"))))]
         let opaque = None;
-        let entry = self.entry_package();
-        let root = entry.native_root()?;
-        let module_root = root.path().parent()?;
-        let sources = self.parsed_units().filter(|(source, _)| {
-            source.package() == entry.name()
-                && !(source.modules().is_empty() && source.path() == root.path())
-                && !entry.is_bridge(source.modules())
-        });
+        let (module_root, sources) = self.island_sources()?;
         Some(super::island::shadow(
             module_root,
             sources.map(|(source, unit)| {
                 (source.modules(), source.path(), source.text(), unit.items())
             }),
             self.native_root_items(),
+            &self.native_modules(),
             called,
             opaque.as_ref(),
         ))
+    }
+
+    /// The directory of the crate root, and the marked sources the shadow
+    /// crate stands trampolines for, when it stands any
+    /// ([`Package::has_trampolines`]): every marked source of the entry
+    /// package but a native root's and its bridges' Rawr texts, which hold
+    /// only their `mod` declarations.
+    fn island_sources(
+        &self,
+    ) -> Option<(&Path, impl Iterator<Item = (&source::Source, &parse::Unit)>)> {
+        let entry = self.entry_package();
+        if !entry.has_trampolines() {
+            return None;
+        }
+        let root = entry.native_root().map(RustModule::path);
+        let module_root = root.unwrap_or(self.entry_source().path()).parent()?;
+        let sources = self.parsed_units().filter(move |(source, _)| {
+            source.package() == entry.name()
+                && !(source.modules().is_empty() && Some(source.path()) == root)
+                && !entry.is_bridge(source.modules())
+        });
+        Some((module_root, sources))
+    }
+
+    /// The module path of each native module of the entry package.
+    fn native_modules(&self) -> Vec<&[ImmutableString]> {
+        self.entry_package()
+            .rust_modules
+            .iter()
+            .map(|module| &*module.modules)
+            .collect()
     }
 
     /// The `use` declarations of the native crate root, which name marked
@@ -670,45 +710,33 @@ impl Graph {
             .map_or(&[], |root| &root.uses)
     }
 
-    /// The marked statics of a native root that marked code reads as native
-    /// code's items, by their paths from the crate root
-    /// (`island::native_statics`); none when the root is marked.
+    /// The marked statics that marked code reads as native code's items, by
+    /// their paths from the crate root (`island::native_statics`); none
+    /// when the shadow crate stands no trampolines.
     #[cfg(feature = "rust-import")]
     pub(crate) fn native_statics(&self) -> Vec<Vec<ImmutableString>> {
-        let entry = self.entry_package();
-        let Some(root) = entry.native_root() else {
+        let Some((_, sources)) = self.island_sources() else {
             return Vec::new();
         };
         super::island::native_statics(
-            self.parsed_units()
-                .filter(|(source, _)| {
-                    source.package() == entry.name()
-                        && !(source.modules().is_empty() && source.path() == root.path())
-                        && !entry.is_bridge(source.modules())
-                })
-                .map(|(source, unit)| (source.modules(), source.text(), unit.items())),
+            sources.map(|(source, unit)| (source.modules(), source.text(), unit.items())),
             self.native_root_items(),
+            &self.native_modules(),
         )
     }
 
-    /// The marked types of a native root that the runner holds as their
-    /// mirrors in rawr's copy of the crate where a crate's generic takes
-    /// one (`island::mirrors`, #1249); none when the root is marked.
+    /// The marked types the runner holds as their mirrors in rawr's copy
+    /// of the crate where a crate's generic takes one (`island::mirrors`,
+    /// #1249); none when the shadow crate stands no trampolines.
     #[cfg(feature = "rust-import")]
     pub(crate) fn island_mirrors(&self) -> Vec<Vec<ImmutableString>> {
-        let entry = self.entry_package();
-        let Some(root) = entry.native_root() else {
+        let Some((_, sources)) = self.island_sources() else {
             return Vec::new();
         };
         super::island::mirrors(
-            self.parsed_units()
-                .filter(|(source, _)| {
-                    source.package() == entry.name()
-                        && !(source.modules().is_empty() && source.path() == root.path())
-                        && !entry.is_bridge(source.modules())
-                })
-                .map(|(source, unit)| (source.modules(), source.text(), unit.items())),
+            sources.map(|(source, unit)| (source.modules(), source.text(), unit.items())),
             self.native_root_items(),
+            &self.native_modules(),
         )
     }
 
@@ -1046,6 +1074,7 @@ impl<'a> Builder<'a> {
             target: target.clone(),
             script,
             re_exports: Vec::new(),
+            marked_uses: false,
         });
 
         let module_root = request
@@ -1181,7 +1210,7 @@ impl<'a> Builder<'a> {
             self.attach_cargo(package, cargo, own_library);
         }
         if self.packages[package.0].native_root.is_none() {
-            self.check_native_direction(package)?;
+            self.find_marked_uses(package);
         }
         Ok(package)
     }
@@ -1686,13 +1715,14 @@ impl<'a> Builder<'a> {
         Ok(())
     }
 
-    /// In a crate whose root is marked, native code must not depend on
-    /// marked code: a native module's `crate::…` and `super::…` paths must
-    /// not land in a marked module (the crate root included). That native
-    /// part is built without the marked modules, so such a path would not
-    /// compile there. A native root's crate has trampolines for its marked
-    /// modules instead (D501), and is not checked.
-    fn check_native_direction(&mut self, package: Id) -> Result<(), Error> {
+    /// In a crate whose root is marked, find whether native code uses
+    /// marked code: a native module's `crate::…` or `super::…` path lands
+    /// in a marked module (the crate root included). Its shadow crate then
+    /// stands trampolines for the marked modules, as a native root's does
+    /// (D510), and native code calls into the interpreter through them.
+    /// Without one it holds the native modules alone, and records the
+    /// marked modules' `use` declarations their paths go through.
+    fn find_marked_uses(&mut self, package: Id) {
         let name = self.packages[package.0].name.clone();
         let features = &self.packages[package.0].features;
         let marked = self
@@ -1701,7 +1731,6 @@ impl<'a> Builder<'a> {
             .filter(|source| source.package() == name.as_str())
             .map(|source| Marked {
                 modules: source.modules().to_vec(),
-                path: source.path().to_path_buf(),
                 bindings: super::polyglot::bindings(source.text(), features),
             })
             .collect::<Vec<_>>();
@@ -1728,7 +1757,7 @@ impl<'a> Builder<'a> {
             native: &native,
             externs: &externs,
         };
-        let mut violation = None;
+        let mut uses = false;
         let mut re_exports = Vec::new();
         'modules: for module in &self.packages[package.0].rust_modules {
             for reference in super::polyglot::references(&module.text, features) {
@@ -1756,22 +1785,15 @@ impl<'a> Builder<'a> {
                     absolute.extend(reference.segments[supers..].iter().cloned());
                     absolute
                 };
-                let Some((owner, _)) = tree.landing(&absolute) else {
+                if tree.landing(&absolute).is_none() {
                     continue;
-                };
+                }
                 let mut chain = Vec::new();
                 if tree.re_exported(&absolute, &mut chain) {
                     re_exports.extend(chain);
                     continue;
                 }
-                violation = Some((
-                    module.modules.clone(),
-                    module.path.clone(),
-                    module.text.clone(),
-                    reference,
-                    marked[owner].modules.clone(),
-                    marked[owner].path.clone(),
-                ));
+                uses = true;
                 break 'modules;
             }
         }
@@ -1780,39 +1802,7 @@ impl<'a> Builder<'a> {
         });
         re_exports.dedup();
         self.packages[package.0].re_exports = re_exports;
-        let Some((modules, path, text, reference, owner, owner_path)) = violation else {
-            return Ok(());
-        };
-        let spelled = |modules: &[ImmutableString]| {
-            std::iter::once("crate")
-                .chain(modules.iter().map(ImmutableString::as_str))
-                .collect::<Vec<_>>()
-                .join("::")
-        };
-        let source = diagnostic::Source::new(path.to_string_lossy().into_owned(), text.clone())
-            .map_err(Error::diagnostic)?;
-        let index = self.push_evidence(source);
-        let label = error::Label {
-            source: index,
-            span: manifest::byte_span(&text, reference.range.clone()),
-        };
-        Err(Error::module(
-            self.evidence.clone(),
-            format!(
-                "native module `{}` cannot use `{used}`, which is in the marked module `{}` (`{}`): \
-                 native modules cannot use marked code when the crate root is marked. \
-                 Move the item into a native module, mark `{}` with `// rawr`, \
-                 or leave the crate root unmarked so native code calls marked modules through rawr.",
-                spelled(&modules),
-                spelled(&owner),
-                owner_path.display(),
-                path.display(),
-                used = reference.segments.join("::"),
-            )
-            .into(),
-            label,
-            None,
-        ))
+        self.packages[package.0].marked_uses = uses;
     }
 
     /// Rust's file rules for `mod name;`: `name.rs` or `name/mod.rs`,
@@ -2510,7 +2500,6 @@ fn keep_span(text: &str, span: Span) -> String {
 /// `use` declarations bind.
 struct Marked {
     modules: Vec<ImmutableString>,
-    path: PathBuf,
     bindings: Vec<super::polyglot::Binding>,
 }
 
