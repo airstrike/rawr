@@ -9,7 +9,13 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
+      "entries": [
+        {"text":"`rawr dap` serves the Debug Adapter Protocol on stdio as a shell of the run's debugger session: launch or attach, line and function breakpoints, next, step in and step out, pause, a call stack named by Rust paths, variables that expand field by field, and evaluate where the program is paused, while each save still reloads the program and says so as output.","issues":[514]},
+        {"text":"The VS Code extension adds a `rawr` debugger that runs `rawr dap`, with launch and attach configurations and snippets; a new Debugging docs page also covers Neovim, Helix and Zed.","issues":[514]}
+      ]
+    },
     "releases": [
       {
         "version": "0.4.22",
@@ -3429,7 +3435,7 @@
     {"issue":511,"title":"inspect reads callers' frames","state":"closed","category":"Health","release":"0.3.54"},
     {"issue":512,"title":"inspect prints bindings by their declared type","state":"closed","category":"Health","release":"0.4.20"},
     {"issue":513,"title":"A registered debugger copies every call's arguments into its call-stack frame","state":"closed","category":"Health","release":"0.3.59"},
-    {"issue":514,"title":"Debug adapter: an editor reads a running program's values","state":"open","category":"Health"},
+    {"issue":514,"title":"Debug adapter: an editor reads a running program's values","state":"closed","category":"Health"},
     {"issue":515,"title":"Build ?play's universe engine once per bot and give each snippet a copy","state":"closed","category":"No glue (D593)","release":"0.3.53"},
     {"issue":516,"title":"A runner copies its facade definitions twice at start","state":"open","category":"Importer"},
     {"issue":517,"title":"A stable-toolchain project fails when a build script checks for nightly","state":"open","category":"Divergences from rustc"},
@@ -5184,7 +5190,11 @@
     {"issue":2267,"title":"rawr mcp's `wait` returns a started program's output only with the next event","state":"open","category":"Health"},
     {"issue":2268,"title":"The inspector runs in the browser universe behind a feature, with pauses suspended through JSPI","state":"open","category":"Platforms"},
     {"issue":2269,"title":"Pause inside a browser callback (iced's update and view, ratzilla's draw) in the playground debugger","state":"open","category":"Platforms"},
-    {"issue":2270,"title":"The playground's iced debugger shell: the window shell built for wasm","state":"open","category":"Platforms"}
+    {"issue":2270,"title":"The playground's iced debugger shell: the window shell built for wasm","state":"open","category":"Platforms"},
+    {"issue":2271,"title":"eval fails with E0308 on a view returning `impl Widget<Message>` built by `column![…]`","state":"open","category":"Health"},
+    {"issue":2272,"title":"A step pauses on statements the lowering wrote: a `&mut` parameter's signature line, or the same line again","state":"open","category":"Health"},
+    {"issue":2273,"title":"A Zed extension that registers `rawr dap` as a debug adapter","state":"open","category":"Health"},
+    {"issue":2274,"title":"DAP launch holds the program until configurationDone","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -7877,7 +7887,8 @@
             {"number":573,"title":"Debugger frames name methods by their internal symbol","state":"closed"},
             {"number":575,"title":"Say why a caller frame has no bindings to read","state":"closed"},
             {"number":2256,"title":"inspect reads `self` deeper inside an expression on it","state":"open"},
-            {"number":2257,"title":"inspect lists a compiler-made `i` binding and drops a moved parameter at some steps","state":"open"}
+            {"number":2257,"title":"inspect lists a compiler-made `i` binding and drops a moved parameter at some steps","state":"open"},
+            {"number":2272,"title":"A step pauses on statements the lowering wrote: a `&mut` parameter's signature line, or the same line again","state":"open"}
           ],
           "milestone": "0.5"
         },
@@ -7924,7 +7935,8 @@
             {"number":1207,"title":"rawr-repl drops a Drop value at the end of the line that bound it","state":"closed"},
             {"number":2263,"title":"eval in a caller's frame","state":"open"},
             {"number":2264,"title":"eval in a program with Rust dependencies, end to end","state":"open"},
-            {"number":2265,"title":"eval paused at a match arm or another expression position fails to parse","state":"open"}
+            {"number":2265,"title":"eval paused at a match arm or another expression position fails to parse","state":"open"},
+            {"number":2271,"title":"eval fails with E0308 on a view returning `impl Widget<Message>` built by `column![…]`","state":"open"}
           ],
           "milestone": "0.5"
         },
@@ -7947,9 +7959,11 @@
           "start": 63,
           "size": 2,
           "state": "now",
-          "note": "A debug adapter shell: breakpoints, frames and values in any editor (#514)",
+          "note": "`rawr dap` on the shared session and a VS Code debugger (#514); Neovim, Helix and Zed through their DAP config. Left: a Zed extension (#2273), and holding a launched program for its breakpoints (#2274).",
           "issues": [
-            {"number":514,"title":"Debug adapter: an editor reads a running program's values","state":"open"}
+            {"number":514,"title":"Debug adapter: an editor reads a running program's values","state":"closed"},
+            {"number":2273,"title":"A Zed extension that registers `rawr dap` as a debug adapter","state":"open"},
+            {"number":2274,"title":"DAP launch holds the program until configurationDone","state":"open"}
           ],
           "milestone": "0.5"
         },
