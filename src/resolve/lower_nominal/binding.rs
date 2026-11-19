@@ -70,14 +70,14 @@ impl<'a> Parser<'a> {
                 continue;
             }
             let statements = self.destructure(&syntax, &parameter.name.text, &ty)?;
-            self.write_output(statements, body);
+            self.write_written(statements, body);
             // The parameter's value keeps what the pattern does not move out.
             if self.drops() {
                 let bound = self.pattern_bindings(&syntax);
                 let holder = drops::Holder::Local(parameter.name.text.to_string(), Vec::new());
                 let clears =
                     self.pattern_drops(Some(&syntax), &ty, &holder, &bound, drops::Clears::InArm)?;
-                self.write_output(clears, body);
+                self.write_written(clears, body);
             }
         }
         Ok(())

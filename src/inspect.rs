@@ -659,11 +659,12 @@ impl Located {
         ))
     }
 
-    /// The file and line `position` in the lowered program comes from, or
-    /// `None` in code the compiler wrote around the program's.
+    /// The file and line of the program's statement at `position` in the
+    /// lowered program, or `None` in code the compiler wrote around or
+    /// among the program's statements.
     #[must_use]
     pub fn line(&self, position: Position) -> Option<(String, usize)> {
-        let (file, span) = self.positions.locate_position(&self.entry, position)?;
+        let (file, span) = self.positions.locate_statement(&self.entry, position)?;
         Some((file.identity().to_owned(), span.start().line()?))
     }
 
@@ -2404,6 +2405,104 @@ mod tests {
         assert!(again.get("error").is_none(), "{again}");
         assert!(registered.try_recv().is_err());
         let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// A program with a `&mut` parameter and a receiver, written to a file
+    /// of its own so a breakpoint can be set on its lines.
+    const STEPPED: &str = "struct Counter { value: u64, history: Vec<u64> }\n\
+        fn tick(counter: &mut Counter, step: u64) {\n\
+        \x20   counter.value += step;\n\
+        }\n\
+        impl Counter {\n\
+        \x20   fn update(&mut self, message: u64) {\n\
+        \x20       match message {\n\
+        \x20           0 => {\n\
+        \x20               self.history.push(self.value);\n\
+        \x20               self.value += 1;\n\
+        \x20           }\n\
+        \x20           _ => self.value -= 1,\n\
+        \x20       }\n\
+        \x20   }\n\
+        }\n\
+        pub fn run() -> u64 {\n\
+        \x20   let mut c = Counter { value: 0, history: vec![] };\n\
+        \x20   tick(&mut c, 2);\n\
+        \x20   c.update(0);\n\
+        \x20   c.value\n\
+        }\n";
+
+    /// Where [`STEPPED`]'s `run` pauses: at a breakpoint on `line`, then
+    /// after each step of `steps`.
+    #[cfg(unix)]
+    fn stepped(name: &str, line: usize, steps: &[&str]) -> Vec<serde_json::Value> {
+        use serde_json::json;
+        let directory = std::env::temp_dir().join(format!("rawr-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let file = directory.join("main.rs");
+        std::fs::write(&file, STEPPED).unwrap();
+        let socket = directory.join("s");
+        let inspector = super::Inspector::bind(&socket).unwrap();
+        let mut engine = crate::Engine::new();
+        inspector.attach(&mut engine);
+        // Compiled as a runner compiles: its steps placed by the compiler's
+        // positions, in the file written above.
+        let executable = engine
+            .compile_executable(STEPPED)
+            .unwrap_or_else(|error| panic!("{error}"));
+        let located = executable.located().unwrap();
+        let (ast, _) = executable.into_ast_with_positions();
+        let path = file.to_string_lossy().into_owned();
+        let at = path.clone();
+        inspector.locate_with(move |position| {
+            located.line(position).map(|(_, line)| (at.clone(), line))
+        });
+        inspector.compiled(&ast);
+        let set = ask(
+            &socket,
+            &json!({ "op": "break", "file": path, "line": line }),
+        );
+        assert!(set.get("error").is_none(), "{set}");
+        let seen = std::thread::scope(|scope| {
+            let running = scope.spawn(|| {
+                engine
+                    .call_fn::<u64>(&mut crate::Scope::new(), &ast, "run", ())
+                    .unwrap_or_else(|error| panic!("{error}"))
+            });
+            let mut seen = vec![ask(&socket, &json!({ "name": "nothing" }))["paused"].clone()];
+            for kind in steps {
+                seen.push(ask(&socket, &json!({ "op": "step", "kind": kind }))["paused"].clone());
+            }
+            ask(&socket, &json!({ "op": "clear" }));
+            ask(&socket, &json!({ "op": "continue" }));
+            assert_eq!(running.join().unwrap(), 3);
+            seen
+        });
+        let _ = std::fs::remove_dir_all(&directory);
+        seen
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_step_into_a_function_with_a_mut_parameter_pauses_at_its_first_line() {
+        let seen = stepped("step-into-mut", 18, &["into"]);
+        assert_eq!(seen[0]["line"], 18, "{seen:?}");
+        assert_eq!(seen[1]["line"], 3, "{seen:?}");
+        assert_eq!(seen[1]["reason"], "step", "{seen:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_step_over_a_breakpoint_line_pauses_at_the_next_line() {
+        let seen = stepped("step-over-break", 9, &["over", "over"]);
+        assert_eq!(seen[0]["line"], 9, "{seen:?}");
+        assert_eq!(seen[1]["line"], 10, "{seen:?}");
+        assert_eq!(seen[1]["reason"], "step", "{seen:?}");
+        // Out of the arm's block, whose value no statement wrote, to the
+        // caller's next line.
+        assert_eq!(seen[2]["line"], 20, "{seen:?}");
+        // A step into the method from its caller passes its signature too.
+        let seen = stepped("step-into-method", 19, &["into"]);
+        assert_eq!(seen[1]["line"], 7, "{seen:?}");
     }
 
     #[test]

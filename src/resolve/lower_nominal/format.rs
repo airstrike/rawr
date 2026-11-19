@@ -2656,6 +2656,16 @@ impl<'a> Parser<'a> {
         self.output.push_text("\n");
         start
     }
+
+    /// Write `rendered`, statements the compiler adds around the program's
+    /// own, such as a parameter's check where a body starts: an error in
+    /// them is located at `original`, but a debugger doesn't stop at them.
+    pub(super) fn write_written(&mut self, rendered: impl Into<origin::Fragment>, original: Span) {
+        let mut rendered = rendered.into();
+        rendered.cover_written(original);
+        self.output.push(rendered);
+        self.output.push_text("\n");
+    }
 }
 
 /// `=` or a compound assignment.

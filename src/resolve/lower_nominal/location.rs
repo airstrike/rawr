@@ -11,6 +11,8 @@ pub(super) struct Output {
     pub(super) generated: Range<usize>,
     pub(super) original: Span,
     pub(super) nesting: usize,
+    /// The compiler wrote the code itself, around the program's statements.
+    pub(super) written: bool,
 }
 
 pub(super) struct Pending {
@@ -20,6 +22,7 @@ pub(super) struct Pending {
     pub(super) generated: Range<usize>,
     pub(super) original: Span,
     pub(super) nesting: usize,
+    pub(super) written: bool,
 }
 
 /// Concatenated compiler source paired with complete user-source ownership.
@@ -255,6 +258,8 @@ pub(crate) struct Location {
     pub(crate) generated: Span,
     pub(crate) original: Span,
     pub(crate) nesting: usize,
+    /// The compiler wrote the code itself, around the program's statements.
+    pub(crate) written: bool,
 }
 
 pub(super) fn retain_locations(
@@ -275,6 +280,7 @@ pub(super) fn retain_locations(
             generated: start..end.saturating_add(1),
             original: location.original,
             nesting: location.nesting,
+            written: location.written,
         })
     }));
 }
@@ -299,6 +305,7 @@ pub(super) fn resolve_locations(generated: &str, locations: Vec<Pending>) -> Vec
                 ),
                 original: location.original,
                 nesting: location.nesting,
+                written: location.written,
             })
         })
         .collect()
@@ -341,6 +348,7 @@ mod tests {
                 generated: 0..16,
                 original: expression,
                 nesting: 1,
+                written: false,
             }],
         );
         generated.declaration(source, declaration, "}\n");
@@ -371,11 +379,13 @@ mod tests {
                     generated: 7..14,
                     original: inner,
                     nesting: 1,
+                    written: false,
                 },
                 Output {
                     generated: 0..16,
                     original: outer,
                     nesting: 3,
+                    written: false,
                 },
             ],
             vec![
@@ -383,11 +393,13 @@ mod tests {
                     generated: 0..16,
                     original: outer,
                     nesting: 3,
+                    written: false,
                 },
                 Output {
                     generated: 7..14,
                     original: inner,
                     nesting: 1,
+                    written: false,
                 },
             ],
         ] {

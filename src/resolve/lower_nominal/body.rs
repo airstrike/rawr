@@ -105,7 +105,7 @@ impl<'a> Parser<'a> {
                 let helper = self.push_op(Op::Validate {
                     definition: model.definition().clone(),
                 });
-                self.write_output(
+                self.write_written(
                     format!("{helper}({}(self));", crate::engine::KEYWORD_LEND),
                     definition.body(),
                 );
@@ -154,7 +154,7 @@ impl<'a> Parser<'a> {
             let helper = self.push_op(Op::Validate {
                 definition: model.definition().clone(),
             });
-            self.write_output(
+            self.write_written(
                 format!("{helper}({}(self));", crate::engine::KEYWORD_LEND),
                 definition.body(),
             );
@@ -637,7 +637,7 @@ impl<'a> Parser<'a> {
             } else {
                 parameter.name.text.as_str()
             };
-            self.write_output(
+            self.write_written(
                 format!("{helper}({}({name}));", crate::engine::KEYWORD_LEND),
                 definition.body.span,
             );
