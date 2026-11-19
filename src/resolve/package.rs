@@ -2968,9 +2968,6 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    /// The crates this package's paths may start with, as rustc's extern
-    /// prelude has them. `None` for a host's one in-memory file, whose host
-    /// decides what it reaches.
     /// Whether `qualified`, a dependency path a `use` in `context` names,
     /// is a miss against native code's retained facades rather than a
     /// macro: they hold no item there, and rustc hasn't resolved a macro
@@ -2991,6 +2988,9 @@ impl<'a> Resolver<'a> {
         }
     }
 
+    /// The crates this package's paths may start with, as rustc's extern
+    /// prelude has them. `None` for a host's one in-memory file, whose host
+    /// decides what it reaches.
     fn prelude(&self) -> Option<super::extern_prelude::Prelude> {
         self.tables.prelude().cloned()
     }
