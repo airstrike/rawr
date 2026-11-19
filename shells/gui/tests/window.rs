@@ -638,3 +638,43 @@ fn a_map_binding_opens_to_a_row_per_key() {
     std::fs::copy(&dark, screens.join("gui-map.png")).unwrap();
     std::fs::copy(&light, screens.join("gui-map-light.png")).unwrap();
 }
+
+/// A one-pixel PNG, the frame a program's window draws.
+const PIXEL: &[u8] = &[
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+    0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xf8, 0xdf, 0xc1, 0xf0,
+    0x1f, 0x00, 0x06, 0x98, 0x02, 0x87, 0x7d, 0xb5, 0x93, 0x99, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
+    0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+];
+
+/// A program with no window answers its capture with an error and gets
+/// no frame pane; one whose capture comes shows the pane, which stays
+/// with a placeholder while a restarted program has yet to draw.
+#[test]
+fn the_frame_pane_shows_once_the_program_shows_a_window() {
+    let script = Arc::new(Script::default());
+    let mut app = paused(&script);
+    reply(
+        &mut app,
+        &script.request("screenshot"),
+        json!({ "error": "the program shows no window" }),
+    );
+    assert!(
+        !shows(&app, "FRAME"),
+        "a windowless program has no frame pane"
+    );
+    assert!(shows(&app, "CALL STACK") && shows(&app, "BINDINGS"));
+    snapshot(&app, "windowless.png");
+
+    let _ = app.update(Message::Captured(Ok(PIXEL.to_vec())));
+    assert!(shows(&app, "FRAME"), "the window's frame shows in its pane");
+    assert!(!shows(&app, "Waiting for the window"));
+    snapshot(&app, "framed.png");
+
+    let _ = app.update(line(&json!({
+        "jsonrpc": "2.0", "method": "event", "params": { "event": "restarting", "seq": 3 },
+    })));
+    assert!(shows(&app, "FRAME"), "a restart keeps the pane");
+    assert!(shows(&app, "Waiting for the window"));
+}

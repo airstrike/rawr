@@ -44,7 +44,7 @@ pub struct App {
     phase: Phase,
     root: String,
     output: String,
-    frame: Option<image::Handle>,
+    window: Window,
     /// The program's frames, innermost first, as its last answer gave them.
     stack: Vec<Frame>,
     selected: usize,
@@ -79,10 +79,25 @@ struct Splits {
     columns: f32,
     /// The source over the console.
     console: f32,
-    /// The program's frame over the frames and bindings.
+    /// The program's frame over the frames and bindings, once it shows a
+    /// window.
     frame: f32,
-    /// The frames over the bindings.
+    /// The frames over the bindings, with or without the frame over them.
     frames: f32,
+}
+
+/// What the debugger knows of the program's own window: a program shows
+/// one once a capture of it first comes, and a program that never shows
+/// one, whose captures each answer an error, gets no pane for it.
+#[derive(Clone, Debug, Default)]
+enum Window {
+    /// No capture has come yet.
+    #[default]
+    Unseen,
+    /// The program showed a window: its latest frame, or none while a
+    /// restarted program has yet to draw its first. The pane stays either
+    /// way, so it never comes and goes across a restart.
+    Shown(Option<image::Handle>),
 }
 
 /// One of the window's split lines.
@@ -185,7 +200,7 @@ impl App {
             client: Client::default(),
             phase: Phase::Starting,
             output: String::new(),
-            frame: None,
+            window: Window::default(),
             stack: Vec::new(),
             selected: 0,
             inspected: None,
@@ -308,7 +323,7 @@ impl App {
                 Task::none()
             }
             Message::Captured(Ok(bytes)) => {
-                self.frame = Some(image::Handle::from_bytes(bytes));
+                self.window = Window::Shown(Some(image::Handle::from_bytes(bytes)));
                 Task::none()
             }
             Message::Captured(Err(error)) => {
@@ -435,6 +450,12 @@ impl App {
     fn moved(&mut self, phase: Phase) -> Task<Message> {
         let was_live = matches!(self.phase, Phase::Running | Phase::Paused(_));
         self.phase = phase;
+        // A restarted program is a new one, whose window has yet to draw.
+        if self.phase == Phase::Restarting
+            && let Window::Shown(frame) = &mut self.window
+        {
+            *frame = None;
+        }
         match self.phase.stop().cloned() {
             Some(stop) if self.inspected.as_ref() != Some(&stop) => {
                 self.selected = 0;
@@ -610,7 +631,8 @@ impl App {
 
     /// The toolbar over the panes, which split the window: the source and
     /// the console left of the program's frame, its frames and bindings,
-    /// and the output under them all. Each split's line drags.
+    /// and the output under them all. The frame's pane shows once the
+    /// program shows a window. Each split's line drags.
     pub fn view(&self) -> Element<'_, Message> {
         let left = horizontal_split(
             self.source_pane(),
@@ -619,22 +641,27 @@ impl App {
             |at| Message::Split(Split::Console, at),
         )
         .style(theme::divider);
-        let right = horizontal_split(
-            pane("Frame", self.frame_pane()),
-            horizontal_split(
-                pane("Call stack", scrollable(self.frames()).height(Fill)),
-                pane(
-                    "Bindings",
-                    scrollable(self.bindings.view().map(Message::Bindings)).height(Fill),
-                ),
-                self.splits.frames,
-                |at| Message::Split(Split::Frames, at),
-            )
-            .style(theme::divider),
-            self.splits.frame,
-            |at| Message::Split(Split::Frame, at),
+        let stack = horizontal_split(
+            pane("Call stack", scrollable(self.frames()).height(Fill)),
+            pane(
+                "Bindings",
+                scrollable(self.bindings.view().map(Message::Bindings)).height(Fill),
+            ),
+            self.splits.frames,
+            |at| Message::Split(Split::Frames, at),
         )
         .style(theme::divider);
+        let right = match &self.window {
+            Window::Unseen => stack.boxed(),
+            Window::Shown(frame) => horizontal_split(
+                pane("Frame", frame_pane(frame.as_ref())),
+                stack,
+                self.splits.frame,
+                |at| Message::Split(Split::Frame, at),
+            )
+            .style(theme::divider)
+            .boxed(),
+        };
         let panes = vertical_split(left, right, self.splits.columns, |at| {
             Message::Split(Split::Columns, at)
         })
@@ -726,19 +753,6 @@ impl App {
         .boxed()
     }
 
-    fn frame_pane(&self) -> Element<'_, Message> {
-        match &self.frame {
-            Some(handle) => image(handle.clone()).width(Fill).height(Fill).boxed(),
-            None => container(
-                text("No frame yet")
-                    .size(theme::SIZE)
-                    .style(text::secondary),
-            )
-            .center(Fill)
-            .boxed(),
-        }
-    }
-
     /// The program's calls, innermost first, as a table of each call's
     /// function and where it is; the selected call's row is marked, and a
     /// click on another reads its bindings.
@@ -792,6 +806,21 @@ impl App {
         } else {
             Theme::Dark
         }
+    }
+}
+
+/// The program's latest frame, or a quiet word while a restarted program
+/// has yet to draw.
+fn frame_pane(frame: Option<&image::Handle>) -> Element<'_, Message> {
+    match frame {
+        Some(handle) => image(handle.clone()).width(Fill).height(Fill).boxed(),
+        None => container(
+            text("Waiting for the window")
+                .size(theme::SIZE)
+                .style(text::secondary),
+        )
+        .center(Fill)
+        .boxed(),
     }
 }
 
