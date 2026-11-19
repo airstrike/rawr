@@ -56,8 +56,10 @@ fn compiler_ir_layout_keeps_parser_types_compact() {
         "executable operation size: {}",
         std::mem::size_of::<super::ExecutableOp>()
     );
+    // An intrinsic's proof holds where a call that gives a
+    // `std::panic::Location` is made, boxed (#1560).
     #[cfg(feature = "rust-import")]
-    assert_eq!(std::mem::size_of::<super::ExecutableOp>(), 592);
+    assert_eq!(std::mem::size_of::<super::ExecutableOp>(), 608);
 }
 
 #[cfg(feature = "rust-import")]

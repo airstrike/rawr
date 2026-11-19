@@ -1880,13 +1880,19 @@ impl<'a> Resolver<'a> {
                 // `use serde::Deserialize;`.
                 // A dependency's macro the facades hold no item at, as `use
                 // rust_decimal_macros::dec;` names a proc macro, is bound in
-                // the macro namespace for rustc to expand its calls.
+                // the macro namespace for rustc to expand its calls. Against
+                // native code's retained facades, a path they miss is a miss
+                // first: preparation demands it, and binds it as a macro
+                // only when the crate holds no item there. One rustc
+                // resolved as a macro before stays one.
                 let variant = variant.or_else(|| {
                     let qualified = super::std_reexport(&spelled.join("::"), self.host);
                     if self.host.entry(&qualified).is_some() {
                         None
                     } else if self.host.derive_macro(&qualified) {
                         Some(item::Import::Derive)
+                    } else if self.missed_macro_use(context, &qualified) {
+                        None
                     } else {
                         self.tables
                             .prelude()
@@ -2959,6 +2965,26 @@ impl<'a> Resolver<'a> {
                 reference,
                 missing: Unresolved::Path,
             },
+        }
+    }
+
+    /// Whether `qualified`, a dependency path a `use` in `context` names,
+    /// is a miss against native code's retained facades rather than a
+    /// macro: they hold no item there, and rustc hasn't resolved a macro
+    /// there either.
+    fn missed_macro_use(&self, context: &Context, qualified: &str) -> bool {
+        #[cfg(feature = "rust-import")]
+        return self.native.as_deref().is_some_and(|capture| {
+            capture
+                .at(program::source::Id::from_index(context.source.index()))
+                .missing_binding(self.host, qualified)
+        }) && self.tables.prelude().is_none_or(|prelude| {
+            super::resolved_macro_use(prelude.project(), qualified).is_none()
+        });
+        #[cfg(not(feature = "rust-import"))]
+        {
+            let _ = (context, qualified);
+            false
         }
     }
 

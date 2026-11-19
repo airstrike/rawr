@@ -516,10 +516,10 @@ fn parse_items_in(
                                 stray = true;
                             }
                         }
-                        None => {
-                            let call = crate_call(input, &path, true)?;
-                            CALLS.with_borrow_mut(|calls| calls.push(call));
-                        }
+                        None => match crate_call(input, &path, true)? {
+                            Some(call) => CALLS.with_borrow_mut(|calls| calls.push(call)),
+                            None => stray = true,
+                        },
                     }
                     after_name = false;
                     boundary = true;
@@ -567,12 +567,13 @@ fn call_path(input: &mut TokenStream, first: (Token, Position)) -> Option<Vec<(T
 
 /// The call of a crate's macro at `path`, read through its closing
 /// delimiter, and among a module's items (`module`) the `;` after a call in
-/// parentheses or brackets.
+/// parentheses or brackets. `None` when that `;` is not next: the call
+/// begins an expression, as a script's last statement or `m!(..).f()` is.
 fn crate_call(
     input: &mut TokenStream,
     path: &[(Token, Position)],
     module: bool,
-) -> ParseResult<crate::item::MacroCall> {
+) -> ParseResult<Option<crate::item::MacroCall>> {
     let at = path[0].1;
     let (last, last_at) = path.last().expect("a path has a name");
     let name = Span::new(at, after(*last_at, last.to_string().chars().count()));
@@ -615,16 +616,14 @@ fn crate_call(
     let group = Span::new(start, after(close, 1));
     let mut end = group.end();
     if module && !braced {
-        end = after(
-            expect(
-                input,
-                Token::SemiColon,
-                "after a macro call in item position",
-            )?,
-            1,
-        );
+        match input.peek() {
+            Some((Token::SemiColon, _)) => {
+                end = after(input.next().expect("peeked `;`").1, 1);
+            }
+            _ => return Ok(None),
+        }
     }
-    Ok(crate::item::MacroCall {
+    Ok(Some(crate::item::MacroCall {
         path: path
             .iter()
             .filter_map(|(token, _)| match token {
@@ -637,13 +636,15 @@ fn crate_call(
         span: Span::new(at, end),
         scope: None,
         expression: false,
-    })
+    }))
 }
 
 /// The call of `rules` whose name `name` is read, from its `!` through its
 /// closing delimiter and the `;` after it, where an item goes: the items it
 /// expands to, with the spans they mask, and the call's span. No items
-/// when the expansion is something else, as a script's statement is.
+/// when the expansion is something else, as a script's statement is, or
+/// when a call in parentheses or brackets has no `;` after it and so
+/// begins an expression.
 fn expand_items(
     input: &mut TokenStream,
     rules: &crate::resolve::macro_rules::Rules,
@@ -691,11 +692,10 @@ fn expand_items(
         call.push((token, position));
     }
     if !braced {
-        end = expect(
-            input,
-            Token::SemiColon,
-            "after a macro call in item position",
-        )?;
+        match input.peek() {
+            Some((Token::SemiColon, _)) => end = input.next().expect("peeked `;`").1,
+            _ => return Ok((None, Span::new(at, after(end, 1)))),
+        }
     }
     let span = Span::new(at, after(end, 1));
     let Some((text, mark)) = super::item_macro::lay_out(rules, &call, "crate", false, false) else {

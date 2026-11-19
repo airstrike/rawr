@@ -50,8 +50,9 @@ pub(super) enum Op {
     },
     Symbolic {
         value: crate::item::Value,
-        /// A lifted closure's captures, passed to the op where it is written.
-        captures: usize,
+        /// A lifted closure's captures, passed to the op where it is
+        /// written: a `u32`, so the flag after it fits beside it.
+        captures: u32,
         /// Whether the closure changes what it captures (`FnMut`): each
         /// capture is a cell its calls write, as the closure owns it.
         changes: bool,

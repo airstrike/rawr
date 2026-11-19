@@ -339,6 +339,21 @@ impl LoweringFailure {
     }
 }
 
+/// The kept source of rustc's answer to a `use` of the dependency macro
+/// `qualified` in the project at `project`, when rustc resolved it there.
+#[cfg(feature = "rust-import")]
+pub(crate) fn resolved_macro_use(
+    project: &std::path::Path,
+    qualified: &str,
+) -> Option<std::path::PathBuf> {
+    use rawr_import::expand::call;
+    let path = call::Call::used(qualified).source_path(project);
+    std::fs::read_to_string(&path)
+        .ok()
+        .is_some_and(|text| call::kept(&text).is_some())
+        .then_some(path)
+}
+
 impl Program {
     /// Each `use` that binds a dependency's macro by name
     /// ([`item::Import::CrateMacro`]) and that rustc hasn't resolved yet in
@@ -363,15 +378,11 @@ impl Program {
                 if binding.target != item::Import::CrateMacro {
                     continue;
                 }
-                let request = call::Call::used(&binding.qualified);
-                let path = request.source_path(project);
-                let resolved = std::fs::read_to_string(&path)
-                    .ok()
-                    .is_some_and(|text| call::kept(&text).is_some());
-                if resolved {
+                if let Some(path) = resolved_macro_use(project, &binding.qualified) {
                     kept::name(&path);
                     continue;
                 }
+                let request = call::Call::used(&binding.qualified);
                 let call: Box<[u8]> = serde_json::to_vec(&request).unwrap_or_default().into();
                 let known = |(_, missed): &(_, Error)| {
                     matches!(missed, Error::MacroExpansionRequired { call: known, .. }

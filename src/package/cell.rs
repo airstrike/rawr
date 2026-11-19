@@ -31,7 +31,7 @@ use crate::{parse, source, ImmutableString, Position, Span};
 const MAGIC: &[u8; 4] = b"RPCL";
 
 /// Bumped when the encoding below changes.
-const FORMAT: u32 = 15;
+const FORMAT: u32 = 16;
 
 /// What a cell must have been written by to be read: the format, the crate
 /// version, a digest of the parser's sources (see `build.rs`), whether it
@@ -229,9 +229,11 @@ impl Cells {
 
     fn encode(&self, text: &str, features: &Enabled, unit: &parse::Unit) -> Option<Vec<u8>> {
         let (items, statements, script_source) = unit.parts();
-        // A cell holds the file's own text; what its macro calls expand to
-        // is laid out after it, or comes once a crate's facade is known.
-        if statements.is_some() || !unit.expansions().is_empty() || !unit.calls().is_empty() {
+        // A cell holds the file's own text. What a program macro's call
+        // expands to is laid out after it. A crate macro's call is held as
+        // the parse left it, and the graph expands it once the crate's
+        // facade is known, as it does a fresh parse's.
+        if statements.is_some() || !unit.expansions().is_empty() {
             return None;
         }
         let mut writer = Writer(Vec::with_capacity(text.len() * 2));
@@ -243,6 +245,7 @@ impl Cells {
         put_all(unit.imports(), &mut writer);
         put_all(unit.inner_attributes(), &mut writer);
         put_all(unit.macros(), &mut writer);
+        put_all(unit.calls(), &mut writer);
         Some(writer.0)
     }
 }
@@ -266,10 +269,12 @@ fn decode(reader: &mut Reader, text: &str) -> Option<parse::Unit> {
     let imports = Box::<[item::Use]>::get(reader)?;
     let attributes = Box::<[item::Attribute]>::get(reader)?;
     let macros = Box::<[item::MacroRules]>::get(reader)?;
+    let calls = Box::<[item::MacroCall]>::get(reader)?;
     reader.bytes.is_empty().then(|| {
         parse::Unit::new(source::Map::new(text), items, None, script_source)
             .with_scope(imports, attributes)
             .with_macros(macros)
+            .with_calls(calls)
     })
 }
 
@@ -519,6 +524,7 @@ record! {
     item::Attribute { path, arguments, span, text }
     item::Module { header, name, span, inline }
     item::MacroRules { header, name, span }
+    item::MacroCall { path, name, group, span, scope, expression }
     item::Use { scope, header, tree, span }
     item::UseMember { name, alias }
     item::GenericParam { name, bounds, projections, default, lifted, constant }
@@ -1015,6 +1021,7 @@ pub fn main() -> iced::Result {
         for ((left, a), (right, b)) in parsed.parsed_units().zip(kept.parsed_units()) {
             assert_eq!(left.path(), right.path());
             assert_eq!(a.items(), b.items());
+            assert_eq!(a.calls(), b.calls());
             assert_eq!(a.parts().2, b.parts().2);
             assert_eq!(format!("{:?}", a.parts().1), format!("{:?}", b.parts().1));
         }
