@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 - `rawr tui [path]` opens a terminal debugger on a program's run. It attaches to the run's shared debugger session, or starts one, and shows the phase and output, the source at the stop with breakpoints marked, the frames and their bindings, and an eval prompt. Keys set breakpoints, pause, step and continue, and it keeps working while another shell such as `rawr mcp` drives the same run. (#2259)
+- A native module below a marked crate root can call the root's marked functions and use its marked types, public or private, as Cargo builds them. The calls go through the same trampolines as a native root's, so an edit to the marked code reaches the next call. (#2276)
+- A native module below a marked one sees only the private items its paths name, so a save that changes a private field native code never reads still swaps in place. (#2282)
+- `rawr gui [path]` opens a debugger window on the program's run, in its own process, so it keeps drawing while the program is paused. It attaches to a `rawr run` already going, or starts one, and shows the run's state and output, the program's latest frame, the source where it stopped with breakpoints set in the gutter, the frames and their bindings as folding trees, an eval console, and step, continue and pause. (#2260)
+- `rawr gui` and `rawr tui` draw the source in syntax colours, and the window follows the system's light or dark mode. (#2286)
 
 ## 0.4.23 (2026-11-18)
 

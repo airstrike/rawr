@@ -12,7 +12,11 @@
     "unreleased": {
       "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
       "entries": [
-        {"text":"`rawr tui [path]` opens a terminal debugger on a program's run. It attaches to the run's shared debugger session, or starts one, and shows the phase and output, the source at the stop with breakpoints marked, the frames and their bindings, and an eval prompt. Keys set breakpoints, pause, step and continue, and it keeps working while another shell such as `rawr mcp` drives the same run.","issues":[2259]}
+        {"text":"`rawr tui [path]` opens a terminal debugger on a program's run. It attaches to the run's shared debugger session, or starts one, and shows the phase and output, the source at the stop with breakpoints marked, the frames and their bindings, and an eval prompt. Keys set breakpoints, pause, step and continue, and it keeps working while another shell such as `rawr mcp` drives the same run.","issues":[2259]},
+        {"text":"A native module below a marked crate root can call the root's marked functions and use its marked types, public or private, as Cargo builds them. The calls go through the same trampolines as a native root's, so an edit to the marked code reaches the next call.","issues":[2276]},
+        {"text":"A native module below a marked one sees only the private items its paths name, so a save that changes a private field native code never reads still swaps in place.","issues":[2282]},
+        {"text":"`rawr gui [path]` opens a debugger window on the program's run, in its own process, so it keeps drawing while the program is paused. It attaches to a `rawr run` already going, or starts one, and shows the run's state and output, the program's latest frame, the source where it stopped with breakpoints set in the gutter, the frames and their bindings as folding trees, an eval console, and step, continue and pause.","issues":[2260]},
+        {"text":"`rawr gui` and `rawr tui` draw the source in syntax colours, and the window follows the system's light or dark mode.","issues":[2286]}
       ]
     },
     "releases": [
@@ -5187,7 +5191,7 @@
     {"issue":2257,"title":"inspect lists a compiler-made `i` binding and drops a moved parameter at some steps","state":"open","category":"Health"},
     {"issue":2258,"title":"One debugger session per run that any number of shells attach to, with rawr mcp as its first shell","state":"closed","category":"Health","release":"0.4.22"},
     {"issue":2259,"title":"A terminal shell (TUI) on the shared debugger session","state":"closed","category":"Health"},
-    {"issue":2260,"title":"A window shell (GUI) in its own process on the shared debugger session","state":"open","category":"Health"},
+    {"issue":2260,"title":"A window shell (GUI) in its own process on the shared debugger session","state":"closed","category":"Health"},
     {"issue":2261,"title":"Rewind to a past state, and replay recorded turns under edited code","state":"open","category":"Health"},
     {"issue":2262,"title":"iced's own debug tools (comet, and its time machine where the program enables it) work under rawr run","state":"open","category":"Health"},
     {"issue":2263,"title":"eval in a caller's frame","state":"open","category":"Health"},
@@ -5203,13 +5207,19 @@
     {"issue":2273,"title":"A Zed extension that registers `rawr dap` as a debug adapter","state":"open","category":"Health"},
     {"issue":2274,"title":"DAP launch holds the program until configurationDone","state":"open","category":"Health"},
     {"issue":2275,"title":"The VS Code debugger's F5 without a launch.json runs the workspace's root crate, not the active file's","state":"open","category":"Health"},
-    {"issue":2276,"title":"A marked root's native modules can't call marked code: lift D510's trampolines to a marked root","state":"open","category":"No glue (D593)"},
+    {"issue":2276,"title":"A marked root's native modules can't call marked code: lift D510's trampolines to a marked root","state":"closed","category":"No glue (D593)"},
     {"issue":2277,"title":"The runtime key covers the checkout path and the whole Cargo.lock, so builds with the same sources never share it","state":"open","category":"Health"},
     {"issue":2278,"title":"The session tells shells when breakpoints change","state":"open","category":"Health"},
     {"issue":2279,"title":"rawr check on a gallery with a marked main.rs fails with 'diagnostic label has no source span', hiding the error","state":"open","category":"No glue (D593)"},
     {"issue":2280,"title":"Marked code calling a method a native module defines on a marked type","state":"open","category":"No glue (D593)"},
     {"issue":2281,"title":"marked::a_marked_module_of_the_library_runs_from_the_native_binary expects Shape::change to name a new item","state":"open","category":"Health"},
-    {"issue":2282,"title":"Since #2276, a private-field edit of a held type under a native module restarts instead of swapping","state":"open","category":"No glue (D593)"}
+    {"issue":2282,"title":"Since #2276, a private-field edit of a held type under a native module restarts instead of swapping","state":"closed","category":"No glue (D593)"},
+    {"issue":2283,"title":"Five rawr package lib tests fail on main before tonight's merges","state":"open","category":"Health"},
+    {"issue":2284,"title":"`located::here!()` in a marked module fails to expand: expected expression, found `)`","state":"open","category":"No glue (D593)"},
+    {"issue":2285,"title":"A native module reading a private field through a value whose type it never names isn't counted as seeing it","state":"open","category":"No glue (D593)"},
+    {"issue":2286,"title":"`rawr gui` and `rawr tui` draw the source in syntax colours, and the window follows the system's…","state":"open","category":"Health"},
+    {"issue":2287,"title":"A step on a paused iced program never reaches a new pause","state":"open","category":"Health"},
+    {"issue":2288,"title":"A run started in a terminal tells its output to the session","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -6255,10 +6265,11 @@
             {"number":2212,"title":"A generic impl's trait method that takes a witness can't be called through dynamic dispatch","state":"open"},
             {"number":1592,"title":"A value only a generic or std-type impl covers can't coerce to a crate trait's &dyn","state":"open"},
             {"number":2241,"title":"A program's own `#[derive(thiserror::Error)]` is refused as an impl of an unknown trait path","state":"open"},
-            {"number":2276,"title":"A marked root's native modules can't call marked code: lift D510's trampolines to a marked root","state":"open"},
+            {"number":2276,"title":"A marked root's native modules can't call marked code: lift D510's trampolines to a marked root","state":"closed"},
             {"number":2279,"title":"rawr check on a gallery with a marked main.rs fails with 'diagnostic label has no source span', hiding the error","state":"open"},
             {"number":2280,"title":"Marked code calling a method a native module defines on a marked type","state":"open"},
-            {"number":2282,"title":"Since #2276, a private-field edit of a held type under a native module restarts instead of swapping","state":"open"}
+            {"number":2282,"title":"Since #2276, a private-field edit of a held type under a native module restarts instead of swapping","state":"closed"},
+            {"number":2285,"title":"A native module reading a private field through a value whose type it never names isn't counted as seeing it","state":"open"}
           ]
         },
         {
@@ -7382,7 +7393,8 @@
             {"number":2202,"title":"A transcriber repetition starting with an operator inside a separated repetition doesn't expand","state":"open"},
             {"number":2217,"title":"An enum variant imported by `use` can be passed to a macro, as…","state":"closed"},
             {"number":2236,"title":"`cfg_if::cfg_if!` in a program fails with \"diagnostic span falls outside source\"","state":"open"},
-            {"number":2237,"title":"`scopeguard::defer!` fails: cannot find function `guard` in module `scopeguard`","state":"open"}
+            {"number":2237,"title":"`scopeguard::defer!` fails: cannot find function `guard` in module `scopeguard`","state":"open"},
+            {"number":2284,"title":"`located::here!()` in a marked module fails to expand: expected expression, found `)`","state":"open"}
           ]
         },
         {
@@ -7619,7 +7631,8 @@
             {"number":1917,"title":"Four rawr-import unit tests fail on main: epoch ownership, nightly identity, wrapped control graph, driver manifest","state":"open"},
             {"number":1900,"title":"Each fresh test rawr home builds rawr's runtime from scratch at opt-level 3","state":"open"},
             {"number":2227,"title":"Two rawr-import classify lib tests fail on main","state":"open"},
-            {"number":2281,"title":"marked::a_marked_module_of_the_library_runs_from_the_native_binary expects Shape::change to name a new item","state":"open"}
+            {"number":2281,"title":"marked::a_marked_module_of_the_library_runs_from_the_native_binary expects Shape::change to name a new item","state":"open"},
+            {"number":2283,"title":"Five rawr package lib tests fail on main before tonight's merges","state":"open"}
           ]
         },
         {
@@ -7971,7 +7984,8 @@
           "issues": [
             {"number":2258,"title":"One debugger session per run that any number of shells attach to, with rawr mcp as its first shell","state":"closed"},
             {"number":2266,"title":"A shell attaching to a plain `rawr run` restarts the program to register a debugger, losing its state","state":"open"},
-            {"number":2278,"title":"The session tells shells when breakpoints change","state":"open"}
+            {"number":2278,"title":"The session tells shells when breakpoints change","state":"open"},
+            {"number":2288,"title":"A run started in a terminal tells its output to the session","state":"open"}
           ],
           "milestone": "0.5"
         },
@@ -8008,9 +8022,11 @@
           "start": 67,
           "size": 3,
           "state": "now",
-          "note": "A GUI in its own process, so it keeps working while the program is paused",
+          "note": "`rawr gui`: a window in its own process with frame, highlighted source, gutter breakpoints, bindings and eval (#2260, #2286). Left: a step lost on a paused iced program (#2287).",
           "issues": [
-            {"number":2260,"title":"A window shell (GUI) in its own process on the shared debugger session","state":"open"}
+            {"number":2260,"title":"A window shell (GUI) in its own process on the shared debugger session","state":"closed"},
+            {"number":2287,"title":"A step on a paused iced program never reaches a new pause","state":"open"},
+            {"number":2286,"title":"`rawr gui` and `rawr tui` draw the source in syntax colours, and the window follows the system's…","state":"open"}
           ],
           "milestone": "0.5"
         }

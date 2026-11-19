@@ -16,16 +16,8 @@ fn scale(tick: i64) -> i64 {
 }
 
 fn main() {
-    let stop = std::env::var_os("ISLANDS_STOP");
-    let ticks: i64 = std::env::var("ISLANDS_TICKS")
-        .ok()
-        .and_then(|ticks| ticks.parse().ok())
-        .unwrap_or(3000);
-    for tick in 1..=ticks {
-        if stop
-            .as_ref()
-            .is_some_and(|path| std::path::Path::new(path).exists())
-        {
+    for tick in 1..=tally::ticks() {
+        if tally::stopped() {
             break;
         }
         println!("{}", tally::line(tick));
