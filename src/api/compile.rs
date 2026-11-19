@@ -15,6 +15,33 @@ impl Engine {
         crate::package::compile::snapshot(self, snapshot)
     }
 
+    /// Compile one immutable snapshot as a run compiles it, with the
+    /// [`program::Positions`] that place its steps in its files: a runner
+    /// lowers it against its retained native surface, and a program with
+    /// no dependencies compiles as `rawr run` compiles it.
+    #[cfg(feature = "rust-import")]
+    #[doc(hidden)]
+    pub fn compile_package_snapshot_with_positions(
+        &self,
+        snapshot: &crate::package::snapshot::Snapshot,
+    ) -> Result<(AST, program::Positions), crate::package::Error> {
+        crate::package::compile::snapshot_with_positions(self, snapshot)
+    }
+
+    /// Compile one immutable snapshot as `rawr run` compiles a program with
+    /// no dependencies, with the [`program::Positions`] that place its
+    /// steps in its files.
+    #[cfg(not(feature = "rust-import"))]
+    #[doc(hidden)]
+    pub fn compile_package_snapshot_with_positions(
+        &self,
+        snapshot: &crate::package::snapshot::Snapshot,
+    ) -> Result<(AST, program::Positions), crate::package::Error> {
+        crate::package::Graph::load_snapshot(self, snapshot)
+            .and_then(|graph| self.compile_package_with_positions(graph))
+            .map(|(ast, _, positions)| (ast, positions))
+    }
+
     /// A reload generation of any program, a plain one (no application or
     /// previews, a `main` run once) included, retaining the same program for
     /// top-level evaluation before the generation is bound.

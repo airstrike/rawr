@@ -67,13 +67,20 @@ pub(crate) fn snapshot(
     engine: &Engine,
     snapshot: &super::snapshot::Snapshot,
 ) -> Result<crate::AST, Error> {
-    let mut graph = engine.load_snapshot_kept(snapshot)?;
-    let expanded = graph.expand_crate_macros(&engine.host_registry);
-    let sources = graph.diagnostic_sources();
-    let program = expanded
-        .and_then(|()| resolve::package::resolve(graph, &engine.host_registry))
-        .map_err(|failure| Error::resolution(sources.clone(), failure))?;
-    snapshot_executable(engine, program, &sources).map(program::Executable::into_hosted_ast)
+    snapshot_program(engine, snapshot, |_| ()).map(|(executable, ())| executable.into_hosted_ast())
+}
+
+/// The program `snapshot` holds, compiled as a runner compiles its start
+/// ([`snapshot_generation_plain`]), with the [`program::Positions`] that
+/// place its steps in its files: code a debugger evaluates checks in the
+/// program as the run checked it (#2292).
+#[cfg(feature = "rust-import")]
+pub(crate) fn snapshot_with_positions(
+    engine: &Engine,
+    snapshot: &super::snapshot::Snapshot,
+) -> Result<(crate::AST, program::Positions), Error> {
+    snapshot_program(engine, snapshot, |_| ())
+        .map(|(executable, ())| executable.into_ast_with_positions())
 }
 
 /// A generation of any program, a plain one included, for a runner with no
@@ -83,25 +90,41 @@ pub(crate) fn snapshot_generation_plain(
     engine: &Engine,
     snapshot: &super::snapshot::Snapshot,
 ) -> Result<crate::reload::Candidate, Error> {
-    let mut graph = engine.load_snapshot_kept(snapshot)?;
-    let expanded = graph.expand_crate_macros(&engine.host_registry);
-    let sources = graph.diagnostic_sources();
-    let source = crate::reload::source::Graph::from_package(&graph);
-    // A crate built for its tests runs them in place of its `main`.
-    let declared = graph
-        .entry_package()
-        .features()
-        .test()
-        .then(|| super::test::Declared::of(&graph));
-    let program = expanded
-        .and_then(|()| resolve::package::resolve(graph, &engine.host_registry))
-        .map_err(|failure| Error::resolution(sources.clone(), failure))?;
-    let executable = snapshot_executable(engine, program, &sources)?;
+    let (executable, (source, declared)) = snapshot_program(engine, snapshot, |graph| {
+        // A crate built for its tests runs them in place of its `main`.
+        let declared = graph
+            .entry_package()
+            .features()
+            .test()
+            .then(|| super::test::Declared::of(graph));
+        (crate::reload::source::Graph::from_package(graph), declared)
+    })?;
     let tests = declared.map(|declared| super::test::Declared::compiled_in(declared, &executable));
     Ok(
         crate::reload::Candidate::from_package_plain(executable, source, engine, snapshot)
             .with_tests(tests),
     )
+}
+
+/// The program `snapshot` holds, lowered as a runner lowers it: the
+/// dependencies' macro calls expanded, and on a compiler that retains a
+/// native surface, lowered against it, which reveals each opaque return
+/// type (`fn view() -> impl Widget`) before a crate's generic call takes
+/// it. `read` takes what it needs of the loaded graph first.
+#[cfg(feature = "rust-import")]
+fn snapshot_program<T>(
+    engine: &Engine,
+    snapshot: &super::snapshot::Snapshot,
+    read: impl FnOnce(&Graph) -> T,
+) -> Result<(program::Executable, T), Error> {
+    let mut graph = engine.load_snapshot_kept(snapshot)?;
+    let expanded = graph.expand_crate_macros(&engine.host_registry);
+    let sources = graph.diagnostic_sources();
+    let read = read(&graph);
+    let program = expanded
+        .and_then(|()| resolve::package::resolve(graph, &engine.host_registry))
+        .map_err(|failure| Error::resolution(sources.clone(), failure))?;
+    snapshot_executable(engine, program, &sources).map(|executable| (executable, read))
 }
 
 #[cfg(feature = "rust-import")]

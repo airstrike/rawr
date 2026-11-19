@@ -43,6 +43,10 @@ pub struct App {
     selected: usize,
     /// The stop the window last read the frames of.
     inspected: Option<Stop>,
+    /// How many reads of the program's frames the window asked: only the
+    /// answer to the newest shows, since an earlier one tells of a pause
+    /// or a frame the window has left.
+    reads: u64,
     /// The line breakpoints set, each a file and a line.
     breakpoints: Vec<(String, u64)>,
     /// The last thing that went wrong, until the next.
@@ -67,7 +71,7 @@ struct Frame {
 enum Asked {
     Hello,
     Breakpoints,
-    Inspect { frame: usize },
+    Inspect { frame: usize, read: u64 },
     Break,
     Step { resumes: u64 },
     Continue,
@@ -139,6 +143,7 @@ impl App {
             stack: Vec::new(),
             selected: 0,
             inspected: None,
+            reads: 0,
             breakpoints: Vec::new(),
             note: None,
             source: source::State::default(),
@@ -232,7 +237,7 @@ impl App {
             }
             Message::Select(frame) => {
                 self.selected = frame;
-                self.ask(json!({ "frame": frame }), Asked::Inspect { frame });
+                self.read(frame);
                 Task::none()
             }
             // The program goes on: it runs from now to its next pause, and
@@ -278,6 +283,14 @@ impl App {
         if let Some(link) = &self.link {
             link.send(&self.client.program(request, kind));
         }
+    }
+
+    /// Read the values of `frame` where the program is: this read's answer
+    /// replaces any earlier one's.
+    fn read(&mut self, frame: usize) {
+        self.reads += 1;
+        let read = self.reads;
+        self.ask(json!({ "frame": frame }), Asked::Inspect { frame, read });
     }
 
     /// Ask the program to draw its window for this one, into a file of
@@ -328,7 +341,7 @@ impl App {
         match self.phase.stop().cloned() {
             Some(stop) if self.inspected.as_ref() != Some(&stop) => {
                 self.selected = 0;
-                self.ask(json!({ "frame": 0 }), Asked::Inspect { frame: 0 });
+                self.read(0);
                 let task = match &stop.file {
                     Some(file) => self.source.show(file, stop.line).map(Message::Source),
                     None => Task::none(),
@@ -339,6 +352,8 @@ impl App {
             Some(_) => Task::none(),
             None => {
                 if self.inspected.take().is_some() {
+                    // A read still on its way tells of the pause just left.
+                    self.reads += 1;
                     self.stack.clear();
                     self.bindings.show(Vec::new(), None);
                 }
@@ -352,6 +367,13 @@ impl App {
 
     /// The reply to a request made for `kind`.
     fn answered(&mut self, kind: Asked, result: Result<Value, session::Error>) -> Task<Message> {
+        // An earlier read, and what went wrong with it, is of a pause or a
+        // frame the window has left.
+        if let Asked::Inspect { read, .. } = kind
+            && read != self.reads
+        {
+            return Task::none();
+        }
         let answer = match result {
             Ok(answer) => answer,
             Err(error) => {
@@ -426,7 +448,7 @@ impl App {
                 }
                 Task::none()
             }
-            Asked::Inspect { frame } => {
+            Asked::Inspect { frame, .. } => {
                 if answer["reached"] != true {
                     self.note = Some(format!("frame {frame} isn't there to read"));
                     return Task::none();

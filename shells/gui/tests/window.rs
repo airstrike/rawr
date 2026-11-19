@@ -420,3 +420,67 @@ fn each_capture_writes_a_file_of_its_own() {
         "two captures in flight never share a file"
     );
 }
+
+/// What the session tells when the program pauses at `line` of `function`
+/// for a pause asked of it.
+fn paused_at(seq: u64, line: u64, function: &str) -> Value {
+    json!({
+        "jsonrpc": "2.0", "method": "event",
+        "params": { "event": "paused", "seq": seq, "file": FILE, "line": line,
+                    "function": function, "reason": "pause" },
+    })
+}
+
+#[test]
+fn each_pause_reads_its_frame_and_shows_only_the_newest_answer() {
+    let script = Arc::new(Script::default());
+    let mut app = paused(&script);
+    interact(&mut app, |ui| {
+        let _ = ui.click("Continue").unwrap();
+    });
+    // The program pauses in `tick`, and the window reads that pause; it
+    // goes on and pauses in `main` before the first read is answered.
+    let _ = app.update(line(&paused_at(3, 6, "p::tick")));
+    let first = script.inspect();
+    interact(&mut app, |ui| {
+        let _ = ui.click("Continue").unwrap();
+    });
+    let _ = app.update(line(&json!({
+        "jsonrpc": "2.0", "method": "event", "params": { "event": "resumed", "seq": 4 },
+    })));
+    let _ = app.update(line(&paused_at(5, 10, "p::main")));
+    let second = script.inspect();
+    assert_ne!(first["id"], second["id"], "the second pause is read again");
+    reply(
+        &mut app,
+        &second,
+        json!({
+            "reached": true, "frame": 0, "file": FILE, "line": 10, "function": "p::main",
+            "bindings": [{ "name": "total", "value": "11" }],
+            "unread": null,
+            "frames": [{ "function": "p::main", "file": FILE, "line": 10 }],
+        }),
+    );
+    // The first pause's read is answered last, with that pause's values.
+    reply(
+        &mut app,
+        &first,
+        json!({
+            "reached": true, "frame": 0, "file": FILE, "line": 6, "function": "p::tick",
+            "bindings": [{ "name": "next", "value": "3" }],
+            "unread": null,
+            "frames": [
+                { "function": "p::tick", "file": FILE, "line": 6 },
+                { "function": "p::main", "file": FILE, "line": 10 },
+            ],
+        }),
+    );
+    assert!(shows(&app, "paused (pause) at line 10"));
+    assert!(shows(&app, "total"), "the newest pause's bindings show");
+    assert!(shows(&app, "11"));
+    assert!(!shows(&app, "next"), "an earlier pause's bindings are gone");
+    assert!(
+        !shows(&app, "p::tick"),
+        "an earlier pause's frames are gone"
+    );
+}
