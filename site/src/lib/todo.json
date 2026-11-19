@@ -1,6 +1,6 @@
 {
   "repo": "airstrike/rawr",
-  "updated": "2026-11-18",
+  "updated": "2026-11-19",
   "version": "0.4.23",
   "examples": {
     "running": 56,
@@ -5208,7 +5208,8 @@
     {"issue":2278,"title":"The session tells shells when breakpoints change","state":"open","category":"Health"},
     {"issue":2279,"title":"rawr check on a gallery with a marked main.rs fails with 'diagnostic label has no source span', hiding the error","state":"open","category":"No glue (D593)"},
     {"issue":2280,"title":"Marked code calling a method a native module defines on a marked type","state":"open","category":"No glue (D593)"},
-    {"issue":2281,"title":"marked::a_marked_module_of_the_library_runs_from_the_native_binary expects Shape::change to name a new item","state":"open","category":"Health"}
+    {"issue":2281,"title":"marked::a_marked_module_of_the_library_runs_from_the_native_binary expects Shape::change to name a new item","state":"open","category":"Health"},
+    {"issue":2282,"title":"Since #2276, a private-field edit of a held type under a native module restarts instead of swapping","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -6256,7 +6257,8 @@
             {"number":2241,"title":"A program's own `#[derive(thiserror::Error)]` is refused as an impl of an unknown trait path","state":"open"},
             {"number":2276,"title":"A marked root's native modules can't call marked code: lift D510's trampolines to a marked root","state":"open"},
             {"number":2279,"title":"rawr check on a gallery with a marked main.rs fails with 'diagnostic label has no source span', hiding the error","state":"open"},
-            {"number":2280,"title":"Marked code calling a method a native module defines on a marked type","state":"open"}
+            {"number":2280,"title":"Marked code calling a method a native module defines on a marked type","state":"open"},
+            {"number":2282,"title":"Since #2276, a private-field edit of a held type under a native module restarts instead of swapping","state":"open"}
           ]
         },
         {
