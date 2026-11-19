@@ -30,6 +30,12 @@ resolver = "3"
 # The example apps' dependencies, as iced's examples take theirs.
 [workspace.dependencies]
 crossterm = "0.29"
+# iced master, the browser universe's (play/universe), for the debugger
+# window and the split it lays its panes out with.
+iced = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b" }
+iced_runtime = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b" }
+iced_split = { git = "https://github.com/edwloef/iced_split", rev = "a8b7da03a0396b356143c3b2ea8b61aeb3a06fc1" }
+iced_test = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b" }
 ratatui = "0.30"
 rawr = { path = "." }
 softbuffer = "0.4"
@@ -222,6 +228,11 @@ required-features = ["unstable"]
 name = "grain_allocation_efficiency"
 path = "tests/grain/allocation.rs"
 required-features = ["grain"]
+
+# iced_split asks crates.io for iced master's iced_core, which isn't
+# published: it is the one iced above.
+[patch.crates-io]
+iced_core = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b" }
 
 [profile.dev]
 # Line tables keep file:line backtraces; full debug info made each test

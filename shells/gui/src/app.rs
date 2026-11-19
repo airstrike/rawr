@@ -9,14 +9,21 @@
 use std::path::PathBuf;
 
 use iced::theme::Mode;
-use iced::widget::{button, column, container, image, row, rule, scrollable, text};
-use iced::{Element, Fill, Font, Length, Subscription, Task, Theme};
+use iced::widget::text::{Ellipsis, Wrapping};
+use iced::widget::{
+    button, column, container, image, row, rule, scrollable, space, table, text, tooltip,
+};
+use iced::{keyboard, Element, Fill, Font, Length, Subscription, Task, Theme, Widget};
+use iced_split::{horizontal_split, vertical_split};
 use serde_json::{json, Value};
 
 use crate::bindings;
 use crate::console;
+use crate::control::{Control, Shortcut};
 use crate::session::{self, Client, Incoming, Link, Phase, Stop};
 use crate::source;
+use crate::theme;
+use crate::tree;
 
 /// Output kept for the window, oldest first out.
 const OUTPUT: usize = 64 * 1024;
@@ -58,6 +65,34 @@ pub struct App {
     bindings: bindings::State,
     /// The system draws light: the window follows it.
     light: bool,
+    /// Where each split's line is, as a share of its whole.
+    splits: Splits,
+}
+
+/// Where each split's line is: the share of the whole its first pane
+/// takes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Splits {
+    /// The panes over the output.
+    output: f32,
+    /// The source and console, left of the frame, frames and bindings.
+    columns: f32,
+    /// The source over the console.
+    console: f32,
+    /// The program's frame over the frames and bindings.
+    frame: f32,
+    /// The frames over the bindings.
+    frames: f32,
+}
+
+/// One of the window's split lines.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Split {
+    Output,
+    Columns,
+    Console,
+    Frame,
+    Frames,
 }
 
 /// One of the program's calls: its function's Rust path and where it is.
@@ -82,14 +117,6 @@ enum Asked {
     Screenshot { file: PathBuf },
 }
 
-/// How a step goes on.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Step {
-    Over,
-    Into,
-    Out,
-}
-
 #[derive(Clone, Debug)]
 pub enum Message {
     Session(session::Event),
@@ -97,22 +124,39 @@ pub enum Message {
     Console(console::Message),
     Bindings(bindings::Message),
     Select(usize),
-    Step(Step),
-    Continue,
-    Pause,
-    Refresh,
+    /// A toolbar control, clicked.
+    Control(Control),
+    /// A control's key, pressed where nothing else took it.
+    Shortcut(Shortcut),
+    /// A split's line, dragged to this share of its whole.
+    Split(Split, f32),
     Captured(Result<Vec<u8>, String>),
     /// The system's light or dark mode.
     Mode(Mode),
 }
 
-impl Step {
-    const fn name(self) -> &'static str {
-        match self {
-            Self::Over => "over",
-            Self::Into => "into",
-            Self::Out => "out",
+impl Default for Splits {
+    fn default() -> Self {
+        Self {
+            output: 0.84,
+            columns: 0.6,
+            console: 0.74,
+            frame: 0.36,
+            frames: 0.34,
         }
+    }
+}
+
+impl Splits {
+    fn set(&mut self, split: Split, at: f32) {
+        let share = match split {
+            Split::Output => &mut self.output,
+            Split::Columns => &mut self.columns,
+            Split::Console => &mut self.console,
+            Split::Frame => &mut self.frame,
+            Split::Frames => &mut self.frames,
+        };
+        *share = at;
     }
 }
 
@@ -153,6 +197,7 @@ impl App {
             console: console::State::default(),
             bindings: bindings::State::default(),
             light: false,
+            splits: Splits::default(),
         }
     }
 
@@ -177,6 +222,9 @@ impl App {
         Subscription::batch([
             Subscription::run_with(self.socket.clone(), session::connect).map(Message::Session),
             iced::system::theme_changes().map(Message::Mode),
+            keyboard::listen()
+                .filter_map(Shortcut::of)
+                .map(Message::Shortcut),
         ])
     }
 
@@ -234,7 +282,9 @@ impl App {
             Message::Console(message) => {
                 let action = self.console.update(message);
                 if let Some(console::Instruction::Eval { entry, code }) = action.instruction {
-                    let request = json!({ "op": "eval", "code": code, "frame": self.selected });
+                    let request = json!({
+                        "op": "eval", "code": code, "frame": self.selected, "children": true,
+                    });
                     self.ask(request, Asked::Eval { entry });
                 }
                 action.task.map(Message::Console)
@@ -248,26 +298,13 @@ impl App {
                 self.read(frame);
                 Task::none()
             }
-            // The program goes on: it runs from now to its next pause, and
-            // only a pause, which ends a step that runs long, can be asked.
-            Message::Step(step) => {
-                let resumes = self.resumes + 1;
-                self.ask(
-                    json!({ "op": "step", "kind": step.name() }),
-                    Asked::Step { resumes },
-                );
-                self.went_on()
-            }
-            Message::Continue => {
-                self.ask(json!({ "op": "continue" }), Asked::Continue);
-                self.went_on()
-            }
-            Message::Pause => {
-                self.ask(json!({ "op": "pause" }), Asked::Pause);
-                Task::none()
-            }
-            Message::Refresh => {
-                self.capture();
+            Message::Control(control) => self.act(control),
+            Message::Shortcut(shortcut) => match Control::keyed(shortcut, &self.phase) {
+                Some(control) => self.act(control),
+                None => Task::none(),
+            },
+            Message::Split(split, at) => {
+                self.splits.set(split, at);
                 Task::none()
             }
             Message::Captured(Ok(bytes)) => {
@@ -286,6 +323,37 @@ impl App {
         }
     }
 
+    /// Act on `control`, when the program has something for it to act on.
+    fn act(&mut self, control: Control) -> Task<Message> {
+        if !control.enabled(&self.phase) {
+            return Task::none();
+        }
+        match control {
+            // The program goes on: it runs from now to its next pause, and
+            // only a pause, which ends a step that runs long, can be asked.
+            Control::Step(step) => {
+                let resumes = self.resumes + 1;
+                self.ask(
+                    json!({ "op": "step", "kind": step.name() }),
+                    Asked::Step { resumes },
+                );
+                self.went_on()
+            }
+            Control::Continue => {
+                self.ask(json!({ "op": "continue" }), Asked::Continue);
+                self.went_on()
+            }
+            Control::Pause => {
+                self.ask(json!({ "op": "pause" }), Asked::Pause);
+                Task::none()
+            }
+            Control::Refresh => {
+                self.capture();
+                Task::none()
+            }
+        }
+    }
+
     /// Ask the program `request` through the session, for `kind`.
     fn ask(&mut self, request: Value, kind: Asked) {
         if let Some(link) = &self.link {
@@ -298,7 +366,10 @@ impl App {
     fn read(&mut self, frame: usize) {
         self.reads += 1;
         let read = self.reads;
-        self.ask(json!({ "frame": frame }), Asked::Inspect { frame, read });
+        self.ask(
+            json!({ "frame": frame, "children": true }),
+            Asked::Inspect { frame, read },
+        );
     }
 
     /// Ask the program to draw its window for this one, into a file of
@@ -507,7 +578,10 @@ impl App {
             }
             Asked::Eval { entry } => {
                 let result = match (answer["value"].as_str(), answer["error"].as_str()) {
-                    (Some(value), _) => Ok(value.to_owned()),
+                    (Some(value), _) => Ok(console::Answer {
+                        value: value.to_owned(),
+                        parts: tree::Part::all(&answer["children"]),
+                    }),
                     (None, Some("not paused")) => {
                         Err("the program isn't paused: there is no frame to evaluate in".to_owned())
                     }
@@ -534,14 +608,75 @@ impl App {
         }
     }
 
+    /// The toolbar over the panes, which split the window: the source and
+    /// the console left of the program's frame, its frames and bindings,
+    /// and the output under them all. Each split's line drags.
     pub fn view(&self) -> Element<'_, Message> {
-        let paused = self.phase.stop().is_some();
-        let live = matches!(self.phase, Phase::Running | Phase::Paused(_));
-        let control = |label: &'static str, message: Message, enabled: bool| {
-            button(text(label))
-                .on_press_maybe(enabled.then_some(message))
-                .padding([4, 10])
-        };
+        let left = horizontal_split(
+            self.source_pane(),
+            pane("Console", self.console.view().map(Message::Console)),
+            self.splits.console,
+            |at| Message::Split(Split::Console, at),
+        )
+        .style(theme::divider);
+        let right = horizontal_split(
+            pane("Frame", self.frame_pane()),
+            horizontal_split(
+                pane("Call stack", scrollable(self.frames()).height(Fill)),
+                pane(
+                    "Bindings",
+                    scrollable(self.bindings.view().map(Message::Bindings)).height(Fill),
+                ),
+                self.splits.frames,
+                |at| Message::Split(Split::Frames, at),
+            )
+            .style(theme::divider),
+            self.splits.frame,
+            |at| Message::Split(Split::Frame, at),
+        )
+        .style(theme::divider);
+        let panes = vertical_split(left, right, self.splits.columns, |at| {
+            Message::Split(Split::Columns, at)
+        })
+        .style(theme::divider);
+        let output = scrollable(
+            text(self.output.as_str())
+                .font(Font::MONOSPACE)
+                .size(theme::SIZE),
+        )
+        .anchor_bottom()
+        .width(Fill)
+        .height(Fill);
+        column![
+            self.toolbar(),
+            rule::horizontal(1),
+            horizontal_split(
+                panes,
+                pane("Output", container(output).padding([2, 6])),
+                self.splits.output,
+                |at| Message::Split(Split::Output, at),
+            )
+            .style(theme::divider),
+        ]
+        .boxed()
+    }
+
+    /// The controls, each an icon with its label and key in a tooltip, then
+    /// where the program is and the last thing that went wrong.
+    fn toolbar(&self) -> Element<'_, Message> {
+        let controls = Control::ALL.into_iter().map(|control| {
+            let press = button(control.icon().size(15).center())
+                .width(26)
+                .height(24)
+                .padding(0)
+                .style(theme::control)
+                .on_press_maybe(
+                    control
+                        .enabled(&self.phase)
+                        .then_some(Message::Control(control)),
+                );
+            theme::tipped(press, control.tip(), tooltip::Position::Bottom)
+        });
         let phase = match &self.phase {
             Phase::Building { stage, percent } => format!("building: {stage} {percent}%"),
             Phase::Paused(stop) => format!(
@@ -553,92 +688,101 @@ impl App {
             Phase::Ended(status) => format!("ended with status {status}"),
             other => other.name().to_owned(),
         };
-        let toolbar = row![
-            text(phase).width(Fill),
-            control("Continue", Message::Continue, paused),
-            control("Pause", Message::Pause, self.phase == Phase::Running),
-            control("Step over", Message::Step(Step::Over), paused),
-            control("Step into", Message::Step(Step::Into), paused),
-            control("Step out", Message::Step(Step::Out), paused),
-            control("Refresh frame", Message::Refresh, live && !paused),
-        ]
-        .spacing(6)
-        .align_y(iced::Center);
-        let note: Element<'_, Message> = match &self.note {
-            Some(note) => text(note.as_str()).size(13).style(text::danger).into(),
-            None => text(self.root.as_str()).size(13).into(),
+        let note = match &self.note {
+            Some(note) => text(note.as_str()).style(text::danger),
+            None => text(self.root.as_str()).style(text::secondary),
         };
-
-        let frame: Element<'_, Message> = match &self.frame {
-            Some(handle) => image(handle.clone()).width(Fill).height(Fill).into(),
-            None => container(text("No frame yet")).center(Fill).into(),
-        };
-        let frames = column(self.stack.iter().enumerate().map(|(index, frame)| {
-            let at = match (&frame.file, frame.line) {
-                (Some(file), Some(line)) => format!("{}:{line}", short_path(file)),
-                _ => String::new(),
-            };
-            button(
-                row![
-                    text(frame.function.as_str()).font(Font::MONOSPACE),
-                    text(at).size(12),
-                ]
-                .spacing(8)
-                .align_y(iced::Center),
-            )
-            .width(Fill)
-            .padding([2, 6])
-            .style(if index == self.selected {
-                button::primary
-            } else {
-                button::text
-            })
-            .on_press(Message::Select(index))
-            .into()
-        }));
-
-        let right = column![
-            container(frame).height(Length::Fixed(260.0)).width(Fill),
-            heading("Frames"),
-            scrollable(frames).height(Length::FillPortion(1)),
-            heading("Bindings"),
-            scrollable(self.bindings.view().map(Message::Bindings))
-                .height(Length::FillPortion(2))
+        row![
+            row(controls).spacing(1),
+            rule::vertical(1),
+            text(phase).font(Font::MONOSPACE).size(theme::SIZE),
+            note.size(theme::SIZE)
+                .wrapping(Wrapping::None)
+                .ellipsis(Ellipsis::Start)
                 .width(Fill),
         ]
-        .spacing(6)
-        .width(Length::FillPortion(2));
+        .spacing(8)
+        .height(28)
+        .padding([2, 6])
+        .align_y(iced::Center)
+        .boxed()
+    }
 
+    fn source_pane(&self) -> Element<'_, Message> {
         let breakpoints: Vec<u64> = self
             .breakpoints
             .iter()
             .filter(|(file, _)| Some(file.as_str()) == self.source.file())
             .map(|(_, line)| *line)
             .collect();
-        let left = column![
-            container(self.source.view(&breakpoints).map(Message::Source)).height(Fill),
-            heading("Console"),
-            container(self.console.view().map(Message::Console)).height(Length::Fixed(170.0)),
-        ]
-        .spacing(6)
-        .width(Length::FillPortion(3));
+        let file = self.source.file().map(source::short_path);
+        container(column![
+            theme::heading("Source", file),
+            self.source.view(&breakpoints).map(Message::Source),
+        ])
+        .width(Fill)
+        .height(Fill)
+        .style(theme::pane)
+        .boxed()
+    }
 
-        let output = scrollable(text(self.output.as_str()).font(Font::MONOSPACE).size(12))
-            .anchor_bottom()
+    fn frame_pane(&self) -> Element<'_, Message> {
+        match &self.frame {
+            Some(handle) => image(handle.clone()).width(Fill).height(Fill).boxed(),
+            None => container(
+                text("No frame yet")
+                    .size(theme::SIZE)
+                    .style(text::secondary),
+            )
+            .center(Fill)
+            .boxed(),
+        }
+    }
+
+    /// The program's calls, innermost first, as a table of each call's
+    /// function and where it is; the selected call's row is marked, and a
+    /// click on another reads its bindings.
+    fn frames(&self) -> Element<'_, Message> {
+        // A function's cell fills its column, which takes what the places
+        // leave; a place's cell is as wide as its text.
+        let cell = |index: usize, content: Element<'static, Message>, width: Length| {
+            button(content)
+                .width(width)
+                .padding([0, 6])
+                .style(theme::item(index == self.selected))
+                .on_press(Message::Select(index))
+                .boxed()
+        };
+        let functions = table::column(space(), move |(index, frame): (usize, &Frame)| {
+            let function = text(frame.function.clone())
+                .font(Font::MONOSPACE)
+                .size(theme::SIZE)
+                .wrapping(Wrapping::None)
+                .ellipsis(Ellipsis::Start);
+            cell(index, function.boxed(), Fill)
+        })
+        .width(Fill);
+        let places = table::column(space(), move |(index, frame): (usize, &Frame)| {
+            let at = match (&frame.file, frame.line) {
+                (Some(file), Some(line)) => format!("{}:{line}", source::short_path(file)),
+                _ => String::new(),
+            };
+            cell(
+                index,
+                text(at)
+                    .font(Font::MONOSPACE)
+                    .size(theme::SIZE)
+                    .style(text::secondary)
+                    .wrapping(Wrapping::None)
+                    .boxed(),
+                Length::Shrink,
+            )
+        });
+        table::table([functions, places], self.stack.iter().enumerate())
             .width(Fill)
-            .height(Length::Fixed(120.0));
-
-        column![
-            toolbar,
-            note,
-            rule::horizontal(1),
-            row![left, rule::vertical(1), right].spacing(8).height(Fill),
-            heading("Output"),
-            output,
-        ]
-        .spacing(6)
-        .padding(10)
-        .into()
+            .padding(0)
+            .separator(0)
+            .boxed()
     }
 
     #[must_use]
@@ -651,12 +795,11 @@ impl App {
     }
 }
 
-fn heading(label: &str) -> Element<'_, Message> {
-    text(label).size(13).style(text::secondary).into()
-}
-
-/// The last two parts of `file`'s path.
-fn short_path(file: &str) -> &str {
-    let mut cuts = file.rmatch_indices('/').map(|(at, _)| at);
-    cuts.nth(1).map_or(file, |at| &file[at + 1..])
+/// A pane under its section bar, on the window's background.
+fn pane<'a>(label: &str, content: impl Widget<Message> + 'a) -> Element<'a, Message> {
+    container(column![theme::heading(label, None), content])
+        .width(Fill)
+        .height(Fill)
+        .style(theme::pane)
+        .boxed()
 }

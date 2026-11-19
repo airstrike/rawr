@@ -21,8 +21,9 @@ use iced::keyboard::key::Named;
 use iced::Theme;
 use iced_test::Simulator;
 use rawr_gui::app::Message;
+use rawr_gui::control::{Control, Step};
 use rawr_gui::session::{self, Event, Phase};
-use rawr_gui::{console, App};
+use rawr_gui::{console, icon, App};
 
 /// The window and its connection, with the work its updates started.
 struct Window {
@@ -92,7 +93,11 @@ fn shows(app: &App, text: &str) -> bool {
 /// The window at a height that shows a whole short file, whose lines the
 /// test clicks without scrolling.
 fn tall(app: &App) -> Simulator<'_, Message> {
-    Simulator::with_size(iced::Settings::default(), (1200.0, 1500.0), app.view())
+    let settings = iced::Settings {
+        fonts: vec![icon::FONT.into()],
+        ..iced::Settings::default()
+    };
+    Simulator::with_size(settings, (1200.0, 1500.0), app.view())
 }
 
 fn stopped_line(app: &App) -> Option<u64> {
@@ -148,7 +153,7 @@ fn the_window_attaches_to_a_run_stops_at_its_breakpoint_steps_and_continues() {
     let stop = window.app.phase().stop().cloned();
     let went_on = Cell::new(false);
     window.interact(|ui| {
-        let _ = ui.click("Step over").unwrap();
+        let _ = ui.click(Control::Step(Step::Over).glyph()).unwrap();
     });
     window.until("the step", |app| {
         went_on.set(went_on.get() || *app.phase() == Phase::Running);
@@ -159,7 +164,7 @@ fn the_window_attaches_to_a_run_stops_at_its_breakpoint_steps_and_continues() {
     window.snapshot("attached-step.png");
 
     window.interact(|ui| {
-        let _ = ui.click("Continue").unwrap();
+        let _ = ui.click(Control::Continue.glyph()).unwrap();
     });
     window.until("the program to run on", |app| {
         *app.phase() == Phase::Running
@@ -167,7 +172,7 @@ fn the_window_attaches_to_a_run_stops_at_its_breakpoint_steps_and_continues() {
 
     // Pause stops it at the next statement it runs.
     window.interact(|ui| {
-        let _ = ui.click("Pause").unwrap();
+        let _ = ui.click(Control::Pause.glyph()).unwrap();
     });
     window.until(
         "the pause",
@@ -175,7 +180,7 @@ fn the_window_attaches_to_a_run_stops_at_its_breakpoint_steps_and_continues() {
     );
     window.snapshot("attached-pause.png");
     window.interact(|ui| {
-        let _ = ui.click("Continue").unwrap();
+        let _ = ui.click(Control::Continue.glyph()).unwrap();
     });
     window.until("the program to run on", |app| {
         *app.phase() == Phase::Running
