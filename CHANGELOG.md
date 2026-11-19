@@ -6,6 +6,12 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.36 (2026-11-19)
+
+- A step into a closure whose body ends in a tail expression pauses at that expression, as rustc's debuggers do. (#2300)
+- A breakpoint one thread reaches while another thread answers a debugger read pauses the program instead of being passed. (#2301)
+- Scoped threads that borrow the same local read it at the same time, as in Rust, instead of failing with a data race under load. (#2303)
+
 ## 0.4.35 (2026-11-19)
 
 - A step into a function no longer pauses on its signature for a `mut` binding of a `&mut` parameter or a parameter pattern, nor on a closure's or a `for` loop's pattern, and a breakpoint's line no longer pauses again after a call that lends a local `&mut` returns. (#2298)

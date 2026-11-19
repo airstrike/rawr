@@ -8,6 +8,15 @@
   },
   "releases": [
     {
+      "version": "0.4.36",
+      "date": "2026-11-19",
+      "entries": [
+        {"text":"A step into a closure whose body ends in a tail expression pauses at that expression, as rustc's debuggers do.","issues":[2300]},
+        {"text":"A breakpoint one thread reaches while another thread answers a debugger read pauses the program instead of being passed.","issues":[2301]},
+        {"text":"Scoped threads that borrow the same local read it at the same time, as in Rust, instead of failing with a data race under load.","issues":[2303]}
+      ]
+    },
+    {
       "version": "0.4.35",
       "date": "2026-11-19",
       "entries": [

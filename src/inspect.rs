@@ -130,6 +130,7 @@ mod parts;
 mod screenshot;
 mod stops;
 
+use std::cell::Cell;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Condvar, Mutex, MutexGuard, PoisonError, TryLockError};
@@ -832,6 +833,14 @@ impl Home {
     }
 }
 
+thread_local! {
+    /// The callback is answering on this thread: steps of the `Debug` code
+    /// and the code it runs are not answered and don't pause. Evaluations on
+    /// other threads go on calling back, so one that reaches a breakpoint or
+    /// a step's end meanwhile pauses there.
+    static ANSWERING: Cell<bool> = const { Cell::new(false) };
+}
+
 #[derive(Default)]
 struct State {
     pending: Vec<Request>,
@@ -919,9 +928,6 @@ struct Shared {
     stepping: AtomicBool,
     /// The program waits at its first statement until a `release`.
     entry: AtomicBool,
-    /// The callback is answering: steps of the `Debug` code it runs are not
-    /// answered and don't pause.
-    answering: AtomicBool,
     /// One step of the program pauses at a time.
     one: Mutex<()>,
     /// Where the running program's steps are, once it compiled.
@@ -965,7 +971,6 @@ impl Shared {
             breaks: Arc::default(),
             stepping: AtomicBool::new(false),
             entry: AtomicBool::new(false),
-            answering: AtomicBool::new(false),
             one: Mutex::new(()),
             locate: Mutex::new(None),
             #[cfg(feature = "sync")]
@@ -1705,7 +1710,7 @@ impl Shared {
         node: crate::ast::ASTNode,
         position: Position,
     ) -> DebuggerCommand {
-        if self.answering.load(Ordering::Acquire) {
+        if ANSWERING.get() {
             return DebuggerCommand::Continue;
         }
         // A native call's end has no bindings of the program's to read.
@@ -1869,7 +1874,7 @@ impl Shared {
                 self.rouse(&state);
                 let paused = state.paused.clone();
                 drop(state);
-                self.answering.store(true, Ordering::Release);
+                ANSWERING.set(true);
                 for request in pending {
                     let answer = if let Some(code) = &request.code {
                         self.evaluated(context, &request, code, position)
@@ -1884,7 +1889,7 @@ impl Shared {
                     };
                     request.reply.send(answer);
                 }
-                self.answering.store(false, Ordering::Release);
+                ANSWERING.set(false);
                 state = self.state();
                 continue;
             }
@@ -1920,7 +1925,7 @@ impl Shared {
     /// At a step of the program: answer each waiting request this step
     /// matches.
     fn answer(&self, context: &mut EvalContext, position: Position) {
-        if self.answering.swap(true, Ordering::AcqRel) {
+        if ANSWERING.replace(true) {
             return;
         }
         let mut matched = Vec::new();
@@ -1941,7 +1946,7 @@ impl Shared {
             let answer = self.read_at(context, &request, position);
             request.reply.send(answer);
         }
-        self.answering.store(false, Ordering::Release);
+        ANSWERING.set(false);
     }
 
     /// Whether `request` reads where `context` is, at `position`: the
@@ -3440,6 +3445,31 @@ mod tests {
             .recv()
             .unwrap();
         assert_eq!(answer, json!({ "error": "not paused" }));
+    }
+
+    /// Bodies whose last statement is a tail expression: a closure's whose
+    /// body is only that, and a function's.
+    const TAILED: &str = "fn twice(n: u64) -> u64 {\n\
+        \x20   n * 2\n\
+        }\n\
+        pub fn run() -> u64 {\n\
+        \x20   let f = |(a, b): (u64, u64)| {\n\
+        \x20       a + b\n\
+        \x20   };\n\
+        \x20   let one = f((0, 1));\n\
+        \x20   one + twice(one)\n\
+        }\n";
+
+    /// A tail expression is a statement a step stops at, as rustc's
+    /// debuggers stop at it (#2300).
+    #[cfg(unix)]
+    #[test]
+    fn a_step_pauses_at_a_tail_expression() {
+        let seen = stepped_in(TAILED, "step-tail", 8, &["into", "over", "into"]);
+        assert_eq!(seen[0]["line"], 8, "{seen:?}");
+        assert_eq!(seen[1]["line"], 6, "{seen:?}");
+        assert_eq!(seen[2]["line"], 9, "{seen:?}");
+        assert_eq!(seen[3]["line"], 2, "{seen:?}");
     }
 
     #[test]
