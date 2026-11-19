@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.42 (2026-11-19)
+
+- `rawr gui`'s debugger window splits into panes you resize by dragging (source, console, frame, call stack, bindings, output). Frames and bindings are compact tables; a binding or an eval answer opens to a row per field, item or map key, and a long value shows its whole text in a tooltip. The toolbar's controls are icons, on F8 (continue or pause), F10, F11 and Shift+F11. The window now runs on iced master, as the playground does. (#2310; part of #2270)
+
 ## 0.4.41 (2026-11-19)
 
 - A shell that attaches to a `rawr run` of a program with Rust dependencies gets the debugger in the running program at its next step, even when its `main` loops without returning to native code. Every program now keeps its state and its process when a debugger attaches. (#2308)

@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.4.42",
+      "date": "2026-11-19",
+      "entries": [
+        {"text":"`rawr gui`'s debugger window splits into panes you resize by dragging (source, console, frame, call stack, bindings, output). Frames and bindings are compact tables; a binding or an eval answer opens to a row per field, item or map key, and a long value shows its whole text in a tooltip. The toolbar's controls are icons, on F8 (continue or pause), F10, F11 and Shift+F11. The window now runs on iced master, as the playground does.","issues":[2310],"refs":[2270]}
+      ]
+    },
+    {
       "version": "0.4.41",
       "date": "2026-11-19",
       "entries": [
