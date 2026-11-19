@@ -1,4 +1,4 @@
-/* What every page but /todo shares, on the tokens in tokens.css: Tailwind's
+/* What every page shares, on the tokens in tokens.css: Tailwind's
    colours over them, the reset, the site bar, the footer and the syntax
    colours. The theme is tokens.css's: the system's, or <html data-theme>. */
 @import "tailwindcss";

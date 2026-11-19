@@ -1,5 +1,5 @@
-/* rawr's palette and type, in one place, for every page: the work plan
-   (/todo) imports this file alone, and global.css imports it for the rest.
+/* rawr's palette and type, in one place, for every page: global.css imports
+   it, and the bot's pages link the stylesheet the build makes of it.
    Black on white with one red, as the work plan has always been drawn. The
    dark values are airstrike.fyi's: its background, text and red.
 

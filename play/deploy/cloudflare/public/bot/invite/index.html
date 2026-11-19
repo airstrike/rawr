@@ -21,30 +21,29 @@
   <meta http-equiv="refresh" content="0; url=https://discord.com/oauth2/authorize?client_id=1562248110887932025&amp;scope=bot+applications.commands&amp;permissions=274878008384">
   <!-- build.mjs: the site's head (look.ts's HEAD and BASE) -->
   <style>
-    main { padding-top: 32px; }
-    .label { color: var(--quiet); }
+    .opening { margin-top: 24px; }
     a.add {
-      display: inline-block; margin-top: 16px; padding: 10px 16px; border: 2px solid var(--ink);
+      display: inline-block; margin-top: 16px; padding: 10px 16px; border: 2px solid var(--ink); text-decoration: none;
       background: var(--ink); color: var(--paper);
-      font-size: var(--fs-label); font-weight: var(--w-strong); text-transform: uppercase; letter-spacing: var(--track-label);
+      font-size: var(--fs-label); font-weight: var(--w-strong); line-height: 1.2; text-transform: uppercase; letter-spacing: var(--track-label);
     }
-    a.add:hover { background: var(--red); border-color: var(--red); }
+    a.add:hover { background: var(--red); border-color: var(--red); color: var(--on-red); }
     .more { margin-top: 20px; color: var(--quiet); }
   </style>
 </head>
 <body>
-  <header class="page">
-    <div>
-      <p class="mark"><a href="/">rawr</a><span>Play bot</span></p>
-      <h1>Rawr Play</h1>
-    </div>
-    <p class="meta"><!-- build.mjs: the theme switch --></p>
-  </header>
-  <main>
-    <p class="label">OPENING DISCORD</p>
+  <!-- build.mjs: the site bar -->
+  <main class="wrap">
+    <header class="page">
+      <div>
+        <p class="label kicker"><span class="red">//</span> Play bot</p>
+        <h1>Rawr Play</h1>
+      </div>
+    </header>
+    <p class="label opening">OPENING DISCORD</p>
     <a class="add" href="https://discord.com/oauth2/authorize?client_id=1562248110887932025&amp;scope=bot+applications.commands&amp;permissions=274878008384">Add Rawr Play to a server</a>
     <p class="more"><a href="/play">Or try it in the playground</a> · <a href="/bot">Status</a></p>
   </main>
-  <!-- build.mjs: the switch's script -->
+  <!-- build.mjs: the site's footer -->
 </body>
 </html>

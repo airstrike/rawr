@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { render, state, type Dashboard } from "../src/dashboard.ts";
+import { STYLES } from "../src/site.gen.ts";
 import {
   MAX_EVENTS,
   bucket,
@@ -149,4 +150,6 @@ test("the dashboard states and escapes", () => {
   assert.ok(html.includes("≠ deployed def"), "an image other than the deployed one is flagged");
   assert.ok(html.includes('href="/bot/invite"'));
   assert.ok(html.includes(TOKEN), "servers are listed by token");
+  for (const href of STYLES) assert.ok(html.includes(`<link rel="stylesheet" href="${href}">`), `the page links the site's ${href}`);
+  assert.ok(html.includes('<header class="bar">') && html.includes('<footer class="site">'), "the page has the site's bar and footer");
 });
