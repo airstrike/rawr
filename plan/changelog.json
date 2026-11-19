@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.4.38",
+      "date": "2026-11-19",
+      "entries": [
+        {"text":"An assignment through a `&` reference (`*r = 5`, `r.field = 5`, `r[i] = 5` of a slice or array) gives rustc's E0594, \"cannot assign to `*r`, which is behind a `&` reference\", with rustc's label and span, in code and in the debugger's eval. A `Vec` element written through `&` gives rustc's E0596.","issues":[2305]}
+      ]
+    },
+    {
       "version": "0.4.37",
       "date": "2026-11-19",
       "entries": [

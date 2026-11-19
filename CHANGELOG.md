@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.38 (2026-11-19)
+
+- An assignment through a `&` reference (`*r = 5`, `r.field = 5`, `r[i] = 5` of a slice or array) gives rustc's E0594, "cannot assign to `*r`, which is behind a `&` reference", with rustc's label and span, in code and in the debugger's eval. A `Vec` element written through `&` gives rustc's E0596. (#2305)
+
 ## 0.4.37 (2026-11-19)
 
 - The browser module can carry a debugger: built with `browser-debugger`, a page can pause a running program at a breakpoint, read its frames, evaluate, step and continue while the page stays live. The playground's own module is unchanged. (#2268)
