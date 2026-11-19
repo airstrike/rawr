@@ -207,8 +207,8 @@
         {"id":"repl","name":"Evaluate in a paused frame","start":60,"size":3,"state":"now","note":"The same interpreter, the same errors","issues":[490,1207,2263,2264,2265],"milestone":"0.5"},
         {"id":"one-session","name":"One debugger, many shells","start":60,"size":3,"state":"now","note":"The run's owner hosts one session any number of shells attach to, with capabilities listed at hello; rawr mcp is its first shell and attaches to terminal runs (#2258, D1053). Left: attaching keeps the program's state (#2266).","issues":[2258,2266],"milestone":"0.5"},
         {"id":"editor-adapter","name":"Editor debugging","start":63,"size":2,"state":"now","note":"A debug adapter shell: breakpoints, frames and values in any editor (#514)","issues":[514],"milestone":"0.5"},
-        {"id":"terminal-shell","name":"Terminal shell","start":65,"size":2,"state":"next","note":"A TUI on the same session","issues":[2259],"milestone":"0.5"},
-        {"id":"window-shell","name":"Window shell","start":67,"size":3,"state":"next","note":"A GUI in its own process, so it keeps working while the program is paused","issues":[2260],"milestone":"0.5"}
+        {"id":"terminal-shell","name":"Terminal shell","start":65,"size":2,"state":"now","note":"A TUI on the same session","issues":[2259],"milestone":"0.5"},
+        {"id":"window-shell","name":"Window shell","start":67,"size":3,"state":"now","note":"A GUI in its own process, so it keeps working while the program is paused","issues":[2260],"milestone":"0.5"}
       ]
     },
     {

@@ -7958,7 +7958,7 @@
           "name": "Terminal shell",
           "start": 65,
           "size": 2,
-          "state": "next",
+          "state": "now",
           "note": "A TUI on the same session",
           "issues": [
             {"number":2259,"title":"A terminal shell (TUI) on the shared debugger session","state":"open"}
@@ -7970,7 +7970,7 @@
           "name": "Window shell",
           "start": 67,
           "size": 3,
-          "state": "next",
+          "state": "now",
           "note": "A GUI in its own process, so it keeps working while the program is paused",
           "issues": [
             {"number":2260,"title":"A window shell (GUI) in its own process on the shared debugger session","state":"open"}
