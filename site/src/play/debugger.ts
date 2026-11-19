@@ -14,7 +14,9 @@
 // where they are now, as a compile moves them. A `paused` event reads the
 // frames and the innermost one's bindings; `resumed` clears them. Once
 // `main` returns or panics, the run's end and exit status show, and the
-// controls have nothing to act on.
+// controls have nothing to act on. Bindings and evals are asked with
+// `"children": true`, so each value comes with its parts for the panel's
+// and the console's trees.
 
 /** Where the universe puts a snippet's crate root. */
 export const ROOT = "/universe/src/main.rs";
@@ -38,10 +40,23 @@ export interface Frame {
   line?: number;
 }
 
+/**
+ * One part of a value, as the inspector splits its `{:?}` text when asked
+ * with `"children": true` (src/inspect/parts.rs): a field, an item or a
+ * map's entry, named by its field, index or key.
+ */
+export interface Part {
+  name: string;
+  value: string;
+  children?: Part[];
+}
+
 export interface Binding {
   name: string;
   value?: string;
   error?: string;
+  /** The value's parts, when it has any. */
+  children?: Part[];
 }
 
 /** One `eval` and what it gave. */
@@ -49,6 +64,8 @@ export interface Evaluated {
   code: string;
   value?: string;
   error?: string;
+  /** The value's parts, when it has any. */
+  children?: Part[];
 }
 
 /**
@@ -199,7 +216,7 @@ export class Debugger {
     const run = this.run;
     if (!this.ask || !this.state.paused) return;
     this.set({ frame });
-    const answer = await this.ask({ frame });
+    const answer = await this.ask({ frame, children: true });
     if (run !== this.run || !this.state.paused || this.state.frame !== frame || answer.reached !== true) return;
     this.set({ bindings: answer.bindings ?? [], unread: answer.unread ?? null, frames: answer.frames ?? this.state.frames });
   }
@@ -208,9 +225,11 @@ export class Debugger {
   async evaluate(code: string): Promise<void> {
     const run = this.run;
     if (!this.ask || !code.trim()) return;
-    const answer = await this.ask({ op: "eval", code });
+    const answer = await this.ask({ op: "eval", code, children: true });
     if (run !== this.run) return;
-    const evaluated: Evaluated = answer.error !== undefined ? { code, error: String(answer.error) } : { code, value: String(answer.value) };
+    const evaluated: Evaluated = answer.error !== undefined
+      ? { code, error: String(answer.error) }
+      : { code, value: String(answer.value), ...(Array.isArray(answer.children) ? { children: answer.children } : {}) };
     this.set({ evaluated: [...this.state.evaluated, evaluated].slice(-KEPT) });
   }
 

@@ -4,9 +4,11 @@
 // Before hydration the server-rendered controls show; the editor mounts
 // once the island runs. The debugger icon runs the program under the
 // debugger build of the universe, opens its panel right of the output and
-// its console under the code (debugger.ts, D1071).
+// its console under the code (debugger.ts, D1071). On a wide screen,
+// split bars between the panes and over the console set their sizes,
+// the viewer's own (panes.tsx).
 import type { EditorView } from "@codemirror/view";
-import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { Fragment, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
 import { Button } from "../components/ui/button.tsx";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from "../components/ui/select.tsx";
 import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group.tsx";
@@ -14,6 +16,7 @@ import { onTheme, theme as pageTheme, type Theme } from "../lib/theme.ts";
 import { DEBUGGER, universe } from "../scripts/universe.ts";
 import { Debugger, ROOT, type DebugState } from "./debugger.ts";
 import { createConsole, createEditor, setDebugging, setDoc, setMarks } from "./editor.ts";
+import { clamp, PartsOf, SplitBar, Twisty, useOpen, useStoredSize, ValueTable, type Row } from "./panes.tsx";
 import { Session, TURNSTILE_JS, WEB_MODULE, type Example, type Output, type PlayData, type State, type Web, type Where } from "./session.ts";
 
 /** The page's data, or a bare page's when the Worker wrote none (a static preview). */
@@ -80,6 +83,18 @@ function browserDeps() {
   };
 }
 
+/**
+ * The wide layout's least sizes, in CSS pixels: a drag of a split bar stops
+ * short of them, as elevato's divider stops short of its cards'.
+ */
+const CODE_MIN = 260;
+const OUTPUT_MIN = 320;
+const DEBUGGER_MIN = 220;
+const EDITOR_MIN = 120;
+const CONSOLE_MIN = 64;
+/** The line between two columns, which its split bar straddles. */
+const LINE = 1;
+
 const NONE: State = {
   code: "", theme: "dark", where: "browser", output: { kind: "note" }, status: "ready", busy: false, mark: "", debugging: false,
 };
@@ -100,6 +115,30 @@ export default function Playground() {
     () => debug?.state ?? null,
     () => null,
   );
+  const main = useRef<HTMLElement>(null);
+  const debugging = state.debugging && !!debug && !!debugState;
+  // The split bars' sizes, the viewer's own: the code's share of the width
+  // it splits with the output, and the debugger's width in pixels.
+  const [codeShare, setCodeShare, keepCodeShare] = useStoredSize("rawr.play.split.code", 0.5);
+  const [debuggerWidth, setDebuggerWidth, keepDebuggerWidth] = useStoredSize("rawr.play.split.debugger", 288);
+  const debuggerColumn = debugging ? debuggerWidth + LINE : 0;
+  const moveCode = (x: number) => {
+    const box = main.current!.getBoundingClientRect();
+    const shared = box.width - LINE - debuggerColumn;
+    setCodeShare(clamp(x - box.left, CODE_MIN, shared - OUTPUT_MIN) / shared);
+  };
+  const codeLine = () => {
+    const box = main.current!.getBoundingClientRect();
+    return box.left + codeShare * (box.width - LINE - debuggerColumn);
+  };
+  const moveDebugger = (x: number) => {
+    const box = main.current!.getBoundingClientRect();
+    setDebuggerWidth(clamp(box.right - x, DEBUGGER_MIN, box.width - 2 * LINE - CODE_MIN - OUTPUT_MIN));
+  };
+  const debuggerLine = () => main.current!.getBoundingClientRect().right - debuggerWidth;
+  // The columns on a wide screen; a phone stacks the panes and ignores them.
+  const columns = `minmax(0, ${codeShare}fr) ${LINE}px minmax(0, ${1 - codeShare}fr)`
+    + (debugging ? ` ${LINE}px min(${debuggerWidth}px, max(${DEBUGGER_MIN}px, calc(100% - ${CODE_MIN + OUTPUT_MIN + 2 * LINE}px)))` : "");
 
   // After hydration: the session from the page's data, the editor, the theme and the keys.
   useEffect(() => {
@@ -224,15 +263,16 @@ export default function Playground() {
           Run
         </Button>
       </div>
-      <main className={"flex min-h-0 flex-1 flex-col md:grid " + (state.debugging ? "md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_18rem]" : "md:grid-cols-2")}>
+      <main ref={main} className="playmain flex min-h-0 flex-1 flex-col md:grid" style={{ "--columns": columns } as CSSProperties}>
         <section className="pane flex min-h-0 flex-col px-4 pt-4 pb-6 md:px-6">
           <p className="playcap mb-2"><span className="text-red">//</span> Code</p>
-          <div ref={host} className="editor min-h-[300px] flex-1 md:min-h-[360px]" />
-          {state.debugging && debug && debugState && <DebugConsole debug={debug} state={debugState} />}
+          <div ref={host} className={"editor min-h-[300px] flex-1 " + (debugging ? "md:min-h-[120px]" : "md:min-h-[360px]")} />
+          {debugging && <DebugConsole debug={debug!} state={debugState!} />}
           {/* Always present, so Turnstile finds its container whenever the session mounts it. */}
           <div id="ts" className="mt-3 empty:hidden" />
         </section>
-        <section className="pane flex min-h-0 flex-col border-t border-grid px-4 pt-4 pb-6 md:border-t-0 md:border-l md:px-6">
+        <SplitBar between="columns" label="Resize the code and the output" onMove={moveCode} onEnd={keepCodeShare} at={codeLine} />
+        <section className="pane flex min-h-0 flex-col border-t border-grid px-4 pt-4 pb-6 md:border-t-0 md:px-6">
           <p className="playcap mb-2 flex justify-between gap-2">
             <span><span className="text-red">//</span> Output</span>
             <span id="status" className="truncate">{state.status}</span>
@@ -243,7 +283,8 @@ export default function Playground() {
             <OutputView output={state.output} />
           </div>
         </section>
-        {state.debugging && debug && debugState && <DebugPanel debug={debug} state={debugState} />}
+        {debugging && <SplitBar between="columns" label="Resize the debugger" onMove={moveDebugger} onEnd={keepDebuggerWidth} at={debuggerLine} />}
+        {debugging && <DebugPanel debug={debug!} state={debugState!} />}
       </main>
       <footer className="playfoot flex flex-wrap justify-between gap-4 border-t border-rule px-4 py-3 md:px-6">
         <nav aria-label="Playground" className="flex flex-wrap gap-4">
@@ -341,108 +382,141 @@ function ActionIcon({ action }: { action: Action }) {
 
 /**
  * The debugger's console, under the code: what was evaluated and its
- * answers as scrollback, over a `>` prompt where Enter evaluates and
- * Shift+Enter adds a line. Its caption folds it.
+ * answers as compact rows, with the `>` prompt right after the last, where
+ * Enter evaluates and Shift+Enter adds a line. An answer with parts opens
+ * to them. Its caption folds it; on a wide screen the bar over it sets its
+ * height.
  */
 function DebugConsole({ debug, state }: { debug: Debugger; state: DebugState }) {
-  const [open, setOpen] = useState(true);
+  const [folded, setFolded] = useState(false);
+  const [height, setHeight, keepHeight] = useStoredSize("rawr.play.split.console", 200);
+  const [open, toggle] = useOpen();
+  const self = useRef<HTMLElement>(null);
   const prompt = useRef<HTMLDivElement>(null);
-  const scrollback = useRef<HTMLOListElement>(null);
+  const body = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (!open || !prompt.current) return;
+    if (folded || !prompt.current) return;
     const view = createConsole({ parent: prompt.current, onSubmit: (code) => void debug.evaluate(code) });
     return () => view.destroy();
-  }, [debug, open]);
+  }, [debug, folded]);
   // The latest answer shows, as a console scrolls to it.
   useEffect(() => {
-    scrollback.current?.scrollTo(0, scrollback.current.scrollHeight);
+    body.current?.scrollTo(0, body.current.scrollHeight);
   }, [state.evaluated]);
+  // The bar over the console moves its top; the editor above keeps its least height.
+  const move = (y: number) => {
+    const box = self.current!.getBoundingClientRect();
+    const editor = self.current!.parentElement!.querySelector(".editor")!.getBoundingClientRect();
+    setHeight(clamp(box.bottom - y, CONSOLE_MIN, box.bottom - editor.top - EDITOR_MIN));
+  };
   return (
-    <section id="console" className="console mt-3" aria-label="Console">
-      <button type="button" className="playcap fold" aria-expanded={open} onClick={() => setOpen(!open)}>
-        <span className="text-red">//</span> Console
-      </button>
-      {open && (
-        <div className="pane-body">
-          <ol ref={scrollback} className="scrollback">
-            {state.evaluated.map((evaluated, at) => (
-              <li key={at} className="entry">
-                <pre className="in">{evaluated.code}</pre>
-                <pre className={evaluated.error !== undefined ? "answer err" : "answer"}>{evaluated.error ?? evaluated.value}</pre>
-              </li>
-            ))}
-          </ol>
-          <div className="prompt">
-            <span className="mark" aria-hidden="true">&gt;</span>
-            <div ref={prompt} className="input" />
+    <>
+      {!folded && <SplitBar between="rows" label="Resize the console" onMove={move} onEnd={keepHeight} at={() => self.current!.getBoundingClientRect().top} />}
+      <section
+        ref={self}
+        id="console"
+        className={"console" + (folded ? " folded" : "")}
+        aria-label="Console"
+        style={{ "--console-height": `${height}px` } as CSSProperties}
+      >
+        <button type="button" className="playcap fold" aria-expanded={!folded} onClick={() => setFolded(!folded)}>
+          <span className="text-red">//</span> Console
+        </button>
+        {!folded && (
+          <div ref={body} className="pane-body">
+            <ol className="scrollback">
+              {state.evaluated.map((evaluated, at) => {
+                const row: Row = { path: String(at), depth: 0, name: "", value: evaluated.value, children: evaluated.children };
+                const parts = evaluated.children?.length ? evaluated.children : null;
+                return (
+                  <li key={at} className="entry">
+                    <pre className="in">{evaluated.code}</pre>
+                    <div className={parts ? "out-line opens" : "out-line"} onClick={parts ? () => toggle(row.path) : undefined}>
+                      {parts && <Twisty row={row} open={open} toggle={toggle} />}
+                      <pre
+                        className={(evaluated.error !== undefined ? "answer err" : "answer") + (parts ? " elided" : "")}
+                        title={parts ? evaluated.value : undefined}
+                      >
+                        {evaluated.error ?? evaluated.value}
+                      </pre>
+                    </div>
+                    {parts && open.has(row.path) && <PartsOf path={row.path} parts={parts} open={open} toggle={toggle} />}
+                  </li>
+                );
+              })}
+            </ol>
+            <div className="prompt">
+              <span className="mark" aria-hidden="true">&gt;</span>
+              <div ref={prompt} className="input" />
+            </div>
           </div>
-        </div>
-      )}
-    </section>
+        )}
+      </section>
+    </>
   );
 }
 
-/** The debugger's panel, right of the output: its toolbar, where the program is, the frames and the bindings. */
+/**
+ * The debugger's panel, right of the output, dense as DevTools' sources
+ * sidebar: its toolbar beside where the program is, then the frames and
+ * the bindings as compact tables under section bars. A binding with parts
+ * opens to them, and stays open across pauses.
+ */
 function DebugPanel({ debug, state }: { debug: Debugger; state: DebugState }) {
+  const [open, toggle] = useOpen();
   const paused = state.phase === "paused";
   const canPause = state.pause === true;
+  const rows: Row[] = state.bindings.map((binding) => ({
+    path: binding.name, depth: 0, name: binding.name, value: binding.value, error: binding.error, children: binding.children,
+  }));
   return (
-    <section id="debugger" className="pane debugger flex min-h-0 flex-col gap-3 border-t border-grid px-4 pt-4 pb-6 md:border-t-0 md:border-l" aria-label="Debugger">
-      {/* The caption alone, as the code's and the output's; where the program is goes under it. */}
-      <div>
-        <p className="playcap mb-2 whitespace-nowrap"><span className="text-red">//</span> Debugger</p>
-        <p className="phase">{phaseText(state)}</p>
+    <section id="debugger" className="pane debugger flex min-h-0 flex-col border-t border-grid pt-4 pb-6 md:border-t-0" aria-label="Debugger">
+      {/* The caption alone, as the code's and the output's. */}
+      <p className="playcap mb-1 whitespace-nowrap px-3"><span className="text-red">//</span> Debugger</p>
+      <div className="bar flex items-center gap-2 px-2">
+        <div className="actions flex" role="toolbar" aria-label="Debugger controls">
+          {ACTIONS.map((action) => (
+            <button
+              key={action.id}
+              type="button"
+              data-control={action.id}
+              aria-label={action.label}
+              title={`${action.label} (${action.shortcut})`}
+              disabled={!action.enabled(state)}
+              onClick={() => action.run(debug)}
+            >
+              <ActionIcon action={action} />
+            </button>
+          ))}
+        </div>
+        <p className="phase truncate" title={phaseText(state)}>{phaseText(state)}</p>
       </div>
-      {state.pause === false && (
-        <p className="note">This browser can't pause a program: it has no WebAssembly JS Promise Integration (JSPI). Breakpoints and steps need it.</p>
-      )}
-      <div className="actions flex gap-0.5" role="toolbar" aria-label="Debugger controls">
-        {ACTIONS.map((action) => (
-          <button
-            key={action.id}
-            type="button"
-            data-control={action.id}
-            aria-label={action.label}
-            title={`${action.label} (${action.shortcut})`}
-            disabled={!action.enabled(state)}
-            onClick={() => action.run(debug)}
-          >
-            <ActionIcon action={action} />
-          </button>
-        ))}
+      <div className="notes px-3">
+        {state.pause === false && (
+          <p className="note">This browser can't pause a program: it has no WebAssembly JS Promise Integration (JSPI). Breakpoints and steps need it.</p>
+        )}
+        {state.phase === "ended" && <p className="note">The program's <code>main</code> has ended. Run it again to debug it.</p>}
+        {canPause && state.phase !== "ended" && state.lines.length === 0 && !paused && <p className="note">Click a line number to set a breakpoint.</p>}
+        {state.error && <p className="error">{state.error}</p>}
       </div>
-      {state.phase === "ended" && <p className="note">The program's <code>main</code> has ended. Run it again to debug it.</p>}
-      {canPause && state.phase !== "ended" && state.lines.length === 0 && !paused && <p className="note">Click a line number to set a breakpoint.</p>}
-      {state.error && <p className="error">{state.error}</p>}
       {paused && state.paused && (
-        <>
-          <p className="where">{shortName(state.paused.function)} · line {state.paused.line}</p>
-          <div>
-            <h3>Frames</h3>
-            <ol className="frames-list">
-              {state.frames.map((frame, at) => (
-                <li key={at}>
-                  <button type="button" aria-current={at === state.frame} onClick={() => void debug.select(at)}>
-                    {shortName(frame.function)}
-                    {frame.line ? ` :${frame.line}` : ""}
-                  </button>
-                </li>
-              ))}
-            </ol>
-          </div>
-          <div>
-            <h3>Bindings</h3>
-            {state.unread && <p className="note">{state.unread}</p>}
-            <dl className="bindings">
-              {state.bindings.map((binding) => (
-                <div key={binding.name} data-binding={binding.name}>
-                  <dt>{binding.name}</dt>
-                  <dd className={binding.error !== undefined ? "err" : undefined}>{binding.error ?? binding.value}</dd>
-                </div>
-              ))}
-            </dl>
-          </div>
-        </>
+        <div className="sections min-h-0 flex-1 overflow-auto">
+          <p className="where px-3" title={state.paused.function}>{shortName(state.paused.function)} · line {state.paused.line}</p>
+          <h3>Call stack</h3>
+          <ol className="frames-list">
+            {state.frames.map((frame, at) => (
+              <li key={at}>
+                <button type="button" aria-current={at === state.frame} title={frame.function} onClick={() => void debug.select(at)}>
+                  <span className="fn">{shortName(frame.function)}</span>
+                  {frame.line ? <span className="line">:{frame.line}</span> : null}
+                </button>
+              </li>
+            ))}
+          </ol>
+          <h3>Bindings</h3>
+          {state.unread && <p className="note px-3">{state.unread}</p>}
+          <ValueTable rows={rows} open={open} toggle={toggle} className="bindings" />
+        </div>
       )}
     </section>
   );
