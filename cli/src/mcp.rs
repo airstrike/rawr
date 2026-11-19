@@ -18,9 +18,9 @@
 mod check;
 pub mod content;
 mod extension;
-mod process;
-mod session;
-mod tools;
+pub(crate) mod process;
+pub(crate) mod session;
+pub(crate) mod tools;
 
 use std::collections::HashMap;
 use std::path::PathBuf;

@@ -500,6 +500,7 @@ impl Session {
                     };
                     if let Some(text) = params["text"].as_str() {
                         self.state().keep(stream, text.to_owned());
+                        self.changed.notify_all();
                     }
                 }
                 _ => {}
@@ -565,6 +566,7 @@ impl Session {
                 "params": { "stream": stream.name(), "text": text },
             }));
             self.state().keep(stream, text);
+            self.changed.notify_all();
         }
         self.state().pipes -= 1;
         self.changed.notify_all();
@@ -699,6 +701,24 @@ impl Session {
             building,
         );
         (self.state().waiter == ticket).then_some(after)
+    }
+
+    /// Wait for an event past `event` or output past `output`, the end of
+    /// the session, or `cancel`: for a shell that tells each as it comes.
+    pub fn hear(self: &Arc<Self>, event: u64, output: u64, cancel: &process::Cancel) {
+        self.block(
+            event,
+            cancel,
+            |state, after| {
+                state.next_output > output
+                    || state
+                        .session
+                        .events()
+                        .last()
+                        .is_some_and(|(seq, _)| *seq > after)
+            },
+            |_, _| {},
+        );
     }
 
     /// The session now: its phase, the events past `cursor` and the output
