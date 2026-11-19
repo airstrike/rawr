@@ -6,6 +6,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.31 (2026-11-19)
+
+- An editor launch holds the program at its first statement until its breakpoints are in (`configurationDone`), so a breakpoint in code that runs at startup is hit. (#2274)
+- In VS Code, F5 with no launch.json runs the crate the active file belongs to, by its nearest Cargo.toml, and says so when the active .rs file isn't marked. (#2275)
+
 ## 0.4.30 (2026-11-19)
 
 - A debugger step stops only at statements the program wrote, once per line: step into a function with a `&mut` parameter pauses at its first body line, not its signature, and a step or continue from a breakpoint no longer pauses on the same line again. (#2272)

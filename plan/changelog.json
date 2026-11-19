@@ -8,6 +8,14 @@
   },
   "releases": [
     {
+      "version": "0.4.31",
+      "date": "2026-11-19",
+      "entries": [
+        {"text":"An editor launch holds the program at its first statement until its breakpoints are in (`configurationDone`), so a breakpoint in code that runs at startup is hit.","issues":[2274]},
+        {"text":"In VS Code, F5 with no launch.json runs the crate the active file belongs to, by its nearest Cargo.toml, and says so when the active .rs file isn't marked.","issues":[2275]}
+      ]
+    },
+    {
       "version": "0.4.30",
       "date": "2026-11-19",
       "entries": [

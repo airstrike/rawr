@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-19",
-  "version": "0.4.30",
+  "version": "0.4.31",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,14 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.31",
+        "date": "2026-11-19",
+        "entries": [
+          {"text":"An editor launch holds the program at its first statement until its breakpoints are in (`configurationDone`), so a breakpoint in code that runs at startup is hit.","issues":[2274]},
+          {"text":"In VS Code, F5 with no launch.json runs the crate the active file belongs to, by its nearest Cargo.toml, and says so when the active .rs file isn't marked.","issues":[2275]}
+        ]
+      },
       {
         "version": "0.4.30",
         "date": "2026-11-19",
@@ -5251,8 +5259,8 @@
     {"issue":2271,"title":"eval fails with E0308 on a view returning `impl Widget<Message>` built by `column![…]`","state":"closed","category":"Health"},
     {"issue":2272,"title":"A step pauses on statements the lowering wrote: a `&mut` parameter's signature line, or the same line again","state":"closed","category":"Health","release":"0.4.30"},
     {"issue":2273,"title":"A Zed extension that registers `rawr dap` as a debug adapter","state":"open","category":"Health"},
-    {"issue":2274,"title":"DAP launch holds the program until configurationDone","state":"open","category":"Health"},
-    {"issue":2275,"title":"The VS Code debugger's F5 without a launch.json runs the workspace's root crate, not the active file's","state":"open","category":"Health"},
+    {"issue":2274,"title":"DAP launch holds the program until configurationDone","state":"closed","category":"Health","release":"0.4.31"},
+    {"issue":2275,"title":"The VS Code debugger's F5 without a launch.json runs the workspace's root crate, not the active file's","state":"closed","category":"Health","release":"0.4.31"},
     {"issue":2276,"title":"A marked root's native modules can't call marked code: lift D510's trampolines to a marked root","state":"closed","category":"No glue (D593)","release":"0.4.24"},
     {"issue":2277,"title":"The runtime key covers the checkout path and the whole Cargo.lock, so builds with the same sources never share it","state":"open","category":"Health"},
     {"issue":2278,"title":"The session tells shells when breakpoints change","state":"open","category":"Health"},
@@ -8061,8 +8069,8 @@
           "issues": [
             {"number":514,"title":"Debug adapter: an editor reads a running program's values","state":"closed"},
             {"number":2273,"title":"A Zed extension that registers `rawr dap` as a debug adapter","state":"open"},
-            {"number":2274,"title":"DAP launch holds the program until configurationDone","state":"open"},
-            {"number":2275,"title":"The VS Code debugger's F5 without a launch.json runs the workspace's root crate, not the active file's","state":"open"}
+            {"number":2274,"title":"DAP launch holds the program until configurationDone","state":"closed"},
+            {"number":2275,"title":"The VS Code debugger's F5 without a launch.json runs the workspace's root crate, not the active file's","state":"closed"}
           ],
           "milestone": "0.5"
         },
