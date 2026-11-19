@@ -16,10 +16,10 @@
 // scroll. The private tabs need JavaScript: they fetch their HTML from the
 // Worker (/todo/private/<doc>), which asks for the password first. None of
 // their content is in this page or the site's build.
-import ThemeSwitch from "../components/ThemeSwitch.astro";
+import Footer from "../components/Footer.astro";
 import Text from "../components/todo/Text.astro";
-import { FONT_GATE, THEME_INIT } from "../lib/theme-init.ts";
-import "../styles/tokens.css";
+import Base from "../layouts/Base.astro";
+import { SITE } from "../lib/docs.ts";
 import { CHANGELOG, EXAMPLES, GROUPS, ITEMS, REPO, STATE_NAME, UPDATED, VERSION, categories, issueUrl, parts, stateClass, type Row } from "../lib/todo.ts";
 
 const rows = GROUPS.flatMap((g) => g.rows);
@@ -80,29 +80,16 @@ const tally = (rows: Row[]) => {
     .join(" · ");
 };
 ---
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<Base
+  title="rawr work plan"
+  description="rawr's work plan: the chart, the changelog and the open issues."
+  path="/todo"
+  markdown="/todo.md"
+  icon="/todo.svg"
+  og={{ image: `${SITE}/og/todo.png`, alt: "The rawr work plan: each epic as a bar on one axis, done in black, under way in red, next in outline, with its milestone on the left." }}
+>
+<Fragment slot="head">
 <meta name="robots" content="noindex, nofollow">
-<meta name="theme-color" content="#ffffff" data-follow>
-<script is:inline set:html={THEME_INIT} />
-<title>rawr work plan</title>
-<link rel="icon" href="/todo.svg" type="image/svg+xml">
-<link rel="alternate" type="text/markdown" href="/todo.md">
-<meta name="description" content="rawr's work plan: the chart, the changelog and the open issues.">
-<meta property="og:title" content="rawr work plan">
-<meta property="og:description" content="rawr's work plan: the chart, the changelog and the open issues.">
-<meta property="og:type" content="website">
-<meta property="og:url" content="https://rawr.airstrike.fyi/todo">
-<meta property="og:image" content="https://rawr.airstrike.fyi/og/todo.png">
-<meta property="og:image:width" content="1200">
-<meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="The rawr work plan: each epic as a bar on one axis, done in black, under way in red, next in outline, with its milestone on the left.">
-<meta name="twitter:card" content="summary_large_image">
-<link rel="preconnect" href="https://abitaro-sans.pages.dev" crossorigin>
-<link rel="stylesheet" href="https://abitaro-sans.pages.dev/abitaro-sans.css?v=0.300">
 <script is:inline>
   // The tab, before the page paints: /todo#<tab>, else the chart (whose
   // groups and rows keep their own anchors).
@@ -116,59 +103,50 @@ const tally = (rows: Row[]) => {
       : /^v\d/.test(hash) ? "changelog" : "gantt";
   })();
 </script>
-<script is:inline set:html={FONT_GATE} />
 <style is:inline>
-  /* The colours and the font are tokens.css's, in both themes. */
+  /* The colours, the font, the reset, the site bar and the footer are the
+     site's (Base.astro, global.css). This is the plan's own column and parts. */
   :root {
     --name: 13rem;
     --note: 15rem;
     --cols: 8;
+    /* The site bar's height: sticky parts sit under it, anchors land below it. */
+    --bar-h: 50px;
   }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
   [hidden] { display: none !important; }
-  html[data-font="wait"] body { visibility: hidden; }
-  html { background: var(--paper); color: var(--ink); }
-  body {
-    font-family: var(--sans);
-    font-kerning: normal;
-    font-size: 14px;
-    font-weight: 450;
-    line-height: 1.35;
-    -webkit-font-smoothing: antialiased;
-    font-variant-numeric: tabular-nums;
-    padding: 40px 40px 96px;
-  }
-  header {
+  body { line-height: 1.35; font-variant-numeric: tabular-nums; }
+  main.plan { max-width: 1280px; margin: 0 auto; padding: 32px var(--pad) 0; }
+  /* The title, as the docs draw theirs, over the 4px rule. */
+  header.page {
     display: grid;
     grid-template-columns: 1fr auto;
     align-items: end;
-    border-bottom: 4px solid var(--rule);
+    border-bottom: var(--rule-thick) solid var(--rule);
     padding-bottom: 16px;
   }
-  .mark { font-weight: 800; font-size: 14px; letter-spacing: 0.01em; margin-bottom: 40px; }
-  h1 { font-size: clamp(48px, 9vw, 128px); font-weight: 800; letter-spacing: -0.05em; line-height: 0.88; }
-  .meta { text-align: right; font-size: 13px; line-height: 1.6; }
-  .meta b { font-weight: 700; }
+  header.page h1 { font-size: var(--fs-title); font-weight: var(--w-heavy); letter-spacing: var(--track-display); line-height: 0.95; }
+  .meta { text-align: right; font-size: var(--fs-small); line-height: 1.6; }
+  .meta b { font-weight: var(--w-strong); }
   .figures { display: grid; grid-template-columns: repeat(4, 1fr); border-bottom: 1px solid var(--rule); }
   .figures div { padding: 20px 16px 24px 0; }
   .figures div + div { padding-left: 16px; border-left: 1px solid var(--rule); }
-  .figures .n { display: block; font-size: 60px; font-weight: 800; letter-spacing: -0.045em; line-height: 1; }
+  .figures .n { display: block; font-size: 60px; font-weight: var(--w-heavy); letter-spacing: -0.045em; line-height: 1; }
   .figures .n.red { color: var(--red); }
-  .figures .k { display: block; margin-top: 8px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; }
+  .figures .k { display: block; margin-top: 8px; font-size: var(--fs-label); font-weight: 600; text-transform: uppercase; letter-spacing: var(--track-label); }
   .legend {
     display: flex; flex-wrap: wrap; gap: 24px; padding: 14px 0;
-    font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em;
+    font-size: var(--fs-label); font-weight: 600; text-transform: uppercase; letter-spacing: var(--track-label);
     border-bottom: 1px solid var(--rule);
   }
   .legend span { display: inline-flex; align-items: center; gap: 8px; }
-  .legend .say { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 450; color: var(--quiet); font-size: 13px; }
+  .legend .say { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: var(--w-base); color: var(--quiet); font-size: var(--fs-small); }
   .key { display: inline-block; width: 24px; height: 10px; }
-  .bar.done, .key.done { background: var(--ink); }
-  .bar.now, .key.now { background: var(--red); }
-  .bar.next, .key.next { border: 1px solid var(--ink); background: transparent; }
+  .fill.done, .key.done { background: var(--ink); }
+  .fill.now, .key.now { background: var(--red); }
+  .fill.next, .key.next { border: 1px solid var(--ink); background: transparent; }
   .row, .axis { display: grid; grid-template-columns: var(--name) 1fr var(--note); column-gap: 20px; align-items: center; }
   .axis {
-    position: sticky; top: 0; z-index: 1; background: var(--paper);
+    position: sticky; top: var(--bar-h); z-index: 1; background: var(--paper);
     padding: 14px 0 8px; font-size: 11px; font-weight: 600; color: var(--quiet);
     border-bottom: 1px solid var(--grid);
   }
@@ -181,44 +159,46 @@ const tally = (rows: Row[]) => {
     list-style: none; cursor: pointer;
     display: grid; grid-template-columns: var(--name) 1fr auto; column-gap: 20px; align-items: baseline;
   }
-  .milestone > summary { border-top: 4px solid var(--rule); padding: 10px 0 8px; }
-  .milestone > summary .v { font-size: 24px; font-weight: 800; letter-spacing: -0.03em; line-height: 1; white-space: nowrap; }
+  .milestone > summary { border-top: var(--rule-thick) solid var(--rule); padding: 10px 0 8px; }
+  .milestone > summary .v { font-size: 24px; font-weight: var(--w-heavy); letter-spacing: var(--track-head); line-height: 1; white-space: nowrap; }
   details.group { margin-top: 14px; }
   .group > summary { border-top: 1px solid var(--rule); padding: 8px 0 6px; }
   summary::-webkit-details-marker { display: none; }
-  summary .t { font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; }
-  summary .s { font-size: 13px; font-weight: 500; }
-  summary .c { font-size: 12px; color: var(--quiet); display: inline-flex; gap: 14px; align-items: baseline; }
+  summary .t { font-size: var(--fs-small); font-weight: var(--w-heavy); text-transform: uppercase; letter-spacing: 0.06em; }
+  summary .s { font-size: var(--fs-small); font-weight: 500; }
+  summary .c { font-size: var(--fs-label); color: var(--quiet); display: inline-flex; gap: 14px; align-items: baseline; }
   summary .c::after { content: "+"; font-size: 18px; font-weight: 400; line-height: 0; color: var(--ink); width: 10px; text-align: center; }
   details.group[open] > summary .c::after, details.milestone[open] > summary .c::after { content: "−"; }
   summary:focus-visible { outline: 2px solid var(--red); outline-offset: 2px; }
   .row { padding: 7px 0; border-bottom: 1px solid var(--grid); }
   .name { font-weight: 600; }
-  .note { color: var(--quiet); font-size: 13px; }
+  .note { color: var(--quiet); font-size: var(--fs-small); }
   .note a, .refs a { color: inherit; text-decoration: none; border-bottom: 1px solid var(--grid); }
   .note a:hover, .refs a:hover { border-bottom-color: currentColor; }
-  .refs { display: flex; flex-wrap: wrap; gap: 0 8px; margin-top: 2px; font-size: 12px; font-weight: 500; color: var(--ink); }
+  .refs { display: flex; flex-wrap: wrap; gap: 0 8px; margin-top: 2px; font-size: var(--fs-label); font-weight: 500; color: var(--ink); }
   .refs a.closed { color: var(--quiet); }
   details.refs { display: block; }
   details.refs > summary { list-style: none; cursor: pointer; color: var(--quiet); }
   details.refs > summary::after { content: " +"; }
   details.refs[open] > summary::after { content: " −"; }
   details.refs > span { display: flex; flex-wrap: wrap; gap: 0 8px; }
-  footer a { color: inherit; }
   .track {
     position: relative; height: 14px;
     background-image: repeating-linear-gradient(to right, var(--grid) 0 1px, transparent 1px calc(100% / var(--cols)));
   }
-  .bar { position: absolute; top: 2px; height: 10px; }
-  footer {
-    margin-top: 56px; padding-top: 12px; border-top: 4px solid var(--rule);
-    display: grid; grid-template-columns: 1fr 1fr; font-size: 12px; color: var(--quiet);
+  .fill { position: absolute; top: 2px; height: 10px; }
+  /* The plan's own line over the site's footer. */
+  .colophon {
+    margin-top: 56px; display: grid; grid-template-columns: 1fr 1fr; gap: 4px 24px; font-size: var(--fs-small); color: var(--quiet);
   }
-  footer p + p { text-align: right; }
-  /* Tabs. With JavaScript, <html data-tab> picks the panel; without, :target does. */
+  .colophon p + p { text-align: right; }
+  .colophon a { color: inherit; }
+  footer.site { margin-top: 12px; }
+  /* Tabs, as the site's: tracked labels, the current one over a red rule.
+     With JavaScript, <html data-tab> picks the panel; without, :target does. */
   .tabs {
-    display: flex; flex-wrap: wrap; gap: 0 28px; border-bottom: 1px solid var(--rule);
-    font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
+    display: flex; flex-wrap: wrap; gap: 0 24px; border-bottom: 1px solid var(--rule);
+    font-size: var(--fs-label); font-weight: var(--w-strong); text-transform: uppercase; letter-spacing: var(--track-label);
   }
   .tabs a {
     padding: 14px 0 10px; color: var(--quiet); text-decoration: none;
@@ -238,16 +218,16 @@ const tally = (rows: Row[]) => {
   :root:not([data-tab]) body:has(#decisions:target) .tabs a[href="#decisions"],
   :root:not([data-tab]) body:has(#code:target) .tabs a[href="#code"],
   .tabs a[aria-current="page"] { color: var(--ink); border-bottom-color: var(--red); }
-  .lede { max-width: 46rem; padding: 20px 0; font-size: 15px; }
+  .lede { max-width: 46rem; padding: 20px 0; font-size: var(--fs-read); }
   code { font-family: var(--mono); font-size: 0.88em; overflow-wrap: anywhere; }
   a.issue { color: inherit; text-decoration: none; border-bottom: 1px solid var(--grid); }
   a.issue:hover { border-bottom-color: currentColor; }
 
   /* Changelog: one release a row, its version on the left. */
-  .release { display: grid; grid-template-columns: var(--name) minmax(0, 46rem); column-gap: 20px; padding: 18px 0 20px; border-top: 2px solid var(--rule); }
+  .release { display: grid; grid-template-columns: var(--name) minmax(0, 46rem); column-gap: 20px; padding: 18px 0 20px; border-top: var(--rule-mid) solid var(--rule); }
   .release + .release { border-top-width: 1px; }
-  .release h2 { font-size: 28px; font-weight: 800; letter-spacing: -0.03em; line-height: 1; }
-  .release .date { display: block; margin-top: 6px; font-size: 12px; font-weight: 600; color: var(--quiet); text-transform: uppercase; letter-spacing: 0.08em; }
+  .release h2 { font-size: var(--fs-head); font-weight: var(--w-heavy); letter-spacing: var(--track-head); line-height: 1; }
+  .release .date { display: block; margin-top: 6px; font-size: var(--fs-label); font-weight: 600; color: var(--quiet); text-transform: uppercase; letter-spacing: var(--track-label); }
   .release .say { margin-bottom: 10px; }
   .release ul { list-style: none; }
   .release li { padding: 7px 0; border-bottom: 1px solid var(--grid); }
@@ -255,14 +235,14 @@ const tally = (rows: Row[]) => {
   .release .refs { display: inline; margin-left: 6px; color: var(--quiet); }
   .release .refs a { color: inherit; }
   .release .anchor { color: inherit; text-decoration: none; }
-  .release li { position: relative; scroll-margin-top: 24px; }
+  .release li { position: relative; scroll-margin-top: calc(var(--bar-h) + 24px); }
   .release .mark { position: absolute; left: -1.1em; color: var(--quiet); opacity: 0; }
   .release li:hover .mark, .release .mark:focus { opacity: 1; }
   .release li:target { background: var(--hl); }
   .release:target h2 a { text-decoration: underline; }
 
   /* TODO: radio filters, then the categories. */
-  .filters { display: flex; flex-wrap: wrap; gap: 8px 24px; padding: 14px 0; border-bottom: 1px solid var(--rule); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; }
+  .filters { display: flex; flex-wrap: wrap; gap: 8px 24px; padding: 14px 0; border-bottom: 1px solid var(--rule); font-size: var(--fs-label); font-weight: 600; text-transform: uppercase; letter-spacing: var(--track-label); }
   .filters input { position: absolute; opacity: 0; pointer-events: none; }
   .filters label { cursor: pointer; color: var(--quiet); border-bottom: 3px solid transparent; padding-bottom: 2px; }
   .filters input:checked + label { color: var(--ink); border-bottom-color: var(--red); }
@@ -271,17 +251,17 @@ const tally = (rows: Row[]) => {
   :has(> #f-open:checked) ~ .cat:not(:has(.item.open)), :has(> #f-closed:checked) ~ .cat:not(:has(.item.closed)) { display: none; }
   .cat > summary {
     list-style: none; cursor: pointer; display: grid; grid-template-columns: 1fr auto; column-gap: 20px; align-items: baseline;
-    border-top: 2px solid var(--rule); padding: 9px 0 7px; margin-top: 22px;
+    border-top: var(--rule-mid) solid var(--rule); padding: 9px 0 7px; margin-top: 22px;
   }
   details.cat[open] > summary .c::after { content: "−"; }
   .item { display: grid; grid-template-columns: 4.5rem minmax(0, 1fr) auto; column-gap: 20px; padding: 7px 0; border-bottom: 1px solid var(--grid); }
-  .item .n { font-weight: 700; }
+  .item .n { font-weight: var(--w-strong); }
   .item .n a { color: inherit; text-decoration: none; }
   .item .n a:hover { color: var(--red); }
   .item.closed .n, .item.closed .what { color: var(--quiet); }
   /* A closed issue is crossed off wherever it's named. */
   .item.closed .n a, .item.closed .what, .refs a.closed, a.issue.closed { text-decoration: line-through; text-decoration-thickness: 1px; }
-  .item .rel { font-size: 12px; color: var(--quiet); }
+  .item .rel { font-size: var(--fs-label); color: var(--quiet); }
 
   /* The private documents. */
   .gate { padding: 28px 0; max-width: 28rem; }
@@ -292,35 +272,35 @@ const tally = (rows: Row[]) => {
     border: 2px solid var(--ink); border-right: 0; border-radius: 0; background: var(--paper); color: var(--ink);
   }
   .gate input:focus { outline: none; border-color: var(--red); }
-  button {
-    font: inherit; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
+  .gate button, .docbar button {
+    font: inherit; font-size: var(--fs-label); font-weight: var(--w-strong); text-transform: uppercase; letter-spacing: var(--track-label);
     padding: 10px 16px; border: 2px solid var(--ink); border-radius: 0; background: var(--ink); color: var(--paper); cursor: pointer;
   }
-  button:hover { background: var(--red); border-color: var(--red); }
-  button:focus-visible { outline: 2px solid var(--red); outline-offset: 2px; }
+  .gate button:hover, .docbar button:hover { background: var(--red); border-color: var(--red); }
+  .gate button:focus-visible, .docbar button:focus-visible { outline: 2px solid var(--red); outline-offset: 2px; }
   button.quiet { background: transparent; color: var(--ink); border-width: 1px; padding: 6px 10px; }
   button.quiet:hover { background: var(--ink); color: var(--paper); border-color: var(--ink); }
   .gate .msg { margin: 10px 0 0; color: var(--red); min-height: 1.35em; }
-  .docbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 12px 0; border-bottom: 1px solid var(--rule); font-size: 13px; color: var(--quiet); }
+  .docbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 12px 0; border-bottom: 1px solid var(--rule); font-size: var(--fs-small); color: var(--quiet); }
   .docbar .grow { flex: 1; }
-  .doc { max-width: 52rem; padding-top: 8px; font-size: 15px; line-height: 1.5; overflow-wrap: anywhere; }
+  .doc { max-width: 52rem; padding-top: 8px; font-size: var(--fs-read); line-height: 1.5; overflow-wrap: anywhere; }
   .doc h1 { font-size: 40px; letter-spacing: -0.04em; line-height: 1; margin: 24px 0 16px; }
-  .doc h2 { font-size: 20px; font-weight: 800; letter-spacing: -0.01em; line-height: 1.2; margin: 40px 0 10px; padding-top: 10px; border-top: 2px solid var(--rule); scroll-margin-top: 8px; }
-  .doc h3 { font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; margin: 22px 0 6px; }
-  .doc h4, .doc h5, .doc h6 { font-size: 14px; font-weight: 700; margin: 18px 0 4px; }
+  .doc h2 { font-size: var(--fs-h2); font-weight: var(--w-heavy); letter-spacing: -0.01em; line-height: 1.2; margin: 40px 0 10px; padding-top: 10px; border-top: var(--rule-mid) solid var(--rule); scroll-margin-top: calc(var(--bar-h) + 8px); }
+  .doc h3 { font-size: var(--fs-label); font-weight: var(--w-heavy); text-transform: uppercase; letter-spacing: var(--track-label); margin: 22px 0 6px; }
+  .doc h4, .doc h5, .doc h6 { font-size: var(--fs-base); font-weight: var(--w-strong); margin: 18px 0 4px; }
   .doc p, .doc ul, .doc ol, .doc pre, .doc table, .doc blockquote { margin: 0 0 12px; }
   .doc ul, .doc ol { padding-left: 1.4em; }
   .doc li + li { margin-top: 3px; }
   .doc a { color: inherit; text-decoration: none; border-bottom: 1px solid var(--grid); }
   .doc a:hover { border-bottom-color: currentColor; }
-  .doc strong { font-weight: 700; }
+  .doc strong { font-weight: var(--w-strong); }
   .doc blockquote { border-left: 3px solid var(--red); padding-left: 14px; color: var(--quiet); }
-  .doc pre { overflow-x: auto; padding: 12px 14px; background: var(--wash); font-size: 13px; line-height: 1.45; }
+  .doc pre { overflow-x: auto; padding: 12px 14px; background: var(--wash); font-size: var(--fs-small); line-height: 1.45; }
   .doc pre code { font-size: inherit; overflow-wrap: normal; }
   .doc :not(pre) > code { background: var(--wash); padding: 0 3px; }
-  .doc table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; font-size: 13px; }
+  .doc table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; font-size: var(--fs-small); }
   .doc th, .doc td { text-align: left; vertical-align: top; padding: 6px 12px 6px 0; border-bottom: 1px solid var(--grid); min-width: 8rem; }
-  .doc th { border-bottom: 2px solid var(--rule); font-weight: 700; }
+  .doc th { border-bottom: var(--rule-mid) solid var(--rule); font-weight: var(--w-strong); }
   .doc hr { border: 0; border-top: 1px solid var(--rule); margin: 24px 0; }
   @media (max-width: 1100px) {
     :root { --note: 0px; }
@@ -328,13 +308,13 @@ const tally = (rows: Row[]) => {
     .note, .axis .pad-r { display: none; }
   }
   @media (max-width: 640px) {
-    body { padding: 24px 16px 64px; }
+    main.plan { padding-top: 24px; }
     .release { grid-template-columns: 1fr; row-gap: 10px; }
     .item { grid-template-columns: 3.6rem minmax(0, 1fr); }
     .item .rel { grid-column: 2; }
     .tabs { gap: 0 14px; font-size: 11px; letter-spacing: 0.04em; }
     .doc h1 { font-size: 30px; }
-    header { grid-template-columns: 1fr; }
+    header.page { grid-template-columns: 1fr; }
     .meta { text-align: left; margin-top: 16px; }
     .figures { grid-template-columns: repeat(2, 1fr); }
     .figures div:nth-child(3) { border-left: 0; padding-left: 0; }
@@ -343,20 +323,17 @@ const tally = (rows: Row[]) => {
     .legend .say { margin-left: 0; flex-basis: 100%; }
     .row, .axis { grid-template-columns: 1fr; row-gap: 4px; }
     .axis .pad-l { display: none; }
-    .note { display: block; font-size: 12px; }
+    .note { display: block; font-size: var(--fs-label); }
     .milestone > summary, .group > summary { grid-template-columns: 1fr auto; }
     summary .s { grid-column: 1; grid-row: 2; }
     summary .c { grid-column: 2; grid-row: 1 / span 2; }
   }
 </style>
-</head>
-<body>
-<header>
-  <div>
-    <p class="mark">rawr</p>
-    <h1>Work plan</h1>
-  </div>
-  <p class="meta"><ThemeSwitch /><br>Updated <b>{UPDATED}</b><br>Version <b>{VERSION}</b></p>
+</Fragment>
+<main class="plan">
+<header class="page">
+  <h1>Work plan</h1>
+  <p class="meta">Updated <b>{UPDATED}</b><br>Version <b>{VERSION}</b></p>
 </header>
 
 <nav class="tabs" aria-label="Work plan">
@@ -403,7 +380,7 @@ const tally = (rows: Row[]) => {
                 )}
               </div>
               <div class="track" role="img" aria-label={`${label[r.state]}, ${r.size} units`}>
-                <i class={`bar ${r.state}`} style={`left:${pct(Math.max(r.start - lo, 0))};width:${pct(r.size)}`}></i>
+                <i class={`fill ${r.state}`} style={`left:${pct(Math.max(r.start - lo, 0))};width:${pct(r.size)}`}></i>
               </div>
               <span class="note"><Text text={r.note} /></span>
             </div>
@@ -482,10 +459,12 @@ const tally = (rows: Row[]) => {
   </section>
 ))}
 
-<footer>
+<div class="colophon">
   <p>{EXAMPLES.running} of {EXAMPLES.total} upstream iced examples run under rawr run with no rawr-iced. {EXAMPLES.note}.</p>
   <p><a href={`https://github.com/${REPO}/issues`}>Issues</a> · rawr.airstrike.fyi</p>
-</footer>
+</div>
+</main>
+<Footer />
 
 <script is:inline>
   // Fit the axis to the rows that show (their milestone and group are both
@@ -501,7 +480,7 @@ const tally = (rows: Row[]) => {
       const span = Math.max(hi - lo, 5);
       document.documentElement.style.setProperty("--cols", span / 5);
       for (const r of rows) {
-        const bar = r.querySelector(".bar");
+        const bar = r.querySelector(".fill");
         bar.style.left = `${((+r.dataset.start - lo) / span) * 100}%`;
         bar.style.width = `${(+r.dataset.size / span) * 100}%`;
       }
@@ -650,5 +629,4 @@ const tally = (rows: Row[]) => {
     fromHash();
   })();
 </script>
-</body>
-</html>
+</Base>

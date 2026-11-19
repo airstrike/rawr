@@ -1,8 +1,8 @@
 // The status page at /bot: server-rendered HTML in the site's look (look.ts),
 // from the PlayBot Durable Object's aggregate stats and boot events. Its only
-// scripts are the site's theme, font gate and switch.
+// scripts are the site's theme, font gate and bar (with its switch).
 
-import { BASE, HEAD, SWITCH, SWITCH_SCRIPT } from "./look.ts";
+import { BAR, BASE, FOOTER, HEAD } from "./look.ts";
 import type { Event, Server, Status, Summary } from "./stats.ts";
 
 export interface Dashboard {
@@ -115,14 +115,13 @@ ${HEAD}
 <meta name="description" content="Status and aggregate render stats of the rawr ?play Discord bot.">
 <style>
 ${BASE}
-.kicker { margin-bottom: 10px; }
 h1.silent, h1.stopped, h1.starting { color: var(--red); }
 .lede { max-width: 46rem; padding: 20px 0; font-size: var(--fs-read); border-bottom: 1px solid var(--rule); }
-.meta .links a + a { margin-left: 12px; }
-section { margin-top: 32px; }
+.meta .go a + a { margin-left: 16px; }
+section { margin-top: 40px; }
 section > h2 {
-  font-size: var(--fs-small); font-weight: var(--w-heavy); text-transform: uppercase; letter-spacing: 0.06em;
-  border-top: var(--rule-mid) solid var(--rule); padding: 9px 0 7px;
+  font-size: var(--fs-h2); font-weight: var(--w-heavy); line-height: 1.2; letter-spacing: -0.01em;
+  border-top: var(--rule-mid) solid var(--rule); padding: 12px 0 12px;
 }
 /* The counters: /todo's figures, which wrap. The grid sits 17px left of its
    clip, so each row's first rule is hidden and its text lines up with the page. */
@@ -152,13 +151,14 @@ td.phase { white-space: nowrap; }
 </style>
 </head>
 <body>
+${BAR}
+<main class="wrap">
 <header class="page">
 <div>
-<p class="mark"><a href="/" aria-label="rawr home, play bot">rawr</a><span>Play bot</span></p>
-<p class="label kicker"><span class="red">//</span> Status</p>
+<p class="label kicker"><span class="red">//</span> Play bot · Status</p>
 <h1 class="${st}">${title}</h1>
 </div>
-<p class="meta">${SWITCH}<br><span class="links"><a href="/play">Playground</a><a href="/bot/invite">Add to a server</a></span></p>
+<p class="meta"><span class="go"><a href="/play">Playground</a><a href="/bot/invite">Add to a server</a></span></p>
 </header>
 ${line ? `<p class="lede">${line}</p>` : ""}
 <section>
@@ -214,8 +214,9 @@ ${servers || '<tr><td colspan="7" class="note">None yet.</td></tr>'}
 ${events || '<tr><td colspan="4" class="note">No events yet.</td></tr>'}
 </table></div>
 </section>
-<footer class="page"><span>Aggregate only · no messages, users or server names</span><span>${when(d.now)}</span><a href="https://airstrike.fyi">airstrike.fyi</a></footer>
-${SWITCH_SCRIPT}
+<p class="colophon"><span>Aggregate only · no messages, users or server names</span><span>${when(d.now)}</span></p>
+</main>
+${FOOTER}
 </body>
 </html>
 `;
