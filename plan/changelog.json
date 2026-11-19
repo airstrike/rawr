@@ -4,12 +4,17 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
-    "entries": [
-      {"text":"`rawr dap` serves the Debug Adapter Protocol on stdio as a shell of the run's debugger session: launch or attach, line and function breakpoints, next, step in and step out, pause, a call stack named by Rust paths, variables that expand field by field, and evaluate where the program is paused, while each save still reloads the program and says so as output.","issues":[514]},
-      {"text":"The VS Code extension adds a `rawr` debugger that runs `rawr dap`, with launch and attach configurations and snippets; a new Debugging docs page also covers Neovim, Helix and Zed.","issues":[514]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.4.23",
+      "date": "2026-11-18",
+      "entries": [
+        {"text":"`rawr dap` serves the Debug Adapter Protocol on stdio as a shell of the run's debugger session: launch or attach, line and function breakpoints, next, step in and step out, pause, a call stack named by Rust paths, variables that expand field by field, and evaluate where the program is paused, while each save still reloads the program and says so as output.","issues":[514]},
+        {"text":"The VS Code extension adds a `rawr` debugger that runs `rawr dap`, with launch and attach configurations and snippets; a new Debugging docs page also covers Neovim, Helix and Zed.","issues":[514]}
+      ]
+    },
     {
       "version": "0.4.22",
       "date": "2026-11-18",

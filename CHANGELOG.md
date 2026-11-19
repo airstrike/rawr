@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
+
+## 0.4.23 (2026-11-18)
+
 - `rawr dap` serves the Debug Adapter Protocol on stdio as a shell of the run's debugger session: launch or attach, line and function breakpoints, next, step in and step out, pause, a call stack named by Rust paths, variables that expand field by field, and evaluate where the program is paused, while each save still reloads the program and says so as output. (#514)
 - The VS Code extension adds a `rawr` debugger that runs `rawr dap`, with launch and attach configurations and snippets; a new Debugging docs page also covers Neovim, Helix and Zed. (#514)
 
