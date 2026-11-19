@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
+
+## 0.4.24 (2026-11-19)
+
 - `rawr tui [path]` opens a terminal debugger on a program's run. It attaches to the run's shared debugger session, or starts one, and shows the phase and output, the source at the stop with breakpoints marked, the frames and their bindings, and an eval prompt. Keys set breakpoints, pause, step and continue, and it keeps working while another shell such as `rawr mcp` drives the same run. (#2259)
 - A native module below a marked crate root can call the root's marked functions and use its marked types, public or private, as Cargo builds them. The calls go through the same trampolines as a native root's, so an edit to the marked code reaches the next call. (#2276)
 - A native module below a marked one sees only the private items its paths name, so a save that changes a private field native code never reads still swaps in place. (#2282)
