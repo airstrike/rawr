@@ -20,6 +20,7 @@ members = [
     "hot",
     "macros",
     "reload",
+    "shells/gui",
     "watch",
     "web",
 ]

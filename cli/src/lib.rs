@@ -16,6 +16,8 @@ pub mod cells;
 pub mod color;
 pub mod diagnostic;
 pub mod events;
+#[cfg(unix)]
+pub mod gui;
 pub mod harness;
 pub mod init;
 pub mod layer;
@@ -70,6 +72,16 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
             create(path, template.as_deref(), &arguments)
         }
         Ok(Request::Mcp { path }) => serve(path),
+        #[cfg(unix)]
+        Ok(Request::Gui { path }) => gui::open(path.as_ref()),
+        #[cfg(not(unix))]
+        Ok(Request::Gui { .. }) => {
+            eprintln!(
+                "{}: rawr gui runs on Unix",
+                color::label(color::Level::Error)
+            );
+            ExitCode::FAILURE
+        }
         Ok(Request::Init {
             claude,
             codex,
@@ -225,6 +237,10 @@ enum Request {
     New(New),
     /// `rawr mcp [path]`: serve agents, with relative paths from `path`.
     Mcp {
+        path: Option<PathBuf>,
+    },
+    /// `rawr gui [path]`: the debugger window on the program's run.
+    Gui {
         path: Option<PathBuf>,
     },
     /// `rawr init [--claude] [--codex] [path]`.
@@ -407,7 +423,7 @@ fn parse_command(arguments: &[OsString]) -> Result<Request, String> {
         }),
         Some("-h" | "--help" | "help") => Ok(Request::Help),
         Some("-V" | "--version") => Ok(Request::Version),
-        Some("run" | "check" | "doctor" | "mcp" | "init") if asks_help => Ok(Request::Help),
+        Some("run" | "check" | "doctor" | "mcp" | "gui" | "init") if asks_help => Ok(Request::Help),
         Some("run") => path(&arguments[1..]).map(|path| Request::Program {
             check: false,
             path,
@@ -430,6 +446,7 @@ fn parse_command(arguments: &[OsString]) -> Result<Request, String> {
         Some("doctor") => path(&arguments[1..]).map(|path| Request::Doctor { path }),
         Some("new") => parse_new(&arguments[1..]).map(Request::New),
         Some("mcp") => path(&arguments[1..]).map(|path| Request::Mcp { path }),
+        Some("gui") => path(&arguments[1..]).map(|path| Request::Gui { path }),
         Some("init") => parse_init(&arguments[1..]),
         Some(word) if word.starts_with('-') => Err(format!("unknown argument `{word}`")),
         Some(_) if is_path(&arguments[0]) => path(arguments).map(|path| Request::Program {
@@ -476,6 +493,8 @@ fn help(installed: &[layer::Installed]) -> String {
          rawr new <path>               Create a crate with a marked `src/main.rs`\n  \
          rawr doctor [path]            Report on the environment and the project\n  \
          rawr mcp [path]               Serve coding agents over MCP on stdio\n  \
+         rawr gui [path]               Open a debugger window on the program's run,\n                                \
+         starting one when none is going\n  \
          rawr init [--claude] [--codex] [path]\n                                \
          Register `rawr mcp` in the project's agent config\n",
     );
