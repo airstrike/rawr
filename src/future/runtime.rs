@@ -9,7 +9,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError};
 use std::task::{Context, Waker};
 
 use super::{Frame, Poll};
@@ -1084,8 +1084,14 @@ thread_local! {
 /// what admits it there. A newer offer replaces an older one.
 #[allow(clippy::type_complexity)]
 static OFFERED: Mutex<Option<Box<dyn FnOnce() + Send>>> = Mutex::new(None);
-/// Whether [`OFFERED`] holds an offer, read at each entry.
+/// Whether [`OFFERED`] holds an offer, or one is [`expect`]ed, read at
+/// each entry.
 static WAITING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// How many generations are [`expect`]ed: the owner thread waits for them
+/// before it admits one.
+static EXPECTED: Mutex<usize> = Mutex::new(0);
+/// Told when an expected generation was offered or given up.
+static ARRIVED: Condvar = Condvar::new();
 /// Whether this process has reached a point that admits a generation
 /// ([`admits`]).
 static ENTERED_ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -1120,6 +1126,35 @@ pub fn offer(admit: impl FnOnce() + Send + 'static) {
     };
     drop(older);
     crate::redraw::windows_after(admit_idle);
+}
+
+/// Say that a generation is coming, which the program's next calls from
+/// native code run in: until the [`Expected`] it gives is dropped, after
+/// its generation was [`offer`]ed, the outermost entry on the thread that
+/// owns the program waits, then admits the generation offered last. A
+/// debugger registered while the program runs is such a generation: a
+/// call that arrives while it compiles runs on it, so it passes no
+/// breakpoint already set (#2296).
+pub fn expect() -> Expected {
+    let mut expected = lock(&EXPECTED);
+    *expected += 1;
+    WAITING.store(true, std::sync::atomic::Ordering::Release);
+    drop(expected);
+    Expected(())
+}
+
+/// A generation [`expect`]ed, until it drops: drop it once its generation
+/// is offered, or once none will be.
+#[must_use = "the owner thread waits for an expected generation until this drops"]
+pub struct Expected(());
+
+impl Drop for Expected {
+    fn drop(&mut self) {
+        let mut expected = lock(&EXPECTED);
+        *expected = expected.saturating_sub(1);
+        drop(expected);
+        ARRIVED.notify_all();
+    }
 }
 
 /// Admit the generation offered last when this thread owns the program
@@ -1178,9 +1213,19 @@ fn admit_waiting() {
     if !(WAITING.load(std::sync::atomic::Ordering::Acquire) && owns()) {
         return;
     }
+    let mut expected = lock(&EXPECTED);
+    while *expected > 0 {
+        expected = ARRIVED
+            .wait(expected)
+            .unwrap_or_else(PoisonError::into_inner);
+    }
+    drop(expected);
     let admit = {
         let mut offered = lock(&OFFERED);
-        WAITING.store(false, std::sync::atomic::Ordering::Release);
+        // One expected since the wait keeps the next entry waiting for it.
+        let expected = lock(&EXPECTED);
+        WAITING.store(*expected > 0, std::sync::atomic::Ordering::Release);
+        drop(expected);
         offered.take()
     };
     // In a memoizing framework, such as Freya, nothing calls the new
