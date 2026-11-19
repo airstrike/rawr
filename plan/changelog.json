@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.4.41",
+      "date": "2026-11-19",
+      "entries": [
+        {"text":"A shell that attaches to a `rawr run` of a program with Rust dependencies gets the debugger in the running program at its next step, even when its `main` loops without returning to native code. Every program now keeps its state and its process when a debugger attaches.","issues":[2308]}
+      ]
+    },
+    {
       "version": "0.4.40",
       "date": "2026-11-19",
       "entries": [

@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.41 (2026-11-19)
+
+- A shell that attaches to a `rawr run` of a program with Rust dependencies gets the debugger in the running program at its next step, even when its `main` loops without returning to native code. Every program now keeps its state and its process when a debugger attaches. (#2308)
+
 ## 0.4.40 (2026-11-19)
 
 - The debugger's console runs code in the frame you select: a caller's code runs before the statement making the call, sees that caller's bindings, and a change stays in that caller. The playground, rawr gui, rawr tui, rawr dap (`frameId`) and rawr mcp's `eval` (`frame`) send the selected frame. (#2309)
