@@ -4,6 +4,9 @@
 
 #![cfg(unix)]
 
+#[path = "shared/picture.rs"]
+mod picture;
+
 use std::io::{BufRead as _, BufReader, Write as _};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -11,7 +14,7 @@ use std::sync::mpsc;
 
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::backend::TestBackend;
-use ratatui::style::{Color, Modifier};
+use ratatui::style::Color;
 use ratatui::Terminal;
 use rawr_tui::client::Client;
 use rawr_tui::{Input, Shell};
@@ -409,14 +412,6 @@ fn a_pause_stops_the_running_program_where_its_event_says() {
     assert_eq!(next["params"], json!({ "op": "continue" }));
 }
 
-/// A cell's colour as `#rrggbb`, or its name for one of the terminal's own.
-fn colour(color: Color) -> String {
-    match color {
-        Color::Rgb(red, green, blue) => format!("#{red:02x}{green:02x}{blue:02x}"),
-        other => format!("{other:?}"),
-    }
-}
-
 #[test]
 fn the_source_draws_rust_in_colour_with_its_breakpoint_and_stop() {
     let mut rig = Rig::new("colour");
@@ -450,21 +445,6 @@ fn the_source_draws_rust_in_colour_with_its_breakpoint_and_stop() {
     let seven = line_with(&screen, "app.count += 1;");
     assert!(seven.contains("● 7 ▶"), "{seven}");
 
-    // The screen's cells, for a picture of it.
-    let screens = Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .parent()
-        .unwrap()
-        .join("screens");
-    std::fs::create_dir_all(&screens).unwrap();
-    let mut cells = format!("{}\t{}\n", buffer.area.width, buffer.area.height);
-    for cell in &buffer.content {
-        let bold = cell.modifier.contains(Modifier::BOLD);
-        cells.push_str(&format!(
-            "{}\t{}\t{}\t{bold}\n",
-            cell.symbol(),
-            colour(cell.fg),
-            colour(cell.bg)
-        ));
-    }
-    std::fs::write(screens.join("tui-highlighted.cells"), cells).unwrap();
+    // The screen as a terminal shows it.
+    picture::save(&buffer, "tui-highlighted.png");
 }

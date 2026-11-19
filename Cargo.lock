@@ -4723,7 +4723,9 @@ dependencies = [
 name = "rawr-tui"
 version = "0.4.44"
 dependencies = [
+ "ab_glyph",
  "crossterm",
+ "png 0.18.1",
  "ratatui",
  "serde_json",
  "syntect",
