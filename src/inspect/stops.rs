@@ -219,7 +219,10 @@ impl Stops {
 
 /// Add to `found` each closure that `statements` make a pointer to, by the
 /// function the pointer calls, once each.
-fn closures(statements: &[Stmt], found: &mut Vec<crate::Shared<crate::ast::ScriptFuncDef>>) {
+pub(super) fn closures(
+    statements: &[Stmt],
+    found: &mut Vec<crate::Shared<crate::ast::ScriptFuncDef>>,
+) {
     let mut path = Vec::new();
     for statement in statements {
         statement.walk(&mut path, &mut |path: &[ASTNode]| {

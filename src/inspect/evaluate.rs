@@ -11,15 +11,27 @@
 //! The block is the code's scope: a binding it makes ends with it. A
 //! mutation Rust allows at that line changes the frame's value, and the
 //! program goes on with it.
+//!
+//! With `"frame": n`, the code runs in a caller instead (#2309): it is
+//! written before the caller's statement that makes the call on the stack,
+//! the innermost one around it, and runs against the bindings the caller
+//! lent that call (`Lent`). The values move into a scope of the code's own
+//! for the run, at the same indices, and back after it, so nothing the
+//! code adds moves the caller's entries while its call runs. A binding the
+//! call holds by reference is borrowed until it returns, so code that uses
+//! it is refused.
 
+use std::ptr::NonNull;
 use std::sync::Arc;
 
 use serde_json::{json, Value};
 
+use crate::ast::{ASTNode, Expr, Stmt};
 use crate::diagnostic::{self, Report, Source};
+use crate::engine::{KEYWORD_HELD, KEYWORD_SLOT_OF, KEYWORD_THIS, KEYWORD_THROUGH};
 use crate::package::snapshot::Snapshot;
 use crate::splice::{self, Spliced};
-use crate::{EvalContext, ImmutableString, Position};
+use crate::{Dynamic, EvalContext, ImmutableString, Position, Scope};
 
 /// The name an evaluation's errors give its code.
 const IDENTITY: &str = "<eval>";
@@ -59,30 +71,245 @@ struct Written {
     frame: Position,
 }
 
-/// The answer to `code` evaluated where `context` is paused, at
-/// `position`: `{"value": ..}`, its tail's `{:?}` text, or `{"error":
-/// ..}`, its compile error or panic as rustc and Rust report them.
+/// The frame code runs in: the statement it is written before, and whose
+/// bindings it runs against.
+struct Frame {
+    /// The statement's position, as the program was compiled.
+    statement: Position,
+    /// A caller's bindings, as the call it made keeps them; `None` for the
+    /// frame the program is paused in, whose bindings the step holds.
+    caller: Option<Caller>,
+}
+
+/// A caller's bindings while the call it made runs (`Lent`).
+struct Caller {
+    /// The scope it keeps them in, and where its own entries end there.
+    scope: NonNull<Scope<'static>>,
+    end: usize,
+    /// Its receiver, when the call doesn't hold it.
+    this: Option<NonNull<Dynamic>>,
+    /// The binding the call holds by reference, which code can't use
+    /// while the call runs.
+    held: Option<Held>,
+    /// The receiver's name and what code that reaches it is told, when
+    /// the call kept none.
+    unkept: Option<(ImmutableString, String)>,
+}
+
+/// A caller's binding its running call holds by reference.
+struct Held {
+    /// The local, by its index in the caller's scope, or `None` for the
+    /// receiver.
+    index: Option<usize>,
+    name: ImmutableString,
+    /// Why code can't use it.
+    why: String,
+}
+
+/// The answer to `code` evaluated in frame `frame` (0 for the function
+/// the program is paused in, 1 for its caller, and on) where `context` is
+/// paused, at `position`: `{"value": ..}`, its tail's `{:?}` text, or
+/// `{"error": ..}`, its compile error or panic as rustc and Rust report
+/// them.
 pub(super) fn answer(
     context: &mut EvalContext,
     program: &Program,
+    frame: usize,
     position: Position,
     code: &str,
 ) -> Value {
-    match evaluate(context, program, position, code) {
+    let evaluated = frame_of(context, frame, position)
+        .and_then(|frame| evaluate(context, program, &frame, code));
+    match evaluated {
         Ok(value) => json!({ "value": value }),
         Err(error) => json!({ "error": error }),
     }
 }
 
+/// Frame `frame` where `context` is paused, at `position`. A caller's
+/// statement is the one making the call that is on the stack, and its
+/// bindings are where that call was lent them.
+fn frame_of(context: &mut EvalContext, frame: usize, position: Position) -> Result<Frame, String> {
+    if frame == 0 {
+        return Ok(Frame {
+            statement: position,
+            caller: None,
+        });
+    }
+    let base = NonNull::from(context.scope_mut()).cast::<Scope<'static>>();
+    let frames = super::script_frames(context);
+    let global = context.global_runtime_state();
+    let stack = global.debugger.call_stack();
+    let (Some(&index), Some(&within)) = (frames.get(frame), frames.get(frame - 1)) else {
+        let last = frames.len().saturating_sub(1);
+        // The debugger's stack has no call made before it attached (D1075).
+        return Err(format!(
+            "error: frame {frame} isn't on the debugger's stack, which has frames 0 to \
+             {last}: a call made before the debugger attached isn't on it"
+        ));
+    };
+    let shown =
+        |symbol: &str| crate::resolve::lower_nominal::function_display_name(symbol).to_owned();
+    let function = &stack[index];
+    let call = &stack[index + 1];
+    let (name, callee) = (shown(&function.fn_name), shown(&stack[within].fn_name));
+    let kept = || {
+        format!(
+            "error: `{name}`'s bindings can't be reached while it calls `{callee}`: rawr \
+             doesn't keep them for this call"
+        )
+    };
+    let lent = call.caller.as_ref().ok_or_else(kept)?;
+    let (scope, end) = super::scope_of(base, stack, &frames, frame).ok_or_else(kept)?;
+    let statement = call_statement(global, &function.fn_name, call.pos)
+        .ok_or_else(|| format!("error: `{name}` is calling `{callee}` from code rawr wrote"))?;
+    let this_name = function
+        .bindings
+        .as_ref()
+        .and_then(|bindings| bindings.this_name.clone());
+    let borrowed = |held: &str| {
+        format!("error: `{held}` is borrowed by the call to `{callee}`, which is still running")
+    };
+    let held = match lent.held {
+        Some(crate::eval::Held::Local(place)) => {
+            // SAFETY: as for `super::entries`, a shared reference inside
+            // this step's callback; only the entries' addresses are read.
+            let lent: &Scope = unsafe { scope.as_ref() };
+            let found = lent
+                .places()
+                .take(end)
+                .enumerate()
+                .find(|(_, (_, at))| *at == place);
+            let Some((index, (local, _))) = found else {
+                // A place inside one of the frame's values: which one isn't
+                // known, so the frame is borrowed whole.
+                return Err(format!(
+                    "error: `{name}`'s bindings are borrowed by the call to `{callee}`, which \
+                     is still running"
+                ));
+            };
+            Some(Held {
+                index: Some(index),
+                why: borrowed(local),
+                name: local.clone(),
+            })
+        }
+        Some(crate::eval::Held::This) => this_name.as_ref().map(|this| Held {
+            index: None,
+            why: borrowed(this),
+            name: this.clone(),
+        }),
+        None => None,
+    };
+    let unkept = this_name
+        .filter(|_| lent.this.is_none() && held.as_ref().is_none_or(|held| held.index.is_some()))
+        .map(|this| {
+            let why = format!(
+                "error: `{this}` can't be reached while `{callee}` runs: rawr doesn't keep it \
+                 for this call"
+            );
+            (this, why)
+        });
+    Ok(Frame {
+        statement,
+        caller: Some(Caller {
+            scope,
+            end,
+            this: lent.this,
+            held,
+            unkept,
+        }),
+    })
+}
+
+/// The statement of the function `function` that makes the call at
+/// `call`: the innermost one around it, so code written before it is in
+/// the scope the call is made in.
+fn call_statement(
+    global: &crate::GlobalRuntimeState,
+    function: &str,
+    call: Position,
+) -> Option<Position> {
+    let mut functions: Vec<_> = global
+        .lib
+        .iter()
+        .flat_map(|lib| lib.iter_script_fn())
+        .map(|(.., function)| crate::Shared::clone(function))
+        .collect();
+    // A closure runs the body its pointer holds.
+    let mut index = 0;
+    while let Some(within) = functions.get(index).cloned() {
+        super::stops::closures(within.body.statements(), &mut functions);
+        index += 1;
+    }
+    functions
+        .iter()
+        .filter(|candidate| candidate.name == function)
+        .find_map(|candidate| {
+            let mut found = None;
+            let mut path = Vec::new();
+            for statement in candidate.body.iter() {
+                statement.walk(&mut path, &mut |path: &[ASTNode]| {
+                    if let Some(node @ ASTNode::Expr(..)) = path.last()
+                        && node.position() == call
+                    {
+                        found = path.iter().rev().find_map(|node| match node {
+                            ASTNode::Stmt(statement) => Some(statement.position()),
+                            ASTNode::Expr(..) => None,
+                        });
+                    }
+                    found.is_none()
+                });
+                path.clear();
+                if found.is_some() {
+                    break;
+                }
+            }
+            found
+        })
+}
+
+/// Whether `statements` use the binding `name`, or the receiver when
+/// `receiver` is set: by name, or where it is, as the compiler names that
+/// (`KEYWORD_SLOT_OF`, `KEYWORD_THROUGH`, `KEYWORD_HELD`).
+fn uses(statements: &[Stmt], name: &str, receiver: bool) -> bool {
+    let named = |mut local: &str| {
+        while let Some(rest) = [KEYWORD_SLOT_OF, KEYWORD_THROUGH, KEYWORD_HELD]
+            .iter()
+            .find_map(|prefix| local.strip_prefix(prefix))
+        {
+            local = rest;
+        }
+        local == name || (receiver && local == KEYWORD_THIS)
+    };
+    let mut found = false;
+    let mut path = Vec::new();
+    for statement in statements {
+        statement.walk(&mut path, &mut |path: &[ASTNode]| {
+            found = match path.last() {
+                Some(ASTNode::Expr(Expr::Variable(variable, ..))) => named(&variable.1),
+                Some(ASTNode::Expr(Expr::ThisPtr(..))) => receiver,
+                _ => false,
+            };
+            !found
+        });
+        path.clear();
+        if found {
+            break;
+        }
+    }
+    found
+}
+
 fn evaluate(
     context: &mut EvalContext,
     program: &Program,
-    position: Position,
+    frame: &Frame,
     code: &str,
 ) -> Result<String, String> {
     let (file, span) = program
         .positions
-        .locate_position(&program.entry, position)
+        .locate_position(&program.entry, frame.statement)
         .ok_or("the program is paused in code rawr wrote around it")?;
     let text = file.text();
     let at = diagnostic::offset(
@@ -93,7 +320,7 @@ fn evaluate(
     let mut spliced = Spliced::default();
     spliced.copy(0, 0, &text[..at]);
     let code_split = splice::split(context.engine(), code);
-    let frame = spliced
+    let start = spliced
         .frame(1, 0, &code_split, true)
         .map_or(Position::NONE, |start| spliced.position(start));
     spliced.copy(0, at, &text[at..]);
@@ -104,7 +331,7 @@ fn evaluate(
     let splice = Written {
         shown,
         spliced,
-        frame,
+        frame: start,
     };
     let identity = file.identity().to_owned();
     let snapshot = program
@@ -137,6 +364,23 @@ fn evaluate(
                 .find_map(|function| splice::framed(function.body.iter(), splice.frame, &place))
         })
         .ok_or("the code's statements aren't where it was written")?;
+    if let Some(caller) = &frame.caller {
+        let refused = caller
+            .held
+            .as_ref()
+            .map(|held| (held.name.as_str(), held.index.is_none(), &held.why))
+            .into_iter()
+            .chain(
+                caller
+                    .unkept
+                    .as_ref()
+                    .map(|(this, why)| (this.as_str(), true, why)),
+            )
+            .find(|(name, receiver, _)| uses(&statements, name, *receiver));
+        if let Some((.., why)) = refused {
+            return Err(why.clone());
+        }
+    }
 
     let (engine, global, caches, scope, this) = context.parts();
     let libraries = global.lib.len();
@@ -144,12 +388,66 @@ fn evaluate(
     global.lib.push(ast.shared_support().clone());
     let resolutions = caches.fn_resolution_caches_len();
     caches.push_fn_resolution_cache();
-    let bindings = scope.len();
-    let ran = engine.eval_stmt_block(global, caches, scope, this, &statements, false);
-    let value = scope
-        .get_value::<ImmutableString>(splice::VALUE)
-        .map(|value| value.to_string());
-    scope.rewind(bindings);
+    let (ran, value) = match &frame.caller {
+        None => {
+            let bindings = scope.len();
+            let ran = engine.eval_stmt_block(global, caches, scope, this, &statements, false);
+            let value = tail(scope);
+            scope.rewind(bindings);
+            (ran, value)
+        }
+        Some(caller) => {
+            // A caller whose call extended the paused frame's scope keeps its
+            // bindings in that scope, which the step lends here.
+            let own = caller.scope == NonNull::from(&mut *scope).cast();
+            // SAFETY: the caller's call is on the call stack, below the step
+            // `context` is at, on this thread, and its caller uses neither
+            // pointer until it returns (`Lent`). The references end with
+            // this block, inside the step's callback.
+            let (lent, this) = unsafe {
+                (
+                    if own {
+                        scope
+                    } else {
+                        caller.scope.cast().as_mut()
+                    },
+                    caller.this.map(|mut this| this.as_mut()),
+                )
+            };
+            // The code runs in a scope of its own holding the caller's
+            // values, moved there, at the same indices. What it adds goes
+            // there, so the caller's entries stay where its running call
+            // may hold one.
+            let end = caller.end.min(lent.len());
+            let held = caller.held.as_ref().and_then(|held| held.index);
+            let mut moved = Scope::with_capacity(end);
+            let names: Vec<ImmutableString> = lent
+                .iter_inner()
+                .take(end)
+                .map(|(name, ..)| name.clone())
+                .collect();
+            for (index, name) in names.into_iter().enumerate() {
+                let value = if held == Some(index) {
+                    Dynamic::UNIT
+                } else {
+                    std::mem::take(lent.get_mut_by_index(index))
+                };
+                let access = value.access_mode();
+                moved.push_entry(name, access, value);
+            }
+            // The call is made inside the statement, past where the code
+            // is compiled: entries the statement made before it stand
+            // between, so the code finds its bindings by name.
+            let searching = std::mem::replace(&mut global.always_search_scope, true);
+            let ran = engine.eval_stmt_block(global, caches, &mut moved, this, &statements, false);
+            global.always_search_scope = searching;
+            let value = tail(&moved);
+            for index in (0..end).filter(|&index| held != Some(index)) {
+                *lent.get_mut_by_index(index) = std::mem::take(moved.get_mut_by_index(index));
+            }
+            (ran, value)
+        }
+    };
     caches.rewind_fn_resolution_caches(resolutions);
     global.lib.truncate(libraries);
     match ran {
@@ -167,6 +465,14 @@ fn evaluate(
             ))
         }
     }
+}
+
+/// The `{:?}` text of the code's tail, which its frame keeps in
+/// [`splice::VALUE`] in `scope`.
+fn tail(scope: &Scope) -> Option<String> {
+    scope
+        .get_value::<ImmutableString>(splice::VALUE)
+        .map(|value| value.to_string())
 }
 
 impl Written {
@@ -192,23 +498,33 @@ mod tests {
     /// What evaluating each of `codes` answers where `program` first pauses
     /// at `line`, then what the program printed as it went on.
     fn evaluated(program: &str, line: usize, codes: &[&str]) -> (Vec<Value>, String) {
+        evaluated_in(program, line, 0, codes)
+    }
+
+    /// [`evaluated`], each code in frame `frame` of the pause.
+    fn evaluated_in(
+        program: &str,
+        line: usize,
+        frame: usize,
+        codes: &[&str],
+    ) -> (Vec<Value>, String) {
         evaluated_on(
             crate::Engine::new(),
             crate::Shared::new,
             program,
-            line,
+            (line, frame),
             codes,
         )
     }
 
-    /// [`evaluated`], on `engine` as `finish` makes it once the debugger is
-    /// registered: the program compiles as a run compiles it on that
-    /// engine.
+    /// [`evaluated_in`] at `(line, frame)`, on `engine` as `finish` makes
+    /// it once the debugger is registered: the program compiles as a run
+    /// compiles it on that engine.
     fn evaluated_on(
         mut engine: crate::Engine,
         finish: impl FnOnce(crate::Engine) -> crate::Shared<crate::Engine>,
         program: &str,
-        line: usize,
+        (line, frame): (usize, usize),
         codes: &[&str],
     ) -> (Vec<Value>, String) {
         let snapshot = Snapshot::new(FILE.into(), vec![(FILE.into(), program.into())]).unwrap();
@@ -243,7 +559,7 @@ mod tests {
                     let at = at.lock().unwrap();
                     let (program, _) = at.as_ref().unwrap();
                     for code in &codes {
-                        let answer = answer(&mut context, program, position, code);
+                        let answer = answer(&mut context, program, frame, position, code);
                         answering.lock().unwrap().push(answer);
                     }
                 }
@@ -400,6 +716,52 @@ fn main() {
         assert!(!errors[1].contains("__rawr"), "{}", errors[1]);
     }
 
+    /// A caller that keeps a local, `turn`, and calls `inner` with a copy
+    /// of it and a borrow of another, `held`, mid-statement.
+    const CALLER: &str = "// rawr
+fn inner(n: u64, held: &mut u64) -> u64 {
+    let doubled = n * 2;
+    *held += 1;
+    doubled
+}
+
+fn main() {
+    let mut turn: u64 = 1;
+    let mut held: u64 = 0;
+    let next = 1 + inner(turn, &mut held);
+    println!(\"{turn} {next} {held}\");
+}
+";
+
+    #[test]
+    fn code_reads_and_writes_a_callers_bindings_in_its_frame() {
+        let (answers, printed) = evaluated_in(
+            CALLER,
+            3,
+            1,
+            &["turn + 1", "turn = 10;", "turn", "doubled", "held"],
+        );
+        assert_eq!(answers[0], json!({ "value": "2" }));
+        assert_eq!(answers[1], json!({ "value": "()" }));
+        assert_eq!(answers[2], json!({ "value": "10" }));
+        let error = |answer: &Value| answer["error"].as_str().unwrap_or_default().to_owned();
+        // `inner`'s own bindings aren't in `main`'s scope.
+        assert!(
+            error(&answers[3]).starts_with("error[E0425]: cannot find value `doubled`"),
+            "{}",
+            answers[3]
+        );
+        // The running call holds `held` by reference until it returns.
+        assert!(
+            error(&answers[4]).contains("`held` is borrowed by the call to `main::inner`"),
+            "{}",
+            answers[4]
+        );
+        // `main` goes on with the value written in its frame; the call it
+        // was making had its argument already.
+        assert_eq!(printed, "10 3 1\n");
+    }
+
     /// A program whose generic function passes its type parameter to a
     /// crate's generic function, which a runner's lowering compiles per
     /// instance, as it reveals an opaque return type: code evaluated in it
@@ -426,7 +788,7 @@ fn main() {
                     .expect("a fresh compiler retains a native surface")
             },
             program,
-            6,
+            (6, 0),
             &["count + 1"],
         );
         assert_eq!(answers, [json!({ "value": "4" })]);

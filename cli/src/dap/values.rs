@@ -127,8 +127,8 @@ impl Adapter {
     }
 
     /// `evaluate`: the inspector's `eval`, as a block written before the
-    /// statement the program is paused at (D1054), in the function it is
-    /// paused in.
+    /// statement the program is paused at (D1054), in the frame `frameId`
+    /// names: a caller's at the statement making its call (#2309).
     pub(super) fn evaluate(&self, arguments: &Value) -> Result<Value, String> {
         let code = arguments["expression"]
             .as_str()

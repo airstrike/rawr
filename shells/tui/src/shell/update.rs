@@ -232,7 +232,8 @@ impl Shell {
 
     fn evaluate(&mut self, code: String) {
         self.push(Kind::Eval, code.clone());
-        self.program(json!({ "op": "eval", "code": code }), Pending::Eval);
+        let request = json!({ "op": "eval", "code": code, "frame": self.frame });
+        self.program(request, Pending::Eval);
     }
 
     /// Read the shown frame's bindings, where the program is paused.

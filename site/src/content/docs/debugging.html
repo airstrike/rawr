@@ -12,7 +12,7 @@
   <li>Next, step in and step out stop at the program&rsquo;s next statement. Pause stops a running program at the next statement it runs. A program waiting in a window&rsquo;s event loop pauses when the loop calls into it again. A step past the end of a function the event loop called goes on into the loop and stops at the next statement the program runs, such as the next <code>view</code> or <code>update</code>.</li>
   <li>The call stack names each frame by its Rust path, such as <code>counter::App::update</code>.</li>
   <li>Variables show each binding as Rust&rsquo;s <code>{:?}</code> prints it. A struct, a tuple, a list or a map expands into its fields or items, and those expand in turn.</li>
-  <li>The Debug Console and watch expressions evaluate Rust where the program is paused, as if it were a block written just before the paused statement. rustc&rsquo;s rules for that line apply. See <a href="/docs/agents#break">eval</a>.</li>
+  <li>The Debug Console and watch expressions evaluate Rust where the program is paused, as if it were a block written just before the paused statement. rustc&rsquo;s rules for that line apply. With a caller&rsquo;s frame selected, it runs in that caller, before the statement making the call, and a change stays in that caller. See <a href="/docs/agents#break">eval</a>.</li>
   <li>A save reloads the program as at a terminal. The Debug Console says when it reloaded, restarted or failed. Breakpoints follow their line&rsquo;s text across saves.</li>
   <li>The program&rsquo;s output goes to the Debug Console.</li>
 </ul>
@@ -77,7 +77,7 @@ args = { program = "{0}" }</code></pre></div>
 <ul>
   <li>Click a line number to set a breakpoint there, and click it again to clear it. Breakpoints set before a run are in place before <code>main</code> starts.</li>
   <li>The panel&rsquo;s toolbar continues (F8), pauses (F8), and steps over (F10), into (F11) and out (Shift+F11), as in DevTools. The paused line is highlighted, and the panel lists the frames and the bindings of the one you pick.</li>
-  <li>The console runs Rust where the program is paused. Enter evaluates, Shift+Enter adds a line, and each answer stays above the prompt.</li>
+  <li>The console runs Rust where the program is paused, in the frame you pick. Enter evaluates, Shift+Enter adds a line, and each answer stays above the prompt.</li>
   <li>Pausing needs WebAssembly JS Promise Integration (JSPI), which Chrome has. In a browser without it, the panel says so, and the program runs without pausing.</li>
   <li>A pause stops <code>main</code>&rsquo;s own code, and the functions it calls. A function the page calls, such as an iced <code>view</code> or <code>update</code>, runs whole.</li>
 </ul>
@@ -91,7 +91,7 @@ args = { program = "{0}" }</code></pre></div>
   <li>The protocol sees one thread: the one that runs the program&rsquo;s code.</li>
   <li>Code in Rust dependencies runs whole. A step can&rsquo;t stop inside a crate&rsquo;s function, and its lines take no breakpoints.</li>
   <li>A pause inside a call from native code, such as a window&rsquo;s event loop, holds that loop. The window doesn&rsquo;t redraw or take input until the program goes on.</li>
-  <li>Evaluation works only in the frame the program is paused in, the top of the stack.</li>
+  <li>Evaluation in a caller&rsquo;s frame refuses a binding the running call borrows, such as one passed to it as <code>&amp;mut</code>, until the call returns. A frame entered before the debugger attached isn&rsquo;t on the stack, so code can&rsquo;t run in it.</li>
   <li>A value whose <code>Debug</code> text isn&rsquo;t in the shapes the standard derives write, as a hand-written impl may print, shows whole, without fields.</li>
   <li>Launch refuses a program that draws a terminal UI. Run it with <code>rawr run</code> in a terminal and attach.</li>
 </ul>

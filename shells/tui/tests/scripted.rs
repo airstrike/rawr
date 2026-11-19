@@ -352,7 +352,7 @@ fn an_eval_shows_its_code_and_its_value_in_the_console() {
     let eval = rig.session.request();
     assert_eq!(
         eval["params"],
-        json!({ "op": "eval", "code": "app.count * 2" })
+        json!({ "op": "eval", "code": "app.count * 2", "frame": 0 })
     );
     rig.session.answer(&eval, json!({ "value": "2" }));
     rig.hear(1);
