@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-19",
-  "version": "0.4.27",
+  "version": "0.4.28",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,14 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.28",
+        "date": "2026-11-19",
+        "entries": [
+          {"text":"An eval at a pause checks the program as its run did, so a crate's generic call whose type comes from an `impl Trait` return, such as `iced::run(update, view)`, no longer fails with E0282.","issues":[2292]},
+          {"text":"`rawr gui` shows the frames and bindings of the newest pause only; a slow answer about an earlier stop no longer replaces them.","issues":[2295]}
+        ]
+      },
       {
         "version": "0.4.27",
         "date": "2026-11-19",
@@ -5247,10 +5255,10 @@
     {"issue":2289,"title":"End-to-end test lanes and started projects beyond the warm set outlive a killed or failing run and fill the disk","state":"closed","category":"Health"},
     {"issue":2290,"title":"A crate macro call sent to rustc keeps hidden-segment paths in its input","state":"open","category":"No glue (D593)"},
     {"issue":2291,"title":"rustc's expansion of a crate macro call gives line!() at the expansion input, not the call","state":"open","category":"No glue (D593)"},
-    {"issue":2292,"title":"Eval at a pause in an iced callback fails: cannot use `iced::run`'s `W` here, type annotations needed","state":"open","category":"Health"},
+    {"issue":2292,"title":"Eval at a pause in an iced callback fails: cannot use `iced::run`'s `W` here, type annotations needed","state":"closed","category":"Health","release":"0.4.28"},
     {"issue":2293,"title":"After a step in an iced callback, the window shows no frames or bindings and 'No such file or directory (os error 2)'","state":"closed","category":"Health","release":"0.4.27"},
     {"issue":2294,"title":"Continue after a step in an iced callback never answers the window","state":"closed","category":"Health","release":"0.4.27"},
-    {"issue":2295,"title":"rawr gui shows the previous stop's frames and bindings at a new pause","state":"open","category":"Health"}
+    {"issue":2295,"title":"rawr gui shows the previous stop's frames and bindings at a new pause","state":"closed","category":"Health","release":"0.4.28"}
   ],
   "groups": [
     {
@@ -8061,10 +8069,10 @@
             {"number":2260,"title":"A window shell (GUI) in its own process on the shared debugger session","state":"closed"},
             {"number":2287,"title":"A step on a paused iced program never reaches a new pause","state":"closed"},
             {"number":2286,"title":"`rawr gui` and `rawr tui` draw the source in syntax colours, and the window follows the system's…","state":"closed"},
-            {"number":2292,"title":"Eval at a pause in an iced callback fails: cannot use `iced::run`'s `W` here, type annotations needed","state":"open"},
+            {"number":2292,"title":"Eval at a pause in an iced callback fails: cannot use `iced::run`'s `W` here, type annotations needed","state":"closed"},
             {"number":2293,"title":"After a step in an iced callback, the window shows no frames or bindings and 'No such file or directory (os error 2)'","state":"closed"},
             {"number":2294,"title":"Continue after a step in an iced callback never answers the window","state":"closed"},
-            {"number":2295,"title":"rawr gui shows the previous stop's frames and bindings at a new pause","state":"open"}
+            {"number":2295,"title":"rawr gui shows the previous stop's frames and bindings at a new pause","state":"closed"}
           ],
           "milestone": "0.5"
         }

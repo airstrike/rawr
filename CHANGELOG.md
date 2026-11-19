@@ -6,6 +6,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.28 (2026-11-19)
+
+- An eval at a pause checks the program as its run did, so a crate's generic call whose type comes from an `impl Trait` return, such as `iced::run(update, view)`, no longer fails with E0282. (#2292)
+- `rawr gui` shows the frames and bindings of the newest pause only; a slow answer about an earlier stop no longer replaces them. (#2295)
+
 ## 0.4.27 (2026-11-19)
 
 - A continue ends a step that never pauses, and both are answered; the session no longer queues a continue behind a step. `rawr gui` runs on as soon as you step or continue, so Pause is available while a step runs. (#2294)

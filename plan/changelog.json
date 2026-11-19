@@ -8,6 +8,14 @@
   },
   "releases": [
     {
+      "version": "0.4.28",
+      "date": "2026-11-19",
+      "entries": [
+        {"text":"An eval at a pause checks the program as its run did, so a crate's generic call whose type comes from an `impl Trait` return, such as `iced::run(update, view)`, no longer fails with E0282.","issues":[2292]},
+        {"text":"`rawr gui` shows the frames and bindings of the newest pause only; a slow answer about an earlier stop no longer replaces them.","issues":[2295]}
+      ]
+    },
+    {
       "version": "0.4.27",
       "date": "2026-11-19",
       "entries": [
