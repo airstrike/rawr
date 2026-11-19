@@ -137,14 +137,16 @@ fn sleep(duration: std::time::Duration) {
     SUSPENDABLE.set(true);
 }
 
-/// Suspend `main`'s stack until `promise` settles, the page running its
-/// events meanwhile: what a pause waits in. `Err` is the page's reason it
-/// can't, as a page without JSPI gives.
+/// Suspend the stack this call runs on, `main`'s or an entered callback's,
+/// until `promise` settles, the page running its events meanwhile: what a
+/// pause waits in. Other stacks run meanwhile, so the flag that says which
+/// stack runs is cleared, and this stack's own comes back on resume. `Err`
+/// is the page's reason it can't, as a page without JSPI gives.
 #[cfg(feature = "browser-debugger")]
 pub(super) fn suspend(promise: &js_sys::Promise) -> Result<(), JsValue> {
-    SUSPENDABLE.set(false);
+    let suspendable = SUSPENDABLE.replace(false);
     let suspended = js_sys::futures::jspi_block_on_promise(promise);
-    SUSPENDABLE.set(true);
+    SUSPENDABLE.set(suspendable);
     suspended.map(drop)
 }
 

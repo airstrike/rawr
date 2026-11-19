@@ -17,7 +17,7 @@ use std::hash::{DefaultHasher, Hash as _, Hasher as _};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use super::{bindgen, Error};
+use super::{bindgen, callbacks, Error};
 
 /// The target a page's runner is built for.
 pub(super) const TARGET: &str = "wasm32-unknown-unknown";
@@ -177,6 +177,14 @@ impl Build {
         for name in [GLUE, MODULE] {
             let site = self.site.join(name);
             std::fs::rename(self.pack.join(name), &site).map_err(file(&site))?;
+        }
+        // A runner with the browser debugger pauses inside page callbacks
+        // only through glue that enters them on a stack JSPI suspends.
+        if rawr_import::universe::debugged() {
+            let glue = self.site.join(GLUE);
+            let text = std::fs::read_to_string(&glue).map_err(file(&glue))?;
+            let entered = callbacks::enter(&text).ok_or(Error::Glue)?;
+            std::fs::write(&glue, entered).map_err(file(&glue))?;
         }
         let index = self.site.join(INDEX);
         std::fs::write(&index, PAGE).map_err(file(&index))?;
