@@ -50,15 +50,80 @@ pub type LockGuardMut<'a, T> = std::cell::RefMut<'a, T>;
 #[allow(dead_code)]
 pub use std::sync::RwLock as Locked;
 
-/// Read-only lock guard for synchronized shared object.
 #[cfg(feature = "sync")]
-#[allow(dead_code)]
-pub type LockGuard<'a, T> = std::sync::RwLockReadGuard<'a, T>;
+thread_local! {
+    /// How many [`Locked`] values this thread holds: a thread that holds
+    /// none waits for one another thread holds, and so closes no cycle of
+    /// waits ([`locked_read`]).
+    static HOLDING: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
-/// Mutable lock guard for synchronized shared object.
+/// Read-only lock guard for synchronized shared object, counted among the
+/// locks its thread holds while it lives.
 #[cfg(feature = "sync")]
-#[allow(dead_code)]
-pub type LockGuardMut<'a, T> = std::sync::RwLockWriteGuard<'a, T>;
+#[derive(Debug)]
+pub struct LockGuard<'a, T>(std::sync::RwLockReadGuard<'a, T>);
+
+/// Mutable lock guard for synchronized shared object, counted as
+/// [`LockGuard`] is.
+#[cfg(feature = "sync")]
+#[derive(Debug)]
+pub struct LockGuardMut<'a, T>(std::sync::RwLockWriteGuard<'a, T>);
+
+#[cfg(feature = "sync")]
+impl<'a, T> LockGuard<'a, T> {
+    fn held(guard: std::sync::RwLockReadGuard<'a, T>) -> Self {
+        HOLDING.set(HOLDING.get() + 1);
+        Self(guard)
+    }
+}
+
+#[cfg(feature = "sync")]
+impl<'a, T> LockGuardMut<'a, T> {
+    fn held(guard: std::sync::RwLockWriteGuard<'a, T>) -> Self {
+        HOLDING.set(HOLDING.get() + 1);
+        Self(guard)
+    }
+}
+
+#[cfg(feature = "sync")]
+impl<T> std::ops::Deref for LockGuard<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+
+#[cfg(feature = "sync")]
+impl<T> std::ops::Deref for LockGuardMut<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+
+#[cfg(feature = "sync")]
+impl<T> std::ops::DerefMut for LockGuardMut<'_, T> {
+    fn deref_mut(&mut self) -> &mut T {
+        &mut self.0
+    }
+}
+
+#[cfg(feature = "sync")]
+impl<T> Drop for LockGuard<'_, T> {
+    fn drop(&mut self) {
+        HOLDING.set(HOLDING.get() - 1);
+    }
+}
+
+#[cfg(feature = "sync")]
+impl<T> Drop for LockGuardMut<'_, T> {
+    fn drop(&mut self) {
+        HOLDING.set(HOLDING.get() - 1);
+    }
+}
 
 /// Context of a native Rust function call.
 #[derive(Debug)]
@@ -620,6 +685,10 @@ pub fn shared_take<T>(value: Shared<T>) -> T {
 /// `None` at once while it is borrowed for write, as
 /// [`RefCell::try_borrow`] does: a value one thread shares is borrowed for
 /// write only by a borrow still held, and waiting for it never ends.
+/// Threads share a value as Rust's scoped threads share a borrow: while
+/// another thread holds it and this one holds no other, this one waits
+/// until that thread's access ends. A thread that holds one already meets
+/// the conflict, so no two threads wait for each other.
 /// Exported under the `internals` feature only.
 ///
 /// [`RefCell::try_borrow`]: std::cell::RefCell::try_borrow
@@ -633,14 +702,20 @@ pub fn locked_read<T>(value: &Locked<T>) -> Option<LockGuard<'_, T>> {
     // A holder that panicked left the value as it was, as a `RefCell` does.
     #[cfg(feature = "sync")]
     match value.try_read() {
-        Ok(guard) => Some(guard),
-        Err(std::sync::TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner()),
-        Err(std::sync::TryLockError::WouldBlock) => None,
+        Ok(guard) => Some(LockGuard::held(guard)),
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => {
+            Some(LockGuard::held(poisoned.into_inner()))
+        }
+        Err(std::sync::TryLockError::WouldBlock) => {
+            (HOLDING.get() == 0).then(|| waited_read(value))
+        }
     }
 }
 
 /// _(internals)_ Lock a [`Locked`] resource for mutable access, or `None`
-/// at once while it is borrowed, as [`RefCell::try_borrow_mut`] does.
+/// at once while it is borrowed, as [`RefCell::try_borrow_mut`] does; a
+/// thread that holds no other waits while another thread holds it, as
+/// [`locked_read`] does.
 /// Exported under the `internals` feature only.
 ///
 /// [`RefCell::try_borrow_mut`]: std::cell::RefCell::try_borrow_mut
@@ -653,9 +728,13 @@ pub fn locked_write<T>(value: &Locked<T>) -> Option<LockGuardMut<'_, T>> {
 
     #[cfg(feature = "sync")]
     match value.try_write() {
-        Ok(guard) => Some(guard),
-        Err(std::sync::TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner()),
-        Err(std::sync::TryLockError::WouldBlock) => None,
+        Ok(guard) => Some(LockGuardMut::held(guard)),
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => {
+            Some(LockGuardMut::held(poisoned.into_inner()))
+        }
+        Err(std::sync::TryLockError::WouldBlock) => {
+            (HOLDING.get() == 0).then(|| waited_write(value))
+        }
     }
 }
 
@@ -669,9 +748,11 @@ pub(crate) fn waited_read<T>(value: &Locked<T>) -> LockGuard<'_, T> {
     return value.borrow();
 
     #[cfg(feature = "sync")]
-    value
-        .read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+    LockGuard::held(
+        value
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    )
 }
 
 /// Lock a [`Locked`] resource that threads share for mutable access,
@@ -682,9 +763,11 @@ pub(crate) fn waited_write<T>(value: &Locked<T>) -> LockGuardMut<'_, T> {
     return value.borrow_mut();
 
     #[cfg(feature = "sync")]
-    value
-        .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+    LockGuardMut::held(
+        value
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    )
 }
 
 /// Read the value a shared [`Dynamic`][crate::Dynamic] holds, to answer
@@ -850,5 +933,34 @@ mod tests {
             .write_lock::<Dynamic>()
             .expect("an unborrowed value is written");
         let _ = copy.is_int();
+    }
+
+    /// A value another thread holds is waited for by a thread that holds
+    /// no other, as threads share a borrow, and is a conflict at once to
+    /// one that does (#2303).
+    #[cfg(feature = "sync")]
+    #[test]
+    fn a_thread_that_holds_no_value_waits_for_one_another_thread_holds() {
+        use super::{locked_read, locked_write, Locked};
+        let value = Locked::new(1);
+        let other = Locked::new(2);
+        let (held, holding) = std::sync::mpsc::channel();
+        let (go, going) = std::sync::mpsc::channel::<()>();
+        std::thread::scope(|scope| {
+            let written = &value;
+            scope.spawn(move || {
+                let mut guard = locked_write(written).expect("an unborrowed value is written");
+                held.send(()).unwrap();
+                going.recv().unwrap();
+                *guard = 3;
+            });
+            holding.recv().unwrap();
+            {
+                let _other = locked_read(&other).expect("an unborrowed value is read");
+                assert!(locked_read(&value).is_none());
+            }
+            go.send(()).unwrap();
+            assert_eq!(locked_read(&value).map(|guard| *guard), Some(3));
+        });
     }
 }
