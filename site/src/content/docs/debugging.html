@@ -9,7 +9,7 @@
   <li><strong>Launch</strong> starts <code>rawr run</code> on <code>program</code>, a crate&rsquo;s directory or <code>Cargo.toml</code>, or one <code>.rs</code> file, with <code>args</code>. Relative paths start at <code>cwd</code>.</li>
   <li><strong>Attach</strong> reaches a <code>rawr run</code> started in a terminal for <code>program</code>. A run started in a terminal has no debugger until a shell asks, so it restarts once with one.</li>
   <li>Breakpoints go on lines and on functions. A line with no statement is refused, with why.</li>
-  <li>Next, step in and step out stop at the program&rsquo;s next statement. Pause stops a running program at the next statement it runs. A program waiting in a window&rsquo;s event loop pauses when the loop calls into it again.</li>
+  <li>Next, step in and step out stop at the program&rsquo;s next statement. Pause stops a running program at the next statement it runs. A program waiting in a window&rsquo;s event loop pauses when the loop calls into it again. A step past the end of a function the event loop called goes on into the loop and stops at the next statement the program runs, such as the next <code>view</code> or <code>update</code>.</li>
   <li>The call stack names each frame by its Rust path, such as <code>counter::App::update</code>.</li>
   <li>Variables show each binding as Rust&rsquo;s <code>{:?}</code> prints it. A struct, a tuple, a list or a map expands into its fields or items, and those expand in turn.</li>
   <li>The Debug Console and watch expressions evaluate Rust where the program is paused, as if it were a block written just before the paused statement. rustc&rsquo;s rules for that line apply. See <a href="/docs/agents#break">eval</a>.</li>

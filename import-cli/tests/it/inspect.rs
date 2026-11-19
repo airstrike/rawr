@@ -142,9 +142,11 @@ fn inspect_reads_a_callbacks_bindings_in_a_runner_with_crate_values() {
         told.lines().any(|line| line.contains("\"resumed\"")),
         "{told}"
     );
-    // Past the function's end, the step pauses at the loop's next call.
+    // Past the function's end, the step goes on into the native loop, which
+    // it can't stop in, and says so; it pauses at the loop's next call.
     let step = ask(&socket, &json!({ "op": "step", "kind": "over" }));
-    assert_eq!(step["paused"]["line"], 13, "{step}");
+    assert_eq!(step, json!({ "paused": null, "native": true }), "{step}");
+    assert_eq!(pause(&mut run, &events, 3)["line"], 13);
     let next = ask(&socket, &json!({ "name": "tick" }));
     assert_ne!(next["bindings"], first["bindings"], "{next}");
     let continued = ask(&socket, &json!({ "op": "continue" }));
