@@ -21,6 +21,7 @@ members = [
     "macros",
     "reload",
     "shells/gui",
+    "shells/tui",
     "watch",
     "web",
 ]

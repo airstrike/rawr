@@ -25,6 +25,8 @@ pub mod layer;
 pub mod mcp;
 pub mod new;
 pub mod supervise;
+#[cfg(unix)]
+pub mod tui;
 pub mod web;
 
 use std::ffi::{OsStr, OsString};
@@ -74,6 +76,16 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
         }
         Ok(Request::Mcp { path }) => serve(path),
         Ok(Request::Dap { path }) => debug(path),
+        #[cfg(unix)]
+        Ok(Request::Tui { path }) => tui::run(path),
+        #[cfg(not(unix))]
+        Ok(Request::Tui { .. }) => {
+            eprintln!(
+                "{}: rawr tui runs on Unix only",
+                color::label(color::Level::Error)
+            );
+            ExitCode::FAILURE
+        }
         #[cfg(unix)]
         Ok(Request::Gui { path }) => gui::open(path.as_ref()),
         #[cfg(not(unix))]
@@ -244,6 +256,10 @@ enum Request {
     /// `rawr dap [path]`: serve an editor's debugger, with relative paths
     /// from `path`.
     Dap {
+        path: Option<PathBuf>,
+    },
+    /// `rawr tui [path]`: the terminal debugger on the program's run.
+    Tui {
         path: Option<PathBuf>,
     },
     /// `rawr gui [path]`: the debugger window on the program's run.
@@ -430,7 +446,7 @@ fn parse_command(arguments: &[OsString]) -> Result<Request, String> {
         }),
         Some("-h" | "--help" | "help") => Ok(Request::Help),
         Some("-V" | "--version") => Ok(Request::Version),
-        Some("run" | "check" | "doctor" | "mcp" | "dap" | "gui" | "init") if asks_help => {
+        Some("run" | "check" | "doctor" | "mcp" | "dap" | "tui" | "gui" | "init") if asks_help => {
             Ok(Request::Help)
         }
         Some("run") => path(&arguments[1..]).map(|path| Request::Program {
@@ -456,6 +472,7 @@ fn parse_command(arguments: &[OsString]) -> Result<Request, String> {
         Some("new") => parse_new(&arguments[1..]).map(Request::New),
         Some("mcp") => path(&arguments[1..]).map(|path| Request::Mcp { path }),
         Some("dap") => path(&arguments[1..]).map(|path| Request::Dap { path }),
+        Some("tui") => path(&arguments[1..]).map(|path| Request::Tui { path }),
         Some("gui") => path(&arguments[1..]).map(|path| Request::Gui { path }),
         Some("init") => parse_init(&arguments[1..]),
         Some(word) if word.starts_with('-') => Err(format!("unknown argument `{word}`")),
@@ -504,6 +521,8 @@ fn help(installed: &[layer::Installed]) -> String {
          rawr doctor [path]            Report on the environment and the project\n  \
          rawr mcp [path]               Serve coding agents over MCP on stdio\n  \
          rawr dap [path]               Serve an editor's debugger over DAP on stdio\n  \
+         rawr tui [path]               Debug the program's run in the terminal, attached to\n                                \
+         its run or starting one\n  \
          rawr gui [path]               Open a debugger window on the program's run,\n                                \
          starting one when none is going\n  \
          rawr init [--claude] [--codex] [path]\n                                \
@@ -1065,6 +1084,14 @@ mod tests {
         assert!(request(&["new"]).is_err());
         assert!(request(&["new", "hello", "--template"]).is_err());
         assert_eq!(request(&["run", "--help"]), Ok(Request::Help));
+        assert_eq!(request(&["tui"]), Ok(Request::Tui { path: None }));
+        assert_eq!(
+            request(&["tui", "app"]),
+            Ok(Request::Tui {
+                path: Some(PathBuf::from("app"))
+            })
+        );
+        assert_eq!(request(&["tui", "--help"]), Ok(Request::Help));
         assert_eq!(request(&["--version"]), Ok(Request::Version));
         assert!(request(&["run", "a", "b"]).is_err());
         assert!(request(&["--bogus"]).is_err());
