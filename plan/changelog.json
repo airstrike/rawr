@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.4.34",
+      "date": "2026-11-19",
+      "entries": [
+        {"text":"A breakpoint set on a running program takes effect for its next call: a click made while the debugger is still being added no longer passes it.","issues":[2296]}
+      ]
+    },
+    {
       "version": "0.4.33",
       "date": "2026-11-19",
       "entries": [

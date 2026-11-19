@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-19",
-  "version": "0.4.33",
+  "version": "0.4.34",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.34",
+        "date": "2026-11-19",
+        "entries": [
+          {"text":"A breakpoint set on a running program takes effect for its next call: a click made while the debugger is still being added no longer passes it.","issues":[2296]}
+        ]
+      },
       {
         "version": "0.4.33",
         "date": "2026-11-19",
@@ -5297,7 +5304,7 @@
     {"issue":2293,"title":"After a step in an iced callback, the window shows no frames or bindings and 'No such file or directory (os error 2)'","state":"closed","category":"Health","release":"0.4.27"},
     {"issue":2294,"title":"Continue after a step in an iced callback never answers the window","state":"closed","category":"Health","release":"0.4.27"},
     {"issue":2295,"title":"rawr gui shows the previous stop's frames and bindings at a new pause","state":"closed","category":"Health","release":"0.4.28"},
-    {"issue":2296,"title":"Input that arrives while the debugger registers passes a breakpoint just set","state":"open","category":"Health"},
+    {"issue":2296,"title":"Input that arrives while the debugger registers passes a breakpoint just set","state":"closed","category":"Health","release":"0.4.34"},
     {"issue":2297,"title":"A base-language `rawr run` restarts its program to register a debugger","state":"open","category":"Health"},
     {"issue":2298,"title":"A `mut` binding of a `&mut` parameter is a step stop on the signature line","state":"open","category":"Health"},
     {"issue":2299,"title":"rawr dap tells a breakpoint a save moved as removed and new, not changed","state":"open","category":"Health"}
@@ -8070,7 +8077,7 @@
             {"number":2266,"title":"A shell attaching to a plain `rawr run` restarts the program to register a debugger, losing its state","state":"closed"},
             {"number":2278,"title":"The session tells shells when breakpoints change","state":"closed"},
             {"number":2288,"title":"A run started in a terminal tells its output to the session","state":"open"},
-            {"number":2296,"title":"Input that arrives while the debugger registers passes a breakpoint just set","state":"open"},
+            {"number":2296,"title":"Input that arrives while the debugger registers passes a breakpoint just set","state":"closed"},
             {"number":2297,"title":"A base-language `rawr run` restarts its program to register a debugger","state":"open"},
             {"number":2298,"title":"A `mut` binding of a `&mut` parameter is a step stop on the signature line","state":"open"},
             {"number":2299,"title":"rawr dap tells a breakpoint a save moved as removed and new, not changed","state":"open"}

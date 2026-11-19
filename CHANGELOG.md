@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.34 (2026-11-19)
+
+- A breakpoint set on a running program takes effect for its next call: a click made while the debugger is still being added no longer passes it. (#2296)
+
 ## 0.4.33 (2026-11-19)
 
 - A script whose last expression is a macro call, as `format!(..)`, or whose statement starts with one, as `format!(..).len();`, runs again. (#2283)
