@@ -5,6 +5,8 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
+- `rawr mcp` has `eval`: Rust code runs where the program is paused, with the bindings in scope there. It is compiled as a block written before the paused statement, so a type error, or a borrow that conflicts with one the program holds, is refused with rustc's error. The last expression's value prints as `{:?}` prints it, without moving it, and a change the code makes stays. (#490)
+- rawr-repl runs its entries as the statements of one body: items and bindings from earlier entries keep their types, and a local whose type implements `Drop` lives until the session ends, then drops newest first, while temporaries, `let _` and `drop(x)` drop where Rust drops them. (#1207)
 
 ## 0.4.20 (2026-11-18)
 

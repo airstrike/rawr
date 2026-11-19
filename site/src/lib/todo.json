@@ -9,7 +9,13 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
+      "entries": [
+        {"text":"`rawr mcp` has `eval`: Rust code runs where the program is paused, with the bindings in scope there. It is compiled as a block written before the paused statement, so a type error, or a borrow that conflicts with one the program holds, is refused with rustc's error. The last expression's value prints as `{:?}` prints it, without moving it, and a change the code makes stays.","issues":[490]},
+        {"text":"rawr-repl runs its entries as the statements of one body: items and bindings from earlier entries keep their types, and a local whose type implements `Drop` lives until the session ends, then drops newest first, while temporaries, `let _` and `drop(x)` drop where Rust drops them.","issues":[1207]}
+      ]
+    },
     "releases": [
       {
         "version": "0.4.20",
@@ -3389,7 +3395,7 @@
     {"issue":487,"title":"Delete the dead host-profile request path","state":"closed","category":"Importer","release":"0.3.47"},
     {"issue":488,"title":"Read a running program's values from rawr mcp and the editor","state":"closed","category":"Health","release":"0.3.47"},
     {"issue":489,"title":"Breakpoints and stepping under rawr run","state":"closed","category":"Health","release":"0.3.53"},
-    {"issue":490,"title":"Evaluate Rust in a paused frame","state":"open","category":"Health"},
+    {"issue":490,"title":"Evaluate Rust in a paused frame","state":"closed","category":"Health"},
     {"issue":491,"title":"Record and replay messages, with iced's comet","state":"open","category":"Health"},
     {"issue":492,"title":"CI runs fail only when the code is broken","state":"closed","category":"Health","release":"0.3.47"},
     {"issue":493,"title":"Run the ?play release on each release push to main","state":"retired","category":"Health"},
@@ -4106,7 +4112,7 @@
     {"issue":1204,"title":"A marked module can't reach a private field of its native crate root's struct","state":"open","category":"Divergences from rustc"},
     {"issue":1205,"title":"rawr has no timeouts of its own: remove every deadline from the protocol, the owner and the test harness","state":"closed","category":"Health","release":"0.3.172"},
     {"issue":1206,"title":"std::thread::sleep traps rawr-web","state":"closed","category":"Platforms","release":"0.4.1"},
-    {"issue":1207,"title":"rawr-repl drops a Drop value at the end of the line that bound it","state":"open","category":"Divergences from rustc"},
+    {"issue":1207,"title":"rawr-repl drops a Drop value at the end of the line that bound it","state":"closed","category":"Divergences from rustc"},
     {"issue":1208,"title":"A root package's build script that declares no rerun-if input runs again only when the generated crate changes","state":"open","category":"Divergences from rustc"},
     {"issue":1209,"title":"The package-tree witness of a build script without rerun-if inputs sees more files than Cargo lists","state":"closed","category":"Health","release":"0.4.15"},
     {"issue":1210,"title":"Decide the fate of input/membership, the unwired contained cargo-package listing","state":"open","category":"Health"},
@@ -5160,7 +5166,10 @@
     {"issue":2259,"title":"A terminal shell (TUI) on the shared debugger session","state":"open","category":"Health"},
     {"issue":2260,"title":"A window shell (GUI) in its own process on the shared debugger session","state":"open","category":"Health"},
     {"issue":2261,"title":"Rewind to a past state, and replay recorded turns under edited code","state":"open","category":"Health"},
-    {"issue":2262,"title":"comet as a shell: a bridge that speaks beacon and maps its rewind to rawr's","state":"open","category":"Health"}
+    {"issue":2262,"title":"iced's own debug tools (comet, and its time machine where the program enables it) work under rawr run","state":"open","category":"Health"},
+    {"issue":2263,"title":"eval in a caller's frame","state":"open","category":"Health"},
+    {"issue":2264,"title":"eval in a program with Rust dependencies, end to end","state":"open","category":"Health"},
+    {"issue":2265,"title":"eval paused at a match arm or another expression position fails to parse","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -7895,8 +7904,11 @@
           "state": "now",
           "note": "The same interpreter, the same errors",
           "issues": [
-            {"number":490,"title":"Evaluate Rust in a paused frame","state":"open"},
-            {"number":1207,"title":"rawr-repl drops a Drop value at the end of the line that bound it","state":"open"}
+            {"number":490,"title":"Evaluate Rust in a paused frame","state":"closed"},
+            {"number":1207,"title":"rawr-repl drops a Drop value at the end of the line that bound it","state":"closed"},
+            {"number":2263,"title":"eval in a caller's frame","state":"open"},
+            {"number":2264,"title":"eval in a program with Rust dependencies, end to end","state":"open"},
+            {"number":2265,"title":"eval paused at a match arm or another expression position fails to parse","state":"open"}
           ],
           "milestone": "0.5"
         },
@@ -7947,31 +7959,6 @@
             {"number":2260,"title":"A window shell (GUI) in its own process on the shared debugger session","state":"open"}
           ],
           "milestone": "0.5"
-        },
-        {
-          "id": "record-replay",
-          "name": "Record turns and state",
-          "start": 67,
-          "size": 3,
-          "state": "next",
-          "note": "Each turn's message and state, while a shell listens (#491)",
-          "issues": [
-            {"number":491,"title":"Record and replay messages, with iced's comet","state":"open"}
-          ],
-          "milestone": "0.5"
-        },
-        {
-          "id": "rewind",
-          "name": "Rewind, replay and comet",
-          "start": 70,
-          "size": 4,
-          "state": "next",
-          "note": "Time travel when the state is pure, replay under edited code, and comet as a shell (D1053)",
-          "issues": [
-            {"number":2261,"title":"Rewind to a past state, and replay recorded turns under edited code","state":"open"},
-            {"number":2262,"title":"comet as a shell: a bridge that speaks beacon and maps its rewind to rawr's","state":"open"}
-          ],
-          "milestone": "0.5"
         }
       ]
     },
@@ -8009,6 +7996,19 @@
             {"number":1142,"title":"The grain VM's script calls don't grow the stack","state":"open"},
             {"number":1417,"title":"`rawr check` passes where the runner build fails: a check that also compiles the generated…","state":"open"},
             {"number":1511,"title":"The mirror table that Ty::from_resolved reads is a thread-local installed by Models::new; pass it explicitly","state":"open"}
+          ]
+        },
+        {
+          "id": "time-travel",
+          "name": "Comet and time travel (stretch)",
+          "start": 0,
+          "size": 2,
+          "state": "next",
+          "note": "Off the Debugger milestone (D1055): rawr records no history and infers no purity. Where a program's own stack has a time machine, as iced's time-travel with comet, rawr lets it work under rawr run.",
+          "issues": [
+            {"number":491,"title":"Record and replay messages, with iced's comet","state":"open"},
+            {"number":2261,"title":"Rewind to a past state, and replay recorded turns under edited code","state":"open"},
+            {"number":2262,"title":"iced's own debug tools (comet, and its time machine where the program enables it) work under rawr run","state":"open"}
           ]
         }
       ]
