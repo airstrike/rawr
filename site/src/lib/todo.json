@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
+      "entries": [
+        {"text":"`rawr tui [path]` opens a terminal debugger on a program's run. It attaches to the run's shared debugger session, or starts one, and shows the phase and output, the source at the stop with breakpoints marked, the frames and their bindings, and an eval prompt. Keys set breakpoints, pause, step and continue, and it keeps working while another shell such as `rawr mcp` drives the same run.","issues":[2259]}
+      ]
+    },
     "releases": [
       {
         "version": "0.4.23",
@@ -5181,7 +5186,7 @@
     {"issue":2256,"title":"inspect reads `self` deeper inside an expression on it","state":"open","category":"Health"},
     {"issue":2257,"title":"inspect lists a compiler-made `i` binding and drops a moved parameter at some steps","state":"open","category":"Health"},
     {"issue":2258,"title":"One debugger session per run that any number of shells attach to, with rawr mcp as its first shell","state":"closed","category":"Health","release":"0.4.22"},
-    {"issue":2259,"title":"A terminal shell (TUI) on the shared debugger session","state":"open","category":"Health"},
+    {"issue":2259,"title":"A terminal shell (TUI) on the shared debugger session","state":"closed","category":"Health"},
     {"issue":2260,"title":"A window shell (GUI) in its own process on the shared debugger session","state":"open","category":"Health"},
     {"issue":2261,"title":"Rewind to a past state, and replay recorded turns under edited code","state":"open","category":"Health"},
     {"issue":2262,"title":"iced's own debug tools (comet, and its time machine where the program enables it) work under rawr run","state":"open","category":"Health"},
@@ -5198,7 +5203,9 @@
     {"issue":2273,"title":"A Zed extension that registers `rawr dap` as a debug adapter","state":"open","category":"Health"},
     {"issue":2274,"title":"DAP launch holds the program until configurationDone","state":"open","category":"Health"},
     {"issue":2275,"title":"The VS Code debugger's F5 without a launch.json runs the workspace's root crate, not the active file's","state":"open","category":"Health"},
-    {"issue":2276,"title":"A marked root's native modules can't call marked code: lift D510's trampolines to a marked root","state":"open","category":"No glue (D593)"}
+    {"issue":2276,"title":"A marked root's native modules can't call marked code: lift D510's trampolines to a marked root","state":"open","category":"No glue (D593)"},
+    {"issue":2277,"title":"The runtime key covers the checkout path and the whole Cargo.lock, so builds with the same sources never share it","state":"open","category":"Health"},
+    {"issue":2278,"title":"The session tells shells when breakpoints change","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -6866,7 +6873,8 @@
             {"number":1984,"title":"Runner crates share one build-script unit in a shared target dir, so after a reinstall it links the old runtime","state":"closed"},
             {"number":1983,"title":"Any edit to rawr's src/ rebuilds rawr's whole runtime, so a crossing test rerun takes about 3 minutes","state":"closed"},
             {"number":2248,"title":"A check reaches its demand closure in many rounds, each paying probes, harness work and a resolution","state":"open"},
-            {"number":2253,"title":"A cold iced emulator test spends about 10 minutes building the API","state":"open"}
+            {"number":2253,"title":"A cold iced emulator test spends about 10 minutes building the API","state":"open"},
+            {"number":2277,"title":"The runtime key covers the checkout path and the whole Cargo.lock, so builds with the same sources never share it","state":"open"}
           ]
         },
         {
@@ -7954,7 +7962,8 @@
           "note": "The run's owner hosts one session any number of shells attach to, with capabilities listed at hello; rawr mcp is its first shell and attaches to terminal runs (#2258, D1053). Left: attaching keeps the program's state (#2266).",
           "issues": [
             {"number":2258,"title":"One debugger session per run that any number of shells attach to, with rawr mcp as its first shell","state":"closed"},
-            {"number":2266,"title":"A shell attaching to a plain `rawr run` restarts the program to register a debugger, losing its state","state":"open"}
+            {"number":2266,"title":"A shell attaching to a plain `rawr run` restarts the program to register a debugger, losing its state","state":"open"},
+            {"number":2278,"title":"The session tells shells when breakpoints change","state":"open"}
           ],
           "milestone": "0.5"
         },
@@ -7978,10 +7987,10 @@
           "name": "Terminal shell",
           "start": 65,
           "size": 2,
-          "state": "now",
-          "note": "A TUI on the same session",
+          "state": "done",
+          "note": "`rawr tui`: source, frames, bindings, eval, break, pause and step, on the shared session beside other shells (#2259).",
           "issues": [
-            {"number":2259,"title":"A terminal shell (TUI) on the shared debugger session","state":"open"}
+            {"number":2259,"title":"A terminal shell (TUI) on the shared debugger session","state":"closed"}
           ],
           "milestone": "0.5"
         },

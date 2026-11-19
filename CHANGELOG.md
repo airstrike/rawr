@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
+- `rawr tui [path]` opens a terminal debugger on a program's run. It attaches to the run's shared debugger session, or starts one, and shows the phase and output, the source at the stop with breakpoints marked, the frames and their bindings, and an eval prompt. Keys set breakpoints, pause, step and continue, and it keeps working while another shell such as `rawr mcp` drives the same run. (#2259)
 
 ## 0.4.23 (2026-11-18)
 
