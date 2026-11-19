@@ -6258,8 +6258,9 @@ enum __RawrNext {
     /// it.
     Frame(std::io::Result<(u8, Vec<u8>)>),
     /// A shell's first request for the debugger of a running marked `main`
-    /// that runs without one (#2266).
-    Debugger,
+    /// that runs without one (#2266), which the program's calls from
+    /// native code wait for until its generation is offered (#2296).
+    Debugger(__rawr_internal::future::Expected),
 }
 
 /// The parent's next frame, before the program runs: only a running
@@ -6267,7 +6268,7 @@ enum __RawrNext {
 fn next_frame(next: &std::sync::mpsc::Receiver<__RawrNext>) -> std::io::Result<(u8, Vec<u8>)> {
     match next.recv() {
         Ok(__RawrNext::Frame(frame)) => frame,
-        Ok(__RawrNext::Debugger) => Err(std::io::Error::other("debugger request before the program runs")),
+        Ok(__RawrNext::Debugger(_)) => Err(std::io::Error::other("debugger request before the program runs")),
         Err(_) => Err(std::io::Error::other("protocol reader stopped")),
     }
 }
@@ -6314,10 +6315,12 @@ fn offer(live: &mut Live, mut program: Program) -> std::io::Result<()> {
 /// ran without one (#2266). The newest generation's sources compile again
 /// on an engine attached to the inspector, and the program admits that
 /// generation at its next call from native code, as it admits a save
-/// (D555): it keeps its state, and a request waits for that call. One it
-/// can't take ends the runner for `rawr run` to start it again with the
+/// (D555): it keeps its state, and a request waits for that call. Calls
+/// from native code wait for it until `expected` drops, once it is
+/// offered, so none passes a breakpoint set before (#2296). One it can't
+/// take ends the runner for `rawr run` to start it again with the
 /// debugger.
-fn register_debugger(live: &mut Live) -> std::io::Result<()> {
+fn register_debugger(live: &mut Live, expected: __rawr_internal::future::Expected) -> std::io::Result<()> {
     let compiled = compile_source(
         std::sync::Arc::clone(&live.source),
         Compilation::Live(&live.engine),
@@ -6334,7 +6337,9 @@ fn register_debugger(live: &mut Live) -> std::io::Result<()> {
         }
         _ => __rawr_internal::process::leave(__rawr_internal::process::DEBUGGER),
     };
-    offer(live, program)
+    offer(live, program)?;
+    drop(expected);
+    Ok(())
 }
 
 /// The parent's early requests for a next generation (HotBegin), each
@@ -6538,17 +6543,20 @@ fn serve_entry(
     let mut pending: Option<PendingProgram> = None;
     let mut hot = Hot::default();
     // A debugger asked for while a save's generation was pending, which
-    // registers once that generation is committed or aborted.
-    let mut register = false;
+    // registers once that generation is committed or aborted: calls from
+    // native code wait for it, past the save's generation.
+    let mut register: Option<__rawr_internal::future::Expected> = None;
     let mut serve = || -> std::io::Result<()> {
         loop {
             let (tag, payload) = match received.recv() {
                 Ok(__RawrNext::Frame(frame)) => frame?,
-                Ok(__RawrNext::Debugger) => {
+                Ok(__RawrNext::Debugger(expected)) => {
                     REGISTERED.store(true, std::sync::atomic::Ordering::Release);
                     match live.as_mut() {
-                        Some(running) if pending.is_none() => register_debugger(running)?,
-                        _ => register = true,
+                        Some(running) if pending.is_none() => register_debugger(running, expected)?,
+                        // Nothing runs that could take it.
+                        None => drop(expected),
+                        Some(_) => register = Some(expected),
                     }
                     continue;
                 }
@@ -6616,10 +6624,10 @@ fn serve_entry(
                     if tag == 26 {
                         drop(candidate);
                         send_frame(&mut stream, 27, &payload)?;
-                        if std::mem::take(&mut register)
+                        if let Some(expected) = register.take()
                             && let Some(running) = live.as_mut()
                         {
-                            register_debugger(running)?;
+                            register_debugger(running, expected)?;
                         }
                         continue;
                     }
@@ -6630,8 +6638,8 @@ fn serve_entry(
                     key = next;
                     send_frame(&mut stream, 8, &payload)?;
                     // Its sources are the running program's now.
-                    if std::mem::take(&mut register) {
-                        register_debugger(running)?;
+                    if let Some(expected) = register.take() {
+                        register_debugger(running, expected)?;
                     }
                 }
                 17 => send_frame(&mut stream, 19, &invoke_rejection(&key, &Error::Stale))?,
@@ -6837,7 +6845,9 @@ fn run_protocol(
                 {
                     let wanted = wanted.clone();
                     inspector.register_on_request(move || {
-                        let _ = wanted.send(__RawrNext::Debugger);
+                        // Before the request is answered, so every call
+                        // after the answer waits for the debugger (#2296).
+                        let _ = wanted.send(__RawrNext::Debugger(__rawr_internal::future::expect()));
                     });
                 }
                 send_frame(&mut stream, 21, &key)?;

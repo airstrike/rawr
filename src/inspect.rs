@@ -2598,6 +2598,129 @@ mod tests {
         let _ = std::fs::remove_dir_all(&directory);
     }
 
+    /// A program's owner thread, which runs no async step here.
+    #[cfg(unix)]
+    struct Owner;
+
+    #[cfg(unix)]
+    impl crate::future::Host for Owner {
+        fn invoke(
+            &self,
+            _: &crate::item::Value,
+            _: &mut [Dynamic],
+        ) -> crate::RawrResultOf<Dynamic> {
+            unreachable!("the scripted loop calls the program through its engine")
+        }
+    }
+
+    /// A break set on a program that runs without a debugger is answered
+    /// before the debugger's generation compiles, on another thread as a
+    /// runner's protocol compiles it. The call native code makes at once
+    /// after the answer waits for that generation and pauses at the
+    /// breakpoint (#2296).
+    #[cfg(unix)]
+    #[test]
+    fn a_call_right_after_a_break_on_a_program_without_a_debugger_pauses() {
+        use serde_json::json;
+        const TICK: &str = "fn tick(count: i64) -> i64 {\n\
+            \x20   let next = count + 1;\n\
+            \x20   next\n\
+            }\n";
+        let directory = std::env::temp_dir().join(format!("rawr-expect-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let socket = directory.join("s");
+        let inspector = super::Inspector::bind(&socket).unwrap();
+        let compile = |inspector: Option<&super::Inspector>| {
+            let mut engine = crate::Engine::new();
+            if let Some(inspector) = inspector {
+                inspector.attach(&mut engine);
+            }
+            let ast = engine
+                .compile(TICK)
+                .unwrap_or_else(|error| panic!("{error}"));
+            (engine, ast)
+        };
+        // The generation the owner thread admits, which its next call runs.
+        let admitted: Arc<Mutex<Option<(crate::Engine, crate::AST)>>> = Arc::default();
+        let (register, registered) = std::sync::mpsc::channel();
+        inspector.register_on_request(move || {
+            let _ = register.send(crate::future::expect());
+        });
+        let returned = AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            let protocol = {
+                let (inspector, admitted) = (inspector.clone(), Arc::clone(&admitted));
+                scope.spawn(move || {
+                    let expected = registered.recv().unwrap();
+                    let (engine, ast) = compile(Some(&inspector));
+                    inspector
+                        .locate_with(|position| Some(("main.rs".to_owned(), position.line()?)));
+                    inspector.compiled(&ast);
+                    crate::future::offer(move || {
+                        *admitted.lock().unwrap() = Some((engine, ast));
+                    });
+                    drop(expected);
+                })
+            };
+            let (call, calls) = std::sync::mpsc::channel::<()>();
+            let (done, finished) = std::sync::mpsc::channel();
+            let native = {
+                let (inspector, admitted, returned) = (&inspector, &admitted, &returned);
+                scope.spawn(move || {
+                    crate::future::serve(std::rc::Rc::new(Owner));
+                    let (mut engine, mut ast) = compile(None);
+                    let mut count = 0;
+                    for () in calls {
+                        let entry = crate::future::entry();
+                        if let Some(next) = admitted.lock().unwrap().take() {
+                            (engine, ast) = next;
+                        }
+                        count = tick(&engine, &ast, count);
+                        drop(entry);
+                        returned.store(true, Ordering::Release);
+                        // A wait on `changed` looks at `returned` under
+                        // this lock.
+                        drop(inspector.0.state());
+                        inspector.0.changed.notify_all();
+                        done.send(count).unwrap();
+                    }
+                })
+            };
+            for _ in 0..3 {
+                call.send(()).unwrap();
+                finished.recv().unwrap();
+            }
+            returned.store(false, Ordering::Release);
+            let set = ask(&socket, &json!({ "op": "break", "function": "tick" }));
+            assert_eq!(set["compiled"], false, "{set}");
+            call.send(()).unwrap();
+            let paused = {
+                let state = inspector.0.state();
+                let state = inspector
+                    .0
+                    .changed
+                    .wait_while(state, |state| {
+                        state.paused.is_none() && !returned.load(Ordering::Acquire)
+                    })
+                    .unwrap();
+                state.paused.clone()
+            };
+            assert_eq!(
+                paused.as_ref().map(|paused| &paused["function"]),
+                Some(&json!("tick")),
+                "the call after the break's answer runs on the debugger's generation"
+            );
+            ask(&socket, &json!({ "op": "clear" }));
+            let continued = ask(&socket, &json!({ "op": "continue" }));
+            assert_eq!(continued, json!({ "paused": null }));
+            assert_eq!(finished.recv().unwrap(), 4);
+            drop(call);
+            native.join().unwrap();
+            protocol.join().unwrap();
+        });
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
     /// A program with a `&mut` parameter and a receiver, written to a file
     /// of its own so a breakpoint can be set on its lines.
     const STEPPED: &str = "struct Counter { value: u64, history: Vec<u64> }\n\
