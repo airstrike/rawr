@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.45 (2026-11-19)
+
+- A debugger attached to a running program names the function it pauses in and reads that function's locals by their declared types: a `HashMap` reads as `{k: v}` with one row per key, and the frame says `main`, not `?`. A root function native code calls by its own name reads by its declared types too. (#2315)
+
 ## 0.4.44 (2026-11-19)
 
 - The debugger reads a map, set or sequence holding a program's own structs or enums as Rust's `{:?}` prints it, such as `{"ann": Player { score: 3, level: 1, tags: ["new"] }}`, instead of a list of pairs with opaque `<Rawr struct …>` handles, so the panel opens such a map to one row per key, then its fields. (#2313)

@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-19",
-  "version": "0.4.44",
+  "version": "0.4.45",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.45",
+        "date": "2026-11-19",
+        "entries": [
+          {"text":"A debugger attached to a running program names the function it pauses in and reads that function's locals by their declared types: a `HashMap` reads as `{k: v}` with one row per key, and the frame says `main`, not `?`. A root function native code calls by its own name reads by its declared types too.","issues":[2315]}
+        ]
+      },
       {
         "version": "0.4.44",
         "date": "2026-11-19",
@@ -5396,7 +5403,9 @@
     {"issue":2311,"title":"The playground's Crates group has iced examples that run in the browser: a counter, a to-do…","state":"closed","category":"Platforms","release":"0.4.43"},
     {"issue":2312,"title":"The browser universe binds no iced text_input, so a playground snippet can't take typed input","state":"open","category":"Platforms"},
     {"issue":2313,"title":"The debugger reads a map, set or sequence holding a program's own structs or enums as Rust's…","state":"closed","category":"Divergences from rustc","release":"0.4.44"},
-    {"issue":2314,"title":"Superseded builds of rawr's own crates pile up in target/debug despite #1732's prune","state":"closed","category":"Health"}
+    {"issue":2314,"title":"Superseded builds of rawr's own crates pile up in target/debug despite #1732's prune","state":"closed","category":"Health"},
+    {"issue":2315,"title":"A debugger attached to a running program names the function it pauses in and reads that…","state":"closed","category":"Health","release":"0.4.45"},
+    {"issue":2316,"title":"A root unit function compiled by Engine::compile gives native code its last statement's value","state":"open","category":"No glue (D593)"}
   ],
   "groups": [
     {
@@ -6446,7 +6455,8 @@
             {"number":2279,"title":"rawr check on a gallery with a marked main.rs fails with 'diagnostic label has no source span', hiding the error","state":"open"},
             {"number":2280,"title":"Marked code calling a method a native module defines on a marked type","state":"open"},
             {"number":2282,"title":"Since #2276, a private-field edit of a held type under a native module restarts instead of swapping","state":"closed"},
-            {"number":2285,"title":"A native module reading a private field through a value whose type it never names isn't counted as seeing it","state":"open"}
+            {"number":2285,"title":"A native module reading a private field through a value whose type it never names isn't counted as seeing it","state":"open"},
+            {"number":2316,"title":"A root unit function compiled by Engine::compile gives native code its last statement's value","state":"open"}
           ]
         },
         {

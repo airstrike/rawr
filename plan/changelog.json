@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.4.45",
+      "date": "2026-11-19",
+      "entries": [
+        {"text":"A debugger attached to a running program names the function it pauses in and reads that function's locals by their declared types: a `HashMap` reads as `{k: v}` with one row per key, and the frame says `main`, not `?`. A root function native code calls by its own name reads by its declared types too.","issues":[2315]}
+      ]
+    },
+    {
       "version": "0.4.44",
       "date": "2026-11-19",
       "entries": [
