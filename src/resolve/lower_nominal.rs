@@ -219,7 +219,8 @@ use known_panic::{Known, KnownIndex};
 use location::retain_locations;
 pub(crate) use location::Location;
 use lvalue::{
-    assigned_place, field_place, fields_below_local, in_place, nested_step, variable_name,
+    assigned_place, described_place, field_place, fields_below_local, in_place, nested_step,
+    variable_name,
 };
 use lvalue::{opens_compound, Lvalue, PlaceStep, Writeback};
 #[cfg(feature = "rust-import")]
@@ -304,7 +305,7 @@ use ty::{host_ty_proof_allocations, reset_host_ty_proof_allocations};
 use ty::{
     host_type_name, literal_fallback, numeric_type, same_head, same_host_definition, same_inferred,
     CellKind, Counter, Float, FnCandidate, HostTyProof, Int, Keyed, PartialEqImpl, Pointer, Time,
-    Ty, Unplaced, UNSIGNED_SOURCE, WIDE_I128, WIDE_U128,
+    Ty, Unassignable, Unplaced, UNSIGNED_SOURCE, WIDE_I128, WIDE_U128,
 };
 use wide::{
     kind_value, wide_i128, wide_method, wide_order, wide_u128, wide_value, PendingFloat,
@@ -414,6 +415,10 @@ struct Parser<'a> {
     /// their own (`*r`, `*rc`, `[s][0]`), by their span: what rustc
     /// refuses of each.
     unmovable: BTreeMap<Span, Unplaced>,
+    /// Elements reached through `IndexMut` (a `Vec`'s, a `VecDeque`'s), by
+    /// their span: an assignment to one borrows its container mutably,
+    /// where an array's or a slice's element is a place of its own.
+    index_mut_elements: BTreeSet<Span>,
     /// The closures that own a capture which is not `Copy`, so they move
     /// as values that are not `Copy` do.
     owning_closures: BTreeSet<crate::item::Key>,
@@ -951,6 +956,7 @@ impl<'a> Parser<'a> {
             local_types: Vec::new(),
             shared_field_reads: BTreeSet::new(),
             unmovable: BTreeMap::new(),
+            index_mut_elements: BTreeSet::new(),
             owning_closures: BTreeSet::new(),
             once_closures: BTreeSet::new(),
             copied_state: BTreeMap::new(),

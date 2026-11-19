@@ -2792,14 +2792,11 @@ impl<'a> Parser<'a> {
             _ if below => {}
             Ty::Reference { mutable: true, .. } => {}
             Ty::Reference { mutable: false, .. } => {
-                return Err(Error::InvalidHostOperation {
-                    item: definition.path().into(),
-                    reason: format!(
-                        "`{member}` is behind a `&` reference, so it can't be assigned"
-                    )
-                    .into(),
-                    operation: member_span,
-                });
+                let holder = match &receiver.lvalue {
+                    Some(Lvalue::Binding { binding, .. }) => Some(binding.as_str()),
+                    _ => None,
+                };
+                return Err(self.shared_assignment(holder, span(start, assigned.span.end())));
             }
             _ => {
                 let root = match &receiver.lvalue {

@@ -512,9 +512,20 @@ impl Counter {
 pub(super) struct Unplaced {
     /// rustc's code and message for a move out of it.
     pub(super) moved: (&'static str, String),
-    /// rustc's E0594 message for an assignment to it, where it is behind a
-    /// pointer with no `DerefMut`.
-    pub(super) assigned: Option<ImmutableString>,
+    /// Why an assignment to it is rustc's E0594, where it is behind a
+    /// pointer that can't change it.
+    pub(super) assigned: Option<Unassignable>,
+}
+
+/// The pointer a place is behind that makes an assignment to it rustc's
+/// E0594.
+#[derive(Clone)]
+pub(super) enum Unassignable {
+    /// An `Rc` or `Arc`, which has no `DerefMut`.
+    Counted(Counter),
+    /// A `&` reference: the local or `self` that holds it, when the place is
+    /// below one directly, which rustc's label names.
+    Shared(Option<ImmutableString>),
 }
 
 /// The path of a std struct rawr knows (`core::str::iter::Chars`), held

@@ -650,7 +650,7 @@ impl Parser<'_> {
                             "E0507",
                             format!("cannot move out of an `{}`", counter.name()),
                         ),
-                        assigned: Some(counter.unassignable()),
+                        assigned: Some(Unassignable::Counted(counter)),
                     },
                 );
 
