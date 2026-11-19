@@ -15,7 +15,8 @@
 //! A test that fails gives its slot up, and the next test makes another
 //! under its number. Its slot stays as it left it, to be looked at, only
 //! when the failure is kept ([`super::held`]). A new slot takes the lowest
-//! free number, so each run takes again the slots the last one left. A
+//! number no live run holds, so each run takes again the slots the last
+//! one left. A
 //! test that runs [`super::alone`] does so before it takes a slot: once it
 //! holds one, a test waiting for that slot would never end, and neither
 //! would its wait to run alone.
@@ -24,7 +25,9 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Condvar, Mutex, MutexGuard, Once, PoisonError};
+
+use crate::support::held;
 
 /// The most slots of one fixture: a test that waits for one holds a test
 /// thread, while each more slot costs one more cold start.
@@ -44,9 +47,11 @@ pub struct Started {
 struct Slots {
     /// The numbers of the slots that serve tests, those no test holds and
     /// those held by a test that has not failed, and of the slots failures
-    /// kept. A new slot takes the lowest number not here, so the slots an
-    /// earlier run left are the ones a later run takes again.
+    /// kept. A new slot takes the lowest number not here that no other live
+    /// run holds, so the slots an earlier run left are the ones a later run
+    /// takes again.
     taken: BTreeSet<usize>,
+    claims: held::Claims,
     /// The slots that serve tests.
     live: usize,
     free: Vec<PathBuf>,
@@ -79,6 +84,7 @@ impl Started {
             variables,
             slots: Mutex::new(Slots {
                 taken: BTreeSet::new(),
+                claims: held::Claims::new(),
                 live: 0,
                 free: Vec::new(),
             }),
@@ -90,7 +96,10 @@ impl Started {
     /// and no more can be made.
     pub fn project(&'static self) -> Project {
         // Before the slots' lock: the test may wait here for its turn.
-        let fixtures = crate::support::scratch().join("started").join(self.name);
+        let started = crate::support::scratch().join("started");
+        static PRUNED: Once = Once::new();
+        PRUNED.call_once(|| held::prune_tree(&started, SLOTS));
+        let fixtures = started.join(self.name);
         let taken = {
             let mut slots = self.slots();
             loop {
@@ -98,8 +107,9 @@ impl Started {
                     break Taken::Kept(slot);
                 }
                 if slots.live < SLOTS {
-                    let number = (1..).find(|number| !slots.taken.contains(number)).unwrap();
-                    slots.taken.insert(number);
+                    let Slots { taken, claims, .. } = &mut *slots;
+                    let number = claims.number(&fixtures, taken);
+                    taken.insert(number);
                     slots.live += 1;
                     break Taken::New(fixtures.join(number.to_string()));
                 }
@@ -128,7 +138,7 @@ impl Started {
                 {
                     project.again();
                 } else {
-                    crate::support::held::clear(&project.slot);
+                    held::clear(&project.slot);
                     self.make(&project.root);
                     clone(&project.root, &project.slot.join("kept"));
                     fs::write(&recorded, stamp).unwrap();
@@ -218,7 +228,7 @@ impl Project {
     /// Put the slot back as its run left it, at the same path: each file
     /// the test changed has its bytes and time from before.
     pub fn again(&mut self) {
-        crate::support::held::clear(&self.root);
+        held::clear(&self.root);
         clone(&self.slot.join("kept"), &self.root);
     }
 }
@@ -248,7 +258,7 @@ impl Drop for Project {
         let mut slots = self.fixture.slots();
         if std::thread::panicking() {
             slots.live -= 1;
-            if !crate::support::held::failure_kept() {
+            if !held::failure_kept() {
                 let _ = fs::remove_dir_all(&self.slot);
                 if let Some(number) = number(&self.slot) {
                     slots.taken.remove(&number);

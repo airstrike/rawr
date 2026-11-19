@@ -7,15 +7,17 @@
 //! user who replaces one program with another in a project: each test's
 //! program runs as it would fresh whichever programs ran in the lane before
 //! (#893). Lanes are made as tests ask for them, up to one per test thread,
-//! so tests of one fixture run in parallel. Each run makes its lanes anew,
-//! and they go when it ends ([`super::held`]); a lane a failing test kept is not lent
-//! again, and another is made in its place.
+//! so tests of one fixture run in parallel. Lanes stay between runs, and a
+//! run takes again the lanes the last one left ([`super::held`]); a lane a
+//! failing test kept is not lent again, and another is made in its place.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
-use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Condvar, Mutex, MutexGuard, Once, PoisonError};
+
+use crate::support::held;
 
 /// A fixture under `tests/fixtures` and its lanes.
 pub struct Fixture {
@@ -29,8 +31,10 @@ pub struct Fixture {
 
 /// The lanes made so far in this run and those no test holds.
 struct Lanes {
-    /// The number the next lane takes.
-    next: usize,
+    /// The numbers of the lanes that serve tests and of the lanes failures
+    /// kept.
+    taken: BTreeSet<usize>,
+    claims: held::Claims,
     /// The lanes that serve tests: those no test holds, and those held by
     /// a test that has not kept its failure.
     live: usize,
@@ -58,7 +62,8 @@ impl Fixture {
             name,
             extra,
             lanes: Mutex::new(Lanes {
-                next: 0,
+                taken: BTreeSet::new(),
+                claims: held::Claims::new(),
                 live: 0,
                 free: Vec::new(),
             }),
@@ -85,6 +90,8 @@ impl Fixture {
         crate::support::driver();
         // Before the lanes' lock: the test may wait here for its turn.
         let scratch = crate::support::scratch();
+        static PRUNED: Once = Once::new();
+        PRUNED.call_once(|| held::prune_tree(&scratch.join("lanes"), limit()));
         let root = {
             let mut lanes = self.lanes();
             loop {
@@ -95,9 +102,11 @@ impl Fixture {
                     // A lane an earlier run left stays warm: its files are
                     // settled below, and Cargo and rawr keep its builds.
                     let lanes_of_fixture = scratch.join("lanes").join(self.name);
-                    lanes.next += 1;
+                    let Lanes { taken, claims, .. } = &mut *lanes;
+                    let number = claims.number(&lanes_of_fixture, taken);
+                    taken.insert(number);
                     lanes.live += 1;
-                    break lanes_of_fixture.join(lanes.next.to_string());
+                    break lanes_of_fixture.join(number.to_string());
                 }
                 lanes = self
                     .returned
@@ -146,7 +155,7 @@ impl AsRef<Path> for Lease {
 impl Drop for Lease {
     fn drop(&mut self) {
         let mut lanes = self.fixture.lanes();
-        if crate::support::held::failure_kept() {
+        if held::failure_kept() {
             // Left as the failure left it, out of the pool.
             lanes.live -= 1;
         } else {

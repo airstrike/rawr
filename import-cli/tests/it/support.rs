@@ -4,8 +4,9 @@
 //! `rawr-import run` with its output read as it comes. The suite runs its
 //! tests in parallel; a test that needs a project or a home no other test
 //! touches makes its own with [`fresh`], by a name no other test uses.
-//! [`held`] says when each of them goes: a run removes all it made, and
-//! `RAWR_KEEP_TEST_SCRATCH=1` keeps what a failing test held.
+//! [`held`] says when each of them goes: a test's own directory when the
+//! test ends, a lane or slot when no live run holds it and no run takes it
+//! again, and `RAWR_KEEP_TEST_SCRATCH=1` keeps what a failing test held.
 
 use std::fs;
 use std::io::{BufRead, BufReader};
