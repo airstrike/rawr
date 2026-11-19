@@ -5396,7 +5396,7 @@
     {"issue":2311,"title":"The playground's Crates group has iced examples that run in the browser: a counter, a to-do…","state":"closed","category":"Platforms","release":"0.4.43"},
     {"issue":2312,"title":"The browser universe binds no iced text_input, so a playground snippet can't take typed input","state":"open","category":"Platforms"},
     {"issue":2313,"title":"The debugger reads a map, set or sequence holding a program's own structs or enums as Rust's…","state":"closed","category":"Divergences from rustc","release":"0.4.44"},
-    {"issue":2314,"title":"Superseded builds of rawr's own crates pile up in target/debug despite #1732's prune","state":"open","category":"Health"}
+    {"issue":2314,"title":"Superseded builds of rawr's own crates pile up in target/debug despite #1732's prune","state":"closed","category":"Health"}
   ],
   "groups": [
     {
@@ -7816,7 +7816,7 @@
             {"number":2289,"title":"End-to-end test lanes and started projects beyond the warm set outlive a killed or failing run and fill the disk","state":"closed"},
             {"number":2302,"title":"AppKit input test each_button_keeps_its_number_and_every_pointer_event_lands_where_it_was_sent fails now and then","state":"open"},
             {"number":2303,"title":"std_method_tests::a_sync_channel_a_scope_and_a_builder_run_as_std_s fails now and then under the full lib suite","state":"closed"},
-            {"number":2314,"title":"Superseded builds of rawr's own crates pile up in target/debug despite #1732's prune","state":"open"}
+            {"number":2314,"title":"Superseded builds of rawr's own crates pile up in target/debug despite #1732's prune","state":"closed"}
           ]
         },
         {

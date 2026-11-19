@@ -2313,6 +2313,6 @@
     {"t":"T2311","issue":2311,"title":"T2311: The playground's Crates group has iced examples that run in the browser: a counter, a to-do…","state":"closed","category":"Platforms","labels":["platform","playground"],"gantt":null,"decisions":[],"commit":null,"release":"0.4.43"},
     {"t":"T2312","issue":2312,"title":"T2312: The browser universe binds no iced text_input, so a playground snippet can't take typed input","state":"open","category":"Platforms","labels":["platform","playground"],"gantt":{"group":"play","row":"universe-coverage"},"decisions":[],"commit":null,"release":null},
     {"t":"T2313","issue":2313,"title":"T2313: The debugger reads a map, set or sequence holding a program's own structs or enums as Rust's…","state":"closed","category":"Divergences from rustc","labels":["rustc divergence"],"gantt":null,"decisions":[],"commit":null,"release":"0.4.44"},
-    {"t":"T2314","issue":2314,"title":"T2314: Superseded builds of rawr's own crates pile up in target/debug despite #1732's prune","state":"open","category":"Health","labels":["health"],"gantt":{"group":"ship","row":"steady-suites"},"decisions":[],"commit":null,"release":null}
+    {"t":"T2314","issue":2314,"title":"T2314: Superseded builds of rawr's own crates pile up in target/debug despite #1732's prune","state":"closed","category":"Health","labels":["health"],"gantt":{"group":"ship","row":"steady-suites"},"decisions":[],"commit":"7f021a87f","release":null}
   ]
 }
