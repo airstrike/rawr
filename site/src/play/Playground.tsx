@@ -264,6 +264,8 @@ function phaseText(state: DebugState): string {
       return "running";
     case "paused":
       return `paused · ${state.paused?.reason ?? ""}`;
+    case "ended":
+      return `${state.status === 101 ? "panicked" : "main returned"} · exit ${state.status}`;
   }
 }
 
@@ -300,7 +302,8 @@ function DebugPanel({ debug, state }: { debug: Debugger; state: DebugState }) {
           </Button>
         ))}
       </div>
-      {canPause && state.lines.length === 0 && !paused && <p className="note">Click a line number to set a breakpoint.</p>}
+      {state.phase === "ended" && <p className="note">The program's <code>main</code> has ended. Run it again to debug it.</p>}
+      {canPause && state.phase !== "ended" && state.lines.length === 0 && !paused && <p className="note">Click a line number to set a breakpoint.</p>}
       {state.error && <p className="error">{state.error}</p>}
       {paused && state.paused && (
         <>

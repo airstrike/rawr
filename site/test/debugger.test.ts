@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Debugger, ROOT } from "../src/play/debugger.ts";
-import { Session, type Universe } from "../src/play/session.ts";
+import { Session, type State, type Universe } from "../src/play/session.ts";
 import type { Frame } from "../src/scripts/universe.ts";
 
 /** A stand-in instance whose debugger answers with `answer`, and the requests it was asked. */
@@ -139,10 +139,11 @@ function universe(name: string, debuggee: object = {}) {
   const stand: Universe = {
     manifest: async () => '[dependencies]\niced = "0.14"\n',
     frame: async () => ({ element: { remove: () => void removed.push(name) }, instance: debuggee }) as unknown as Frame,
-    run: async (_frame, code, started) => {
-      runs.push({ code, held: started !== undefined });
-      await started?.();
-      return { kind: "text", status: 0, output: [] };
+    run: async (_frame, code, debugged) => {
+      runs.push({ code, held: debugged !== undefined });
+      await debugged?.started();
+      debugged?.ended(3);
+      return { kind: "text", status: 3, output: [] };
     },
     replace: () => ({ kind: "restart", reason: "a stand-in" }),
   };
@@ -185,9 +186,11 @@ test("the debugger icon runs the program again on the debugger build, held at it
   assert.deepEqual(plain.runs, []);
   assert.equal(session.state.output.kind, "frame");
   assert.deepEqual(page.asked.map((request) => request.op), ["hello", "hold", "release"]);
+  assert.equal(debug.state.phase, "ended", "the panel shows the end of main");
+  assert.equal(debug.state.status, 3, "with its exit status");
   await session.debug();
   assert.equal(session.state.debugging, false);
   assert.ok(debugged.removed.includes("debugger"), "the debugger's frame goes");
-  assert.equal(session.state.output.kind, "term", "and the program runs as before");
+  assert.equal((session.state as State).output.kind, "term", "and the program runs as before");
   assert.equal(debug.state.phase, "idle");
 });
