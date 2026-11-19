@@ -8,6 +8,15 @@
   },
   "releases": [
     {
+      "version": "0.4.33",
+      "date": "2026-11-19",
+      "entries": [
+        {"text":"A script whose last expression is a macro call, as `format!(..)`, or whose statement starts with one, as `format!(..).len();`, runs again.","issues":[2283]},
+        {"text":"A file that calls a crate's macro is kept in its parse cell, so it isn't parsed again on the next run.","issues":[2283]},
+        {"text":"A reload that adds a `use` of a dependency item the running build lacks prepares the build again, and a `use` through a function or a type is an unresolved import.","issues":[2283]}
+      ]
+    },
+    {
       "version": "0.4.32",
       "date": "2026-11-19",
       "entries": [

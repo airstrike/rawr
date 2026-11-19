@@ -6,6 +6,12 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.33 (2026-11-19)
+
+- A script whose last expression is a macro call, as `format!(..)`, or whose statement starts with one, as `format!(..).len();`, runs again. (#2283)
+- A file that calls a crate's macro is kept in its parse cell, so it isn't parsed again on the next run. (#2283)
+- A reload that adds a `use` of a dependency item the running build lacks prepares the build again, and a `use` through a function or a type is an unresolved import. (#2283)
+
 ## 0.4.32 (2026-11-19)
 
 - A breakpoint set or cleared from any shell shows in every other at once: `rawr gui` and `rawr tui` mark it in the gutter, an editor through `rawr dap` adds or removes it, and a shell that attaches later shows those already set. Attaching a window no longer registers the debugger by itself. (#2278)
