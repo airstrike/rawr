@@ -487,7 +487,7 @@ fn prepare(command: &mut std::process::Command) {
     if let Some(path) = rawr_cli::events::reload::path() {
         command.env(rawr_cli::events::reload::VARIABLE, path);
     }
-    rawr_cli::events::session::prepare_runner(command);
+    rawr_cli::events::session::prepare(command);
 }
 
 /// The contents of the program's files: its sources, its native modules

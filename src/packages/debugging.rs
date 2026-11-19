@@ -26,43 +26,39 @@ mod debugging_functions {
 
         ctx.global_runtime_state()
             .debugger
-            .as_ref()
-            .map_or_else(Array::new, |debugger| {
-                debugger
-                    .call_stack()
-                    .iter()
-                    .rev()
-                    .filter(|CallStackFrame { fn_name, .. }| fn_name != "back_trace")
-                    .map(
-                        |frame @ CallStackFrame {
-                             fn_name: _fn_name,
-                             source: _source,
-                             pos: _pos,
-                             ..
-                         }| {
-                            let display = frame.to_string();
+            .call_stack()
+            .iter()
+            .rev()
+            .filter(|CallStackFrame { fn_name, .. }| fn_name != "back_trace")
+            .map(
+                |frame @ CallStackFrame {
+                     fn_name: _fn_name,
+                     source: _source,
+                     pos: _pos,
+                     ..
+                 }| {
+                    let display = frame.to_string();
 
-                            {
-                                use crate::INT;
+                    {
+                        use crate::INT;
 
-                                let mut map = Map::new();
-                                map.insert("display".into(), display.into());
-                                map.insert("fn_name".into(), _fn_name.into());
-                                if let Some(source) = _source {
-                                    map.insert("source".into(), source.into());
-                                }
-                                if !_pos.is_none() {
-                                    map.insert("line".into(), (_pos.line().unwrap() as INT).into());
-                                    map.insert(
-                                        "position".into(),
-                                        (_pos.position().unwrap_or(0) as INT).into(),
-                                    );
-                                }
-                                Dynamic::from_map(map)
-                            }
-                        },
-                    )
-                    .collect()
-            })
+                        let mut map = Map::new();
+                        map.insert("display".into(), display.into());
+                        map.insert("fn_name".into(), _fn_name.into());
+                        if let Some(source) = _source {
+                            map.insert("source".into(), source.into());
+                        }
+                        if !_pos.is_none() {
+                            map.insert("line".into(), (_pos.line().unwrap() as INT).into());
+                            map.insert(
+                                "position".into(),
+                                (_pos.position().unwrap_or(0) as INT).into(),
+                            );
+                        }
+                        Dynamic::from_map(map)
+                    }
+                },
+            )
+            .collect()
     }
 }

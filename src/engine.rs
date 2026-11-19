@@ -196,12 +196,11 @@ pub struct Engine {
     /// Max limits.
     pub(crate) limits: crate::api::limits::Limits,
 
-    /// Callback closure for debugging.
+    /// The debugger's callbacks, set once: before the engine runs anything,
+    /// or while it runs a program, so a shell attaches to a running
+    /// program (#2297). Reading it is one load.
     #[cfg(feature = "debugging")]
-    pub(crate) debugger_interface: Option<(
-        Box<crate::eval::OnDebuggingInit>,
-        Box<crate::eval::OnDebuggerCallback>,
-    )>,
+    pub(crate) debugger_interface: std::sync::OnceLock<crate::eval::debugger::Interface>,
 
     /// While set, the debugger callback runs at each step
     /// ([`DebuggerEvent::Wake`][crate::debugger::DebuggerEvent::Wake]).
@@ -251,7 +250,7 @@ impl fmt::Debug for Engine {
         f.field("limits", &self.limits);
 
         #[cfg(feature = "debugging")]
-        f.field("debugger_interface", &self.debugger_interface.is_some());
+        f.field("debugger_interface", &self.is_debugger_registered());
         #[cfg(feature = "debugging")]
         f.field("debugger_wake", &self.debugger_wake.is_some());
         #[cfg(feature = "debugging")]
@@ -339,7 +338,7 @@ impl Engine {
         limits: crate::api::limits::Limits::new(),
 
         #[cfg(feature = "debugging")]
-        debugger_interface: None,
+        debugger_interface: std::sync::OnceLock::new(),
         #[cfg(feature = "debugging")]
         debugger_wake: None,
         #[cfg(feature = "debugging")]
@@ -466,8 +465,8 @@ impl Engine {
     #[cfg(feature = "debugging")]
     #[inline(always)]
     #[must_use]
-    pub(crate) const fn is_debugger_registered(&self) -> bool {
-        self.debugger_interface.is_some()
+    pub(crate) fn is_debugger_registered(&self) -> bool {
+        self.debugger_interface.get().is_some()
     }
 
     /// Whether another thread asked the debugger callback to run at the

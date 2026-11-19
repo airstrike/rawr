@@ -1,7 +1,7 @@
 mod cache;
 mod chaining;
 mod data_check;
-mod debugger;
+pub(crate) mod debugger;
 mod eval_context;
 mod expr;
 mod global_state;
@@ -22,7 +22,6 @@ pub use debugger::CallStackFrame;
 #[cfg(feature = "debugging")]
 pub use debugger::{
     BreakPoint, BreakPositions, Debugger, DebuggerCommand, DebuggerEvent, DebuggerStatus,
-    OnDebuggerCallback, OnDebuggingInit,
 };
 #[cfg(feature = "debugging")]
 pub(crate) use debugger::{FrameBindings, Held};

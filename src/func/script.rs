@@ -40,7 +40,7 @@ impl Engine {
         }
 
         #[cfg(feature = "debugging")]
-        if self.debugger_interface.is_none() && fn_def.body.is_empty() {
+        if !self.is_debugger_registered() && fn_def.body.is_empty() {
             return Ok(Dynamic::UNIT);
         }
         #[cfg(not(feature = "debugging"))]
@@ -57,10 +57,7 @@ impl Engine {
         let orig_imports_len = global.num_imports();
 
         #[cfg(feature = "debugging")]
-        let orig_call_stack_len = global
-            .debugger
-            .as_ref()
-            .map_or(0, |dbg| dbg.call_stack().len());
+        let orig_call_stack_len = global.debugger.call_stack().len();
 
         // Guard against too many variables
         if scope.len() + fn_def.params.len() > self.max_variables() {
@@ -196,12 +193,10 @@ impl Engine {
                 }
             }
 
-            // Pop the call stack
-            global
-                .debugger
-                .as_mut()
-                .unwrap()
-                .rewind_call_stack(orig_call_stack_len);
+            // Pop the call stack. A call entered before the debugger was
+            // registered pushed no frame, and the frames above its length
+            // are its callees', which have returned.
+            global.debugger.rewind_call_stack(orig_call_stack_len);
         }
 
         // Remove all local variables and imported modules

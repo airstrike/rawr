@@ -822,16 +822,18 @@ pub(super) fn lower_with_context(
         rewrites.insert(sentinel, private.clone());
         register(&mut module, private, op, &models);
     }
-    // A debugger reads any value's `Debug` text through it (#488). A
-    // program that formats with `Debug` registered it above; one that
-    // doesn't carries it only while a debugger is registered (#526).
+    // A debugger reads any value's `Debug` text through it (#488). Every
+    // program carries it, so a debugger registered while the program runs
+    // reads what one registered from its start does (#2297). Its name is
+    // private to the compiler: a program's own `{:?}` is checked as Rust
+    // checks it.
     debug_assert_eq!(
         format!("\0rawr.{}", PreludeOp::GenericDebug.name()),
         DEBUG_GENERIC
     );
     debug_assert_eq!(trait_dispatcher_name("Debug", "fmt"), DEBUG_DISPATCHER);
     #[cfg(feature = "debugging")]
-    if engine.is_debugger_registered() {
+    {
         register(
             &mut module,
             DEBUG_GENERIC.into(),
@@ -853,16 +855,14 @@ pub(super) fn lower_with_context(
         super::format::register_declared_debug(&mut module, &models, declared);
     }
     #[cfg(not(feature = "debugging"))]
-    drop(declared);
+    drop((declared, receivers));
 
     rewrite_statements(ast.statements_mut(), &rewrites, &nominal_patterns);
-    #[cfg(feature = "debugging")]
-    let named = engine.is_debugger_registered();
-    #[cfg(not(feature = "debugging"))]
-    let named = false;
     ast.for_each_fn_def_mut(|function| {
         rewrite_statements(function.body.statements_mut(), &rewrites, &nominal_patterns);
-        if named {
+        // The receiver's name, which a debugger reads it by.
+        #[cfg(feature = "debugging")]
+        {
             function.this_name = receivers.get(&function.name).cloned();
         }
         function.this_parameter = written_receivers.get(&function.name).copied();

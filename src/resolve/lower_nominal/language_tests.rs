@@ -13443,10 +13443,16 @@ fn carries_generic_debug(engine: &Engine, source: &str) -> bool {
 
 const WITHOUT_DEBUG: &str = "pub fn run(n: i64) -> i64 { n + 1 } run(1)";
 
+/// Every program carries the generic `Debug` op, so a debugger registered
+/// while it runs reads its values (#2297); without the debugger, only one
+/// whose `{:?}` formats through it does.
 #[test]
-fn generic_debug_is_carried_only_by_programs_whose_debug_formatting_needs_it() {
+fn generic_debug_is_carried_whether_or_not_a_debugger_is_registered() {
     let engine = Engine::new();
-    assert!(!carries_generic_debug(&engine, WITHOUT_DEBUG));
+    assert_eq!(
+        carries_generic_debug(&engine, WITHOUT_DEBUG),
+        cfg!(feature = "debugging")
+    );
     // A `Vec`'s `{:?}` formats through it.
     assert!(carries_generic_debug(
         &engine,
@@ -13454,16 +13460,21 @@ fn generic_debug_is_carried_only_by_programs_whose_debug_formatting_needs_it() {
     ));
 }
 
-#[cfg(feature = "debugging")]
+/// The generic `Debug` op every program carries is the compiler's: a
+/// program's own `{:?}` of a type without `Debug` is still rustc's E0277.
 #[test]
-fn generic_debug_is_carried_while_a_debugger_is_registered() {
-    let mut engine = Engine::new();
-    #[allow(deprecated)]
-    engine.register_debugger(
-        |_, debugger| debugger,
-        |_, _, _, _, _| Ok(crate::debugger::DebuggerCommand::Continue),
+fn debug_formatting_a_type_without_debug_is_rejected() {
+    let error = rejected(
+        r#"
+struct Point { x: i64 }
+pub fn run() -> i64 { let p = Point { x: 1 }; let _ = format!("{:?}", p); p.x }
+run()
+"#,
     );
-    assert!(carries_generic_debug(&engine, WITHOUT_DEBUG));
+    assert!(
+        error.contains("`Point` doesn't implement `Debug`"),
+        "{error}"
+    );
 }
 
 /// A pattern binding of a `&mut` value is writable through `*`, whatever

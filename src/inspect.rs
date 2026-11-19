@@ -221,10 +221,7 @@ fn is_written(name: &str) -> bool {
 /// between them are left out, and so are the functions the compiler wrote
 /// around the program's, as a value's drop glue.
 fn script_frames(context: &EvalContext) -> Vec<usize> {
-    let Some(debugger) = context.global_runtime_state().debugger.as_ref() else {
-        return Vec::new();
-    };
-    let stack = debugger.call_stack();
+    let stack = context.global_runtime_state().debugger.call_stack();
     (0..stack.len())
         .rev()
         .filter(|&index| {
@@ -287,11 +284,7 @@ fn scope_of<'c>(
 /// deep.
 fn entries<'c>(context: &'c EvalContext, frame: usize) -> Option<Result<Vec<Entry<'c>>, String>> {
     let frames = script_frames(context);
-    let stack = context
-        .global_runtime_state()
-        .debugger
-        .as_ref()
-        .map_or(&[][..], |debugger| debugger.call_stack());
+    let stack = context.global_runtime_state().debugger.call_stack();
     let own = |index: usize| stack.get(*frames.get(index)?)?.bindings.as_ref();
     let mut found: Vec<Entry<'c>> = Vec::new();
     if frame == 0 {
@@ -427,11 +420,7 @@ pub fn binding(context: &mut EvalContext, name: &str) -> Option<Binding> {
 /// The name frame `frame`'s function runs under where `context` is.
 fn frame_symbol(context: &EvalContext, frame: usize) -> Option<crate::ImmutableString> {
     let index = *script_frames(context).get(frame)?;
-    let stack = context
-        .global_runtime_state()
-        .debugger
-        .as_ref()?
-        .call_stack();
+    let stack = context.global_runtime_state().debugger.call_stack();
     Some(stack[index].fn_name.clone())
 }
 
@@ -491,11 +480,7 @@ pub fn function(context: &EvalContext) -> Option<String> {
 /// The function of frame `frame` where `context` is, as Rust names it.
 fn frame_function(context: &EvalContext, frame: usize) -> Option<String> {
     let index = *script_frames(context).get(frame)?;
-    let call = &context
-        .global_runtime_state()
-        .debugger
-        .as_ref()?
-        .call_stack()[index];
+    let call = &context.global_runtime_state().debugger.call_stack()[index];
     Some(crate::resolve::lower_nominal::function_display_name(&call.fn_name).to_owned())
 }
 
@@ -507,11 +492,7 @@ fn frame_position(context: &EvalContext, frame: usize, position: Position) -> Op
         return Some(position);
     }
     let index = *script_frames(context).get(frame)?;
-    let stack = context
-        .global_runtime_state()
-        .debugger
-        .as_ref()?
-        .call_stack();
+    let stack = context.global_runtime_state().debugger.call_stack();
     Some(stack.get(index + 1)?.pos)
 }
 
@@ -1220,13 +1201,11 @@ impl Inspector {
     }
 
     /// Answer requests from the program `engine` runs, and pause it at the
-    /// breakpoints. Attach before the program compiles, so the compiler
-    /// keeps what reading needs (#526).
+    /// breakpoints, from the first evaluation it starts.
     pub fn attach(&self, engine: &mut Engine) {
+        self.prepare(engine);
         *self.0.wanted() = Wanted::Attached;
         let shared = Arc::clone(&self.0);
-        engine.wake_debugger_on(Arc::clone(&shared.wake));
-        engine.break_debugger_at(Arc::clone(&shared.breaks));
         #[allow(deprecated)]
         engine.register_debugger(
             |_, debugger| debugger,
@@ -1234,6 +1213,32 @@ impl Inspector {
                 Ok(shared.on_step(&mut context, event, node, position))
             },
         );
+    }
+
+    /// Ready `engine` to take this inspector's debugger while it runs
+    /// ([`Self::attach_running`]): it reads the wake and the breakpoints
+    /// from now on, which cost nothing until a debugger is registered.
+    pub fn prepare(&self, engine: &mut Engine) {
+        engine.wake_debugger_on(Arc::clone(&self.0.wake));
+        engine.break_debugger_at(Arc::clone(&self.0.breaks));
+    }
+
+    /// Answer requests from the program `engine` runs from its next step
+    /// on, and pause it at the breakpoints: the engine takes the debugger
+    /// while it runs (#2297), [`prepared`](Self::prepare) for it when it
+    /// was made. `false` when it has a debugger already.
+    pub fn attach_running(&self, engine: &Engine) -> bool {
+        let shared = Arc::clone(&self.0);
+        let attached = engine.attach_debugger(
+            |_, debugger| debugger,
+            move |mut context, event, node, _source, position| {
+                Ok(shared.on_step(&mut context, event, node, position))
+            },
+        );
+        if attached {
+            *self.0.wanted() = Wanted::Attached;
+        }
+        attached
     }
 
     /// Until an engine attaches, call `register` once, when the first
@@ -1294,13 +1299,11 @@ impl Inspector {
     }
 }
 
-/// How deep in calls the program is where `context` is.
+/// How deep in calls the program is where `context` is, which steps
+/// compare: the evaluation's call level, which counts the calls entered
+/// before the debugger was registered too, so a step out of one ends.
 fn depth(context: &EvalContext) -> usize {
-    context
-        .global_runtime_state()
-        .debugger
-        .as_ref()
-        .map_or(0, |debugger| debugger.call_stack().len())
+    context.global_runtime_state().level
 }
 
 impl Shared {
@@ -2718,6 +2721,76 @@ mod tests {
             assert_eq!(next["paused"]["function"], "spin", "{next}");
             assert_eq!(next["paused"]["reason"], "step", "{next}");
         });
+    }
+
+    /// `outer` counts while `going()` says so, called from `run`.
+    const RUNNING: &str = "fn outer() -> i64 {\n\
+        \x20   let mut count = 0;\n\
+        \x20   while going() {\n\
+        \x20       count += 1;\n\
+        \x20   }\n\
+        \x20   count\n\
+        }\n\
+        pub fn run() -> i64 {\n\
+        \x20   let counted = outer();\n\
+        \x20   counted\n\
+        }\n";
+
+    /// An engine already running a program takes the debugger at the
+    /// first request that needs one (#2297): a read answers in a call
+    /// entered before it, and a step out of that call ends where its
+    /// caller goes on, though neither call is on the debugger's call stack.
+    #[cfg(unix)]
+    #[test]
+    fn a_running_engine_takes_the_debugger_and_a_step_out_of_a_call_begun_before_ends() {
+        use serde_json::json;
+        let directory = std::env::temp_dir().join(format!("rawr-running-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let socket = directory.join("s");
+        let inspector = super::Inspector::bind(&socket).unwrap();
+        let going = Arc::new(AtomicBool::new(true));
+        let mut engine = crate::Engine::new();
+        let reading = Arc::clone(&going);
+        engine.register_fn("going", move || reading.load(Ordering::Acquire));
+        inspector.prepare(&mut engine);
+        let engine: &'static crate::Engine = Box::leak(Box::new(engine));
+        let ast: &'static crate::AST = Box::leak(Box::new(
+            engine
+                .compile(RUNNING)
+                .unwrap_or_else(|error| panic!("{error}")),
+        ));
+        inspector.locate_with(|position| Some(("main.rs".to_owned(), position.line()?)));
+        let registering = inspector.clone();
+        inspector.register_on_request(move || {
+            registering.compiled(ast);
+            assert!(registering.attach_running(engine));
+        });
+        let running = std::thread::spawn(|| {
+            engine
+                .call_fn::<i64>(&mut crate::Scope::new(), ast, "run", ())
+                .unwrap_or_else(|error| panic!("{error}"))
+        });
+        let read = ask(&socket, &json!({ "name": "count" }));
+        assert_eq!(read["reached"], true, "{read}");
+        let counted: i64 = read["bindings"][0]["value"]
+            .as_str()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or_else(|| panic!("{read}"));
+        let paused = ask(&socket, &json!({ "op": "pause" }));
+        assert!(paused.get("error").is_none(), "{paused}");
+        let at = ask(&socket, &json!({ "name": "nothing" }));
+        let line = at["paused"]["line"]
+            .as_u64()
+            .unwrap_or_else(|| panic!("{at}"));
+        assert!((3..=4).contains(&line), "{at}");
+        going.store(false, Ordering::Release);
+        let out = ask(&socket, &json!({ "op": "step", "kind": "out" }));
+        assert_eq!(out["paused"]["line"], 10, "{out}");
+        let continued = ask(&socket, &json!({ "op": "continue" }));
+        assert!(continued["paused"].is_null(), "{continued}");
+        // The program kept counting from where the read found it.
+        assert!(running.join().unwrap() >= counted);
+        let _ = std::fs::remove_dir_all(&directory);
     }
 
     /// A program held at its start runs nothing until released, and a

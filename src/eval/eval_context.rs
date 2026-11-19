@@ -177,8 +177,8 @@ impl<'a, 's, 'ps, 'g, 'c, 't> EvalContext<'a, 's, 'ps, 'g, 'c, 't> {
     #[cfg(feature = "internals")]
     #[inline(always)]
     #[must_use]
-    pub fn debugger(&self) -> Option<&crate::debugger::Debugger> {
-        self.global.debugger.as_deref()
+    pub fn debugger(&self) -> &crate::debugger::Debugger {
+        &self.global.debugger
     }
     /// _(internals, debugging)_ Mutable reference to the debugging interface.
     /// Exported under the `debugging` and `internals` features only.
@@ -186,8 +186,8 @@ impl<'a, 's, 'ps, 'g, 'c, 't> EvalContext<'a, 's, 'ps, 'g, 'c, 't> {
     #[cfg(feature = "internals")]
     #[inline(always)]
     #[must_use]
-    pub fn debugger_mut(&mut self) -> Option<&mut crate::debugger::Debugger> {
-        self.global.debugger.as_deref_mut()
+    pub fn debugger_mut(&mut self) -> &mut crate::debugger::Debugger {
+        &mut self.global.debugger
     }
 
     /// Call a function inside the [evaluation context][`EvalContext`] with the provided arguments.
