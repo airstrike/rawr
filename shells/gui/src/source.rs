@@ -2,7 +2,7 @@
 //! file, that line marked, and a gutter that sets and clears a breakpoint
 //! on each.
 //!
-//! Each line is drawn in the colours iced's highlighter gives it. The
+//! Each line is drawn in the colours a syntax highlighter gives it. The
 //! highlighter carries its state from line to line, so it runs once over
 //! the file's lines up to the last one shown, and keeps what it found: a
 //! view reads those pieces and highlights nothing. New text for the file,

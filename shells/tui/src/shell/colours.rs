@@ -1,4 +1,4 @@
-//! The colours of the shown file's lines, as syntect's highlighter gives
+//! The colours of the shown file's lines, as a syntax highlighter gives
 //! them. The highlighter carries its state from line to line, so it runs
 //! once over the lines up to the last one drawn and keeps what it found: a
 //! draw highlights only the lines no draw reached before, and new text
