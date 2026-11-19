@@ -31,6 +31,11 @@
 //! Nothing runs while no request waits: the engine checks one flag at each
 //! step.
 //!
+//! A program can serve the socket before any engine of its has a debugger:
+//! the first request that reads or controls it then asks the program to
+//! register one ([`Inspector::register_on_request`]), and waits until an
+//! engine attached to the inspector runs (#2266).
+//!
 //! The same socket sets breakpoints and resumes a paused program (#489),
 //! with an `op`:
 //! - `{"op": "break", "file": .., "line": ..}` or `{"op": "break",
@@ -766,6 +771,18 @@ struct State {
     held: Vec<Arc<Interrupt>>,
 }
 
+/// What a request that reads or controls the program does while no
+/// engine answers it.
+enum Wanted {
+    /// It waits for an engine to attach.
+    Wait,
+    /// The first one registers a debugger: the program started without
+    /// one (#2266).
+    Register(Box<dyn FnOnce() + Send>),
+    /// An engine answers it.
+    Attached,
+}
+
 /// Where the program tells that it paused and went on (#535).
 enum Told {
     /// The run's session, on a connection that first said where this
@@ -797,11 +814,28 @@ struct Shared {
     /// Where the breakpoints are kept across restarts.
     saved: std::path::PathBuf,
     told: Option<Told>,
+    wanted: Mutex<Wanted>,
 }
 
 impl Shared {
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn wanted(&self) -> std::sync::MutexGuard<'_, Wanted> {
+        self.wanted.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// A request needs an engine: the first one registers a debugger with
+    /// the program, when it started without one.
+    fn want(&self) {
+        let mut wanted = self.wanted();
+        if let Wanted::Register(_) = &*wanted
+            && let Wanted::Register(register) = std::mem::replace(&mut *wanted, Wanted::Wait)
+        {
+            drop(wanted);
+            register();
+        }
     }
 
     /// Have every evaluation call back at its next step while a request
@@ -880,6 +914,7 @@ impl Inspector {
             told: std::env::var_os(EVENTS)
                 .filter(|path| !path.is_empty())
                 .and_then(|path| Told::open(std::path::PathBuf::from(path), socket)),
+            wanted: Mutex::new(Wanted::Wait),
         });
         let listening = Arc::clone(&shared);
         std::thread::Builder::new()
@@ -899,6 +934,7 @@ impl Inspector {
     /// breakpoints. Attach before the program compiles, so the compiler
     /// keeps what reading needs (#526).
     pub fn attach(&self, engine: &mut Engine) {
+        *self.0.wanted() = Wanted::Attached;
         let shared = Arc::clone(&self.0);
         engine.wake_debugger_on(Arc::clone(&shared.wake));
         engine.break_debugger_at(Arc::clone(&shared.breaks));
@@ -909,6 +945,19 @@ impl Inspector {
                 Ok(shared.on_step(&mut context, event, node, position))
             },
         );
+    }
+
+    /// Until an engine attaches, call `register` once, when the first
+    /// request that reads or controls the program arrives, which then
+    /// waits for an engine as any request does: a program that started
+    /// without a debugger registers one then (#2266). Window input,
+    /// screenshots and menus need no engine, and call nothing. A later
+    /// `register` replaces this one.
+    pub fn register_on_request(&self, register: impl FnOnce() + Send + 'static) {
+        let mut wanted = self.0.wanted();
+        if !matches!(*wanted, Wanted::Attached) {
+            *wanted = Wanted::Register(Box::new(register));
+        }
     }
 
     /// Place the program's steps with `locate` from now on: the positions
@@ -1001,7 +1050,11 @@ impl Shared {
     /// The answer to one request, which `gone` gives up.
     #[cfg(unix)]
     fn respond(&self, request: &Value, gone: &Arc<Interrupt>) -> Value {
-        match request.get("op").and_then(Value::as_str) {
+        let op = request.get("op").and_then(Value::as_str);
+        if !matches!(op, Some("input" | "screenshot" | "menu")) {
+            self.want();
+        }
+        match op {
             Some("input") => self.input(request, gone),
             Some("screenshot") => self.screenshot(request, gone),
             Some("menu") => self.menu(request, gone),
@@ -2282,6 +2335,75 @@ mod tests {
             let again = ask(&socket, &json!({ "op": "continue" }));
             assert_eq!(again["error"], "not paused", "{again}");
         });
+    }
+
+    /// Native code's call into a program that started without a debugger,
+    /// on the engine of the generation it runs.
+    #[cfg(unix)]
+    fn tick(engine: &crate::Engine, ast: &crate::AST, count: i64) -> i64 {
+        engine
+            .call_fn::<i64>(&mut crate::Scope::new(), ast, "tick", (count,))
+            .unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    /// A program served its socket without a debugger. The first request
+    /// asks it for one, which it registers at its next call from native
+    /// code by compiling a generation on an engine attached to the
+    /// inspector: the request reads the state native code kept.
+    #[cfg(unix)]
+    #[test]
+    fn a_debugger_registered_at_the_next_call_reads_the_state_native_code_kept() {
+        use serde_json::json;
+        const TICK: &str = "fn tick(count: i64) -> i64 {\n\
+            \x20   let next = count + 1;\n\
+            \x20   next\n\
+            }\n";
+        let directory = std::env::temp_dir().join(format!("rawr-register-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let socket = directory.join("s");
+        let inspector = super::Inspector::bind(&socket).unwrap();
+        let (register, registered) = std::sync::mpsc::channel();
+        inspector.register_on_request(move || {
+            let _ = register.send(());
+        });
+        let compile = |inspector: Option<&super::Inspector>| {
+            let mut engine = crate::Engine::new();
+            if let Some(inspector) = inspector {
+                inspector.attach(&mut engine);
+            }
+            let ast = engine
+                .compile(TICK)
+                .unwrap_or_else(|error| panic!("{error}"));
+            (engine, ast)
+        };
+        let (mut engine, mut ast) = compile(None);
+        let mut count = 0;
+        for _ in 0..5 {
+            count = tick(&engine, &ast, count);
+        }
+        let asking = socket.clone();
+        let tool = std::thread::spawn(move || ask(&asking, &json!({ "name": "count" })));
+        while !tool.is_finished() {
+            if registered.try_recv().is_ok() {
+                (engine, ast) = compile(Some(&inspector));
+                inspector.locate_with(|position| Some(("main.rs".to_owned(), position.line()?)));
+                inspector.compiled(&ast);
+            }
+            count = tick(&engine, &ast, count);
+        }
+        let read = tool.join().unwrap();
+        assert_eq!(read["reached"], true, "{read}");
+        let value: i64 = read["bindings"][0]["value"]
+            .as_str()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or_else(|| panic!("{read}"));
+        assert!(value >= 5, "{read}");
+        // One request registered it, once.
+        inspector.register_on_request(|| panic!("an attached inspector registers nothing"));
+        let again = ask(&socket, &json!({ "op": "clear" }));
+        assert!(again.get("error").is_none(), "{again}");
+        assert!(registered.try_recv().is_err());
+        let _ = std::fs::remove_dir_all(&directory);
     }
 
     #[test]

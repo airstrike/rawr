@@ -74,6 +74,9 @@ enum Debugger {
     Off,
     /// A shell asked for one: the owner restarts the program with it.
     Asked,
+    /// The program serves its inspector and registers a debugger at a
+    /// shell's first request that needs one, keeping its state.
+    OnRequest,
     /// Each program the owner starts has one.
     On,
 }
@@ -158,6 +161,30 @@ pub fn prepare(command: &mut Command) {
     }
     // The program this starts has the debugger the shell asked for.
     inner.debugger = Debugger::On;
+    command
+        .env(crate::events::INSPECT, shared.place.inspector())
+        .env(crate::events::DEBUG_EVENTS, shared.place.socket());
+}
+
+/// Ready `command`, which starts a generated runner, for the session: the
+/// debugger's sockets, and unless a shell asked for the debugger already,
+/// [`DEBUGGER_ON_REQUEST`](crate::events::DEBUGGER_ON_REQUEST). The
+/// runner then serves the inspector and registers the debugger at a
+/// shell's first request for it, at its next call from native code
+/// (#2266); a runner that started with one keeps it on.
+pub fn prepare_runner(command: &mut Command) {
+    command.env_remove(handover::LISTENER);
+    let Some(shared) = current() else {
+        return;
+    };
+    let mut inner = shared.inner();
+    inner.debugger = match inner.debugger {
+        Debugger::Off | Debugger::OnRequest => {
+            command.env(crate::events::DEBUGGER_ON_REQUEST, "1");
+            Debugger::OnRequest
+        }
+        Debugger::Asked | Debugger::On => Debugger::On,
+    };
     command
         .env(crate::events::INSPECT, shared.place.inspector())
         .env(crate::events::DEBUG_EVENTS, shared.place.socket());
@@ -482,14 +509,14 @@ impl Shared {
     /// Control requests take turns; `pause` and `continue` go at once, as
     /// they end a step that waits for a pause the program may never reach.
     fn forward(&self, request: &Value, cancel: &Cancel) -> Result<Value, Refusal> {
-        let control = matches!(
-            request["op"].as_str(),
-            Some("break" | "clear" | "step" | "eval" | "input")
-        );
+        let op = request["op"].as_str();
+        let control = matches!(op, Some("break" | "clear" | "step" | "eval" | "input"));
+        // Window input, screenshots and menus need no debugger.
+        let debugs = !matches!(op, Some("input" | "screenshot" | "menu"));
         let _turn = control.then(|| self.control.lock().unwrap_or_else(PoisonError::into_inner));
         let mut gone = None;
         loop {
-            let (connection, socket) = self.reachable(cancel, gone)?;
+            let (connection, socket) = self.reachable(cancel, gone, debugs)?;
             match ask(&socket, request, cancel) {
                 Asked::Answered(answer) => return Ok(answer),
                 Asked::Refused | Asked::Ended => gone = Some(connection),
@@ -500,8 +527,15 @@ impl Shared {
 
     /// The inspector a request goes to once the program serves one: not
     /// while it starts or restarts, and not the one on connection `gone`.
-    /// A program without a debugger is asked for one.
-    fn reachable(&self, cancel: &Cancel, gone: Option<u64>) -> Result<(u64, PathBuf), Refusal> {
+    /// A program without a debugger is asked for one, by a restart; one
+    /// that registers it on request does so at the request that `debugs`,
+    /// and the programs started after it have one from their start.
+    fn reachable(
+        &self,
+        cancel: &Cancel,
+        gone: Option<u64>,
+        debugs: bool,
+    ) -> Result<(u64, PathBuf), Refusal> {
         let mut inner = self.inner();
         loop {
             if cancel.cancelled.load(Ordering::Acquire) {
@@ -515,7 +549,11 @@ impl Shared {
                 && !phase.is_pending()
                 && gone != Some(served.connection)
             {
-                return Ok((served.connection, served.socket.clone()));
+                let reached = (served.connection, served.socket.clone());
+                if debugs && inner.debugger == Debugger::OnRequest {
+                    inner.debugger = Debugger::On;
+                }
+                return Ok(reached);
             }
             if !phase.is_live() && !phase.is_pending() {
                 return Err(Refusal::NotRunning(phase.clone()));
@@ -737,6 +775,60 @@ mod tests {
         answered.sort_by_key(|id| id.as_u64());
         assert_eq!(answered, [json!(1), json!(2)]);
         drop(host);
+    }
+
+    /// Whether `command` starts a runner that registers its debugger at a
+    /// shell's first request, beside the inspector's socket.
+    fn on_request(command: &std::process::Command) -> bool {
+        let envs: Vec<_> = command.get_envs().collect();
+        assert!(envs
+            .iter()
+            .any(|(name, value)| *name == crate::events::INSPECT && value.is_some()));
+        envs.iter()
+            .any(|(name, value)| *name == crate::events::DEBUGGER_ON_REQUEST && value.is_some())
+    }
+
+    /// One request, which the program's inspector on `inspector` reads and
+    /// answers.
+    fn answered(shell: &Shell, inspector: &UnixListener, id: u64, request: &Value) {
+        shell.send(&json!({ "jsonrpc": "2.0", "id": id, "method": "program", "params": request }));
+        let (asked, _) = inspector.accept().unwrap();
+        let mut line = String::new();
+        BufReader::new(&asked).read_line(&mut line).unwrap();
+        assert_eq!(line.trim(), request.to_string());
+        writeln!(&asked, "{}", json!({ "answered": id })).unwrap();
+        assert_eq!(shell.next()["result"]["answered"], id);
+    }
+
+    /// A runner no shell started serves its inspector and registers the
+    /// debugger at the first request that needs one, in place: the owner
+    /// restarts nothing, and the programs it starts after that have the
+    /// debugger from their start (#2266).
+    #[test]
+    fn a_runner_registers_its_debugger_at_the_first_request_that_needs_one() {
+        let (host, place) = host("on-request", false);
+        *super::open_session() = Some(std::sync::Arc::clone(&host.0));
+        let mut started = std::process::Command::new("true");
+        super::prepare_runner(&mut started);
+        assert!(on_request(&started));
+        host.0.record(json!({ "event": "running" }));
+        let inspector = UnixListener::bind(place.inspector()).unwrap();
+        let _told = serve(&place);
+        let shell = Shell::connect(&place.socket());
+        shell.hello();
+        // A screenshot needs no debugger.
+        answered(&shell, &inspector, 1, &json!({ "op": "screenshot" }));
+        let mut again = std::process::Command::new("true");
+        super::prepare_runner(&mut again);
+        assert!(on_request(&again));
+        // A read does: the runner registers it.
+        answered(&shell, &inspector, 2, &json!({ "name": "count" }));
+        assert!(!super::take_restart());
+        let mut restarted = std::process::Command::new("true");
+        super::prepare_runner(&mut restarted);
+        assert!(!on_request(&restarted));
+        drop(host);
+        assert!(super::current().is_none());
     }
 
     #[test]

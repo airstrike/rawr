@@ -41,6 +41,11 @@ pub const INSPECT: &str = "RAWR_MCP_INSPECT";
 /// program has it.
 pub const DEBUG_EVENTS: &str = rawr::inspect::EVENTS;
 
+/// Set in a generated runner's environment beside [`INSPECT`]: the runner
+/// serves the socket and registers its debugger at a shell's first request
+/// for the program, not before (#2266).
+pub const DEBUGGER_ON_REQUEST: &str = "RAWR_DEBUGGER_ON_REQUEST";
+
 /// How often a watched process looks at its parent.
 const WATCH: Duration = Duration::from_millis(100);
 

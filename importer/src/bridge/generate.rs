@@ -5488,6 +5488,18 @@ struct Program {
     /// libtest's arguments of a crate built for its tests, which run in
     /// place of its `main` (#1653).
     tests: Option<__rawr_internal::package::test::harness::Options>,
+    /// What it compiled from.
+    source: std::sync::Arc<__RawrSource>,
+}
+
+/// The sources a generation compiled from, which a debugger registered
+/// while it runs compiles again (#2266). Its name is one no script type
+/// takes, since a script type's proxy is declared at the crate root beside
+/// it.
+struct __RawrSource {
+    /// The application semantic the parent expected of them.
+    expected: [u8; 32],
+    snapshot: __rawr_internal::package::snapshot::Snapshot,
 }
 
 fn snapshot_bytes<'a>(input: &mut &'a [u8], limit: usize) -> std::io::Result<&'a [u8]> {
@@ -5535,13 +5547,25 @@ fn decode_snapshot(mut input: &[u8]) -> std::io::Result<__rawr_internal::package
         .map_err(|error| std::io::Error::other(error.to_string()))
 }
 
-/// Under `rawr mcp`, the socket it named in `RAWR_MCP_INSPECT`, where a
-/// tool reads the running program's values (D675). Bound once; each engine
-/// this runner compiles a generation on answers on it. A plain `rawr run`
-/// names none, and no debugger is registered. A browser's has no socket.
+/// The socket the session named in `RAWR_MCP_INSPECT`, where a tool reads
+/// the running program's values (D675). Bound once; each engine this
+/// runner compiles a generation on answers on it once a debugger is
+/// [`registered`]. A browser's has no socket.
 #[cfg(not(unix))]
 fn inspector() -> Option<&'static __rawr_internal::inspect::Inspector> {
     None
+}
+
+/// Whether the engines this runner compiles generations on have the
+/// inspector's debugger: from the start, unless `RAWR_DEBUGGER_ON_REQUEST`
+/// says to wait for a shell's first request for it (#2266).
+static REGISTERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The inspector, once its debugger is registered: what the engines this
+/// runner compiles generations on attach to, and what places their steps.
+/// Until then, a plain `rawr run` compiles nothing a debugger reads.
+fn registered() -> Option<&'static __rawr_internal::inspect::Inspector> {
+    inspector().filter(|_| REGISTERED.load(std::sync::atomic::Ordering::Acquire))
 }
 
 #[cfg(unix)]
@@ -5559,16 +5583,28 @@ fn inspector() -> Option<&'static __rawr_internal::inspect::Inspector> {
                 arena_read(|arena| arena.unreadable(&handle))
                     .unwrap_or(Some(__rawr_internal::inspect::Unreadable::Held))
             });
-            __rawr_internal::inspect::Inspector::bind(std::path::Path::new(&socket))
+            let inspector = __rawr_internal::inspect::Inspector::bind(std::path::Path::new(&socket))
                 .map_err(|error| eprintln!("rawr: values can't be read from this run: {error}"))
-                .ok()
+                .ok()?;
+            if std::env::var_os("RAWR_DEBUGGER_ON_REQUEST").is_some_and(|value| !value.is_empty()) {
+                // A program whose next generation can't register it in
+                // place starts again with one: a running marked `main`
+                // replaces this (#2266).
+                inspector.register_on_request(|| {
+                    __rawr_internal::process::leave(__rawr_internal::process::DEBUGGER)
+                });
+            } else {
+                REGISTERED.store(true, std::sync::atomic::Ordering::Release);
+            }
+            Some(inspector)
         })
         .as_ref()
 }
 
-/// Under `rawr mcp`, place the steps of `program`, which runs next.
+/// Once a debugger is registered, place the steps of `program`, which runs
+/// next.
 fn locate(program: &Program) {
-    if let Some(inspector) = inspector()
+    if let Some(inspector) = registered()
         && let Some(located) = program.candidate.as_ref().and_then(|candidate| candidate.located())
     {
         // Code evaluated at a pause compiles into this program (#490).
@@ -5610,8 +5646,8 @@ fn prepare_engine(
     if tests.is_some_and(__rawr_internal::package::test::harness::Options::captures) {
         __rawr_internal::package::test::harness::capture(&mut engine);
     }
-    // Under `rawr mcp`, before the program compiles (#526).
-    if let Some(inspector) = inspector() {
+    // Before the program compiles, so it keeps what reading needs (#526).
+    if let Some(inspector) = registered() {
         inspector.attach(&mut engine);
     }
     let (bindings, application_contract) = __rawr_profile::install_compiler_bindings(&mut engine, &mut native)?;
@@ -5652,6 +5688,17 @@ fn compile_program(
     let snapshot = decode_snapshot(input)?;
     progress(1)?;
     if !COMPILE_SNAPSHOT { return Ok(None); }
+    let source = __RawrSource { expected: *expected, snapshot };
+    compile_source(std::sync::Arc::new(source), compilation, progress).map(Some)
+}
+
+/// Compile `source` as a generation on an engine of its own.
+fn compile_source(
+    source: std::sync::Arc<__RawrSource>,
+    compilation: Compilation<'_>,
+    progress: &mut impl FnMut(u8) -> std::io::Result<()>,
+) -> std::io::Result<Program> {
+    let snapshot = &source.snapshot;
     let native = match compilation {
         Compilation::Initial => __rawr_internal::package::import::runner::account::Native::decode(GENERATED_MANIFEST),
         Compilation::Replacement(current) => current.as_ref()
@@ -5674,15 +5721,15 @@ fn compile_program(
         prepare_engine(native, __rawr_internal::Access::all(), tests.as_ref(), &mut *progress)?;
     let (candidate, ast) = __rawr_profile::compile_initial(
         &engine,
-        &snapshot,
+        snapshot,
         &application_contract,
-        expected,
+        &source.expected,
     )?;
     progress(4)?;
     progress(5)?;
     let marked_main = snapshot.marked_root();
-    Ok(Some(Program { engine, ast: Some(ast), candidate, application_contract,
-        _bindings: bindings.into(), marked_main, tests }))
+    Ok(Program { engine, ast: Some(ast), candidate, application_contract,
+        _bindings: bindings.into(), marked_main, tests, source })
 }
 
 fn compile_live(
@@ -6203,16 +6250,26 @@ fn decode_hex(value: &str) -> std::io::Result<[u8; 32]> {
     Ok(output)
 }
 
-/// One frame from the parent, as the protocol's reader thread received it.
-/// Its name is one no script type takes, since a script type's proxy is
-/// declared at the crate root beside it.
-type __RawrFrame = std::io::Result<(u8, Vec<u8>)>;
+/// What the protocol thread takes next. Its name is one no script type
+/// takes, since a script type's proxy is declared at the crate root beside
+/// it.
+enum __RawrNext {
+    /// One frame from the parent, as the protocol's reader thread received
+    /// it.
+    Frame(std::io::Result<(u8, Vec<u8>)>),
+    /// A shell's first request for the debugger of a running marked `main`
+    /// that runs without one (#2266).
+    Debugger,
+}
 
-/// The parent's next frame.
-fn next_frame(frames: &std::sync::mpsc::Receiver<__RawrFrame>) -> std::io::Result<(u8, Vec<u8>)> {
-    frames
-        .recv()
-        .unwrap_or_else(|_| Err(std::io::Error::other("protocol reader stopped")))
+/// The parent's next frame, before the program runs: only a running
+/// marked `main` is asked for its debugger.
+fn next_frame(next: &std::sync::mpsc::Receiver<__RawrNext>) -> std::io::Result<(u8, Vec<u8>)> {
+    match next.recv() {
+        Ok(__RawrNext::Frame(frame)) => frame,
+        Ok(__RawrNext::Debugger) => Err(std::io::Error::other("debugger request before the program runs")),
+        Err(_) => Err(std::io::Error::other("protocol reader stopped")),
+    }
 }
 
 fn exit(status: i32) -> ! {
@@ -6224,12 +6281,60 @@ fn exit(status: i32) -> ! {
 
 /// What the protocol thread keeps of a running marked `main`'s program to
 /// compile the next generation beside it (D553.3): the engine it compiles
-/// against and the generation it compares with.
+/// against, the generation it compares with and the sources the newest
+/// generation compiled from.
 struct Live {
     engine: __rawr_internal::Shared<__rawr_internal::Engine>,
     generation: std::sync::Arc<__rawr_internal::reload::Generation>,
     bindings: std::sync::Arc<[__rawr_internal::host::facade::Definition]>,
     contract: __rawr_profile::ApplicationContract,
+    source: std::sync::Arc<__RawrSource>,
+}
+
+/// Make `program`, compiled beside the running marked `main`, the
+/// generation the owner thread admits at its next call from native code
+/// (D553.3); a newer one offered before then replaces it.
+fn offer(live: &mut Live, mut program: Program) -> std::io::Result<()> {
+    evaluate_program(&mut program)?;
+    if let Some(next) = program.candidate.as_ref() {
+        live.engine = program.engine.clone();
+        live.generation = next.generation().clone();
+        live.bindings = program._bindings.clone();
+        live.source = std::sync::Arc::clone(&program.source);
+    }
+    __rawr_internal::future::offer(move || {
+        if let Err(error) = __rawr_profile::admit(program) {
+            eprintln!("rawr: the program keeps running the previous generation: {error}");
+        }
+    });
+    Ok(())
+}
+
+/// Register the inspector's debugger with the running marked `main`, which
+/// ran without one (#2266). The newest generation's sources compile again
+/// on an engine attached to the inspector, and the program admits that
+/// generation at its next call from native code, as it admits a save
+/// (D555): it keeps its state, and a request waits for that call. One it
+/// can't take ends the runner for `rawr run` to start it again with the
+/// debugger.
+fn register_debugger(live: &mut Live) -> std::io::Result<()> {
+    let compiled = compile_source(
+        std::sync::Arc::clone(&live.source),
+        Compilation::Live(&live.engine),
+        &mut |_| Ok(()),
+    );
+    let program = match compiled {
+        Ok(program)
+            if program
+                .candidate
+                .as_ref()
+                .is_some_and(|next| __rawr_internal::island::refusal(&live.generation, next).is_none()) =>
+        {
+            program
+        }
+        _ => __rawr_internal::process::leave(__rawr_internal::process::DEBUGGER),
+    };
+    offer(live, program)
 }
 
 /// The parent's early requests for a next generation (HotBegin), each
@@ -6265,6 +6370,8 @@ struct Resident<'a> {
     bindings: &'a std::sync::Arc<[__rawr_internal::host::facade::Definition]>,
     contract: &'a __rawr_profile::ApplicationContract,
     running: Option<&'a std::sync::Arc<__rawr_internal::reload::Generation>>,
+    /// The application semantic the running program's sources had.
+    expected: [u8; 32],
 }
 
 enum ResidentResult {
@@ -6285,10 +6392,10 @@ enum ResidentResult {
 /// with its reason.
 fn compile_resident(
     resident: &Resident<'_>,
-    snapshot: &__rawr_internal::package::snapshot::Snapshot,
+    snapshot: __rawr_internal::package::snapshot::Snapshot,
 ) -> std::io::Result<ResidentResult> {
     use __rawr_internal::package::import::resident::{Error, Outcome};
-    let compiled = match __rawr_profile::compile_resident(resident.engine, snapshot, resident.contract) {
+    let compiled = match __rawr_profile::compile_resident(resident.engine, &snapshot, resident.contract) {
         Ok(Outcome::Compiled(compiled)) => compiled,
         Ok(Outcome::NeedsPreparation) => return Ok(ResidentResult::Miss),
         Err(Error::Source(error)) => return Ok(ResidentResult::Diagnostic(error.reported().encode())),
@@ -6312,6 +6419,7 @@ fn compile_resident(
         marked_main: snapshot.marked_root(),
         // A save reloads a running program; tests run once.
         tests: None,
+        source: std::sync::Arc::new(__RawrSource { expected: resident.expected, snapshot }),
     };
     Ok(ResidentResult::Compiled(program, None, carrier, coverage))
 }
@@ -6382,7 +6490,7 @@ fn serve_hot(
                 .map_err(|_| std::io::Error::other("resident transition nonce"))?;
             send_progress(stream, key, &nonce, 3, 1, 1)?;
             let output = match &resident {
-                Some(resident) => compile_resident(resident, &snapshot),
+                Some(resident) => compile_resident(resident, snapshot),
                 None => Ok(ResidentResult::Miss),
             };
             let output = output?;
@@ -6418,23 +6526,40 @@ fn serve_hot(
 /// and is offered to the owner thread, which admits it at its next call
 /// from native code into script code (D553.3). A generation that can't
 /// replace the running one is refused with its reason, and the owner
-/// restarts the program with it.
+/// restarts the program with it. A marked `main` that runs without a
+/// debugger registers one here at a shell's first request for it
+/// (#2266).
 fn serve_entry(
     mut stream: std::os::unix::net::UnixStream,
-    received: std::sync::mpsc::Receiver<__RawrFrame>,
+    received: std::sync::mpsc::Receiver<__RawrNext>,
     mut key: [u8; 32],
     mut live: Option<Live>,
 ) {
     let mut pending: Option<PendingProgram> = None;
     let mut hot = Hot::default();
+    // A debugger asked for while a save's generation was pending, which
+    // registers once that generation is committed or aborted.
+    let mut register = false;
     let mut serve = || -> std::io::Result<()> {
         loop {
-            let (tag, payload) = next_frame(&received)?;
+            let (tag, payload) = match received.recv() {
+                Ok(__RawrNext::Frame(frame)) => frame?,
+                Ok(__RawrNext::Debugger) => {
+                    REGISTERED.store(true, std::sync::atomic::Ordering::Release);
+                    match live.as_mut() {
+                        Some(running) if pending.is_none() => register_debugger(running)?,
+                        _ => register = true,
+                    }
+                    continue;
+                }
+                Err(_) => return Err(std::io::Error::other("protocol reader stopped")),
+            };
             let resident = live.as_ref().map(|running| Resident {
                 engine: &running.engine,
                 bindings: &running.bindings,
                 contract: &running.contract,
                 running: Some(&running.generation),
+                expected: running.source.expected,
             });
             if serve_hot(&mut stream, tag, &payload, &key, &mut hot, &mut pending, resident)? {
                 continue;
@@ -6491,25 +6616,23 @@ fn serve_entry(
                     if tag == 26 {
                         drop(candidate);
                         send_frame(&mut stream, 27, &payload)?;
+                        if std::mem::take(&mut register)
+                            && let Some(running) = live.as_mut()
+                        {
+                            register_debugger(running)?;
+                        }
                         continue;
                     }
-                    if let Some(mut program) = candidate.program {
-                        evaluate_program(&mut program)?;
-                        if let (Some(running), Some(next)) = (live.as_mut(), program.candidate.as_ref()) {
-                            running.engine = program.engine.clone();
-                            running.generation = next.generation().clone();
-                            running.bindings = program._bindings.clone();
-                        }
-                        // The owner thread admits it at its next call from
-                        // native code; a newer save's replaces it first.
-                        __rawr_internal::future::offer(move || {
-                            if let Err(error) = __rawr_profile::admit(program) {
-                                eprintln!("rawr: the program keeps running the previous generation: {error}");
-                            }
-                        });
+                    let Some(running) = live.as_mut() else { unreachable!("matched above") };
+                    if let Some(program) = candidate.program {
+                        offer(running, program)?;
                     }
                     key = next;
                     send_frame(&mut stream, 8, &payload)?;
+                    // Its sources are the running program's now.
+                    if std::mem::take(&mut register) {
+                        register_debugger(running)?;
+                    }
                 }
                 17 => send_frame(&mut stream, 19, &invoke_rejection(&key, &Error::Stale))?,
                 12 if payload.as_slice() == key => {
@@ -6561,12 +6684,13 @@ fn run_protocol(
     let mut admitted = false;
     let mut hot = Hot::default();
     let mut first = Some(first);
-    let (frames, received) = std::sync::mpsc::channel::<__RawrFrame>();
+    let (frames, received) = std::sync::mpsc::channel::<__RawrNext>();
+    let wanted = frames.clone();
     let mut reader = stream.try_clone()?;
     std::thread::spawn(move || loop {
         let frame = receive_frame(&mut reader);
         let end = frame.is_err();
-        if frames.send(frame).is_err() || end {
+        if frames.send(__RawrNext::Frame(frame)).is_err() || end {
             break;
         }
     });
@@ -6581,6 +6705,7 @@ fn run_protocol(
                 bindings: &program._bindings,
                 contract: &program.application_contract,
                 running: None,
+                expected: program.source.expected,
             });
             if serve_hot(&mut stream, tag, &payload, &key, &mut hot, &mut pending, resident)? {
                 continue;
@@ -6702,6 +6827,19 @@ fn run_protocol(
                 send_frame(&mut stream, 11, &key)?;
             }
             20 if admitted && payload.as_slice() == key => {
+                // A shell's first request for the debugger of a marked
+                // `main` that runs without one registers it beside the
+                // program (#2266), from before the owner hears it runs and
+                // lets shells reach it.
+                if program.as_ref().is_some_and(|program| program.candidate.is_some())
+                    && registered().is_none()
+                    && let Some(inspector) = inspector()
+                {
+                    let wanted = wanted.clone();
+                    inspector.register_on_request(move || {
+                        let _ = wanted.send(__RawrNext::Debugger);
+                    });
+                }
                 send_frame(&mut stream, 21, &key)?;
                 // The program runs here, on the thread that owns it, for as
                 // long as it runs; the protocol goes on beside it. That
@@ -6721,6 +6859,7 @@ fn run_protocol(
                     generation: candidate.generation().clone(),
                     bindings: running._bindings.clone(),
                     contract: running.application_contract.clone(),
+                    source: std::sync::Arc::clone(&running.source),
                 });
                 std::thread::Builder::new()
                     .name("rawr protocol".into())
@@ -30092,7 +30231,7 @@ mod tests {
                 "account::Native::decode(GENERATED_MANIFEST)",
                 "prepare_engine(native, __rawr_internal::Access::all(), tests.as_ref(), &mut *progress)?",
                 "__rawr_profile::compile_initial(",
-                "Ok(Some(Program { engine,",
+                "Ok(Program { engine,",
             ],
         );
         assert_eq!(compile.matches("Native::decode(").count(), 1);

@@ -478,7 +478,8 @@ pub fn run_tests(
 }
 
 /// What each runner's command gets before it spawns: the program's reload
-/// stream, and its debugger's sockets once a shell asked for one. No hook
+/// stream, and its debugger's sockets, which it registers a debugger on at
+/// a shell's first request when none asked for one yet. No hook
 /// runs in the child, so std spawns it with `posix_spawn` and copies none
 /// of this process's memory. The runner clears the signal mask it inherits
 /// itself.
@@ -486,7 +487,7 @@ fn prepare(command: &mut std::process::Command) {
     if let Some(path) = rawr_cli::events::reload::path() {
         command.env(rawr_cli::events::reload::VARIABLE, path);
     }
-    rawr_cli::events::session::prepare(command);
+    rawr_cli::events::session::prepare_runner(command);
 }
 
 /// The contents of the program's files: its sources, its native modules
@@ -665,15 +666,6 @@ fn session(
                 Some(ended) => return Ok(ended),
                 None => {}
             }
-            // A shell asked for the debugger of a program that runs
-            // without one: it starts again with one.
-            if rawr_cli::events::session::take_restart() {
-                let reason = "a debugger attached";
-                rawr_import::process::say(format_args!("rawr: {reason}; restarting the program"));
-                rawr_cli::events::restarting(reason);
-                return Ok(Ended::Restart(reason.to_owned(), None));
-            }
-
             adapter.poll();
             let now = Instant::now();
             if now >= refresh_at {
@@ -1258,6 +1250,17 @@ fn reaped(
             rawr::island::REFUSED,
         )))) if swapped_marked && lifecycle == rawr_import::process::Lifecycle::Run => {
             let reason = "a value made before a save took effect holds its old types";
+            rawr_cli::events::restarting(reason);
+            Ok(Some(Ended::Restart(reason.to_owned(), None)))
+        }
+        // A shell asked for the debugger of a program that can't take a
+        // generation with one in place, such as an async `main`'s runtime
+        // entry, and the runner said so: it starts again with one (#2266).
+        Err(crate::native::Error::Process(rawr_import::process::RunnerError::Exit(Some(
+            rawr::process::DEBUGGER,
+        )))) if lifecycle == rawr_import::process::Lifecycle::Run => {
+            let reason = "a debugger attached";
+            rawr_import::process::say(format_args!("rawr: {reason}; restarting the program"));
             rawr_cli::events::restarting(reason);
             Ok(Some(Ended::Restart(reason.to_owned(), None)))
         }
