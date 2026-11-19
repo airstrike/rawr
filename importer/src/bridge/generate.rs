@@ -30212,6 +30212,34 @@ mod tests {
         );
     }
 
+    /// A debugger registered at a shell's request, and each generation it
+    /// is placed on, compiles nothing (#2308): registration places the
+    /// generation that runs next and attaches the engines the runner made,
+    /// so a request never waits on a compile.
+    #[test]
+    fn generated_debugger_registration_compiles_nothing() {
+        let driver = std::str::from_utf8(DRIVER_SOURCE).expect("driver source is UTF-8");
+        let body = |name: &str| {
+            let (_, rest) = driver
+                .split_once(&format!("\nfn {name}("))
+                .unwrap_or_else(|| panic!("no `{name}` in the driver"));
+            rest.split_once("\n}\n").expect("a function's end").0
+        };
+        for name in ["register", "take_debugger", "locate", "place"] {
+            let body = body(name);
+            assert!(!body.contains("compile_"), "`{name}` compiles: {body}");
+            assert!(
+                !body.contains("prepare_engine"),
+                "`{name}` makes an engine: {body}"
+            );
+        }
+        assert!(body("register").contains("attach_running"));
+        assert!(body("take_debugger").contains("attach_running"));
+        // The runner main asks for no generation for the debugger.
+        let runner = std::str::from_utf8(RUNNER_MAIN).expect("runner source is UTF-8");
+        assert!(!runner.contains("register_on_request"), "{runner}");
+    }
+
     #[test]
     fn generated_compiler_retains_one_native_account_before_initial_compilation() {
         let runtime = std::str::from_utf8(DRIVER_SOURCE).expect("driver source is UTF-8");
