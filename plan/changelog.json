@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.4.44",
+      "date": "2026-11-19",
+      "entries": [
+        {"text":"The debugger reads a map, set or sequence holding a program's own structs or enums as Rust's `{:?}` prints it, such as `{\"ann\": Player { score: 3, level: 1, tags: [\"new\"] }}`, instead of a list of pairs with opaque `<Rawr struct …>` handles, so the panel opens such a map to one row per key, then its fields.","issues":[2313]}
+      ]
+    },
+    {
       "version": "0.4.43",
       "date": "2026-11-19",
       "entries": [

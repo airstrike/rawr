@@ -1,7 +1,7 @@
 {
   "$schema": "schema/gantt.schema.json",
   "updated": "2026-11-19",
-  "version": "0.4.43",
+  "version": "0.4.44",
   "examples": {
     "running": 56,
     "total": 56,
@@ -164,7 +164,7 @@
         {"id":"example-sweeps","name":"Caches fit on the machine","start":84,"size":2,"state":"next","note":"rawr deletes stale caches by state, with no timer (#1677). That took inboard's target/rawr from 22 GB to 15 GB. Left: inboard's store keeps parts beside whole executions (#1407). The facade plan, compression and single facts are #1360, #1361 and #1362.","issues":[959,960,963,964,972,982,989,998,999,1013,1015,1016,1121,1122,1246,1347,1354,1355,1356,1357,1358,1359,1360,1361,1362,1371,1376,1377,1389,1407,1677,1731,1732,1733,1751,1771,1782,1783,1790,1791,725,865,2109]},
         {"id":"error-messages","name":"Error messages and metadata edge cases","start":84,"size":1,"state":"done","note":"#1108 in 0.3.165; #1109 reworded about 150 messages in 0.3.166","issues":[1108,1109],"milestone":"0.3"},
         {"id":"std-once","name":"std bindings built once","start":82,"size":2,"state":"done","note":"0.02 s release startup (#931); once per machine is 0.4 work","issues":[931,939,940,941],"milestone":"0.3"},
-        {"id":"steady-suites","name":"Suites pass on main and under load","start":86,"size":2,"state":"next","note":"A test fails for a cause, never for its neighbours. Left: tests failing on main (#253, #353, #696), races in the lib suites (#421, #1057, #1229), Miri under Stacked Borrows (#574).","issues":[316,329,76,81,84,243,253,418,353,421,574,673,696,697,788,883,884,895,1054,1057,1104,1113,1229,1332,1420,1446,396,182,1856,1862,1917,1900,2227,2281,2283,2289,2302,2303]},
+        {"id":"steady-suites","name":"Suites pass on main and under load","start":86,"size":2,"state":"next","note":"A test fails for a cause, never for its neighbours. Left: tests failing on main (#253, #353, #696), races in the lib suites (#421, #1057, #1229), Miri under Stacked Borrows (#574).","issues":[316,329,76,81,84,243,253,418,353,421,574,673,696,697,788,883,884,895,1054,1057,1104,1113,1229,1332,1420,1446,396,182,1856,1862,1917,1900,2227,2281,2283,2289,2302,2303,2314]},
         {"id":"ci-and-install","name":"CI, install and release","start":86,"size":1,"state":"next","note":"Left: a cached Linux target (#495), current action majors (#494), a from-source install's driver (#840), play/universe's lock (#882).","issues":[494,495,497,498,537,558,840,866,868,882]},
         {"id":"windows-and-signing","name":"Windows builds and signed binaries","start":87,"size":3,"state":"next","note":"Left: rawr-import on Windows (#824), the Windows binaries run (#823), notarized macOS binaries (#822).","issues":[822,823,824,1910]},
         {"id":"docs-match-code","name":"Docs say what the code does","start":87,"size":1,"state":"next","note":"Left: the README's setup and link (#1091), the commands page (#1093), the Agents page's tool fields (#1094).","issues":[1091,1093,1094,1402,1220,1221,1223]}
