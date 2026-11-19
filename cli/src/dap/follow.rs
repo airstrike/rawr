@@ -1,6 +1,7 @@
 //! The session's events and output as the protocol's events: a pause is
 //! `stopped`, its end `continued`, the program's output and each reload
-//! `output`, and the end of the run `exited` and `terminated`.
+//! `output`, a change to the breakpoints `breakpoint`, and the end of the
+//! run `exited` and `terminated`.
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -18,8 +19,12 @@ impl Adapter {
     pub(super) fn follow(&self, session: &Arc<Session>) {
         let mut event = 0;
         let mut output = 0;
+        let mut breakpoints = 0;
         let mut past = !session.is_started();
         loop {
+            let told = session.breakpoints();
+            breakpoints = told["revision"].as_u64().unwrap_or(breakpoints);
+            self.follow_breakpoints(&told);
             let answer = session.answer(Some(event), Some(output)).structured;
             event = answer["cursor"].as_u64().unwrap_or(event);
             output = answer["output_cursor"].as_u64().unwrap_or(output);
@@ -46,7 +51,7 @@ impl Adapter {
                 self.out.event("terminated", json!({}));
                 return;
             }
-            session.hear(event, output, &Cancel::default());
+            session.hear(event, output, breakpoints, &Cancel::default());
         }
     }
 

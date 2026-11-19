@@ -11,12 +11,17 @@
 //! The protocol is JSON-RPC 2.0, one message per line each way. A shell
 //! asks:
 //! - `hello`: `{"protocol", "capabilities": [..], "root", "pid", "events":
-//!   [..], "output": [{"stream", "text"}]}`, the events so far each with its
-//!   `seq` and the output kept so far. From then on the connection hears
+//!   [..], "output": [{"stream", "text"}], "breakpoints"}`, the events so
+//!   far each with its `seq`, the output kept so far and the breakpoints
+//!   now, as their event tells them. From then on the connection hears
 //!   each event as an `event` notification, numbered on, and each piece of
 //!   output as an `output` notification: each connection has its own cursor
 //!   through them. A pause, a resume and a reload reach every connection
-//!   this way.
+//!   this way. A change to the breakpoints, from any shell, is told as a
+//!   `breakpoints` event with no number and no place in the history:
+//!   `{"event": "breakpoints", "revision", "breakpoints": [..]}`, the list
+//!   the program's inspector keeps (#2278), its revision counting the
+//!   changes, so a shell takes only a newer list than it has.
 //! - `program`: the inspector's request (see [`rawr::inspect`]), answered
 //!   with the inspector's answer once the program answers it, or the error
 //!   [`NOT_RUNNING`] with the session's `state` when no program will. A
@@ -33,7 +38,7 @@
 //!
 //! The inspector tells `serve` (`{"socket"}`) once it listens, which holds
 //! while its connection stays open, and `emit` (an event) when the program
-//! pauses and goes on.
+//! pauses and goes on and when its breakpoints change.
 //!
 //! A run no shell started registers no debugger. A generated runner
 //! serves its inspector all the same ([`prepare_runner`]), and a shell's

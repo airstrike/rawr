@@ -71,7 +71,6 @@ struct Rig {
     session: Session,
     terminal: Terminal<TestBackend>,
     file: PathBuf,
-    saved: PathBuf,
 }
 
 impl Rig {
@@ -80,12 +79,10 @@ impl Rig {
         std::fs::create_dir_all(&directory).unwrap();
         let file = directory.join("main.rs");
         std::fs::write(&file, SOURCE).unwrap();
-        let saved = directory.join("breakpoints.json");
-        let _ = std::fs::remove_file(&saved);
         let (ours, theirs) = UnixStream::pair().unwrap();
         let (send, inputs) = mpsc::channel();
         let client = Client::new(ours, send, Input::Session).unwrap();
-        let shell = Shell::new(client, file.clone(), saved.clone());
+        let shell = Shell::new(client, file.clone());
         let session = Session {
             reader: BufReader::new(theirs.try_clone().unwrap()),
             writer: theirs,
@@ -96,7 +93,6 @@ impl Rig {
             session,
             terminal: Terminal::new(TestBackend::new(110, 30)).unwrap(),
             file,
-            saved,
         }
     }
 
@@ -160,8 +156,24 @@ impl Rig {
         })
     }
 
+    /// The breakpoints at `lines` of the file, as the session tells them
+    /// at `revision`.
+    fn breakpoints(&self, revision: u64, lines: &[u64]) -> Value {
+        let specs: Vec<Value> = lines
+            .iter()
+            .map(|line| json!({ "file": self.file(), "line": line, "text": "" }))
+            .collect();
+        json!({ "event": "breakpoints", "revision": revision, "breakpoints": specs })
+    }
+
     /// Attach: the session says the program runs and gives its output.
     fn attach(&mut self) {
+        self.attach_with(&[]);
+    }
+
+    /// Attach to a session whose breakpoints are at `lines`.
+    fn attach_with(&mut self, lines: &[u64]) {
+        let breakpoints = self.breakpoints(1, lines);
         let hello = self.session.request();
         assert_eq!(hello["method"], "hello", "{hello}");
         self.session.answer(
@@ -172,6 +184,7 @@ impl Rig {
                 "capabilities": ["events", "inspect", "eval", "break", "step", "continue"],
                 "events": [{ "event": "running", "seq": 1 }],
                 "output": [{ "stream": "stdout", "text": "started\n" }],
+                "breakpoints": breakpoints,
             }),
         );
         self.hear(1);
@@ -187,12 +200,13 @@ impl Rig {
             json!({ "op": "break", "file": self.file(), "line": 7 })
         );
         let spec = json!({ "file": self.file(), "line": 7, "text": "app.count += 1;" });
-        std::fs::write(&self.saved, json!([spec]).to_string()).unwrap();
         self.session.answer(
             &request,
             json!({ "set": spec, "lines": [spec], "compiled": true, "paused": null }),
         );
-        self.hear(1);
+        let told = self.breakpoints(2, &[7]);
+        self.session.event(told);
+        self.hear(2);
     }
 
     /// The program pauses at `line`, as another shell's click or a step
@@ -216,6 +230,38 @@ fn line_with<'s>(screen: &'s str, needle: &str) -> &'s str {
         .lines()
         .find(|line| line.contains(needle))
         .unwrap_or_else(|| panic!("the screen shows `{needle}`:\n{screen}"))
+}
+
+/// A breakpoint another shell sets or clears marks its line as the session
+/// tells it, and one set before the shell attached shows at once (#2278).
+#[test]
+fn the_breakpoints_every_shell_sets_mark_their_lines() {
+    let mut rig = Rig::new("told");
+    rig.attach_with(&[13]);
+    let screen = rig.screen();
+    assert!(screen.contains("● main.rs:13"), "{screen}");
+    let thirteen = line_with(&screen, "update(&mut app);");
+    assert!(thirteen.contains("●13"), "{thirteen}");
+
+    let told = rig.breakpoints(2, &[7, 13]);
+    rig.session.event(told);
+    rig.hear(1);
+    let screen = rig.screen();
+    assert!(
+        line_with(&screen, "app.count += 1;").contains("● 7"),
+        "{screen}"
+    );
+    // A list older than the one shown changes nothing.
+    let stale = rig.breakpoints(1, &[]);
+    rig.session.event(stale);
+    rig.hear(1);
+    assert!(rig.screen().contains("● main.rs:7"));
+    let cleared = rig.breakpoints(3, &[13]);
+    rig.session.event(cleared);
+    rig.hear(1);
+    let screen = rig.screen();
+    assert!(!screen.contains("● main.rs:7"), "{screen}");
+    assert!(screen.contains("● main.rs:13"), "{screen}");
 }
 
 #[test]

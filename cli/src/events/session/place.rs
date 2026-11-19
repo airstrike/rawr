@@ -91,11 +91,17 @@ impl Place {
         self.directory.join("inspect.sock")
     }
 
+    /// The file the program's inspector keeps its breakpoints in.
+    #[must_use]
+    pub fn breakpoints(&self) -> PathBuf {
+        self.directory.join(rawr::inspect::BREAKPOINTS)
+    }
+
     /// What a run leaves here for the next: the breakpoints and a
     /// program's stale socket. A new run starts with none.
     pub fn clear(&self) {
         let _ = std::fs::remove_file(self.inspector());
-        let _ = std::fs::remove_file(self.directory.join("breakpoints.json"));
+        let _ = std::fs::remove_file(self.breakpoints());
     }
 
     /// Remove the place, once its run is over.

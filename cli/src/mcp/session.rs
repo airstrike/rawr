@@ -65,6 +65,9 @@ struct Mirror {
     /// The newest `wait`'s number: a wait whose number is older was given
     /// up by its client, which waits once at a time, and answers nothing.
     waiter: u64,
+    /// The newest breakpoints the session told, as its `breakpoints` event
+    /// tells them (#2278).
+    breakpoints: Value,
 }
 
 /// How the session answered a request.
@@ -505,6 +508,9 @@ impl Session {
                     if let Some(seq) = event["seq"].as_u64() {
                         self.state().session.record(seq, event);
                         self.changed.notify_all();
+                    } else if event["event"] == "breakpoints" {
+                        self.state().take_breakpoints(event);
+                        self.changed.notify_all();
                     }
                 }
                 (None, Some("output")) => {
@@ -546,6 +552,7 @@ impl Session {
                 state.session.record(seq, event.clone());
             }
         }
+        state.take_breakpoints(result["breakpoints"].clone());
         if self.started.is_none() {
             state.pid = result["pid"]
                 .as_u64()
@@ -718,14 +725,31 @@ impl Session {
         (self.state().waiter == ticket).then_some(after)
     }
 
-    /// Wait for an event past `event` or output past `output`, the end of
-    /// the session, or `cancel`: for a shell that tells each as it comes.
-    pub fn hear(self: &Arc<Self>, event: u64, output: u64, cancel: &process::Cancel) {
+    /// The newest breakpoints the session told: `{"event": "breakpoints",
+    /// "revision", "breakpoints": [..]}`, or null before `hello`.
+    #[must_use]
+    pub fn breakpoints(&self) -> Value {
+        self.state().breakpoints.clone()
+    }
+
+    /// Wait for an event past `event`, output past `output`, breakpoints
+    /// past revision `breakpoints`, the end of the session, or `cancel`:
+    /// for a shell that tells each as it comes.
+    pub fn hear(
+        self: &Arc<Self>,
+        event: u64,
+        output: u64,
+        breakpoints: u64,
+        cancel: &process::Cancel,
+    ) {
         self.block(
             event,
             cancel,
             |state, after| {
                 state.next_output > output
+                    || state.breakpoints["revision"]
+                        .as_u64()
+                        .is_some_and(|revision| revision > breakpoints)
                     || state
                         .session
                         .events()
@@ -833,6 +857,15 @@ impl Mirror {
                 break;
             };
             self.output_bytes -= dropped.len();
+        }
+    }
+
+    /// Take `told` breakpoints when they are newer than those kept: the
+    /// session may tell a list `hello` already gave.
+    fn take_breakpoints(&mut self, told: Value) {
+        let revision = |breakpoints: &Value| breakpoints["revision"].as_u64();
+        if revision(&told) > revision(&self.breakpoints) {
+            self.breakpoints = told;
         }
     }
 }

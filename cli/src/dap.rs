@@ -6,7 +6,8 @@
 //! `attach` reaches a run started elsewhere, through the same
 //! [`crate::mcp::session`]. Breakpoints, steps, a pause, values and `eval`
 //! are the program's inspector's ([`rawr::inspect`]); the session's events
-//! become `stopped`, `continued`, `output` and `terminated`. A save still
+//! become `stopped`, `continued`, `output` and `terminated`, and the
+//! breakpoints another shell sets or clears become `breakpoint` events. A save still
 //! reloads the program, and the adapter says so as output.
 //!
 //! The protocol counts one thread: the one that runs the program's code,
@@ -14,6 +15,7 @@
 //! each named by its Rust path, and a value's children are its parts as
 //! the inspector splits its `{:?}` text.
 
+mod breakpoints;
 mod control;
 mod follow;
 mod handles;
@@ -51,6 +53,8 @@ struct Adapter {
     functions: Mutex<Vec<String>>,
     /// One breakpoint request changes the program's breakpoints at a time.
     breaking: Mutex<()>,
+    /// The breakpoints the client knows, by their ids.
+    known: Mutex<breakpoints::Known>,
     /// The client heard `stopped` and no `continued` since.
     stopped: AtomicBool,
     /// The program the adapter launched waits at its start for the
@@ -69,6 +73,7 @@ impl Adapter {
             first_line: AtomicU64::new(1),
             functions: Mutex::new(Vec::new()),
             breaking: Mutex::new(()),
+            known: Mutex::new(breakpoints::Known::default()),
             stopped: AtomicBool::new(false),
             held: AtomicBool::new(false),
         }
@@ -76,6 +81,10 @@ impl Adapter {
 
     fn handles(&self) -> MutexGuard<'_, handles::Handles> {
         self.handles.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn known(&self) -> MutexGuard<'_, breakpoints::Known> {
+        self.known.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// The program's session, once the client launched or attached.
@@ -161,5 +170,33 @@ mod tests {
         assert_eq!(configured.join().unwrap(), json!({}));
         // Nothing is held any more: no request goes to the program.
         assert_eq!(adapter.configured(), json!({}));
+    }
+
+    /// A breakpoint another shell sets reaches the client as a `breakpoint`
+    /// event, `new` with its line as the client counts lines, and its
+    /// clear as `removed` by the same id (#2278).
+    #[test]
+    fn another_shells_breakpoint_is_told_as_new_then_removed() {
+        let (written, read) = std::os::unix::net::UnixStream::pair().unwrap();
+        let adapter = Adapter::new(PathBuf::from("/p"), wire::Writer::new(written));
+        adapter.first_line.store(0, Ordering::Relaxed);
+        let mut heard = BufReader::new(read);
+        let spec = json!({ "file": "/p/src/main.rs", "line": 7, "text": "tick();" });
+        adapter.follow_breakpoints(&json!({ "revision": 1, "breakpoints": [spec] }));
+        let new = wire::read(&mut heard).unwrap().unwrap();
+        assert_eq!(new["event"], "breakpoint", "{new}");
+        assert_eq!(new["body"]["reason"], "new", "{new}");
+        assert_eq!(new["body"]["breakpoint"]["line"], 6, "{new}");
+        assert_eq!(
+            new["body"]["breakpoint"]["source"]["path"],
+            "/p/src/main.rs"
+        );
+        adapter.follow_breakpoints(&json!({ "revision": 2, "breakpoints": [] }));
+        let removed = wire::read(&mut heard).unwrap().unwrap();
+        assert_eq!(removed["body"]["reason"], "removed", "{removed}");
+        assert_eq!(
+            removed["body"]["breakpoint"]["id"],
+            new["body"]["breakpoint"]["id"]
+        );
     }
 }
