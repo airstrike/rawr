@@ -53,6 +53,9 @@ struct Adapter {
     breaking: Mutex<()>,
     /// The client heard `stopped` and no `continued` since.
     stopped: AtomicBool,
+    /// The program the adapter launched waits at its start for the
+    /// client's `configurationDone`, which releases it (#2274).
+    held: AtomicBool,
 }
 
 impl Adapter {
@@ -67,6 +70,7 @@ impl Adapter {
             functions: Mutex::new(Vec::new()),
             breaking: Mutex::new(()),
             stopped: AtomicBool::new(false),
+            held: AtomicBool::new(false),
         }
     }
 
@@ -119,5 +123,43 @@ impl Adapter {
     fn output(&self, category: &str, text: &str) {
         self.out
             .event("output", json!({ "category": category, "output": text }));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{BufRead as _, BufReader, Write as _};
+    use std::path::PathBuf;
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+
+    use serde_json::{json, Value};
+
+    use super::{wire, Adapter};
+    use crate::mcp::session::{Phase, Session};
+
+    /// `configurationDone` releases the program the adapter launched, held
+    /// at its start, once; a second asks the program nothing (#2274).
+    #[test]
+    fn configuration_done_releases_a_launched_program_once() {
+        let (session, other) = Session::running_at(Phase::Running);
+        let adapter = Arc::new(Adapter::new(
+            PathBuf::from("/p"),
+            wire::Writer::new(std::io::sink()),
+        ));
+        *adapter.session.lock().unwrap() = Some(session);
+        adapter.held.store(true, Ordering::Release);
+        let configuring = Arc::clone(&adapter);
+        let configured = std::thread::spawn(move || configuring.configured());
+        let mut lines = BufReader::new(other.try_clone().unwrap()).lines();
+        let mut next = || serde_json::from_str::<Value>(&lines.next().unwrap().unwrap()).unwrap();
+        assert_eq!(next()["method"], "hello");
+        let asked = next();
+        assert_eq!(asked["params"], json!({ "op": "release" }));
+        let answer = json!({ "jsonrpc": "2.0", "id": asked["id"], "result": { "released": true } });
+        writeln!(&other, "{answer}").unwrap();
+        assert_eq!(configured.join().unwrap(), json!({}));
+        // Nothing is held any more: no request goes to the program.
+        assert_eq!(adapter.configured(), json!({}));
     }
 }

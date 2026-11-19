@@ -709,7 +709,14 @@ fn start(
     }
     let session = server
         .sessions
-        .start(&place.root, &place.path, arguments, stdin, cancel)
+        .start(
+            &place.root,
+            &place.path,
+            arguments,
+            stdin,
+            crate::mcp::session::Entry::Run,
+            cancel,
+        )
         .map_err(|error| format!("cannot start rawr run: {error}"))?;
     session.settle(cancel, |stage, percent| {
         progress.send(percent as f64, Some(100.0), stage);

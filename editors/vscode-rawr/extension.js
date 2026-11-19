@@ -7,15 +7,16 @@
 
 const vscode = require("vscode");
 
-const MARKER = "// rawr";
+const { isMarker, programFor } = require("./program");
+
+/** The first line of `document`, or nothing. */
+function firstLine(document) {
+  return document.lineCount === 0 ? "" : document.lineAt(0).text;
+}
 
 /** Whether `document` is a `.rs` file whose first line is `// rawr`. */
 function isMarked(document) {
-  if (document.languageId !== "rust" || document.lineCount === 0) {
-    return false;
-  }
-  const first = document.lineAt(0).text.replace(/^﻿/, "");
-  return first.trimEnd() === MARKER;
+  return document.languageId === "rust" && isMarker(firstLine(document));
 }
 
 function update(editor) {
@@ -34,17 +35,27 @@ const adapter = {
 };
 
 /**
- * A launch with no configuration, as F5 without a launch.json starts:
- * the active file's program, else the workspace folder's.
+ * A launch with no configuration, as F5 without a launch.json starts: the
+ * crate of the active Rust file, which must be marked, else the workspace
+ * folder's.
  */
 const configurations = {
   resolveDebugConfiguration(folder, configuration) {
     if (configuration.type === undefined && configuration.request === undefined) {
-      const editor = vscode.window.activeTextEditor;
-      const program =
-        editor !== undefined && isMarked(editor.document)
-          ? editor.document.uri.fsPath
-          : folder?.uri.fsPath;
+      const document = vscode.window.activeTextEditor?.document;
+      let program = folder?.uri.fsPath;
+      if (document?.languageId === "rust" && document.uri.scheme === "file") {
+        const chosen = programFor(
+          document.uri.fsPath,
+          firstLine(document),
+          vscode.workspace.asRelativePath(document.uri),
+        );
+        if (chosen.error !== undefined) {
+          vscode.window.showErrorMessage(chosen.error);
+          return undefined;
+        }
+        program = chosen.program;
+      }
       if (program === undefined) {
         return undefined;
       }

@@ -51,6 +51,10 @@ struct Inner {
     listeners: Vec<Listener>,
     inspector: Option<Served>,
     debugger: Debugger,
+    /// The next program the owner starts waits at its start for the shell
+    /// that started the run (#2274): only the first, as a program started
+    /// again has the breakpoints from its start.
+    hold: bool,
 }
 
 /// A connection that said `hello`, and hears what happens from then on.
@@ -128,6 +132,8 @@ pub fn open(root: &Path) -> Option<Host> {
     });
     match opened {
         Ok(Some(host)) => {
+            host.0.inner().hold =
+                std::env::var_os(crate::events::HOLD).is_some_and(|value| !value.is_empty());
             *open_session() = Some(Arc::clone(&host.0));
             Some(host)
         }
@@ -151,11 +157,14 @@ pub fn record(event: &Value) {
 /// listener this run was handed, and the debugger's sockets once a shell
 /// asked for one.
 pub fn prepare(command: &mut Command) {
-    command.env_remove(handover::LISTENER);
+    command
+        .env_remove(handover::LISTENER)
+        .env_remove(crate::events::HOLD);
     let Some(shared) = current() else {
         return;
     };
     let mut inner = shared.inner();
+    hold(&mut inner, command);
     if inner.debugger == Debugger::Off {
         return;
     }
@@ -173,11 +182,14 @@ pub fn prepare(command: &mut Command) {
 /// shell's first request for it, at its next call from native code
 /// (#2266); a runner that started with one keeps it on.
 pub fn prepare_runner(command: &mut Command) {
-    command.env_remove(handover::LISTENER);
+    command
+        .env_remove(handover::LISTENER)
+        .env_remove(crate::events::HOLD);
     let Some(shared) = current() else {
         return;
     };
     let mut inner = shared.inner();
+    hold(&mut inner, command);
     inner.debugger = match inner.debugger {
         Debugger::Off | Debugger::OnRequest => {
             command.env(crate::events::DEBUGGER_ON_REQUEST, "1");
@@ -188,6 +200,14 @@ pub fn prepare_runner(command: &mut Command) {
     command
         .env(crate::events::INSPECT, shared.place.inspector())
         .env(crate::events::DEBUG_EVENTS, shared.place.socket());
+}
+
+/// Hold the program `command` starts at its start when it is the run's
+/// first; no other has the variable.
+fn hold(inner: &mut Inner, command: &mut Command) {
+    if std::mem::take(&mut inner.hold) {
+        command.env(crate::events::HOLD, "1");
+    }
 }
 
 /// Whether a shell asked for the program's debugger while it ran without
@@ -829,6 +849,29 @@ mod tests {
         assert!(!on_request(&restarted));
         drop(host);
         assert!(super::current().is_none());
+    }
+
+    /// A run whose shell holds its start holds only the first program the
+    /// owner starts; one started again goes at once (#2274).
+    #[test]
+    fn only_the_first_program_of_a_held_run_waits_at_its_start() {
+        let held = |command: &std::process::Command| {
+            command
+                .get_envs()
+                .find(|(name, _)| *name == crate::events::HOLD)
+                .and_then(|(_, value)| value)
+                .is_some()
+        };
+        let mut inner = super::Inner {
+            hold: true,
+            ..super::Inner::default()
+        };
+        let mut first = std::process::Command::new("true");
+        super::hold(&mut inner, &mut first);
+        assert!(held(&first));
+        let mut again = std::process::Command::new("true");
+        super::hold(&mut inner, &mut again);
+        assert!(!held(&again));
     }
 
     #[test]

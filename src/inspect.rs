@@ -58,6 +58,10 @@
 //! - `{"op": "pause"}` on a running program: answered at once, `{"paused":
 //!   null}`, and it pauses at the next statement it runs, with the reason
 //!   `pause`; on a paused one, `{"paused": ..}` where it is.
+//! - `{"op": "release"}` on a program held at its start ([`HOLD`]): it
+//!   runs on from its first statement, which pauses there if a breakpoint
+//!   is on it now. Answered at once, `{"released": true}`, or `{"released":
+//!   false}` when nothing held it.
 //!
 //! It also sends the program's window input (#989), with `{"op": "input",
 //! "action": ..}`: a pointer move, a click, a drag, a scroll, a key press or
@@ -122,6 +126,12 @@ use interrupt::Interrupt;
 /// to. The process that runs the program has it, a runner or the
 /// program's own.
 pub const EVENTS: &str = "RAWR_MCP_DEBUG_EVENTS";
+
+/// Set in the environment of a program whose shell sets its breakpoints
+/// before it runs (#2274): the program waits at the first statement it
+/// wrote until a `release` request, which the shell sends once they are
+/// in. Breakpoints are set meanwhile; a read waits for the release.
+pub const HOLD: &str = "RAWR_DEBUG_HOLD";
 
 #[cfg(feature = "sync")]
 pub use evaluate::Program;
@@ -801,6 +811,8 @@ struct Shared {
     breaks: Arc<BreakPositions>,
     /// A step is under way: each step calls back until it pauses.
     stepping: AtomicBool,
+    /// The program waits at its first statement until a `release`.
+    entry: AtomicBool,
     /// The callback is answering: steps of the `Debug` code it runs are not
     /// answered and don't pause.
     answering: AtomicBool,
@@ -849,8 +861,10 @@ impl Shared {
             .stepping
             .as_ref()
             .is_some_and(|stepping| stepping.anywhere);
-        self.wake
-            .store(anywhere || !state.pending.is_empty(), Ordering::Release);
+        self.wake.store(
+            anywhere || !state.pending.is_empty() || self.entry.load(Ordering::Acquire),
+            Ordering::Release,
+        );
     }
 
     /// Where `position` is in the program's files.
@@ -906,6 +920,7 @@ impl Inspector {
             wake: Arc::default(),
             breaks: Arc::default(),
             stepping: AtomicBool::new(false),
+            entry: AtomicBool::new(false),
             answering: AtomicBool::new(false),
             one: Mutex::new(()),
             locate: Mutex::new(None),
@@ -928,7 +943,20 @@ impl Inspector {
                         .spawn(move || shared.handle(stream));
                 }
             })?;
-        Ok(Self(shared))
+        let inspector = Self(shared);
+        if std::env::var_os(HOLD).is_some_and(|value| !value.is_empty()) {
+            inspector.hold();
+        }
+        Ok(inspector)
+    }
+
+    /// Hold the program at the first statement it wrote until a `release`
+    /// request: every evaluation calls back at its next step until then.
+    pub fn hold(&self) {
+        let shared = &self.0;
+        let state = shared.state();
+        shared.entry.store(true, Ordering::Release);
+        shared.rouse(&state);
     }
 
     /// Answer requests from the program `engine` runs, and pause it at the
@@ -1064,6 +1092,7 @@ impl Shared {
             Some("clear") => self.clear(request),
             Some("continue") => self.resume(Resume::Continue, gone),
             Some("pause") => self.interrupt(),
+            Some("release") => self.let_go(),
             Some("step") => self.resume(
                 Resume::Step(match request.get("kind").and_then(Value::as_str) {
                     Some("into") => Step::Into,
@@ -1326,6 +1355,27 @@ impl Shared {
         json!({ "paused": null })
     }
 
+    /// Let a program held at its start run on: answered at once.
+    fn let_go(&self) -> Value {
+        let state = self.state();
+        let released = self.entry.swap(false, Ordering::AcqRel);
+        self.rouse(&state);
+        drop(state);
+        self.changed.notify_all();
+        json!({ "released": released })
+    }
+
+    /// Wait at the program's first statement until a `release`.
+    fn wait_entry(&self) {
+        let mut state = self.state();
+        while self.entry.load(Ordering::Acquire) {
+            state = self
+                .changed
+                .wait(state)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+
     /// Break at every breakpoint's steps.
     fn armed(&self, state: &State) {
         self.breaks.set(
@@ -1366,6 +1416,15 @@ impl Shared {
             )
         {
             self.answer(context, position);
+        }
+        // A program held at its start waits at its first statement; a
+        // breakpoint set on it meanwhile pauses it there once released.
+        let mut event = event;
+        if self.entry.load(Ordering::Acquire) && self.stop(position, &node).is_some() {
+            self.wait_entry();
+            if self.breaks.contains(position) {
+                event = DebuggerEvent::Break;
+            }
         }
         match event {
             DebuggerEvent::Break => {
@@ -2291,6 +2350,49 @@ mod tests {
             assert_eq!(next["paused"]["function"], "spin", "{next}");
             assert_eq!(next["paused"]["reason"], "step", "{next}");
         });
+    }
+
+    /// A program held at its start runs nothing until released, and a
+    /// breakpoint set on its first statement meanwhile pauses it there
+    /// (#2274).
+    #[cfg(unix)]
+    #[test]
+    fn a_held_program_pauses_at_a_breakpoint_set_on_its_first_statement() {
+        use serde_json::json;
+        let going = Arc::new(AtomicBool::new(true));
+        let called = Called::new("hold-break", &going);
+        called._inspector.hold();
+        let socket = called.socket.clone();
+        let tool = std::thread::spawn(move || {
+            let set = ask(&socket, &json!({ "op": "break", "function": "make" }));
+            assert!(set["paused"].is_null(), "{set}");
+            let released = ask(&socket, &json!({ "op": "release" }));
+            let paused = ask(&socket, &json!({ "name": "nothing" }));
+            let continued = ask(&socket, &json!({ "op": "continue" }));
+            (released, paused, continued)
+        });
+        let _ = called.make();
+        let (released, paused, continued) = tool.join().unwrap();
+        assert_eq!(released, json!({ "released": true }));
+        assert_eq!(paused["paused"]["function"], "make", "{paused}");
+        assert_eq!(paused["paused"]["reason"], "breakpoint", "{paused}");
+        assert!(continued["paused"].is_null(), "{continued}");
+    }
+
+    /// A release before the program reaches its first statement lets it
+    /// run without a pause; a second finds nothing held.
+    #[cfg(unix)]
+    #[test]
+    fn a_program_released_before_it_starts_runs_without_a_pause() {
+        use serde_json::json;
+        let going = Arc::new(AtomicBool::new(true));
+        let called = Called::new("hold-release", &going);
+        called._inspector.hold();
+        let released = ask(&called.socket, &json!({ "op": "release" }));
+        assert_eq!(released, json!({ "released": true }));
+        let _ = called.make();
+        let again = ask(&called.socket, &json!({ "op": "release" }));
+        assert_eq!(again, json!({ "released": false }));
     }
 
     /// A step that never pauses, out of a loop that runs on, is ended by a

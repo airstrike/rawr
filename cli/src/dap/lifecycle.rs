@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 
 use super::Adapter;
 use crate::mcp::process::Cancel;
-use crate::mcp::session::Session;
+use crate::mcp::session::{Entry, Session};
 use crate::mcp::tools;
 
 impl Adapter {
@@ -26,8 +26,9 @@ impl Adapter {
     }
 
     /// `launch`: start `rawr run` on the `program` path, with `args`, as
-    /// `rawr mcp`'s `start` does; a run started elsewhere that serves it
-    /// is attached to instead.
+    /// `rawr mcp`'s `start` does, its program held at its start until
+    /// `configurationDone`; a run started elsewhere that serves it is
+    /// attached to instead, and runs on.
     pub(super) fn launch(self: &Arc<Self>, arguments: &Value) -> Result<Value, String> {
         let cwd = tools::absolute(&self.root, arguments["cwd"].as_str());
         let place = tools::place(&cwd, arguments["program"].as_str())?;
@@ -45,9 +46,18 @@ impl Adapter {
             .collect();
         let session = self
             .sessions
-            .start(&place.root, &place.path, &program, None, &Cancel::default())
+            .start(
+                &place.root,
+                &place.path,
+                &program,
+                None,
+                Entry::Hold,
+                &Cancel::default(),
+            )
             .map_err(|error| format!("cannot start rawr run: {error}"))?;
-        if !session.is_started() {
+        if session.is_started() {
+            self.held.store(true, Ordering::Release);
+        } else {
             self.output(
                 "console",
                 "rawr: a `rawr run` started elsewhere serves this program, so the adapter attached to it\n",
@@ -83,6 +93,16 @@ impl Adapter {
             .name("rawr-dap-follow".into())
             .spawn(move || following.follow(&session));
         self.out.event("initialized", json!({}));
+    }
+
+    /// `configurationDone`: the client's breakpoints are in, so the program
+    /// the adapter launched runs on from its start. A program that isn't
+    /// running holds nothing.
+    pub(super) fn configured(&self) -> Value {
+        if self.held.swap(false, Ordering::AcqRel) {
+            let _ = self.ask(&json!({ "op": "release" }));
+        }
+        json!({})
     }
 
     /// End the run the adapter started, once it exited, or detach from one

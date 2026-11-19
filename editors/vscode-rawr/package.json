@@ -2,7 +2,7 @@
   "name": "rawr",
   "displayName": "Rawr",
   "description": "Rawr for marked .rs files: a debugger through `rawr dap`, and the home of a future preview pane.",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "publisher": "rawr-local",
   "private": true,
   "license": "MIT OR Apache-2.0",
@@ -23,7 +23,8 @@
   ],
   "main": "./extension.js",
   "files": [
-    "extension.js"
+    "extension.js",
+    "program.js"
   ],
   "contributes": {
     "configuration": {

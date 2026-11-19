@@ -6,7 +6,7 @@
 
 <h2 id="what">What it does</h2>
 <ul>
-  <li><strong>Launch</strong> starts <code>rawr run</code> on <code>program</code>, a crate&rsquo;s directory or <code>Cargo.toml</code>, or one <code>.rs</code> file, with <code>args</code>. Relative paths start at <code>cwd</code>.</li>
+  <li><strong>Launch</strong> starts <code>rawr run</code> on <code>program</code>, a crate&rsquo;s directory or <code>Cargo.toml</code>, or one <code>.rs</code> file, with <code>args</code>. Relative paths start at <code>cwd</code>. The program waits at its first statement until the editor has set its breakpoints and sent <code>configurationDone</code>, so a breakpoint in code that runs at startup is hit.</li>
   <li><strong>Attach</strong> reaches a <code>rawr run</code> started in a terminal for <code>program</code>. A run started in a terminal has no debugger until a shell asks, so it restarts once with one.</li>
   <li>Breakpoints go on lines and on functions. A line with no statement is refused, with why.</li>
   <li>Next, step in and step out stop at the program&rsquo;s next statement. Pause stops a running program at the next statement it runs. A program waiting in a window&rsquo;s event loop pauses when the loop calls into it again. A step past the end of a function the event loop called goes on into the loop and stops at the next statement the program runs, such as the next <code>view</code> or <code>update</code>.</li>
@@ -22,7 +22,7 @@
 <div class="block"><pre><code>cd editors/vscode-rawr
 npx @vscode/vsce package --skip-license --out rawr.vsix
 code --install-extension rawr.vsix</code></pre></div>
-<p>Press F5 in a Rawr file to run it, or add a configuration to <code>.vscode/launch.json</code>. The <em>Rawr: run</em> and <em>Rawr: attach</em> snippets write these:</p>
+<p>Press F5 in a Rawr file to run the crate it belongs to, found by the nearest <code>Cargo.toml</code> above it, or the file alone when there is none. A <code>.rs</code> file that isn&rsquo;t marked runs nothing and says so. Or add a configuration to <code>.vscode/launch.json</code>. The <em>Rawr: run</em> and <em>Rawr: attach</em> snippets write these:</p>
 <div class="block"><pre><code>{
   "type": "rawr",
   "request": "launch",
@@ -82,7 +82,6 @@ args = { program = "{0}" }</code></pre></div>
   <li>A pause inside a call from native code, such as a window&rsquo;s event loop, holds that loop. The window doesn&rsquo;t redraw or take input until the program goes on.</li>
   <li>Evaluation works only in the frame the program is paused in, the top of the stack.</li>
   <li>A value whose <code>Debug</code> text isn&rsquo;t in the shapes the standard derives write, as a hand-written impl may print, shows whole, without fields.</li>
-  <li>A launch starts the program at once, so a breakpoint on a line that runs before the program&rsquo;s debugger is ready can be passed. Breakpoints in code that runs later, such as an app&rsquo;s <code>update</code>, are set in time.</li>
   <li>Launch refuses a program that draws a terminal UI. Run it with <code>rawr run</code> in a terminal and attach.</li>
 </ul>
 </article>
