@@ -111,10 +111,12 @@ fn evaluate(
         .snapshot
         .with_text(std::path::Path::new(&identity), splice.spliced.text())
         .ok_or_else(|| format!("{identity} isn't one of the program's files"))?;
-    let engine = context.engine();
-    let compiled = crate::package::Graph::load_snapshot(engine, &snapshot)
-        .and_then(|graph| engine.compile_package_with_positions(graph));
-    let (ast, _, positions) = compiled.map_err(|error| match error.report() {
+    // The run's own compiler compiles it as it compiled the run: a crate's
+    // generic call takes the types the run's lowering revealed.
+    let compiled = context
+        .engine()
+        .compile_package_snapshot_with_positions(&snapshot);
+    let (ast, positions) = compiled.map_err(|error| match error.report() {
         Ok(report) => splice.rendered(&report, &identity),
         Err(_) => error.to_string(),
     })?;
@@ -190,11 +192,29 @@ mod tests {
     /// What evaluating each of `codes` answers where `program` first pauses
     /// at `line`, then what the program printed as it went on.
     fn evaluated(program: &str, line: usize, codes: &[&str]) -> (Vec<Value>, String) {
+        evaluated_on(
+            crate::Engine::new(),
+            crate::Shared::new,
+            program,
+            line,
+            codes,
+        )
+    }
+
+    /// [`evaluated`], on `engine` as `finish` makes it once the debugger is
+    /// registered: the program compiles as a run compiles it on that
+    /// engine.
+    fn evaluated_on(
+        mut engine: crate::Engine,
+        finish: impl FnOnce(crate::Engine) -> crate::Shared<crate::Engine>,
+        program: &str,
+        line: usize,
+        codes: &[&str],
+    ) -> (Vec<Value>, String) {
         let snapshot = Snapshot::new(FILE.into(), vec![(FILE.into(), program.into())]).unwrap();
         let printed = Arc::new(Mutex::new(String::new()));
         let answers = Arc::new(Mutex::new(Vec::new()));
         let shared: Arc<Mutex<Option<(Program, Stops)>>> = Arc::default();
-        let mut engine = crate::Engine::new();
         let printing = Arc::clone(&printed);
         engine.on_output(move |_, text| printing.lock().unwrap().push_str(text));
         let answering = Arc::clone(&answers);
@@ -230,8 +250,10 @@ mod tests {
                 Ok(crate::debugger::DebuggerCommand::StepInto)
             },
         );
-        let graph = crate::package::Graph::load_snapshot(&engine, &snapshot).unwrap();
-        let (ast, main, positions) = engine.compile_package_with_positions(graph).unwrap();
+        let engine = finish(engine);
+        let (ast, positions) = engine
+            .compile_package_snapshot_with_positions(&snapshot)
+            .unwrap_or_else(|error| panic!("{error}"));
         let entry = Source::new(FILE, program).unwrap();
         let positions = Arc::new(positions);
         let located = Arc::clone(&positions);
@@ -245,8 +267,18 @@ mod tests {
         let _ = engine
             .eval_ast_with_scope::<crate::Dynamic>(&mut scope, &ast)
             .unwrap();
+        let main = ast
+            .iter_fn_def()
+            .map(|function| function.name.clone())
+            .find(|name| {
+                crate::resolve::lower_nominal::function_display_name(name)
+                    .rsplit("::")
+                    .next()
+                    == Some("main")
+            })
+            .expect("the program has a `fn main`");
         let _ = engine
-            .call_fn::<crate::Dynamic>(&mut scope, &ast, main.unwrap(), ())
+            .call_fn::<crate::Dynamic>(&mut scope, &ast, main, ())
             .unwrap_or_else(|error| panic!("{error}"));
         let answers = answers.lock().unwrap().clone();
         let printed = printed.lock().unwrap().clone();
@@ -324,5 +356,38 @@ fn main() {
         assert!(errors[1].contains("<eval>:1:1"), "{}", errors[1]);
         assert!(errors[1].contains("main.rs:6"), "{}", errors[1]);
         assert!(!errors[1].contains("__rawr"), "{}", errors[1]);
+    }
+
+    /// A program whose generic function passes its type parameter to a
+    /// crate's generic function, which a runner's lowering compiles per
+    /// instance, as it reveals an opaque return type: code evaluated in it
+    /// checks as the run checked it, so the crate's call takes the type
+    /// the instance gives it (#2292).
+    #[cfg(feature = "rust-import")]
+    #[test]
+    fn code_checks_in_a_program_whose_crate_call_takes_an_instance_type() {
+        use crate::package::import::runner::account;
+        let program = "// rawr
+fn shown<T: Clone>(value: T) -> T { native::echo(value) }
+fn echoed() -> i64 { shown(7i64) }
+fn main() {
+    let count = 3;
+    println!(\"{count}\");
+}
+";
+        let (answers, printed) = evaluated_on(
+            crate::package::compile::captured::tests::compiler(),
+            |engine| {
+                let native = account::Native::transform(account::tests::carrier());
+                engine
+                    .retain_imported_native(native)
+                    .expect("a fresh compiler retains a native surface")
+            },
+            program,
+            6,
+            &["count + 1"],
+        );
+        assert_eq!(answers, [json!({ "value": "4" })]);
+        assert_eq!(printed, "3\n");
     }
 }
