@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-19",
-  "version": "0.4.26",
+  "version": "0.4.27",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,14 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.27",
+        "date": "2026-11-19",
+        "entries": [
+          {"text":"A continue ends a step that never pauses, and both are answered; the session no longer queues a continue behind a step. `rawr gui` runs on as soon as you step or continue, so Pause is available while a step runs.","issues":[2294]},
+          {"text":"`rawr gui` writes each capture of the program's window to its own file, so two captures in flight no longer show \"No such file or directory\".","issues":[2293]}
+        ]
+      },
       {
         "version": "0.4.26",
         "date": "2026-11-19",
@@ -5240,8 +5248,9 @@
     {"issue":2290,"title":"A crate macro call sent to rustc keeps hidden-segment paths in its input","state":"open","category":"No glue (D593)"},
     {"issue":2291,"title":"rustc's expansion of a crate macro call gives line!() at the expansion input, not the call","state":"open","category":"No glue (D593)"},
     {"issue":2292,"title":"Eval at a pause in an iced callback fails: cannot use `iced::run`'s `W` here, type annotations needed","state":"open","category":"Health"},
-    {"issue":2293,"title":"After a step in an iced callback, the window shows no frames or bindings and 'No such file or directory (os error 2)'","state":"open","category":"Health"},
-    {"issue":2294,"title":"Continue after a step in an iced callback never answers the window","state":"open","category":"Health"}
+    {"issue":2293,"title":"After a step in an iced callback, the window shows no frames or bindings and 'No such file or directory (os error 2)'","state":"closed","category":"Health","release":"0.4.27"},
+    {"issue":2294,"title":"Continue after a step in an iced callback never answers the window","state":"closed","category":"Health","release":"0.4.27"},
+    {"issue":2295,"title":"rawr gui shows the previous stop's frames and bindings at a new pause","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -8053,8 +8062,9 @@
             {"number":2287,"title":"A step on a paused iced program never reaches a new pause","state":"closed"},
             {"number":2286,"title":"`rawr gui` and `rawr tui` draw the source in syntax colours, and the window follows the system's…","state":"closed"},
             {"number":2292,"title":"Eval at a pause in an iced callback fails: cannot use `iced::run`'s `W` here, type annotations needed","state":"open"},
-            {"number":2293,"title":"After a step in an iced callback, the window shows no frames or bindings and 'No such file or directory (os error 2)'","state":"open"},
-            {"number":2294,"title":"Continue after a step in an iced callback never answers the window","state":"open"}
+            {"number":2293,"title":"After a step in an iced callback, the window shows no frames or bindings and 'No such file or directory (os error 2)'","state":"closed"},
+            {"number":2294,"title":"Continue after a step in an iced callback never answers the window","state":"closed"},
+            {"number":2295,"title":"rawr gui shows the previous stop's frames and bindings at a new pause","state":"open"}
           ],
           "milestone": "0.5"
         }

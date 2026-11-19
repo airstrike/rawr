@@ -8,6 +8,14 @@
   },
   "releases": [
     {
+      "version": "0.4.27",
+      "date": "2026-11-19",
+      "entries": [
+        {"text":"A continue ends a step that never pauses, and both are answered; the session no longer queues a continue behind a step. `rawr gui` runs on as soon as you step or continue, so Pause is available while a step runs.","issues":[2294]},
+        {"text":"`rawr gui` writes each capture of the program's window to its own file, so two captures in flight no longer show \"No such file or directory\".","issues":[2293]}
+      ]
+    },
+    {
       "version": "0.4.26",
       "date": "2026-11-19",
       "entries": [
