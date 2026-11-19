@@ -113,6 +113,8 @@ impl Stops {
                 let candidate = match node {
                     ASTNode::Stmt(Stmt::Expr(..) | Stmt::Block(..) | Stmt::Noop(..)) => false,
                     ASTNode::Stmt(..) => true,
+                    // `()` runs nothing: a block's value when it has no tail.
+                    ASTNode::Expr(Expr::Unit(..)) => false,
                     // An expression statement's step is its expression's.
                     ASTNode::Expr(..) => {
                         matches!(outer.last(), Some(ASTNode::Stmt(Stmt::Expr(..))))

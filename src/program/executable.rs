@@ -74,6 +74,9 @@ struct Location {
     generated: crate::Span,
     original: crate::Span,
     nesting: usize,
+    /// The compiler wrote the code itself, around the program's statements:
+    /// an error in it is located at `original`, but no debugger stops there.
+    written: bool,
 }
 
 /// The compiler's evidence for one program's source, kept apart from its
@@ -135,6 +138,32 @@ impl Positions {
             })
     }
 
+    /// The source and span of the program's statement that starts at
+    /// `position`: as [`Self::locate_position`] places it, but `None` in
+    /// code the compiler wrote among the program's statements too, such as
+    /// the check of a parameter's value where its function's body starts.
+    #[must_use]
+    pub fn locate_statement<'a>(
+        &'a self,
+        entry: &'a crate::diagnostic::Source,
+        position: crate::Position,
+    ) -> Option<(&'a crate::diagnostic::Source, crate::Span)> {
+        if position.is_none() {
+            return None;
+        }
+        let (source, location) = self
+            .innermost(position)
+            .map(|location| (entry, location))
+            .or_else(|| {
+                self.others.iter().find_map(|(source, positions)| {
+                    positions
+                        .innermost(position)
+                        .map(|location| (source, location))
+                })
+            })?;
+        (!location.written).then_some((source, location.original))
+    }
+
     /// `position` in the lowered program as a position in the source's own
     /// text, or none when the evidence does not cover it: code the compiler
     /// wrote around the source's.
@@ -147,12 +176,16 @@ impl Positions {
     }
 
     fn original(&self, position: crate::Position) -> Option<crate::Span> {
+        self.innermost(position).map(|location| location.original)
+    }
+
+    fn innermost(&self, position: crate::Position) -> Option<&Location> {
         innermost(&self.callables, position).or_else(|| innermost(&self.helpers, position))
     }
 }
 
-/// The original span of the innermost generated span holding `position`.
-fn innermost(entries: &[Location], position: crate::Position) -> Option<crate::Span> {
+/// The innermost location whose generated span holds `position`.
+fn innermost(entries: &[Location], position: crate::Position) -> Option<&Location> {
     entries
         .iter()
         .filter(|location| {
@@ -167,7 +200,6 @@ fn innermost(entries: &[Location], position: crate::Position) -> Option<crate::S
                 location.original.end(),
             )
         })
-        .map(|location| location.original)
 }
 
 pub(crate) enum Dispatch {
@@ -751,6 +783,7 @@ fn retain_locations(
                     generated: location.generated,
                     original: location.original,
                     nesting: location.nesting,
+                    written: location.written,
                 });
             continue;
         };
@@ -765,6 +798,7 @@ fn retain_locations(
                     generated: location.generated,
                     original: location.original,
                     nesting: location.nesting,
+                    written: location.written,
                 });
         }
         grouped
@@ -775,6 +809,7 @@ fn retain_locations(
                 generated: location.generated,
                 original: location.original,
                 nesting: location.nesting,
+                written: location.written,
             });
     }
     for (key, (source, entries)) in grouped {

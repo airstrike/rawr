@@ -208,7 +208,7 @@ pub fn run(loaded: Loaded) -> Result<Option<String>, Failed> {
             ));
         }
         inspector.locate_with(move |position| {
-            let (file, span) = positions.locate_position(&entry, position)?;
+            let (file, span) = positions.locate_statement(&entry, position)?;
             Some((file.identity().to_owned(), span.start().line()?))
         });
         inspector.compiled(&ast);

@@ -43,6 +43,9 @@ struct Origin {
     generated: Range<usize>,
     original: Span,
     nesting: usize,
+    /// The compiler wrote the code itself, around the program's own
+    /// statements (`Fragment::cover_written`).
+    written: bool,
 }
 
 impl Fragment {
@@ -92,6 +95,18 @@ impl Fragment {
     }
 
     pub(super) fn cover(&mut self, original: Span) {
+        self.envelop(original, false);
+    }
+
+    /// Cover this fragment, code the compiler writes itself around the
+    /// program's statements, with `original`: an error in it is located
+    /// there, but it is no statement of the program's, so a debugger
+    /// doesn't stop at it.
+    pub(super) fn cover_written(&mut self, original: Span) {
+        self.envelop(original, true);
+    }
+
+    fn envelop(&mut self, original: Span, written: bool) {
         if self.0.text.is_empty() {
             return;
         }
@@ -102,6 +117,7 @@ impl Fragment {
             generated: 0..self.0.text.len(),
             original,
             nesting,
+            written,
         });
         self.0.max_nesting = nesting;
     }
@@ -231,6 +247,7 @@ impl Fragment {
                 generated: origin.generated,
                 original: origin.original,
                 nesting: origin.nesting,
+                written: origin.written,
             })
             .collect();
         (std::mem::take(&mut self.0.text), locations)

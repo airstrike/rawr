@@ -30,6 +30,15 @@ fn hash_idx() -> (u64, u64) {
     })
 }
 
+/// Whether the debugger was called at `parent`, an index step of a chain
+/// on `root`, before the chain ran: the chain's own expression, which
+/// `eval_expr` calls it at as for any expression, unless the chain
+/// `assigns`, which a statement starts. Each node calls it once.
+#[cfg(feature = "debugging")]
+fn reported(root: &Expr, parent: &Expr, assigns: bool) -> bool {
+    !assigns && matches!(parent, Expr::Index(x, ..) if std::ptr::eq(&x.lhs, root))
+}
+
 /// What a chain's method calls are lent of the code running the chain,
 /// for a debugger to read its bindings while a call runs (#540): what the
 /// chain's start took before it borrowed its root, and the root the calls
@@ -970,13 +979,15 @@ impl Engine {
                         if !parent.options().intersects(ASTFlags::BREAK) =>
                     {
                         #[cfg(feature = "debugging")]
-                        self.dbg(
-                            global,
-                            caches,
-                            x!(s, b),
-                            seen!(this_ptr.as_deref_mut()),
-                            parent,
-                        )?;
+                        if !reported(root, parent, new_val.is_some()) {
+                            self.dbg(
+                                global,
+                                caches,
+                                x!(s, b),
+                                seen!(this_ptr.as_deref_mut()),
+                                parent,
+                            )?;
+                        }
 
                         let idx_val = &mut idx_values.pop().unwrap();
                         let mut idx_val_for_setter = idx_val.clone();
@@ -1179,13 +1190,15 @@ impl Engine {
                     // xxx[rhs]
                     (_, None) => {
                         #[cfg(feature = "debugging")]
-                        self.dbg(
-                            global,
-                            caches,
-                            x!(s, b),
-                            seen!(this_ptr.as_deref_mut()),
-                            parent,
-                        )?;
+                        if !reported(root, parent, false) {
+                            self.dbg(
+                                global,
+                                caches,
+                                x!(s, b),
+                                seen!(this_ptr.as_deref_mut()),
+                                parent,
+                            )?;
+                        }
 
                         let obj = target.as_mut();
 
