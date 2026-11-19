@@ -911,10 +911,13 @@ impl<'a> Parser<'a> {
                     )?;
                     Ok(statements + clears.as_str())
                 }) {
-                Ok(statements) => Some((
-                    origin::Fragment::plain(statements),
-                    origin::Fragment::default(),
-                )),
+                Ok(statements) => {
+                    // The pattern's bindings are the compiler's, at the
+                    // pattern: a step into the body passes them.
+                    let mut bindings = origin::Fragment::plain(statements);
+                    bindings.cover_written(pattern.span());
+                    Some((bindings, origin::Fragment::default()))
+                }
                 Err(error) => {
                     self.bindings = outer;
                     return Err(error);

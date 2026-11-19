@@ -449,12 +449,21 @@ impl<'a> Parser<'a> {
         let mut source = origin::Fragment::plain(format!("{{ let {returned} = "));
         source.push(call);
         source.push_text("; ");
+        // The stores and the value after the call are the compiler's, at
+        // the arguments: no debugger stops there again once the call ran.
+        let mut stores = origin::Fragment::default();
         for (index, place) in places.iter().enumerate() {
             let value = format!("{moved}({returned}[{}])", index + 1);
-            source.push(self.store_into(place, &value)?);
-            source.push_text(" ");
+            stores.push(self.store_into(place, &value)?);
+            stores.push_text(" ");
         }
-        source.push_text(format!("{moved}({returned}[0]) }})"));
+        stores.push_text(format!("{moved}({returned}[0])"));
+        stores.mark_written();
+        if let (Some(first), Some(last)) = (places.first(), places.last()) {
+            stores.cover_written(span(first.span.start(), last.span.end()));
+        }
+        source.push(stores);
+        source.push_text(" })");
         Ok(source.surrounded("(", ""))
     }
 

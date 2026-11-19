@@ -684,7 +684,7 @@ impl<'a> Parser<'a> {
                     (Token::Unit, at),
                     (Token::SemiColon, at),
                 ]);
-                self.parse_statement()?;
+                self.parse_written(Self::parse_statement)?;
             }
             return self.parse_async_body(&output, definition.body.span);
         }

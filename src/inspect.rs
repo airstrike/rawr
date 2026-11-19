@@ -2749,11 +2749,18 @@ mod tests {
     /// after each step of `steps`.
     #[cfg(unix)]
     fn stepped(name: &str, line: usize, steps: &[&str]) -> Vec<serde_json::Value> {
+        stepped_in(STEPPED, name, line, steps)
+    }
+
+    /// Where `source`'s `run`, which gives 3, pauses: at a breakpoint on
+    /// `line`, then after each step of `steps`.
+    #[cfg(unix)]
+    fn stepped_in(source: &str, name: &str, line: usize, steps: &[&str]) -> Vec<serde_json::Value> {
         use serde_json::json;
         let directory = std::env::temp_dir().join(format!("rawr-{name}-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
         let file = directory.join("main.rs");
-        std::fs::write(&file, STEPPED).unwrap();
+        std::fs::write(&file, source).unwrap();
         let socket = directory.join("s");
         let inspector = super::Inspector::bind(&socket).unwrap();
         let mut engine = crate::Engine::new();
@@ -2761,7 +2768,7 @@ mod tests {
         // Compiled as a runner compiles: its steps placed by the compiler's
         // positions, in the file written above.
         let executable = engine
-            .compile_executable(STEPPED)
+            .compile_executable(source)
             .unwrap_or_else(|error| panic!("{error}"));
         let located = executable.located().unwrap();
         let (ast, _) = executable.into_ast_with_positions();
@@ -2817,6 +2824,48 @@ mod tests {
         // A step into the method from its caller passes its signature too.
         let seen = stepped("step-into-method", 19, &["into"]);
         assert_eq!(seen[1]["line"], 7, "{seen:?}");
+    }
+
+    /// Parameters the lowering binds again where the body starts: a `mut`
+    /// binding of a `&mut`, a pattern that only one variant matches and a
+    /// closure's pattern. A `&mut` of a local is stored back after a call.
+    const REBOUND: &str = "struct Counter { value: u64 }\n\
+        enum Wrapped { Only(u64) }\n\
+        fn bump(counter: &mut Counter, mut by: &mut u64) {\n\
+        \x20   counter.value += *by;\n\
+        }\n\
+        fn take(Wrapped::Only(step): Wrapped, counter: &mut Counter) {\n\
+        \x20   counter.value += step;\n\
+        }\n\
+        pub fn run() -> u64 {\n\
+        \x20   let mut c = Counter { value: 0 };\n\
+        \x20   let mut one = 1;\n\
+        \x20   bump(&mut c, &mut one);\n\
+        \x20   take(Wrapped::Only(2), &mut c);\n\
+        \x20   let f = |(a, b): (u64, u64)| {\n\
+        \x20       let sum = a + b;\n\
+        \x20       sum\n\
+        \x20   };\n\
+        \x20   c.value + f((0, 0))\n\
+        }\n";
+
+    #[cfg(unix)]
+    #[test]
+    fn a_step_into_a_function_that_binds_a_parameter_again_pauses_at_its_first_line() {
+        let steps = ["into", "over", "into", "over", "over", "into"];
+        let seen = stepped_in(REBOUND, "step-into-rebound", 12, &steps);
+        assert_eq!(seen[0]["line"], 12, "{seen:?}");
+        // `mut by: &mut u64` is `let mut by = ..;` at the parameter, which
+        // the lowering wrote.
+        assert_eq!(seen[1]["line"], 4, "{seen:?}");
+        // Out of the call, past the stores of `&mut one` back into `one`.
+        assert_eq!(seen[2]["line"], 13, "{seen:?}");
+        // `Wrapped::Only(step)` is matched as a `let` at the parameter.
+        assert_eq!(seen[3]["line"], 7, "{seen:?}");
+        assert_eq!(seen[4]["line"], 14, "{seen:?}");
+        assert_eq!(seen[5]["line"], 18, "{seen:?}");
+        // `(a, b)` is bound from the closure's argument at its header.
+        assert_eq!(seen[6]["line"], 15, "{seen:?}");
     }
 
     #[test]

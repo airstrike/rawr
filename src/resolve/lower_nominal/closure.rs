@@ -879,7 +879,15 @@ impl<'a> Parser<'a> {
         let mut body_block = if destructured.is_empty() {
             body.rendered_block()
         } else {
-            let mut block = origin::Fragment::plain(format!("{{{destructured} "));
+            // The patterns' bindings are the compiler's, at the parameters:
+            // a step into the closure passes them for its body.
+            let mut bindings = origin::Fragment::plain(destructured);
+            if let (Some((_, first)), Some((_, last))) = (patterns.first(), patterns.last()) {
+                bindings.cover_written(span(first.span().start(), last.span().end()));
+            }
+            let mut block = origin::Fragment::plain("{");
+            block.push(bindings);
+            block.push_text(" ");
             block.push(body.rendered_block());
             block.push_text(" }");
             block
