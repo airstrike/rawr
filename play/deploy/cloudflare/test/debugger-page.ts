@@ -11,12 +11,16 @@
 // icon fetches the debugger build, runs the program under it and opens the
 // panel. A click on line 2's number sets a breakpoint, and the program
 // pauses there, the line highlighted, with its frames and its bindings in
-// the panel; an eval answers, a step goes on a line, and a continue pauses
-// on the next turn. Clearing the breakpoint lets the loop run on. A second
-// click on the icon closes the panel and runs the program as before, and a
-// third opens it again without fetching the debugger build's module again. It saves
-// window screenshots in SHOTS_DIR (default target/web-check). CHROME names
-// the browser when it is not in the usual place.
+// the panel right of the output. The toolbar's glyphs name their actions
+// and keys. The console under the code evaluates at a typed Enter, takes a
+// second line at Shift+Enter, and keeps each answer in its scrollback. F10
+// steps over a line, the Continue glyph pauses on the next turn, and F8
+// lets the loop run on once the breakpoint is cleared. A second click on
+// the icon closes the panel and runs the program as before, and a third
+// opens it again without fetching the debugger build's module again. It
+// saves window screenshots in SHOTS_DIR (default target/web-check): the
+// paused debugger in the dark and light themes at 1440 wide and on a
+// phone. CHROME names the browser when it is not in the usual place.
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
@@ -156,7 +160,15 @@ const icon = `document.getElementById("debug")`;
 const panel = `document.getElementById("debugger")`;
 /** The editor's line number `line`, which a click sets a breakpoint on. */
 const lineNumber = (line: number) => `[...document.querySelectorAll("#playground .cm-lineNumbers .cm-gutterElement")].find((e) => e.textContent === "${line}")`;
-const control = (name: string) => `document.querySelector('#debugger [data-control="${name}"]')`;
+/** The debugger toolbar's action `label`, as its aria-label names it. */
+const control = (label: string) => `document.querySelector('#debugger [role=toolbar] [aria-label="${label}"]')`;
+/** A key typed on the page, with `text` when it types one. */
+const press = async (key: string, code: string, keyCode: number, modifiers = 0, text?: string) => {
+  await on("Input.dispatchKeyEvent", { type: "keyDown", key, code, windowsVirtualKeyCode: keyCode, modifiers, ...(text ? { text } : {}) });
+  await on("Input.dispatchKeyEvent", { type: "keyUp", key, code, windowsVirtualKeyCode: keyCode, modifiers });
+};
+const SHIFT = 8;
+const entries = `[...document.querySelectorAll("#console .scrollback .entry")].map((e) => [e.querySelector(".in").textContent, e.querySelector(".answer").textContent])`;
 const phase = `(${panel}?.querySelector(".phase")?.textContent ?? "")`;
 const where = `(${panel}?.querySelector(".where")?.textContent ?? "")`;
 const binding = (name: string) => `(${panel}?.querySelector('[data-binding="${name}"] dd')?.textContent ?? null)`;
@@ -175,6 +187,7 @@ try {
   await on("Runtime.enable");
   await on("Page.enable");
   await on("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
+  await on("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "dark" }] });
   await on("Page.navigate", { url: `http://127.0.0.1:${port}/play` });
   await until("the island", `document.readyState === "complete" && !!document.querySelector("#playground .cm-content") && !${icon}.hidden`);
   check(debuggerFetches() === 0, "the page loads without the debugger build");
@@ -204,34 +217,58 @@ try {
   await clickOn(`[...${panel}.querySelectorAll(".frames-list button")][2]`);
   await until("main's bindings", `${binding("turn")} !== null`, 5000);
   check(Number(await evaluate(binding("turn"))) === depth, "a frame's click shows its own bindings");
-  await shot("debugger-paused.png");
   const written = await evaluate(`${printed}.length`);
   await sleep(300);
   check((await evaluate(`${printed}.length`)) === written, "the program prints nothing while paused");
 
-  // An eval where it is paused.
-  await clickOn(`${panel}.querySelector('input[aria-label="Evaluate"]')`);
-  await on("Input.insertText", { text: "depth + 1" });
-  // Enter with its text submits the form, as a typed Enter does.
-  await on("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, text: "\r" });
-  await on("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
-  await until("the eval", `!!${panel}.querySelector(".evaluated li")`, 5000);
-  const evaluated = await evaluate(`${panel}.querySelector(".evaluated li:last-child").textContent`);
-  check(evaluated === `depth + 1 = ${depth + 1}`, "an eval answers in the paused frame", evaluated);
+  // The toolbar's actions: glyphs named for their action and key.
+  const titles: string[] = await evaluate(`[...${panel}.querySelectorAll("[role=toolbar] button")].map((b) => b.title)`);
+  check(JSON.stringify(titles) === JSON.stringify(["Continue (F8)", "Pause (F8)", "Step over (F10)", "Step into (F11)", "Step out (Shift+F11)"]), "the toolbar's glyphs name their action and key", titles);
+  check(await evaluate(`${control("Pause")}.disabled && !${control("Continue")}.disabled`), "paused, Pause is off and Continue on");
 
-  // A step over goes on a line; a continue pauses on the next turn.
-  await clickOn(control("over"));
+  // The console under the code: a typed Enter evaluates where it is paused.
+  check(await evaluate(`!!document.querySelector("#playground section.pane #console") && !${panel}.querySelector("#console")`), "the console sits under the code, not in the panel");
+  await clickOn(`document.querySelector("#console .prompt .cm-content")`);
+  await on("Input.insertText", { text: "depth + 1" });
+  await press("Enter", "Enter", 13, 0, "\r");
+  await until("the eval", `document.querySelectorAll("#console .scrollback .entry").length === 1`, 5000);
+  check(JSON.stringify(await evaluate(entries)) === JSON.stringify([["depth + 1", String(depth + 1)]]), "an eval answers in the paused frame", await evaluate(entries));
+  check(await evaluate(`document.querySelector("#console .prompt").textContent === ">"`), "and the prompt empties");
+  // Shift+Enter adds a line; the eval and its answer join the scrollback.
+  await on("Input.insertText", { text: "depth" });
+  await press("Enter", "Enter", 13, SHIFT, "\r");
+  check(await evaluate(`document.querySelectorAll("#console .prompt .cm-line").length === 2`), "Shift+Enter adds a line to the prompt");
+  await on("Input.insertText", { text: "* 3" });
+  await press("Enter", "Enter", 13, 0, "\r");
+  await until("the second eval", `document.querySelectorAll("#console .scrollback .entry").length === 2`, 5000);
+  const scrolled: string[][] = await evaluate(entries);
+  check(scrolled[0][0] === "depth + 1" && scrolled[1][0].startsWith("depth\n") && scrolled[1][0].endsWith("* 3") && scrolled[1][1] === String(depth * 3), "a two-line eval answers under the first in the scrollback", scrolled);
+  await shot("debugger-dark.png");
+  await on("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "light" }] });
+  await until("the light theme", `document.documentElement.dataset.theme === "light"`, 5000);
+  await shot("debugger-light.png");
+  await on("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+  await sleep(300);
+  await shot("debugger-phone.png");
+  check(await evaluate(`document.documentElement.scrollWidth <= innerWidth`), "a phone has no sideways scroll with the debugger on");
+  await on("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
+  await on("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "dark" }] });
+  await sleep(300);
+
+  // F10 steps over a line; the Continue glyph pauses on the next turn.
+  await evaluate(`document.activeElement?.blur()`);
+  await press("F10", "F10", 121);
   await until("the step", `${where}.endsWith("line 3")`, 5000);
   await until("the step's bindings", `${binding("deep")} !== null`, 5000);
   check(Number(await evaluate(binding("deep"))) === depth * 2, "a step over reads the binding it made");
-  await clickOn(control("continue"));
+  await clickOn(control("Continue"));
   await until("the next turn's pause", `${where}.endsWith("line 2") && ${binding("depth")} === "${depth + 1}"`, 5000);
   check(true, "a continue pauses at the breakpoint on the next turn");
 
   // Cleared and continued, the loop runs on.
   await clickOn(lineNumber(2));
   await until("the cleared mark", `!${lineNumber(2)}.classList.contains("cm-breakpoint")`, 5000);
-  await clickOn(control("continue"));
+  await press("F8", "F8", 119);
   await until("the loop running on", `${phase} === "running"`, 5000);
   const turns = await evaluate(`${printed}.length`);
   await until("more turns", `${printed}.length > ${turns}`, 5000);
@@ -254,7 +291,7 @@ try {
   check(debuggerFetches() === fetched, "turned on again, the page fetches the module no more", served);
   // Its main returned: the panel says so, with its status, and its controls are off.
   await until("the end of main", `${phase} === "main returned · exit 0"`, 5000);
-  check(await evaluate(`[...${panel}.querySelectorAll("[data-control]")].every((b) => b.disabled)`), "once main returned, every control is off");
+  check(await evaluate(`[...${panel}.querySelectorAll("[role=toolbar] button")].every((b) => b.disabled)`), "once main returned, every action is off");
 } catch (error) {
   check(false, String(error));
 } finally {

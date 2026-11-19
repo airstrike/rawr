@@ -31,8 +31,8 @@ body.play { font-size: var(--fs-base); line-height: 1.5; }
 .out.framed pre { padding: 0 16px 16px; }
 .term .err { color: var(--red); }
 .term .exit, .term .none, .term .note { color: var(--quiet); }
-/* The debugger's panel (Playground.tsx's DebugPanel), between the code and */
-/* the output while the debugger is on. */
+/* The debugger's panel (Playground.tsx's DebugPanel), right of the output, */
+/* and its console under the code, while the debugger is on. */
 .debugger { font-size: 13px; overflow: auto; }
 .debugger .note { color: var(--quiet); }
 .debugger .error { color: var(--red); }
@@ -44,6 +44,28 @@ body.play { font-size: var(--fs-base); line-height: 1.5; }
 .debugger .bindings > div { display: flex; gap: 8px; }
 .debugger .bindings dt { color: var(--quiet); }
 .debugger .bindings dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
-.debugger .evaluated { font: 13px/1.55 var(--mono); overflow-wrap: anywhere; }
 .debugger .err { color: var(--red); }
 .debugger .phase { font: 13px/1.55 var(--mono); color: var(--quiet); overflow-wrap: anywhere; }
+/* The toolbar's actions: glyphs, as DevTools draws them, in the ink colour. */
+.debugger .actions button { display: grid; place-items: center; width: 28px; height: 28px; border: 1px solid transparent; background: none; color: var(--ink); cursor: pointer; }
+.debugger .actions button:hover:not(:disabled) { border-color: var(--grid); background: var(--wash); }
+.debugger .actions button:focus-visible { outline: 2px solid var(--red); outline-offset: 1px; }
+.debugger .actions button:disabled { color: var(--quiet); opacity: 0.45; cursor: default; }
+.console { border: 1px solid var(--grid); background: var(--wash); }
+.console .fold { display: flex; width: 100%; align-items: center; gap: 6px; padding: 6px 12px; background: none; border: 0; cursor: pointer; text-align: left; }
+.console .fold::after { content: ""; margin-left: auto; width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(45deg); }
+.console .fold[aria-expanded="false"]::after { transform: rotate(-45deg); }
+.console .pane-body { border-top: 1px solid var(--grid); }
+.console .scrollback { max-height: 168px; overflow: auto; font: 13px/1.55 var(--mono); }
+.console .scrollback:empty { display: none; }
+.console .entry { border-bottom: 1px solid var(--grid); padding: 2px 12px 2px 28px; }
+.console .entry pre { margin: 0; font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; position: relative; }
+.console .entry .in { color: var(--ink); }
+.console .entry .in::before, .console .entry .answer::before { position: absolute; left: -16px; color: var(--quiet); }
+.console .entry .in::before { content: ">"; }
+.console .entry .answer::before { content: "<"; }
+.console .entry .answer { color: var(--quiet); }
+.console .entry .answer.err { color: var(--red); }
+.console .prompt { display: flex; gap: 8px; padding: 4px 12px 6px; font: 13px/1.55 var(--mono); }
+.console .prompt .mark { color: var(--red); }
+.console .prompt .input { flex: 1; min-width: 0; }

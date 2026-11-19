@@ -81,8 +81,8 @@ const IDLE: DebugState = {
   phase: "idle", pause: null, paused: null, frames: [], frame: 0, bindings: [], unread: null, lines: [], evaluated: [], error: null, status: null,
 };
 
-/** The evals the panel keeps, latest last. */
-const KEPT = 8;
+/** The evals the console keeps as its scrollback, latest last. */
+const KEPT = 100;
 
 export class Debugger {
   state: DebugState = IDLE;

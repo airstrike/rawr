@@ -73,11 +73,11 @@ args = { program = "{0}" }</code></pre></div>
 ]</code></pre></div>
 
 <h2 id="playground">In the playground</h2>
-<p>The <a href="/play">playground</a> has a debugger too. Click the bug icon beside Share. The program starts again from its start under the debugger, in the browser, and a debugger panel opens beside the code. Click the bug again to turn it off, and the program runs as before.</p>
+<p>The <a href="/play">playground</a> has a debugger too. Click the bug icon beside Share. The program starts again from its start under the debugger, in the browser, and a debugger panel opens right of the output, with a console under the code. Click the bug again to turn it off, and the program runs as before.</p>
 <ul>
   <li>Click a line number to set a breakpoint there, and click it again to clear it. Breakpoints set before a run are in place before <code>main</code> starts.</li>
-  <li>Continue, Pause, and step over, into and out work as in an editor. The paused line is highlighted, and the panel lists the frames and the bindings of the one you pick.</li>
-  <li>The eval box runs Rust where the program is paused.</li>
+  <li>The panel&rsquo;s toolbar continues (F8), pauses (F8), and steps over (F10), into (F11) and out (Shift+F11), as in DevTools. The paused line is highlighted, and the panel lists the frames and the bindings of the one you pick.</li>
+  <li>The console runs Rust where the program is paused. Enter evaluates, Shift+Enter adds a line, and each answer stays above the prompt.</li>
   <li>Pausing needs WebAssembly JS Promise Integration (JSPI), which Chrome has. In a browser without it, the panel says so, and the program runs without pausing.</li>
   <li>A pause stops <code>main</code>&rsquo;s own code, and the functions it calls. A function the page calls, such as an iced <code>view</code> or <code>update</code>, runs whole.</li>
 </ul>
