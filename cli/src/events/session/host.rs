@@ -412,6 +412,7 @@ impl Shared {
                     self.changed.notify_all();
                 }
             }
+            (Some("emit"), None) if params["event"] == "breakpoints" => self.tell(&params),
             (Some("emit"), None) if params.is_object() => self.record(params),
             (Some("output"), None) => self.output(connection, params),
             (Some(method), Some(id)) => {
@@ -458,6 +459,7 @@ impl Shared {
             "pid": std::process::id(),
             "events": events,
             "output": inner.output,
+            "breakpoints": self.breakpoints(),
         });
         let _ = send.send(line(
             &json!({ "jsonrpc": "2.0", "id": id, "result": result }),
@@ -482,6 +484,29 @@ impl Shared {
             .retain(|listener| listener.send.send(Arc::clone(&told)).is_ok());
         drop(inner);
         self.changed.notify_all();
+    }
+
+    /// Tell every connection `event`, which says what is so now rather
+    /// than what happened: it takes no number and stays in no history, as
+    /// `hello` says the same.
+    fn tell(&self, event: &Value) {
+        let told = line(&json!({ "jsonrpc": "2.0", "method": "event", "params": event }));
+        self.inner()
+            .listeners
+            .retain(|listener| listener.send.send(Arc::clone(&told)).is_ok());
+    }
+
+    /// The breakpoints as the program's inspector keeps them in its file,
+    /// told as its `breakpoints` event tells them: none before it kept
+    /// any.
+    fn breakpoints(&self) -> Value {
+        let mut told = std::fs::read(self.place.breakpoints())
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+            .filter(Value::is_object)
+            .unwrap_or_else(|| json!({ "revision": 0, "breakpoints": [] }));
+        told["event"] = json!("breakpoints");
+        told
     }
 
     /// Keep output the shell on `from` read, and tell the others.
@@ -872,6 +897,64 @@ mod tests {
         let mut again = std::process::Command::new("true");
         super::hold(&mut inner, &mut again);
         assert!(!held(&again));
+    }
+
+    /// A breakpoint one shell sets reaches the other as a `breakpoints`
+    /// event, unnumbered, and a shell that attaches later has the list in
+    /// `hello` (#2278).
+    #[test]
+    fn a_breakpoint_one_shell_sets_reaches_the_others() {
+        let (host, place) = host("breakpoints", true);
+        host.0.record(json!({ "event": "running" }));
+        let inspector = UnixListener::bind(place.inspector()).unwrap();
+        let told = serve(&place);
+        let setting = Shell::connect(&place.socket());
+        let watching = Shell::connect(&place.socket());
+        setting.hello();
+        watching.send(&json!({ "jsonrpc": "2.0", "id": 0, "method": "hello" }));
+        let greeted = watching.next();
+        assert_eq!(
+            greeted["result"]["breakpoints"],
+            json!({ "event": "breakpoints", "revision": 0, "breakpoints": [] })
+        );
+        setting.send(&json!({
+            "jsonrpc": "2.0", "id": 1, "method": "program",
+            "params": { "op": "break", "file": "/p/src/main.rs", "line": 4 }
+        }));
+        // The program's inspector keeps the list and tells it, as
+        // `rawr::inspect` does, then answers.
+        let (asked, _) = inspector.accept().unwrap();
+        let mut request = String::new();
+        BufReader::new(&asked).read_line(&mut request).unwrap();
+        let kept = json!({
+            "revision": 1,
+            "breakpoints": [{ "file": "/p/src/main.rs", "line": 4, "text": "tick();" }],
+        });
+        std::fs::write(place.breakpoints(), kept.to_string()).unwrap();
+        let mut event = kept.clone();
+        event["event"] = json!("breakpoints");
+        let emit = json!({ "jsonrpc": "2.0", "method": "emit", "params": event });
+        writeln!(&told, "{emit}").unwrap();
+        writeln!(
+            &asked,
+            "{}",
+            json!({ "set": kept["breakpoints"][0], "revision": 1 })
+        )
+        .unwrap();
+        let heard = watching.next();
+        assert_eq!(heard["method"], "event", "{heard}");
+        assert_eq!(heard["params"], event, "a told list takes no number");
+
+        let late = Shell::connect(&place.socket());
+        late.send(&json!({ "jsonrpc": "2.0", "id": 0, "method": "hello" }));
+        let greeted = late.next();
+        assert_eq!(greeted["result"]["breakpoints"], event);
+        assert_eq!(
+            greeted["result"]["events"],
+            json!([{ "event": "running", "seq": 1 }]),
+            "the list stays out of the history"
+        );
+        drop(host);
     }
 
     #[test]

@@ -41,10 +41,11 @@
 //! - `{"op": "break", "file": .., "line": ..}` or `{"op": "break",
 //!   "function": "tick"}`: `{"set": .., "lines": [{"file": .., "line": ..}],
 //!   "compiled": .., "paused": {"file": .., "line": .., "function": ..,
-//!   "reason": ..} or null}`, the pause the program is in if any, or
-//!   `{"error": ..}`;
+//!   "reason": ..} or null, "revision": .., "breakpoints": [..]}`, the
+//!   pause the program is in if any, or `{"error": ..}`;
 //! - `{"op": "clear"}`, with `file`, `line` or `function` to take fewer:
-//!   `{"cleared": n, "left": [..], "paused": ..}`;
+//!   `{"cleared": n, "left": [..], "paused": .., "revision": ..}`, `left`
+//!   the breakpoints there are now;
 //! - `{"op": "step", "kind": "over" | "into" | "out"}` on a paused program,
 //!   answered where the step pauses: `{"paused": ..}`, or `{"paused": null,
 //!   "native": true}` once it went on into the native code that called the
@@ -86,6 +87,14 @@
 //! every shell attached to the run hears them (#535): the run's session
 //! socket, which first hears where this socket is (`serve`) and holds that
 //! while the connection stays open, or a file, a line each.
+//!
+//! The breakpoints live in [`BREAKPOINTS`] beside the socket, as
+//! `{"revision": n, "breakpoints": [{"file", "line", "text"} or
+//! {"function"}]}`, so a program started again there has them. Each change
+//! to them, a set, a clear that took one or a compile that moved one,
+//! writes that file and tells it as a `breakpoints` event with the same
+//! fields (#2278). The revision counts the changes, across restarts, so a
+//! shell orders what it heard against the answers it got.
 //!
 //! A request waits for its answer without looking at a clock: the tool
 //! closing its connection wakes the wait, and so does a pause, for a
@@ -132,6 +141,9 @@ pub const EVENTS: &str = "RAWR_MCP_DEBUG_EVENTS";
 /// wrote until a `release` request, which the shell sends once they are
 /// in. Breakpoints are set meanwhile; a read waits for the release.
 pub const HOLD: &str = "RAWR_DEBUG_HOLD";
+
+/// The file beside the inspector's socket that keeps its breakpoints.
+pub const BREAKPOINTS: &str = "breakpoints.json";
 
 #[cfg(feature = "sync")]
 pub use evaluate::Program;
@@ -765,6 +777,8 @@ struct State {
     pending: Vec<Request>,
     /// The breakpoints, and the program's statements once it compiled.
     points: Vec<stops::Point>,
+    /// How many times the breakpoints changed, kept with them.
+    revision: u64,
     stops: Option<Arc<stops::Stops>>,
     /// Where the program is paused, as a tool reads it.
     paused: Option<Value>,
@@ -899,12 +913,15 @@ impl Inspector {
 
         let _ = std::fs::remove_file(socket);
         let listener = UnixListener::bind(socket)?;
-        let saved = socket.with_file_name("breakpoints.json");
-        let points = std::fs::read(&saved)
+        let saved = socket.with_file_name(BREAKPOINTS);
+        let kept = std::fs::read(&saved)
             .ok()
-            .and_then(|bytes| serde_json::from_slice::<Vec<Value>>(&bytes).ok())
-            .unwrap_or_default()
-            .iter()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+            .unwrap_or_default();
+        let points = kept["breakpoints"]
+            .as_array()
+            .into_iter()
+            .flatten()
             .filter_map(stops::Spec::from_json)
             .map(|spec| stops::Point {
                 spec,
@@ -914,6 +931,7 @@ impl Inspector {
         let shared = Arc::new(Shared {
             state: Mutex::new(State {
                 points,
+                revision: kept["revision"].as_u64().unwrap_or(0),
                 ..State::default()
             }),
             changed: Condvar::new(),
@@ -1015,14 +1033,22 @@ impl Inspector {
         let shared = &self.0;
         let stops = Arc::new(stops::Stops::of(ast, &|position| shared.locate(position)));
         let mut state = shared.state();
-        state.points = state
+        let points: Vec<stops::Point> = state
             .points
             .iter()
             .filter_map(|point| stops::moved(point, &stops))
             .collect();
+        let changed = points.len() != state.points.len()
+            || points
+                .iter()
+                .zip(&state.points)
+                .any(|(now, was)| now.spec != was.spec);
+        state.points = points;
         state.stops = Some(stops);
         shared.armed(&state);
-        shared.save(&state);
+        if changed {
+            shared.save(&mut state);
+        }
     }
 }
 
@@ -1255,8 +1281,13 @@ impl Shared {
         state.points.retain(|held| held.spec != point.spec);
         state.points.push(point);
         self.armed(&state);
-        self.save(&state);
-        json!({ "set": spec, "lines": lines, "compiled": compiled, "paused": state.paused })
+        self.save(&mut state);
+        let mut answer = told(&state);
+        answer["set"] = spec;
+        answer["lines"] = json!(lines);
+        answer["compiled"] = json!(compiled);
+        answer["paused"] = json!(state.paused);
+        answer
     }
 
     /// Remove the breakpoints a request names: all of them when it names
@@ -1274,12 +1305,16 @@ impl Shared {
             .points
             .retain(|point| !point.spec.cleared_by(file, line, function));
         let cleared = before - state.points.len();
-        self.armed(&state);
-        self.save(&state);
+        if cleared > 0 {
+            self.armed(&state);
+            self.save(&mut state);
+        }
+        let told = told(&state);
         json!({
             "cleared": cleared,
-            "left": state.points.iter().map(|point| point.spec.to_json()).collect::<Vec<_>>(),
+            "left": told["breakpoints"],
             "paused": state.paused,
+            "revision": told["revision"],
         })
     }
 
@@ -1386,14 +1421,14 @@ impl Shared {
         );
     }
 
-    /// Keep the breakpoints for a program started again.
-    fn save(&self, state: &State) {
-        let specs: Vec<Value> = state
-            .points
-            .iter()
-            .map(|point| point.spec.to_json())
-            .collect();
-        let _ = std::fs::write(&self.saved, Value::from(specs).to_string());
+    /// The breakpoints changed: count the change, keep them for a program
+    /// started again, and tell every shell what the file now holds.
+    fn save(&self, state: &mut State) {
+        state.revision += 1;
+        let mut told = told(state);
+        let _ = std::fs::write(&self.saved, told.to_string());
+        told["event"] = json!("breakpoints");
+        self.emit(&told);
     }
 
     /// At a step of the program: answer what waits, and pause at a
@@ -1772,6 +1807,17 @@ impl Told {
             }
         }
     }
+}
+
+/// The breakpoints as [`BREAKPOINTS`] keeps them: `{"revision",
+/// "breakpoints"}`.
+fn told(state: &State) -> Value {
+    let specs: Vec<Value> = state
+        .points
+        .iter()
+        .map(|point| point.spec.to_json())
+        .collect();
+    json!({ "revision": state.revision, "breakpoints": specs })
 }
 
 /// The lines a breakpoint pauses on.
@@ -2377,6 +2423,49 @@ mod tests {
         assert_eq!(paused["paused"]["function"], "make", "{paused}");
         assert_eq!(paused["paused"]["reason"], "breakpoint", "{paused}");
         assert!(continued["paused"].is_null(), "{continued}");
+    }
+
+    /// Each change to the breakpoints is kept beside the socket with its
+    /// revision, which the answer says too; a clear that takes none
+    /// changes nothing, and a program started there again has them at the
+    /// same revision (#2278).
+    #[cfg(unix)]
+    #[test]
+    fn each_change_to_the_breakpoints_is_kept_with_its_revision() {
+        use serde_json::{json, Value};
+        let going = Arc::new(AtomicBool::new(true));
+        let called = Called::new("kept", &going);
+        let file = called.directory.join(super::BREAKPOINTS);
+        let kept = || serde_json::from_slice::<Value>(&std::fs::read(&file).unwrap()).unwrap();
+        assert_eq!(
+            kept(),
+            json!({ "revision": 1, "breakpoints": [{ "function": "update" }] })
+        );
+        let set = ask(
+            &called.socket,
+            &json!({ "op": "break", "function": "view" }),
+        );
+        assert_eq!(set["revision"], 2, "{set}");
+        assert_eq!(set["breakpoints"], kept()["breakpoints"], "{set}");
+        let none = ask(
+            &called.socket,
+            &json!({ "op": "clear", "function": "spin" }),
+        );
+        assert_eq!(
+            (&none["cleared"], &none["revision"]),
+            (&json!(0), &json!(2))
+        );
+        assert_eq!(kept()["revision"], 2);
+        let cleared = ask(
+            &called.socket,
+            &json!({ "op": "clear", "function": "update" }),
+        );
+        assert_eq!(cleared["revision"], 3, "{cleared}");
+        assert_eq!(cleared["left"], json!([{ "function": "view" }]));
+        assert_eq!(kept()["breakpoints"], cleared["left"]);
+        let again = super::Inspector::bind(&called.directory.join("again")).unwrap();
+        let state = again.0.state();
+        assert_eq!((state.revision, state.points.len()), (3, 1));
     }
 
     /// A release before the program reaches its first statement lets it

@@ -2,10 +2,11 @@
 //! Each goes to the program's inspector through the session, which waits
 //! for a program that starts or restarts.
 
-use std::sync::{Arc, PoisonError};
+use std::sync::{Arc, MutexGuard, PoisonError};
 
 use serde_json::{json, Value};
 
+use super::breakpoints::{Change, Known, Point};
 use super::Adapter;
 use crate::mcp::tools;
 
@@ -17,29 +18,50 @@ impl Adapter {
             .as_str()
             .ok_or("setBreakpoints needs the source's path")?;
         let file = tools::absolute(&self.root, Some(file));
-        let _one = self.breaking.lock().unwrap_or_else(PoisonError::into_inner);
-        self.ask(&json!({ "op": "clear", "file": file }))?;
-        let source = json!({ "path": file });
-        let set: Vec<Value> = arguments["breakpoints"]
+        let lines: Vec<u64> = arguments["breakpoints"]
             .as_array()
             .into_iter()
             .flatten()
             .filter_map(|breakpoint| breakpoint["line"].as_u64())
-            .map(|line| {
-                let line = self.line_in(line);
-                match self.ask(&json!({ "op": "break", "file": file, "line": line })) {
-                    Ok(answer) => json!({
-                        "verified": true,
-                        "line": self.line_out(answer["lines"][0]["line"].as_u64().unwrap_or(line)),
-                        "source": source,
-                    }),
-                    Err(message) => json!({
-                        "verified": false,
-                        "line": self.line_out(line),
-                        "message": message,
-                        "source": source,
-                    }),
+            .map(|line| self.line_in(line))
+            .collect();
+        let point = |line: u64| Point::Line {
+            file: file.to_string_lossy().into_owned(),
+            line,
+        };
+        let _one = self.breaking.lock().unwrap_or_else(PoisonError::into_inner);
+        self.known().ask(lines.iter().copied().map(point).collect());
+        let mut last = None;
+        let mut answers = Vec::new();
+        let cleared = self.ask(&json!({ "op": "clear", "file": file }));
+        if let Ok(answer) = &cleared {
+            last = Some(listed(answer));
+            for line in &lines {
+                let answer = self.ask(&json!({ "op": "break", "file": file, "line": line }));
+                if let Ok(answer) = &answer {
+                    last = Some(listed(answer));
                 }
+                answers.push((*line, answer));
+            }
+        }
+        let known = self.told(last.as_ref());
+        cleared?;
+        let source = json!({ "path": file });
+        let set: Vec<Value> = answers
+            .into_iter()
+            .map(|(line, answer)| match answer {
+                Ok(answer) => json!({
+                    "id": known.id(&point(line)),
+                    "verified": true,
+                    "line": self.line_out(answer["lines"][0]["line"].as_u64().unwrap_or(line)),
+                    "source": source,
+                }),
+                Err(message) => json!({
+                    "verified": false,
+                    "line": self.line_out(line),
+                    "message": message,
+                    "source": source,
+                }),
             })
             .collect();
         Ok(json!({ "breakpoints": set }))
@@ -48,39 +70,93 @@ impl Adapter {
     /// `setFunctionBreakpoints`: the function breakpoints become those
     /// named, each pausing at its function's first statement.
     pub(super) fn set_functions(&self, arguments: &Value) -> Result<Value, String> {
+        let names: Vec<&str> = arguments["breakpoints"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|breakpoint| breakpoint["name"].as_str())
+            .collect();
         let _one = self.breaking.lock().unwrap_or_else(PoisonError::into_inner);
         let mut functions = self
             .functions
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
+        self.known().ask(
+            functions
+                .iter()
+                .map(String::as_str)
+                .chain(names.iter().copied())
+                .map(|name| Point::Function(name.to_owned()))
+                .collect(),
+        );
+        let mut last = None;
+        let mut cleared = Ok(());
         for function in functions.drain(..) {
-            self.ask(&json!({ "op": "clear", "function": function }))?;
+            match self.ask(&json!({ "op": "clear", "function": function })) {
+                Ok(answer) => last = Some(listed(&answer)),
+                Err(message) => {
+                    cleared = Err(message);
+                    break;
+                }
+            }
         }
-        let mut set = Vec::new();
-        for name in arguments["breakpoints"]
-            .as_array()
+        let mut answers = Vec::new();
+        if cleared.is_ok() {
+            for name in &names {
+                let answer = self.ask(&json!({ "op": "break", "function": name }));
+                if let Ok(answer) = &answer {
+                    functions.push((*name).to_owned());
+                    last = Some(listed(answer));
+                }
+                answers.push((*name, answer));
+            }
+        }
+        let known = self.told(last.as_ref());
+        cleared?;
+        let set: Vec<Value> = answers
             .into_iter()
-            .flatten()
-            .filter_map(|breakpoint| breakpoint["name"].as_str())
-        {
-            set.push(
-                match self.ask(&json!({ "op": "break", "function": name })) {
-                    Ok(answer) => {
-                        functions.push(name.to_owned());
-                        let at = &answer["lines"][0];
-                        let mut breakpoint = json!({ "verified": true });
-                        if let (Some(file), Some(line)) = (at["file"].as_str(), at["line"].as_u64())
-                        {
-                            breakpoint["source"] = json!({ "path": file });
-                            breakpoint["line"] = json!(self.line_out(line));
-                        }
-                        breakpoint
+            .map(|(name, answer)| match answer {
+                Ok(answer) => {
+                    let at = &answer["lines"][0];
+                    let mut breakpoint = json!({
+                        "id": known.id(&Point::Function(name.to_owned())),
+                        "verified": true,
+                    });
+                    if let (Some(file), Some(line)) = (at["file"].as_str(), at["line"].as_u64()) {
+                        breakpoint["source"] = json!({ "path": file });
+                        breakpoint["line"] = json!(self.line_out(line));
                     }
-                    Err(message) => json!({ "verified": false, "message": message }),
-                },
-            );
-        }
+                    breakpoint
+                }
+                Err(message) => json!({ "verified": false, "message": message }),
+            })
+            .collect();
         Ok(json!({ "breakpoints": set }))
+    }
+
+    /// The client's breakpoint request ended, its last answer the list
+    /// `last`: tell the client what other shells changed meanwhile, and
+    /// give the breakpoints it knows, its own now among them.
+    fn told(&self, last: Option<&Value>) -> MutexGuard<'_, Known> {
+        let mut known = self.known();
+        let changes = known.answered(last);
+        self.tell_breakpoints(&changes);
+        known
+    }
+
+    /// Tell the client what the session's newest breakpoints, `told`,
+    /// changed of those it knows: what another shell set or cleared.
+    pub(super) fn follow_breakpoints(&self, told: &Value) {
+        let mut known = self.known();
+        let changes = known.follow(told);
+        self.tell_breakpoints(&changes);
+    }
+
+    fn tell_breakpoints(&self, changes: &[Change]) {
+        for change in changes {
+            self.out
+                .event("breakpoint", change.body(|line| self.line_out(line)));
+        }
     }
 
     /// `continue`: the paused program runs on.
@@ -123,4 +199,11 @@ impl Adapter {
             Err(message) => self.output("stderr", &format!("rawr: the step failed: {message}\n")),
         }
     }
+}
+
+/// The breakpoints a `break` or `clear` answer says there are now, as the
+/// session tells them: `{"revision", "breakpoints"}`.
+fn listed(answer: &Value) -> Value {
+    let breakpoints = answer.get("breakpoints").unwrap_or(&answer["left"]);
+    json!({ "revision": answer["revision"], "breakpoints": breakpoints })
 }

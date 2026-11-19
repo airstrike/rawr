@@ -83,6 +83,23 @@ fn reply(app: &mut App, request: &Value, result: Value) {
     ));
 }
 
+/// The breakpoints at `lines` of the file, as the session tells them at
+/// `revision`.
+fn breakpoints(revision: u64, lines: &[u64]) -> Value {
+    let specs: Vec<Value> = lines
+        .iter()
+        .map(|line| json!({ "file": FILE, "line": line, "text": "" }))
+        .collect();
+    json!({ "event": "breakpoints", "revision": revision, "breakpoints": specs })
+}
+
+/// The session tells every shell the breakpoints at `lines`.
+fn told(app: &mut App, revision: u64, lines: &[u64]) {
+    let _ = app.update(line(&json!({
+        "jsonrpc": "2.0", "method": "event", "params": breakpoints(revision, lines),
+    })));
+}
+
 /// A window connected to `script`, greeted by a running program and then
 /// paused in `tick`, with its frames and bindings read.
 fn paused(script: &Arc<Script>) -> App {
@@ -98,12 +115,8 @@ fn paused(script: &Arc<Script>) -> App {
             "protocol": 1, "root": "/p", "capabilities": ["events", "inspect"],
             "events": [{ "event": "running", "seq": 1 }],
             "output": [{ "stream": "stdout", "text": "ticking\n" }],
+            "breakpoints": breakpoints(0, &[]),
         }),
-    );
-    reply(
-        &mut app,
-        &script.request("clear"),
-        json!({ "cleared": 0, "left": [], "paused": null }),
     );
     let _ = app.update(line(&json!({
         "jsonrpc": "2.0", "method": "event",
@@ -231,6 +244,7 @@ fn the_gutter_sets_and_clears_a_breakpoint() {
         &set,
         json!({ "set": { "file": FILE, "line": 7 }, "lines": [], "compiled": true, "paused": null }),
     );
+    told(&mut app, 1, &[7]);
     assert!(shows(&app, "●"), "the line shows its breakpoint");
     snapshot(&app, "breakpoint.png");
 
@@ -244,7 +258,52 @@ fn the_gutter_sets_and_clears_a_breakpoint() {
         &clear,
         json!({ "cleared": 1, "left": [], "paused": null }),
     );
+    told(&mut app, 2, &[]);
     assert!(!shows(&app, "●"), "the breakpoint is gone");
+}
+
+/// A breakpoint another shell sets or clears shows as the session tells
+/// it, and a window that attaches later shows those set already (#2278).
+#[test]
+fn the_gutter_shows_the_breakpoints_every_shell_sets() {
+    let script = Arc::new(Script::default());
+    let mut app = paused(&script);
+    assert!(!shows(&app, "●"));
+    told(&mut app, 1, &[7]);
+    assert!(shows(&app, "●"), "another shell's breakpoint shows");
+    // A list older than the one shown changes nothing.
+    told(&mut app, 0, &[]);
+    assert!(shows(&app, "●"));
+    told(&mut app, 2, &[]);
+    assert!(!shows(&app, "●"), "another shell's clear shows");
+
+    let mut late = App::new(PathBuf::from("/tmp/rawr-test/session.sock"));
+    let _ = late.update(Message::Session(Event::Connected(Link::new(
+        Arc::clone(&script) as Arc<dyn Transport>,
+    ))));
+    reply(
+        &mut late,
+        &script.request("hello"),
+        json!({
+            "protocol": 1, "root": FILE, "capabilities": ["events"],
+            "events": [{ "event": "running", "seq": 1 }], "output": [],
+            "breakpoints": breakpoints(3, &[7]),
+        }),
+    );
+    let _ = late.update(Message::Source(source::Message::Loaded {
+        file: FILE.to_owned(),
+        text: Ok(SOURCE.to_owned()),
+    }));
+    assert!(shows(&late, "●"), "hello's breakpoints show");
+    assert!(
+        script
+            .sent
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .all(|sent| sent["params"]["op"] != "clear"),
+        "the window asks the program nothing to learn its breakpoints"
+    );
 }
 
 #[test]
@@ -293,6 +352,7 @@ fn a_stop_draws_its_rust_source_in_the_colours_of_the_windows_mode() {
         &script.request("break"),
         json!({ "set": { "file": FILE, "line": 5 }, "lines": [], "compiled": true, "paused": null }),
     );
+    told(&mut app, 1, &[5]);
     assert!(shows(&app, "●"));
     let dark = snapshot(&app, "highlighted.png");
     let screens = Path::new(env!("CARGO_TARGET_TMPDIR"))

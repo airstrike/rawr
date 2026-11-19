@@ -47,8 +47,10 @@ pub struct App {
     /// answer to the newest shows, since an earlier one tells of a pause
     /// or a frame the window has left.
     reads: u64,
-    /// The line breakpoints set, each a file and a line.
+    /// The line breakpoints set, each a file and a line, as the session
+    /// last told them, and that list's revision.
     breakpoints: Vec<(String, u64)>,
+    revision: u64,
     /// The last thing that went wrong, until the next.
     note: Option<String>,
     source: source::State,
@@ -70,7 +72,7 @@ struct Frame {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Asked {
     Hello,
-    Breakpoints,
+    Clear,
     Inspect { frame: usize, read: u64 },
     Break,
     Step { resumes: u64 },
@@ -145,6 +147,7 @@ impl App {
             inspected: None,
             reads: 0,
             breakpoints: Vec::new(),
+            revision: 0,
             note: None,
             source: source::State::default(),
             console: console::State::default(),
@@ -186,6 +189,10 @@ impl App {
             }
             Message::Session(session::Event::Line(line)) => match self.client.receive(&line) {
                 Some(Incoming::Reply { kind, result }) => self.answered(kind, result),
+                Some(Incoming::Event(event)) if event["event"] == "breakpoints" => {
+                    self.follow_breakpoints(&event);
+                    Task::none()
+                }
                 Some(Incoming::Event(event)) => {
                     // Each pause is a new one, even where the last was.
                     if event["event"] == "paused" {
@@ -216,7 +223,7 @@ impl App {
                         json!({ "op": "break", "file": file, "line": line })
                     };
                     let kind = if request["op"] == "clear" {
-                        Asked::Breakpoints
+                        Asked::Clear
                     } else {
                         Asked::Break
                     };
@@ -312,6 +319,24 @@ impl App {
         );
     }
 
+    /// The breakpoints the session told, `{"revision", "breakpoints"}`,
+    /// when newer than those shown: whichever shell set or cleared them.
+    fn follow_breakpoints(&mut self, told: &Value) {
+        let Some(revision) = told["revision"]
+            .as_u64()
+            .filter(|revision| *revision >= self.revision)
+        else {
+            return;
+        };
+        self.revision = revision;
+        self.breakpoints = told["breakpoints"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|point| Some((point["file"].as_str()?.to_owned(), point["line"].as_u64()?)))
+            .collect();
+    }
+
     /// A step or continue was asked of the paused program, which runs on.
     fn went_on(&mut self) -> Task<Message> {
         self.resumes += 1;
@@ -404,9 +429,7 @@ impl App {
                         self.heard(piece);
                     }
                 }
-                // The breakpoints set so far: a clear that matches none
-                // answers with all of them.
-                self.ask(json!({ "op": "clear", "line": 0 }), Asked::Breakpoints);
+                self.follow_breakpoints(&answer["breakpoints"]);
                 let moved = self.moved(phase);
                 if self.source.file().is_some() {
                     return moved;
@@ -425,29 +448,9 @@ impl App {
                     .map(Message::Source);
                 Task::batch([moved, shown])
             }
-            Asked::Breakpoints => {
-                self.breakpoints = answer["left"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|point| {
-                        Some((point["file"].as_str()?.to_owned(), point["line"].as_u64()?))
-                    })
-                    .collect();
-                Task::none()
-            }
-            Asked::Break => {
-                if let (Some(file), Some(line)) = (
-                    answer["set"]["file"].as_str(),
-                    answer["set"]["line"].as_u64(),
-                ) {
-                    let point = (file.to_owned(), line);
-                    if !self.breakpoints.contains(&point) {
-                        self.breakpoints.push(point);
-                    }
-                }
-                Task::none()
-            }
+            // The session tells the breakpoints as they are now to every
+            // shell, this one among them.
+            Asked::Break | Asked::Clear => Task::none(),
             Asked::Inspect { frame, .. } => {
                 if answer["reached"] != true {
                     self.note = Some(format!("frame {frame} isn't there to read"));

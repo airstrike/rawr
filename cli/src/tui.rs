@@ -37,10 +37,8 @@ pub fn run(path: Option<PathBuf>) -> ExitCode {
 fn attach(root: &Path, path: &Path, source: PathBuf) -> std::io::Result<()> {
     let place = session::Place::new(root)?;
     let socket = place.socket();
-    // The inspector keeps its breakpoints beside its socket.
-    let saved = place.inspector().with_file_name("breakpoints.json");
     if let Ok(stream) = UnixStream::connect(&socket) {
-        return rawr_tui::run(rawr_tui::Session::new(stream, source, saved));
+        return rawr_tui::run(rawr_tui::Session::new(stream, source));
     }
     place.make()?;
     let _ = std::fs::remove_file(&socket);
@@ -49,7 +47,7 @@ fn attach(root: &Path, path: &Path, source: PathBuf) -> std::io::Result<()> {
     drop(listener);
     // The kernel holds the connection until the run accepts it.
     let shown = UnixStream::connect(&socket).and_then(|stream| {
-        let mut attached = rawr_tui::Session::new(stream, source, saved);
+        let mut attached = rawr_tui::Session::new(stream, source);
         if let Some(pipe) = child.stdout.take() {
             attached = attached.with_output(rawr_tui::Stream::Stdout, pipe);
         }

@@ -277,6 +277,10 @@ impl Shell {
     }
 
     fn event(&mut self, event: &Value) {
+        if event["event"] == "breakpoints" {
+            self.follow_breakpoints(event);
+            return;
+        }
         let before = self.phase.stop().cloned();
         self.phase = self.phase.after(event);
         match event["event"].as_str().unwrap_or_default() {
@@ -313,7 +317,6 @@ impl Shell {
     fn paused_at(&mut self, stop: &Stop) {
         self.show(Path::new(stop.file()), stop.line());
         self.frame = 0;
-        self.load_breakpoints();
         self.inspect();
     }
 
@@ -360,15 +363,11 @@ impl Shell {
         match pending {
             Pending::Hello => self.greeted(&answer),
             Pending::Inspect { frame } => self.inspected(frame, &answer),
+            // The session tells the breakpoints as they are now to every
+            // shell, this one among them.
             Pending::Break | Pending::Clear => {
                 if let Some(error) = answer["error"].as_str() {
                     self.status = Some(error.to_owned());
-                }
-                self.load_breakpoints();
-                if let Some(set) = Breakpoint::from_json(&answer["set"])
-                    && !self.breakpoints.contains(&set)
-                {
-                    self.breakpoints.push(set);
                 }
             }
             Pending::Resume => match answer["error"].as_str() {
@@ -403,7 +402,7 @@ impl Shell {
         for event in answer["events"].as_array().into_iter().flatten() {
             self.phase = self.phase.after(event);
         }
-        self.load_breakpoints();
+        self.follow_breakpoints(&answer["breakpoints"]);
         if let Some(stop) = self.phase.stop().cloned() {
             self.paused_at(&stop);
         }
@@ -466,16 +465,22 @@ impl Shell {
             .min(self.source.lines.len().saturating_sub(1));
     }
 
-    /// The breakpoints the inspector keeps, which every shell's requests
-    /// set.
-    fn load_breakpoints(&mut self) {
-        let Ok(text) = std::fs::read_to_string(&self.saved) else {
+    /// The breakpoints the session told, `{"revision", "breakpoints"}`,
+    /// when newer than those shown: whichever shell set or cleared them.
+    fn follow_breakpoints(&mut self, told: &Value) {
+        let Some(revision) = told["revision"]
+            .as_u64()
+            .filter(|revision| *revision >= self.revision)
+        else {
             return;
         };
-        let Ok(Value::Array(specs)) = serde_json::from_str::<Value>(&text) else {
-            return;
-        };
-        self.breakpoints = specs.iter().filter_map(Breakpoint::from_json).collect();
+        self.revision = revision;
+        self.breakpoints = told["breakpoints"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Breakpoint::from_json)
+            .collect();
     }
 
     fn output(&mut self, stream: Stream, text: &str) {

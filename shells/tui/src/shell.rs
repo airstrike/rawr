@@ -64,9 +64,10 @@ pub struct Shell {
     pending: HashMap<u64, Pending>,
     /// The program's root, as the session names it.
     root: String,
-    /// Where the program's inspector keeps its breakpoints.
-    saved: PathBuf,
+    /// The breakpoints as the session last told them, and that list's
+    /// revision.
     breakpoints: Vec<Breakpoint>,
+    revision: u64,
     /// The run's output and the evaluations, oldest first.
     console: Vec<Line>,
     /// The stream whose last piece ended without a newline.
@@ -177,17 +178,16 @@ enum Purpose {
 
 impl Shell {
     /// A shell on the session `client` talks to, showing `source` until
-    /// the program pauses, with the breakpoints kept at `saved`. It says
-    /// `hello` at once.
+    /// the program pauses. It says `hello` at once.
     #[must_use]
-    pub fn new(client: Client, source: PathBuf, saved: PathBuf) -> Self {
+    pub fn new(client: Client, source: PathBuf) -> Self {
         let mut shell = Self {
             client,
             phase: Phase::default(),
             pending: HashMap::new(),
             root: String::new(),
-            saved,
             breakpoints: Vec::new(),
+            revision: 0,
             console: Vec::new(),
             partial: None,
             source: Source::default(),

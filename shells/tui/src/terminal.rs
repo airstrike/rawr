@@ -13,24 +13,21 @@ use crate::client::Client;
 use crate::shell::{Flow, Input, Shell, Stream};
 
 /// What the shell attaches to: a connection to a run's session, the file
-/// it shows first, where the run's inspector keeps its breakpoints, and the
-/// output of the run when this shell started it.
+/// it shows first, and the output of the run when this shell started it.
 pub struct Session {
     stream: UnixStream,
     source: PathBuf,
-    saved: PathBuf,
     output: Vec<(Stream, Box<dyn Read + Send>)>,
 }
 
 impl Session {
     /// A session reached on `stream`, showing `source` until the program
-    /// pauses, with its breakpoints kept at `saved`.
+    /// pauses.
     #[must_use]
-    pub fn new(stream: UnixStream, source: PathBuf, saved: PathBuf) -> Self {
+    pub fn new(stream: UnixStream, source: PathBuf) -> Self {
         Self {
             stream,
             source,
-            saved,
             output: Vec::new(),
         }
     }
@@ -62,7 +59,7 @@ pub fn run(session: Session) -> std::io::Result<()> {
     std::thread::Builder::new()
         .name("rawr-tui-keys".into())
         .spawn(move || read_keys(&send))?;
-    let mut shell = Shell::new(client, session.source, session.saved);
+    let mut shell = Shell::new(client, session.source);
     let mut terminal = ratatui::init();
     let result = (|| loop {
         terminal.draw(|screen| shell.draw(screen))?;
