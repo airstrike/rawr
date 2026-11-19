@@ -2190,6 +2190,10 @@ impl<'a> Parser<'a> {
             sequence::Kind::Array(_) | sequence::Kind::Slice => point_span(value.span.start()),
             sequence::Kind::Vec | sequence::Kind::Deque => span(value.span.start(), end),
         });
+        if matches!(kind, sequence::Kind::Vec | sequence::Kind::Deque) {
+            self.index_mut_elements
+                .insert(span(value.span.start(), end));
+        }
         let length = kind.length();
         let mut source = value.rendered_source().surrounded("(", ")");
         source.push_text("[");

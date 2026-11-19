@@ -642,6 +642,44 @@ pub(super) fn variable_name(source: &str) -> Option<ImmutableString> {
         .then(|| source.into())
 }
 
+/// A written place as rustc's borrow check describes it: an explicit
+/// leading deref reached through (`r.f` of `(*r).f`) and each index as `_`
+/// (`r.a[_]` of `r.a[i + 1]`).
+pub(super) fn described_place(place: &str) -> String {
+    let mut place = place.trim();
+    let mut described = String::new();
+    if let Some(inner) = place.strip_prefix("(*")
+        && let Some(close) = inner.find(')')
+    {
+        let rest = &inner[close + 1..];
+        if !rest.starts_with(['.', '[']) {
+            described.push('*');
+        }
+        described.push_str(inner[..close].trim());
+        place = rest;
+    }
+    let mut depth = 0usize;
+    for character in place.chars() {
+        match character {
+            '[' => {
+                if depth == 0 {
+                    described.push_str("[_");
+                }
+                depth += 1;
+            }
+            ']' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    described.push(']');
+                }
+            }
+            _ if depth == 0 && !character.is_whitespace() => described.push(character),
+            _ => {}
+        }
+    }
+    described
+}
+
 /// The place an assignment's text `text` assigns: `g.c[0]` of
 /// `g.c[0] += 2`.
 pub(super) fn assigned_place(text: &str) -> &str {

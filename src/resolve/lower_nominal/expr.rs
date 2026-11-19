@@ -483,6 +483,14 @@ impl<'a> Parser<'a> {
                 });
             }
             let through_reference = matches!(resolved, Ty::Reference { .. });
+            // The local or `self` a `&` reference is in, which rustc's E0594
+            // for an assignment through it names.
+            let holder = variable_name(operand.source.as_str())
+                .filter(|name| self.bindings.contains_key(name.as_str()))
+                .filter(|name| {
+                    self.written_from(operand.span.start())
+                        .is_some_and(|written| written.starts_with(name.as_str()))
+                });
             operand.lvalue = match (resolved, operand.lvalue.take()) {
                 (Ty::Reference { mutable: true, .. }, Some(Lvalue::Binding { binding, .. })) => {
                     Some(Lvalue::Binding {
@@ -533,7 +541,9 @@ impl<'a> Parser<'a> {
             };
             if let Some(behind) = behind {
                 let assigned = match self.inference.resolve(&base.1) {
-                    Ty::Counted(counter, _) => Some(counter.unassignable()),
+                    _ if dereferenced.is_some() => None,
+                    Ty::Counted(counter, _) => Some(Unassignable::Counted(counter)),
+                    Ty::Reference { mutable: false, .. } => Some(Unassignable::Shared(holder)),
                     _ => None,
                 };
                 self.unmovable.insert(

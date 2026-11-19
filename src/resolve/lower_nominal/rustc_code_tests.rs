@@ -1777,3 +1777,122 @@ fn an_operation_known_to_overflow_or_panic_is_rustcs_deny_lint() {
         .compile(program)
         .unwrap_or_else(|error| panic!("{error}"));
 }
+
+#[test]
+fn assigning_through_a_shared_reference_is_e0594() {
+    // A place behind a `&` parameter or local: `*r`, a field and an element
+    // of a slice or array (#2305).
+    let written = |reference: &str| {
+        label(&format!(
+            "`{reference}` is a `&` reference, so it cannot be written to"
+        ))
+    };
+    assert_eq!(
+        refused("fn bump(shared: &u64) {\n    *shared = 5;\n}\nfn main() {}\n"),
+        (
+            "E0594".into(),
+            "cannot assign to `*shared`, which is behind a `&` reference".into(),
+            written("shared")
+        )
+    );
+    assert_eq!(
+        refused("fn main() {\n    let x = 1;\n    let r = &x;\n    *r += 2;\n}\n"),
+        (
+            "E0594".into(),
+            "cannot assign to `*r`, which is behind a `&` reference".into(),
+            written("r")
+        )
+    );
+    assert_eq!(
+        refused("struct P { f: i32 }\nfn a(r: &P) {\n    r.f = 5;\n}\nfn main() {}\n"),
+        (
+            "E0594".into(),
+            "cannot assign to `r.f`, which is behind a `&` reference".into(),
+            written("r")
+        )
+    );
+    assert_eq!(
+        refused("fn d(r: &[i32]) {\n    r[0] = 5;\n}\nfn main() {}\n"),
+        (
+            "E0594".into(),
+            "cannot assign to `r[_]`, which is behind a `&` reference".into(),
+            written("r")
+        )
+    );
+    assert_eq!(
+        refused("fn e(r: &[i32; 2]) {\n    r[0] = 5;\n}\nfn main() {}\n"),
+        (
+            "E0594".into(),
+            "cannot assign to `r[_]`, which is behind a `&` reference".into(),
+            written("r")
+        )
+    );
+    let assigned = |body: &str| {
+        refused(&format!(
+            "struct P {{ f: i32, a: [i32; 2], v: Vec<i32> }}\nfn g(mut r: &P, t: &(i32, i32)) \
+             {{\n    {body}\n}}\nfn main() {{}}\n"
+        ))
+    };
+    let shared = |place: &str, reference: &str| {
+        (
+            "E0594".to_owned(),
+            format!("cannot assign to `{place}`, which is behind a `&` reference"),
+            written(reference),
+        )
+    };
+    assert_eq!(assigned("r.f += 1;"), shared("r.f", "r"));
+    assert_eq!(assigned("(*r).f = 1;"), shared("r.f", "r"));
+    assert_eq!(assigned("r.a[1] = 1;"), shared("r.a[_]", "r"));
+    assert_eq!(assigned("t.0 = 1;"), shared("t.0", "t"));
+    // A match arm's assignment is refused as a statement's.
+    assert_eq!(
+        assigned("match 1 {\n        0 => r.f = 1,\n        _ => {}\n    }"),
+        shared("r.f", "r")
+    );
+    assert_eq!(
+        assigned("match 1 {\n        0 => *t = (1, 2),\n        _ => {}\n    }"),
+        shared("*t", "t")
+    );
+    assert_eq!(
+        refused(
+            "struct S { n: i32 }\nimpl S {\n    fn a(&self) {\n        *self = S { n: 1 };\n    \
+             }\n}\nfn main() {}\n"
+        ),
+        shared("*self", "self")
+    );
+    // An element of a `Vec` is `IndexMut`'s, which borrows it mutably.
+    let borrowed = |place: &str| {
+        (
+            "E0596".to_owned(),
+            format!("cannot borrow `{place}` as mutable, as it is behind a `&` reference"),
+            label("`r` is a `&` reference, so it cannot be borrowed as mutable"),
+        )
+    };
+    assert_eq!(
+        refused("fn b(r: &Vec<i32>) {\n    r[0] = 5;\n}\nfn main() {}\n"),
+        borrowed("*r")
+    );
+    assert_eq!(assigned("r.v[0] = 1;"), borrowed("r.v"));
+    // rustc marks the whole assignment, and for `IndexMut` the container.
+    let rendered = |source: &str| {
+        let error = Engine::new().compile(source).map(|_| ()).unwrap_err();
+        let source = Source::new("main.rs", source).unwrap();
+        render(&Report::from_parse(source, &error).unwrap())
+    };
+    let bump = rendered("fn bump(shared: &u64) { *shared = 5; }\nfn main() {}\n");
+    assert!(
+        bump.contains(
+            "1 | fn bump(shared: &u64) { *shared = 5; }\n  |                         \
+             ^^^^^^^^^^^ `shared` is a `&` reference, so it cannot be written to"
+        ),
+        "{bump}"
+    );
+    let element = rendered("fn b(r: &Vec<i32>) { r[0] = 5; }\nfn main() {}\n");
+    assert!(
+        element.contains(
+            "1 | fn b(r: &Vec<i32>) { r[0] = 5; }\n  |                      ^ `r` is a `&` \
+             reference, so it cannot be borrowed as mutable"
+        ),
+        "{element}"
+    );
+}

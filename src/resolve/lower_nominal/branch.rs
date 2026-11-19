@@ -2034,7 +2034,10 @@ impl<'a> Parser<'a> {
 
         let assignment = self.next().0;
         let Some(lvalue) = value.lvalue else {
-            return Err(self.unsupported("assignment target in match arm"));
+            let refused = self.unplaced_assignment(value.span)?;
+            return Err(
+                refused.unwrap_or_else(|| self.unsupported("assignment target in match arm"))
+            );
         };
         let binding_name = lvalue.binding().clone();
         let Some(binding) = self.mutation_binding(&binding_name) else {
@@ -2045,10 +2048,20 @@ impl<'a> Parser<'a> {
         let deferred = matches!(lvalue, Lvalue::Binding { .. })
             .then(|| self.deferred.get(&binding.declaration).copied())
             .flatten();
-        let immutable = (!binding.mutable && matches!(binding.kind, BindingKind::Local))
-            .then_some(binding.declaration)
-            .filter(|_| binding.available || deferred.is_none())
-            .map(|declaration| deferred.flatten().unwrap_or(declaration));
+        // A place below a `&mut` local changes through the reference, and
+        // one below a `&` local can't, whether or not the local is `mut`.
+        let reference = match self.inference.resolve(&binding.ty) {
+            Ty::Reference { mutable, .. } if !matches!(lvalue, Lvalue::Binding { .. }) => {
+                Some(mutable)
+            }
+            _ => None,
+        };
+        let shared = reference == Some(false) && matches!(binding.kind, BindingKind::Local);
+        let immutable =
+            (!binding.mutable && reference.is_none() && matches!(binding.kind, BindingKind::Local))
+                .then_some(binding.declaration)
+                .filter(|_| binding.available || deferred.is_none())
+                .map(|declaration| deferred.flatten().unwrap_or(declaration));
         if !binding.mutable && !matches!(binding.kind, BindingKind::Local) {
             return Err(match &binding.kind {
                 BindingKind::Receiver { .. } if !matches!(lvalue, Lvalue::Binding { .. }) => {
@@ -2069,6 +2082,7 @@ impl<'a> Parser<'a> {
         }
         // `Some(n) => r = &mut b,` of a `&mut` local given new borrows.
         if compound_operator(&assignment).is_none()
+            && !shared
             && let Some((selector, mutable)) = self.rebound_selector(&value.ty, &lvalue)
         {
             let (rebind, end) = self.rebind_selector(value.span, &value.ty, selector, mutable)?;
@@ -2114,6 +2128,9 @@ impl<'a> Parser<'a> {
         }
         self.coerce_expr(lvalue.ty(), &mut replacement)?;
         let whole = span(value.span.start(), replacement.span.end());
+        if shared {
+            return Err(self.shared_local_assignment(&binding_name, value.span, whole));
+        }
         if let Some(first) = immutable {
             return Err(self.immutable_assignment(
                 &lvalue,

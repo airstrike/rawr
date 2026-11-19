@@ -151,6 +151,8 @@ impl<'a> Parser<'a> {
     /// place below a `self` of type `receiver` that can't change it: one
     /// behind `&self`, or a `self` not declared `mut`.
     pub(super) fn receiver_assignment(&self, receiver: &Ty, at: Span) -> Error {
+        // The assignment's span ends where its last token starts.
+        let at = self.expression_span(at);
         let place = self.written(at).map_or_else(
             || "self".to_owned(),
             |text| assigned_place(&text).to_owned(),
@@ -169,6 +171,90 @@ impl<'a> Parser<'a> {
             ),
             note: None,
             reference: at,
+        }
+    }
+
+    /// rustc's E0594 for an assignment to `place`, after its `=`, where it
+    /// has no lvalue because a pointer that can't change it is above it
+    /// (`*r` of a `&`, a field of an `Arc`'s value). rustc's borrow check
+    /// comes after the value's type check, so the value is parsed first,
+    /// and the error marks the whole assignment.
+    pub(super) fn unplaced_assignment(&mut self, place: Span) -> Result<Option<Error>, Error> {
+        let Some(Unplaced {
+            assigned: Some(assigned),
+            ..
+        }) = self.unmovable.get(&place).cloned()
+        else {
+            return Ok(None);
+        };
+        let replacement = self.parse_expr()?;
+        let at = span(place.start(), replacement.span.end());
+        Ok(Some(match assigned {
+            Unassignable::Counted(counter) => Error::BorrowConflict {
+                code: "E0594",
+                message: counter.unassignable(),
+                access: at,
+                borrow: Span::NONE,
+            },
+            Unassignable::Shared(holder) => self.shared_assignment(holder.as_deref(), at),
+        }))
+    }
+
+    /// rustc's E0594 for an assignment at `at`, the whole assignment, to a
+    /// place behind a `&` reference, which `holder`, a local or `self`,
+    /// holds when the place is directly below it.
+    pub(super) fn shared_assignment(&self, holder: Option<&str>, at: Span) -> Error {
+        // The assignment's span ends where its last token starts.
+        let at = self.expression_span(at);
+        let place = self.written(at).map_or_else(
+            || "*_".to_owned(),
+            |text| described_place(assigned_place(&text)),
+        );
+        let label = holder.map_or_else(
+            || "cannot assign".to_owned(),
+            |holder| format!("`{holder}` is a `&` reference, so it cannot be written to"),
+        );
+        Error::StdPath {
+            code: "E0594",
+            message: format!("cannot assign to `{place}`, which is behind a `&` reference").into(),
+            label: Some(label.into()),
+            note: None,
+            reference: at,
+        }
+    }
+
+    /// rustc's error for an assignment at `at` to `place`, a place below
+    /// `binding`, a `&` local: E0596 for the container of an `IndexMut`
+    /// element, which the assignment borrows mutably, and E0594 otherwise.
+    pub(super) fn shared_local_assignment(&self, binding: &str, place: Span, at: Span) -> Error {
+        let written = self
+            .written(at)
+            .map(|text| assigned_place(&text).to_owned());
+        let indexed = written
+            .as_deref()
+            .filter(|_| self.index_mut_elements.contains(&place))
+            .and_then(|text| text.rfind('[').map(|open| text[..open].trim_end()));
+        let Some(indexed) = indexed else {
+            return self.shared_assignment(Some(binding), at);
+        };
+        let borrowed = described_place(indexed);
+        let borrowed = if borrowed == binding {
+            format!("*{binding}")
+        } else {
+            borrowed
+        };
+        Error::StdPath {
+            code: "E0596",
+            message: format!(
+                "cannot borrow `{borrowed}` as mutable, as it is behind a `&` reference"
+            )
+            .into(),
+            label: Some(
+                format!("`{binding}` is a `&` reference, so it cannot be borrowed as mutable")
+                    .into(),
+            ),
+            note: None,
+            reference: Span::new(at.start(), text_end(at.start(), indexed)),
         }
     }
 

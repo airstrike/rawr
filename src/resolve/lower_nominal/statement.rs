@@ -354,22 +354,8 @@ impl<'a> Parser<'a> {
     ) -> Result<(origin::Fragment, Span), Error> {
         let assignment = self.next().0;
         let Some(lvalue) = value.lvalue else {
-            // rustc's borrow check comes after the value's type check, and
-            // points at the whole assignment.
-            if let Some(Unplaced {
-                assigned: Some(message),
-                ..
-            }) = self.unmovable.get(&value.span).cloned()
-            {
-                let replacement = self.parse_expr()?;
-                return Err(Error::BorrowConflict {
-                    code: "E0594",
-                    message,
-                    access: span(value.span.start(), replacement.span.end()),
-                    borrow: Span::NONE,
-                });
-            }
-            return Err(self.unsupported("assignment target"));
+            let refused = self.unplaced_assignment(value.span)?;
+            return Err(refused.unwrap_or_else(|| self.unsupported("assignment target")));
         };
         let binding_name = lvalue.binding().clone();
         let Some(binding) = self.mutation_binding(&binding_name) else {
@@ -390,11 +376,22 @@ impl<'a> Parser<'a> {
                 self.inference.resolve(&binding.ty),
                 Ty::Reference { mutable: true, .. }
             );
-        let immutable =
-            (!binding.mutable && !through_reference && matches!(binding.kind, BindingKind::Local))
-                .then_some(binding.declaration)
-                .filter(|_| binding.available || deferred.is_none())
-                .map(|declaration| deferred.flatten().unwrap_or(declaration));
+        // A place below a `&` local can't change through it, whether or not
+        // the local is `mut`: rustc's E0594 (E0596 for an `IndexMut`
+        // element) once the value's type is checked.
+        let shared = !matches!(lvalue, Lvalue::Binding { .. })
+            && matches!(binding.kind, BindingKind::Local)
+            && matches!(
+                self.inference.resolve(&binding.ty),
+                Ty::Reference { mutable: false, .. }
+            );
+        let immutable = (!binding.mutable
+            && !through_reference
+            && !shared
+            && matches!(binding.kind, BindingKind::Local))
+        .then_some(binding.declaration)
+        .filter(|_| binding.available || deferred.is_none())
+        .map(|declaration| deferred.flatten().unwrap_or(declaration));
         // A place below a `self` that can't change it is rustc's E0594 once
         // the value's type is checked, as an immutable local's is.
         let receiver = (!binding.mutable
@@ -424,6 +421,7 @@ impl<'a> Parser<'a> {
         if compound_operator(&assignment).is_none()
             && immutable.is_none()
             && receiver.is_none()
+            && !shared
             && let Some((selector, mutable)) = self.rebound_selector(&value.ty, &lvalue)
         {
             return self.rebind_selector(value.span, &value.ty, selector, mutable);
@@ -465,6 +463,10 @@ impl<'a> Parser<'a> {
         if let Some(receiver) = receiver {
             let assignment = span(value.span.start(), replacement.span.end());
             return Err(self.receiver_assignment(&receiver, assignment));
+        }
+        if shared {
+            let assignment = span(value.span.start(), replacement.span.end());
+            return Err(self.shared_local_assignment(&binding_name, value.span, assignment));
         }
         self.consume_imported_value(&replacement, &binding_name, replacement.span)?;
         self.move_local(&mut replacement)?;
