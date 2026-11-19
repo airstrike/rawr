@@ -36,7 +36,7 @@
 // start, under the debugger (debugger.ts), and the panel opens. Turned off,
 // the program runs again as before, on the plain module or rawr-web.
 
-import { crates, usesCrate, type Frame } from "../scripts/universe.ts";
+import { crates, usesCrate, type Debugged, type Frame } from "../scripts/universe.ts";
 import type { Debugger } from "./debugger.ts";
 
 /** rawr-web's module: web/build.sh's output, which the release puts in the Worker's /web. */
@@ -121,8 +121,8 @@ export interface Web {
 export interface Universe {
   manifest(): Promise<string>;
   frame(parent: Element): Promise<Frame>;
-  /** `started` runs once the program compiled and waits at its start, before `main` goes on. */
-  run(frame: Frame, code: string, started?: () => Promise<void>): Promise<any>;
+  /** A run `debugged` is held at its start, and tells its end (scripts/universe.ts). */
+  run(frame: Frame, code: string, debugged?: Debugged): Promise<any>;
   /** The edit `code` for the program running in `frame`, which reloads in place. */
   replace(frame: Frame, code: string): any;
 }
@@ -498,7 +498,7 @@ export class Session {
     // breakpoints.
     const debug = this.state.debugging ? this.deps.debugging?.debugger : undefined;
     const attached = debug ? await debug.attach(frame.instance) : false;
-    const result = await this.universe!.run(frame, code, attached ? () => debug!.start() : undefined);
+    const result = await this.universe!.run(frame, code, attached ? { started: () => debug!.start(), ended: debug!.ending() } : undefined);
     if (mine !== this.runs) return;
     const took = Math.round(this.deps.now() - start) + " ms in the browser";
     if (result.kind === "error") this.result(result, took);

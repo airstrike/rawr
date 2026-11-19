@@ -98,6 +98,16 @@ export interface Loaded {
   manifest: string;
 }
 
+/**
+ * A run under the debugger (session.ts): `started` once the program
+ * compiled and waits at its held start, `ended` with its exit status once
+ * `main` returns or panics.
+ */
+export interface Debugged {
+  started(): Promise<void>;
+  ended(status: number): void;
+}
+
 /** A frame with its own instance, its bindings installed, ready to run. */
 export interface Frame {
   element: HTMLIFrameElement;
@@ -292,17 +302,16 @@ export function universe({ document, fetch, compile, build = PLAIN }: UniverseEn
    * compile error. A panic aborts the instance; its message is the error.
    * A `main` that sleeps runs on in the frame and prints to its terminal:
    * the answer is then a status of 0 with no output. Without JSPI it stops
-   * at its first sleep, and its frame says why. `started` runs once the
-   * program compiled and its `main` waits, as a debugger's held start
-   * waits (session.ts), before the run looks at whether `main` sleeps.
+   * at its first sleep, and its frame says why. A run `debugged` is held at
+   * its start until `started` settles, and tells `ended` its status.
    */
-  const run = async (frame: Frame, code: string, started?: () => Promise<void>): Promise<any> => {
+  const run = async (frame: Frame, code: string, debugged?: Debugged): Promise<any> => {
     const { manifest } = await load();
     frame.element.hidden = false;
     await settled(frame.element);
     try {
       const answer = frame.instance.run(manifest, code);
-      if (started) await started();
+      if (debugged) return await heldRun(frame, answer, debugged);
       if (frame.instance.sleeping()) {
         terminal(frame);
         // A panic's message goes to the terminal.
@@ -317,8 +326,34 @@ export function universe({ document, fetch, compile, build = PLAIN }: UniverseEn
         terminalIn(frame).textContent = message;
         return { kind: "text", status: 101, output: [] };
       }
+      debugged?.ended(101);
       return { kind: "text", status: 101, output: [{ stream: "stderr", text: message + "\n" }] };
     }
+  };
+
+  /**
+   * The rest of a held run, whose `answer` the release lets settle.
+   * `sleeping` can't say whether it runs on: a hold in the program's
+   * top-level items comes before `main` starts. A program that compiled
+   * and runs to its end does so in the microtasks the release starts, so
+   * its answer settles before the next task; one that sleeps or pauses
+   * leaves its answer pending, runs on and prints to its terminal.
+   */
+  const heldRun = async (frame: Frame, answer: Promise<string>, debugged: Debugged): Promise<any> => {
+    await debugged.started();
+    const next = new Promise<null>((resolve) => setTimeout(() => resolve(null), 0));
+    const done = await Promise.race([answer.then((text) => JSON.parse(text)), next]);
+    if (done) {
+      if (done.kind !== "error") debugged.ended(done.status);
+      return done;
+    }
+    terminal(frame);
+    // A panic's message goes to the terminal.
+    answer.then(
+      (text) => debugged.ended(JSON.parse(text).status),
+      () => debugged.ended(101),
+    );
+    return { kind: "text", status: 0, output: [] };
   };
 
   /**

@@ -180,3 +180,62 @@ test("a program stopped for want of JSPI says so in its frame", async () => {
   assert.equal(appended[0].className, "terminal");
   assert.equal(appended[0].textContent, NO_JSPI);
 });
+
+/** A frame whose instance answers `run` with `answer`, and says `sleeping` is false. */
+function heldFrame(answer: () => Promise<string>) {
+  const appended: unknown[] = [];
+  const document = {
+    createElement: () => ({ className: "", textContent: "" }),
+    body: { append: (node: unknown) => appended.push(node) },
+    scrollingElement: null,
+  };
+  const contentWindow = { innerWidth: 700, document, requestAnimationFrame: (callback: () => void) => callback() };
+  // A hold in the program's top-level items comes before `main` runs.
+  const instance = { run: answer, sleeping: () => false, set_output: () => {} };
+  return { frame: { element: { hidden: true, contentWindow } as unknown as HTMLIFrameElement, instance: instance as any }, appended };
+}
+
+/** A universe over stand-ins, for the frames `heldFrame` makes. */
+async function heldUniverse() {
+  const { universe } = await import("../src/scripts/universe.ts");
+  return universe({ document: {} as Document, fetch: (async () => new Response("[dependencies]\n")) as typeof fetch, compile: async () => ({}) as WebAssembly.Module });
+}
+
+test("a debugged run that ends at its release shows its answer, and tells its end", async () => {
+  const page = await heldUniverse();
+  let release: (text: string) => void = () => {};
+  const { frame, appended } = heldFrame(() => new Promise<string>((resolve) => (release = resolve)));
+  const ended: number[] = [];
+  const answer = await page.run(frame, "fn main() {}", {
+    started: async () => release('{"kind":"text","status":2,"output":[{"stream":"stdout","text":"hi\\n"}]}'),
+    ended: (status) => void ended.push(status),
+  });
+  assert.deepEqual(answer, { kind: "text", status: 2, output: [{ stream: "stdout", text: "hi\n" }] });
+  assert.deepEqual(ended, [2]);
+  assert.equal(appended.length, 0, "no terminal for a program that ended");
+});
+
+test("a debugged run held before main that runs on prints to its terminal, and tells its end later", async () => {
+  const page = await heldUniverse();
+  let finish: (text: string) => void = () => {};
+  const { frame, appended } = heldFrame(() => new Promise<string>((resolve) => (finish = resolve)));
+  const ended: number[] = [];
+  const answer = await page.run(frame, "fn main() {}", { started: async () => {}, ended: (status) => void ended.push(status) });
+  assert.deepEqual(answer, { kind: "text", status: 0, output: [] }, "though sleeping() is false, it runs on");
+  assert.equal(appended.length, 1, "its output goes to a terminal in its frame");
+  assert.deepEqual(ended, []);
+  finish('{"kind":"text","status":0,"output":[]}');
+  await new Promise((next) => setTimeout(next, 0));
+  assert.deepEqual(ended, [0], "its end is told once main returns");
+});
+
+test("a debugged run that panics tells its end with status 101", async () => {
+  const page = await heldUniverse();
+  let fail: (error: Error) => void = () => {};
+  const { frame } = heldFrame(() => new Promise<string>((_, reject) => (fail = reject)));
+  const ended: number[] = [];
+  await page.run(frame, "fn main() {}", { started: async () => {}, ended: (status) => void ended.push(status) });
+  fail(new Error("unreachable"));
+  await new Promise((next) => setTimeout(next, 0));
+  assert.deepEqual(ended, [101]);
+});

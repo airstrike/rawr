@@ -12,7 +12,9 @@
 // breakpoints, and `release` lets it run. The breakpoints are lines of the
 // crate root, kept across runs; the debugger's `breakpoints` events say
 // where they are now, as a compile moves them. A `paused` event reads the
-// frames and the innermost one's bindings; `resumed` clears them.
+// frames and the innermost one's bindings; `resumed` clears them. Once
+// `main` returns or panics, the run's end and exit status show, and the
+// controls have nothing to act on.
 
 /** Where the universe puts a snippet's crate root. */
 export const ROOT = "/universe/src/main.rs";
@@ -51,9 +53,9 @@ export interface Evaluated {
 
 /**
  * Where the program is: no program attached yet, held at its start, running,
- * or paused.
+ * paused, or past the end of `main`.
  */
-export type Phase = "idle" | "held" | "running" | "paused";
+export type Phase = "idle" | "held" | "running" | "paused" | "ended";
 
 export interface DebugState {
   phase: Phase;
@@ -71,10 +73,12 @@ export interface DebugState {
   evaluated: Evaluated[];
   /** The last request the debugger refused, with its reason. */
   error: string | null;
+  /** The exit status once `main` returned or panicked. */
+  status: number | null;
 }
 
 const IDLE: DebugState = {
-  phase: "idle", pause: null, paused: null, frames: [], frame: 0, bindings: [], unread: null, lines: [], evaluated: [], error: null,
+  phase: "idle", pause: null, paused: null, frames: [], frame: 0, bindings: [], unread: null, lines: [], evaluated: [], error: null, status: null,
 };
 
 /** The evals the panel keeps, latest last. */
@@ -141,6 +145,15 @@ export class Debugger {
     }
     // A pause the release ran into is told as an event, which already came.
     if (run === this.run && this.state.phase === "held") this.set({ phase: "running" });
+  }
+
+  /** What the attached run calls once `main` returns or panics, with its status. */
+  ending(): (status: number) => void {
+    const run = this.run;
+    return (status) => {
+      if (run !== this.run) return;
+      this.set({ phase: "ended", status, paused: null, frames: [], frame: 0, bindings: [], unread: null });
+    };
   }
 
   /** The instance went away: its program no longer runs. */
@@ -218,6 +231,7 @@ export class Debugger {
         return;
       }
       case "resumed":
+        if (this.state.phase === "ended") return;
         this.set({ phase: "running", paused: null, frames: [], frame: 0, bindings: [], unread: null });
         return;
       case "breakpoints":

@@ -251,6 +251,9 @@ try {
   // A program that ends before the page looks prints under its frame.
   await until("the program's run under the debugger", `${printed}.includes("plain again") || (document.querySelector("#out pre.term") || {}).textContent?.includes("plain again")`, 15000);
   check(debuggerFetches() === fetched, "turned on again, the page fetches the module no more", served);
+  // Its main returned: the panel says so, with its status, and its controls are off.
+  await until("the end of main", `${phase} === "main returned · exit 0"`, 5000);
+  check(await evaluate(`[...${panel}.querySelectorAll("[data-control]")].every((b) => b.disabled)`), "once main returned, every control is off");
 } catch (error) {
   check(false, String(error));
 } finally {
