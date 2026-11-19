@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.4.26",
+      "date": "2026-11-19",
+      "entries": [
+        {"text":"A step past the end of a function a window's event loop called is answered at once and pauses at the next statement the program runs, such as the next `view` or `update`, instead of leaving the shell waiting.","issues":[2287]}
+      ]
+    },
+    {
       "version": "0.4.25",
       "date": "2026-11-19",
       "entries": [

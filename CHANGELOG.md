@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.26 (2026-11-19)
+
+- A step past the end of a function a window's event loop called is answered at once and pauses at the next statement the program runs, such as the next `view` or `update`, instead of leaving the shell waiting. (#2287)
+
 ## 0.4.25 (2026-11-19)
 
 - A dependency's macro that calls std's macros through its own re-export of them, as `$crate::__support::format_args!(.., $crate::__support::line!())` does, expands again in marked code. A macro's `line!()` and `column!()` are where cargo's build puts them: the macro's own at its outermost call, and one its caller passes in where the caller wrote it. (#2284)

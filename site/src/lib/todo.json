@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-19",
-  "version": "0.4.25",
+  "version": "0.4.26",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.26",
+        "date": "2026-11-19",
+        "entries": [
+          {"text":"A step past the end of a function a window's event loop called is answered at once and pauses at the next statement the program runs, such as the next `view` or `update`, instead of leaving the shell waiting.","issues":[2287]}
+        ]
+      },
       {
         "version": "0.4.25",
         "date": "2026-11-19",
@@ -5227,11 +5234,14 @@
     {"issue":2284,"title":"`located::here!()` in a marked module fails to expand: expected expression, found `)`","state":"closed","category":"No glue (D593)","release":"0.4.25"},
     {"issue":2285,"title":"A native module reading a private field through a value whose type it never names isn't counted as seeing it","state":"open","category":"No glue (D593)"},
     {"issue":2286,"title":"`rawr gui` and `rawr tui` draw the source in syntax colours, and the window follows the system's…","state":"closed","category":"Health","release":"0.4.24"},
-    {"issue":2287,"title":"A step on a paused iced program never reaches a new pause","state":"open","category":"Health"},
+    {"issue":2287,"title":"A step on a paused iced program never reaches a new pause","state":"closed","category":"Health","release":"0.4.26"},
     {"issue":2288,"title":"A run started in a terminal tells its output to the session","state":"open","category":"Health"},
     {"issue":2289,"title":"End-to-end test lanes and started projects beyond the warm set outlive a killed or failing run and fill the disk","state":"closed","category":"Health"},
     {"issue":2290,"title":"A crate macro call sent to rustc keeps hidden-segment paths in its input","state":"open","category":"No glue (D593)"},
-    {"issue":2291,"title":"rustc's expansion of a crate macro call gives line!() at the expansion input, not the call","state":"open","category":"No glue (D593)"}
+    {"issue":2291,"title":"rustc's expansion of a crate macro call gives line!() at the expansion input, not the call","state":"open","category":"No glue (D593)"},
+    {"issue":2292,"title":"Eval at a pause in an iced callback fails: cannot use `iced::run`'s `W` here, type annotations needed","state":"open","category":"Health"},
+    {"issue":2293,"title":"After a step in an iced callback, the window shows no frames or bindings and 'No such file or directory (os error 2)'","state":"open","category":"Health"},
+    {"issue":2294,"title":"Continue after a step in an iced callback never answers the window","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -8037,11 +8047,14 @@
           "start": 67,
           "size": 3,
           "state": "now",
-          "note": "`rawr gui`: a window in its own process with frame, highlighted source, gutter breakpoints, bindings and eval (#2260, #2286). Left: a step lost on a paused iced program (#2287).",
+          "note": "`rawr gui`: a window in its own process with frame, highlighted source, gutter breakpoints, bindings and eval (#2260, #2286); a step on an iced program now pauses (#2287). Left from the live run: #2292, #2293, #2294.",
           "issues": [
             {"number":2260,"title":"A window shell (GUI) in its own process on the shared debugger session","state":"closed"},
-            {"number":2287,"title":"A step on a paused iced program never reaches a new pause","state":"open"},
-            {"number":2286,"title":"`rawr gui` and `rawr tui` draw the source in syntax colours, and the window follows the system's…","state":"closed"}
+            {"number":2287,"title":"A step on a paused iced program never reaches a new pause","state":"closed"},
+            {"number":2286,"title":"`rawr gui` and `rawr tui` draw the source in syntax colours, and the window follows the system's…","state":"closed"},
+            {"number":2292,"title":"Eval at a pause in an iced callback fails: cannot use `iced::run`'s `W` here, type annotations needed","state":"open"},
+            {"number":2293,"title":"After a step in an iced callback, the window shows no frames or bindings and 'No such file or directory (os error 2)'","state":"open"},
+            {"number":2294,"title":"Continue after a step in an iced callback never answers the window","state":"open"}
           ],
           "milestone": "0.5"
         }
