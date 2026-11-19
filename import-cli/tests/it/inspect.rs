@@ -1,5 +1,7 @@
 //! `rawr mcp`'s `inspect` (D675, #510) on a program with a Rust dependency:
-//! its runner serves the socket `RAWR_MCP_INSPECT` names and reads the
+//! its runner serves the inspector socket in its run's session place
+//! (D1053), whose owner names it in `RAWR_MCP_INSPECT` and has the runner
+//! register its debugger at the first request (#2308), and reads the
 //! bindings of a script function a native loop calls back, as iced calls
 //! `update`, with a crate value printed through its own `Debug`. Build the
 //! driver first, as for `plain`.
@@ -9,7 +11,7 @@
 use std::fs;
 use std::io::{BufRead as _, BufReader, Write as _};
 use std::os::unix::net::UnixStream;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -36,21 +38,26 @@ fn ask(socket: &Path, request: &Value) -> Value {
     serde_json::from_str(&line).unwrap()
 }
 
-/// The `count`th pause the program told in `events`, once it has.
-fn pause(run: &mut crate::support::Run, events: &Path, count: usize) -> Value {
+/// The inspector socket of the program at `root`: its run's owner hosts
+/// the run's session and names this socket to the program, in place of
+/// one the run's environment names.
+fn inspector(root: &Path) -> PathBuf {
+    rawr_cli::events::session::Place::new(root)
+        .unwrap()
+        .inspector()
+}
+
+/// The pause the program is in, once it pauses: setting the breakpoint
+/// `set` again answers with it, and keeps the breakpoint as it was.
+fn pause(run: &mut crate::support::Run, socket: &Path, set: &Value) -> Value {
     loop {
-        let told = fs::read_to_string(events).unwrap_or_default();
-        if let Some(pause) = told
-            .lines()
-            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-            .filter(|event| event["event"] == "paused")
-            .nth(count - 1)
-        {
-            return pause;
+        let answer = ask(socket, set);
+        if answer["paused"].is_object() {
+            return answer["paused"].clone();
         }
         assert!(
             run.child.try_wait().unwrap().is_none(),
-            "the run exited first: {told}\n{}",
+            "the run exited first: {answer}\n{}",
             run.seen.join("\n")
         );
         std::thread::sleep(Duration::from_millis(20));
@@ -63,22 +70,9 @@ fn inspect_reads_a_callbacks_bindings_in_a_runner_with_crate_values() {
     let root = crate::support::fresh("inspect-dependency");
     let stop = root.join("stop");
     let _ = fs::remove_file(&stop);
-    let events = root.join("debug-events");
-    let _ = fs::remove_file(&events);
     copy(Path::new(FIXTURE), &root);
-    // A Unix socket's path is short: under the system's temp directory, as
-    // `rawr mcp` makes it.
-    let directory = std::env::temp_dir().join(format!("rawr-inspect-{}", std::process::id()));
-    fs::create_dir_all(&directory).unwrap();
-    let socket = directory.join("s");
-    let mut run = start(
-        &root,
-        &[
-            ("RAWR_MCP_INSPECT", socket.clone()),
-            ("RAWR_MCP_DEBUG_EVENTS", events.clone()),
-            ("PUMP_STOP", stop.clone()),
-        ],
-    );
+    let socket = inspector(&root);
+    let mut run = start(&root, &[("PUMP_STOP", stop.clone())]);
     // The first run builds the runner.
     run.until(|line| line.starts_with("running"));
     let main = fs::canonicalize(root.join("src/main.rs")).unwrap();
@@ -117,13 +111,10 @@ fn inspect_reads_a_callbacks_bindings_in_a_runner_with_crate_values() {
     // A breakpoint in the function the native loop calls pauses the loop
     // there (#489). Paused, the same values read again.
     let main_text = main.to_string_lossy().into_owned();
-    let set = ask(
-        &socket,
-        &json!({ "op": "break", "file": main_text, "line": 18 }),
-    );
+    let line_18 = json!({ "op": "break", "file": main_text, "line": 18 });
+    let set = ask(&socket, &line_18);
     assert!(set.get("error").is_none(), "{set}");
-    // The pause is told as an event (#535).
-    let paused = pause(&mut run, &events, 1);
+    let paused = pause(&mut run, &socket, &line_18);
     assert_eq!(paused["line"], 18, "{paused}");
     assert_eq!(paused["function"], "inspect_dependency::update", "{paused}");
     let first = ask(&socket, &json!({ "name": "tick" }));
@@ -137,26 +128,70 @@ fn inspect_reads_a_callbacks_bindings_in_a_runner_with_crate_values() {
     );
     let step = ask(&socket, &json!({ "op": "step", "kind": "over" }));
     assert_eq!(step["paused"]["line"], 19, "{step}");
-    let told = fs::read_to_string(&events).unwrap_or_default();
-    assert!(
-        told.lines().any(|line| line.contains("\"resumed\"")),
-        "{told}"
-    );
     // Past the function's end, the step goes on into the native loop, which
     // it can't stop in, and says so; it pauses at the loop's next call.
     let step = ask(&socket, &json!({ "op": "step", "kind": "over" }));
     assert_eq!(step, json!({ "paused": null, "native": true }), "{step}");
-    assert_eq!(pause(&mut run, &events, 3)["line"], 13);
+    assert_eq!(pause(&mut run, &socket, &line_18)["line"], 13);
     let next = ask(&socket, &json!({ "name": "tick" }));
     assert_ne!(next["bindings"], first["bindings"], "{next}");
     let continued = ask(&socket, &json!({ "op": "continue" }));
     assert!(continued["paused"].is_null(), "{continued}");
-    assert_eq!(pause(&mut run, &events, 4)["line"], 18);
+    assert_eq!(pause(&mut run, &socket, &line_18)["line"], 18);
     let cleared = ask(&socket, &json!({ "op": "clear" }));
     assert_eq!(cleared["cleared"], 1, "{cleared}");
     let continued = ask(&socket, &json!({ "op": "continue" }));
     assert!(continued["paused"].is_null(), "{continued}");
 
     fs::write(&stop, "").unwrap();
-    let _ = fs::remove_dir_all(&directory);
+}
+
+const LOOP_FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/inspect-loop");
+
+/// The value of `count` a read through `socket` answers with.
+fn count(socket: &Path) -> u64 {
+    let read = ask(socket, &json!({ "name": "count" }));
+    assert_eq!(read["reached"], true, "{read}");
+    read["bindings"][0]["value"]
+        .as_str()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or_else(|| panic!("{read}"))
+}
+
+/// A marked `main` that loops in script code, calling its dependency and
+/// never returning to native code, which its run's session starts without
+/// a debugger: the first read registers the debugger with the engine that
+/// runs it (#2308). The read answers in the loop, the count
+/// goes on from where the program had it, and the process is the one
+/// that started.
+#[test]
+fn a_read_registers_the_debugger_in_a_marked_main_that_never_returns_to_native_code() {
+    crate::support::driver();
+    let root = crate::support::fresh("inspect-loop");
+    copy(Path::new(LOOP_FIXTURE), &root);
+    let socket = inspector(&root);
+    let mut run = start(&root, &[]);
+    let pid: i32 = run
+        .until(|line| line.starts_with("pid "))
+        .trim_start_matches("pid ")
+        .trim()
+        .parse()
+        .unwrap();
+
+    let first = count(&socket);
+    let second = count(&socket);
+    assert!(second >= first, "the count went from {first} to {second}");
+    // A restart would have ended the process that printed its pid.
+    assert!(
+        nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok(),
+        "the runner that started is gone: {}",
+        run.seen.join("\n")
+    );
+    assert!(
+        !run.seen
+            .iter()
+            .any(|line| line.starts_with("pid ") && !line.ends_with(&pid.to_string())),
+        "{}",
+        run.seen.join("\n")
+    );
 }

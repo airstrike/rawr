@@ -42,10 +42,9 @@
 //!
 //! A run no shell started registers no debugger. Its program serves its
 //! inspector all the same ([`prepare`]), and a shell's first request that
-//! needs the debugger has the program register one, keeping its state: a
-//! base program's running engine takes it at its next step (#2297), and a
-//! generated runner at its next call from native code, on a generation
-//! compiled again from the running program's sources (#2266). Until a
+//! needs the debugger has the program register one, keeping its state:
+//! the engine that runs it takes it at its next step, a base program's
+//! (#2297) and a generated runner's (#2308) alike. Until a
 //! shell connects, the session is one thread blocked in `accept`.
 
 mod handover;
