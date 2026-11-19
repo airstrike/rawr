@@ -6,6 +6,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.35 (2026-11-19)
+
+- A step into a function no longer pauses on its signature for a `mut` binding of a `&mut` parameter or a parameter pattern, nor on a closure's or a `for` loop's pattern, and a breakpoint's line no longer pauses again after a call that lends a local `&mut` returns. (#2298)
+- `rawr dap` tells a breakpoint a save moved as `changed` with the id the editor knows, so the editor keeps its own breakpoint. (#2299)
+
 ## 0.4.34 (2026-11-19)
 
 - A breakpoint set on a running program takes effect for its next call: a click made while the debugger is still being added no longer passes it. (#2296)

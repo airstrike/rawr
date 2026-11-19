@@ -248,7 +248,7 @@ fn a_dap_client_launches_stops_reads_values_by_reference_evaluates_steps_and_end
     );
     assert_eq!(
         set["breakpoints"],
-        json!([{ "verified": true, "line": 17, "source": { "path": main } }]),
+        json!([{ "id": 1, "verified": true, "line": 17, "source": { "path": main } }]),
         "{set}"
     );
     client.request("configurationDone", json!({}));

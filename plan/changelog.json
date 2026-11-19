@@ -8,6 +8,14 @@
   },
   "releases": [
     {
+      "version": "0.4.35",
+      "date": "2026-11-19",
+      "entries": [
+        {"text":"A step into a function no longer pauses on its signature for a `mut` binding of a `&mut` parameter or a parameter pattern, nor on a closure's or a `for` loop's pattern, and a breakpoint's line no longer pauses again after a call that lends a local `&mut` returns.","issues":[2298]},
+        {"text":"`rawr dap` tells a breakpoint a save moved as `changed` with the id the editor knows, so the editor keeps its own breakpoint.","issues":[2299]}
+      ]
+    },
+    {
       "version": "0.4.34",
       "date": "2026-11-19",
       "entries": [
