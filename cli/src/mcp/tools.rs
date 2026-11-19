@@ -1031,6 +1031,10 @@ fn debug(server: &Server, tool: &str, arguments: &Value, cancel: &Cancel) -> Res
         ));
     } else if tool == "break" {
         summary.push_str("the program runs; `wait` says when it pauses");
+    } else if answer["native"] == true {
+        summary.push_str(
+            "the step went on into the native code that called the program, where it can't stop; the program pauses at the next statement it runs, which `wait` says",
+        );
     } else if tool == "continue" {
         summary.push_str("the program runs on; `wait` says when it pauses again");
     } else {

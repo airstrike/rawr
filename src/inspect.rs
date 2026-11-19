@@ -41,7 +41,10 @@
 //! - `{"op": "clear"}`, with `file`, `line` or `function` to take fewer:
 //!   `{"cleared": n, "left": [..], "paused": ..}`;
 //! - `{"op": "step", "kind": "over" | "into" | "out"}` on a paused program,
-//!   answered where the step pauses: `{"paused": ..}`; `{"op": "continue"}`,
+//!   answered where the step pauses: `{"paused": ..}`, or `{"paused": null,
+//!   "native": true}` once it went on into the native code that called the
+//!   program, its pause told as an event at the next statement the program
+//!   runs; `{"op": "continue"}`,
 //!   answered once it runs on: `{"paused": null}`; either `{"error": "not
 //!   paused"}` on a program that isn't.
 //! - `{"op": "pause"}` on a running program: answered at once, `{"paused":
@@ -81,7 +84,8 @@
 //! window's event loop, waits in that call until the program goes on. A
 //! step pauses at the next statement the program wrote. It can't stop in
 //! a crate's native code, so a step out of a function that native code
-//! called pauses at the program's next call from it.
+//! called pauses at the next statement the program runs, in any call into
+//! it, and the step's tool hears it went on before that pause comes.
 #![cfg(feature = "debugging")]
 
 // What it compiles code with is shared between threads.
@@ -715,6 +719,26 @@ struct Stepping {
     /// The program left the code it stepped from for native code, which
     /// called into the program again: its next statement pauses.
     anywhere: bool,
+    /// The evaluation the step started in, while it runs: a call from
+    /// native code into the program, which ends by returning to that code.
+    home: Option<Home>,
+}
+
+/// One evaluation of the program on one thread, by where its runtime state
+/// lives while it runs.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Home {
+    thread: std::thread::ThreadId,
+    global: usize,
+}
+
+impl Home {
+    fn of(context: &EvalContext) -> Self {
+        Self {
+            thread: std::thread::current().id(),
+            global: std::ptr::from_ref(context.global_runtime_state()).addr(),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -728,6 +752,8 @@ struct State {
     /// How many times it paused, and the last place.
     pauses: u64,
     last: Value,
+    /// How many steps went on into native code before they paused.
+    departures: u64,
     resume: Option<Resume>,
     stepping: Option<Stepping>,
     /// The requests the program's event loop answers, which a pause gives
@@ -771,6 +797,20 @@ struct Shared {
 impl Shared {
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Have every evaluation call back at its next step while a request
+    /// waits for one, or while a step pauses wherever the program goes: an
+    /// evaluation native code started before the step, or one that copies
+    /// the state of a call that wasn't stepping, calls back at no other
+    /// step.
+    fn rouse(&self, state: &State) {
+        let anywhere = state
+            .stepping
+            .as_ref()
+            .is_some_and(|stepping| stepping.anywhere);
+        self.wake
+            .store(anywhere || !state.pending.is_empty(), Ordering::Release);
     }
 
     /// Where `position` is in the program's files.
@@ -959,8 +999,7 @@ impl Shared {
         match request.get("op").and_then(Value::as_str) {
             Some("input") => self.input(request, gone),
             Some("screenshot") => self.screenshot(request, gone),
-            Some("menu") => menu::answer(request, gone)
-                .unwrap_or_else(|| json!({ "error": "the tool went away" })),
+            Some("menu") => self.menu(request, gone),
             Some("eval") => self.evaluate(request, gone),
             Some("break") => self.set(request),
             Some("clear") => self.clear(request),
@@ -1027,6 +1066,24 @@ impl Shared {
             .unwrap_or_else(|| json!({ "error": "paused", "paused": self.state().paused.clone() }))
     }
 
+    /// Read the program's menu bar, or choose one of rawr's items. A paused
+    /// program holds its event loop, where menus are read and chosen, so
+    /// the request waits for neither.
+    fn menu(&self, request: &Value, gone: &Arc<Interrupt>) -> Value {
+        if let Some(paused) = self.hold(gone) {
+            return json!({ "error": "paused", "paused": paused });
+        }
+        let answer = menu::answer(request, gone);
+        self.release(gone);
+        answer.unwrap_or_else(|| {
+            let paused = self.state().paused.clone();
+            match paused {
+                Some(paused) => json!({ "error": "paused", "paused": paused }),
+                None => json!({ "error": "the tool went away" }),
+            }
+        })
+    }
+
     /// Read values: answered at the program's next matching step, or where
     /// it is paused, unless the tool goes away first.
     fn inspect(&self, request: &Value, gone: &Interrupt) -> Value {
@@ -1061,9 +1118,7 @@ impl Shared {
         {
             let mut state = self.state();
             state.pending.retain(|request| request.id != id);
-            if state.pending.is_empty() {
-                self.wake.store(false, Ordering::Release);
-            }
+            self.rouse(&state);
             drop(state);
         }
         // An answer made while the request was being given up.
@@ -1135,21 +1190,24 @@ impl Shared {
         })
     }
 
-    /// Resume a paused program. A step is answered where it pauses, unless
-    /// the tool goes away first; a continue once the program runs on.
+    /// Resume a paused program. A step is answered where it pauses, or
+    /// once it went on into the native code that called the program, which
+    /// it can't stop in: `{"paused": null, "native": true}`, its pause told
+    /// as an event at the next statement the program runs. A continue is
+    /// answered once the program runs on; either, once the tool went away.
     fn resume(&self, resume: Resume, gone: &Interrupt) -> Value {
         let mut state = self.state();
         if state.paused.is_none() {
             return json!({ "error": "not paused" });
         }
-        let seen = state.pauses;
+        let seen = (state.pauses, state.departures);
         let step = matches!(resume, Resume::Step(_));
         state.resume = Some(resume);
         self.changed.notify_all();
         if !step {
             return json!({ "paused": null });
         }
-        while state.pauses == seen {
+        while (state.pauses, state.departures) == seen {
             if gone.is_fired() {
                 return json!({ "paused": null });
             }
@@ -1157,6 +1215,9 @@ impl Shared {
                 .changed
                 .wait(state)
                 .unwrap_or_else(PoisonError::into_inner);
+        }
+        if state.pauses == seen.0 {
+            return json!({ "paused": null, "native": true });
         }
         json!({ "paused": state.last })
     }
@@ -1177,10 +1238,11 @@ impl Shared {
             file: String::new(),
             line: 0,
             anywhere: true,
+            home: None,
         });
         self.stepping.store(true, Ordering::Release);
         // The engine calls back at its next step, which goes on stepping.
-        self.wake.store(true, Ordering::Release);
+        self.rouse(&state);
         json!({ "paused": null })
     }
 
@@ -1233,11 +1295,19 @@ impl Shared {
             }
             DebuggerEvent::Start if self.stepping.load(Ordering::Acquire) => {
                 // Native code called into the program again.
-                if let Some(stepping) = self.state().stepping.as_mut() {
+                let mut state = self.state();
+                if let Some(stepping) = state.stepping.as_mut() {
                     stepping.anywhere = true;
                 }
+                self.rouse(&state);
             }
-            DebuggerEvent::Step if self.stepping.load(Ordering::Acquire) => {
+            DebuggerEvent::End if self.stepping.load(Ordering::Acquire) => self.depart(context),
+            // A step that pauses wherever the program goes ends in an
+            // evaluation that wasn't stepping too: one native code started
+            // before the step, or one that copies the state of a call that
+            // wasn't stepping, which call back only once woken.
+            DebuggerEvent::Step | DebuggerEvent::Wake if self.stepping.load(Ordering::Acquire) => {
+                let woken = matches!(event, DebuggerEvent::Wake);
                 if let Some(stop) = self.stop(position, &node) {
                     let reason = if self.breaks.contains(position) {
                         Some("breakpoint")
@@ -1246,6 +1316,7 @@ impl Shared {
                         self.state()
                             .stepping
                             .as_ref()
+                            .filter(|stepping| !woken || stepping.anywhere)
                             .filter(|stepping| ends(stepping, depth, position, &stop))
                             .map(|stepping| {
                                 if stepping.step == Step::Pause {
@@ -1267,6 +1338,28 @@ impl Shared {
         } else {
             DebuggerCommand::Continue
         }
+    }
+
+    /// An evaluation ended where `context` is. When it is the one a step
+    /// started in, the step went on into the native code that called it,
+    /// where it can't stop: it pauses at the next statement the program
+    /// runs, wherever that is, and its tool is answered now.
+    fn depart(&self, context: &EvalContext) {
+        let home = Home::of(context);
+        let mut state = self.state();
+        let Some(stepping) = state
+            .stepping
+            .as_mut()
+            .filter(|stepping| stepping.home == Some(home))
+        else {
+            return;
+        };
+        stepping.home = None;
+        stepping.anywhere = true;
+        state.departures += 1;
+        self.rouse(&state);
+        drop(state);
+        self.changed.notify_all();
     }
 
     /// The statement a step is at, if it is one the program wrote.
@@ -1293,6 +1386,7 @@ impl Shared {
         let mut state = self.state();
         state.stepping = None;
         self.stepping.store(false, Ordering::Release);
+        self.rouse(&state);
         let mut event = at.clone();
         event["event"] = json!("paused");
         self.emit(&event);
@@ -1307,7 +1401,7 @@ impl Shared {
         let resume = loop {
             if !state.pending.is_empty() {
                 let pending = std::mem::take(&mut state.pending);
-                self.wake.store(false, Ordering::Release);
+                self.rouse(&state);
                 let paused = state.paused.clone();
                 drop(state);
                 self.answering.store(true, Ordering::Release);
@@ -1348,6 +1442,7 @@ impl Shared {
                 file: stop.file,
                 line: stop.line,
                 anywhere: false,
+                home: Some(Home::of(context)),
             });
             self.stepping.store(true, Ordering::Release);
         }
@@ -1371,9 +1466,7 @@ impl Shared {
                     index += 1;
                 }
             }
-            if pending.is_empty() {
-                self.wake.store(false, Ordering::Release);
-            }
+            self.rouse(&state);
         }
         for request in matched {
             self.reply(context, &request, position);
@@ -1909,6 +2002,202 @@ mod tests {
         assert_eq!(named(&some), Some("Opaque".to_owned()));
         assert_eq!(named(&Dynamic::from(1_u8)), None);
         assert_eq!(named(&crate::option::none()), None);
+    }
+
+    /// One request on the inspector at `socket`, and its answer.
+    #[cfg(unix)]
+    fn ask(socket: &std::path::Path, request: &serde_json::Value) -> serde_json::Value {
+        use std::io::{BufRead as _, Write as _};
+        let mut stream = std::os::unix::net::UnixStream::connect(socket).unwrap();
+        writeln!(stream, "{request}").unwrap();
+        let mut line = String::new();
+        std::io::BufReader::new(stream)
+            .read_line(&mut line)
+            .unwrap();
+        serde_json::from_str(&line).unwrap_or(serde_json::Value::Null)
+    }
+
+    /// A program whose `update` and `view` native code calls, and whose
+    /// `spin` runs while `going()` says so.
+    const CALLED: &str = "struct Counter { value: i64 }\n\
+        fn update(counter: &mut Counter, message: i64) {\n\
+        \x20   match message {\n\
+        \x20       0 => counter.value += 1,\n\
+        \x20       _ => counter.value -= 1,\n\
+        \x20   }\n\
+        }\n\
+        fn view(counter: &Counter) -> i64 {\n\
+        \x20   vec![counter.value, 1]\n\
+        \x20       .iter()\n\
+        \x20       .sum::<i64>()\n\
+        }\n\
+        fn spin() -> i64 {\n\
+        \x20   let mut turns = 0;\n\
+        \x20   while going() {\n\
+        \x20       turns += 1;\n\
+        \x20   }\n\
+        \x20   turns\n\
+        }\n\
+        fn make() -> Counter { Counter { value: 0 } }\n";
+
+    /// [`CALLED`] compiled on an engine its inspector answers for, on a
+    /// socket of its own; `going()` reads `going`.
+    #[cfg(unix)]
+    struct Called {
+        directory: std::path::PathBuf,
+        socket: std::path::PathBuf,
+        _inspector: super::Inspector,
+        engine: crate::Engine,
+        ast: crate::AST,
+    }
+
+    #[cfg(unix)]
+    impl Called {
+        fn new(name: &str, going: &Arc<AtomicBool>) -> Self {
+            let directory =
+                std::env::temp_dir().join(format!("rawr-{name}-{}", std::process::id()));
+            std::fs::create_dir_all(&directory).unwrap();
+            let socket = directory.join("s");
+            let inspector = super::Inspector::bind(&socket).unwrap();
+            let mut engine = crate::Engine::new();
+            let going = Arc::clone(going);
+            engine.register_fn("going", move || going.load(Ordering::Acquire));
+            inspector.attach(&mut engine);
+            let ast = engine
+                .compile(CALLED)
+                .unwrap_or_else(|error| panic!("{error}"));
+            inspector.locate_with(|position| Some(("main.rs".to_owned(), position.line()?)));
+            inspector.compiled(&ast);
+            let set = ask(
+                &socket,
+                &serde_json::json!({ "op": "break", "function": "update" }),
+            );
+            assert!(set.get("error").is_none(), "{set}");
+            Self {
+                directory,
+                socket,
+                _inspector: inspector,
+                engine,
+                ast,
+            }
+        }
+
+        /// A counter, as native code holds one.
+        fn make(&self) -> Dynamic {
+            self.engine
+                .call_fn::<Dynamic>(&mut crate::Scope::new(), &self.ast, "make", ())
+                .unwrap_or_else(|error| panic!("{error}"))
+        }
+
+        /// Call `update` as native code does: an evaluation of its own.
+        fn update(&self, counter: &mut Dynamic) {
+            self.engine
+                .call_fn_with_options::<()>(
+                    crate::CallFnOptions::new().bind_this_ptr(counter),
+                    &mut crate::Scope::new(),
+                    &self.ast,
+                    "update",
+                    (0_i64,),
+                )
+                .unwrap_or_else(|error| panic!("{error}"));
+        }
+
+        fn view(&self, counter: &Dynamic) {
+            let _ = self
+                .engine
+                .call_fn::<i64>(
+                    &mut crate::Scope::new(),
+                    &self.ast,
+                    "view",
+                    (counter.clone(),),
+                )
+                .unwrap_or_else(|error| panic!("{error}"));
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for Called {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.directory);
+        }
+    }
+
+    /// What a tool sees stepping over from the breakpoint in `update` at
+    /// `socket` until a step goes on into native code: each step's answer,
+    /// then where the program pauses next, read by a name it never binds,
+    /// which only a pause answers.
+    #[cfg(unix)]
+    fn step_out_of_update(socket: &std::path::Path) -> (Vec<serde_json::Value>, serde_json::Value) {
+        use serde_json::json;
+        let paused = ask(socket, &json!({ "name": "nothing" }));
+        assert_eq!(paused["paused"]["function"], "update", "{paused}");
+        let cleared = ask(socket, &json!({ "op": "clear" }));
+        assert_eq!(cleared["cleared"], 1, "{cleared}");
+        let mut steps = Vec::new();
+        while steps
+            .last()
+            .is_none_or(|step: &serde_json::Value| step["native"] != true)
+        {
+            let step = ask(socket, &json!({ "op": "step", "kind": "over" }));
+            assert!(steps.len() < 4, "{steps:?} then {step}");
+            steps.push(step);
+        }
+        let next = ask(socket, &json!({ "name": "nothing" }));
+        let continued = ask(socket, &json!({ "op": "continue" }));
+        assert!(continued["paused"].is_null(), "{continued}");
+        (steps, next)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_step_out_of_a_call_from_native_code_is_answered_and_pauses_at_the_next_call() {
+        let going = Arc::new(AtomicBool::new(true));
+        let called = Called::new("step-next", &going);
+        let mut counter = called.make();
+        let socket = called.socket.clone();
+        let tool = std::thread::spawn(move || step_out_of_update(&socket));
+        while !tool.is_finished() {
+            called.update(&mut counter);
+            called.view(&counter);
+        }
+        let (steps, next) = tool.join().unwrap();
+        let (last, within) = steps.split_last().unwrap();
+        assert_eq!(*last, serde_json::json!({ "paused": null, "native": true }));
+        assert!(
+            within
+                .iter()
+                .all(|step| step["paused"]["function"] == "update"),
+            "{steps:?}"
+        );
+        assert_eq!(next["paused"]["function"], "view", "{next}");
+        assert_eq!(next["paused"]["reason"], "step", "{next}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_step_out_of_a_call_from_native_code_pauses_in_an_evaluation_already_running() {
+        let going = Arc::new(AtomicBool::new(true));
+        let called = Called::new("step-running", &going);
+        let mut counter = called.make();
+        let socket = called.socket.clone();
+        std::thread::scope(|scope| {
+            let (engine, ast) = (&called.engine, &called.ast);
+            // Started before the step, it calls back only once woken.
+            let spinning = scope.spawn(move || {
+                engine
+                    .call_fn::<i64>(&mut crate::Scope::new(), ast, "spin", ())
+                    .unwrap_or_else(|error| panic!("{error}"))
+            });
+            let tool = scope.spawn(move || step_out_of_update(&socket));
+            // Native code calls the program once, then waits.
+            called.update(&mut counter);
+            let (steps, next) = tool.join().unwrap();
+            going.store(false, Ordering::Release);
+            assert!(spinning.join().unwrap() > 0);
+            assert_eq!(steps.last().unwrap()["native"], true, "{steps:?}");
+            assert_eq!(next["paused"]["function"], "spin", "{next}");
+            assert_eq!(next["paused"]["reason"], "step", "{next}");
+        });
     }
 
     #[test]
