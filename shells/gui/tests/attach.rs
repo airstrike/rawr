@@ -17,7 +17,7 @@ use iced::futures::executor::block_on;
 use iced::futures::{Stream, StreamExt as _};
 use iced::keyboard::key::Named;
 use iced::Theme;
-use iced_test::{simulator, Simulator};
+use iced_test::Simulator;
 use rawr_gui::app::Message;
 use rawr_gui::session::{self, Event, Phase};
 use rawr_gui::{console, App};
@@ -57,7 +57,7 @@ impl Window {
 
     fn interact(&mut self, act: impl FnOnce(&mut Simulator<'_, Message>)) {
         let messages: Vec<Message> = {
-            let mut ui = simulator(self.app.view());
+            let mut ui = tall(&self.app);
             act(&mut ui);
             ui.into_messages().collect()
         };
@@ -78,13 +78,19 @@ impl Window {
                 let _ = std::fs::remove_file(entry.path());
             }
         }
-        let shot = simulator(self.app.view()).snapshot(&Theme::Dark).unwrap();
+        let shot = tall(&self.app).snapshot(&Theme::Dark).unwrap();
         assert!(shot.matches_image(directory.join(name)).unwrap());
     }
 }
 
 fn shows(app: &App, text: &str) -> bool {
-    simulator(app.view()).find(text).is_ok()
+    tall(app).find(text).is_ok()
+}
+
+/// The window at a height that shows a whole short file, whose lines the
+/// test clicks without scrolling.
+fn tall(app: &App) -> Simulator<'_, Message> {
+    Simulator::with_size(iced::Settings::default(), (1200.0, 1500.0), app.view())
 }
 
 fn stopped_line(app: &App) -> Option<u64> {
