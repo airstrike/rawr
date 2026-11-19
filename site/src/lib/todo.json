@@ -5205,7 +5205,10 @@
     {"issue":2275,"title":"The VS Code debugger's F5 without a launch.json runs the workspace's root crate, not the active file's","state":"open","category":"Health"},
     {"issue":2276,"title":"A marked root's native modules can't call marked code: lift D510's trampolines to a marked root","state":"open","category":"No glue (D593)"},
     {"issue":2277,"title":"The runtime key covers the checkout path and the whole Cargo.lock, so builds with the same sources never share it","state":"open","category":"Health"},
-    {"issue":2278,"title":"The session tells shells when breakpoints change","state":"open","category":"Health"}
+    {"issue":2278,"title":"The session tells shells when breakpoints change","state":"open","category":"Health"},
+    {"issue":2279,"title":"rawr check on a gallery with a marked main.rs fails with 'diagnostic label has no source span', hiding the error","state":"open","category":"No glue (D593)"},
+    {"issue":2280,"title":"Marked code calling a method a native module defines on a marked type","state":"open","category":"No glue (D593)"},
+    {"issue":2281,"title":"marked::a_marked_module_of_the_library_runs_from_the_native_binary expects Shape::change to name a new item","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -6251,7 +6254,9 @@
             {"number":2212,"title":"A generic impl's trait method that takes a witness can't be called through dynamic dispatch","state":"open"},
             {"number":1592,"title":"A value only a generic or std-type impl covers can't coerce to a crate trait's &dyn","state":"open"},
             {"number":2241,"title":"A program's own `#[derive(thiserror::Error)]` is refused as an impl of an unknown trait path","state":"open"},
-            {"number":2276,"title":"A marked root's native modules can't call marked code: lift D510's trampolines to a marked root","state":"open"}
+            {"number":2276,"title":"A marked root's native modules can't call marked code: lift D510's trampolines to a marked root","state":"open"},
+            {"number":2279,"title":"rawr check on a gallery with a marked main.rs fails with 'diagnostic label has no source span', hiding the error","state":"open"},
+            {"number":2280,"title":"Marked code calling a method a native module defines on a marked type","state":"open"}
           ]
         },
         {
@@ -7611,7 +7616,8 @@
             {"number":1862,"title":"The islands tests download the published driver for the current version, which a local build hasn't published","state":"open"},
             {"number":1917,"title":"Four rawr-import unit tests fail on main: epoch ownership, nightly identity, wrapped control graph, driver manifest","state":"open"},
             {"number":1900,"title":"Each fresh test rawr home builds rawr's runtime from scratch at opt-level 3","state":"open"},
-            {"number":2227,"title":"Two rawr-import classify lib tests fail on main","state":"open"}
+            {"number":2227,"title":"Two rawr-import classify lib tests fail on main","state":"open"},
+            {"number":2281,"title":"marked::a_marked_module_of_the_library_runs_from_the_native_binary expects Shape::change to name a new item","state":"open"}
           ]
         },
         {

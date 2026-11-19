@@ -61,7 +61,7 @@ fn a_marked_crate_runs_and_checks_like_a_rawr_project() {
     assert_eq!(stdout(&run), "total: 27\n");
     assert_eq!(
         stderr(&run),
-        "cargo is not on PATH. Rawr skipped `cargo check`.\n"
+        "warning: cargo is not on PATH. Rawr skipped `cargo check`.\n"
     );
     assert_success(&file);
     assert_eq!(stdout(&file), "total: 27\n");
@@ -72,7 +72,7 @@ fn a_marked_crate_runs_and_checks_like_a_rawr_project() {
     );
     assert_eq!(
         stderr(&checked),
-        "cargo is not on PATH. Rawr skipped `cargo check`.\n"
+        "warning: cargo is not on PATH. Rawr skipped `cargo check`.\n"
     );
 }
 
