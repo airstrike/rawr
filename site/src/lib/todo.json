@@ -1,16 +1,24 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-19",
-  "version": "0.4.38",
+  "version": "0.4.39",
   "examples": {
     "running": 56,
     "total": 56,
-    "note": "Headless parity, 2026-11-16: cargo test and rawr test agree on all 56 iced examples, the iced_test Emulator half included. arc's frame is drawn from elapsed wall-clock time; a fixed-time sweep reproduces both runners' hashes (#2111)."
+    "note": "0.3 confirmed by the scheduled sweep of 2026-11-19 on 472462d01: all iced examples agree with cargo (integration not runnable headless on either), and rustlings matches: 132 of 132 solutions run and match, 95 of 95 exercises fail as rustc fails."
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.39",
+        "date": "2026-11-19",
+        "entries": [
+          {"text":"A shell attaching to a `rawr run` of a program without Rust dependencies takes the debugger in the running program, which keeps its state and its process instead of restarting.","issues":[2297]},
+          {"text":"The playground's debugger and console are denser: bindings and console answers open as trees (a `HashMap` shows one row per key), and split bars between the code, output, debugger and console set sizes the page remembers.","issues":[2307],"refs":[2304]}
+        ]
+      },
       {
         "version": "0.4.38",
         "date": "2026-11-19",
@@ -5336,7 +5344,7 @@
     {"issue":2294,"title":"Continue after a step in an iced callback never answers the window","state":"closed","category":"Health","release":"0.4.27"},
     {"issue":2295,"title":"rawr gui shows the previous stop's frames and bindings at a new pause","state":"closed","category":"Health","release":"0.4.28"},
     {"issue":2296,"title":"Input that arrives while the debugger registers passes a breakpoint just set","state":"closed","category":"Health","release":"0.4.34"},
-    {"issue":2297,"title":"A base-language `rawr run` restarts its program to register a debugger","state":"open","category":"Health"},
+    {"issue":2297,"title":"A base-language `rawr run` restarts its program to register a debugger","state":"closed","category":"Health","release":"0.4.39"},
     {"issue":2298,"title":"A `mut` binding of a `&mut` parameter is a step stop on the signature line","state":"closed","category":"Health","release":"0.4.35"},
     {"issue":2299,"title":"rawr dap tells a breakpoint a save moved as removed and new, not changed","state":"closed","category":"Health","release":"0.4.35"},
     {"issue":2300,"title":"A step into a closure whose body is only a tail expression never pauses in it","state":"closed","category":"Health","release":"0.4.36"},
@@ -5345,7 +5353,10 @@
     {"issue":2303,"title":"std_method_tests::a_sync_channel_a_scope_and_a_builder_run_as_std_s fails now and then under the full lib suite","state":"closed","category":"Health","release":"0.4.36"},
     {"issue":2304,"title":"The playground's debugger icon swaps in a debugger build of the browser module and restarts the program under it","state":"open","category":"Platforms"},
     {"issue":2305,"title":"An assignment through a `&T` says rawr doesn't support it, not rustc's E0594","state":"closed","category":"Divergences from rustc","release":"0.4.38"},
-    {"issue":2306,"title":"An assignment to a value that is no place says rawr doesn't support it, not rustc's E0070","state":"open","category":"Divergences from rustc"}
+    {"issue":2306,"title":"An assignment to a value that is no place says rawr doesn't support it, not rustc's E0070","state":"open","category":"Divergences from rustc"},
+    {"issue":2307,"title":"The playground's debugger and console are denser: bindings and console answers open as trees (a…","state":"closed","category":"Platforms","release":"0.4.39"},
+    {"issue":2308,"title":"A runner registers its debugger in its running engine, replacing the debugger generation","state":"open","category":"Health"},
+    {"issue":2309,"title":"The debugger evaluates only in the innermost frame, even with another frame selected","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -8119,12 +8130,14 @@
             {"number":2278,"title":"The session tells shells when breakpoints change","state":"closed"},
             {"number":2288,"title":"A run started in a terminal tells its output to the session","state":"open"},
             {"number":2296,"title":"Input that arrives while the debugger registers passes a breakpoint just set","state":"closed"},
-            {"number":2297,"title":"A base-language `rawr run` restarts its program to register a debugger","state":"open"},
+            {"number":2297,"title":"A base-language `rawr run` restarts its program to register a debugger","state":"closed"},
             {"number":2298,"title":"A `mut` binding of a `&mut` parameter is a step stop on the signature line","state":"closed"},
             {"number":2299,"title":"rawr dap tells a breakpoint a save moved as removed and new, not changed","state":"closed"},
             {"number":2300,"title":"A step into a closure whose body is only a tail expression never pauses in it","state":"closed"},
             {"number":2301,"title":"inspect::tests::a_step_out_of_a_call_from_native_code_pauses_in_an_evaluation_already_running hangs now and then","state":"closed"},
-            {"number":2305,"title":"An assignment through a `&T` says rawr doesn't support it, not rustc's E0594","state":"closed"}
+            {"number":2305,"title":"An assignment through a `&T` says rawr doesn't support it, not rustc's E0594","state":"closed"},
+            {"number":2308,"title":"A runner registers its debugger in its running engine, replacing the debugger generation","state":"open"},
+            {"number":2309,"title":"The debugger evaluates only in the innermost frame, even with another frame selected","state":"open"}
           ],
           "milestone": "0.5"
         },

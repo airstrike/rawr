@@ -8,6 +8,14 @@
   },
   "releases": [
     {
+      "version": "0.4.39",
+      "date": "2026-11-19",
+      "entries": [
+        {"text":"A shell attaching to a `rawr run` of a program without Rust dependencies takes the debugger in the running program, which keeps its state and its process instead of restarting.","issues":[2297]},
+        {"text":"The playground's debugger and console are denser: bindings and console answers open as trees (a `HashMap` shows one row per key), and split bars between the code, output, debugger and console set sizes the page remembers.","issues":[2307],"refs":[2304]}
+      ]
+    },
+    {
       "version": "0.4.38",
       "date": "2026-11-19",
       "entries": [

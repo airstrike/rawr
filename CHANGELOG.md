@@ -6,6 +6,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.39 (2026-11-19)
+
+- A shell attaching to a `rawr run` of a program without Rust dependencies takes the debugger in the running program, which keeps its state and its process instead of restarting. (#2297)
+- The playground's debugger and console are denser: bindings and console answers open as trees (a `HashMap` shows one row per key), and split bars between the code, output, debugger and console set sizes the page remembers. (#2307; part of #2304)
+
 ## 0.4.38 (2026-11-19)
 
 - An assignment through a `&` reference (`*r = 5`, `r.field = 5`, `r[i] = 5` of a slice or array) gives rustc's E0594, "cannot assign to `*r`, which is behind a `&` reference", with rustc's label and span, in code and in the debugger's eval. A `Vec` element written through `&` gives rustc's E0596. (#2305)
