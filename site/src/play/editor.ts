@@ -5,8 +5,10 @@
 //
 // While the debugger is on (setDebugging), the editor shows line numbers: a
 // click on one sets or clears a breakpoint there, each breakpoint's number
-// is marked, and the line the program is paused at is highlighted.
-import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
+// is marked, and the line the program is paused at is highlighted. The
+// debugger's console prompt (createConsole) is a small editor of the same
+// Rust.
+import { defaultKeymap, history, historyKeymap, indentWithTab, insertNewlineAndIndent } from "@codemirror/commands";
 import { rustLanguage } from "@codemirror/lang-rust";
 import { LanguageSupport, bracketMatching, indentUnit, syntaxHighlighting, syntaxTree } from "@codemirror/language";
 import { Compartment, EditorState, RangeSet, RangeSetBuilder, StateEffect, StateField } from "@codemirror/state";
@@ -166,4 +168,55 @@ export function createEditor({ parent, doc, onChange, onRun }: EditorOptions): E
 export function setDoc(view: EditorView, doc: string): void {
   if (view.state.doc.toString() === doc) return;
   view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: doc } });
+}
+
+const consoleLook = EditorView.theme({
+  "&": { backgroundColor: "transparent", color: "var(--ink)", fontSize: "13px" },
+  "&.cm-focused": { outline: "none" },
+  ".cm-scroller": { fontFamily: "var(--mono)", lineHeight: "1.55" },
+  ".cm-content": { padding: "0", caretColor: "var(--red)" },
+  ".cm-line": { padding: "0" },
+  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--red)", borderLeftWidth: "2px" },
+  "&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection": {
+    backgroundColor: "color-mix(in srgb, var(--red) 28%, transparent)",
+  },
+});
+
+export interface ConsoleOptions {
+  parent: HTMLElement;
+  /** Takes the prompt's text when Enter submits it; the prompt then empties. */
+  onSubmit(code: string): void;
+}
+
+/**
+ * The debugger console's prompt: the editor's Rust and highlighting, one
+ * line that grows as lines are added. Enter submits it and Shift+Enter
+ * adds a line.
+ */
+export function createConsole({ parent, onSubmit }: ConsoleOptions): EditorView {
+  const submit = (view: EditorView) => {
+    const code = view.state.doc.toString();
+    if (!code.trim()) return true;
+    onSubmit(code);
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: "" } });
+    return true;
+  };
+  return new EditorView({
+    parent,
+    state: EditorState.create({
+      extensions: [
+        history(),
+        drawSelection(),
+        bracketMatching(),
+        EditorState.tabSize.of(4),
+        indentUnit.of("    "),
+        keymap.of([{ key: "Enter", run: submit, shift: insertNewlineAndIndent }, ...defaultKeymap, ...historyKeymap]),
+        rust,
+        syntaxHighlighting(highlighter),
+        refinement,
+        consoleLook,
+        EditorView.contentAttributes.of({ "aria-label": "Console", autocapitalize: "off", autocorrect: "off", spellcheck: "false" }),
+      ],
+    }),
+  });
 }

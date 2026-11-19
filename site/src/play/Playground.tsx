@@ -3,18 +3,17 @@
 // request's data (the share, the examples, Turnstile's key) into #play-data.
 // Before hydration the server-rendered controls show; the editor mounts
 // once the island runs. The debugger icon runs the program under the
-// debugger build of the universe and opens its panel beside the code
-// (debugger.ts, D1071).
+// debugger build of the universe, opens its panel right of the output and
+// its console under the code (debugger.ts, D1071).
 import type { EditorView } from "@codemirror/view";
 import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Button } from "../components/ui/button.tsx";
-import { Input } from "../components/ui/input.tsx";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from "../components/ui/select.tsx";
 import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group.tsx";
 import { onTheme, theme as pageTheme, type Theme } from "../lib/theme.ts";
 import { DEBUGGER, universe } from "../scripts/universe.ts";
 import { Debugger, ROOT, type DebugState } from "./debugger.ts";
-import { createEditor, setDebugging, setDoc, setMarks } from "./editor.ts";
+import { createConsole, createEditor, setDebugging, setDoc, setMarks } from "./editor.ts";
 import { Session, TURNSTILE_JS, WEB_MODULE, type Example, type Output, type PlayData, type State, type Web, type Where } from "./session.ts";
 
 /** The page's data, or a bare page's when the Worker wrote none (a static preview). */
@@ -145,6 +144,20 @@ export default function Playground() {
     setMarks(editor.current, debugState.lines, paused);
   }, [debugState]);
 
+  // The debugger's keys, as DevTools has them: F8 continues or pauses,
+  // F10 steps over, F11 into and Shift+F11 out. The editor binds none.
+  useEffect(() => {
+    if (!debug || !state.debugging) return;
+    const keys = (event: KeyboardEvent) => {
+      const action = ACTIONS.find((action) => action.key === event.key && action.shift === event.shiftKey && action.enabled(debug.state));
+      if (!action) return;
+      event.preventDefault();
+      action.run(debug);
+    };
+    document.addEventListener("keydown", keys);
+    return () => document.removeEventListener("keydown", keys);
+  }, [debug, state.debugging]);
+
   const examples = session?.data.examples ?? [];
   const groups: [string, Example[]][] = [];
   for (const example of examples) {
@@ -211,14 +224,14 @@ export default function Playground() {
           Run
         </Button>
       </div>
-      <main className={"flex min-h-0 flex-1 flex-col md:grid " + (state.debugging ? "md:grid-cols-[minmax(0,1fr)_18rem_minmax(0,1fr)]" : "md:grid-cols-2")}>
+      <main className={"flex min-h-0 flex-1 flex-col md:grid " + (state.debugging ? "md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_18rem]" : "md:grid-cols-2")}>
         <section className="pane flex min-h-0 flex-col px-4 pt-4 pb-6 md:px-6">
           <p className="playcap mb-2"><span className="text-red">//</span> Code</p>
           <div ref={host} className="editor min-h-[300px] flex-1 md:min-h-[360px]" />
+          {state.debugging && debug && debugState && <DebugConsole debug={debug} state={debugState} />}
           {/* Always present, so Turnstile finds its container whenever the session mounts it. */}
           <div id="ts" className="mt-3 empty:hidden" />
         </section>
-        {state.debugging && debug && debugState && <DebugPanel debug={debug} state={debugState} />}
         <section className="pane flex min-h-0 flex-col border-t border-grid px-4 pt-4 pb-6 md:border-t-0 md:border-l md:px-6">
           <p className="playcap mb-2 flex justify-between gap-2">
             <span><span className="text-red">//</span> Output</span>
@@ -230,6 +243,7 @@ export default function Playground() {
             <OutputView output={state.output} />
           </div>
         </section>
+        {state.debugging && debug && debugState && <DebugPanel debug={debug} state={debugState} />}
       </main>
       <footer className="playfoot flex flex-wrap justify-between gap-4 border-t border-rule px-4 py-3 md:px-6">
         <nav aria-label="Playground" className="flex flex-wrap gap-4">
@@ -274,18 +288,104 @@ function shortName(name: string): string {
   return name.split("::").at(-1) ?? name;
 }
 
-/** The debugger's panel, beside the code: its controls, the frames, the bindings and an eval box. */
+/** One of the debugger toolbar's actions, with its key and its glyph. */
+interface Action {
+  id: string;
+  label: string;
+  /** Its key's name, as `KeyboardEvent.key` gives it, and whether Shift is held. */
+  key: string;
+  shift: boolean;
+  shortcut: string;
+  enabled(state: DebugState): boolean;
+  run(debug: Debugger): void;
+  /** The glyph's SVG paths, on a 16 px grid: filled, then stroked. */
+  fill?: string;
+  stroke?: string;
+}
+
+const isPaused = (state: DebugState) => state.phase === "paused";
+
+const ACTIONS: Action[] = [
+  {
+    id: "continue", label: "Continue", key: "F8", shift: false, shortcut: "F8", enabled: isPaused, run: (debug) => void debug.continue(),
+    fill: "M7 3l7 5-7 5z", stroke: "M3.5 3v10",
+  },
+  {
+    id: "pause", label: "Pause", key: "F8", shift: false, shortcut: "F8",
+    enabled: (state) => state.pause === true && state.phase === "running", run: (debug) => void debug.pause(),
+    fill: "M3.5 3h3v10h-3zM9.5 3h3v10h-3z",
+  },
+  {
+    id: "over", label: "Step over", key: "F10", shift: false, shortcut: "F10", enabled: isPaused, run: (debug) => void debug.step("over"),
+    fill: "M8 11.5a1.75 1.75 0 1 1 0 3.5a1.75 1.75 0 1 1 0-3.5z", stroke: "M2.5 9a5.5 5 0 0 1 11 0M13.5 9l-3-1.25M13.5 9l1-3",
+  },
+  {
+    id: "into", label: "Step into", key: "F11", shift: false, shortcut: "F11", enabled: isPaused, run: (debug) => void debug.step("into"),
+    fill: "M8 11.5a1.75 1.75 0 1 1 0 3.5a1.75 1.75 0 1 1 0-3.5z", stroke: "M8 1.5v7M5 5.5l3 3 3-3",
+  },
+  {
+    id: "out", label: "Step out", key: "F11", shift: true, shortcut: "Shift+F11", enabled: isPaused, run: (debug) => void debug.step("out"),
+    fill: "M8 11.5a1.75 1.75 0 1 1 0 3.5a1.75 1.75 0 1 1 0-3.5z", stroke: "M8 9V2M5 5l3-3 3 3",
+  },
+];
+
+/** An action's glyph, in the button's colour. */
+function ActionIcon({ action }: { action: Action }) {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+      {action.fill && <path d={action.fill} fill="currentColor" />}
+      {action.stroke && <path d={action.stroke} fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="square" />}
+    </svg>
+  );
+}
+
+/**
+ * The debugger's console, under the code: what was evaluated and its
+ * answers as scrollback, over a `>` prompt where Enter evaluates and
+ * Shift+Enter adds a line. Its caption folds it.
+ */
+function DebugConsole({ debug, state }: { debug: Debugger; state: DebugState }) {
+  const [open, setOpen] = useState(true);
+  const prompt = useRef<HTMLDivElement>(null);
+  const scrollback = useRef<HTMLOListElement>(null);
+  useEffect(() => {
+    if (!open || !prompt.current) return;
+    const view = createConsole({ parent: prompt.current, onSubmit: (code) => void debug.evaluate(code) });
+    return () => view.destroy();
+  }, [debug, open]);
+  // The latest answer shows, as a console scrolls to it.
+  useEffect(() => {
+    scrollback.current?.scrollTo(0, scrollback.current.scrollHeight);
+  }, [state.evaluated]);
+  return (
+    <section id="console" className="console mt-3" aria-label="Console">
+      <button type="button" className="playcap fold" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <span className="text-red">//</span> Console
+      </button>
+      {open && (
+        <div className="pane-body">
+          <ol ref={scrollback} className="scrollback">
+            {state.evaluated.map((evaluated, at) => (
+              <li key={at} className="entry">
+                <pre className="in">{evaluated.code}</pre>
+                <pre className={evaluated.error !== undefined ? "answer err" : "answer"}>{evaluated.error ?? evaluated.value}</pre>
+              </li>
+            ))}
+          </ol>
+          <div className="prompt">
+            <span className="mark" aria-hidden="true">&gt;</span>
+            <div ref={prompt} className="input" />
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+/** The debugger's panel, right of the output: its toolbar, where the program is, the frames and the bindings. */
 function DebugPanel({ debug, state }: { debug: Debugger; state: DebugState }) {
-  const [code, setCode] = useState("");
   const paused = state.phase === "paused";
   const canPause = state.pause === true;
-  const controls: [string, string, () => void, boolean][] = [
-    ["continue", "Continue", () => void debug.continue(), paused],
-    ["pause", "Pause", () => void debug.pause(), canPause && state.phase === "running"],
-    ["over", "Over", () => void debug.step("over"), paused],
-    ["into", "Into", () => void debug.step("into"), paused],
-    ["out", "Out", () => void debug.step("out"), paused],
-  ];
   return (
     <section id="debugger" className="pane debugger flex min-h-0 flex-col gap-3 border-t border-grid px-4 pt-4 pb-6 md:border-t-0 md:border-l" aria-label="Debugger">
       {/* The caption alone, as the code's and the output's; where the program is goes under it. */}
@@ -296,11 +396,19 @@ function DebugPanel({ debug, state }: { debug: Debugger; state: DebugState }) {
       {state.pause === false && (
         <p className="note">This browser can't pause a program: it has no WebAssembly JS Promise Integration (JSPI). Breakpoints and steps need it.</p>
       )}
-      <div className="flex flex-wrap gap-1" role="toolbar" aria-label="Debugger controls">
-        {controls.map(([id, label, act, enabled]) => (
-          <Button key={id} data-control={id} className="px-2" title={id === "continue" || id === "pause" ? label : `Step ${id}`} disabled={!enabled} onClick={act}>
-            {label}
-          </Button>
+      <div className="actions flex gap-0.5" role="toolbar" aria-label="Debugger controls">
+        {ACTIONS.map((action) => (
+          <button
+            key={action.id}
+            type="button"
+            data-control={action.id}
+            aria-label={action.label}
+            title={`${action.label} (${action.shortcut})`}
+            disabled={!action.enabled(state)}
+            onClick={() => action.run(debug)}
+          >
+            <ActionIcon action={action} />
+          </button>
         ))}
       </div>
       {state.phase === "ended" && <p className="note">The program's <code>main</code> has ended. Run it again to debug it.</p>}
@@ -334,26 +442,7 @@ function DebugPanel({ debug, state }: { debug: Debugger; state: DebugState }) {
               ))}
             </dl>
           </div>
-          <form
-            className="flex gap-1"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void debug.evaluate(code);
-            }}
-          >
-            <Input className="min-w-0 flex-1" aria-label="Evaluate" placeholder="Rust to evaluate" value={code} onChange={(event) => setCode(event.target.value)} />
-            <Button type="submit" className="px-2">Eval</Button>
-          </form>
         </>
-      )}
-      {state.evaluated.length > 0 && (
-        <ul className="evaluated">
-          {state.evaluated.map((evaluated, at) => (
-            <li key={at}>
-              <code>{evaluated.code}</code> = <span className={evaluated.error !== undefined ? "err" : undefined}>{evaluated.error ?? evaluated.value}</span>
-            </li>
-          ))}
-        </ul>
       )}
     </section>
   );
