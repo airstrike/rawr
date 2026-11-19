@@ -19,6 +19,11 @@
 # module ships as its brotli copy only (#1459): raw, it is over Cloudflare's
 # 25 MiB limit on an asset. The Worker serves it as /web/universe_bg.wasm
 # with Content-Encoding: br, which every browser decodes.
+#
+# The universe is built a second time with rawr's browser debugger (D1071,
+# RAWR_UNIVERSE_DEBUGGER=1), as universe-debugger.js and
+# universe-debugger_bg.wasm.br beside the plain one, which stays as it is.
+# The playground fetches it only when a visitor turns its debugger on.
 set -eu
 cd "$(dirname "$0")/.."
 out="${1:-target/wasm/site}"
@@ -47,6 +52,9 @@ mkdir -p "$out"
 sh play/universe/web.sh "${RAWR_IMPORT:-rawr-import}"
 cp target/wasm/universe/site/universe.js target/wasm/universe/site/universe_bg.wasm "$out/"
 cp target/wasm/universe/Cargo.toml "$out/universe.toml"
+RAWR_UNIVERSE_DEBUGGER=1 sh play/universe/web.sh "${RAWR_IMPORT:-rawr-import}"
+cp target/wasm/universe/site-debugger/universe.js "$out/universe-debugger.js"
+cp target/wasm/universe/site-debugger/universe_bg.wasm "$out/universe-debugger_bg.wasm"
 
 # pack FILE: write FILE.br, brotli at quality 11 with a 16 MiB window.
 pack() {
@@ -57,6 +65,8 @@ pack() {
 pack "$out/rawr_web_bg.wasm"
 pack "$out/universe_bg.wasm"
 rm "$out/universe_bg.wasm"
+pack "$out/universe-debugger_bg.wasm"
+rm "$out/universe-debugger_bg.wasm"
 
 # SHA256SUMS names each file with its hash, as sha256sum writes it. A deploy
 # that keeps the live rawr-web (play/deploy/cloudflare/live-web.sh) reads it

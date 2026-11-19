@@ -12,12 +12,20 @@
 //! meanwhile. A step that lands in a call the page made goes on until
 //! `main`'s stack runs again. Each pause, resume and change to the
 //! breakpoints is told to the listener [`debug_events`] names.
+//!
+//! Two requests are the page's own, beside the socket's protocol. `hello`
+//! says what this instance's debugger can do before the program runs:
+//! whether a pause can wait, which needs the browser's JSPI. `hold`, asked
+//! before `run`, holds the program at the first statement it wrote, as
+//! `RAWR_DEBUG_HOLD` holds a native one: the page sets its breakpoints
+//! meanwhile, and the protocol's `release` lets it run.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
 use serde_json::{json, Value};
 use wasm_bindgen::prelude::{wasm_bindgen, JsValue};
+use wasm_bindgen::JsCast as _;
 
 use super::{browser, Universe};
 use crate::inspect::{Host, Inspector};
@@ -96,10 +104,13 @@ fn tell(event: &Value) {
 
 /// Ask the program's debugger `request`, one JSON object of the
 /// inspector's socket protocol: a read (`{"name": .., "frame": ..}`), an
-/// `eval`, a `break`, a `clear`, a `step`, a `continue` or a `pause`. The
-/// promise settles with the answer's JSON text, as the socket would write
-/// it: a read at the program's next step that matches it, a step where it
-/// pauses again.
+/// `eval`, a `break`, a `clear`, a `step`, a `continue`, a `pause` or a
+/// `release`. The promise settles with the answer's JSON text, as the
+/// socket would write it: a read at the program's next step that matches
+/// it, a step where it pauses again. The page's own requests are answered
+/// at once: `{"op": "hello"}` with `{"debugger": true, "pause": ..}`,
+/// `pause` false where the browser can't suspend the program, and `{"op":
+/// "hold"}` with `{"held": ..}`, false once the program started.
 #[wasm_bindgen]
 pub fn debug(request: &str) -> js_sys::Promise {
     let id = NEXT.get();
@@ -118,6 +129,16 @@ pub fn debug(request: &str) -> js_sys::Promise {
         }
     };
     match INSPECTOR.with_borrow(Option::clone) {
+        Some(_) if request["op"] == "hello" => {
+            settle(id, &json!({ "debugger": true, "pause": can_suspend() }))
+        }
+        Some(inspector) if request["op"] == "hold" => {
+            let held = browser::unstarted();
+            if held {
+                inspector.hold();
+            }
+            settle(id, &json!({ "held": held }));
+        }
         Some(inspector) => inspector.ask(&request, move |answer| settle(id, &answer)),
         None => settle(
             id,
@@ -133,6 +154,22 @@ pub fn debug(request: &str) -> js_sys::Promise {
 #[wasm_bindgen]
 pub fn debug_events(listener: Listener) {
     LISTENER.set(Some(listener));
+}
+
+/// Whether this browser suspends a stack through JSPI: its
+/// `WebAssembly.Suspending` is the browser's own. A page without one
+/// instantiates the module with a stand-in of its own code, which refuses
+/// every suspension.
+fn can_suspend() -> bool {
+    let suspending = js_sys::Reflect::get(&js_sys::global(), &JsValue::from_str("WebAssembly"))
+        .and_then(|assembly| js_sys::Reflect::get(&assembly, &JsValue::from_str("Suspending")));
+    suspending.ok().is_some_and(|suspending| {
+        suspending
+            .dyn_ref::<js_sys::Function>()
+            .is_some_and(|suspending| {
+                String::from(suspending.to_string()).contains("[native code]")
+            })
+    })
 }
 
 /// Settle request `id`'s promise with `answer`.

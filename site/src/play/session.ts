@@ -29,8 +29,15 @@
 // Share's link keeps ?run=server and never has a hash.
 //
 // The theme is the page's (theme.ts): Turnstile's widget draws in it.
+//
+// The debugger icon (D1071) runs every program, plain or not, on the
+// debugger build of the universe instead (Deps.debugging), fetched the first
+// time it is turned on: the program in the output starts again from its
+// start, under the debugger (debugger.ts), and the panel opens. Turned off,
+// the program runs again as before, on the plain module or rawr-web.
 
 import { crates, usesCrate, type Frame } from "../scripts/universe.ts";
+import type { Debugger } from "./debugger.ts";
 
 /** rawr-web's module: web/build.sh's output, which the release puts in the Worker's /web. */
 export const WEB_MODULE = "/web/rawr_web.js";
@@ -101,6 +108,8 @@ export interface State {
   busy: boolean;
   /** The example the code is, by slug, or "". */
   mark: string;
+  /** Whether programs run under the debugger. */
+  debugging: boolean;
 }
 
 /** rawr-web's API (web/src/lib.rs). */
@@ -112,7 +121,8 @@ export interface Web {
 export interface Universe {
   manifest(): Promise<string>;
   frame(parent: Element): Promise<Frame>;
-  run(frame: Frame, code: string): Promise<any>;
+  /** `started` runs once the program compiled and waits at its start, before `main` goes on. */
+  run(frame: Frame, code: string, started?: () => Promise<void>): Promise<any>;
   /** The edit `code` for the program running in `frame`, which reloads in place. */
   replace(frame: Frame, code: string): any;
 }
@@ -135,6 +145,8 @@ export interface Deps {
   universe?: Universe;
   /** Where a universe frame goes: the output pane's host for it. */
   frameHost?(): Element | null;
+  /** The debugger build of the universe, and the page's side of its debugger. */
+  debugging?: { universe: Universe; debugger: Debugger };
   now(): number;
   clipboard(text: string): Promise<void>;
   turnstile(): Widget | undefined;
@@ -185,6 +197,7 @@ export class Session {
     this.state = {
       code: s.code, theme, where: this.chosen,
       output: { kind: "note" }, status: data.shared ? `shared · ${data.shared}` : "ready", busy: false, mark: "",
+      debugging: false,
     };
     let named = "";
     try {
@@ -280,7 +293,29 @@ export class Session {
   }
 
   go(): Promise<void> {
-    return this.state.where === "browser" ? this.browser() : this.run();
+    return this.state.where === "browser" || this.state.debugging ? this.browser() : this.run();
+  }
+
+  /**
+   * The debugger icon: run the program again from its start under the
+   * debugger, or, turned off, as it ran before.
+   */
+  debug(on = !this.state.debugging): Promise<void> {
+    if (on === this.state.debugging || (on && !this.deps.debugging)) return Promise.resolve();
+    // The frame made ahead is the other module's.
+    const next = this.next;
+    this.next = null;
+    next?.then((frame) => frame.element.remove(), () => {});
+    this.frame?.element.remove();
+    this.frame = null;
+    this.deps.debugging?.debugger.detach();
+    this.set({ debugging: on });
+    return on ? this.browser() : this.go();
+  }
+
+  /** The universe the next frame runs on: the debugger's while it is on. */
+  private get universe(): Universe | undefined {
+    return this.state.debugging ? this.deps.debugging?.universe : this.deps.universe;
   }
 
   // Turnstile: the widget mounts only without a valid pass.
@@ -322,6 +357,7 @@ export class Session {
     if (output.kind !== "frame") {
       this.frame?.element.remove();
       this.frame = null;
+      this.deps.debugging?.debugger.detach();
     }
     this.set({ output });
   }
@@ -430,7 +466,7 @@ export class Session {
 
   /** The next universe frame in `host`, made ahead of its run. */
   private nextFrame(host: Element): Promise<Frame> {
-    return (this.next ??= this.deps.universe!.frame(host).catch((error) => {
+    return (this.next ??= this.universe!.frame(host).catch((error) => {
       this.next = null;
       throw error;
     }));
@@ -444,11 +480,12 @@ export class Session {
   private async framed(mine: number, code: string, restarted = ""): Promise<void> {
     const host = this.deps.frameHost?.();
     if (!host) return this.server("the page has no place for the program's window");
-    if (!this.next) this.set({ status: "loading…" });
+    if (!this.next) this.set({ status: this.state.debugging ? "loading the debugger…" : "loading…" });
     let frame: Frame;
     try {
       frame = await this.nextFrame(host);
     } catch {
+      if (this.state.debugging) return this.undebuggable();
       return this.server("the universe did not load");
     }
     // A newer run takes this frame.
@@ -457,7 +494,11 @@ export class Session {
     this.frame?.element.remove();
     this.frame = frame;
     const start = this.deps.now();
-    const result = await this.deps.universe!.run(frame, code);
+    // Under the debugger the program waits at its start for the page's
+    // breakpoints.
+    const debug = this.state.debugging ? this.deps.debugging?.debugger : undefined;
+    const attached = debug ? await debug.attach(frame.instance) : false;
+    const result = await this.universe!.run(frame, code, attached ? () => debug!.start() : undefined);
     if (mine !== this.runs) return;
     const took = Math.round(this.deps.now() - start) + " ms in the browser";
     if (result.kind === "error") this.result(result, took);
@@ -476,7 +517,7 @@ export class Session {
    */
   private reload(mine: number, code: string, output: Extract<Output, { kind: "frame" }>): Promise<void> | void {
     const start = this.deps.now();
-    const answer = this.deps.universe!.replace(this.frame!, code);
+    const answer = this.universe!.replace(this.frame!, code);
     const took = Math.round(this.deps.now() - start) + " ms in the browser";
     switch (answer.kind) {
       case "restart":
@@ -507,7 +548,8 @@ export class Session {
     this.save();
     const mine = ++this.runs;
     const code = this.state.code;
-    if (this.deps.universe && usesCrate(code, await this.crates())) {
+    // Under the debugger every program runs on its universe.
+    if (this.state.debugging || (this.deps.universe && usesCrate(code, await this.crates()))) {
       if (mine !== this.runs) return;
       const output = this.state.output;
       if (edit && this.frame && output.kind === "frame") return this.reload(mine, code, output);
@@ -536,6 +578,13 @@ export class Session {
     }
     const result: TextResult = JSON.parse(text);
     this.result(result, Math.round(this.deps.now() - start) + " ms in the browser");
+  }
+
+  /** The debugger's module didn't load: it turns off, and the program runs as before. */
+  private async undebuggable(): Promise<void> {
+    this.set({ debugging: false });
+    await this.browser();
+    this.set({ status: this.state.status + " · the debugger did not load" });
   }
 
   /** What a run gave, from the browser or the server: its output or its report. */

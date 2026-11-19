@@ -7097,8 +7097,22 @@ pub(super) fn main() {
     if UNIVERSE {
         __rawr_internal::crossing::universe();
     }
-    __rawr_internal::universe::browser::serve(&__RawrBindings);
+"#;
+/// The end of the browser's `main`: it serves the bindings to the page.
+const SHELL_SERVE: &[u8] = br#"    __rawr_internal::universe::browser::serve(&__RawrBindings);
 }
+"#;
+/// What the browser's `main` does before it serves, in a runner built
+/// with rawr's browser debugger (D1071), as a native runner's inspector
+/// does: a crate value lives in the arena behind a handle, its type names
+/// a value without `Debug`, and an arena a native call up this thread's
+/// stack holds can't be read (#533). A runner without it says none of
+/// this.
+const SHELL_DEBUGGER: &[u8] = br#"    __rawr_internal::inspect::name_undebuggable_with(|value| {
+        let handle = value.read_lock::<NativeHandle>()?.clone();
+        arena_read(|arena| arena.unreadable(&handle))
+            .unwrap_or(Some(__rawr_internal::inspect::Unreadable::Held))
+    });
 "#;
 const PROFILE_RUNNER_MAIN: &[u8] = br#"
 fn send_frame(stream: &mut std::os::unix::net::UnixStream, tag: u8, payload: &[u8]) -> std::io::Result<()> {
@@ -9352,6 +9366,12 @@ fn render_source(
     output
         .write_all(SHELL_SOURCE)
         .map_err(request::unwritable)?;
+    if crate::universe::debugged() {
+        output
+            .write_all(SHELL_DEBUGGER)
+            .map_err(request::unwritable)?;
+    }
+    output.write_all(SHELL_SERVE).map_err(request::unwritable)?;
     output
         .write_all(b"\nmod rawr_applications;\n")
         .map_err(request::unwritable)?;

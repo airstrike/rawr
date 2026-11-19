@@ -1,0 +1,234 @@
+// The playground's debugger (D1071): the page's side of the debugger build
+// of the browser universe (scripts/universe.ts's DEBUGGER), apart from how
+// it is drawn, so a test can drive it with a stand-in instance
+// (test/debugger.test.ts). Playground.tsx draws its state as a panel beside
+// the code, and the editor's gutter as its breakpoints.
+//
+// Each run under the debugger gets a fresh instance, which `attach` takes
+// before the program runs. It asks `hello` first, which says whether a
+// pause can wait (it needs the browser's JSPI), so the panel says so before
+// any pause is tried. Where one can, it asks `hold`: the program waits at
+// its first statement once it compiled, `start` sets the page's
+// breakpoints, and `release` lets it run. The breakpoints are lines of the
+// crate root, kept across runs; the debugger's `breakpoints` events say
+// where they are now, as a compile moves them. A `paused` event reads the
+// frames and the innermost one's bindings; `resumed` clears them.
+
+/** Where the universe puts a snippet's crate root. */
+export const ROOT = "/universe/src/main.rs";
+
+/** The debugger build's exports a run uses. */
+export interface Debuggee {
+  debug?(request: string): Promise<string>;
+  debug_events?(listener: (event: string) => void): void;
+}
+
+export interface Paused {
+  file: string;
+  line: number;
+  function: string;
+  reason: string;
+}
+
+export interface Frame {
+  function: string;
+  file?: string;
+  line?: number;
+}
+
+export interface Binding {
+  name: string;
+  value?: string;
+  error?: string;
+}
+
+/** One `eval` and what it gave. */
+export interface Evaluated {
+  code: string;
+  value?: string;
+  error?: string;
+}
+
+/**
+ * Where the program is: no program attached yet, held at its start, running,
+ * or paused.
+ */
+export type Phase = "idle" | "held" | "running" | "paused";
+
+export interface DebugState {
+  phase: Phase;
+  /** Whether a pause can wait in this browser, once `hello` said. */
+  pause: boolean | null;
+  paused: Paused | null;
+  frames: Frame[];
+  /** The frame whose bindings show, 0 the innermost. */
+  frame: number;
+  bindings: Binding[];
+  /** Why the frame's bindings can't be read. */
+  unread: string | null;
+  /** The breakpoints' lines in the crate root. */
+  lines: number[];
+  evaluated: Evaluated[];
+  /** The last request the debugger refused, with its reason. */
+  error: string | null;
+}
+
+const IDLE: DebugState = {
+  phase: "idle", pause: null, paused: null, frames: [], frame: 0, bindings: [], unread: null, lines: [], evaluated: [], error: null,
+};
+
+/** The evals the panel keeps, latest last. */
+const KEPT = 8;
+
+export class Debugger {
+  state: DebugState = IDLE;
+  private listeners = new Set<(state: DebugState) => void>();
+  /** The attached instance's `debug`, as parsed JSON. */
+  private ask: ((request: object) => Promise<any>) | null = null;
+  /** Counts attachments: a detached instance's events and answers are dropped. */
+  private run = 0;
+
+  subscribe(listener: (state: DebugState) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  private set(change: Partial<DebugState>) {
+    this.state = { ...this.state, ...change };
+    for (const listener of this.listeners) listener(this.state);
+  }
+
+  /**
+   * Take `instance`, which runs the next program, before it runs: hear its
+   * events, learn whether it can pause, and hold its start where it can.
+   * `false` when it isn't a debugger build.
+   */
+  async attach(instance: Debuggee): Promise<boolean> {
+    const run = ++this.run;
+    const debug = instance.debug?.bind(instance);
+    if (!debug || !instance.debug_events) {
+      this.ask = null;
+      this.set({ ...IDLE, lines: this.state.lines, error: "this module has no debugger" });
+      return false;
+    }
+    const ask = async (request: object) => JSON.parse(await debug(JSON.stringify(request)));
+    this.ask = ask;
+    instance.debug_events((text) => {
+      if (run === this.run) this.heard(JSON.parse(text));
+    });
+    const hello = await ask({ op: "hello" });
+    if (run !== this.run) return false;
+    const pause = hello.pause === true;
+    this.set({ ...IDLE, lines: this.state.lines, pause, evaluated: this.state.evaluated });
+    if (pause) {
+      const hold = await ask({ op: "hold" });
+      if (run === this.run && hold.held) this.set({ phase: "held" });
+    }
+    return true;
+  }
+
+  /**
+   * The held program compiled and waits at its start: set the page's
+   * breakpoints, then let it run.
+   */
+  async start(): Promise<void> {
+    const run = this.run;
+    const ask = this.ask;
+    if (!ask) return;
+    if (this.state.phase === "held") {
+      for (const line of this.state.lines) await this.answered(run, ask({ op: "break", file: ROOT, line }));
+      await ask({ op: "release" });
+    }
+    // A pause the release ran into is told as an event, which already came.
+    if (run === this.run && this.state.phase === "held") this.set({ phase: "running" });
+  }
+
+  /** The instance went away: its program no longer runs. */
+  detach() {
+    this.run++;
+    this.ask = null;
+    this.set({ ...IDLE, lines: this.state.lines, evaluated: this.state.evaluated });
+  }
+
+  /** A click on line `line`'s number: set a breakpoint there, or clear the one there. */
+  async toggle(line: number): Promise<void> {
+    const had = this.state.lines.includes(line);
+    const ask = this.ask;
+    if (!ask) {
+      const lines = had ? this.state.lines.filter((at) => at !== line) : [...this.state.lines, line].sort((a, b) => a - b);
+      this.set({ lines });
+      return;
+    }
+    const answer = await this.answered(this.run, ask(had ? { op: "clear", file: ROOT, line } : { op: "break", file: ROOT, line }));
+    // Each answer lists the breakpoints there are now.
+    const list = answer?.breakpoints ?? answer?.left;
+    if (Array.isArray(list)) this.set({ lines: linesOf(list) });
+  }
+
+  continue(): Promise<void> {
+    return this.resume({ op: "continue" });
+  }
+
+  pause(): Promise<void> {
+    return this.resume({ op: "pause" });
+  }
+
+  step(kind: "over" | "into" | "out"): Promise<void> {
+    return this.resume({ op: "step", kind });
+  }
+
+  private async resume(request: object): Promise<void> {
+    if (this.ask) await this.answered(this.run, this.ask(request));
+  }
+
+  /** Show frame `frame`'s bindings. */
+  async select(frame: number): Promise<void> {
+    const run = this.run;
+    if (!this.ask || !this.state.paused) return;
+    this.set({ frame });
+    const answer = await this.ask({ frame });
+    if (run !== this.run || !this.state.paused || this.state.frame !== frame || answer.reached !== true) return;
+    this.set({ bindings: answer.bindings ?? [], unread: answer.unread ?? null, frames: answer.frames ?? this.state.frames });
+  }
+
+  /** Evaluate `code` where the program is paused, in its innermost frame. */
+  async evaluate(code: string): Promise<void> {
+    const run = this.run;
+    if (!this.ask || !code.trim()) return;
+    const answer = await this.ask({ op: "eval", code });
+    if (run !== this.run) return;
+    const evaluated: Evaluated = answer.error !== undefined ? { code, error: String(answer.error) } : { code, value: String(answer.value) };
+    this.set({ evaluated: [...this.state.evaluated, evaluated].slice(-KEPT) });
+  }
+
+  /** `answer`, its refusal shown as the panel's error while `run` is attached. */
+  private async answered(run: number, answer: Promise<any>): Promise<any> {
+    const value = await answer;
+    if (run === this.run) this.set({ error: value?.error !== undefined ? String(value.error) : null });
+    return value;
+  }
+
+  /** One event of the attached instance's debugger. */
+  private heard(event: any) {
+    switch (event.event) {
+      case "paused": {
+        const paused: Paused = { file: event.file, line: event.line, function: event.function, reason: event.reason };
+        this.set({ phase: "paused", paused, frame: 0, frames: [], bindings: [], unread: null });
+        void this.select(0);
+        return;
+      }
+      case "resumed":
+        this.set({ phase: "running", paused: null, frames: [], frame: 0, bindings: [], unread: null });
+        return;
+      case "breakpoints":
+        if (Array.isArray(event.breakpoints)) this.set({ lines: linesOf(event.breakpoints) });
+        return;
+    }
+  }
+}
+
+/** The crate root's lines among the debugger's breakpoints. */
+function linesOf(breakpoints: { file?: string; line?: number }[]): number[] {
+  const lines = breakpoints.filter((point) => point.file === ROOT && typeof point.line === "number").map((point) => point.line!);
+  return [...new Set(lines)].sort((a, b) => a - b);
+}

@@ -31,3 +31,18 @@ body.play { font-size: var(--fs-base); line-height: 1.5; }
 .out.framed pre { padding: 0 16px 16px; }
 .term .err { color: var(--red); }
 .term .exit, .term .none, .term .note { color: var(--quiet); }
+/* The debugger's panel (Playground.tsx's DebugPanel), between the code and */
+/* the output while the debugger is on. */
+.debugger { font-size: 13px; overflow: auto; }
+.debugger .note { color: var(--quiet); }
+.debugger .error { color: var(--red); }
+.debugger .where { font: 13px/1.55 var(--mono); color: var(--ink); }
+.debugger h3 { font-size: var(--fs-label); font-weight: var(--w-strong); letter-spacing: var(--track-label); text-transform: uppercase; color: var(--quiet); margin-bottom: 4px; }
+.debugger .frames-list button { font: 13px/1.55 var(--mono); color: var(--ink); background: none; border: 0; padding: 0; cursor: pointer; text-align: left; }
+.debugger .frames-list button[aria-current="true"] { color: var(--red); }
+.debugger .bindings { font: 13px/1.55 var(--mono); }
+.debugger .bindings > div { display: flex; gap: 8px; }
+.debugger .bindings dt { color: var(--quiet); }
+.debugger .bindings dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.debugger .evaluated { font: 13px/1.55 var(--mono); overflow-wrap: anywhere; }
+.debugger .err { color: var(--red); }

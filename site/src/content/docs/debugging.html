@@ -72,6 +72,16 @@ args = { program = "{0}" }</code></pre></div>
   { "label": "rawr attach", "adapter": "rawr", "request": "attach", "program": "$ZED_WORKTREE_ROOT" }
 ]</code></pre></div>
 
+<h2 id="playground">In the playground</h2>
+<p>The <a href="/play">playground</a> has a debugger too. Click the bug icon beside Share. The program starts again from its start under the debugger, in the browser, and a debugger panel opens beside the code. Click the bug again to turn it off, and the program runs as before.</p>
+<ul>
+  <li>Click a line number to set a breakpoint there, and click it again to clear it. Breakpoints set before a run are in place before <code>main</code> starts.</li>
+  <li>Continue, Pause, and step over, into and out work as in an editor. The paused line is highlighted, and the panel lists the frames and the bindings of the one you pick.</li>
+  <li>The eval box runs Rust where the program is paused.</li>
+  <li>Pausing needs WebAssembly JS Promise Integration (JSPI), which Chrome has. In a browser without it, the panel says so, and the program runs without pausing.</li>
+  <li>A pause stops <code>main</code>&rsquo;s own code, and the functions it calls. A function the page calls, such as an iced <code>view</code> or <code>update</code>, runs whole.</li>
+</ul>
+
 <h2 id="with-agents">With an agent on the same run</h2>
 <p>Every shell attached to a run hears each pause, resume and reload. An agent&rsquo;s <code>click</code> through <code>rawr mcp</code> that reaches a breakpoint stops the editor there too, and a <code>continue</code> from the editor lets the agent&rsquo;s program go on. The run&rsquo;s output reaches every shell when a shell started the run.</p>
 <p>Breakpoints are the run&rsquo;s, not one shell&rsquo;s. A breakpoint set or cleared from <code>rawr tui</code>, <code>rawr gui</code>, an agent or another editor shows in every other shell at once: the editor adds or removes it in its gutter, and a shell that attaches later shows those already set.</p>

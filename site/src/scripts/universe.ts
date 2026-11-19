@@ -40,6 +40,12 @@
 // size in CSS pixels, so there iced draws at twice the size it hit-tests
 // (#1449). A real display at that scale doesn't: check scale 2 in a Chrome
 // started with `--force-device-scale-factor=2` and no viewport override.
+//
+// The module comes in two builds (web/build.sh): PLAIN, which every run
+// uses, and DEBUGGER, the same universe with rawr's browser debugger, whose
+// instances also export `debug` and `debug_events` (D1071). Each build is
+// its own `universe`, which fetches and compiles its module the first time
+// it makes a frame.
 
 import { Screen } from "../lib/terminal.ts";
 
@@ -52,6 +58,22 @@ export const NO_JSPI = "This browser can't run a program that sleeps: it has no 
 /** The universe's files, beside rawr-web's (web/build.sh). */
 export const UNIVERSE_GLUE = "/web/universe.js";
 export const UNIVERSE_WASM = "/web/universe_bg.wasm";
+
+/** A build of the universe's module: its glue and its wasm. */
+export interface Build {
+  glue: string;
+  wasm: string;
+}
+
+/** The module ?play runs every program on. */
+export const PLAIN: Build = { glue: UNIVERSE_GLUE, wasm: UNIVERSE_WASM };
+
+/**
+ * The same universe built with rawr's browser debugger (D1071), which the
+ * playground loads only when its debugger is turned on: every program it
+ * runs is under a debugger the page asks through `debug`.
+ */
+export const DEBUGGER: Build = { glue: "/web/universe-debugger.js", wasm: "/web/universe-debugger_bg.wasm" };
 /** The universe's Cargo.toml, which a snippet's `use`s name crates from. */
 export const UNIVERSE_MANIFEST = "/web/universe.toml";
 
@@ -64,6 +86,10 @@ export interface Instance {
   set_output(sink: (stream: string, text: string) => void): void;
   replace(source: string): string;
   panic_message(): string | undefined;
+  /** The debugger build's (rawr::universe::debugger): one request's answer, as JSON text. */
+  debug?(request: string): Promise<string>;
+  /** The debugger build's: each event of its debugger, as JSON text. */
+  debug_events?(listener: (event: string) => void): void;
 }
 
 /** The compiled module and the manifest snippets compile beside. */
@@ -83,6 +109,8 @@ export interface UniverseEnv {
   document: Document;
   fetch: typeof fetch;
   compile(response: Promise<Response>): Promise<WebAssembly.Module>;
+  /** Which build of the module its frames run: PLAIN unless named. */
+  build?: Build;
 }
 
 /**
@@ -212,7 +240,7 @@ function terminal(frame: Frame): void {
 }
 
 /** The page's universe: the module compiled once, an instance per frame. */
-export function universe({ document, fetch, compile }: UniverseEnv) {
+export function universe({ document, fetch, compile, build = PLAIN }: UniverseEnv) {
   // The manifest alone, for a page that asks which snippets use crates
   // before it fetches the module. A fetch that failed is tried again.
   let manifest: Promise<string> | null = null;
@@ -228,10 +256,14 @@ export function universe({ document, fetch, compile }: UniverseEnv) {
       }));
   let loaded: Promise<Loaded> | null = null;
   const load = () =>
-    (loaded ??= Promise.all([compile(fetch(UNIVERSE_WASM)), readManifest()]).then(([module, manifest]) => ({
-      module,
-      manifest,
-    })));
+    (loaded ??= Promise.all([compile(fetch(build.wasm)), readManifest()]).then(
+      ([module, manifest]) => ({ module, manifest }),
+      // A module that didn't load is fetched again by the next frame.
+      (error) => {
+        loaded = null;
+        throw error;
+      },
+    ));
 
   /** A new frame in `parent`, hidden until shown, with its instance prepared. */
   const frame = async (parent: Element): Promise<Frame> => {
@@ -248,7 +280,7 @@ export function universe({ document, fetch, compile }: UniverseEnv) {
         else reject(new Error(detail.error));
       });
     });
-    element.srcdoc = frameDocument(new URL(UNIVERSE_GLUE, document.baseURI).href);
+    element.srcdoc = frameDocument(new URL(build.glue, document.baseURI).href);
     parent.append(element);
     const instance = await ready;
     instance.prepare();
@@ -260,14 +292,17 @@ export function universe({ document, fetch, compile }: UniverseEnv) {
    * compile error. A panic aborts the instance; its message is the error.
    * A `main` that sleeps runs on in the frame and prints to its terminal:
    * the answer is then a status of 0 with no output. Without JSPI it stops
-   * at its first sleep, and its frame says why.
+   * at its first sleep, and its frame says why. `started` runs once the
+   * program compiled and its `main` waits, as a debugger's held start
+   * waits (session.ts), before the run looks at whether `main` sleeps.
    */
-  const run = async (frame: Frame, code: string): Promise<any> => {
+  const run = async (frame: Frame, code: string, started?: () => Promise<void>): Promise<any> => {
     const { manifest } = await load();
     frame.element.hidden = false;
     await settled(frame.element);
     try {
       const answer = frame.instance.run(manifest, code);
+      if (started) await started();
       if (frame.instance.sleeping()) {
         terminal(frame);
         // A panic's message goes to the terminal.

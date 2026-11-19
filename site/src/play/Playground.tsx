@@ -2,15 +2,19 @@
 // from a Session (session.ts). The page is static; the Worker writes each
 // request's data (the share, the examples, Turnstile's key) into #play-data.
 // Before hydration the server-rendered controls show; the editor mounts
-// once the island runs.
+// once the island runs. The debugger icon runs the program under the
+// debugger build of the universe and opens its panel beside the code
+// (debugger.ts, D1071).
 import type { EditorView } from "@codemirror/view";
 import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Button } from "../components/ui/button.tsx";
+import { Input } from "../components/ui/input.tsx";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from "../components/ui/select.tsx";
 import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group.tsx";
 import { onTheme, theme as pageTheme, type Theme } from "../lib/theme.ts";
-import { universe } from "../scripts/universe.ts";
-import { createEditor, setDoc } from "./editor.ts";
+import { DEBUGGER, universe } from "../scripts/universe.ts";
+import { Debugger, ROOT, type DebugState } from "./debugger.ts";
+import { createEditor, setDebugging, setDoc, setMarks } from "./editor.ts";
 import { Session, TURNSTILE_JS, WEB_MODULE, type Example, type Output, type PlayData, type State, type Web, type Where } from "./session.ts";
 
 /** The page's data, or a bare page's when the Worker wrote none (a static preview). */
@@ -50,6 +54,16 @@ function browserDeps() {
       fetch: window.fetch.bind(window),
       compile: (response) => WebAssembly.compileStreaming(response),
     }),
+    // Its debugger build, fetched the first time the debugger is turned on.
+    debugging: {
+      universe: universe({
+        document,
+        fetch: window.fetch.bind(window),
+        compile: (response) => WebAssembly.compileStreaming(response),
+        build: DEBUGGER,
+      }),
+      debugger: new Debugger(),
+    },
     now: () => performance.now(),
     clipboard: (text: string) => navigator.clipboard.writeText(text),
     turnstile: () => (window as Window & { turnstile?: any }).turnstile,
@@ -68,7 +82,7 @@ function browserDeps() {
 }
 
 const NONE: State = {
-  code: "", theme: "dark", where: "browser", output: { kind: "note" }, status: "ready", busy: false, mark: "",
+  code: "", theme: "dark", where: "browser", output: { kind: "note" }, status: "ready", busy: false, mark: "", debugging: false,
 };
 
 export default function Playground() {
@@ -81,6 +95,12 @@ export default function Playground() {
   const host = useRef<HTMLDivElement>(null);
   const frames = useRef<HTMLDivElement>(null);
   const editor = useRef<EditorView | null>(null);
+  const debug = session?.deps.debugging?.debugger;
+  const debugState = useSyncExternalStore(
+    (listener) => debug?.subscribe(listener) ?? (() => {}),
+    () => debug?.state ?? null,
+    () => null,
+  );
 
   // After hydration: the session from the page's data, the editor, the theme and the keys.
   useEffect(() => {
@@ -114,6 +134,16 @@ export default function Playground() {
   useEffect(() => {
     if (editor.current && session) setDoc(editor.current, state.code);
   }, [session, state.code]);
+
+  // While the debugger is on, the editor's line numbers set breakpoints.
+  useEffect(() => {
+    if (editor.current && debug) setDebugging(editor.current, state.debugging ? (line) => void debug.toggle(line) : null);
+  }, [debug, state.debugging]);
+  useEffect(() => {
+    if (!editor.current || !debugState) return;
+    const paused = debugState.paused?.file === ROOT ? debugState.paused.line : null;
+    setMarks(editor.current, debugState.lines, paused);
+  }, [debugState]);
 
   const examples = session?.data.examples ?? [];
   const groups: [string, Example[]][] = [];
@@ -164,18 +194,31 @@ export default function Playground() {
           <ToggleGroupItem className="flex-1 md:flex-none" value="server">Run on server</ToggleGroupItem>
           <ToggleGroupItem className="flex-1 md:flex-none" value="browser">Run in browser</ToggleGroupItem>
         </ToggleGroup>
+        <Button
+          id="debug"
+          className="order-3 px-2"
+          variant={state.debugging ? "primary" : "default"}
+          aria-pressed={state.debugging}
+          aria-label="Debugger"
+          title={state.debugging ? "Turn the debugger off" : "Run under the debugger"}
+          hidden={!session?.deps.debugging}
+          onClick={() => void session?.debug()}
+        >
+          <BugIcon />
+        </Button>
         <Button id="share" className="order-3" onClick={() => void session?.share()}>Share</Button>
         <Button id="run" className="order-3" variant="primary" title="Ctrl/Cmd + Enter" disabled={state.busy} onClick={() => void session?.go()}>
           Run
         </Button>
       </div>
-      <main className="flex min-h-0 flex-1 flex-col md:grid md:grid-cols-2">
+      <main className={"flex min-h-0 flex-1 flex-col md:grid " + (state.debugging ? "md:grid-cols-[minmax(0,1fr)_17rem_minmax(0,1fr)]" : "md:grid-cols-2")}>
         <section className="pane flex min-h-0 flex-col px-4 pt-4 pb-6 md:px-6">
           <p className="playcap mb-2"><span className="text-red">//</span> Code</p>
           <div ref={host} className="editor min-h-[300px] flex-1 md:min-h-[360px]" />
           {/* Always present, so Turnstile finds its container whenever the session mounts it. */}
           <div id="ts" className="mt-3 empty:hidden" />
         </section>
+        {state.debugging && debug && debugState && <DebugPanel debug={debug} state={debugState} />}
         <section className="pane flex min-h-0 flex-col border-t border-grid px-4 pt-4 pb-6 md:border-t-0 md:border-l md:px-6">
           <p className="playcap mb-2 flex justify-between gap-2">
             <span><span className="text-red">//</span> Output</span>
@@ -197,6 +240,118 @@ export default function Playground() {
         <span>MIT or Apache-2.0 · <a href="https://airstrike.fyi">airstrike.fyi</a></span>
       </footer>
     </div>
+  );
+}
+
+/** The debugger icon: a small bug, drawn in the button's colour. */
+function BugIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="square" aria-hidden="true">
+      <rect x="4.75" y="5.25" width="6.5" height="8" rx="3.25" />
+      <path d="M6 5.25a2 2 0 0 1 4 0M8 8v5M1.5 9h3.25M11.25 9h3.25M2.5 5l2.5 1.5M13.5 5L11 6.5M2.5 13.5l2.5-1.5M13.5 13.5L11 12" />
+    </svg>
+  );
+}
+
+/** What the program is doing, in the panel's words. */
+function phaseText(state: DebugState): string {
+  switch (state.phase) {
+    case "idle":
+      return "starting";
+    case "held":
+      return "held at its start";
+    case "running":
+      return "running";
+    case "paused":
+      return `paused · ${state.paused?.reason ?? ""}`;
+  }
+}
+
+/** A frame's function by its last path segment. */
+function shortName(name: string): string {
+  return name.split("::").at(-1) ?? name;
+}
+
+/** The debugger's panel, beside the code: its controls, the frames, the bindings and an eval box. */
+function DebugPanel({ debug, state }: { debug: Debugger; state: DebugState }) {
+  const [code, setCode] = useState("");
+  const paused = state.phase === "paused";
+  const canPause = state.pause === true;
+  const controls: [string, string, () => void, boolean][] = [
+    ["continue", "Continue", () => void debug.continue(), paused],
+    ["pause", "Pause", () => void debug.pause(), canPause && state.phase === "running"],
+    ["over", "Over", () => void debug.step("over"), paused],
+    ["into", "Into", () => void debug.step("into"), paused],
+    ["out", "Out", () => void debug.step("out"), paused],
+  ];
+  return (
+    <section id="debugger" className="pane debugger flex min-h-0 flex-col gap-3 border-t border-grid px-4 pt-4 pb-6 md:border-t-0 md:border-l" aria-label="Debugger">
+      <p className="playcap flex justify-between gap-2">
+        <span><span className="text-red">//</span> Debugger</span>
+        <span className="phase truncate">{phaseText(state)}</span>
+      </p>
+      {state.pause === false && (
+        <p className="note">This browser can't pause a program: it has no WebAssembly JS Promise Integration (JSPI). Breakpoints and steps need it.</p>
+      )}
+      <div className="flex flex-wrap gap-1" role="toolbar" aria-label="Debugger controls">
+        {controls.map(([id, label, act, enabled]) => (
+          <Button key={id} data-control={id} className="px-2" title={id === "continue" || id === "pause" ? label : `Step ${id}`} disabled={!enabled} onClick={act}>
+            {label}
+          </Button>
+        ))}
+      </div>
+      {canPause && state.lines.length === 0 && !paused && <p className="note">Click a line number to set a breakpoint.</p>}
+      {state.error && <p className="error">{state.error}</p>}
+      {paused && state.paused && (
+        <>
+          <p className="where">{shortName(state.paused.function)} · line {state.paused.line}</p>
+          <div>
+            <h3>Frames</h3>
+            <ol className="frames-list">
+              {state.frames.map((frame, at) => (
+                <li key={at}>
+                  <button type="button" aria-current={at === state.frame} onClick={() => void debug.select(at)}>
+                    {shortName(frame.function)}
+                    {frame.line ? ` :${frame.line}` : ""}
+                  </button>
+                </li>
+              ))}
+            </ol>
+          </div>
+          <div>
+            <h3>Bindings</h3>
+            {state.unread && <p className="note">{state.unread}</p>}
+            <dl className="bindings">
+              {state.bindings.map((binding) => (
+                <div key={binding.name} data-binding={binding.name}>
+                  <dt>{binding.name}</dt>
+                  <dd className={binding.error !== undefined ? "err" : undefined}>{binding.error ?? binding.value}</dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+          <form
+            className="flex gap-1"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void debug.evaluate(code);
+            }}
+          >
+            <Input className="min-w-0 flex-1" aria-label="Evaluate" placeholder="Rust to evaluate" value={code} onChange={(event) => setCode(event.target.value)} />
+            <Button type="submit" className="px-2">Eval</Button>
+          </form>
+        </>
+      )}
+      {state.evaluated.length > 0 && (
+        <ul className="evaluated">
+          {state.evaluated.map((evaluated, at) => (
+            <li key={at}>
+              <code>{evaluated.code}</code> = <span className={evaluated.error !== undefined ? "err" : undefined}>{evaluated.error ?? evaluated.value}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 
