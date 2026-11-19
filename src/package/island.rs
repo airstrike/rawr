@@ -49,6 +49,9 @@ use crate::{ImmutableString, Span};
 mod handle;
 #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
 mod reach;
+mod seen;
+
+pub(crate) use seen::{Below, Seen};
 
 /// The module of the shadow crate's root that holds the island's runtime
 /// support. The Rawr root calls its `main` to start the program.
@@ -415,25 +418,59 @@ struct Source<'a> {
     path: &'a Path,
     text: &'a str,
     items: &'a [item::Parsed],
-    /// A native module is below it, which sees its private items as a
-    /// child module sees its ancestors' ([`below`]).
-    below: bool,
+    /// The private items native modules below it see, as a child module
+    /// sees its ancestors', by the paths they write ([`Seen`]).
+    seen: Seen,
 }
 
-impl Source<'_> {
-    /// Whether native code sees this source's item declared with `header`:
-    /// it is visible outside the module, or a native module below sees it.
-    const fn shows(&self, header: &item::Header) -> bool {
-        header.visibility.is_some() || self.below
+impl<'a> Source<'a> {
+    /// A marked source, which native modules below see of as `below`
+    /// records for its module.
+    fn new(
+        modules: &'a [ImmutableString],
+        path: &'a Path,
+        text: &'a str,
+        items: &'a [item::Parsed],
+        below: &Below,
+    ) -> Self {
+        let seen = below
+            .get(modules)
+            .map(|seen| seen.closed(text, items))
+            .unwrap_or_default();
+        Self {
+            modules,
+            path,
+            text,
+            items,
+            seen,
+        }
     }
-}
 
-/// Whether one of the native modules `native` is below the module
-/// `modules`, as a marked crate root's are below it.
-fn below(modules: &[ImmutableString], native: &[&[ImmutableString]]) -> bool {
-    native
-        .iter()
-        .any(|native| native.len() > modules.len() && native.starts_with(modules))
+    /// Whether native code sees this source's item `name`, declared with
+    /// `header`: it is visible outside the module, or a native module
+    /// below names it.
+    fn shows(&self, header: &item::Header, name: &str) -> bool {
+        header.visibility.is_some() || self.seen.contains(name)
+    }
+
+    /// Whether native code sees a function, declared with `header`, of the
+    /// impl `declared`: it is visible outside the module, or a native
+    /// module below sees the impl's type, whose methods it calls without
+    /// naming them.
+    fn shows_method(&self, header: &item::Header, declared: &item::Impl) -> bool {
+        header.visibility.is_some()
+            || seen::owner(declared).is_some_and(|owner| self.seen.contains(owner))
+    }
+
+    /// Whether native code sees the import `declared`: it is a re-export,
+    /// or a native module below names one of its bindings.
+    fn shows_use(&self, declared: &item::Use) -> bool {
+        declared.header.visibility.is_some()
+            || declared
+                .bindings()
+                .iter()
+                .any(|(name, _)| self.seen.contains(&name.text))
+    }
 }
 
 /// How a value crosses for one parameter.
@@ -628,17 +665,11 @@ enum Owner<'o> {
 pub(crate) fn native_statics<'a>(
     sources: impl IntoIterator<Item = (&'a [ImmutableString], &'a str, &'a [item::Parsed])>,
     root: &'a [item::Parsed],
-    native: &[&[ImmutableString]],
+    below: &Below,
 ) -> Vec<Vec<ImmutableString>> {
     let sources = sources
         .into_iter()
-        .map(|(modules, text, items)| Source {
-            modules,
-            path: Path::new(""),
-            text,
-            items,
-            below: below(modules, native),
-        })
+        .map(|(modules, text, items)| Source::new(modules, Path::new(""), text, items, below))
         .collect::<Vec<_>>();
     let generator = Generator::new(&sources, root);
     let mut statics = Vec::new();
@@ -658,7 +689,7 @@ pub(crate) fn native_statics<'a>(
                 .into_iter()
                 .any(|name| name == "Self" || generator.names_type(name));
             if declared.constant
-                && source.shows(&declared.header)
+                && source.shows(&declared.header, &declared.name.text)
                 && keyword.split_whitespace().last() == Some("static")
                 && !marked
             {
@@ -681,17 +712,11 @@ pub(crate) fn native_statics<'a>(
 pub(crate) fn mirrors<'a>(
     sources: impl IntoIterator<Item = (&'a [ImmutableString], &'a str, &'a [item::Parsed])>,
     root: &'a [item::Parsed],
-    native: &[&[ImmutableString]],
+    below: &Below,
 ) -> Vec<Vec<ImmutableString>> {
     let sources = sources
         .into_iter()
-        .map(|(modules, text, items)| Source {
-            modules,
-            path: Path::new(""),
-            text,
-            items,
-            below: below(modules, native),
-        })
+        .map(|(modules, text, items)| Source::new(modules, Path::new(""), text, items, below))
         .collect::<Vec<_>>();
     Generator::new(&sources, root)
         .crossing
@@ -704,27 +729,21 @@ pub(crate) fn mirrors<'a>(
 /// native code calls marked code: a native root's, or a marked root's
 /// whose native modules use it. `module_root` is the directory of the
 /// crate root; `sources` yields each marked source's module path, file,
-/// text and items, and `native` each native module's path, which sees the
-/// private items of the marked modules above it. Only the functions
+/// text and items, and `below` what native modules below each marked
+/// module name of its private items ([`Seen`]). Only the functions
 /// `called` names get their trampolines' bodies, when it names any
 /// ([`Generator::called`]); the shape is the same either way.
 pub(crate) fn shadow<'a>(
     module_root: &Path,
     sources: impl IntoIterator<Item = (&'a [ImmutableString], &'a Path, &'a str, &'a [item::Parsed])>,
     root: &'a [item::Parsed],
-    native: &[&[ImmutableString]],
+    below: &Below,
     called: Option<&'a BTreeSet<String>>,
     opaque: Option<&BTreeSet<String>>,
 ) -> Shadow {
     let sources = sources
         .into_iter()
-        .map(|(modules, path, text, items)| Source {
-            modules,
-            path,
-            text,
-            items,
-            below: below(modules, native),
-        })
+        .map(|(modules, path, text, items)| Source::new(modules, path, text, items, below))
         .collect::<Vec<_>>();
     let mut generator = Generator::new(&sources, root);
     generator.called = called;
@@ -950,7 +969,7 @@ impl<'a> Generator<'a> {
             path: Path::new(""),
             text: "",
             items: root,
-            below: false,
+            seen: Seen::default(),
         };
         let uses = uses(sources.iter().chain([&root]));
         let mut types = BTreeMap::new();
@@ -971,31 +990,39 @@ impl<'a> Generator<'a> {
                     named.insert(path_of(source.modules, &name.text));
                 }
                 let (name, generics, fields) = match item {
-                    item::Parsed::Struct(declared) if source.shows(&declared.header) => (
-                        declared.name.text.as_str(),
-                        !declared.generics.is_empty(),
-                        declared
-                            .fields
-                            .iter()
-                            .map(|field| field.ty.clone())
-                            .collect(),
-                    ),
-                    item::Parsed::Enum(declared) if source.shows(&declared.header) => (
-                        declared.name.text.as_str(),
-                        !declared.generics.is_empty(),
-                        declared
-                            .variants
-                            .iter()
-                            .flat_map(|variant| variant.payload.iter().cloned())
-                            .collect(),
-                    ),
+                    item::Parsed::Struct(declared)
+                        if source.shows(&declared.header, &declared.name.text) =>
+                    {
+                        (
+                            declared.name.text.as_str(),
+                            !declared.generics.is_empty(),
+                            declared
+                                .fields
+                                .iter()
+                                .map(|field| field.ty.clone())
+                                .collect(),
+                        )
+                    }
+                    item::Parsed::Enum(declared)
+                        if source.shows(&declared.header, &declared.name.text) =>
+                    {
+                        (
+                            declared.name.text.as_str(),
+                            !declared.generics.is_empty(),
+                            declared
+                                .variants
+                                .iter()
+                                .flat_map(|variant| variant.payload.iter().cloned())
+                                .collect(),
+                        )
+                    }
                     item::Parsed::Trait(declared) => {
                         traits.insert(declared.name.text.as_str());
                         trait_paths
                             .entry(declared.name.text.as_str())
                             .or_default()
                             .push(path_of(source.modules, &declared.name.text));
-                        if source.shows(&declared.header) {
+                        if source.shows(&declared.header, &declared.name.text) {
                             shown.insert(declared.name.text.as_str());
                         }
                         continue;
@@ -1953,7 +1980,9 @@ impl<'a> Generator<'a> {
                         },
                     );
                 }
-                item::Parsed::Struct(declared) if file.shows(&declared.header) => {
+                item::Parsed::Struct(declared)
+                    if file.shows(&declared.header, &declared.name.text) =>
+                {
                     self.mirror(file, &declared.name, declared.span, None, &mut items, shape);
                     if self
                         .crossing
@@ -1973,7 +2002,9 @@ impl<'a> Generator<'a> {
                         append(shape, &path_of(file.modules, &declared.name.text), &text);
                     }
                 }
-                item::Parsed::Enum(declared) if file.shows(&declared.header) => {
+                item::Parsed::Enum(declared)
+                    if file.shows(&declared.header, &declared.name.text) =>
+                {
                     self.mirror(file, &declared.name, declared.span, None, &mut items, shape);
                     if self
                         .crossing
@@ -1984,7 +2015,9 @@ impl<'a> Generator<'a> {
                         append(shape, &path_of(file.modules, &declared.name.text), &text);
                     }
                 }
-                item::Parsed::TypeAlias(declared) if file.shows(&declared.header) => {
+                item::Parsed::TypeAlias(declared)
+                    if file.shows(&declared.header, &declared.name.text) =>
+                {
                     self.mirror(
                         file,
                         &declared.name,
@@ -1994,7 +2027,9 @@ impl<'a> Generator<'a> {
                         shape,
                     );
                 }
-                item::Parsed::Function(declared) if file.shows(&declared.header) => {
+                item::Parsed::Function(declared)
+                    if file.shows(&declared.header, &declared.name.text) =>
+                {
                     if declared.constant {
                         self.mirror(
                             file,
@@ -2030,7 +2065,9 @@ impl<'a> Generator<'a> {
                         Err(reason) => refused.push(reason),
                     }
                 }
-                item::Parsed::Trait(declared) if file.shows(&declared.header) => {
+                item::Parsed::Trait(declared)
+                    if file.shows(&declared.header, &declared.name.text) =>
+                {
                     let text = self.declaration(file, declared);
                     items.push_str(&text);
                     shape.insert(
@@ -2061,8 +2098,8 @@ impl<'a> Generator<'a> {
         let mut text = String::new();
         for declared in uses {
             // A re-export is part of what native code sees, and so is
-            // each import for a native module below.
-            if file.shows(&declared.header) {
+            // each import a native module below names.
+            if file.shows_use(declared) {
                 let line = without_rawr_attributes(slice(file.text, declared.span));
                 let _ = writeln!(text, "{line}");
                 shape.insert(
@@ -2238,7 +2275,7 @@ impl<'a> Generator<'a> {
         let functions = declared
             .functions
             .iter()
-            .filter(|function| trait_.is_some() || file.shows(&function.header))
+            .filter(|function| trait_.is_some() || file.shows_method(&function.header, declared))
             .collect::<Vec<_>>();
         if functions.is_empty() && trait_.is_none() {
             return;
@@ -3566,9 +3603,10 @@ impl<'a> Generator<'a> {
 
 /// Whether a field of `declared`, written in `file`, is visible outside
 /// its module: a field's span starts at its name, after any `pub` or
-/// `pub(..)`. A native module below sees every field.
+/// `pub(..)`. A native module below that names the struct sees every
+/// field, as Rust lets it read them.
 fn visible_fields(file: &Source<'_>, declared: &item::Struct) -> bool {
-    file.below
+    file.seen.contains(&declared.name.text)
         || declared.fields.iter().any(|field| {
             let before = slice(
                 file.text,
@@ -7911,7 +7949,7 @@ mod tests {
                 unit.items(),
             )],
             &[],
-            &[],
+            &Below::new(),
             called,
             opaque,
         )
@@ -8246,12 +8284,12 @@ mod tests {
         );
     }
 
-    /// A native module below a marked crate root sees the root's private
-    /// items, as a child module sees its ancestors': each gets its
-    /// trampoline or its copy, and each of the root's imports stays, which
-    /// a native `use super::*;` reaches. The root's `main` is the
-    /// program's, and a private function no trampoline can stand for is
-    /// left out, not refused.
+    /// A native module below a marked crate root that writes `use
+    /// super::*;` sees all the root's private items, as a child module
+    /// sees its ancestors': each gets its trampoline or its copy, and each
+    /// of the root's imports stays. The root's `main` is the program's,
+    /// and a private function no trampoline can stand for is left out, not
+    /// refused.
     #[test]
     fn a_marked_roots_private_items_are_seen_by_its_native_modules() {
         let source = "// rawr\nmod charts;\nuse std::collections::BTreeMap;\n\
@@ -8261,7 +8299,7 @@ mod tests {
                       fn later() -> impl Fn() { || {} }\n\
                       pub fn main() { println!(\"{}\", charts::draw()); }\n";
         let unit = crate::Engine::new().parse_unit(source).unwrap();
-        let charts = [ImmutableString::from("charts")];
+        let every = Below::from([(Box::default(), Seen::Every)]);
         let shadow = shadow(
             Path::new("/crate/src"),
             [(
@@ -8271,7 +8309,7 @@ mod tests {
                 unit.items(),
             )],
             &[],
-            &[&charts[..]],
+            &every,
             None,
             None,
         );
@@ -8307,7 +8345,7 @@ mod tests {
                 unit.items(),
             )],
             &[],
-            &[],
+            &Below::new(),
             None,
             None,
         );
@@ -8315,6 +8353,70 @@ mod tests {
             panic!("{:?}", unseen.files);
         };
         assert!(!unseen.contains("fn colors"), "{unseen}");
+        assert!(!unseen.contains("struct Item"), "{unseen}");
+    }
+
+    /// A native module below a marked module that names one private item
+    /// sees that item, the private items its declaration names and the
+    /// methods of a type it sees, and nothing else private: an import no
+    /// generated text names is left out, and a private struct no native
+    /// path reaches is not copied, so its fields stay the interpreter's.
+    #[test]
+    fn a_native_module_sees_only_the_private_items_it_names() {
+        let source = "// rawr\nmod charts;\nuse std::collections::BTreeMap;\n\
+                      struct Item {\n    cents: i64,\n}\n\
+                      struct Held {\n    count: i64,\n}\n\
+                      fn colors(item: &Item) -> i64 { item.cents }\n\
+                      impl Item {\n    fn doubled(&self) -> i64 { self.cents * 2 }\n}\n\
+                      pub fn main() { println!(\"{}\", charts::draw()); }\n";
+        let unit = crate::Engine::new().parse_unit(source).unwrap();
+        let items = unit.items();
+        let mut seen = Seen::default();
+        seen.name(Some("colors"));
+        let closed = seen.closed(source, items);
+        for name in ["colors", "Item", "doubled"] {
+            assert!(closed.contains(name), "{name}: {closed:?}");
+        }
+        for name in ["Held", "BTreeMap", "main"] {
+            assert!(!closed.contains(name), "{name}: {closed:?}");
+        }
+        let below = Below::from([(Box::default(), seen)]);
+        let file = Source::new(&[], Path::new(""), source, items, &below);
+        let struct_ = |name: &str| {
+            items
+                .iter()
+                .find_map(|item| match item {
+                    item::Parsed::Struct(declared) if declared.name.text == name => Some(declared),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        assert!(visible_fields(&file, struct_("Item")));
+        assert!(!visible_fields(&file, struct_("Held")));
+
+        let shadow = shadow(
+            Path::new("/crate/src"),
+            [(&[][..], Path::new("/crate/src/main.rs"), source, items)],
+            &[],
+            &below,
+            None,
+            None,
+        );
+        assert!(shadow.refused.is_empty(), "{:?}", shadow.refused);
+        let [(_, text)] = shadow.files.as_slice() else {
+            panic!("{:?}", shadow.files);
+        };
+        assert!(text.contains("struct Item {\n    cents: i64,\n}"), "{text}");
+        assert!(
+            text.contains("crate::__rawr_island::call(\"colors\", false);"),
+            "{text}"
+        );
+        assert!(
+            text.contains("crate::__rawr_island::call(\"Item::doubled\", true);"),
+            "{text}"
+        );
+        assert!(!text.contains("Held"), "{text}");
+        assert!(!text.contains("BTreeMap"), "{text}");
     }
 
     /// A `&self` method of a marked type copied whole, as inboard's
