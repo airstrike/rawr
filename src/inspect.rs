@@ -699,11 +699,16 @@ impl Located {
     #[cfg(feature = "sync")]
     #[must_use]
     pub fn program(&self) -> Option<Program> {
-        Some(Program::new(
-            self.snapshot.clone()?,
-            self.entry.clone(),
-            Arc::clone(&self.positions),
-        ))
+        Some(self.program_from(self.snapshot.clone()?))
+    }
+
+    /// What evaluating code in this program takes, which compiled from
+    /// `snapshot`: the files of a generation compiled before a debugger
+    /// was registered, which the host kept beside it (#2308).
+    #[cfg(feature = "sync")]
+    #[must_use]
+    pub fn program_from(&self, snapshot: crate::package::snapshot::Snapshot) -> Program {
+        Program::new(snapshot, self.entry.clone(), Arc::clone(&self.positions))
     }
 
     /// The file and line of the program's statement at `position` in the
@@ -3002,26 +3007,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&directory);
     }
 
-    /// A program's owner thread, which runs no async step here.
-    #[cfg(unix)]
-    struct Owner;
-
-    #[cfg(unix)]
-    impl crate::future::Host for Owner {
-        fn invoke(
-            &self,
-            _: &crate::item::Value,
-            _: &mut [Dynamic],
-        ) -> crate::RawrResultOf<Dynamic> {
-            unreachable!("the scripted loop calls the program through its engine")
-        }
-    }
-
-    /// A break set on a program that runs without a debugger is answered
-    /// before the debugger's generation compiles, on another thread as a
-    /// runner's protocol compiles it. The call native code makes at once
-    /// after the answer waits for that generation and pauses at the
-    /// breakpoint (#2296).
+    /// A break set on a program that runs without a debugger registers the
+    /// debugger with the engine that runs it before the break is answered
+    /// (#2308), so the call native code makes at once after the answer
+    /// pauses at the breakpoint (#2296).
     #[cfg(unix)]
     #[test]
     fn a_call_right_after_a_break_on_a_program_without_a_debugger_pauses() {
@@ -3030,57 +3019,34 @@ mod tests {
             \x20   let next = count + 1;\n\
             \x20   next\n\
             }\n";
-        let directory = std::env::temp_dir().join(format!("rawr-expect-{}", std::process::id()));
+        let directory = std::env::temp_dir().join(format!("rawr-break-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
         let socket = directory.join("s");
         let inspector = super::Inspector::bind(&socket).unwrap();
-        let compile = |inspector: Option<&super::Inspector>| {
-            let mut engine = crate::Engine::new();
-            if let Some(inspector) = inspector {
-                inspector.attach(&mut engine);
-            }
-            let ast = engine
+        let mut engine = crate::Engine::new();
+        inspector.prepare(&mut engine);
+        let engine: &'static crate::Engine = Box::leak(Box::new(engine));
+        let ast: &'static crate::AST = Box::leak(Box::new(
+            engine
                 .compile(TICK)
-                .unwrap_or_else(|error| panic!("{error}"));
-            (engine, ast)
-        };
-        // The generation the owner thread admits, which its next call runs.
-        let admitted: Arc<Mutex<Option<(crate::Engine, crate::AST)>>> = Arc::default();
-        let (register, registered) = std::sync::mpsc::channel();
+                .unwrap_or_else(|error| panic!("{error}")),
+        ));
+        let registering = inspector.clone();
         inspector.register_on_request(move || {
-            let _ = register.send(crate::future::expect());
+            registering.locate_with(|position| Some(("main.rs".to_owned(), position.line()?)));
+            registering.compiled(ast);
+            assert!(registering.attach_running(engine));
         });
         let returned = AtomicBool::new(false);
         std::thread::scope(|scope| {
-            let protocol = {
-                let (inspector, admitted) = (inspector.clone(), Arc::clone(&admitted));
-                scope.spawn(move || {
-                    let expected = registered.recv().unwrap();
-                    let (engine, ast) = compile(Some(&inspector));
-                    inspector
-                        .locate_with(|position| Some(("main.rs".to_owned(), position.line()?)));
-                    inspector.compiled(&ast);
-                    crate::future::offer(move || {
-                        *admitted.lock().unwrap() = Some((engine, ast));
-                    });
-                    drop(expected);
-                })
-            };
             let (call, calls) = std::sync::mpsc::channel::<()>();
             let (done, finished) = std::sync::mpsc::channel();
             let native = {
-                let (inspector, admitted, returned) = (&inspector, &admitted, &returned);
+                let (inspector, returned) = (&inspector, &returned);
                 scope.spawn(move || {
-                    crate::future::serve(std::rc::Rc::new(Owner));
-                    let (mut engine, mut ast) = compile(None);
                     let mut count = 0;
                     for () in calls {
-                        let entry = crate::future::entry();
-                        if let Some(next) = admitted.lock().unwrap().take() {
-                            (engine, ast) = next;
-                        }
-                        count = tick(&engine, &ast, count);
-                        drop(entry);
+                        count = tick(engine, ast, count);
                         returned.store(true, Ordering::Release);
                         // A wait on `changed` looks at `returned` under
                         // this lock.
@@ -3096,7 +3062,7 @@ mod tests {
             }
             returned.store(false, Ordering::Release);
             let set = ask(&socket, &json!({ "op": "break", "function": "tick" }));
-            assert_eq!(set["compiled"], false, "{set}");
+            assert_eq!(set["compiled"], true, "{set}");
             call.send(()).unwrap();
             let paused = {
                 let state = inspector.0.state();
@@ -3112,7 +3078,7 @@ mod tests {
             assert_eq!(
                 paused.as_ref().map(|paused| &paused["function"]),
                 Some(&json!("tick")),
-                "the call after the break's answer runs on the debugger's generation"
+                "the call after the break's answer runs with the debugger"
             );
             ask(&socket, &json!({ "op": "clear" }));
             let continued = ask(&socket, &json!({ "op": "continue" }));
@@ -3120,7 +3086,6 @@ mod tests {
             assert_eq!(finished.recv().unwrap(), 4);
             drop(call);
             native.join().unwrap();
-            protocol.join().unwrap();
         });
         let _ = std::fs::remove_dir_all(&directory);
     }
