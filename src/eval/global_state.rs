@@ -58,9 +58,10 @@ pub struct GlobalRuntimeState {
     pub constants: Option<SharedGlobalConstants>,
     /// Custom state that can be used by the external host.
     pub tag: Dynamic,
-    /// Debugging interface.
+    /// The debugger's state for this evaluation. It is always here, so an
+    /// engine can take a debugger while this evaluation runs.
     #[cfg(feature = "debugging")]
-    pub(crate) debugger: Option<Box<super::Debugger>>,
+    pub(crate) debugger: super::Debugger,
     /// The threads the evaluation spawns, which it joins before it returns.
     #[cfg(feature = "sync")]
     pub(crate) threads: super::threads::Threads,
@@ -89,10 +90,15 @@ impl Engine {
             tag: self.default_tag().clone(),
 
             #[cfg(feature = "debugging")]
-            debugger: self.debugger_interface.as_ref().map(|x| {
-                let dbg = crate::eval::Debugger::new(crate::eval::DebuggerStatus::Init);
-                (x.0)(self, dbg).into()
-            }),
+            // An evaluation started before a debugger was registered goes
+            // on from `CONTINUE`: it has started already.
+            debugger: match self.debugger_interface.get() {
+                Some(interface) => (interface.init)(
+                    self,
+                    crate::eval::Debugger::new(crate::eval::DebuggerStatus::Init),
+                ),
+                None => crate::eval::Debugger::new(crate::eval::DebuggerStatus::CONTINUE),
+            },
 
             #[cfg(feature = "sync")]
             threads: super::threads::Threads::root(self.lasting),
@@ -230,25 +236,17 @@ impl GlobalRuntimeState {
         self.source.as_ref()
     }
 
-    /// Return a reference to the debugging interface.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the debugging interface is not set.
+    /// The debugger's state for this evaluation.
     #[cfg(feature = "debugging")]
     #[must_use]
-    pub fn debugger(&self) -> &super::Debugger {
-        self.debugger.as_ref().unwrap()
+    pub const fn debugger(&self) -> &super::Debugger {
+        &self.debugger
     }
-    /// Return a mutable reference to the debugging interface.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the debugging interface is not set.
+    /// The debugger's state for this evaluation, to change.
     #[cfg(feature = "debugging")]
     #[must_use]
-    pub fn debugger_mut(&mut self) -> &mut super::Debugger {
-        self.debugger.as_deref_mut().unwrap()
+    pub const fn debugger_mut(&mut self) -> &mut super::Debugger {
+        &mut self.debugger
     }
 }
 

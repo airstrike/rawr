@@ -184,12 +184,13 @@ pub fn run(loaded: Loaded) -> Result<Option<String>, Failed> {
     // The process exits when `main` returns, ending the threads the program
     // left running, as a Rust program's does.
     let engine = engine(Build::Program).leak();
-    // The debugger is registered before the program compiles, so only a
-    // program a debugger reads carries what reading needs (#526).
-    let inspector = inspector(engine);
+    // The inspector serves from the start; its debugger is registered
+    // with the running engine when a shell first needs it (#2297).
+    let served = Served::serve(engine);
+    let engine: &'static Engine = engine;
     // Code evaluated at a pause compiles into the program as it was read
     // (#490).
-    let snapshot = inspector.as_ref().and_then(|_| {
+    let snapshot = served.as_ref().and_then(|_| {
         rawr::package::snapshot::Snapshot::of(&graph)
             .map_err(|error| eprintln!("rawr: code can't be evaluated in this run: {error}"))
             .ok()
@@ -197,21 +198,25 @@ pub fn run(loaded: Loaded) -> Result<Option<String>, Failed> {
     let (ast, main, positions) = engine
         .compile_package_with_positions(graph)
         .map_err(|error| Failed::Compile(compile_report(&error, target)))?;
+    let ast = std::sync::Arc::new(ast);
     let positions = std::sync::Arc::new(positions);
-    if let (Some(inspector), Some(entry)) = (inspector, source(target)) {
-        let positions = std::sync::Arc::clone(&positions);
-        if let Some(snapshot) = snapshot {
-            inspector.evaluate_in(rawr::inspect::Program::new(
-                snapshot,
-                entry.clone(),
-                std::sync::Arc::clone(&positions),
-            ));
+    if let Some(served) = served {
+        if let Some(entry) = source(target) {
+            let inspector = &served.inspector;
+            let positions = std::sync::Arc::clone(&positions);
+            if let Some(snapshot) = snapshot {
+                inspector.evaluate_in(rawr::inspect::Program::new(
+                    snapshot,
+                    entry.clone(),
+                    std::sync::Arc::clone(&positions),
+                ));
+            }
+            inspector.locate_with(move |position| {
+                let (file, span) = positions.locate_statement(&entry, position)?;
+                Some((file.identity().to_owned(), span.start().line()?))
+            });
         }
-        inspector.locate_with(move |position| {
-            let (file, span) = positions.locate_statement(&entry, position)?;
-            Some((file.identity().to_owned(), span.start().line()?))
-        });
-        inspector.compiled(&ast);
+        served.compiled(engine, std::sync::Arc::clone(&ast));
     }
     locate_panics(target, &positions);
     let runtime =
@@ -277,26 +282,70 @@ pub(crate) fn located(
     located.unwrap_or_else(|_| report(diagnostic::code::ENVIRONMENT_DIAGNOSTIC, error, Some(entry)))
 }
 
-/// Under `rawr mcp`, answer `inspect` on the socket it named, from the
-/// program `engine` runs. Each step's file and line come from the
-/// compiler's positions once the program compiled.
-fn inspector(engine: &mut Engine) -> Option<rawr::inspect::Inspector> {
-    let socket = std::env::var_os(crate::events::INSPECT).filter(|path| !path.is_empty())?;
-    #[cfg(unix)]
-    match rawr::inspect::Inspector::bind(Path::new(&socket)) {
-        Ok(inspector) => {
-            inspector.attach(engine);
-            Some(inspector)
+/// The inspector a run's session named a socket for, served from the
+/// program's start. Each step's file and line come from the compiler's
+/// positions once the program compiled.
+struct Served {
+    inspector: rawr::inspect::Inspector,
+    /// Where the compiled program hands over its debugger's registration,
+    /// when a shell's first request for the debugger registers it: that
+    /// request may come while the program compiles, and waits for it.
+    on_request: Option<std::sync::mpsc::Sender<Box<dyn FnOnce() + Send>>>,
+}
+
+impl Served {
+    /// Serve the inspector on the socket the session named, ready for
+    /// `engine` to take its debugger while it runs.
+    fn serve(engine: &mut Engine) -> Option<Self> {
+        let socket = std::env::var_os(crate::events::INSPECT).filter(|path| !path.is_empty())?;
+        #[cfg(unix)]
+        match rawr::inspect::Inspector::bind(Path::new(&socket)) {
+            Ok(inspector) => {
+                inspector.prepare(engine);
+                let on_request = std::env::var_os(crate::events::DEBUGGER_ON_REQUEST)
+                    .is_some_and(|value| !value.is_empty())
+                    .then(|| {
+                        let (send, registration) =
+                            std::sync::mpsc::channel::<Box<dyn FnOnce() + Send>>();
+                        inspector.register_on_request(move || {
+                            if let Ok(register) = registration.recv() {
+                                register();
+                            }
+                        });
+                        send
+                    });
+                Some(Self {
+                    inspector,
+                    on_request,
+                })
+            }
+            Err(error) => {
+                eprintln!("rawr: values can't be read from this run: {error}");
+                None
+            }
         }
-        Err(error) => {
-            eprintln!("rawr: values can't be read from this run: {error}");
+        #[cfg(not(unix))]
+        {
+            let _ = (engine, socket);
             None
         }
     }
-    #[cfg(not(unix))]
-    {
-        let _ = (engine, socket);
-        None
+
+    /// The program `engine` runs compiled as `ast`: register the debugger
+    /// now, or at a shell's first request for it. Its breakpoints are
+    /// placed on `ast` then.
+    fn compiled(self, engine: &'static Engine, ast: std::sync::Arc<rawr::AST>) {
+        let inspector = self.inspector;
+        let register = move || {
+            inspector.compiled(&ast);
+            inspector.attach_running(engine);
+        };
+        match self.on_request {
+            Some(on_request) => {
+                let _ = on_request.send(Box::new(register));
+            }
+            None => register(),
+        }
     }
 }
 

@@ -346,10 +346,7 @@ impl Engine {
 
             // Push a new call stack frame
             #[cfg(feature = "debugging")]
-            let orig_call_stack_len = global
-                .debugger
-                .as_ref()
-                .map_or(0, |dbg| dbg.call_stack().len());
+            let orig_call_stack_len = global.debugger.call_stack().len();
 
             let mut copy = Dynamic::UNIT;
             let backup = &mut ArgBackup::new();
@@ -689,10 +686,8 @@ impl Engine {
 
         // Do not match function exit for arguments
         #[cfg(feature = "debugging")]
-        let reset = global.debugger.as_deref_mut().and_then(|dbg| {
-            dbg.clear_status_if(|status| {
-                matches!(status, crate::eval::DebuggerStatus::FunctionExit(..))
-            })
+        let reset = global.debugger.clear_status_if(|status| {
+            matches!(status, crate::eval::DebuggerStatus::FunctionExit(..))
         });
         #[cfg(feature = "debugging")]
         defer! { global if Some(reset) => move |g| g.debugger_mut().reset_status(reset) }
@@ -1798,10 +1793,7 @@ impl Engine {
 
         // A native function's frame has its name and position only (#513).
         #[cfg(feature = "debugging")]
-        let orig_call_stack_len = global
-            .debugger
-            .as_ref()
-            .map_or(0, |dbg| dbg.call_stack().len());
+        let orig_call_stack_len = global.debugger.call_stack().len();
         #[cfg(feature = "debugging")]
         {
             self.lend_bindings(global, lent.0, lent.1, lent.2);

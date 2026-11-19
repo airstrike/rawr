@@ -262,9 +262,7 @@ impl<'a> NativeCallContext<'a> {
         let mut global = self.global.clone();
         // The store can outlive the calls on its call stack.
         #[cfg(feature = "debugging")]
-        if let Some(debugger) = global.debugger.as_mut() {
-            debugger.forget_bindings();
-        }
+        global.debugger.forget_bindings();
         NativeCallContextStore {
             fn_name: self.fn_name.to_string(),
             source: self.source.map(ToString::to_string),
@@ -356,8 +354,8 @@ impl<'a> NativeCallContext<'a> {
     #[cfg(feature = "internals")]
     #[inline(always)]
     #[must_use]
-    pub fn debugger(&self) -> Option<&crate::debugger::Debugger> {
-        self.global.debugger.as_deref()
+    pub fn debugger(&self) -> &crate::debugger::Debugger {
+        &self.global.debugger
     }
 
     /// Call a function inside the call context with the provided arguments.

@@ -41,9 +41,9 @@ pub const INSPECT: &str = "RAWR_MCP_INSPECT";
 /// program has it.
 pub const DEBUG_EVENTS: &str = rawr::inspect::EVENTS;
 
-/// Set in a generated runner's environment beside [`INSPECT`]: the runner
-/// serves the socket and registers its debugger at a shell's first request
-/// for the program, not before (#2266).
+/// Set in a program's environment beside [`INSPECT`]: the program serves
+/// the socket and registers its debugger at a shell's first request for
+/// it, not before (#2266, #2297).
 pub const DEBUGGER_ON_REQUEST: &str = "RAWR_DEBUGGER_ON_REQUEST";
 
 /// Set by a shell that starts a run and sets its breakpoints before the

@@ -517,8 +517,43 @@ impl Engine {
             + SendSync
             + 'static,
     ) -> &mut Self {
-        self.debugger_interface = Some((Box::new(init), Box::new(callback)));
+        self.debugger_interface = std::sync::OnceLock::from(crate::eval::debugger::Interface {
+            init: Box::new(init),
+            callback: Box::new(callback),
+        });
         self
+    }
+    /// _(debugging)_ Register a debugger with an engine that may be running
+    /// programs now: each evaluation calls `callback` from its next step
+    /// on. An evaluation whose runtime state was made before this goes on
+    /// in it, without `init`, from [`CONTINUE`][crate::eval::DebuggerStatus::CONTINUE],
+    /// so it never starts again, and its calls under way are not on its
+    /// call stack. `false`, and nothing changes, when a debugger is
+    /// registered already. Install [`Self::wake_debugger_on`] and
+    /// [`Self::break_debugger_at`] before, as they take the engine whole.
+    /// Exported under the `debugging` feature only.
+    #[cfg(feature = "debugging")]
+    pub fn attach_debugger(
+        &self,
+        init: impl Fn(&Self, crate::debugger::Debugger) -> crate::debugger::Debugger
+            + SendSync
+            + 'static,
+        callback: impl Fn(
+                EvalContext,
+                crate::eval::DebuggerEvent,
+                crate::ast::ASTNode,
+                Option<&str>,
+                crate::Position,
+            ) -> RawrResultOf<crate::eval::DebuggerCommand>
+            + SendSync
+            + 'static,
+    ) -> bool {
+        self.debugger_interface
+            .set(crate::eval::debugger::Interface {
+                init: Box::new(init),
+                callback: Box::new(callback),
+            })
+            .is_ok()
     }
     /// _(debugging)_ Run the debugger callback at each step while `wake` is
     /// set, with [`DebuggerEvent::Wake`][crate::debugger::DebuggerEvent::Wake].

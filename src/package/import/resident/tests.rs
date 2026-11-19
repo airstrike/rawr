@@ -16,11 +16,12 @@ fn owners(engine: &Engine) -> usize {
 }
 
 /// Whether `ast`'s support module holds the program's own support
-/// functions, not only the generic `Debug` op a debugger reads through.
+/// functions, not only the `Debug` ops a debugger reads through.
 fn has_own_support(ast: &crate::AST) -> bool {
-    ast.shared_support()
-        .iter_fn()
-        .any(|(_, metadata)| metadata.name.as_str() != crate::resolve::lower_nominal::DEBUG_GENERIC)
+    ast.shared_support().iter_fn().any(|(_, metadata)| {
+        metadata.name.as_str() != crate::resolve::lower_nominal::DEBUG_GENERIC
+            && metadata.name.as_str() != crate::resolve::lower_nominal::DEBUG_DECLARED
+    })
 }
 
 #[test]
@@ -403,9 +404,12 @@ mod top_level {
                 "#[preview] pub fn sample() -> iced::Element<()> { panic!(\"not invoked\") }",
             ))
             .unwrap();
-        assert!(ast.shared_support().is_empty());
+        assert!(!has_own_support(&ast));
         assert!(owners(&engine) > baseline);
         drop(candidate);
+        // The `Debug` ops every program carries for a debugger read the
+        // models through the program's support, which the AST holds.
+        #[cfg(not(feature = "debugging"))]
         assert_eq!(owners(&engine), baseline);
         drop(ast);
         assert_eq!(owners(&engine), baseline);

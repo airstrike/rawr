@@ -28,6 +28,13 @@ pub type OnDebuggerCallback = dyn Fn(EvalContext, DebuggerEvent, ASTNode, Option
     + Send
     + Sync;
 
+/// The callbacks an engine's debugger runs: `init` when an evaluation's
+/// runtime state is made, and `callback` at each step it calls back at.
+pub(crate) struct Interface {
+    pub(crate) init: Box<OnDebuggingInit>,
+    pub(crate) callback: Box<OnDebuggerCallback>,
+}
+
 /// A command for the debugger on the next iteration.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Default, Hash)]
 #[non_exhaustive]
@@ -612,31 +619,27 @@ impl Engine {
             _ => (),
         }
 
-        match global.debugger {
-            Some(ref dbg) => {
-                let event = match dbg.status {
-                    DebuggerStatus::Init => Some(DebuggerEvent::Start),
-                    DebuggerStatus::NEXT if node.is_stmt() => Some(DebuggerEvent::Step),
-                    DebuggerStatus::INTO if node.is_expr() => Some(DebuggerEvent::Step),
-                    DebuggerStatus::STEP => Some(DebuggerEvent::Step),
-                    DebuggerStatus::Terminate => Some(DebuggerEvent::End),
-                    _ => None,
-                };
+        let dbg = &global.debugger;
+        let event = match dbg.status {
+            DebuggerStatus::Init => Some(DebuggerEvent::Start),
+            DebuggerStatus::NEXT if node.is_stmt() => Some(DebuggerEvent::Step),
+            DebuggerStatus::INTO if node.is_expr() => Some(DebuggerEvent::Step),
+            DebuggerStatus::STEP => Some(DebuggerEvent::Step),
+            DebuggerStatus::Terminate => Some(DebuggerEvent::End),
+            _ => None,
+        };
 
-                let event = match event {
-                    Some(e) => e,
-                    None => match dbg.is_break_point(global.source(), node) {
-                        Some(bp) => DebuggerEvent::BreakPoint(bp),
-                        None if self.is_debugger_break(node.position()) => DebuggerEvent::Break,
-                        None if self.is_debugger_woken() => DebuggerEvent::Wake,
-                        None => return Ok(None),
-                    },
-                };
+        let event = match event {
+            Some(e) => e,
+            None => match dbg.is_break_point(global.source(), node) {
+                Some(bp) => DebuggerEvent::BreakPoint(bp),
+                None if self.is_debugger_break(node.position()) => DebuggerEvent::Break,
+                None if self.is_debugger_woken() => DebuggerEvent::Wake,
+                None => return Ok(None),
+            },
+        };
 
-                self.dbg_raw(global, caches, scope, this_ptr, node, event)
-            }
-            None => Ok(None),
-        }
+        self.dbg_raw(global, caches, scope, this_ptr, node, event)
     }
     /// Run the debugger callback unconditionally.
     ///
@@ -654,15 +657,15 @@ impl Engine {
         node: ASTNode,
         event: DebuggerEvent,
     ) -> Result<Option<DebuggerStatus>, Box<crate::EvalAltResult>> {
-        match self.debugger_interface {
-            Some(ref x) => {
+        match self.debugger_interface.get() {
+            Some(interface) => {
                 let orig_scope_len = scope.len();
 
                 let src = global.source_raw().cloned();
                 let context = EvalContext::new(self, global, caches, scope, this_ptr);
-                let (.., ref on_debugger) = *x;
 
-                let command = on_debugger(context, event, node, src.as_deref(), node.position());
+                let command =
+                    (interface.callback)(context, event, node, src.as_deref(), node.position());
 
                 if orig_scope_len != scope.len() {
                     // The scope is changed, always search from now on

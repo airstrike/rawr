@@ -40,13 +40,13 @@
 //! while its connection stays open, and `emit` (an event) when the program
 //! pauses and goes on and when its breakpoints change.
 //!
-//! A run no shell started registers no debugger. A generated runner
-//! serves its inspector all the same ([`prepare_runner`]), and a shell's
-//! first request that needs the debugger has the runner register one at
-//! its next call from native code, on a generation compiled again from
-//! the running program's sources: the program keeps its state (#2266).
-//! Any other program restarts with one ([`take_restart`]). Until a shell
-//! connects, the session is one thread blocked in `accept`.
+//! A run no shell started registers no debugger. Its program serves its
+//! inspector all the same ([`prepare`]), and a shell's first request that
+//! needs the debugger has the program register one, keeping its state: a
+//! base program's running engine takes it at its next step (#2297), and a
+//! generated runner at its next call from native code, on a generation
+//! compiled again from the running program's sources (#2266). Until a
+//! shell connects, the session is one thread blocked in `accept`.
 
 mod handover;
 mod host;
@@ -54,7 +54,7 @@ mod place;
 mod state;
 
 pub use handover::{adopt, handed, LISTENER};
-pub use host::{open, prepare, prepare_runner, record, take_restart, Host, CANCELLED, NOT_RUNNING};
+pub use host::{open, prepare, record, Host, CANCELLED, NOT_RUNNING};
 pub use place::{root, Place};
 pub use state::{Phase, State};
 

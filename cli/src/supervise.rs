@@ -182,18 +182,6 @@ pub fn run(
                 }
             }
         }
-        // A shell asked for the debugger of a program that runs without
-        // one: it starts again with one.
-        #[cfg(unix)]
-        if crate::events::session::take_restart()
-            && let Some(running) = child.take()
-        {
-            child = again(running, &location, &name, arguments);
-            if child.is_none() {
-                return ExitCode::FAILURE;
-            }
-            continue;
-        }
         let Some(watching) = watcher.as_ref() else {
             // Nothing to watch: wait for the program.
             std::thread::sleep(POLL);
@@ -252,35 +240,6 @@ pub fn run(
             }
         };
         crate::events::running();
-    }
-}
-
-/// End `running` and start the program again, now with the debugger a
-/// shell asked for: `None`, said on stderr, when it can't start.
-#[cfg(unix)]
-fn again(
-    mut running: Child,
-    location: &Path,
-    name: &OsStr,
-    arguments: &[OsString],
-) -> Option<Child> {
-    let reason = "a debugger attached";
-    eprintln!("rawr: {reason}; restarting the program");
-    crate::events::restarting(reason);
-    let _ = running.kill();
-    let _ = running.wait();
-    match start(location, name, arguments) {
-        Ok(child) => {
-            crate::events::running();
-            Some(child)
-        }
-        Err(error) => {
-            eprintln!(
-                "{}: cannot start the program: {error}",
-                color::label(color::Level::Error)
-            );
-            None
-        }
     }
 }
 
