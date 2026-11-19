@@ -1,14 +1,13 @@
-//! What a supervised `rawr run` tells the `rawr mcp` server that started it
-//! (D537.3–4).
+//! What a `rawr run` tells the shells attached to its session (D537.3–4,
+//! D1053.2).
 //!
-//! The server names a file in [`EVENTS`]. The owners that know what
-//! happened append one JSON object per line to it: `building` (a stage and
-//! a percent), `running`, `queued`, `swapped`, `restarting` (a reason), `failed`
-//! (structured diagnostics) and `ended` (the exit status). The server reads
-//! the file as it grows and numbers each event. A file needs no descriptor
-//! passed across `exec` or kept from runners: Rust opens it close-on-exec,
-//! and an `exec` into the binary that serves the program opens it again.
-//! The human lines on stderr stay as they are.
+//! The owners that know what happened emit one JSON object per event:
+//! `building` (a stage and a percent), `running`, `queued`, `swapped`,
+//! `restarting` (a reason), `failed` (structured diagnostics) and `ended`
+//! (the exit status). The run's [`session`] numbers each and tells every
+//! shell attached to it. A file named in [`EVENTS`] gets each as a line
+//! too, for a reader that tails it. The human lines on stderr stay as they
+//! are.
 //!
 //! The same lines go to the program itself, on the socket [`reload`]
 //! serves: `queued`, `swapped`, `failed` and `restarting` are what a
@@ -27,17 +26,19 @@ use serde_json::{json, Value};
 
 #[cfg(unix)]
 pub mod reload;
+#[cfg(unix)]
+pub mod session;
 
-/// The file a supervised `rawr run` appends its events to.
+/// A file a `rawr run` appends its events to.
 pub const EVENTS: &str = "RAWR_MCP_EVENTS";
 
-/// The socket a supervised program answers `inspect` on
-/// ([`rawr::inspect`]): the process that runs the program serves it.
+/// The socket a program with a debugger answers on ([`rawr::inspect`]):
+/// the process that runs the program serves it.
 pub const INSPECT: &str = "RAWR_MCP_INSPECT";
 
-/// The events file again, for the program's debugger: where it paused and
-/// when it went on (#535). The process that runs the program has it, which
-/// [`EVENTS`] leaves out so it doesn't report as an owner.
+/// Where the program's debugger tells where it paused and when it went on
+/// (#535): the run's session socket, or a file. The process that runs the
+/// program has it.
 pub const DEBUG_EVENTS: &str = rawr::inspect::EVENTS;
 
 /// How often a watched process looks at its parent.
@@ -57,16 +58,20 @@ fn file() -> Option<&'static Mutex<File>> {
     .as_ref()
 }
 
-/// Whether a `rawr mcp` server supervises this run: it reads the events,
-/// and a program that fails runs again on the next save, as at a terminal.
+/// Whether a shell started this run or a file reads its events: a program
+/// that fails runs again on the next save, as at a terminal.
 #[must_use]
 pub fn supervised() -> bool {
-    std::env::var_os(EVENTS).is_some_and(|path| !path.is_empty())
+    #[cfg(unix)]
+    let handed = session::handed();
+    #[cfg(not(unix))]
+    let handed = false;
+    handed || std::env::var_os(EVENTS).is_some_and(|path| !path.is_empty())
 }
 
-/// Append `event` as one line, when supervised, and then send it to the
-/// program's [`reload`] stream: a connection that hears a line it wrote
-/// knows the file has it.
+/// Append `event` as one line to the events file, if any, record it in
+/// the session, and then send it to the program's [`reload`] stream: a
+/// connection that hears a line it wrote knows the session has it.
 pub fn emit(event: &Value) {
     let mut line = event.to_string();
     line.push('\n');
@@ -77,7 +82,10 @@ pub fn emit(event: &Value) {
         let _ = file.write_all(line.as_bytes());
     }
     #[cfg(unix)]
-    reload::broadcast(&line);
+    {
+        session::record(event);
+        reload::broadcast(&line);
+    }
 }
 
 /// A cold start is building: the stage it is in and the percent done.
@@ -116,13 +124,6 @@ pub fn restarting(reason: &str) {
 /// The first diagnostic's message and position are the event's own, for a
 /// reader that shows one line.
 pub fn failed(report: &rawr::diagnostic::Report) {
-    #[cfg(unix)]
-    let streamed = reload::path().is_some();
-    #[cfg(not(unix))]
-    let streamed = false;
-    if file().is_none() && !streamed {
-        return;
-    }
     let base = std::env::current_dir().unwrap_or_default();
     let diagnostics = crate::diagnostic::shape(report, &base);
     let first = diagnostics.first();
@@ -141,13 +142,6 @@ pub fn failed(report: &rawr::diagnostic::Report) {
 /// A start or a save failed as `cargo check` failed, and cargo's errors
 /// are the whole report: [`failed`], from rustc's diagnostics.
 pub fn failed_cargo(outcome: &crate::cargo::Outcome) {
-    #[cfg(unix)]
-    let streamed = reload::path().is_some();
-    #[cfg(not(unix))]
-    let streamed = false;
-    if file().is_none() && !streamed {
-        return;
-    }
     let first = outcome.diagnostics.first();
     let field = |name: &str| first.and_then(|first| first.get(name)).cloned();
     emit(&json!({

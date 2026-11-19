@@ -36,6 +36,8 @@ use std::fmt;
 
 use serde_json::{json, Value};
 
+use crate::inspect::Interrupt;
+
 /// A position in a window: logical points from its top-left corner.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Point {
@@ -405,11 +407,7 @@ impl Gesture {
     /// Send the input to the program's window titled `title`, or its front
     /// window, waiting for it to take each event and draw, until
     /// `interrupted` says to give up.
-    pub(super) fn send(
-        &self,
-        title: Option<&str>,
-        interrupted: &dyn Fn() -> bool,
-    ) -> Result<Sent, Error> {
+    pub(super) fn send(&self, title: Option<&str>, interrupted: &Interrupt) -> Result<Sent, Error> {
         #[cfg(target_os = "macos")]
         {
             appkit::send(self, title, interrupted)
@@ -432,7 +430,7 @@ impl Sent {
 }
 
 /// Answer one input request, or `None` once `interrupted` gave it up.
-pub(super) fn answer(request: &Value, interrupted: &dyn Fn() -> bool) -> Option<Value> {
+pub(super) fn answer(request: &Value, interrupted: &Interrupt) -> Option<Value> {
     let title = request.get("title").and_then(Value::as_str);
     match Gesture::from_request(request).and_then(|gesture| gesture.send(title, interrupted)) {
         Ok(sent) => Some(sent.to_json()),
@@ -541,7 +539,7 @@ mod tests {
 
     #[test]
     fn an_unknown_action_says_which_there_are() {
-        let answer = answer(&json!({ "action": "wave" }), &|| false).unwrap();
+        let answer = answer(&json!({ "action": "wave" }), &Interrupt::default()).unwrap();
         assert_eq!(
             answer["error"],
             "unknown input `wave`: use move, click, drag, scroll, key or type"

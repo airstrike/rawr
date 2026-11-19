@@ -15,19 +15,38 @@ pub const GRACE: Duration = Duration::from_secs(2);
 pub const KEPT: usize = 256 * 1024;
 
 /// A call's cancellation: the client's `notifications/cancelled`, or the
-/// server shutting down. It ends the groups the call started.
-#[derive(Debug, Default)]
+/// server shutting down. It ends the groups the call started, and wakes
+/// what the call waits on.
+#[derive(Default)]
 pub struct Cancel {
     cancelled: AtomicBool,
     groups: Mutex<Vec<u32>>,
+    wakes: Mutex<Vec<Box<dyn FnOnce() + Send>>>,
+}
+
+impl std::fmt::Debug for Cancel {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Cancel")
+            .field("cancelled", &self.is_cancelled())
+            .finish_non_exhaustive()
+    }
 }
 
 impl Cancel {
-    /// End every group the call started, and any it starts later.
+    /// End every group the call started, and any it starts later, and wake
+    /// each wait of the call.
     pub fn cancel(&self) {
-        self.cancelled.store(true, Ordering::SeqCst);
+        let wakes = {
+            let mut wakes = self.wakes.lock().unwrap_or_else(PoisonError::into_inner);
+            self.cancelled.store(true, Ordering::SeqCst);
+            std::mem::take(&mut *wakes)
+        };
         for group in self.lock().drain(..) {
             end_group(group);
+        }
+        for wake in wakes {
+            wake();
         }
     }
 
@@ -35,6 +54,17 @@ impl Cancel {
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::SeqCst)
+    }
+
+    /// Run `wake` when the call is cancelled, at once if it was.
+    pub fn on_cancel(&self, wake: impl FnOnce() + Send + 'static) {
+        let mut wakes = self.wakes.lock().unwrap_or_else(PoisonError::into_inner);
+        if self.is_cancelled() {
+            drop(wakes);
+            wake();
+        } else {
+            wakes.push(Box::new(wake));
+        }
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Vec<u32>> {

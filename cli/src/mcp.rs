@@ -11,7 +11,9 @@
 //! Core's tools make, check and run programs; installed extensions add
 //! tools their manifests declare ([`extension`]). The programs `start`
 //! runs are the server's ([`session`]): the end of input ends them, and an
-//! owner whose server died ends itself ([`crate::events`]).
+//! owner whose server died ends itself ([`crate::events`]). The server is
+//! one shell of a run's debugger session (D1053.2): its tools also reach a
+//! run started elsewhere, as in a terminal.
 
 mod check;
 pub mod content;
@@ -22,8 +24,7 @@ mod tools;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{mpsc, Arc, Mutex, PoisonError};
-use std::time::Duration;
+use std::sync::{mpsc, Arc, Condvar, Mutex, PoisonError};
 
 use serde_json::{json, Value};
 
@@ -32,15 +33,15 @@ use serde_json::{json, Value};
 pub const PROTOCOL: &str = "2025-06-18";
 const PROTOCOLS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 
-/// How often a waiting call looks for its cancel.
-pub const POLL: Duration = Duration::from_millis(50);
-
 /// The server: where relative paths start, the writer, the calls in
-/// flight and the programs it started.
+/// flight and the programs it reaches.
 pub(crate) struct Server {
     root: PathBuf,
     out: Mutex<mpsc::Sender<Value>>,
     calls: Mutex<HashMap<String, Arc<process::Cancel>>>,
+    /// How many calls run now: the server ends once none does.
+    running: Mutex<usize>,
+    idle: Condvar,
     sessions: session::Sessions,
     checks: check::Checks,
     /// The tool names last listed, to tell the client when installs change
@@ -112,6 +113,8 @@ pub fn serve_on(
         root,
         out: Mutex::new(out),
         calls: Mutex::new(HashMap::new()),
+        running: Mutex::new(0),
+        idle: Condvar::new(),
         sessions: session::Sessions::default(),
         checks: check::Checks::default(),
         listed: Mutex::new(Vec::new()),
@@ -136,9 +139,17 @@ pub fn serve_on(
     server.shut_down();
     // Each call ends once it sees its cancel; then the writer ends with the
     // server's last sender.
-    while Arc::strong_count(&server) > 1 {
-        std::thread::sleep(POLL);
+    let mut running = server
+        .running
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    while *running > 0 {
+        running = server
+            .idle
+            .wait(running)
+            .unwrap_or_else(PoisonError::into_inner);
     }
+    drop(running);
     drop(server);
     let _ = writer.join();
     Ok(())
@@ -195,18 +206,19 @@ fn handle(server: &Arc<Server>, message: Value) {
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .insert(key.clone(), Arc::clone(&cancel));
-            let working = Arc::clone(server);
+            let running = Running::new(server);
             let spawned = std::thread::Builder::new()
                 .name("rawr-mcp-call".into())
                 .spawn(move || {
-                    let result = tools::call(&working, &params, &cancel);
+                    let working = &running.0;
+                    let result = tools::call(working, &params, &cancel);
                     working
                         .calls
                         .lock()
                         .unwrap_or_else(PoisonError::into_inner)
                         .remove(&key);
                     // An install the call saw is told before its answer.
-                    tell_changes(&working);
+                    tell_changes(working);
                     // A cancelled request gets no answer.
                     if !cancel.is_cancelled() {
                         working.reply(id, result);
@@ -217,6 +229,31 @@ fn handle(server: &Arc<Server>, message: Value) {
             }
         }
         method => server.error(id, -32601, &format!("unknown method `{method}`")),
+    }
+}
+
+/// A call in flight: the server counts it as running until it drops, even
+/// by a panic.
+struct Running(Arc<Server>);
+
+impl Running {
+    fn new(server: &Arc<Server>) -> Self {
+        *server
+            .running
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) += 1;
+        Self(Arc::clone(server))
+    }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        *self
+            .0
+            .running
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) -= 1;
+        self.0.idle.notify_all();
     }
 }
 

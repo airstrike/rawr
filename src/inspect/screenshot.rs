@@ -25,6 +25,8 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
+use crate::inspect::Interrupt;
+
 /// A written capture: the window it shows and the program's windows.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Shot {
@@ -124,7 +126,7 @@ impl Shot {
 pub(super) fn capture(
     title: Option<&str>,
     file: &Path,
-    interrupted: &dyn Fn() -> bool,
+    interrupted: &Interrupt,
 ) -> Result<Shot, Error> {
     #[cfg(target_os = "macos")]
     {
@@ -138,7 +140,7 @@ pub(super) fn capture(
 }
 
 /// Answer one capture request, or `None` once `interrupted` gave it up.
-pub(super) fn answer(request: &Value, interrupted: &dyn Fn() -> bool) -> Option<Value> {
+pub(super) fn answer(request: &Value, interrupted: &Interrupt) -> Option<Value> {
     let title = request.get("title").and_then(Value::as_str);
     let file = request
         .get("file")
@@ -169,7 +171,7 @@ mod tests {
             "the program shows no window titled `Settings`; it shows `Counter`, `About`"
         );
         assert_eq!(
-            answer(&json!({ "title": "x" }), &|| false).unwrap()["error"],
+            answer(&json!({ "title": "x" }), &Interrupt::default()).unwrap()["error"],
             "a screenshot needs a `file` to write"
         );
     }

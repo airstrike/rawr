@@ -61,9 +61,15 @@
 //! "eval", "code": ..}`: `{"value": ..}` or `{"error": ..}` (#490, see
 //! [`evaluate`]); `{"error": "not paused"}` on a program that isn't.
 //!
-//! Under `rawr mcp`, a pause and its end are also told as `paused` (with
-//! the file, line, function and reason) and `resumed` events in the file
-//! `RAWR_MCP_DEBUG_EVENTS` names, so `wait` and `status` say so (#535).
+//! A pause and its end are also told as `paused` (with the file, line,
+//! function and reason) and `resumed` events where [`EVENTS`] says, so
+//! every shell attached to the run hears them (#535): the run's session
+//! socket, which first hears where this socket is (`serve`) and holds that
+//! while the connection stays open, or a file, a line each.
+//!
+//! A request waits for its answer without looking at a clock: the tool
+//! closing its connection wakes the wait, and so does a pause, for a
+//! request the program's event loop answers.
 //!
 //! A pause holds the thread that runs the program's code inside the
 //! debugger callback. Native code that called into the program, such as a
@@ -77,6 +83,7 @@
 #[cfg(feature = "sync")]
 mod evaluate;
 mod input;
+mod interrupt;
 pub mod menu;
 mod screenshot;
 mod stops;
@@ -84,21 +91,18 @@ mod stops;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Condvar, Mutex, PoisonError};
-use std::time::Duration;
 
 use serde_json::{json, Value};
 
 use crate::debugger::{BreakPositions, DebuggerCommand, DebuggerEvent};
 use crate::types::dynamic::Union;
 use crate::{Dynamic, Engine, EvalAltResult, EvalContext, Position};
+use interrupt::Interrupt;
 
-/// How often a waiting request looks whether its tool went away.
-const POLL: Duration = Duration::from_millis(50);
-
-/// The variable naming the file `rawr mcp` reads a supervised run's events
-/// from, one JSON object per line, where the program says where it paused
-/// and when it went on. The process that runs the program has it, a
-/// runner or the program's own.
+/// The variable naming where the program says it paused and went on: the
+/// run's session socket, or a file it appends one JSON object per line
+/// to. The process that runs the program has it, a runner or the
+/// program's own.
 pub const EVENTS: &str = "RAWR_MCP_DEBUG_EVENTS";
 
 #[cfg(feature = "sync")]
@@ -687,6 +691,19 @@ struct State {
     last: Value,
     resume: Option<Resume>,
     stepping: Option<Stepping>,
+    /// The requests the program's event loop answers, which a pause gives
+    /// up: the pause holds that loop.
+    held: Vec<Arc<Interrupt>>,
+}
+
+/// Where the program tells that it paused and went on (#535).
+enum Told {
+    /// The run's session, on a connection that first said where this
+    /// program's socket is.
+    #[cfg(unix)]
+    Session(Mutex<std::os::unix::net::UnixStream>),
+    /// A file, one event per line.
+    File(std::path::PathBuf),
 }
 
 struct Shared {
@@ -709,9 +726,7 @@ struct Shared {
     program: Mutex<Option<Arc<Program>>>,
     /// Where the breakpoints are kept across restarts.
     saved: std::path::PathBuf,
-    /// The file a supervising `rawr mcp` reads the program's events from,
-    /// where a pause and its end are told (#535).
-    events: Option<std::path::PathBuf>,
+    told: Option<Told>,
 }
 
 impl Shared {
@@ -778,9 +793,9 @@ impl Inspector {
             #[cfg(feature = "sync")]
             program: Mutex::new(None),
             saved,
-            events: std::env::var_os(EVENTS)
+            told: std::env::var_os(EVENTS)
                 .filter(|path| !path.is_empty())
-                .map(std::path::PathBuf::from),
+                .and_then(|path| Told::open(std::path::PathBuf::from(path), socket)),
         });
         let listening = Arc::clone(&shared);
         std::thread::Builder::new()
@@ -849,24 +864,6 @@ impl Inspector {
     }
 }
 
-/// Whether the tool on `stream` went away: it sends one request line and
-/// then only waits, so a read that sees the end is its leaving.
-#[cfg(unix)]
-fn gone(stream: &std::os::unix::net::UnixStream) -> bool {
-    use std::io::Read as _;
-
-    if stream.set_nonblocking(true).is_err() {
-        return true;
-    }
-    let mut byte = [0_u8; 1];
-    let gone = match (&*stream).read(&mut byte) {
-        Ok(0) => true,
-        Ok(_) => false,
-        Err(error) => error.kind() != std::io::ErrorKind::WouldBlock,
-    };
-    stream.set_nonblocking(false).is_err() || gone
-}
-
 /// How deep in calls the program is where `context` is.
 fn depth(context: &EvalContext) -> usize {
     context
@@ -877,91 +874,131 @@ fn depth(context: &EvalContext) -> usize {
 }
 
 impl Shared {
-    /// Take one request from `stream` and answer it.
+    /// Take one request from `stream` and answer it. The tool sends one
+    /// line and then only waits, so the end of its stream is its leaving: a
+    /// thread blocked reading it gives the request up then.
     #[cfg(unix)]
-    fn handle(&self, stream: std::os::unix::net::UnixStream) {
-        use std::io::{BufRead as _, BufReader, Write as _};
+    fn handle(self: &Arc<Self>, stream: std::os::unix::net::UnixStream) {
+        use std::io::{BufRead as _, BufReader, Read as _, Write as _};
 
         let mut line = String::new();
         let Ok(reading) = stream.try_clone() else {
             return;
         };
-        if BufReader::new(reading).read_line(&mut line).is_err() {
+        let mut reading = BufReader::new(reading);
+        if reading.read_line(&mut line).is_err() {
             return;
         }
         let request: Value = serde_json::from_str(&line).unwrap_or(Value::Null);
+        let gone = Arc::new(Interrupt::default());
+        let watching = Arc::clone(&gone);
+        let shared = Arc::clone(self);
+        let _ = std::thread::Builder::new()
+            .name("rawr-inspect-watch".into())
+            .spawn(move || {
+                let _ = reading.read(&mut [0_u8; 1]);
+                watching.fire();
+                // A wait on `changed` looks at the interrupt under this lock.
+                drop(shared.state());
+                shared.changed.notify_all();
+            });
         // Every request is answered, a panic as its error, so a tool that
         // reads the end before an answer knows the process ended (#1964).
         let answer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.respond(&request, &stream)
+            self.respond(&request, &gone)
         }))
         .unwrap_or_else(|_| json!({ "error": "the program panicked answering this request" }));
         let mut stream = stream;
         let _ = writeln!(stream, "{answer}");
+        // The watch ends with the stream.
+        let _ = stream.shutdown(std::net::Shutdown::Both);
     }
 
-    /// The answer to one request from the tool on `stream`.
+    /// The answer to one request, which `gone` gives up.
     #[cfg(unix)]
-    fn respond(&self, request: &Value, stream: &std::os::unix::net::UnixStream) -> Value {
-        let gone = || gone(stream);
+    fn respond(&self, request: &Value, gone: &Arc<Interrupt>) -> Value {
         match request.get("op").and_then(Value::as_str) {
-            Some("input") => self.input(request, &gone),
-            Some("screenshot") => self.screenshot(request, &gone),
-            Some("menu") => menu::answer(request, &gone)
+            Some("input") => self.input(request, gone),
+            Some("screenshot") => self.screenshot(request, gone),
+            Some("menu") => menu::answer(request, gone)
                 .unwrap_or_else(|| json!({ "error": "the tool went away" })),
-            Some("eval") => self.evaluate(request, &gone),
+            Some("eval") => self.evaluate(request, gone),
             Some("break") => self.set(request),
             Some("clear") => self.clear(request),
-            Some("continue") => self.resume(Resume::Continue, &gone),
+            Some("continue") => self.resume(Resume::Continue, gone),
             Some("step") => self.resume(
                 Resume::Step(match request.get("kind").and_then(Value::as_str) {
                     Some("into") => Step::Into,
                     Some("out") => Step::Out,
                     _ => Step::Over,
                 }),
-                &gone,
+                gone,
             ),
-            _ => self.inspect(request, &gone),
+            _ => self.inspect(request, gone),
         }
     }
 
     /// Evaluate code where the program is paused: answered by the pause.
-    fn evaluate(&self, request: &Value, gone: &dyn Fn() -> bool) -> Value {
+    fn evaluate(&self, request: &Value, gone: &Interrupt) -> Value {
         if self.state().paused.is_none() {
             return json!({ "error": "not paused" });
         }
         self.inspect(request, gone)
     }
 
+    /// Hold `gone` for a pause to give up too, unless the program is
+    /// paused: its pause, then.
+    fn hold(&self, gone: &Arc<Interrupt>) -> Option<Value> {
+        let mut state = self.state();
+        if let Some(paused) = state.paused.clone() {
+            return Some(paused);
+        }
+        state.held.push(Arc::clone(gone));
+        None
+    }
+
+    fn release(&self, gone: &Arc<Interrupt>) {
+        self.state().held.retain(|held| !Arc::ptr_eq(held, gone));
+    }
+
     /// Send the program's window an input. A paused program holds its
     /// event loop, so it takes none until it goes on; an input that makes it
     /// pause is answered with the pause.
-    fn input(&self, request: &Value, gone: &dyn Fn() -> bool) -> Value {
-        if let Some(paused) = self.state().paused.clone() {
+    fn input(&self, request: &Value, gone: &Arc<Interrupt>) -> Value {
+        if let Some(paused) = self.hold(gone) {
             return json!({ "error": "paused", "paused": paused });
         }
-        input::answer(request, &|| self.state().paused.is_some() || gone()).unwrap_or_else(
+        let answer = input::answer(request, gone);
+        self.release(gone);
+        answer.unwrap_or_else(
             || json!({ "error": "paused", "paused": self.state().paused.clone(), "taken": true }),
         )
     }
 
     /// Capture the program's window. A paused program holds its event
     /// loop, so its window draws nothing until it goes on.
-    fn screenshot(&self, request: &Value, gone: &dyn Fn() -> bool) -> Value {
-        if let Some(paused) = self.state().paused.clone() {
+    fn screenshot(&self, request: &Value, gone: &Arc<Interrupt>) -> Value {
+        if let Some(paused) = self.hold(gone) {
             return json!({ "error": "paused", "paused": paused });
         }
-        screenshot::answer(request, &|| self.state().paused.is_some() || gone())
+        let answer = screenshot::answer(request, gone);
+        self.release(gone);
+        answer
             .unwrap_or_else(|| json!({ "error": "paused", "paused": self.state().paused.clone() }))
     }
 
     /// Read values: answered at the program's next matching step, or where
     /// it is paused, unless the tool goes away first.
-    fn inspect(&self, request: &Value, gone: &dyn Fn() -> bool) -> Value {
+    fn inspect(&self, request: &Value, gone: &Interrupt) -> Value {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let text = |key: &str| request.get(key).and_then(Value::as_str).map(str::to_owned);
         let id = NEXT.fetch_add(1, Ordering::Relaxed);
         let (reply, answer) = mpsc::channel();
+        // Every answer is an object: null says the tool went away.
+        let giving_up = reply.clone();
+        gone.on_fire(move || {
+            let _ = giving_up.send(Value::Null);
+        });
         self.state().pending.push(Request {
             id,
             name: text("name"),
@@ -976,12 +1013,9 @@ impl Shared {
         });
         self.wake.store(true, Ordering::Release);
         self.changed.notify_all();
-        loop {
-            match answer.recv_timeout(POLL) {
-                Ok(value) => return value,
-                Err(mpsc::RecvTimeoutError::Timeout) if !gone() => {}
-                Err(_) => break,
-            }
+        match answer.recv() {
+            Ok(Value::Null) | Err(_) => {}
+            Ok(value) => return value,
         }
         {
             let mut state = self.state();
@@ -993,8 +1027,9 @@ impl Shared {
         }
         // An answer made while the request was being given up.
         answer
-            .try_recv()
-            .unwrap_or_else(|_| json!({ "reached": false }))
+            .try_iter()
+            .find(|value| !value.is_null())
+            .unwrap_or_else(|| json!({ "reached": false }))
     }
 
     /// Set a breakpoint. The program pauses when it reaches it; the answer
@@ -1061,7 +1096,7 @@ impl Shared {
 
     /// Resume a paused program. A step is answered where it pauses, unless
     /// the tool goes away first; a continue once the program runs on.
-    fn resume(&self, resume: Resume, gone: &dyn Fn() -> bool) -> Value {
+    fn resume(&self, resume: Resume, gone: &Interrupt) -> Value {
         let mut state = self.state();
         if state.paused.is_none() {
             return json!({ "error": "not paused" });
@@ -1074,14 +1109,13 @@ impl Shared {
             return json!({ "paused": null });
         }
         while state.pauses == seen {
-            if gone() {
+            if gone.is_fired() {
                 return json!({ "paused": null });
             }
             state = self
                 .changed
-                .wait_timeout(state, POLL)
-                .unwrap_or_else(PoisonError::into_inner)
-                .0;
+                .wait(state)
+                .unwrap_or_else(PoisonError::into_inner);
         }
         json!({ "paused": state.last })
     }
@@ -1196,6 +1230,9 @@ impl Shared {
         state.last = at;
         state.pauses += 1;
         state.resume = None;
+        for held in state.held.drain(..) {
+            held.fire();
+        }
         self.changed.notify_all();
         let resume = loop {
             if !state.pending.is_empty() {
@@ -1379,18 +1416,53 @@ impl Shared {
         }));
     }
 
-    /// Tell a supervising `rawr mcp` `event`, as a line of its events file.
+    /// Tell `event` where [`EVENTS`] says.
+    fn emit(&self, event: &Value) {
+        if let Some(told) = &self.told {
+            told.emit(event);
+        }
+    }
+}
+
+impl Told {
+    /// Where `path` says to tell events: a session socket, told at once
+    /// that this program's inspector listens on `socket`, or a file.
+    #[cfg(unix)]
+    fn open(path: std::path::PathBuf, socket: &std::path::Path) -> Option<Self> {
+        use std::io::Write as _;
+        use std::os::unix::fs::FileTypeExt as _;
+
+        let is_socket =
+            std::fs::metadata(&path).is_ok_and(|metadata| metadata.file_type().is_socket());
+        if !is_socket {
+            return Some(Self::File(path));
+        }
+        let mut session = std::os::unix::net::UnixStream::connect(&path).ok()?;
+        let serve = json!({ "jsonrpc": "2.0", "method": "serve", "params": { "socket": socket } });
+        writeln!(session, "{serve}").ok()?;
+        Some(Self::Session(Mutex::new(session)))
+    }
+
     fn emit(&self, event: &Value) {
         use std::io::Write as _;
-        let Some(path) = &self.events else {
-            return;
-        };
-        if let Ok(mut file) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-        {
-            let _ = file.write_all(format!("{event}\n").as_bytes());
+        match self {
+            #[cfg(unix)]
+            Self::Session(session) => {
+                let told = json!({ "jsonrpc": "2.0", "method": "emit", "params": event });
+                let _ = writeln!(
+                    session.lock().unwrap_or_else(PoisonError::into_inner),
+                    "{told}"
+                );
+            }
+            Self::File(path) => {
+                if let Ok(mut file) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)
+                {
+                    let _ = file.write_all(format!("{event}\n").as_bytes());
+                }
+            }
         }
     }
 }

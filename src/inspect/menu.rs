@@ -24,6 +24,8 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
+use crate::inspect::Interrupt;
+
 /// What one of rawr's items does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Action {
@@ -164,7 +166,7 @@ fn screenshot(title: String) {
                 .map_or(Ok(()), std::fs::create_dir_all)
                 .map_err(|error| error.to_string())
                 .and_then(|()| {
-                    super::screenshot::capture(Some(&title), &path, &|| false)
+                    super::screenshot::capture(Some(&title), &path, &Interrupt::default())
                         .map_err(|error| error.to_string())
                 });
             match captured {
@@ -181,7 +183,7 @@ fn screenshot(title: String) {
 }
 
 /// Answer a `menu` request, or `None` once `interrupted` gave it up.
-pub(super) fn answer(request: &Value, interrupted: &dyn Fn() -> bool) -> Option<Value> {
+pub(super) fn answer(request: &Value, interrupted: &Interrupt) -> Option<Value> {
     let choose = request.get("choose").and_then(Value::as_str);
     let action = match choose.map(|title| (title, Action::titled(title))) {
         Some((title, None)) => {
@@ -240,7 +242,9 @@ mod tests {
 
     #[test]
     fn choosing_an_item_rawr_has_none_of_says_so() {
-        let answer = answer(&json!({ "op": "menu", "choose": "Debug" }), &|| true).unwrap();
+        let given_up = Interrupt::default();
+        given_up.fire();
+        let answer = answer(&json!({ "op": "menu", "choose": "Debug" }), &given_up).unwrap();
         assert_eq!(answer["error"], "rawr's menus have no item `Debug`");
     }
 }

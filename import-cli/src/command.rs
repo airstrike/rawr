@@ -38,6 +38,10 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
     if let Some(code) = rawr_cli::supervise::child() {
         return code;
     }
+    // The session listener a shell handed `rawr run`, before any process
+    // starts, so none inherits it.
+    #[cfg(unix)]
+    rawr_cli::events::session::adopt();
     // A universe runner, as `?play`'s image builds it (#434).
     if std::env::var_os(rawr_import::universe::VARIABLE).is_some_and(|value| value == "1") {
         rawr_import::universe::set();

@@ -22,6 +22,7 @@ use std::time::Duration;
 use super::travel::Travel;
 use super::{Button, Error, Gesture, Key, Modifiers, Point, Sent, Unit};
 use crate::inspect::screenshot;
+use crate::inspect::Interrupt;
 
 pub(in crate::inspect) type Id = *mut c_void;
 pub(in crate::inspect) type Sel = *const c_void;
@@ -32,7 +33,8 @@ const CURSOR: &CStr = c"rawr-agent-cursor";
 /// About one frame at 60 Hz: the compositor shows a drawn frame by then.
 const FRAME: Duration = Duration::from_millis(17);
 
-/// How often a wait for the main thread looks whether it is given up.
+/// How often input sent before the program's first window looks for that
+/// window, which AppKit tells no one of.
 const POLL: Duration = Duration::from_millis(50);
 
 #[repr(C)]
@@ -306,7 +308,7 @@ impl Runtime {
 pub(super) fn send(
     gesture: &Gesture,
     title: Option<&str>,
-    interrupted: &dyn Fn() -> bool,
+    interrupted: &Interrupt,
 ) -> Result<Sent, Error> {
     let missing = || Error::Window {
         title: title.map(str::to_owned),
@@ -354,13 +356,13 @@ static SHOWN: AtomicBool = AtomicBool::new(false);
 /// sent in between waits for that window, looking each [`POLL`]. Once one
 /// was shown, a program with none takes no input, and the input says so at
 /// once.
-fn arrived(interrupted: &dyn Fn() -> bool) -> Option<Result<&'static Runtime, Error>> {
+fn arrived(interrupted: &Interrupt) -> Option<Result<&'static Runtime, Error>> {
     let runtime = Runtime::get()?;
     while !SHOWN.load(Ordering::Acquire) {
         match main(interrupted, move || window(runtime, None).is_some()) {
             Ok(true) => SHOWN.store(true, Ordering::Release),
-            Ok(false) if interrupted() => return Some(Err(Error::Interrupted)),
-            Ok(false) => std::thread::sleep(POLL),
+            Ok(false) if interrupted.is_fired() => return Some(Err(Error::Interrupted)),
+            Ok(false) => interrupted.rest(POLL),
             Err(error) => return Some(Err(error)),
         }
     }
@@ -549,9 +551,9 @@ impl Modifiers {
 }
 
 /// Run `work` on the main thread, where AppKit's views take events, and
-/// wait for it, looking at each [`POLL`] whether `interrupted` gives it up.
+/// wait for it until `interrupted` gives it up.
 pub(in crate::inspect) fn main<T: Send + 'static>(
-    interrupted: &dyn Fn() -> bool,
+    interrupted: &Interrupt,
     work: impl FnOnce() -> T + Send + 'static,
 ) -> Result<T, Error> {
     unsafe extern "C" fn run(context: *mut c_void) {
@@ -560,23 +562,22 @@ pub(in crate::inspect) fn main<T: Send + 'static>(
         work();
     }
     let (done, finished) = mpsc::channel();
+    let giving_up = done.clone();
     let work: Box<dyn FnOnce() + Send> = Box::new(move || {
-        let _ = done.send(work());
+        let _ = done.send(Some(work()));
     });
     let context = Box::into_raw(Box::new(work)).cast::<c_void>();
     // SAFETY: the main queue runs `run` once with `context`, which owns
     // the work; a reply after the wait was given up goes to a dropped
     // receiver.
     unsafe { dispatch_async_f((&raw const _dispatch_main_q).cast(), context, run) };
-    loop {
-        match finished.recv_timeout(POLL) {
-            Ok(value) => return Ok(value),
-            Err(mpsc::RecvTimeoutError::Timeout) if interrupted() => {
-                return Err(Error::Interrupted);
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => return Err(Error::Ended),
-        }
+    interrupted.on_fire(move || {
+        let _ = giving_up.send(None);
+    });
+    match finished.recv() {
+        Ok(Some(value)) => Ok(value),
+        Ok(None) => Err(Error::Interrupted),
+        Err(mpsc::RecvError) => Err(Error::Ended),
     }
 }
 
@@ -1061,7 +1062,7 @@ struct Pixels {
 pub(in crate::inspect) fn capture(
     title: Option<&str>,
     file: &Path,
-    interrupted: &dyn Fn() -> bool,
+    interrupted: &Interrupt,
 ) -> Result<screenshot::Shot, screenshot::Error> {
     let lost = |error: Error| match error {
         Error::Ended => screenshot::Error::Ended,
@@ -1641,7 +1642,9 @@ mod tests {
     fn input_before_the_first_window_waits_for_it() {
         let _ = loaded();
         let move_to = Gesture::Move(Point { x: 10.0, y: 10.0 });
-        assert_eq!(send(&move_to, None, &|| true), Err(Error::Interrupted));
+        let given_up = Interrupt::default();
+        given_up.fire();
+        assert_eq!(send(&move_to, None, &given_up), Err(Error::Interrupted));
         assert!(!SHOWN.load(Ordering::Acquire));
     }
 
