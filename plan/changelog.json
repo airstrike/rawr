@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.4.40",
+      "date": "2026-11-19",
+      "entries": [
+        {"text":"The debugger's console runs code in the frame you select: a caller's code runs before the statement making the call, sees that caller's bindings, and a change stays in that caller. The playground, rawr gui, rawr tui, rawr dap (`frameId`) and rawr mcp's `eval` (`frame`) send the selected frame.","issues":[2309]}
+      ]
+    },
+    {
       "version": "0.4.39",
       "date": "2026-11-19",
       "entries": [
