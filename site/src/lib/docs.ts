@@ -23,6 +23,7 @@ export const GROUPS: [string, Item[]][] = [
     ["/docs/apps", "Apps and libraries"],
     ["/docs/embedding", "Embedding"],
     ["/docs/agents", "Agents"],
+    ["/docs/debugging", "Debugging"],
     ["/docs/how-it-works", "How it works"],
     ["/docs/troubleshooting", "Troubleshooting"],
   ]],

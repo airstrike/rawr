@@ -396,6 +396,7 @@ impl Shared {
             "clear",
             "step",
             "continue",
+            "pause",
             "input",
             "screenshot",
             "menu",

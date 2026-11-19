@@ -4,7 +4,34 @@ This extension is for Rawr files: `.rs` files whose first line is `// rawr`.
 rust-analyzer already handles their syntax, completion and diagnostics, so the
 extension has no grammar of its own.
 
-## What it is for
+## Debugging
+
+The extension adds a debugger of type `rawr`. VS Code runs `rawr dap`, which
+speaks the Debug Adapter Protocol on stdio as one shell of the run's debugger
+session, so `rawr mcp` and a terminal can reach the same run at once.
+
+- **Launch** (`"request": "launch"`) starts `rawr run` on `program` with
+  `args`. A save still reloads the program; the Debug Console says so.
+- **Attach** (`"request": "attach"`) reaches a `rawr run` started in a
+  terminal for `program`.
+
+Breakpoints on lines and on functions, stepping over, in and out, pause, the
+call stack named by Rust paths, variables you can expand field by field, and
+evaluation in the paused function all go through rawr's inspector. Press F5
+with no `launch.json` to run the active Rawr file, or the workspace folder.
+
+```json
+{
+  "type": "rawr",
+  "request": "launch",
+  "name": "Rawr: run",
+  "program": "${workspaceFolder}"
+}
+```
+
+The `rawr.path` setting names the `rawr` command, if it isn't on `PATH`.
+
+## The preview pane
 
 The extension will show previews of a Rawr crate in a separate pane, the way
 Xcode shows SwiftUI previews. A dropdown in the pane lists the crate's
@@ -13,21 +40,28 @@ follows edits as Rawr reloads.
 
 **The preview pane is not built yet.** It also has no backend for now. Its
 backend is `rawr preview`, which was removed with rawr-iced and comes back on
-Rawr's plain runner as open work. Today the extension only recognizes Rawr
-files: while one is the active editor, the `rawr.marked` context key is true.
+Rawr's plain runner as open work. While a Rawr file is the active editor, the
+`rawr.marked` context key is true.
 
 ## Install locally
 
-No npm install or build step is required. Link or copy this directory into
-the extension directory for your editor, then reload the editor window:
+Package it as a `.vsix` and install that:
 
-- VS Code: `~/.vscode/extensions/rawr-0.0.2`
-- VS Codium: `~/.vscode-oss/extensions/rawr-0.0.2`
+```sh
+npx @vscode/vsce package --skip-license --out rawr.vsix
+code --install-extension rawr.vsix
+```
+
+Or, with no build step, link or copy this directory into the extension
+directory for your editor, then reload the editor window:
+
+- VS Code: `~/.vscode/extensions/rawr-0.0.3`
+- VS Codium: `~/.vscode-oss/extensions/rawr-0.0.3`
 
 For example, from this directory on macOS or Linux:
 
 ```sh
-ln -s "$(pwd)" ~/.vscode/extensions/rawr-0.0.2
+ln -s "$(pwd)" ~/.vscode/extensions/rawr-0.0.3
 ```
 
 Remove the linked or copied directory to uninstall it.

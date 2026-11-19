@@ -420,22 +420,24 @@ impl Place {
     }
 }
 
-fn absolute(server: &Server, path: Option<&str>) -> PathBuf {
-    let path = path.map_or_else(|| server.root.clone(), PathBuf::from);
+/// `path` as an absolute path, a relative one from `root`; `root` when
+/// there is none.
+pub(crate) fn absolute(root: &Path, path: Option<&str>) -> PathBuf {
+    let path = path.map_or_else(|| root.to_path_buf(), PathBuf::from);
     let path = if path.is_absolute() {
         path
     } else {
-        server.root.join(path)
+        root.join(path)
     };
     std::fs::canonicalize(&path).unwrap_or(path)
 }
 
-/// Resolve `path` once: its program's root and the root's target directory.
-fn place(server: &Server, path: Option<&str>) -> Result<Place, String> {
-    let path = absolute(server, path);
-    let target = crate::base::discover(Some(&path)).map_err(|report| {
-        crate::diagnostic::lines(&crate::diagnostic::shape(&report, &server.root))
-    })?;
+/// Resolve `path`, relative to `root`, once: its program's root and the
+/// root's target directory.
+pub(crate) fn place(root: &Path, path: Option<&str>) -> Result<Place, String> {
+    let path = absolute(root, path);
+    let target = crate::base::discover(Some(&path))
+        .map_err(|report| crate::diagnostic::lines(&crate::diagnostic::shape(&report, root)))?;
     let root = target.project().map_or_else(
         || target.source().path().to_path_buf(),
         |project| project.root().as_path().to_path_buf(),
@@ -500,14 +502,14 @@ pub fn call(server: &Server, params: &Value, cancel: &Cancel) -> Value {
         .unwrap_or_default();
     let outcome = match name {
         "new" => new(server, text("path"), text("template"), cancel),
-        "check" => place(server, text("path")).map(|place| {
+        "check" => place(&server.root, text("path")).map(|place| {
             server
                 .checks
                 .check(&place.path, &place.root, &place.directory(), cancel)
         }),
-        "run" => place(server, text("path"))
+        "run" => place(&server.root, text("path"))
             .map(|place| run(&place, &strings(&arguments, "args"), text("stdin"), cancel)),
-        "start" => place(server, text("path")).and_then(|place| {
+        "start" => place(&server.root, text("path")).and_then(|place| {
             start(
                 server,
                 &place,
@@ -683,7 +685,7 @@ fn run(place: &Place, arguments: &[String], stdin: Option<&str>, cancel: &Cancel
 }
 
 /// The terminal-UI crate a crate's manifest depends on, if any.
-fn terminal_ui(root: &Path) -> Option<&'static str> {
+pub(crate) fn terminal_ui(root: &Path) -> Option<&'static str> {
     let manifest = std::fs::read_to_string(root.join("Cargo.toml")).ok()?;
     let document = manifest.parse::<toml_edit::DocumentMut>().ok()?;
     let dependencies = document.get("dependencies")?.as_table_like()?;
@@ -730,7 +732,7 @@ fn session(
     path: Option<&str>,
     cancel: &Cancel,
 ) -> Result<std::sync::Arc<session::Session>, String> {
-    let place = place(server, path)?;
+    let place = place(&server.root, path)?;
     server.sessions.get(&place.root, cancel).ok_or_else(|| {
         format!(
             "nothing was started for {}: call `start` first",
@@ -782,7 +784,7 @@ fn status(server: &Server, path: Option<&str>, cancel: &Cancel) -> Value {
 }
 
 fn stop(server: &Server, path: Option<&str>) -> Result<Value, String> {
-    let place = place(server, path)?;
+    let place = place(&server.root, path)?;
     let Some(session) = server.sessions.stop(&place.root) else {
         return Ok(content::success(
             json!({ "stopped": false }),
@@ -819,7 +821,7 @@ fn inspect(
     cancel: &Cancel,
 ) -> Result<Value, String> {
     let session = session(server, path, cancel)?;
-    let file = file.map(|file| absolute(server, Some(file)));
+    let file = file.map(|file| absolute(&server.root, Some(file)));
     let request = json!({
         "name": name,
         "file": file,
@@ -952,7 +954,7 @@ fn debug(server: &Server, tool: &str, arguments: &Value, cancel: &Cancel) -> Res
     let file = arguments
         .get("file")
         .and_then(Value::as_str)
-        .map(|file| absolute(server, Some(file)));
+        .map(|file| absolute(&server.root, Some(file)));
     let request = json!({
         "op": tool,
         "file": file,
@@ -1143,7 +1145,7 @@ fn screenshot(
     cancel: &Cancel,
     progress: &Progress<'_>,
 ) -> Result<Value, String> {
-    let place = place(server, path)?;
+    let place = place(&server.root, path)?;
     let session = server.sessions.get(&place.root, cancel);
     let installed = layer::installed();
     let mut reasons = Vec::new();
@@ -1247,8 +1249,8 @@ fn extension_call(
     };
     // An extension may serve a directory that holds no program yet.
     let path = arguments.get("path").and_then(Value::as_str);
-    let place = place(server, path).or_else(|reason| {
-        let directory = absolute(server, path);
+    let place = place(&server.root, path).or_else(|reason| {
+        let directory = absolute(&server.root, path);
         if directory.is_dir() {
             Ok(Place {
                 target_dir: target_directory(&directory),
