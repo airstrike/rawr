@@ -46,3 +46,4 @@ body.play { font-size: var(--fs-base); line-height: 1.5; }
 .debugger .bindings dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
 .debugger .evaluated { font: 13px/1.55 var(--mono); overflow-wrap: anywhere; }
 .debugger .err { color: var(--red); }
+.debugger .phase { font: 13px/1.55 var(--mono); color: var(--quiet); overflow-wrap: anywhere; }

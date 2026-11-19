@@ -211,7 +211,7 @@ export default function Playground() {
           Run
         </Button>
       </div>
-      <main className={"flex min-h-0 flex-1 flex-col md:grid " + (state.debugging ? "md:grid-cols-[minmax(0,1fr)_17rem_minmax(0,1fr)]" : "md:grid-cols-2")}>
+      <main className={"flex min-h-0 flex-1 flex-col md:grid " + (state.debugging ? "md:grid-cols-[minmax(0,1fr)_18rem_minmax(0,1fr)]" : "md:grid-cols-2")}>
         <section className="pane flex min-h-0 flex-col px-4 pt-4 pb-6 md:px-6">
           <p className="playcap mb-2"><span className="text-red">//</span> Code</p>
           <div ref={host} className="editor min-h-[300px] flex-1 md:min-h-[360px]" />
@@ -288,10 +288,11 @@ function DebugPanel({ debug, state }: { debug: Debugger; state: DebugState }) {
   ];
   return (
     <section id="debugger" className="pane debugger flex min-h-0 flex-col gap-3 border-t border-grid px-4 pt-4 pb-6 md:border-t-0 md:border-l" aria-label="Debugger">
-      <p className="playcap flex justify-between gap-2">
-        <span><span className="text-red">//</span> Debugger</span>
-        <span className="phase truncate">{phaseText(state)}</span>
-      </p>
+      {/* The caption alone, as the code's and the output's; where the program is goes under it. */}
+      <div>
+        <p className="playcap mb-2 whitespace-nowrap"><span className="text-red">//</span> Debugger</p>
+        <p className="phase">{phaseText(state)}</p>
+      </div>
       {state.pause === false && (
         <p className="note">This browser can't pause a program: it has no WebAssembly JS Promise Integration (JSPI). Breakpoints and steps need it.</p>
       )}

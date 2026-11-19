@@ -618,6 +618,15 @@ fn undebuggable(value: &Dynamic) -> Option<Unreadable> {
             if crate::place::get(value).is_some() {
                 return None;
             }
+            // A crate value that borrows lives in its scope's region, or is
+            // lent for one call, not in the host's arena: the region or the
+            // lend says whether its type has `Debug`.
+            if let Some(scoped) = value.read_lock::<crate::scope::Scoped>() {
+                return lent_unreadable(scoped.debug(), scoped.name());
+            }
+            if let Some(lent) = value.read_lock::<crate::scope::Lent>() {
+                return lent_unreadable(lent.debug(), lent.name());
+            }
             if let Some(unreadable) = UNDEBUGGABLE.get().and_then(|name| name(value)) {
                 return Some(unreadable);
             }
@@ -626,6 +635,21 @@ fn undebuggable(value: &Dynamic) -> Option<Unreadable> {
             (format!("{value:?}") == name).then_some(Unreadable::NoDebug(name))
         }
         _ => None,
+    }
+}
+
+/// Why a scoped or lent value of type `name` has no `Debug` text, from what
+/// reading it gave: none when it has one, its type's lack of `Debug`, or
+/// where it is when it can't be reached from here.
+fn lent_unreadable(
+    text: Result<Option<String>, crate::scope::Error>,
+    name: &'static str,
+) -> Option<Unreadable> {
+    match text {
+        Ok(Some(_)) => None,
+        Ok(None) => Some(Unreadable::NoDebug(name)),
+        Err(crate::scope::Error::Busy) => Some(Unreadable::Held),
+        Err(_) => Some(Unreadable::Elsewhere),
     }
 }
 
