@@ -1007,9 +1007,13 @@ fn prepare_resolving(
                         return prepare(build, target, None, revision, scope, kept);
                     }
                     // So does a crate macro's call in a body (#1125): kept
-                    // at the call's text, the next load reads it there.
+                    // at the call's text, the next load reads it there. A
+                    // macro path the facade may hold once demanded is
+                    // demanded first, below, so rustc expands only a call
+                    // whose macro is still unknown after that.
                     Err(rawr_import::checked::Evaluation::Transform(Error::Rawr(error)))
-                        if !error.rust_macro_calls().is_empty() =>
+                        if !error.rust_macro_calls().is_empty()
+                            && crate::new_demand(&error, &request_demand, &graph).is_none() =>
                     {
                         if !expand_calls(&graph, &error, basis, &limits)? {
                             return Err(Error::Rawr(error));

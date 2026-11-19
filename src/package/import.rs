@@ -245,12 +245,21 @@ impl crate::Engine {
                 }
                 // rustc expands a crate macro's call first, with every
                 // other the graph found (#1125).
+                // A macro its path may name once demanded is demanded
+                // first (`rust_miss`).
                 if matches!(
                     failure.error,
                     crate::resolve::Error::MacroExpansionRequired { .. }
                 ) {
+                    let misses = match rust_miss(contract, &failure.error) {
+                        Some(Miss::Demand(path, through_alias, member)) => {
+                            vec![(path, through_alias, member)]
+                        }
+                        _ => Vec::new(),
+                    };
                     return Err(super::Error::resolution(sources.clone(), failure)
-                        .with_rust_macro_calls(unexpanded));
+                        .with_rust_macro_calls(unexpanded)
+                        .with_rust_misses(misses));
                 }
                 if let Some(report) = imported_resolution_report(&failure, &sources, &paths)
                     .map_err(super::Error::diagnostic)?
@@ -320,13 +329,18 @@ impl crate::Engine {
                     let (evidence, mut error) = failure.into_parts();
                     // rustc expands a crate macro's call first, with every
                     // other the pass found, and checking again reads their
-                    // expansions (#1125, #2151).
-                    if matches!(
-                        error.err_type(),
-                        crate::ParseErrorType::Resolution(
-                            crate::resolve::Error::MacroExpansionRequired { .. }
-                        )
-                    ) {
+                    // expansions (#1125, #2151). What the pass missed, the
+                    // call's own macro among it (`rust_miss`), is demanded
+                    // before that.
+                    if let crate::ParseErrorType::Resolution(
+                        own @ crate::resolve::Error::MacroExpansionRequired { .. },
+                    ) = error.err_type()
+                    {
+                        if let Some(Miss::Demand(path, through_alias, member)) =
+                            rust_miss(contract, own)
+                        {
+                            misses.insert(0, (path, through_alias, member));
+                        }
                         let calls = unknowns
                             .iter()
                             .chain(unresolved.iter().map(|(_, error)| error))
@@ -338,7 +352,8 @@ impl crate::Engine {
                             })
                             .collect();
                         return Err(super::Error::compilation(sources.clone(), evidence, error)
-                            .with_rust_macro_calls(calls));
+                            .with_rust_macro_calls(calls)
+                            .with_rust_misses(misses));
                     }
                     // A miss a proof may settle is reported and demanded as
                     // the ordinary miss, carrying the call to prove first.
@@ -1110,6 +1125,7 @@ fn rust_miss(
         R::UnknownType { name, .. } => name.to_string(),
         R::UnknownMember { owner, member, .. } => format!("{owner}::{member}"),
         R::NotInModule { module, item, .. } => format!("{module}::{item}"),
+        R::MacroExpansionRequired { .. } => return macro_miss(error),
         // A crate's type the program never names, as the `Bytes` of
         // `response.bytes().await?`, arrives without its impl tables: its
         // `Debug` is there once the type is demanded. A type of no crate's
@@ -1156,6 +1172,20 @@ fn rust_miss(
         Some(Lookup::ThroughCrate) => Some(Miss::Demand(path, true, false)),
         _ => Some(Miss::Demand(path, through_alias, false)),
     }
+}
+
+/// The demand a crate macro's call that `error` asks rustc to expand
+/// makes first. A macro an expansion names through its crate's hidden
+/// segment (`$crate::support::format_args!`) is named by no source, so no
+/// seed demanded it: the facade may hold it once it is demanded, as a
+/// re-export of std's macro or a `macro_rules!`, and only a path still
+/// empty after that is rustc's to expand. A path the source writes was
+/// demanded with the source's, so it asks for nothing more.
+fn macro_miss(error: &crate::resolve::Error) -> Option<Miss> {
+    let crate::resolve::Error::MacroExpansionRequired { path, .. } = error else {
+        return None;
+    };
+    crate::host::path::is_hidden(path).then(|| Miss::Demand(path.to_string(), true, false))
 }
 
 /// A member `error` misses on a crate's type, demanded as well where each
@@ -5333,5 +5363,35 @@ mod tests {
                 assert_eq!(form.same_inputs(against).unwrap(), index == other);
             }
         }
+    }
+
+    /// A dependency macro's expansion that calls a macro through its own
+    /// `$crate`, as `$crate::support::format_args!("{}", $crate::support::
+    /// line!())` does, names the macro through the crate's hidden segment,
+    /// which no seed demanded. That call is demanded before rustc expands
+    /// it, so a re-export of std's macro is read as std's once the facade
+    /// holds it. A macro path the source writes asks for nothing more.
+    #[test]
+    fn a_macro_an_expansion_names_through_its_crate_is_demanded_before_rustc_expands_it() {
+        let required = |path: &str| crate::resolve::Error::MacroExpansionRequired {
+            path: path.into(),
+            call: Box::default(),
+            reference: crate::Span::NONE,
+        };
+        let expanded = "located::__rawr_crate_located_00000000000000ab::support::format_args";
+        let Some(super::Miss::Demand(path, through_alias, member)) =
+            super::macro_miss(&required(expanded))
+        else {
+            panic!("the expansion's macro is demanded");
+        };
+        assert_eq!(path, expanded);
+        assert!(through_alias && !member);
+        assert!(super::macro_miss(&required("wrap::name")).is_none());
+        assert!(super::macro_miss(&crate::resolve::Error::NotInModule {
+            module: "located::__rawr_crate_located_00000000000000ab::support".into(),
+            item: "line".into(),
+            reference: crate::Span::NONE,
+        })
+        .is_none());
     }
 }
