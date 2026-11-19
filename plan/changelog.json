@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.4.32",
+      "date": "2026-11-19",
+      "entries": [
+        {"text":"A breakpoint set or cleared from any shell shows in every other at once: `rawr gui` and `rawr tui` mark it in the gutter, an editor through `rawr dap` adds or removes it, and a shell that attaches later shows those already set. Attaching a window no longer registers the debugger by itself.","issues":[2278]}
+      ]
+    },
+    {
       "version": "0.4.31",
       "date": "2026-11-19",
       "entries": [

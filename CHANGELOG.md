@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.32 (2026-11-19)
+
+- A breakpoint set or cleared from any shell shows in every other at once: `rawr gui` and `rawr tui` mark it in the gutter, an editor through `rawr dap` adds or removes it, and a shell that attaches later shows those already set. Attaching a window no longer registers the debugger by itself. (#2278)
+
 ## 0.4.31 (2026-11-19)
 
 - An editor launch holds the program at its first statement until its breakpoints are in (`configurationDone`), so a breakpoint in code that runs at startup is hit. (#2274)

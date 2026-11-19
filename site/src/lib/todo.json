@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-19",
-  "version": "0.4.31",
+  "version": "0.4.32",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.32",
+        "date": "2026-11-19",
+        "entries": [
+          {"text":"A breakpoint set or cleared from any shell shows in every other at once: `rawr gui` and `rawr tui` mark it in the gutter, an editor through `rawr dap` adds or removes it, and a shell that attaches later shows those already set. Attaching a window no longer registers the debugger by itself.","issues":[2278]}
+        ]
+      },
       {
         "version": "0.4.31",
         "date": "2026-11-19",
@@ -5263,7 +5270,7 @@
     {"issue":2275,"title":"The VS Code debugger's F5 without a launch.json runs the workspace's root crate, not the active file's","state":"closed","category":"Health","release":"0.4.31"},
     {"issue":2276,"title":"A marked root's native modules can't call marked code: lift D510's trampolines to a marked root","state":"closed","category":"No glue (D593)","release":"0.4.24"},
     {"issue":2277,"title":"The runtime key covers the checkout path and the whole Cargo.lock, so builds with the same sources never share it","state":"open","category":"Health"},
-    {"issue":2278,"title":"The session tells shells when breakpoints change","state":"open","category":"Health"},
+    {"issue":2278,"title":"The session tells shells when breakpoints change","state":"closed","category":"Health","release":"0.4.32"},
     {"issue":2279,"title":"rawr check on a gallery with a marked main.rs fails with 'diagnostic label has no source span', hiding the error","state":"open","category":"No glue (D593)"},
     {"issue":2280,"title":"Marked code calling a method a native module defines on a marked type","state":"open","category":"No glue (D593)"},
     {"issue":2281,"title":"marked::a_marked_module_of_the_library_runs_from_the_native_binary expects Shape::change to name a new item","state":"open","category":"Health"},
@@ -5283,7 +5290,8 @@
     {"issue":2295,"title":"rawr gui shows the previous stop's frames and bindings at a new pause","state":"closed","category":"Health","release":"0.4.28"},
     {"issue":2296,"title":"Input that arrives while the debugger registers passes a breakpoint just set","state":"open","category":"Health"},
     {"issue":2297,"title":"A base-language `rawr run` restarts its program to register a debugger","state":"open","category":"Health"},
-    {"issue":2298,"title":"A `mut` binding of a `&mut` parameter is a step stop on the signature line","state":"open","category":"Health"}
+    {"issue":2298,"title":"A `mut` binding of a `&mut` parameter is a step stop on the signature line","state":"open","category":"Health"},
+    {"issue":2299,"title":"rawr dap tells a breakpoint a save moved as removed and new, not changed","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -8051,11 +8059,12 @@
           "issues": [
             {"number":2258,"title":"One debugger session per run that any number of shells attach to, with rawr mcp as its first shell","state":"closed"},
             {"number":2266,"title":"A shell attaching to a plain `rawr run` restarts the program to register a debugger, losing its state","state":"closed"},
-            {"number":2278,"title":"The session tells shells when breakpoints change","state":"open"},
+            {"number":2278,"title":"The session tells shells when breakpoints change","state":"closed"},
             {"number":2288,"title":"A run started in a terminal tells its output to the session","state":"open"},
             {"number":2296,"title":"Input that arrives while the debugger registers passes a breakpoint just set","state":"open"},
             {"number":2297,"title":"A base-language `rawr run` restarts its program to register a debugger","state":"open"},
-            {"number":2298,"title":"A `mut` binding of a `&mut` parameter is a step stop on the signature line","state":"open"}
+            {"number":2298,"title":"A `mut` binding of a `&mut` parameter is a step stop on the signature line","state":"open"},
+            {"number":2299,"title":"rawr dap tells a breakpoint a save moved as removed and new, not changed","state":"open"}
           ],
           "milestone": "0.5"
         },
