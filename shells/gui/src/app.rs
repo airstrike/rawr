@@ -25,8 +25,13 @@ const OUTPUT: usize = 64 * 1024;
 pub struct App {
     /// The session's socket.
     socket: PathBuf,
-    /// Where the program writes the frames it draws for the window.
+    /// Where the program writes the frames it draws for the window: each
+    /// capture its own file, numbered from this one.
     capture: PathBuf,
+    captures: u64,
+    /// How many times the window asked the program to go on: an answer to
+    /// an earlier ask says nothing of where it is now.
+    resumes: u64,
     link: Option<Link>,
     client: Client<Asked>,
     phase: Phase,
@@ -64,11 +69,11 @@ enum Asked {
     Breakpoints,
     Inspect { frame: usize },
     Break,
-    Step,
+    Step { resumes: u64 },
     Continue,
     Pause,
     Eval { entry: usize },
-    Screenshot,
+    Screenshot { file: PathBuf },
 }
 
 /// How a step goes on.
@@ -124,6 +129,8 @@ impl App {
             root: socket.display().to_string(),
             socket,
             capture,
+            captures: 0,
+            resumes: 0,
             link: None,
             client: Client::default(),
             phase: Phase::Starting,
@@ -228,13 +235,19 @@ impl App {
                 self.ask(json!({ "frame": frame }), Asked::Inspect { frame });
                 Task::none()
             }
+            // The program goes on: it runs from now to its next pause, and
+            // only a pause, which ends a step that runs long, can be asked.
             Message::Step(step) => {
-                self.ask(json!({ "op": "step", "kind": step.name() }), Asked::Step);
-                Task::none()
+                let resumes = self.resumes + 1;
+                self.ask(
+                    json!({ "op": "step", "kind": step.name() }),
+                    Asked::Step { resumes },
+                );
+                self.went_on()
             }
             Message::Continue => {
                 self.ask(json!({ "op": "continue" }), Asked::Continue);
-                Task::none()
+                self.went_on()
             }
             Message::Pause => {
                 self.ask(json!({ "op": "pause" }), Asked::Pause);
@@ -267,13 +280,33 @@ impl App {
         }
     }
 
-    /// Ask the program to draw its window for this one.
+    /// Ask the program to draw its window for this one, into a file of
+    /// this capture's own: two in flight never read or remove each other's.
     fn capture(&mut self) {
-        let file = self.capture.display().to_string();
+        self.captures += 1;
+        let stem = self
+            .capture
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        let file = self
+            .capture
+            .with_file_name(format!("{stem}-{}.png", self.captures));
         self.ask(
-            json!({ "op": "screenshot", "file": file }),
-            Asked::Screenshot,
+            json!({ "op": "screenshot", "file": file.display().to_string() }),
+            Asked::Screenshot { file },
         );
+    }
+
+    /// A step or continue was asked of the paused program, which runs on.
+    fn went_on(&mut self) -> Task<Message> {
+        self.resumes += 1;
+        self.note = None;
+        if self.phase.stop().is_some() {
+            return self.moved(Phase::Running);
+        }
+        Task::none()
     }
 
     fn heard(&mut self, piece: &str) {
@@ -332,7 +365,7 @@ impl App {
         };
         if let (Some(error), false) = (
             answer["error"].as_str(),
-            matches!(kind, Asked::Eval { .. } | Asked::Screenshot),
+            matches!(kind, Asked::Eval { .. } | Asked::Screenshot { .. }),
         ) {
             self.note = Some(error.to_owned());
             return Task::none();
@@ -422,19 +455,20 @@ impl App {
                 }
             }
             // A step ends at a new pause, even one where it started: a
-            // loop's line, or a breakpoint it came back to.
-            Asked::Step => {
-                self.note = None;
-                self.inspected = None;
+            // loop's line, or a breakpoint it came back to. The window went
+            // on when it asked, so any pause is new. One that went on into
+            // native code says nothing of where it is: the pause it leads to
+            // is told as an event, which may come before this answer.
+            Asked::Step { resumes } => {
+                if resumes != self.resumes {
+                    return Task::none();
+                }
                 let phase = self.phase.answered(&answer["paused"]);
                 self.moved(phase)
             }
             Asked::Continue => {
-                self.note = None;
-                let phase = self.phase.answered(&answer["paused"]);
-                let moved = self.moved(phase);
                 self.capture();
-                moved
+                Task::none()
             }
             // The program pauses at its next statement, which its `paused`
             // event tells; one already paused says where.
@@ -456,13 +490,12 @@ impl App {
                 self.console.answer(entry, result);
                 Task::none()
             }
-            Asked::Screenshot => {
+            Asked::Screenshot { file } => {
                 if answer["error"].is_string() {
                     // A paused program's window draws nothing until it goes
                     // on: the frame shown stays.
                     return Task::none();
                 }
-                let file = self.capture.clone();
                 Task::perform(
                     async move {
                         let bytes = std::fs::read(&file).map_err(|error| error.to_string());
