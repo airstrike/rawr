@@ -42,6 +42,11 @@ pub(crate) struct Expansion {
     pub(crate) site: crate::Span,
     /// The macro, as the call writes it.
     pub(crate) name: ImmutableString,
+    /// Each call of a location macro (`line!()`, `column!()`) in the
+    /// laid-out text: where its path starts there, and where the token
+    /// that starts it came from, which the lowering reads it at
+    /// (`macros::Table::written`).
+    pub(crate) locations: Box<[(crate::Position, crate::Position)]>,
 }
 
 impl Source {

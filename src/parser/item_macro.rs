@@ -174,12 +174,58 @@ pub(super) fn lay_out(
         (layout.depth < DEPTH).then_some(layout.hygiene)
     })??;
     let expansion = rules.expand(&input, krate, *at, *end, hygiene).ok()?;
-    Some(place(
+    let (text, mark) = place(
         &render(&expansion),
         Span::new(*at, past(*end, last)),
         rules.name(),
         braced_statements,
-    ))
+    );
+    locate(&expansion, &text);
+    Some((text, mark))
+}
+
+/// Record where each location macro of `expansion` came from, at the
+/// place its call has in `text`, the expansion as it was just laid out.
+/// Rendering keeps the tokens' order, so the location calls of the two
+/// pair up in turn. A body's own call is at the macro's call, and one a
+/// caller passed in is where the caller wrote it.
+fn locate(expansion: &[(Token, Position)], text: &str) {
+    let laid = crate::resolve::lower_nominal::lex_rust(&crate::Engine::new_raw(), text);
+    let locations = location_calls(expansion)
+        .zip(location_calls(&laid))
+        .map(|(origin, laid)| (laid, origin))
+        .collect::<Vec<_>>();
+    if locations.is_empty() {
+        return;
+    }
+    with(|layout| {
+        if let Some(last) = layout.expansions.last_mut() {
+            last.locations = locations.into();
+        }
+    });
+}
+
+/// Where each call of `line!` or `column!` among `tokens` starts: its
+/// name, or the first segment of its path (`core::line!()`).
+fn location_calls(tokens: &[(Token, Position)]) -> impl Iterator<Item = Position> + '_ {
+    tokens.iter().enumerate().filter_map(|(index, (token, _))| {
+        let Token::Identifier(name) = token else {
+            return None;
+        };
+        if !matches!(name.as_str(), "line" | "column")
+            || !matches!(tokens.get(index + 1), Some((Token::Bang, _)))
+        {
+            return None;
+        }
+        let mut start = index;
+        while start >= 2
+            && matches!(tokens[start - 1].0, Token::DoubleColon)
+            && matches!(tokens[start - 2].0, Token::Identifier(_))
+        {
+            start -= 2;
+        }
+        Some(tokens[start].1)
+    })
 }
 
 /// Lay out `text`, what the call at `call_span` of the macro `name`
@@ -223,6 +269,7 @@ pub(super) fn place(
             call,
             site: call_span,
             name: name.into(),
+            locations: Box::default(),
         });
         let mut padded = "\n".repeat(first - 1);
         padded.push_str(&laid);
