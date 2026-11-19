@@ -6,7 +6,11 @@
 // source; play/tests/fixtures/rust/LICENSE-rustlings holds the licence.
 // The Crates group runs in the browser's universe, in a frame of its own:
 // the ratatui to-do list is the landing page's, from
-// play/universe/programs/web.
+// play/universe/programs/web, and the iced ones are in
+// play/tests/fixtures/iced. iced's counter, pick_list and arc are iced's own
+// examples, which play/universe/examples.txt names, so the universe makes
+// their calls, and the to-do list makes only calls the universe program
+// (play/universe/src/main.rs) makes.
 
 import type { Example } from "./playpage.ts";
 import enums from "../../../tests/fixtures/rust/enums.rs";
@@ -18,6 +22,10 @@ import traits from "../../../tests/fixtures/rust/traits.rs";
 import useAfterMove from "../../../tests/fixtures/rust/use_after_move.rs";
 import wordCount from "../../../tests/fixtures/rust/word_count.rs";
 import ratatuiTodo from "../../../universe/programs/web/todo.rs";
+import icedArc from "../../../tests/fixtures/iced/arc.rs";
+import icedCounter from "../../../tests/fixtures/iced/counter.rs";
+import icedPickList from "../../../tests/fixtures/iced/pick_list.rs";
+import icedTodos from "../../../tests/fixtures/iced/todos.rs";
 import rustlingsBoxDynError from "../../../tests/fixtures/rust/rustlings_box_dyn_error.rs";
 import rustlingsCapitalize from "../../../tests/fixtures/rust/rustlings_capitalize.rs";
 import rustlingsConsList from "../../../tests/fixtures/rust/rustlings_cons_list.rs";
@@ -44,7 +52,13 @@ export const EXAMPLES: Example[] = [
     { name: "Word count", code: wordCount },
     { name: "Strings and let else", code: strings },
   ].map((example) => ({ ...example, group: "Rust" })),
-  ...[{ name: "ratatui to-do list", code: ratatuiTodo }].map((example) => ({ ...example, group: "Crates" })),
+  ...[
+    { name: "iced counter", code: icedCounter },
+    { name: "iced to-do list", code: icedTodos },
+    { name: "iced pick list", code: icedPickList },
+    { name: "iced arc (animated canvas)", code: icedArc },
+    { name: "ratatui to-do list", code: ratatuiTodo },
+  ].map((example) => ({ ...example, group: "Crates" })),
   ...[
     { name: "Taking ownership", code: rustlingsOwnership },
     { name: "Enum variants with data", code: rustlingsEnums },
