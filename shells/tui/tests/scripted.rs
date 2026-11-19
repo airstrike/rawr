@@ -4,6 +4,8 @@
 
 #![cfg(unix)]
 
+#[path = "shared/pane.rs"]
+mod pane;
 #[path = "shared/picture.rs"]
 mod picture;
 
@@ -148,7 +150,17 @@ impl Rig {
             "line": line,
             "function": "app::update",
             "bindings": [
-                { "name": "app", "value": format!("App {{ count: {count}, items: [1, 2] }}") },
+                {
+                    "name": "app",
+                    "value": format!("App {{ count: {count}, items: [1, 2] }}"),
+                    "children": [
+                        { "name": "count", "value": count.to_string() },
+                        { "name": "items", "value": "[1, 2]", "children": [
+                            { "name": "[0]", "value": "1" },
+                            { "name": "[1]", "value": "2" },
+                        ] },
+                    ],
+                },
                 { "name": "secret", "error": "`Secret` has no `Debug`" },
             ],
             "unread": null,
@@ -221,11 +233,70 @@ impl Rig {
         }));
         self.hear(1);
         let read = self.session.request();
-        assert_eq!(read["params"], json!({ "frame": 0 }), "{read}");
+        assert_eq!(
+            read["params"],
+            json!({ "frame": 0, "children": true }),
+            "{read}"
+        );
         let frame = self.frame(line, count);
         self.session.answer(&read, frame);
         self.hear(1);
     }
+}
+
+/// A shell that attaches to a program already paused reads the stop's
+/// bindings with their parts, and its bindings pane shows them once the
+/// read is answered. Before the answer the pane is empty, though the
+/// source beside it already names the binding (`fn update(app: &mut App)`).
+#[test]
+fn a_late_attach_to_a_paused_program_reads_its_bindings_with_their_parts() {
+    let mut rig = Rig::new("late");
+    let hello = rig.session.request();
+    let paused = json!({
+        "event": "paused", "file": rig.file(), "line": 7,
+        "function": "app::update", "reason": "breakpoint", "seq": 2,
+    });
+    let breakpoints = rig.breakpoints(1, &[7]);
+    rig.session.answer(
+        &hello,
+        json!({
+            "protocol": 1,
+            "root": "/p/app",
+            "events": [{ "event": "running", "seq": 1 }, paused],
+            "output": [],
+            "breakpoints": breakpoints,
+        }),
+    );
+    rig.hear(1);
+    let read = rig.session.request();
+    assert_eq!(
+        read["params"],
+        json!({ "frame": 0, "children": true }),
+        "{read}"
+    );
+    let screen = rig.screen();
+    assert!(screen.contains("paused at main.rs:7"), "{screen}");
+    assert!(screen.contains("app: "), "{screen}");
+    let bindings = pane::pane(&screen, "bindings").expect("a bindings pane");
+    assert!(bindings.trim().is_empty(), "{screen}");
+
+    let frame = rig.frame(7, 1);
+    rig.session.answer(&read, frame);
+    rig.hear(1);
+    let screen = rig.screen();
+    let bindings = pane::pane(&screen, "bindings").expect("a bindings pane");
+    assert!(
+        bindings.contains("▸ app = App { count: 1, items: [1, 2] }"),
+        "{screen}"
+    );
+    rig.press(KeyCode::Tab);
+    rig.press(KeyCode::Tab);
+    rig.press(KeyCode::Enter);
+    let screen = rig.screen();
+    let bindings = pane::pane(&screen, "bindings").expect("a bindings pane");
+    assert!(bindings.contains("▾ app = App {"), "{screen}");
+    assert!(bindings.contains("count = 1"), "{screen}");
+    assert!(bindings.contains("▸ items = [1, 2]"), "{screen}");
 }
 
 fn line_with<'s>(screen: &'s str, needle: &str) -> &'s str {

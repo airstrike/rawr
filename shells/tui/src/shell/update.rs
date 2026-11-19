@@ -236,11 +236,15 @@ impl Shell {
         self.program(request, Pending::Eval);
     }
 
-    /// Read the shown frame's bindings, where the program is paused.
+    /// Read the shown frame's bindings, where the program is paused, each
+    /// value with the parts the inspector splits it into.
     fn inspect(&mut self) {
         let frame = self.frame;
         self.cancel_reads();
-        self.program(json!({ "frame": frame }), Pending::Inspect { frame });
+        self.program(
+            json!({ "frame": frame, "children": true }),
+            Pending::Inspect { frame },
+        );
     }
 
     fn program(&mut self, request: Value, pending: Pending) {
@@ -435,9 +439,10 @@ impl Shell {
             .flatten()
             .map(|binding| Binding {
                 name: binding["name"].as_str().unwrap_or_default().to_owned(),
-                value: match binding["value"].as_str() {
-                    Some(text) => Ok(Node::parse(text)),
-                    None => Err(binding["error"].as_str().unwrap_or_default().to_owned()),
+                value: if binding["value"].is_string() {
+                    Ok(Node::from_json(binding))
+                } else {
+                    Err(binding["error"].as_str().unwrap_or_default().to_owned())
                 },
             })
             .collect();
