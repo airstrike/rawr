@@ -97,7 +97,7 @@ impl<'a> Parser<'a> {
                 .is_some_and(|closure| closure.mutable);
         let helper = self.push_op(Op::Symbolic {
             value: value.clone(),
-            captures: captures.len(),
+            captures: u32::try_from(captures.len()).unwrap_or(u32::MAX),
             changes,
         });
         ParsedExpr {

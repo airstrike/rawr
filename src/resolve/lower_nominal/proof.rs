@@ -126,7 +126,7 @@ impl<'a> Parser<'a> {
                 changes,
             } => ExecutableOp::Symbolic {
                 value,
-                captures,
+                captures: usize::try_from(captures).unwrap_or(usize::MAX),
                 changes,
             },
             Op::Intrinsic { operation } => {

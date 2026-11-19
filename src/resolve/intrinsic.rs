@@ -34,8 +34,9 @@ pub(super) struct Proof {
     copies: u8,
     /// Where the program makes a call that gives a `std::panic::Location`,
     /// which the location a crate's `#[track_caller]` function sees there
-    /// stands for (`std_facade::panic::calling`).
-    caller: Option<crate::std_facade::panic::Site>,
+    /// stands for (`std_facade::panic::calling`). Few calls give one, so
+    /// it is boxed, and every other call's proof holds a pointer's width.
+    caller: Option<Box<crate::std_facade::panic::Site>>,
 }
 
 impl Operand {
@@ -79,7 +80,7 @@ impl Proof {
 
     /// This call, made at the program's `caller`.
     pub(super) fn with_caller(mut self, caller: Option<crate::std_facade::panic::Site>) -> Self {
-        self.caller = caller;
+        self.caller = caller.map(Box::new);
         self
     }
 
@@ -263,7 +264,7 @@ impl Proof {
 
         // A field a pattern borrows is lent to the call alone.
         let result = crate::scope::opened(args, &mut |args| {
-            crate::std_facade::panic::calling(self.caller.as_ref(), || {
+            crate::std_facade::panic::calling(self.caller.as_deref(), || {
                 runtime.invoke(requirement, args, invocation, equal, access)
             })
         });
