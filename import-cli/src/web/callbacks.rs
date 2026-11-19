@@ -96,10 +96,10 @@ pub(super) fn enter(glue: &str) -> Option<String> {
     entered.push_str(&glue[start..call]);
     entered.push_str(HOLDING);
     entered.push_str(&glue[unref..]);
-    if let Some(start) = entered.find("function makeClosure(") {
-        if let Some(call) = entered[start..].find(CALL) {
-            entered.insert_str(start + call + CALL.len(), HELD);
-        }
+    if let Some(start) = entered.find("function makeClosure(")
+        && let Some(call) = entered[start..].find(CALL)
+    {
+        entered.insert_str(start + call + CALL.len(), HELD);
     }
     for closure in closures(glue) {
         let arguments = closure.takes.parameters();
@@ -110,11 +110,10 @@ pub(super) fn enter(glue: &str) -> Option<String> {
             closure.index
         );
         let head = format!("function {}({arguments}) {{", closure.shim);
-        if let Some(at) = entered.find(&head) {
-            let at = at + head.len();
-            if entered[at..].starts_with(&body) {
-                entered.replace_range(at..at + body.len(), &entry);
-            }
+        if let Some(at) = entered.find(&head).map(|at| at + head.len())
+            && entered[at..].starts_with(&body)
+        {
+            entered.replace_range(at..at + body.len(), &entry);
         }
     }
     Some(entered)
