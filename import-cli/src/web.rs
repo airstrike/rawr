@@ -18,6 +18,7 @@
 mod base;
 mod bindgen;
 mod build;
+mod callbacks;
 mod error;
 mod package;
 mod server;

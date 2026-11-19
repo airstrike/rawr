@@ -15,8 +15,11 @@
 // fresh instance, `hello` says a pause can wait, and a program held before
 // its run pauses at a breakpoint the page set meanwhile on its first
 // statement. Then iced's counter answers a read of its `view` at the view
-// a click runs, with no pause, and names a crate value without `Debug`. CHROME names the browser when it is not in
-// the usual place.
+// a click runs, with no pause, and names a crate value without `Debug`.
+// Last, ratatui's to-do example pauses inside its key handler (#2269):
+// at `press` on a key, it reads `self` and `key`, steps and continues,
+// and the keys typed during the pause reach it in order afterwards.
+// CHROME names the browser when it is not in the usual place.
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
@@ -103,6 +106,14 @@ impl Counter {
     }
 }
 `;
+
+/**
+ * ratatui's to-do example as the universe holds it: a ratzilla key
+ * handler that calls `press` on each key, and `draw_web`'s frames.
+ */
+const TODO = readFileSync(join(repo, "play/universe/programs/web/todo.rs"), "utf8");
+/** `press`'s first statement. */
+const PRESS = TODO.split("\n").findIndex((line) => line.includes("fn press(")) + 2;
 
 // The page: the module instantiated once, its universe prepared, and the
 // debugger's events and the program's output kept for the test to read.
@@ -286,6 +297,42 @@ try {
   // The runner names it, as a native one does: its type has no `Debug`, or
   // the native call the view runs in holds the program's crate values.
   check(/doesn't implement `Debug`|can't be read at this step/.test(String(lower?.error ?? "")), "a crate value without Debug says why it has no text (#2304)", lower);
+
+  // ratatui's to-do example, paused inside ratzilla's key handler (#2269).
+  await open();
+  check(!(await evaluate(`start(${JSON.stringify(TODO)})`)), "ratzilla's draw_web hands its loop to the page");
+  const grid = `document.querySelector("[tabindex]")`;
+  await until("the to-do grid", `!!${grid}?.innerText.includes("Buy milk")`);
+  await evaluate(`${grid}.focus()`);
+  const typeKey = async (key: string, text?: string) => {
+    await on("Input.dispatchKeyEvent", { type: text ? "keyDown" : "rawKeyDown", key, code: key, text });
+    await on("Input.dispatchKeyEvent", { type: "keyUp", key, code: key });
+  };
+  const press = await ask({ op: "break", file: ROOT, line: PRESS });
+  check(press.set?.text === "let last = self.items.len().saturating_sub(1);", "a breakpoint goes on press's first statement", press);
+  await typeKey("ArrowDown");
+  const inPress = await ask({ name: "nothing" });
+  check(inPress.paused?.line === PRESS && inPress.paused?.function?.endsWith("press") && inPress.paused?.reason === "breakpoint", "a key pauses the key handler at press", inPress);
+  const before = await evaluate(`ticks`);
+  await sleep(300);
+  check((await evaluate(`ticks`)) > before + 5, "the page's timers run while the key handler is paused");
+  const key = await ask({ name: "key" });
+  check(value(key, "key") === "Down", "inspect reads press's key", key);
+  const own = await ask({ name: "self" });
+  check(/selected: 0/.test(String(value(own, "self"))), "and its self, before the key moved the selection", own);
+  await typeKey("x", "x");
+  await typeKey("y", "y");
+  await sleep(200);
+  check(!(await evaluate(`${grid}.innerText`)).includes("xy"), "keys typed during the pause wait, and no frame draws");
+  const stepped = await ask({ op: "step", kind: "over" });
+  check(stepped.paused?.line > PRESS && stepped.paused?.function?.endsWith("press"), "a step goes on inside press", stepped);
+  const last = await ask({ name: "last" });
+  check(value(last, "last") === "2", "the step's frame reads the binding it made", last);
+  await ask({ op: "clear" });
+  check(JSON.stringify(await ask({ op: "continue" })) === `{"paused":null}`, "continue answers at once");
+  await until("the keys typed during the pause, in order", `${grid}.innerText.includes("xy_")`, 5000);
+  check(await evaluate(`${grid}.innerText.includes("> ☐ Walk the dog")`), "the paused key's press took effect", await evaluate(`${grid}.innerText`));
+  check(!logs.some((line) => /already (mutably )?borrowed|unreachable/.test(line)), "no call ran into the paused handler's borrow", logs);
 } catch (error) {
   check(false, String(error));
 } finally {

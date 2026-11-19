@@ -30,6 +30,13 @@ pub(crate) enum Error {
     /// wasm-bindgen didn't pack the runner.
     #[error("wasm-bindgen didn't pack the runner {}", .0.display())]
     Pack(PathBuf),
+    /// The glue of a runner with the browser debugger isn't of the shape
+    /// rawr rewrites to pause inside page callbacks.
+    #[error(
+        "the glue wasm-bindgen wrote has no `makeMutClosure` the browser debugger can hold \
+         closure calls in"
+    )]
+    Glue,
     /// A file or directory couldn't be read or written.
     #[error("{}: {source}", path.display())]
     File {
