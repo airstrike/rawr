@@ -28,6 +28,13 @@ body.play { font-size: var(--fs-base); line-height: 1.5; }
 .out .frames[hidden], .out iframe.universe[hidden] { display: none; }
 .out .frames { min-height: 360px; display: grid; }
 .out iframe.universe { display: block; width: 100%; height: 100%; min-height: 360px; border: 0; background: transparent; }
+/* The playground's panes take focus to type into a program; a quiet ring
+   marks it where the site's red one would compete with the program. */
+.out iframe.universe:focus-visible, .out iframe.universe:focus,
+.debugger :focus-visible, .console :focus-visible {
+  outline: 1px solid color-mix(in srgb, var(--ink) 25%, transparent);
+  outline-offset: -1px;
+}
 .out.framed pre { padding: 0 16px 16px; }
 .term .err { color: var(--red); }
 .term .exit, .term .none, .term .note { color: var(--quiet); }
@@ -77,7 +84,7 @@ body.play { font-size: var(--fs-base); line-height: 1.5; }
 /* The toolbar's actions: glyphs, as DevTools draws them, in the ink colour. */
 .debugger .actions button { display: grid; place-items: center; width: 26px; height: 26px; border: 1px solid transparent; background: none; color: var(--ink); cursor: pointer; }
 .debugger .actions button:hover:not(:disabled) { border-color: var(--grid); background: var(--wash); }
-.debugger .actions button:focus-visible { outline: 2px solid var(--red); outline-offset: 1px; }
+.debugger .actions button:focus-visible { outline: 1px solid color-mix(in srgb, var(--ink) 35%, transparent); outline-offset: 1px; }
 .debugger .actions button:disabled { color: var(--quiet); opacity: 0.45; cursor: default; }
 
 /* A value tree (panes.tsx's ValueTable): a name and a one-line value a row, */
