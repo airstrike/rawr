@@ -207,6 +207,7 @@ impl Engine {
 
 /// The kept parses, whatever a compile that panicked holding them left.
 fn lock<T>(cell: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    counted!(ResidentCache);
     cell.lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }

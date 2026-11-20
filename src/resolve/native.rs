@@ -81,6 +81,7 @@ impl Capture {
     /// Only the error that actually escapes this same pass can classify a miss.
     /// Successful/speculative lookups and different diagnostics cannot inherit it.
     pub(crate) fn matches(&self, source: program::source::Id, error: &Error) -> bool {
+        counted!(CaptureTerminal);
         self.terminal.lock().ok().is_some_and(|terminal| {
             terminal
                 .last
@@ -93,6 +94,7 @@ impl Capture {
     /// the pass reports for it instead: rustc names a path's unknown type
     /// at the path's last segment.
     pub(crate) fn restate(&self, source: program::source::Id, error: &Error, restated: &Error) {
+        counted!(CaptureTerminal);
         if let Ok(mut terminal) = self.terminal.lock()
             && let Some(miss) = terminal.last.as_mut()
             && miss.is(source, error)
@@ -109,11 +111,13 @@ impl Capture {
 
     /// How many misses were recorded so far.
     pub(crate) fn recorded(&self) -> usize {
+        counted!(CaptureTerminal);
         self.terminal.lock().map_or(0, |terminal| terminal.recorded)
     }
 
     /// The last miss, when one was recorded after the first `recorded`.
     pub(crate) fn since(&self, recorded: usize) -> Option<Miss> {
+        counted!(CaptureTerminal);
         self.terminal
             .lock()
             .ok()
@@ -124,6 +128,7 @@ impl Capture {
     /// Record `miss` again, as the resolution that recorded it does when a
     /// later one reuses what it resolved (#1876).
     pub(crate) fn replay(&self, miss: &Miss) {
+        counted!(CaptureTerminal);
         if let Ok(mut terminal) = self.terminal.lock() {
             terminal.recorded += 1;
             terminal.last = Some(miss.clone());
@@ -179,6 +184,7 @@ impl<'a> Site<'a> {
 
     /// Call only at an actual terminal absence after establishing native origin.
     pub(crate) fn record(&self, error: &Error) {
+        counted!(CaptureTerminal);
         if let Ok(mut terminal) = self.capture.terminal.lock() {
             terminal.recorded += 1;
             terminal.last = Some(Miss {

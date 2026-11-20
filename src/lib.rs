@@ -102,6 +102,12 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 mod reify;
 #[macro_use]
 mod defer;
+#[macro_use]
+mod counted;
+/// How often the locks the locks bench reads are taken.
+#[cfg(feature = "lock-counters")]
+#[doc(hidden)]
+pub mod counters;
 // Only the imported event mapper digests, a rust-import build's.
 #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
 mod digest;

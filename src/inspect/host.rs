@@ -79,13 +79,16 @@ impl Files {
     pub(super) fn read(&self, file: &str) -> Result<String, String> {
         match self {
             Self::Disk => std::fs::read_to_string(file).map_err(|error| error.to_string()),
-            Self::Compiled(compiled) => compiled
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .as_ref()
-                .and_then(|snapshot| snapshot.read(Path::new(file)))
-                .map(str::to_owned)
-                .ok_or_else(|| "it isn't one of the program's files".to_owned()),
+            Self::Compiled(compiled) => {
+                counted!(InspectFiles);
+                compiled
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.read(Path::new(file)))
+                    .map(str::to_owned)
+                    .ok_or_else(|| "it isn't one of the program's files".to_owned())
+            }
         }
     }
 

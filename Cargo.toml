@@ -165,6 +165,10 @@ unstable = []
 ## Running under a testing environment.
 testing-environ = []
 
+## Count the locks `benches/locks` reads (bench only). Without it each
+## counted site compiles to nothing.
+lock-counters = []
+
 [[bin]]
 name = "rawr-repl"
 required-features = ["rustyline"]
@@ -175,6 +179,14 @@ name = "rawr-run"
 [[bin]]
 name = "rawr-dbg"
 required-features = ["debugging"]
+
+# The lock sites' workloads (benches/README.md, "Lock workloads"): its own
+# harness, which writes a JSON result and compares two. It runs on stable.
+[[bench]]
+name = "locks"
+path = "benches/locks/main.rs"
+harness = false
+required-features = ["sync", "rust-import", "debugging", "lock-counters"]
 
 # These inherited micro-benchmarks use the unstable libtest benchmark API.
 # Keep them available on nightly without making stable all-target release

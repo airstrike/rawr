@@ -129,6 +129,7 @@ pub(crate) fn host_compare(lhs: &Dynamic, rhs: &Dynamic) -> Option<std::cmp::Ord
         if ty != rhs.type_id() {
             return None;
         }
+        counted!(HostCompare);
         let compare = *ORDERINGS.read().ok()?.get(&ty)?;
         compare(lhs, rhs)
     }
@@ -162,6 +163,7 @@ pub(crate) fn host_equal(lhs: &Dynamic, rhs: &Dynamic) -> Option<bool> {
             }
             ty
         };
+        counted!(HostEqual);
         let equal = *EQUALITIES.read().ok()?.get(&ty)?;
         equal(lhs, rhs)
     }

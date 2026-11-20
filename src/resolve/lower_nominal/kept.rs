@@ -1054,6 +1054,7 @@ impl host::ImportAllocation for Recording<'_> {
 }
 
 fn lock(engine: &Engine) -> std::sync::MutexGuard<'_, Lowerings> {
+    counted!(ResidentCache);
     engine
         .resident_lowerings
         .lock()

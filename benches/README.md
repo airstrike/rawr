@@ -150,3 +150,97 @@ Harness checks:
 ```bash
 python3 -m unittest discover -s scripts -p 'test_measure_reload.py'
 ```
+
+Lock workloads
+--------------
+
+`benches/locks` measures the paths the locks review's fixes change
+(`.Codex/map/oracle-locks-2026-11-20/synthesis.md`), so each fix has a
+baseline taken before it lands. Counts come first: how many times each
+reviewed lock is taken, and how many allocations a run makes. They don't
+depend on machine load, and they prove a lock's removal by themselves.
+Wall-clock times come second, for the root to take on a quiet machine.
+
+```bash
+# Counts only: one quick pass, any time.
+'/Users/andy/projects/rawr/scripts/cargo.mjs' bench --profile local --bench locks \
+  --features sync,rust-import,debugging,lock-counters -- --counters
+
+# Counts and times, on a quiet machine.
+'/Users/andy/projects/rawr/scripts/cargo.mjs' bench --profile local --bench locks \
+  --features sync,rust-import,debugging,lock-counters -- --label quiet
+
+# Two results side by side.
+'/Users/andy/projects/rawr/scripts/cargo.mjs' bench --profile local --bench locks \
+  --features sync,rust-import,debugging,lock-counters -- \
+  compare target/lock-bench/BEFORE.json target/lock-bench/AFTER.json
+```
+
+`--profile local` builds what `scripts/install-local.sh` installs; the
+`bench` profile's fat LTO takes much longer and is not what runs. Other
+options: `--runs N` counted runs per workload (3), `--samples N` timed
+samples (11, after one warm-up run), `--only a,b` and `--output PATH`.
+The bench uses its own harness and runs on stable.
+
+| Workload | Smells | One run |
+|---|---|---|
+| `mutex-contended` | B5, C1 | 4 threads × 250 locks of one script `Mutex` with a named guard, then 4 `thread::Builder` threads × 250 with a temporary guard |
+| `mutex-handoff` | B5 | 20 handoffs of a held lock to a blocked waiter at the guard's scope end; the script reports each handoff's latency in µs |
+| `host-values` | B3 | 20 rounds of `==`, `<` and `{:?}` over 64 `SystemTime` and `PathBuf` values, and `{}` of a `ToUppercase` |
+| `recompile` | A1, B4, B6 | one save: a body edit of a two-source program, compiled as a runner compiles it (`compile_package_snapshot_resident_plain` on an engine with a retained native account) |
+| `debugger-steps` | D1 | a generation placed under a socket inspector, then 5 pauses at a breakpoint, each stepped over to the function's end by a tool thread (Unix only) |
+| `futures-undriven` | C | 1000 converted (`into_native`) and 1000 script (`into_script`) futures polled to their end where no owner drives |
+| `futures-driven` | C | the same on a driven owner thread, whose queued jobs make the outputs; it runs last, because a driven process stays driven |
+
+The counted sites are `rawr::counters::Site`. Each reviewed lock calls
+`counted!(Site)` where it is taken. That macro expands to nothing without
+the `lock-counters` feature, which only this bench enables, so no build that
+ships pays for a count. With the feature, a count is a relaxed add on its own
+cache line. The allocations come from the bench's own counting global
+allocator. One uncounted run comes before the counted runs, so what a first
+run sets up once is left out. A count that differs between the counted runs depends on
+scheduling, such as a wait that ends at the 1 ms poll or an allocation on a
+thread. It is printed with `~` and recorded with `"stable": false`.
+
+Times include the counters, in the baseline and after a fix alike. Each
+timed sample is one run. The result keeps every sample with its median, min
+and max, and every value a script reported. A result is
+`target/lock-bench/<UTC>-<revision>[-dirty][-counters].json`, schema
+`rawr-lock-bench/1`. It records the binary's path and SHA-256, rawr's
+version and whether debug assertions were on, the revision and whether the
+tree was dirty, `rustc -V` and `cargo -V`, the processor, model and thread
+count, the load averages before and after, and each workload's fixture
+SHA-256. `compare` notes every difference in those, and marks a workload
+whose fixture changed. Compare runs of one mode, profile and machine. No
+figure gates anything.
+
+The workloads stand in for these sites only:
+
+- **A3** (`place::reading`'s registry) is read only by a generated bridge's
+  place values, and this bench has no generated bridge. Its counter is there
+  for a run inside a runner. B3's maps are the same kind of lookup on the
+  same operations.
+- **B4** is counted inside `recompile`, where a compile's charges are. The
+  charge itself (`ImportAllocation::retain_checked`) is crate-private, so no
+  bare charge loop can drive it.
+- **B5**'s handoff has no `drop(guard)` case. rawr never releases a script
+  `Mutex` that `drop` was given a guard of, so the next `lock()` waits
+  forever, even on one thread. A guard that ends at its scope releases.
+  When that is fixed, a `drop` handoff belongs beside the scoped one.
+- **C**'s futures are ready ones. The poll's bookkeeping (`served()`, the
+  `Made<T>` cell) is the same for every kind of future, and a ready one adds
+  no body to the time.
+
+These sites change no compute that this bench could see:
+
+- **B1** (`timing.rs`) records once per command.
+- **B2** reads the feature selection a few times per command.
+- **A2** is the non-`sync` arm, which no shipped build compiles.
+- **D2** is wasm32 only.
+- **D3** is taken once per run.
+- **E1–E3** run once per importer round, beside Cargo and rustc processes.
+- **E4** removes no compute, as the review says.
+- **F1–F5** take one uncontended lock per message or request, beside the
+  request's JSON and socket I/O. They live in the `rawr` CLI crate.
+- **G1** is the watcher, which `scripts/measure_reload.py` (above) times
+  end to end on each save.

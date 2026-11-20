@@ -107,6 +107,7 @@ pub fn register<T: 'static>(reading: Reading<T>) {
 }
 
 pub(super) fn known<T: 'static>() -> Option<&'static Reading<T>> {
+    counted!(PlaceReading);
     registry()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)

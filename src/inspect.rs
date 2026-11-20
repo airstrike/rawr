@@ -1074,6 +1074,7 @@ impl Shared {
 
     /// Where `position` is in the program's files.
     fn locate(&self, position: Position) -> Option<(String, usize)> {
+        counted!(InspectLocate);
         let locator = self
             .locate
             .lock()
