@@ -51,7 +51,7 @@ print!("{s}");</code></pre>
   <li>An edit to a macro reaches every call of it at the next reload.</li>
   <li>The errors are rustc&rsquo;s. A call no rule matches is <code>no rules expected `x`</code>, under the token. An unknown name is <code>cannot find macro `x` in this scope</code>, which points at a definition that comes later or asks for <code>#[macro_use]</code>. A malformed definition gets rustc&rsquo;s error too.</li>
 </ul>
-<p>A macro call in an expression or a statement expands. A call where an item, a type or a pattern goes isn&rsquo;t supported yet.</p>
+<p>A macro call expands in an expression, a statement, an item, a type or a pattern. Among a file&rsquo;s items, a call written with parentheses and a semicolon, as in <code>mk!();</code>, fails to parse yet. Write it as <code>mk! {}</code> or <code>mk![];</code> there. Inside a function <code>mk!();</code> expands.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="macro_rules.rs" id="src-macro-rules">macro_rules! sum {
     () =&gt; { 0 };

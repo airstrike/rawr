@@ -52,7 +52,7 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</c
 <h3 id="missing-syntax">Syntax and items</h3>
 <ul>
   <li>A <code>static mut</code>.</li>
-  <li>A macro call where an item, a type or a pattern goes. The check reports what the macro would have defined as not found. <a href="/docs/reference/macros#macro-rules">Macros</a> in expressions and statements expand.</li>
+  <li>A macro call among a file&rsquo;s items written with parentheses and a semicolon, as in <code>mk!();</code>. It fails to parse. Written as <code>mk! {}</code> or <code>mk![];</code>, the call expands, and so does <code>mk!();</code> inside a function. <a href="/docs/reference/macros#macro-rules">Macros</a> says more.</li>
 </ul>
 <h3 id="missing-types">Types and borrowing</h3>
 <ul>
@@ -66,7 +66,6 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</c
   <li>A <code>&amp;mut</code> argument of an <code>async fn</code> or an async <code>&amp;mut self</code> method that is a place below a field, as in <code>run(&amp;mut s.a.b)</code> or <code>run(&amp;mut s.cells[i])</code>. A local, an element of a local or a field of a local works.</li>
   <li>A closure that returns a future, passed to a crate function, as in sipper&rsquo;s <code>sipper(|sender| async move { .. })</code>. The error names the function and says it takes a closure that returns a future.</li>
   <li>A <code>&amp;mut</code> borrow in a struct literal&rsquo;s field, as in <code>W { v: &amp;mut v }</code>.</li>
-  <li>A trait object of a std trait, as in <code>&amp;dyn Display</code> or <code>Box&lt;dyn Debug&gt;</code>. <code>Box&lt;dyn Error&gt;</code> works in a program that implements <code>Error</code> for a type of its own. A trait object of your own trait works, as <code>&amp;dyn Shape</code> or <code>Box&lt;dyn Shape&gt;</code>.</li>
   <li>Comparing with <code>&lt;</code> a <code>None</code> whose type isn&rsquo;t known yet.</li>
   <li>A value whose type implements <code>Drop</code> inside an <code>Rc</code>, <code>Arc</code>, <code>RefCell</code>, map or set, or taken by a <code>move</code> closure or an <code>async</code> block. See <a href="/docs/reference/moves#drop">Drop</a>.</li>
 </ul>
@@ -85,7 +84,6 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</c
   <li><code>BinaryHeap</code>.</li>
   <li><code>Formatter::pad</code>.</li>
   <li><code>char::from(u8)</code>. <code>byte as char</code> and <code>char::from_u32</code> work.</li>
-  <li><code>Vec::binary_search</code>.</li>
 </ul>
 
 <h2 id="differences">Differences from <code>cargo run</code></h2>
@@ -94,7 +92,7 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</c
   <li><strong><code>HashMap</code> order.</strong> rawr iterates a <code>HashMap</code> in key order. Rust&rsquo;s order is random.</li>
   <li><strong>Width on your own <code>Display</code>.</strong> rawr pads a user <code>Display</code> impl&rsquo;s output to the width in <code>{:&gt;6}</code>. Rust ignores the width unless the impl calls <code>f.pad</code>.</li>
   <li><strong>Drops in a panic.</strong> rawr stops at a panic without running <code>drop</code>. Rust runs it for each value the panic unwinds past.</li>
-  <li><strong>A large integer in generic code.</strong> Inside a generic function, adding or multiplying <code>u64</code> or <code>usize</code> values through <code>T: Add</code> panics once the result passes <code>i64::MAX</code>. With <code>i128</code> or <code>u128</code> values it panics when both values fit an <code>i64</code> and the result doesn&rsquo;t. Rust gives the result.</li>
+  <li><strong>A large integer in generic code.</strong> Inside a generic function, adding or multiplying <code>i128</code> or <code>u128</code> values through <code>T: Add</code> panics when both values fit an <code>i64</code> and the result doesn&rsquo;t. Rust gives the result.</li>
   <li><strong>Arithmetic on literals alone.</strong> An operation whose operands are all unsuffixed literals is computed as an <code>i64</code>. So <code>let x: i128 = 10_000_000_000 * 10_000_000_000;</code> panics where Rust gives the result. A suffix, as in <code>10_000_000_000i128</code>, gives Rust&rsquo;s result.</li>
 </ul>
 <h3 id="refused">Code that rawr refuses rather than run differently</h3>
@@ -114,10 +112,8 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</c
   <li>A block&rsquo;s value that borrows a temporary of its tail, as in <code>let r = { String::from("a").as_str() };</code>, isn&rsquo;t checked.</li>
   <li>A struct&rsquo;s field whose type leaves out a struct&rsquo;s lifetime, as <code>w: Wrapper</code> of <code>struct Wrapper&lt;'a&gt;</code>, is accepted. rustc refuses it with E0106. A field written as a reference without a lifetime is refused, as in rustc.</li>
   <li>An array reference is accepted where <code>&amp;Vec&lt;T&gt;</code> is expected.</li>
-  <li>Private struct fields can be read and set from another module. Private functions are rejected, as in rustc.</li>
   <li>Arithmetic that overflows or divides by zero on a value a local holds, as in <code>let a = 255u8; let b = a + 1;</code>, is accepted, and so is an index past an array&rsquo;s length held in a local. rustc follows the local&rsquo;s value and refuses them with its deny-by-default <code>arithmetic_overflow</code> and <code>unconditional_panic</code> lints. In rawr they panic when they run. <code>cargo check</code> doesn&rsquo;t report them either, since rustc finds them only when it builds. With literals alone, as in <code>let x: u8 = 255 + 1;</code> or <code>a[5]</code> of a <code>[i32; 3]</code>, rawr refuses them as rustc does.</li>
   <li><code>Sync</code> bounds are not checked. A <code>Send</code> bound refuses an <code>Rc</code>, an <code>Arc</code> of a <code>RefCell</code> and what holds one, and accepts every other type.</li>
-  <li>A <code>&amp;str</code>, a <code>String</code> or an error is accepted where a <code>Box&lt;dyn Error&gt;</code> is expected, without <code>Box::new</code> or <code>.into()</code>.</li>
   <li>Top-level statements are accepted.</li>
   <li>A local whose type nothing settles, as <code>let v = Vec::new();</code> used only through <code>v.len()</code>, is accepted. rustc refuses it with E0282.</li>
   <li>A method of an imported <code>impl</code> that fixes its type&rsquo;s arguments is accepted on every instance of the type. quick-xml&rsquo;s <code>read_event</code> belongs to <code>impl&lt;'a&gt; Reader&lt;&amp;'a [u8]&gt;</code>, and rawr accepts it on a <code>Reader&lt;String&gt;</code> too. Such a program stops with an error before the call runs, and <code>cargo check</code> reports rustc&rsquo;s E0599.</li>
