@@ -5,7 +5,12 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
+
+## 0.4.67 (2026-11-20)
+
 - Run's "A native main" opens with a native main.rs and a marked module, then a table of what each save does and a table of what crosses between native and marked code, with one limits list. Native trait objects, statics, slice and text constants, generic functions and the value rules moved to a new Native boundary reference page, and the build copy to How it works. Stale limits were removed: marked code calls the native root's items, any file of the module tree can be marked, `&dyn` and `Rc<dyn>` of a marked type cross, generic methods cross, and the copy takes the feature flags. (#2355)
+- A `?play` snippet in Discord can start with a cargo-script frontmatter block that declares its dependencies. The bot builds them and the bindings for the calls the snippet makes, offline against crates vendored into its image, and runs the snippet with the usual sandbox and limits. Only approved crates and features build: iced at the pinned rev, ratatui and tokio, each with an approved feature set. A snippet that names another crate or feature gets one line that says what is approved, and nothing is built. (#2358)
+- The playground at /play runs every snippet in the browser. Run on server is gone, and so is every fallback to the server. A run that can't start in the browser says why and stops. A snippet with a frontmatter block runs there when each dependency it names is a crate of the browser's prebuilt runner; any other dependency gets one line naming those crates. (#2359)
 
 ## 0.4.66 (2026-11-20)
 
