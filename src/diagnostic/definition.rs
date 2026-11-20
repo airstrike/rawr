@@ -38,6 +38,37 @@ pub(super) fn span(source: &Source, name: Span) -> Span {
     }
 }
 
+/// The type `name` names in `source` from its visibility or keyword
+/// through its name and generics, as rustc marks a type that "must
+/// implement" a trait: `pub struct Value<T>`, without its fields.
+pub(super) fn header(source: &Source, name: Span) -> Span {
+    let whole = span(source, name);
+    if whole == name {
+        return name;
+    }
+    let after = Span::new(name.end(), whole.end()).text(source.text());
+    let generics = match after.strip_prefix('<') {
+        Some(rest) => {
+            let mut depth = 1_usize;
+            let close = rest.char_indices().find_map(|(index, character)| {
+                match character {
+                    '<' => depth += 1,
+                    '>' => depth -= 1,
+                    _ => {}
+                }
+                (depth == 0).then_some(index)
+            });
+            close.map_or(0, |index| rest[..=index].chars().count() + 1)
+        }
+        None => 0,
+    };
+    let mut end = name.end();
+    for _ in 0..generics {
+        end.advance();
+    }
+    Span::new(whole.start(), end)
+}
+
 /// The column, as a count of characters, where the item whose name
 /// follows `before` starts: its visibility, else its first qualifier, else
 /// its keyword.

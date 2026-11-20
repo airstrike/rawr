@@ -32,13 +32,16 @@ fn static_import_failures_are_positioned_resolution_errors() {
     ));
     assert_eq!(unknown.primary_span().start().position(), Some(19));
 
+    // rustc's E0432 at the value a group's prefix names: "expected type,
+    // found constant `Center` in `iced`".
     let invalid_group = engine.compile("use iced::Center::{x};").unwrap_err();
     assert!(matches!(
         invalid_group.err_type(),
-        ParseErrorType::Resolution(resolve::Error::InvalidImport { path, .. })
+        ParseErrorType::Resolution(resolve::Error::UnknownImport { path, .. })
             if path == "iced::Center"
     ));
-    assert_eq!(invalid_group.primary_span().start().position(), Some(5));
+    assert!(invalid_group.to_string().contains("expected type, found constant `Center` in `iced`"), "{invalid_group}");
+    assert_eq!(invalid_group.primary_span().start().position(), Some(11));
 
     let duplicate = engine.compile("use iced::Result;\nstruct Result;").unwrap_err();
     assert!(matches!(

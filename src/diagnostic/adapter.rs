@@ -668,6 +668,12 @@ fn resolution_report_with_sources(
             builder = builder.secondary(source.clone(), *field, label)?;
         }
     }
+    // rustc labels each operand with its type.
+    if let resolve::Error::BinaryOperation { operation, .. } = error {
+        for (span, ty) in &operation.operands {
+            builder = builder.secondary(source.clone(), *span, Some(ty.clone()))?;
+        }
+    }
     if let resolve::Error::ArgumentCount {
         arguments: Some(arguments),
         call,
@@ -990,6 +996,28 @@ fn sections(error: &resolve::Error, source: &Source) -> Vec<Section> {
             };
             help.into_iter().chain(bound).collect()
         }
+        // The program's own type an operator's trait has no impl for.
+        resolve::Error::BinaryOperation { operation, .. } => operation
+            .missing
+            .iter()
+            .map(|missing| {
+                // A generic type's impl is noted with its right side.
+                let capability = if missing.owner.contains('<') {
+                    format!("{}<{}>", missing.capability, operation.operands[1].1)
+                } else {
+                    missing.capability.to_string()
+                };
+                Section::note(format!(
+                    "an implementation of `{capability}` might be missing for `{}`",
+                    missing.owner
+                ))
+                .primary(
+                    source.clone(),
+                    super::definition::header(source, missing.declared),
+                    Some(format!("must implement `{capability}`").into()),
+                )
+            })
+            .collect(),
         // An arm's `&mut` pattern of one binding on a `&` value: rustc
         // notes the `mut` binding it may have meant.
         resolve::Error::PatternMismatch { types, pattern, .. } => types
@@ -1274,6 +1302,25 @@ fn suggestion(error: &resolve::Error, source: &Source) -> Result<Option<Suggesti
             super::definition::span(source, *declared).start(),
             source,
         ),
+        // `PartialOrd` derives with `PartialEq`, its supertrait.
+        resolve::Error::BinaryOperation { operation, .. } => match &operation.missing {
+            Some(missing) => {
+                let derived = match missing.capability.as_str() {
+                    "PartialOrd" => "PartialEq, PartialOrd",
+                    capability => capability,
+                };
+                above(
+                    &format!(
+                        "consider annotating `{}` with `#[derive({derived})]`",
+                        missing.owner
+                    ),
+                    &format!("#[derive({derived})]"),
+                    super::definition::header(source, missing.declared).start(),
+                    source,
+                )
+            }
+            None => Ok(None),
+        },
         resolve::Error::SlicePattern {
             sliceable: true,
             subject: Some(subject),
@@ -1582,6 +1629,7 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Category::NotYet => code::RESOLVE_NOT_YET,
         resolve::Category::TypeAnnotationsNeeded => code::RESOLVE_TYPE_ANNOTATIONS,
         resolve::Category::CannotCompare => code::RESOLVE_CANNOT_COMPARE,
+        resolve::Category::BinaryOperation => code::RESOLVE_BINARY_OPERATOR,
         resolve::Category::ArgumentSignature => code::RESOLVE_ARGUMENT_SIGNATURE,
         resolve::Category::ArgumentCount => match error {
             resolve::Error::ArgumentCount {
@@ -2078,6 +2126,7 @@ fn resolution_message(error: &resolve::Error) -> String {
         resolve::Error::CannotCompare { lhs, rhs, .. } => {
             resolve::CannotCompare(lhs, rhs).to_string()
         }
+        resolve::Error::BinaryOperation { operation, .. } => operation.message.to_string(),
         resolve::Error::ArgumentSignature { closure, .. } => {
             resolve::ArgumentSignature(*closure).to_string()
         }
