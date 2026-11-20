@@ -290,6 +290,7 @@ impl<'a> Parser<'a> {
         let (mut elements, repeat, counted) = parsed?;
         self.bind_framed_elements(&mut elements, bound)?;
         let end = self.expect(close, "the end of an array")?;
+        self.values.insert(span(open, end));
         // Elements naming different functions of one signature meet at a
         // `fn` pointer, as `if` arms do.
         let types = elements

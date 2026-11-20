@@ -1661,14 +1661,14 @@ impl Parser<'_> {
                     local.declaration,
                 ),
             }
-            let whole = span(target.start(), replacement.span.end());
+            let whole = assignee::assignment_span(target, replacement);
             let into = self.flow().rebound(target.start(), whole);
             if let Some(into) = into {
                 self.flow().claim(into, replacement.span, start, holds);
             }
             return;
         }
-        let whole = span(target.start(), replacement.span.end());
+        let whole = assignee::assignment_span(target, replacement);
         self.flow().assigned(target.start(), whole, compound);
         // `pair.right = &b`: the local takes the borrows besides its own.
         let origins = self

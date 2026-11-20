@@ -530,6 +530,30 @@ mod tests {
     }
 
     #[test]
+    fn a_destructuring_assignment_is_one_stop_on_its_line() {
+        // Its `let` and its assignments are statements nested in the one
+        // the program wrote (#2318).
+        let mut engine = crate::Engine::new();
+        #[allow(deprecated)]
+        engine.register_debugger(
+            |_, debugger| debugger,
+            |_, _, _, _, _| Ok(crate::debugger::DebuggerCommand::Continue),
+        );
+        let ast = engine
+            .compile(
+                "pub fn run() -> i64 {\n    let (mut a, mut b) = (1, 2);\n    (a, b) = (b, \
+                 a);\n    [a, _] = [b, 0];\n    a - b\n}\nrun()",
+            )
+            .unwrap_or_else(|error| panic!("{error}"));
+        let stops = super::Stops::of(&ast, &|position| {
+            position.line().map(|line| ("main.rs".to_owned(), line))
+        });
+        for line in 2..=5 {
+            assert_eq!(stops.on_line("main.rs", line).len(), 1, "line {line}");
+        }
+    }
+
+    #[test]
     fn a_moved_line_is_found_by_its_text_nearest_where_it_was() {
         let lines = ["fn main() {", "tick();", "", "tick();", "}"];
         assert_eq!(nearest(&lines, 2, "tick();"), Some(2));

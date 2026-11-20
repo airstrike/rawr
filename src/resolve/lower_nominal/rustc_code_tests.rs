@@ -2003,3 +2003,158 @@ fn an_assignment_to_a_field_of_a_temporary_is_no_e0070() {
         "{dereferenced:?}"
     );
 }
+
+/// What rawr renders for `body`, the body of `main`.
+fn rendered_main(body: &str) -> String {
+    rendered(&format!(
+        "fn f(x: i64) -> i64 {{ x }}\nfn main() {{\n    {body}\n}}\n"
+    ))
+}
+
+#[test]
+fn a_destructuring_assignment_to_an_immutable_local_is_e0384() {
+    // Each place is assigned alone, and marked alone, as rustc desugars
+    // the assignment (#2318).
+    let immutable =
+        rendered_main("let a = 1; let mut b = 2; (a, b) = (3, 4); println!(\"{a}{b}\");");
+    let expected = [
+        "error[E0384]: cannot assign twice to immutable variable `a`",
+        " --> main.rs:3:32",
+        "  |",
+        "3 |     let a = 1; let mut b = 2; (a, b) = (3, 4); println!(\"{a}{b}\");",
+        "  |         -                      ^ cannot assign twice to immutable variable",
+        "  |         |",
+        "  |         first assignment to `a`",
+    ]
+    .join("\n");
+    assert!(immutable.starts_with(&expected), "{immutable}");
+    // A `let a;` takes one destructuring assignment.
+    let deferred = rendered_main("let a; let b; (a, b) = (1, 2); (a, b) = (3, 4);");
+    let expected = [
+        "error[E0384]: cannot assign twice to immutable variable `a`",
+        " --> main.rs:3:37",
+        "  |",
+        "3 |     let a; let b; (a, b) = (1, 2); (a, b) = (3, 4);",
+        "  |                    -                ^ cannot assign twice to immutable variable",
+        "  |                    |",
+        "  |                    first assignment to `a`",
+    ]
+    .join("\n");
+    assert!(deferred.starts_with(&expected), "{deferred}");
+    // A parenthesized place is the place, and the assignment is marked
+    // whole.
+    let parenthesized = rendered_main("let mut x = 1; (x) += 1; (x) = 3; let y = 2; (y) = 3;");
+    let expected = [
+        "error[E0384]: cannot assign twice to immutable variable `y`",
+        " --> main.rs:3:50",
+        "  |",
+        "3 |     let mut x = 1; (x) += 1; (x) = 3; let y = 2; (y) = 3;",
+        "  |                                           -      ^^^^^^^ cannot assign twice to \
+         immutable variable",
+        "  |                                           |",
+        "  |                                           first assignment to `y`",
+    ]
+    .join("\n");
+    assert!(parenthesized.starts_with(&expected), "{parenthesized}");
+}
+
+#[test]
+fn a_destructuring_assignment_to_a_value_is_e0070() {
+    let assigned = |body: &str, column: usize, marks: &str| {
+        let rendered = rendered_main(body);
+        let expected = format!(
+            "error[E0070]: invalid left-hand side of assignment\n --> main.rs:3:{column}\n  |\n3 \
+             |     {body}\n  |{marks}\n"
+        );
+        assert!(rendered.starts_with(&expected), "{rendered}");
+    };
+    assigned(
+        "let mut a = 1; let mut b = 2; (a + 1, b) = (3, 4);",
+        46,
+        "                                    -----     ^",
+    );
+    assigned(
+        "let mut a = 0; (a, 1) = (1, 2);",
+        27,
+        "                        -  ^",
+    );
+    assigned(
+        "let mut a = 0; (f(a), a) = (1, 2);",
+        30,
+        "                     ----     ^",
+    );
+    // A call of a function is no tuple struct's constructor.
+    assigned("let mut a = 0; f(a) = 1;", 25, "                    ---- ^");
+}
+
+#[test]
+fn a_compound_assignment_to_a_tuple_is_e0067() {
+    // rustc reports E0368 for `+=` on a tuple first, and E0067 beside it.
+    let rendered = rendered_main("let mut a = 1; let mut b = 2; (a, b) += (3, 4);");
+    let expected = [
+        "error[E0067]: invalid left-hand side of assignment",
+        " --> main.rs:3:42",
+        "  |",
+        "3 |     let mut a = 1; let mut b = 2; (a, b) += (3, 4);",
+        "  |                                   ------ ^^",
+        "  |                                   |",
+        "  |                                   cannot assign to this expression",
+    ]
+    .join("\n");
+    assert!(rendered.starts_with(&expected), "{rendered}");
+}
+
+#[test]
+fn an_underscore_outside_an_assignee_is_rustcs_syntax_error() {
+    let message = "error: in expressions, `_` can only be used on the left-hand side of an \
+                   assignment";
+    let compound = rendered_main("let mut a = 1; _ += 1;");
+    let expected = [
+        message,
+        " --> main.rs:3:20",
+        "  |",
+        "3 |     let mut a = 1; _ += 1;",
+        "  |                    ^ `_` not allowed here",
+    ]
+    .join("\n");
+    assert!(compound.starts_with(&expected), "{compound}");
+    let value = rendered_main("let x: i64 = _;");
+    let expected = [
+        message,
+        " --> main.rs:3:18",
+        "  |",
+        "3 |     let x: i64 = _;",
+        "  |                  ^ `_` not allowed here",
+    ]
+    .join("\n");
+    assert!(value.starts_with(&expected), "{value}");
+}
+
+#[test]
+fn a_refutable_destructuring_assignment_is_e0005() {
+    let rendered = rendered_main("let mut a = 1; Some(a) = Some(2);");
+    assert!(
+        rendered.starts_with("error[E0005]: refutable pattern in assignment\n --> main.rs:3:20\n"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains(
+            "= note: destructuring assignments require an \"irrefutable pattern\", like a \
+             `struct` or an `enum` with only one variant"
+        ),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("let else"), "{rendered}");
+}
+
+#[test]
+fn a_destructuring_assignment_moves_its_value_first_e0382() {
+    let rendered = rendered_main(
+        "let s = String::from(\"a\"); let mut t = String::new(); let mut u = String::new(); (t, \
+         u) = (s, s);",
+    );
+    assert!(
+        rendered.starts_with("error[E0382]: use of moved value: `s`\n --> main.rs:3:99\n"),
+        "{rendered}"
+    );
+}

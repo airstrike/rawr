@@ -15588,3 +15588,162 @@ fn language_an_array_length_may_be_a_const_parameter() {
          pub fn run() -> usize { pair([1, 2], [3, 4, 5]) } run()",
     );
 }
+
+/// Destructuring assignment and assignment to a parenthesized place, as
+/// rustc runs them (#2318): the value first, then each place left to
+/// right. `cargo run` of the program prints the same.
+#[test]
+fn language_destructuring_assignment_prints_what_rustc_prints() {
+    let source = r#"
+struct S { f: i64, g: i64 }
+struct T(i64, i64);
+#[derive(Debug)]
+struct U;
+fn idx(n: usize) -> usize { println!("place {n}"); n }
+fn val(n: i64) -> i64 { println!("value {n}"); n }
+fn main() {
+    let (mut a, mut b) = (1, 2);
+    (a, b) = (b, a);
+    println!("{a} {b}");
+    let mut v = [0i64; 4];
+    (v[idx(0)], v[idx(1)]) = (val(10), val(11));
+    println!("{v:?}");
+    let arr = [5, 6, 7];
+    let (mut x, mut y);
+    [x, y, _] = arr;
+    println!("{x} {y}");
+    [x, .., y] = arr;
+    println!("{x} {y}");
+    let s = S { f: 3, g: 4 };
+    let f;
+    S { f, .. } = s;
+    println!("{f}");
+    S { f: x, g: y } = s;
+    println!("{x} {y}");
+    T(x, y) = T(8, 9);
+    println!("{x} {y}");
+    _ = val(1);
+    (x) = 1;
+    let mut z = 0;
+    let r = &mut z;
+    (*r) = 2;
+    println!("{x} {z}");
+    ((a, b)) = (5, 6);
+    let c;
+    (a, (b, c)) = (7, (8, 9));
+    println!("{a} {b} {c}");
+    (a, ..) = (1, 2, 3);
+    (.., b) = (1, 2, 3);
+    println!("{a} {b}");
+    (U, a) = (U, 4);
+    println!("{a}");
+    let mut t = (0, 0);
+    (t.0, t.1) = (t.1 + 1, t.0 + 2);
+    println!("{t:?}");
+    let mut st = S { f: 0, g: 0 };
+    (st.f, st.g) = (1, 2);
+    println!("{} {}", st.f, st.g);
+    let mut s1 = String::from("a"); let mut s2 = String::from("b");
+    (s1, s2) = (s2, s1);
+    println!("{s1} {s2}");
+    let u = { (a, b) = (10, 20); a + b };
+    println!("{u}");
+    let w = ((a, b) = (1, 2));
+    println!("{w:?}");
+    let k = true;
+    match k { true => (a, b) = (3, 4), false => {} }
+    println!("{a} {b}");
+    let mut cl = || (a, b) = (b, a);
+    cl();
+    println!("{a} {b}");
+    [_, x, _] = arr;
+    println!("{x}");
+    (..) = (1, 2);
+}
+main();
+"#;
+    assert_eq!(
+        printed(source),
+        "2 1\nvalue 10\nvalue 11\nplace 0\nplace 1\n[10, 11, 0, 0]\n5 6\n5 7\n3\n3 4\n8 9\nvalue \
+         1\n1 2\n7 8 9\n1 3\n4\n(1, 2)\n1 2\nb a\n30\n()\n3 4\n4 3\n6\n"
+    );
+}
+
+/// Destructuring assignment to fields of `self`, through `Self`, a
+/// one-variant enum, references, `IndexMut` elements, a macro and a match
+/// arm, as rustc runs them (#2318).
+#[test]
+fn language_destructuring_assignment_reaches_every_place_rustc_does() {
+    let source = r#"
+use std::collections::HashMap;
+struct P { a: i64, b: String }
+impl P {
+    fn swap(&mut self) { (self.a, self.b) = (self.a + 1, self.b.clone() + "!"); }
+    fn reset(&mut self) { Self { a: self.a, .. } = P { a: 0, b: String::new() }; }
+}
+struct W(i64, i64);
+impl W { fn flip(&mut self) { let w; Self(self.1, w) = Self(self.0, self.1); self.0 = w; } }
+enum One { V(i64, i64) }
+macro_rules! swap { ($a:ident, $b:ident) => { ($a, $b) = ($b, $a) }; }
+fn main() {
+    let s = String::from("kept");
+    _ = s;
+    println!("{s}");
+    let mut p = P { a: 1, b: "x".into() };
+    p.swap();
+    println!("{} {}", p.a, p.b);
+    p.reset();
+    println!("{} {}", p.a, p.b);
+    let mut w = W(1, 2);
+    w.flip();
+    println!("{} {}", w.0, w.1);
+    let (mut x, mut y) = (0, 0);
+    One::V(x, y) = One::V(3, 4);
+    println!("{x} {y}");
+    let mut z = 0;
+    let r = &mut z;
+    (*r, x) = (7, 8);
+    println!("{z} {x}");
+    let mut v = vec![1, 2, 3];
+    [v[0], v[2]] = [v[2], v[0]];
+    println!("{v:?}");
+    (v[1], _) = (9, 0);
+    println!("{v:?}");
+    let (c, d);
+    (c, d) = (1, 2);
+    println!("{c} {d}");
+    let k = true;
+    if k { (x, y) = (y, x) }
+    println!("{x} {y}");
+    swap!(x, y);
+    println!("{x} {y}");
+    match k {
+        true => (x, y) = HashMap::<i64, i64>::new().into_iter().fold((5, 6), |acc, _| acc),
+        false => {}
+    }
+    println!("{x} {y}");
+    let mut m = HashMap::new();
+    m.insert(1, 0);
+    (*m.get_mut(&1).unwrap(), x) = (11, 12);
+    println!("{:?} {x}", m.get(&1));
+    let mut o = Some(1);
+    (o, x) = (None, 0);
+    println!("{o:?} {x}");
+    let mut t = ((1, 2), 3);
+    ((t.0.1, t.0.0), t.1) = ((10, 20), 30);
+    println!("{t:?}");
+    (x,) = (99,);
+    println!("{x}");
+    () = ();
+    let mut arr = [0; 3];
+    (arr[0], arr[1]) = (arr[1] + 1, arr[0] + 2);
+    println!("{arr:?}");
+}
+main();
+"#;
+    assert_eq!(
+        printed(source),
+        "kept\n2 x!\n0 x!\n2 1\n3 4\n7 8\n[3, 2, 1]\n[3, 9, 1]\n1 2\n4 8\n8 4\n5 6\nSome(11) \
+         12\nNone 0\n((20, 10), 30)\n99\n[1, 2, 0]\n"
+    );
+}

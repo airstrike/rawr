@@ -55,6 +55,7 @@ Modules are named by their symbols; line numbers drift.
 | `attributes` | attributes and items in bodies | `cfg_predicate`, `outer_attributes`, `skip_nested_item` |
 | `moves` | moves | `move_local`, `move_part`, `move_capture`, `moved_value` |
 | `mutability` | mutability checks | `immutable_assignment`, `require_mutable_receiver` |
+| `assignee` | destructuring assignment, rewritten to a `let` and plain assignments | `splice_destructuring`, `assignment_span` |
 | `lvalue` | assignment places | `Lvalue`, `PlaceStep`, `OpenedPlace`, `nested_parts`, `compound_assignment`, `nested_step` |
 | `pattern` | patterns and bindings | `pattern::Syntax`, `pattern::Host`, `parse_pattern*`, `resolve_*_pattern*`, `host_pattern*`, `bind_let_pattern` |
 | `coverage` | match exhaustiveness and refutability | `coverage::Key`, `coverage::Pattern`, `coverage::Witness`, `Scalar`, `coverage_witnesses`, `require_irrefutable` |

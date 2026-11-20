@@ -186,6 +186,7 @@ impl<'a> Parser<'a> {
             && matches!(
                 self.peek(),
                 Token::LeftParen
+                    | Token::Unit
                     | Token::LeftBracket
                     | Token::Ampersand
                     | Token::And

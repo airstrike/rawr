@@ -240,6 +240,7 @@ impl<'a> Parser<'a> {
     /// A statement that starts with a block-like expression ends with it
     /// (`block`), as in Rust; otherwise this parses a full expression.
     pub(super) fn parse_expr_in(&mut self, block: bool) -> Result<ParsedExpr, Error> {
+        self.splice_destructuring()?;
         let path = match self.expression_stack.last() {
             Some(parent) => {
                 let child = self
@@ -921,6 +922,16 @@ impl<'a> Parser<'a> {
                 help: Some("try using `match` on the result of the `try` block instead".into()),
                 at: Span::new(at, text_end(at, "catch")),
             }),
+            // `_` that no destructuring assignment took: rustc's syntax
+            // error.
+            Token::Underscore => Err(Error::Syntax {
+                message: "in expressions, `_` can only be used on the left-hand side of an \
+                          assignment"
+                    .into(),
+                label: "`_` not allowed here".into(),
+                help: None,
+                at: Span::new(token_span.start(), text_end(token_span.start(), "_")),
+            }),
             // `throw`, `do`, `#{ .. }` and the like: rustc's syntax error.
             token => {
                 let found = crate::parser::item::found(&token);
@@ -1004,7 +1015,11 @@ impl<'a> Parser<'a> {
             }
             self.note_known_parenthesized(value.span, span(open, end));
             value.span = span(open, end);
-            value.lvalue = None;
+            // `(x) = 1` and `(*r) += 1` assign the place inside, as rustc
+            // does; elsewhere the lowering reads it as a value.
+            if !assignment_token(&self.peek()) {
+                value.lvalue = None;
+            }
             value.source.cover(value.span);
             self.keep_pipeline(&before, &value);
             return Ok(value);
@@ -1050,6 +1065,7 @@ impl<'a> Parser<'a> {
             })
             .collect();
         self.compose(span(open, end), &ty, &parts);
+        self.values.insert(span(open, end));
         self.tuple_fields.insert(
             span(open, end),
             members.iter().map(|member| member.span).collect(),
