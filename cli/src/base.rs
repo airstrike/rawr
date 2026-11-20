@@ -187,13 +187,13 @@ pub fn run(loaded: Loaded) -> Result<Option<String>, Failed> {
     // What the program prints goes to the terminal, then to the run's
     // session, when it has one (#2288).
     #[cfg(unix)]
-    if crate::events::session::teller::is_open() {
+    if rawr::teller::is_open() {
         engine.on_output(|output, text| {
             match output {
                 rawr::Output::Stderr => eprint!("{text}"),
                 _ => print!("{text}"),
             }
-            crate::events::session::teller::tell(output, text);
+            rawr::teller::tell(output, text);
         });
     }
     // The inspector serves from the start; its debugger is registered

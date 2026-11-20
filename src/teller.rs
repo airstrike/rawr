@@ -2,8 +2,8 @@
 //! runs it, when no shell started the run: the program writes to the
 //! terminal itself, so no shell holds its output (#2288).
 //!
-//! The process connects to the session socket [`OUTPUT`](crate::events::OUTPUT)
-//! names and says `tell`. Until a shell says `hello`, each piece the program
+//! The process connects to the session socket [`SOCKET`] names and says
+//! `tell`. Until a shell says `hello`, each piece the program
 //! writes is kept in memory, the newest 256 KiB of it as the session keeps
 //! for shells, and nothing more is done. At the first `hello` the session
 //! says `listen`: the process tells the pieces it kept as `output`
@@ -18,7 +18,14 @@ use std::sync::{Mutex, OnceLock, PoisonError};
 
 use serde_json::{json, Value};
 
-use super::host::OUTPUT;
+/// The variable naming the session socket a program tells what it prints
+/// on, as it is written to the terminal. The session sets it in the
+/// environment of a program no shell started.
+pub const SOCKET: &str = "RAWR_SESSION_OUTPUT";
+
+/// The output kept for the session while no shell listens, oldest first
+/// out: as much as the session keeps for shells that attach later.
+pub const OUTPUT: usize = 256 * 1024;
 
 /// The connection this process tells its output on, once [`open`] made it.
 static TELLER: OnceLock<Teller> = OnceLock::new();
@@ -43,12 +50,11 @@ struct Piece {
     text: String,
 }
 
-/// Connect to the session [`OUTPUT`](crate::events::OUTPUT) names, when it
-/// names one, and keep the program's output for it from now on. A run
-/// whose session can't be reached runs as it would without one.
+/// Connect to the session [`SOCKET`] names, when it names one, and keep
+/// the program's output for it from now on. A run whose session can't be
+/// reached runs as it would without one.
 pub fn open() {
-    let Some(socket) = std::env::var_os(crate::events::OUTPUT).filter(|path| !path.is_empty())
-    else {
+    let Some(socket) = std::env::var_os(SOCKET).filter(|path| !path.is_empty()) else {
         return;
     };
     let Ok(session) = UnixStream::connect(socket) else {
@@ -92,12 +98,12 @@ pub fn is_open() -> bool {
 
 /// Tell `text`, which the program wrote to `stream` and the terminal has
 /// already, to the session: kept until a shell listens, then told at once.
-pub fn tell(stream: rawr::Output, text: &str) {
+pub fn tell(stream: crate::Output, text: &str) {
     let Some(teller) = TELLER.get() else {
         return;
     };
     let stream = match stream {
-        rawr::Output::Stderr => "stderr",
+        crate::Output::Stderr => "stderr",
         _ => "stdout",
     };
     let mut kept = teller.kept();

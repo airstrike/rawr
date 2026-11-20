@@ -47,9 +47,9 @@ pub const DEBUG_EVENTS: &str = rawr::inspect::EVENTS;
 pub const DEBUGGER_ON_REQUEST: &str = "RAWR_DEBUGGER_ON_REQUEST";
 
 /// Set in a program's environment when no shell started its run: the
-/// session socket where it tells what it prints ([`session::teller`]), as
+/// session socket where it tells what it prints ([`rawr::teller`]), as
 /// it is written to the terminal.
-pub const OUTPUT: &str = "RAWR_SESSION_OUTPUT";
+pub const OUTPUT: &str = rawr::teller::SOCKET;
 
 /// Set by a shell that starts a run and sets its breakpoints before the
 /// program runs (#2274): the owner gives it to the first program it

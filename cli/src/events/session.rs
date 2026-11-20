@@ -44,7 +44,7 @@
 //! another way (#2288). An owner that copies the program's output to the
 //! terminal tells each piece itself ([`output()`]). A program that writes
 //! to the terminal itself tells it on a connection of its own
-//! ([`teller`]): it says `tell`, keeps the last of its output until the
+//! ([`rawr::teller`]): it says `tell`, keeps the last of its output until the
 //! first `hello`, at which the session says `listen` and waits, then tells
 //! what it kept as `output`, says `told`, and tells each piece from then
 //! on.
@@ -60,7 +60,6 @@ mod handover;
 mod host;
 mod place;
 mod state;
-pub mod teller;
 
 pub use handover::{adopt, handed, LISTENER};
 pub use host::{open, output, prepare, record, Host, CANCELLED, NOT_RUNNING};

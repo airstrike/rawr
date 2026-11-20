@@ -19,7 +19,7 @@ use super::state::{Phase, State};
 /// The protocol's version, which `hello` says.
 const PROTOCOL: u64 = 1;
 /// Output kept for shells that attach later, oldest first out.
-pub(super) const OUTPUT: usize = 256 * 1024;
+pub(super) const OUTPUT: usize = rawr::teller::OUTPUT;
 
 /// The error a `program` request ends with when no program will answer it.
 pub const NOT_RUNNING: i64 = -32001;
@@ -72,7 +72,7 @@ struct Listener {
     send: mpsc::Sender<Arc<str>>,
 }
 
-/// The program's connection that tells its output (`teller::open`): it
+/// The program's connection that tells its output (`rawr::teller::open`): it
 /// keeps the last of it until the session asks for it with `listen`, then
 /// says `told` and tells each piece as it writes it.
 struct Teller {

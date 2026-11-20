@@ -31,13 +31,13 @@ pub fn child() -> Option<ExitCode> {
     let path = PathBuf::from(std::env::var_os(PROGRAM)?);
     // What the program prints reaches the run's session too (#2288).
     #[cfg(unix)]
-    crate::events::session::teller::open();
+    rawr::teller::open();
     let code = match base::load(Some(&path), base::Build::Program) {
         Ok(loaded) => crate::run_once(loaded),
         Err(report) => crate::failure(&report),
     };
     #[cfg(unix)]
-    crate::events::session::teller::finish();
+    rawr::teller::finish();
     Some(code)
 }
 
