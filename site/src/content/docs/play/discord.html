@@ -16,6 +16,23 @@ xs.iter().sum::&lt;i64&gt;()
 <p><code>?play</code> takes no options. A word after it on its line gets an error reply.</p>
 <p>If you edit a <code>?play</code> message, the bot runs the snippet again and edits its reply.</p>
 
+<h3 id="dependencies">A snippet with dependencies</h3>
+<p>A snippet can start with a cargo-script frontmatter block that declares its dependencies. The bot runs it as <code>rawr run</code> runs a <a href="/docs/run#scripts">script</a>. It builds the dependencies and the bindings for the calls the snippet makes, and then the snippet runs.</p>
+<div class="block">
+  <div class="file"><b>Discord</b></div>
+  <pre><code><span class="k">?play</span>
+<span class="c">```rust</span>
+---
+[dependencies]
+libc = "0.2.172"
+---
+fn main() {
+    println!("{}", libc::EXIT_FAILURE);
+}
+<span class="c">```</span></code></pre>
+</div>
+<p>The bot builds only its <a href="/docs/reference/play#dependencies">approved crates</a>. A snippet that names any other crate gets one line that lists them, and nothing is built. The first snippet that names a crate with features no snippet used before waits for that crate&rsquo;s build. The next one reuses it.</p>
+
 
 <h2 id="add-bot">Adding the bot to a server</h2>
 <p>Use the <a href="/bot/invite">invite link</a> to add the bot to a Discord server you manage. The bot answers only in channels a moderator turns on. It doesn&rsquo;t answer in direct messages.</p>
