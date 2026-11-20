@@ -464,3 +464,61 @@ fn a_dap_client_sets_a_field_a_map_entry_and_an_expression_and_is_refused_an_imm
     drop(client.input.take());
     assert!(client.child.wait().unwrap().success());
 }
+
+/// The program writes a line to each stream and fails.
+const SAYS: &str = "// rawr
+fn main() {
+    println!(\"to stdout\");
+    eprintln!(\"to stderr\");
+    std::process::exit(3);
+}
+";
+
+/// Rawr's own lines reach the client as `console` output, and the
+/// program's streams as `stdout` and `stderr`, though rawr's lines and the
+/// program's stderr both leave `rawr run` (#2367).
+#[test]
+fn a_dap_client_hears_rawr_s_lines_as_console_and_the_program_s_stderr_as_stderr() {
+    let sandbox = Sandbox::new("dap-streams");
+    let made = sandbox.rawr(&["new", "sayer"]);
+    super::assert_success(&made);
+    std::fs::write(sandbox.work().join("sayer/src/main.rs"), SAYS).unwrap();
+    let mut client = Client::start(&sandbox);
+    client.request("initialize", json!({ "adapterID": "rawr" }));
+    client.request("launch", json!({ "program": "sayer" }));
+    client.event("initialized");
+    client.request("configurationDone", json!({}));
+    // A program that failed under a shell waits for a save, which rawr
+    // says on its own stderr.
+    let lines = ["to stdout", "to stderr", "a save runs it again"];
+    let mut heard = Vec::new();
+    while !lines.iter().all(|line| {
+        heard
+            .iter()
+            .any(|(_, output): &(String, String)| output.contains(line))
+    }) {
+        let output = client.event("output");
+        heard.push((
+            output["category"].as_str().unwrap().to_owned(),
+            output["output"].as_str().unwrap().to_owned(),
+        ));
+    }
+    let category = |line: &str| {
+        heard
+            .iter()
+            .find(|(_, output)| output.contains(line))
+            .map(|(category, _)| category.as_str())
+    };
+    assert_eq!(category("to stdout"), Some("stdout"), "{heard:?}");
+    assert_eq!(category("to stderr"), Some("stderr"), "{heard:?}");
+    assert_eq!(
+        category("a save runs it again"),
+        Some("console"),
+        "{heard:?}"
+    );
+    client.request("terminate", json!({}));
+    client.event("terminated");
+    client.request("disconnect", json!({}));
+    drop(client.input.take());
+    let _ = client.child.wait();
+}

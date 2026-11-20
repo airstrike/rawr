@@ -493,13 +493,14 @@ fn prepare(command: &mut std::process::Command) {
 }
 
 /// The program's output, as this process copies it to its own stdout and
-/// stderr, goes to the run's session too (#2288).
-fn output(stream: rawr_import::process::Stream, bytes: &[u8]) {
+/// stderr, goes to the run's session too (#2288), which may take it in
+/// place of this process's stream (#2367).
+fn output(stream: rawr_import::process::Stream, bytes: &[u8]) -> bool {
     let stream = match stream {
         rawr_import::process::Stream::Stdout => rawr::Output::Stdout,
         rawr_import::process::Stream::Stderr => rawr::Output::Stderr,
     };
-    rawr_cli::events::session::output(stream, bytes);
+    rawr_cli::events::session::output(stream, bytes)
 }
 
 /// The contents of the program's files: its sources, its native modules

@@ -244,4 +244,50 @@ mod tests {
         other.shutdown(std::net::Shutdown::Both).unwrap();
         followed.join().unwrap();
     }
+
+    /// Rawr's own lines, the stderr of the run the adapter started, reach
+    /// the client as `console`, and the program's stderr, which the
+    /// session tells, as `stderr` (#2367).
+    #[test]
+    fn rawr_lines_are_console_and_the_programs_stderr_is_stderr() {
+        let (session, other) = Session::running_at(Phase::Running);
+        let (written, read) = std::os::unix::net::UnixStream::pair().unwrap();
+        let adapter = Arc::new(Adapter::new(
+            PathBuf::from("/p"),
+            wire::Writer::new(written),
+        ));
+        session.read_rawr(b"rawr > building runner  55%\n");
+        let told = json!({
+            "jsonrpc": "2.0",
+            "method": "output",
+            "params": { "stream": "stderr", "text": "the program's own\n" },
+        });
+        writeln!(&other, "{told}").unwrap();
+        let following = Arc::clone(&adapter);
+        let followed = std::thread::spawn(move || following.follow(&session));
+        let mut heard = BufReader::new(read);
+        let mut outputs = Vec::new();
+        while outputs.len() < 2 {
+            let message = wire::read(&mut heard).unwrap().unwrap();
+            if message["event"] == "output" {
+                outputs.push((
+                    message["body"]["category"].as_str().unwrap().to_owned(),
+                    message["body"]["output"].as_str().unwrap().to_owned(),
+                ));
+            }
+        }
+        outputs.sort();
+        assert_eq!(
+            outputs,
+            [
+                (
+                    "console".to_owned(),
+                    "rawr > building runner  55%\n".to_owned()
+                ),
+                ("stderr".to_owned(), "the program's own\n".to_owned()),
+            ]
+        );
+        other.shutdown(std::net::Shutdown::Both).unwrap();
+        followed.join().unwrap();
+    }
 }

@@ -57,6 +57,11 @@ pub const OUTPUT: &str = rawr::teller::SOCKET;
 /// ([`rawr::inspect::HOLD`]).
 pub const HOLD: &str = rawr::inspect::HOLD;
 
+/// Set by a shell that starts a run and reads the run's stderr as rawr's
+/// own lines (#2367): the owner tells the program's stderr through the
+/// session, as `output`, in place of writing it to its own stderr.
+pub const PROGRAM_STDERR: &str = "RAWR_SESSION_PROGRAM_STDERR";
+
 /// How often a watched process looks at its parent.
 const WATCH: Duration = Duration::from_millis(100);
 

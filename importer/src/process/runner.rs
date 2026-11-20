@@ -118,8 +118,9 @@ pub struct Arguments {
     pub prepare: Option<fn(&mut Command)>,
     /// Where the program's output also goes as the owner copies it to its
     /// own stdout and stderr, when the program doesn't write to a terminal
-    /// itself.
-    pub output: Option<fn(Stream, &[u8])>,
+    /// itself. It answers whether it took the bytes in place of the
+    /// owner's own stream, which then doesn't get them.
+    pub output: Option<fn(Stream, &[u8]) -> bool>,
 }
 
 /// Closed generated-runner product lifecycle fixed before process admission.
@@ -1699,12 +1700,12 @@ pub enum Stream {
     Stderr,
 }
 
-/// Where a running program's output also goes as it arrives: this
-/// process's own `stream`, and `also`.
+/// Where a running program's output also goes as it arrives: `also`, and
+/// this process's own `stream` unless `also` took it.
 #[derive(Clone, Copy)]
 struct Forward {
     stream: Stream,
-    also: Option<fn(Stream, &[u8])>,
+    also: Option<fn(Stream, &[u8]) -> bool>,
 }
 
 fn tail(mut reader: impl std::io::Read, forward: Option<Forward>) -> std::io::Result<Box<[u8]>> {
@@ -1718,7 +1719,11 @@ fn tail(mut reader: impl std::io::Read, forward: Option<Forward>) -> std::io::Re
         }
         // Best effort: a closed terminal never fails the runner.
         if let Some(forward) = forward {
+            let taken = forward
+                .also
+                .is_some_and(|also| also(forward.stream, &buffer[..count]));
             match forward.stream {
+                _ if taken => {}
                 Stream::Stdout => {
                     let mut out = std::io::stdout().lock();
                     let _ = out.write_all(&buffer[..count]).and_then(|()| out.flush());
@@ -1726,9 +1731,6 @@ fn tail(mut reader: impl std::io::Read, forward: Option<Forward>) -> std::io::Re
                 Stream::Stderr => {
                     let _ = std::io::stderr().lock().write_all(&buffer[..count]);
                 }
-            }
-            if let Some(also) = forward.also {
-                also(forward.stream, &buffer[..count]);
             }
         }
         retained.extend_from_slice(&buffer[..count]);
@@ -1899,8 +1901,9 @@ mod tests {
     /// What `tail` handed on, in the order it read it.
     static HANDED: std::sync::Mutex<Vec<(Stream, Vec<u8>)>> = std::sync::Mutex::new(Vec::new());
 
-    fn hand(stream: Stream, bytes: &[u8]) {
+    fn hand(stream: Stream, bytes: &[u8]) -> bool {
         HANDED.lock().unwrap().push((stream, bytes.to_vec()));
+        false
     }
 
     /// A program's output the owner copies to its own stream is handed on
