@@ -26,15 +26,22 @@ const OUTPUT: usize = 256 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Stream {
+    /// The program's stdout.
     Stdout,
+    /// The program's stderr.
     Stderr,
+    /// Rawr's own lines: the stderr of a `rawr run` the server started,
+    /// whose program's stderr comes through the session instead (#2367).
+    Rawr,
 }
 
 impl Stream {
+    /// The stream other shells hear the piece on, as a terminal shows it:
+    /// rawr's own lines on stderr.
     const fn name(self) -> &'static str {
         match self {
             Self::Stdout => "stdout",
-            Self::Stderr => "stderr",
+            Self::Stderr | Self::Rawr => "stderr",
         }
     }
 }
@@ -220,7 +227,8 @@ impl Sessions {
             })
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stderr(Stdio::piped())
+            .env(crate::events::PROGRAM_STDERR, "1");
         session::hand(&mut command, &listener);
         if entry == Entry::Hold {
             command.env(crate::events::HOLD, "1");
@@ -260,7 +268,7 @@ impl Sessions {
                     .stderr
                     .take()
                     .map(|pipe| Box::new(pipe) as Box<dyn std::io::Read + Send>),
-                Stream::Stderr,
+                Stream::Rawr,
             ),
         ] {
             if let Some(pipe) = pipe {
@@ -396,6 +404,14 @@ impl Session {
         }
         drop(state);
         (session, other)
+    }
+
+    /// Read `text` as the stderr of the `rawr run` the server started:
+    /// rawr's own lines.
+    #[cfg(test)]
+    pub fn read_rawr(&self, text: &'static [u8]) {
+        self.state().pipes += 1;
+        self.read_output(Box::new(text), Stream::Rawr);
     }
 
     fn state(&self) -> MutexGuard<'_, Mirror> {
@@ -789,11 +805,13 @@ impl Session {
             .is_some_and(|(number, _, _)| *number > output_after + 1);
         let mut stdout = String::new();
         let mut stderr = String::new();
+        let mut rawr = String::new();
         for (number, stream, text) in &state.output {
             if *number > output_after {
                 match stream {
                     Stream::Stdout => stdout.push_str(text),
                     Stream::Stderr => stderr.push_str(text),
+                    Stream::Rawr => rawr.push_str(text),
                 }
             }
         }
@@ -833,6 +851,7 @@ impl Session {
             "diagnostics": diagnostics,
             "stdout": stdout,
             "stderr": stderr,
+            "rawr": rawr,
             "output_dropped": dropped,
             "cursor": cursor,
             "output_cursor": output_cursor,
@@ -952,8 +971,8 @@ fn summary(structured: &Value) -> String {
     if let Some(diagnostics) = structured["diagnostics"].as_array() {
         text.push_str(&crate::diagnostic::lines(diagnostics));
     }
-    for (stream, key) in [("stdout", "stdout"), ("stderr", "stderr")] {
-        let output = structured[key].as_str().unwrap_or_default();
+    for stream in ["stdout", "stderr", "rawr"] {
+        let output = structured[stream].as_str().unwrap_or_default();
         if !output.is_empty() {
             text.push_str(&format!("--- {stream} ---\n{output}"));
             if !output.ends_with('\n') {

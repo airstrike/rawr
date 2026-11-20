@@ -1,7 +1,7 @@
 //! The session's events and output as the protocol's events: a pause is
-//! `stopped`, its end `continued`, the program's output and each reload
-//! `output`, a change to the breakpoints `breakpoint`, and the end of the
-//! run `exited` and `terminated`.
+//! `stopped`, its end `continued`, the program's output, rawr's own lines
+//! and each reload `output`, a change to the breakpoints `breakpoint`, and
+//! the end of the run `exited` and `terminated`.
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -38,9 +38,15 @@ impl Adapter {
                     self.tell(told);
                 }
             }
-            for stream in ["stdout", "stderr"] {
+            // Rawr's own lines, such as a cold start's progress, are the
+            // adapter's console; the program's streams keep their names.
+            for (stream, category) in [
+                ("rawr", "console"),
+                ("stdout", "stdout"),
+                ("stderr", "stderr"),
+            ] {
                 if let Some(text) = answer[stream].as_str().filter(|text| !text.is_empty()) {
-                    self.output(stream, text);
+                    self.output(category, text);
                 }
             }
             let phase = session.phase();

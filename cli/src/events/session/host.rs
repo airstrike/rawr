@@ -64,6 +64,10 @@ struct Inner {
     /// that started the run (#2274): only the first, as a program started
     /// again has the breakpoints from its start.
     hold: bool,
+    /// The shell that started the run reads its stderr as rawr's own
+    /// lines, so the program's stderr reaches it through the session
+    /// instead ([`PROGRAM_STDERR`](crate::events::PROGRAM_STDERR)).
+    program_stderr: bool,
 }
 
 /// A connection that said `hello`, and hears what happens from then on.
@@ -147,8 +151,11 @@ pub fn open(root: &Path) -> Option<Host> {
     });
     match opened {
         Ok(Some(host)) => {
-            host.0.inner().hold =
-                std::env::var_os(crate::events::HOLD).is_some_and(|value| !value.is_empty());
+            let set = |name| std::env::var_os(name).is_some_and(|value| !value.is_empty());
+            let mut inner = host.0.inner();
+            inner.hold = set(crate::events::HOLD);
+            inner.program_stderr = host.0.handed && set(crate::events::PROGRAM_STDERR);
+            drop(inner);
             *open_session() = Some(Arc::clone(&host.0));
             Some(host)
         }
@@ -172,11 +179,19 @@ pub fn record(event: &Value) {
 /// session this process hosts, and keep them for shells that attach later:
 /// an owner that holds the program's output calls it as it copies it to
 /// the terminal. A shell that started the run holds that output itself,
-/// and tells it.
-pub fn output(stream: rawr::Output, bytes: &[u8]) {
-    if let Some(shared) = current() {
-        shared.copied(stream, bytes);
-    }
+/// and tells it, except the program's stderr when the shell reads the
+/// run's stderr as rawr's own: that the session takes in place of the
+/// owner's stderr, and this answers `true`.
+pub fn output(stream: rawr::Output, bytes: &[u8]) -> bool {
+    current().is_some_and(|shared| shared.copied(stream, bytes))
+}
+
+/// Whether the session takes the program's stderr in place of this
+/// process's own, as [`output`] does: an owner whose program inherits its
+/// stderr then gives the program a pipe of its own and copies it.
+#[must_use]
+pub fn takes_stderr() -> bool {
+    current().is_some_and(|shared| shared.inner().program_stderr)
 }
 
 /// Ready `command`, which starts the program, for the session: never the
@@ -191,6 +206,7 @@ pub fn prepare(command: &mut Command) {
     command
         .env_remove(handover::LISTENER)
         .env_remove(crate::events::HOLD)
+        .env_remove(crate::events::PROGRAM_STDERR)
         .env_remove(crate::events::OUTPUT);
     if let Some(shared) = current() {
         ready(&shared, command);
@@ -530,18 +546,24 @@ impl Shared {
     }
 
     /// Tell `bytes` the owner copied from the program's `stream`, unless a
-    /// shell that started the run holds that output.
-    fn copied(&self, stream: rawr::Output, bytes: &[u8]) {
-        if self.handed {
-            return;
+    /// shell that started the run holds that output. Whether the session
+    /// took them in place of the owner's own stream: the program's stderr,
+    /// for a shell that reads the run's stderr as rawr's own.
+    fn copied(&self, stream: rawr::Output, bytes: &[u8]) -> bool {
+        let mut inner = self.inner();
+        let takes = inner.program_stderr && matches!(stream, rawr::Output::Stderr);
+        if self.handed && !takes {
+            return false;
         }
-        self.inner().tells = true;
+        inner.tells = true;
+        drop(inner);
         let stream = match stream {
             rawr::Output::Stderr => "stderr",
             _ => "stdout",
         };
         let text = String::from_utf8_lossy(bytes);
         self.output(0, json!({ "stream": stream, "text": text }));
+        takes
     }
 
     /// Keep output the shell on `from` read, and tell the others.
@@ -1079,6 +1101,29 @@ mod tests {
         let shell = Shell::connect(&place.socket());
         assert_eq!(greeted(&shell)["output"], json!([]));
         drop((plain, handed));
+    }
+
+    /// A shell that started the run and reads its stderr as rawr's own
+    /// hears the program's stderr from the session, which takes it in
+    /// place of the owner's stderr; the program's stdout stays the
+    /// shell's (#2367).
+    #[test]
+    fn a_shell_that_reads_rawr_s_lines_hears_the_program_s_stderr_from_the_session() {
+        let (handed, place) = host("program-stderr", true);
+        handed.0.inner().program_stderr = true;
+        let shell = Shell::connect(&place.socket());
+        greeted(&shell);
+        assert!(!handed.0.copied(rawr::Output::Stdout, b"out\n"));
+        assert!(handed.0.copied(rawr::Output::Stderr, b"err\n"));
+        assert_eq!(
+            shell.next(),
+            json!({
+                "jsonrpc": "2.0",
+                "method": "output",
+                "params": { "stream": "stderr", "text": "err\n" },
+            })
+        );
+        drop(handed);
     }
 
     /// The program's connection that tells its output, once the session

@@ -267,8 +267,35 @@ fn start(location: &Path, name: &OsStr, arguments: &[OsString]) -> std::io::Resu
     command
         .args(arguments)
         .env(PROGRAM, location)
-        .env_remove(crate::events::EVENTS)
-        .spawn()
+        .env_remove(crate::events::EVENTS);
+    #[cfg(unix)]
+    if crate::events::session::takes_stderr() {
+        let mut child = command.stderr(std::process::Stdio::piped()).spawn()?;
+        if let Some(pipe) = child.stderr.take() {
+            let _ = std::thread::Builder::new()
+                .name("rawr-program-stderr".into())
+                .spawn(move || copy_stderr(pipe));
+        }
+        return Ok(child);
+    }
+    command.spawn()
+}
+
+/// Copy the program's stderr from `pipe` to the session, which takes it in
+/// place of this process's stderr (#2367); what it doesn't take goes to
+/// this process's stderr.
+#[cfg(unix)]
+fn copy_stderr(mut pipe: impl std::io::Read) {
+    use std::io::Write as _;
+    let mut buffer = [0_u8; 8192];
+    while let Ok(read) = pipe.read(&mut buffer) {
+        if read == 0 {
+            return;
+        }
+        if !crate::events::session::output(rawr::Output::Stderr, &buffer[..read]) {
+            let _ = std::io::stderr().lock().write_all(&buffer[..read]);
+        }
+    }
 }
 
 /// The program's files, watched for saves.

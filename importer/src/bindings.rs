@@ -826,10 +826,12 @@ pub enum Error {
 }
 
 impl Error {
-    /// Whether preparing again can succeed: it can after a rerun's clean.
+    /// Whether preparing again can succeed: it can after a rerun's clean,
+    /// and after a refused table or fact leaves rawr's home, as the next
+    /// preparation extracts or captures it here (#2366).
     #[must_use]
     pub const fn is_stale(&self) -> bool {
-        matches!(self, Self::Rerun(_))
+        matches!(self, Self::Rerun(_) | Self::Refused(_))
     }
 }
 
@@ -2237,6 +2239,46 @@ mod tests {
             );
             assert!(read_entry(&bindings, "key").is_none());
         }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A shared table this project's build-script outputs refuse leaves
+    /// rawr's home, and the refusal prepares again, which extracts the
+    /// table here, rather than ending the run (#2366).
+    #[test]
+    fn a_refused_shared_table_prepares_again() {
+        if !home::alone("bindings::tests::a_refused_shared_table_prepares_again") {
+            return;
+        }
+        let root = scratch("refused-again");
+        let bindings = root.join("bindings");
+        let package = "registry+https://index#demo@1.0.0".to_owned();
+        let scripts = BTreeMap::from([(package, vec![script("cfg")])]);
+        let meta = serde_json::to_vec(&meta(scripts.clone())).unwrap();
+        home::publish(
+            &bindings,
+            "key",
+            &[("table.json", b"units"), ("meta.json", &meta)],
+        )
+        .unwrap();
+        let refused = Settlement {
+            entries: vec![Settled::Read {
+                directory: bindings.clone(),
+                key: "key".to_owned(),
+                crate_name: "fixture".to_owned(),
+                scripts,
+                inputs: crate::input::bindings::Inputs::fixture(),
+            }],
+            local_closures: Box::default(),
+            bindings: Some(bindings.clone()),
+            rawr: Some(runner(&root, &BTreeMap::new())),
+            nightly: None,
+        }
+        .settle()
+        .unwrap_err();
+        assert!(matches!(refused, super::Error::Refused(_)), "{refused}");
+        assert!(refused.is_stale(), "{refused}");
+        assert!(read_entry(&bindings, "key").is_none());
         fs::remove_dir_all(root).unwrap();
     }
 
