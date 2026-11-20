@@ -4,6 +4,7 @@
 use serde_json::{json, Value};
 
 use super::handles::Handle;
+use super::place::Place;
 use super::Adapter;
 
 impl Adapter {
@@ -70,14 +71,10 @@ impl Adapter {
     }
 
     /// `variables`: a frame's bindings, or a value's parts, each with a
-    /// reference to its own parts when it has any.
+    /// reference to its own parts when it has any, and its place as the
+    /// name the client evaluates it by.
     pub(super) fn variables(&self, arguments: &Value) -> Result<Value, String> {
-        let reference = arguments["variablesReference"].as_u64().unwrap_or(0);
-        let handle = self
-            .handles()
-            .get(reference)
-            .cloned()
-            .ok_or("that reference no longer holds: the program went on since it was given")?;
+        let handle = self.handle(arguments)?;
         let variables: Vec<Value> = match handle {
             Handle::Frame(frame) => {
                 let mut answer = self.ask(&json!({ "frame": frame, "children": true }))?;
@@ -101,29 +98,44 @@ impl Adapter {
                             .or_else(|| binding["error"].as_str())
                             .unwrap_or_default()
                             .to_owned();
-                        let mut variable =
-                            handles.variable(&name, &value, binding["children"].take());
-                        variable["evaluateName"] = json!(name);
-                        variable
+                        handles.variable(
+                            frame,
+                            Place::binding(&name),
+                            &name,
+                            &value,
+                            binding["children"].take(),
+                        )
                     })
                     .collect()
             }
             Handle::Parts(parts) => {
                 let mut handles = self.handles();
                 parts
-                    .into_iter()
-                    .map(|mut part| {
-                        let children = part["children"].take();
+                    .parts
+                    .iter()
+                    .map(|part| {
+                        let name = part["name"].as_str().unwrap_or_default();
                         handles.variable(
-                            part["name"].as_str().unwrap_or_default(),
+                            parts.frame,
+                            parts.place_of(name),
+                            name,
                             part["value"].as_str().unwrap_or_default(),
-                            children,
+                            part["children"].clone(),
                         )
                     })
                     .collect()
             }
         };
         Ok(json!({ "variables": variables }))
+    }
+
+    /// What the `variablesReference` among `arguments` reads, while it
+    /// holds.
+    pub(super) fn handle(&self, arguments: &Value) -> Result<Handle, String> {
+        let reference = arguments["variablesReference"].as_u64().unwrap_or(0);
+        self.handles().get(reference).cloned().ok_or_else(|| {
+            "that reference no longer holds: the program went on since it was given".to_owned()
+        })
     }
 
     /// `evaluate`: the inspector's `eval`, as a block written before the
@@ -133,12 +145,23 @@ impl Adapter {
         let code = arguments["expression"]
             .as_str()
             .ok_or("evaluate needs an expression")?;
+        let frame = arguments["frameId"].as_u64().unwrap_or(1).saturating_sub(1);
+        let variable = self.eval(frame, code, Place::expression(code))?;
+        Ok(json!({
+            "result": variable["value"],
+            "variablesReference": variable["variablesReference"],
+        }))
+    }
+
+    /// `code` evaluated in frame `frame` of the paused program, as a
+    /// protocol `Variable` for the value at `place`: the value the code
+    /// ends with, and its parts behind a reference.
+    pub(super) fn eval(&self, frame: u64, code: &str, place: Place) -> Result<Value, String> {
         if self.session()?.paused().is_none() {
             return Err(
                 "the program isn't paused: code is evaluated where it is paused".to_owned(),
             );
         }
-        let frame = arguments["frameId"].as_u64().unwrap_or(1).saturating_sub(1);
         let mut answer = self.ask(&json!({
             "op": "eval",
             "code": code,
@@ -146,12 +169,8 @@ impl Adapter {
             "children": true,
         }))?;
         let value = answer["value"].as_str().unwrap_or_default().to_owned();
-        let variable = self
+        Ok(self
             .handles()
-            .variable("", &value, answer["children"].take());
-        Ok(json!({
-            "result": value,
-            "variablesReference": variable["variablesReference"],
-        }))
+            .variable(frame, place, "", &value, answer["children"].take()))
     }
 }

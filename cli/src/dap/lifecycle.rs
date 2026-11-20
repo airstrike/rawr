@@ -21,6 +21,8 @@ impl Adapter {
             "supportsConfigurationDoneRequest": true,
             "supportsFunctionBreakpoints": true,
             "supportsEvaluateForHovers": true,
+            "supportsSetVariable": true,
+            "supportsSetExpression": true,
             "supportsTerminateRequest": true,
         })
     }

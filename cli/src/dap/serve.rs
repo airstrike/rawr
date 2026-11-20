@@ -67,6 +67,8 @@ impl Adapter {
             "scopes" => Ok(self.scopes(arguments)),
             "variables" => self.variables(arguments),
             "evaluate" => self.evaluate(arguments),
+            "setVariable" => self.set_variable(arguments),
+            "setExpression" => self.set_expression(arguments),
             "continue" => self.resume(),
             "pause" => self.pause(),
             // A step is answered at once; the pause it ends in is told as

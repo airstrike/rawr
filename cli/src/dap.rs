@@ -14,13 +14,16 @@
 //! The protocol counts one thread: the one that runs the program's code,
 //! which the inspector pauses. Frames are the inspector's, innermost first,
 //! each named by its Rust path, and a value's children are its parts as
-//! the inspector splits its `{:?}` text.
+//! the inspector splits its `{:?}` text. A value the client sets is
+//! assigned through the same `eval`, at the value's place in its frame.
 
+mod assign;
 mod breakpoints;
 mod control;
 mod follow;
 mod handles;
 mod lifecycle;
+mod place;
 mod serve;
 mod values;
 mod wire;
