@@ -37,7 +37,7 @@ const PROTOCOLS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 /// flight and the programs it reaches.
 pub(crate) struct Server {
     root: PathBuf,
-    out: Mutex<mpsc::Sender<Value>>,
+    out: mpsc::Sender<Value>,
     calls: Mutex<HashMap<String, Arc<process::Cancel>>>,
     /// How many calls run now: the server ends once none does.
     running: Mutex<usize>,
@@ -51,11 +51,7 @@ pub(crate) struct Server {
 
 impl Server {
     fn send(&self, message: Value) {
-        let _ = self
-            .out
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .send(message);
+        let _ = self.out.send(message);
     }
 
     fn reply(&self, id: Value, result: Value) {
@@ -111,7 +107,7 @@ pub fn serve_on(
         })?;
     let server = Arc::new(Server {
         root,
-        out: Mutex::new(out),
+        out,
         calls: Mutex::new(HashMap::new()),
         running: Mutex::new(0),
         idle: Condvar::new(),
