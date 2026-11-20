@@ -16,9 +16,10 @@ fn test_assignments() {
 fn test_assignments_bad_lhs() {
     let engine = Engine::new();
 
+    // rustc's E0070: the left side is a value, not a place.
     let bad_target = |script: &str| {
         let err = engine.compile(script).expect_err(script);
-        matches!(err.err_type(), ParseErrorType::Resolution(Error::UnsupportedNominalSyntax { construct, .. }) if construct == "assignment target")
+        matches!(err.err_type(), ParseErrorType::Resolution(Error::InvalidAssignee { compound: false, .. }))
     };
 
     assert!(bad_target("let x = 1; let y = 2; (x + y) = 42;"));
@@ -27,6 +28,9 @@ fn test_assignments_bad_lhs() {
     assert!(bad_target("123 = 42;"));
 
     assert!(bad_target("struct S { y: i64 } impl S { fn foo(&self) -> i64 { self.y } } let x = S { y: 1 }; x.foo() = 42;"));
+
+    // A compound assignment to one is rustc's E0067.
+    assert!(matches!(engine.compile("let x = 1; let y = 2; (x + y) += 1;").unwrap_err().err_type(), ParseErrorType::Resolution(Error::InvalidAssignee { compound: true, .. })));
 
     // Assigning to a binding that isn't `mut` is an error too.
     assert!(matches!(

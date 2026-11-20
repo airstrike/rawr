@@ -415,6 +415,10 @@ struct Parser<'a> {
     /// their own (`*r`, `*rc`, `[s][0]`), by their span: what rustc
     /// refuses of each.
     unmovable: BTreeMap<Span, Unplaced>,
+    /// Expressions that are values and never places, by their span: a
+    /// literal, an operator's result, and either in parentheses. An
+    /// assignment to one is rustc's E0070 (`invalid_assignee`).
+    values: BTreeSet<Span>,
     /// Elements reached through `IndexMut` (a `Vec`'s, a `VecDeque`'s), by
     /// their span: an assignment to one borrows its container mutably,
     /// where an array's or a slice's element is a place of its own.
@@ -956,6 +960,7 @@ impl<'a> Parser<'a> {
             local_types: Vec::new(),
             shared_field_reads: BTreeSet::new(),
             unmovable: BTreeMap::new(),
+            values: BTreeSet::new(),
             index_mut_elements: BTreeSet::new(),
             owning_closures: BTreeSet::new(),
             once_closures: BTreeSet::new(),

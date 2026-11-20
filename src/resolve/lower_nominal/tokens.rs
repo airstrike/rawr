@@ -749,6 +749,10 @@ fn token_length(text: &str) -> usize {
             return opening + at + 1;
         }
     }
+    // `()` is one token, as the empty arguments of a call.
+    if text.starts_with("()") {
+        return 2;
+    }
     let identifier = text
         .strip_prefix("r#")
         .filter(|rest| rest.starts_with(word));

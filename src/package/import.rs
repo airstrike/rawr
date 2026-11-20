@@ -1274,6 +1274,7 @@ fn diagnostic_path(error: &crate::resolve::Error) -> Option<(String, ImportedNam
         | R::AsyncMain { .. }
         | R::Unboxed { .. }
         | R::UnscopedWrite { .. }
+        | R::InvalidAssignee { .. }
         | R::StdPath { .. }
         | R::NotYet { .. }
         | R::TypeAnnotationsNeeded { .. }

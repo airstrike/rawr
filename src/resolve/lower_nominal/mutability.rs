@@ -174,12 +174,27 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// rustc's E0594 for an assignment to `place`, after its `=`, where it
-    /// has no lvalue because a pointer that can't change it is above it
-    /// (`*r` of a `&`, a field of an `Arc`'s value). rustc's borrow check
-    /// comes after the value's type check, so the value is parsed first,
-    /// and the error marks the whole assignment.
-    pub(super) fn unplaced_assignment(&mut self, place: Span) -> Result<Option<Error>, Error> {
+    /// rustc's error for an assignment to `place`, which has no lvalue,
+    /// after its `operator` at `at`. A value that is no place is E0070
+    /// (E0067 for a compound assignment), found while the assignment's
+    /// types are checked. A place with a pointer above it that can't change
+    /// it (`*r` of a `&`, a field of an `Arc`'s value) is E0594: rustc's
+    /// borrow check comes after the value's type check, so the value is
+    /// parsed first, and the error marks the whole assignment. `None` for a
+    /// place rawr gives no lvalue of its own yet.
+    pub(super) fn unplaced_assignment(
+        &mut self,
+        place: Span,
+        operator: &Token,
+        at: Position,
+    ) -> Result<Option<Error>, Error> {
+        if self.is_value_expression(place) {
+            return Ok(Some(Error::InvalidAssignee {
+                compound: *operator != Token::Equals,
+                operator: span(at, text_end(at, operator.literal_syntax())),
+                assignee: self.expression_span(place),
+            }));
+        }
         let Some(Unplaced {
             assigned: Some(assigned),
             ..
@@ -198,6 +213,15 @@ impl<'a> Parser<'a> {
             },
             Unassignable::Shared(holder) => self.shared_assignment(holder.as_deref(), at),
         }))
+    }
+
+    /// Whether the expression spanning `at` is a value, never a place: a
+    /// literal, an operator's result or a call's, or one of them in
+    /// parentheses. A call's value is known by where it ends, which `*f()`,
+    /// the place the call's reference refers to, shares.
+    pub(super) fn is_value_expression(&self, at: Span) -> bool {
+        self.values.contains(&at)
+            || (self.flow().is_call(at) && !at.text(self.text).starts_with('*'))
     }
 
     /// rustc's E0594 for an assignment at `at`, the whole assignment, to a

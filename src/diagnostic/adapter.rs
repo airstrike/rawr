@@ -546,6 +546,7 @@ fn resolution_report_with_sources(
         resolve::Error::MovedValue { partial: true, .. } => "value partially moved here".into(),
         resolve::Error::MovedValue { .. } => "value moved here".into(),
         resolve::Error::BorrowConflict { .. } => "borrow made here".into(),
+        resolve::Error::InvalidAssignee { .. } => "cannot assign to this expression".into(),
         resolve::Error::UnboundAlternative { .. } => "variable not in all patterns".into(),
         resolve::Error::ArgumentCount { callee, .. } => callee.defined_here().into(),
         resolve::Error::ImmutableBinding { binding, .. } => {
@@ -860,6 +861,12 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Category::UnlabeledJumpInWhileCondition => code::RESOLVE_JUMP_IN_WHILE_CONDITION,
         resolve::Category::AsyncMain => code::RESOLVE_ASYNC_MAIN,
         resolve::Category::UnscopedWrite => code::RESOLVE_NO_METHOD,
+        resolve::Category::InvalidAssignee => match error {
+            resolve::Error::InvalidAssignee { compound: true, .. } => {
+                code::RESOLVE_INVALID_COMPOUND_ASSIGNEE
+            }
+            _ => code::RESOLVE_INVALID_ASSIGNEE,
+        },
         resolve::Category::StdPath => match error {
             resolve::Error::StdPath { code, .. } => code::std_path(code),
             _ => unreachable!("a std path's category"),
@@ -1333,6 +1340,7 @@ fn resolution_message(error: &resolve::Error) -> String {
         }
         resolve::Error::AsyncMain { .. } => resolve::ASYNC_MAIN.to_string(),
         resolve::Error::UnscopedWrite { owner, .. } => format!("cannot write into `{owner}`"),
+        resolve::Error::InvalidAssignee { .. } => resolve::INVALID_ASSIGNEE.to_string(),
         resolve::Error::StdPath { message, .. } => message.to_string(),
         resolve::Error::NonExhaustive { witnesses, .. } => {
             resolve::NonExhaustive(witnesses).to_string()

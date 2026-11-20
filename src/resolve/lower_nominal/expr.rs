@@ -570,7 +570,9 @@ impl<'a> Parser<'a> {
             return Ok(operand.retain_origin());
         }
         if matches!(self.peek(), Token::Minus | Token::UnaryMinus | Token::Bang) {
-            self.parse_unary()
+            let value = self.parse_unary()?;
+            self.values.insert(value.span);
+            Ok(value)
         } else {
             self.parse_postfix()
         }
@@ -660,6 +662,20 @@ impl<'a> Parser<'a> {
         }
         let (token, position) = self.next();
         let token_span = point_span(position);
+        if matches!(
+            token,
+            Token::Unit
+                | Token::True
+                | Token::False
+                | Token::IntegerConstant(_)
+                | Token::CharConstant(_)
+                | Token::StringConstant(_)
+                | Token::ByteStringConstant(_)
+                | Token::ByteConstant(_)
+                | Token::FloatConstant(_)
+        ) {
+            self.values.insert(token_span);
+        }
 
         match token {
             Token::Unit => Ok(self.literal("()", Ty::Unit, token_span)),
@@ -982,6 +998,9 @@ impl<'a> Parser<'a> {
             self.flow().same_origins(span(open, end), value.span);
             if let Some(unmovable) = self.unmovable.get(&value.span).cloned() {
                 self.unmovable.insert(span(open, end), unmovable);
+            }
+            if self.is_value_expression(value.span) {
+                self.values.insert(span(open, end));
             }
             self.note_known_parenthesized(value.span, span(open, end));
             value.span = span(open, end);
