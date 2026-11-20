@@ -378,6 +378,41 @@ fn main() {
   </div>
 </section>
 
+<section id="debugger">
+  <div class="wrap sec">
+    <div class="side">
+      <h2>One debugger, every shell</h2>
+    </div>
+    <div>
+      <p class="status">A run has one debugger session, and each shell is a view of it. Every shell sees the same breakpoints and the same values. A breakpoint set in one shows in the others at once.</p>
+      <p class="status">A shell attaches to a program already running in a terminal, without restarting it.</p>
+      <div class="actions"><a class="btn" href="/docs/debugging">Debugging</a></div>
+    </div>
+  </div>
+  <div class="wrap shells">
+    <div class="row">
+      <figure class="block shell" style="--ratio: 1.1015">
+        <figcaption class="file"><b>VS Code</b><span>F5, with the rawr extension</span></figcaption>
+        <img src="/img/debugger-vscode-720.webp" srcset="/img/debugger-vscode-720.webp 720w, /img/debugger-vscode-1440.webp 1440w" sizes="(max-width: 640px) 100vw, 45vw" width="720" height="654" loading="lazy" decoding="async" alt="VS Code paused at line 18, with the players map opened to one row per key in Variables">
+      </figure>
+      <figure class="block shell" style="--ratio: 1.4085">
+        <figcaption class="file"><b>Window</b><span>rawr gui</span></figcaption>
+        <img src="/img/debugger-gui-720.webp" srcset="/img/debugger-gui-720.webp 720w, /img/debugger-gui-1440.webp 1440w" sizes="(max-width: 640px) 100vw, 55vw" width="720" height="511" loading="lazy" decoding="async" alt="The rawr gui window paused at line 18, with its source, call stack, bindings, console and output">
+      </figure>
+    </div>
+    <div class="row">
+      <figure class="block shell" style="--ratio: 1.5049">
+        <figcaption class="file"><b>Terminal</b><span>rawr tui</span></figcaption>
+        <img src="/img/debugger-tui-720.webp" srcset="/img/debugger-tui-720.webp 720w, /img/debugger-tui-1440.webp 1440w" sizes="(max-width: 640px) 100vw, 50vw" width="720" height="478" loading="lazy" decoding="async" alt="rawr tui in a terminal paused at line 18, with the players map opened in its bindings pane">
+      </figure>
+      <figure class="block shell" style="--ratio: 1.6">
+        <figcaption class="file"><b>Browser</b><span>the bug icon on /play</span></figcaption>
+        <img src="/img/debugger-playground-720.webp" srcset="/img/debugger-playground-720.webp 720w, /img/debugger-playground-1440.webp 1440w" sizes="(max-width: 640px) 100vw, 50vw" width="720" height="450" loading="lazy" decoding="async" alt="The playground's debugger panel paused at a breakpoint, beside the code and its output">
+      </figure>
+    </div>
+  </div>
+</section>
+
 <section id="embed">
   <div class="wrap sec">
     <div class="side">

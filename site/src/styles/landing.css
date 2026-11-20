@@ -108,6 +108,14 @@ main > section > .wrap { padding: 0; }
 .status { max-width: 40em; }
 .status + .status { margin-top: 12px; }
 
+/* The debugger's shells, two to a row. Each figure grows by its image's
+   width over height (--ratio), so the images in a row share one height. */
+.shells { display: grid; gap: 16px; margin-top: 32px; }
+.shells .row { display: flex; gap: 16px; }
+.shell { flex: var(--ratio) 1 0; min-width: 0; margin: 0; }
+.shell img { display: block; width: 100%; height: auto; background: var(--term); }
+.shell .file { border-bottom: 1px solid var(--grid); }
+
 @media (max-width: 960px) {
   .hero { grid-template-columns: minmax(0, 1fr); gap: 40px; padding: 40px 0 48px; }
   .sec { grid-template-columns: minmax(0, 1fr); gap: 20px; }
@@ -122,6 +130,8 @@ main > section > .wrap { padding: 0; }
   .block pre { font-size: 12px; padding: 12px; }
   .file, .run { padding-left: 12px; padding-right: 12px; }
   .tabs .hint { display: none; }
+  .shells .row { flex-direction: column; }
+  .shell { flex: none; }
   .pair { grid-template-columns: minmax(0, 1fr); }
   .pair .shot { justify-self: start; }
 }

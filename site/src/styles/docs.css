@@ -118,6 +118,14 @@ td:first-child code { font-size: 13px; background: none; padding: 0; }
 .shot { border: 1px solid var(--grid); background: var(--wash); margin: 18px 0; display: inline-block; max-width: 100%; }
 .shot img { display: block; max-width: 100%; height: auto; }
 .shot figcaption { padding: 8px 14px; border-top: 1px solid var(--grid); font-size: var(--fs-small); color: var(--quiet); }
+/* Numbered pins over a figure's image, each at its place as a share of
+   the image's width and height, named by the list that follows. */
+.shot .pins { position: relative; }
+.shot .pins i {
+  position: absolute; transform: translate(-50%, -50%); width: 22px; height: 22px; display: grid; place-items: center; border-radius: 50%;
+  background: var(--red); color: var(--on-red); font: var(--w-strong) 12px/1 var(--mono); font-style: normal; box-shadow: 0 0 0 2px var(--paper);
+}
+@media (max-width: 640px) { .shot .pins i { width: 18px; height: 18px; font-size: 10px; } }
 .pager { display: flex; justify-content: space-between; gap: 16px; margin-top: 64px; padding-top: 12px; border-top: 1px solid var(--grid); }
 .pager a { padding: 4px 0; }
 .pager a { color: var(--quiet); font-size: var(--fs-label); font-weight: 600; letter-spacing: var(--track-label); text-transform: uppercase; text-decoration: none; }
