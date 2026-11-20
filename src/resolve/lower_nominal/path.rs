@@ -701,7 +701,16 @@ impl<'a> Parser<'a> {
             // names (`use iced::widget::Widget;` then `Widget::_boxed(w)`),
             // which Rawr names as a module: the method called on its
             // receiver, as through the trait's whole path.
+            // A std type the std facade re-exports by its path, as
+            // `std::fs::File`, is a module binding too: its methods are
+            // called on their receivers as a trait's are, and its other
+            // functions are no trait's (`File::create`).
+            let std_function =
+                crate::std_table::path(&binding.qualified, crate::std_table::Namespace::Type)
+                    .is_some_and(|resolved| resolved.is_type())
+                    && !self.std_type_method(&path, member_span);
             let crate_trait = self.models.host_items(&path).is_none()
+                && !std_function
                 && matches!(binding.target, item::Import::Module)
                 && binding
                     .qualified
@@ -784,8 +793,17 @@ impl<'a> Parser<'a> {
                 // A module a `use` names lacks only the item, as `fonts::
                 // MISSING` after `use shared::fonts;`: rustc's E0425 for
                 // the module, not a type's E0599 (#1146). A crate's trait,
-                // which Rawr names as a module, is a type.
-                let error = if matches!(binding.target, item::Import::Module) && !crate_trait {
+                // which Rawr names as a module, is a type. A member of a
+                // std type std has is rawr's not-yet error, as its full
+                // path is (D712.1).
+                let error = if let Some(error) = crate::resolve::std_path::not_yet(
+                    &path,
+                    &path,
+                    crate::std_table::Namespace::Value,
+                    span(owner_span.start(), member_span.end()),
+                ) {
+                    error
+                } else if matches!(binding.target, item::Import::Module) && !crate_trait {
                     Error::NotInModule {
                         module: binding.qualified,
                         item: member,

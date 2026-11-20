@@ -45,15 +45,21 @@ impl Snapshot {
     /// its packages' manifests. Loading the snapshot reads the program as
     /// it was compiled, whatever its files hold now.
     ///
+    /// An inline module is a source of its own at its file's path, holding
+    /// only the text inside its braces. The graph loads a file before the
+    /// modules inside it, so the first source at a path holds the whole
+    /// file, and loading the snapshot finds the inline modules in it.
+    ///
     /// # Errors
     ///
-    /// When two of its sources share a path.
+    /// When a path escapes the root it was captured under.
     pub fn of(graph: &super::Graph) -> Result<Self, Error> {
-        let mut files: Vec<(PathBuf, Box<str>)> = graph
-            .sources()
-            .iter()
-            .map(|source| (source.path().to_path_buf(), source.text().into()))
-            .collect();
+        let mut files: Vec<(PathBuf, Box<str>)> = Vec::new();
+        for source in graph.sources() {
+            if !files.iter().any(|(file, _)| file == source.path()) {
+                files.push((source.path().to_path_buf(), source.text().into()));
+            }
+        }
         for package in graph.packages() {
             if let Some((path, text)) = package.cargo_manifest()
                 && !files.iter().any(|(file, _)| file == path)
