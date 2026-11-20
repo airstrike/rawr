@@ -6,6 +6,12 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.71 (2026-11-20)
+
+- Under `rawr dap`, rawr's own progress and status lines reach the editor as console output; only the program's stderr shows as stderr. (#2367)
+- A shared table or fact refused for its build-script output prepares again by itself instead of ending the run with 'run again'. (#2366)
+- A trait another module declares, named in an `impl` header, a bound, a `where` clause, an `impl Trait` or a `dyn` without a `use`, is refused with rustc's E0405 and the `use` that imports it. A module's trait that shares a std trait's name no longer replaces std's trait where the scope doesn't import it. (#2364)
+
 ## 0.4.70 (2026-11-20)
 
 - A build script that gives rawr's nightly build other output than the project's build no longer prints anything when rawr handles it, so VS Code's debug console shows no red lines for it. Once a rerun confirms the difference, every project that builds with the same nightly and gets the same output treats it as known, so a cleaned target or another workspace member no longer cleans and extracts again. (#2365; part of #2351)

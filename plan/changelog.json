@@ -8,6 +8,15 @@
   },
   "releases": [
     {
+      "version": "0.4.71",
+      "date": "2026-11-20",
+      "entries": [
+        {"text":"Under `rawr dap`, rawr's own progress and status lines reach the editor as console output; only the program's stderr shows as stderr.","issues":[2367]},
+        {"text":"A shared table or fact refused for its build-script output prepares again by itself instead of ending the run with 'run again'.","issues":[2366]},
+        {"text":"A trait another module declares, named in an `impl` header, a bound, a `where` clause, an `impl Trait` or a `dyn` without a `use`, is refused with rustc's E0405 and the `use` that imports it. A module's trait that shares a std trait's name no longer replaces std's trait where the scope doesn't import it.","issues":[2364]}
+      ]
+    },
+    {
       "version": "0.4.70",
       "date": "2026-11-20",
       "entries": [
