@@ -495,3 +495,43 @@ fn language_rust_meaning_option_as_deref_borrows_through_deref() {
     );
     assert_eq!(value, "true false Some(\"Inter\") Some(7)");
 }
+
+#[test]
+fn a_block_whose_last_statement_ends_in_a_semicolon_is_unit() {
+    // Native code calling a unit function gets `()`, whatever value the
+    // body's last statement leaves (#2316).
+    let engine = Engine::new();
+    let ast = engine
+        .compile(
+            r#"
+            use std::collections::HashMap;
+            fn main() {
+                let mut players = HashMap::new();
+                players.insert("al", 1);
+                players.insert("bo", 2);
+            }
+            fn tail_block(c: bool) {
+                if c { 1; } else { 2; }
+            }
+            fn count() -> i64 {
+                let n = { 1; 2 };
+                let unit = { n; };
+                if unit == () { n } else { 0 }
+            }
+            "#,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+    let mut scope = crate::Scope::new();
+    engine
+        .call_fn::<()>(&mut scope, &ast, "main", ())
+        .unwrap_or_else(|error| panic!("{error}"));
+    engine
+        .call_fn::<()>(&mut scope, &ast, "tail_block", (true,))
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(
+        engine
+            .call_fn::<i64>(&mut scope, &ast, "count", ())
+            .unwrap_or_else(|error| panic!("{error}")),
+        2
+    );
+}

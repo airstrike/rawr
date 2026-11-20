@@ -613,9 +613,12 @@ impl Engine {
     ) -> RawrResultOf<Option<DebuggerStatus>> {
         let node = node.into();
 
-        // Skip transitive nodes
+        // Skip transitive nodes, and the no-op that gives a block ending in
+        // `;` its `()`, which runs nothing.
         match node {
-            ASTNode::Expr(Expr::Stmt(..)) | ASTNode::Stmt(Stmt::Expr(..)) => return Ok(None),
+            ASTNode::Expr(Expr::Stmt(..))
+            | ASTNode::Stmt(Stmt::Expr(..))
+            | ASTNode::Stmt(Stmt::Noop(..)) => return Ok(None),
             _ => (),
         }
 
