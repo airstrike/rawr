@@ -81,6 +81,27 @@ export interface Evaluated {
 }
 
 /**
+ * Rust naming the part `name` of the value at `place`, whose `{:?}` text is
+ * `text`, as cli/src/dap/place.rs names one for an editor's setVariable: a
+ * map's entry through `get_mut` by a reference to its key (a string
+ * literal is one already), `[i]` a sequence's item, any other name a
+ * field. Where Rust can't reach the part so, the compiler says why.
+ */
+export function partPlace(place: string, text: string, name: string): string {
+  if (text.startsWith("{")) return `(*${place}.get_mut(${name.startsWith('"') ? name : `&${name}`}).unwrap())`;
+  if (name.startsWith("[")) return `${place}${name}`;
+  return `${place}.${name}`;
+}
+
+/** Code that assigns `value` to `place`, its value then the code's. */
+export function assignment(place: string, value: string): string {
+  return `${place} = ${value}; ${place}`;
+}
+
+/** What an assignment gave: the value written, or rustc's refusal. */
+export type Assigned = { value: string } | { error: string };
+
+/**
  * Where the program is: no program attached yet, held at its start, running,
  * paused, or past the end of `main`.
  */
@@ -243,6 +264,21 @@ export class Debugger {
       ? { code, error: String(answer.error) }
       : { code, value: String(answer.value), ...(Array.isArray(answer.children) ? { children: answer.children } : {}) };
     this.set({ evaluated: [...this.state.evaluated, evaluated].slice(-KEPT) });
+  }
+
+  /**
+   * Assign `value`, Rust, to `place` in the selected frame, through the same
+   * eval the console runs, so the program's compiler decides whether Rust
+   * allows the write there. A write reads the frame's bindings again.
+   */
+  async assign(place: string, value: string): Promise<Assigned> {
+    const run = this.run;
+    const frame = this.state.frame;
+    if (!this.ask || !this.state.paused) return { error: "The program isn't paused." };
+    const answer = await this.ask({ op: "eval", code: assignment(place, value), frame });
+    if (answer.error !== undefined) return { error: String(answer.error) };
+    if (run === this.run) await this.select(frame);
+    return { value: String(answer.value) };
   }
 
   /** `answer`, its refusal shown as the panel's error while `run` is attached. */

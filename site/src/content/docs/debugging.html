@@ -130,6 +130,7 @@ args = { program = "{0}" }</code></pre></div>
   <li>Click a line number to set a breakpoint, and click it again to clear it. Breakpoints you set before a run are in place before <code>main</code> starts.</li>
   <li>The panel&rsquo;s toolbar takes the same keys as the window: F8, F10, F11 and Shift+F11.</li>
   <li>The panel shows the call stack and the bindings of the call you select.</li>
+  <li>Click a value without fields or items in the bindings to change it. Type Rust and press Enter to assign it in the selected call. If Rust refuses the assignment, rustc&rsquo;s error shows under the value. Escape cancels.</li>
   <li>The console evaluates Rust in the selected call. Enter evaluates, and Shift+Enter adds a line.</li>
   <li>A breakpoint pauses <code>main</code> and the functions it calls. It also pauses inside an event listener or an animation-frame callback, such as ratzilla&rsquo;s key handler. Any other call from the page into the program runs to its end without pausing.</li>
 </ul>
@@ -147,7 +148,7 @@ args = { program = "{0}" }</code></pre></div>
 <h2 id="values">Values and evaluation</h2>
 <p>Each binding shows as Rust&rsquo;s <code>{:?}</code> prints it. Your own types print through their <code>Debug</code> impls and derives. A crate&rsquo;s type prints through that crate&rsquo;s <code>Debug</code> impl. A type without one says so, as rustc does. A value with fields or items opens to a row for each. Those rows open too.</p>
 <p>Evaluated code runs where the program is paused. rawr compiles it as a block written just before the paused statement, so the bindings in scope there are in scope for it. rustc&rsquo;s rules for that line apply. Changing a binding that isn&rsquo;t <code>mut</code> fails with rustc&rsquo;s error. So does a borrow that conflicts with one the program still holds.</p>
-<p>The answer is the value of the code&rsquo;s last expression. rawr reads it through a borrow, so evaluating a binding doesn&rsquo;t move it. A change the code makes stays, and the program goes on with it. Bindings the code declares end with it.</p>
+<p>The answer is the value of the code&rsquo;s last expression. An assignment such as <code>self.value = 100</code> answers <code>()</code>, with or without its <code>;</code>. rawr reads it through a borrow, so evaluating a binding doesn&rsquo;t move it. A change the code makes stays, and the program goes on with it. Bindings the code declares end with it.</p>
 <p>With a caller&rsquo;s frame selected, the code runs in that caller, just before the statement that made the call. A change it makes stays in that caller. A binding the running call borrows, such as one passed to it as <code>&amp;mut</code>, is refused until the call returns. <code>rawr mcp</code>&rsquo;s <a href="/docs/agents#break"><code>eval</code></a> follows the same rules.</p>
 
 <h2 id="attach">Attaching to a running program</h2>

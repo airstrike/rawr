@@ -2,11 +2,13 @@
 // The playground's debugger (src/play/debugger.ts) against a stand-in for
 // the debugger build's instance, and the session's debugger icon against
 // stand-in universes: the held start, the capabilities said up front, the
-// breakpoints a click sets, a pause's frames and bindings, and the icon's
-// gate on the browser's own JSPI.
+// breakpoints a click sets, a pause's frames and bindings, a value the
+// bindings panel edits in place, and the icon's gate on the browser's own
+// JSPI.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { canPause, Debugger, ROOT } from "../src/play/debugger.ts";
+import { assignment, canPause, Debugger, partPlace, ROOT } from "../src/play/debugger.ts";
+import { editable, visible, type Row } from "../src/play/rows.ts";
 import { Session, type State, type Universe } from "../src/play/session.ts";
 import type { Frame } from "../src/scripts/universe.ts";
 
@@ -224,4 +226,81 @@ test("a browser that can't pause never turns the debugger on, nor runs its build
   assert.deepEqual(debugged.runs, [], "the debugger build never runs");
   assert.deepEqual(page.asked, []);
   assert.equal(session.state.output.kind, "term", "the program's output stays");
+});
+
+test("a part's place is named as Rust reaches it, as an editor's setVariable names one", () => {
+  assert.equal(partPlace("self", "Counter { value: 1 }", "value"), "self.value");
+  assert.equal(partPlace("self.last", "(1, 2)", "0"), "self.last.0");
+  assert.equal(partPlace("items", "[1, 2]", "[1]"), "items[1]");
+  assert.equal(partPlace("names", '{"a": 1}', '"a"'), '(*names.get_mut("a").unwrap())');
+  assert.equal(partPlace("ids", "{3: 1}", "3"), "(*ids.get_mut(&3).unwrap())");
+  assert.equal(assignment("self.value", "100"), "self.value = 100; self.value");
+});
+
+test("an edit in place assigns through eval in the selected frame and reads the frame again", async () => {
+  let value = 1;
+  const refusal = "error[E0308]: mismatched types\n --> <eval>:1:14";
+  const page = instance((request: any) => {
+    if (request.op === "eval") {
+      if (request.code.includes('"a"')) return { error: refusal };
+      value = Number(request.code.match(/= (\d+);/)?.[1]);
+      return { value: String(value) };
+    }
+    if (request.op !== undefined) return answers(true)(request);
+    return {
+      reached: true,
+      frames: [{ function: "update", line: 31 }, { function: "main", line: 10 }],
+      bindings: [{ name: "self", value: `Counter { value: ${value} }`, children: [{ name: "value", value: String(value) }] }],
+    };
+  });
+  const debug = new Debugger();
+  await debug.attach(page.debuggee);
+  await debug.start();
+  page.tell({ event: "paused", file: ROOT, line: 31, function: "update", reason: "breakpoint" });
+  await settle();
+  const place = partPlace("self", debug.state.bindings[0].value!, "value");
+  assert.deepEqual(await debug.assign(place, "100"), { value: "100" });
+  const asked = page.asked.slice(-2);
+  assert.deepEqual(asked[0], { op: "eval", code: "self.value = 100; self.value", frame: 0 });
+  assert.deepEqual(asked[1], { frame: 0, children: true }, "a write reads the frame's bindings again");
+  assert.equal(debug.state.bindings[0].children?.[0].value, "100");
+  // A write Rust refuses gives rustc's error, and reads nothing again.
+  const before = page.asked.length;
+  assert.deepEqual(await debug.assign(place, '"a"'), { error: refusal });
+  assert.equal(page.asked.length, before + 1);
+  assert.equal(debug.state.evaluated.length, 0, "an edit isn't one of the console's evals");
+});
+
+test("an edit while the program runs assigns nothing", async () => {
+  const debug = new Debugger();
+  const page = instance(answers(true));
+  await debug.attach(page.debuggee);
+  await debug.start();
+  const before = page.asked.length;
+  assert.ok("error" in (await debug.assign("x", "1")));
+  assert.equal(page.asked.length, before);
+});
+
+test("the bindings panel's rows carry their places, and a value without parts edits in place", () => {
+  const rows: Row[] = [
+    {
+      path: "self", depth: 0, name: "self", value: "Counter { value: 1, items: [2] }", place: "self", children: [
+        { name: "value", value: "1" },
+        { name: "items", value: "[2]", children: [{ name: "[0]", value: "2" }] },
+      ],
+    },
+    { path: "message", depth: 0, name: "message", error: "it isn't read here", place: "message" },
+  ];
+  const shown = visible(rows, new Set(["self", "self/items"]));
+  assert.deepEqual(shown.map((row) => [row.path, row.place]), [
+    ["self", "self"],
+    ["self/value", "self.value"],
+    ["self/items", "self.items"],
+    ["self/items/[0]", "self.items[0]"],
+    ["message", "message"],
+  ]);
+  // A value with parts opens instead, and one that wasn't read has no text to edit.
+  assert.deepEqual(shown.map(editable), [false, true, false, true, false]);
+  // The console's trees have no place: nothing in them is assigned to.
+  assert.equal(editable({ path: "a/x", depth: 1, name: "x", value: "1" }), false);
 });
