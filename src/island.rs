@@ -1134,13 +1134,13 @@ pub fn __rawr_island_main_v1() -> std::pin::Pin<Box<dyn std::future::Future<Outp
         script.poll_output(cx).map(|output| match output {
             Ok(value) => match value.try_cast::<Result<Dynamic, Dynamic>>() {
                 Some(Err(error)) => {
-                    eprintln!("Error: {error:?}");
+                    main_stderr(&format!("Error: {error:?}\n"));
                     1
                 }
                 _ => 0,
             },
             Err(error) => {
-                eprint!("{}", main_panic(&error));
+                main_stderr(&main_panic(&error));
                 101
             }
         })
@@ -1155,6 +1155,15 @@ pub fn main_failure(error: &program::Error) -> String {
         program::Error::Evaluation { error, .. } => main_panic(error),
         error => format!("error: {error}\n"),
     }
+}
+
+/// Write `text`, what an async `main` ended with, to stderr, which the
+/// run's session hears too when stderr is a terminal (#2319).
+#[cfg(feature = "sync")]
+fn main_stderr(text: &str) {
+    eprint!("{text}");
+    #[cfg(unix)]
+    crate::teller::tell(crate::Output::Stderr, text);
 }
 
 /// A future's failure from its function's `error`: a run-time failure as

@@ -33,6 +33,7 @@ pub const RESTART: i32 = 76;
 /// would only delay it. A program's own exit goes through
 /// [`std::process::exit`] instead.
 pub fn leave(status: i32) -> ! {
+    crate::teller::finish();
     let _ = std::io::stdout().flush();
     let _ = std::io::stderr().flush();
     // SAFETY: `_exit` ends the process at once and returns nothing.
