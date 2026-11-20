@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-19",
-  "version": "0.4.48",
+  "version": "0.4.49",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.49",
+        "date": "2026-11-19",
+        "entries": [
+          {"text":"A shell attached to `rawr run` of a program with Rust dependencies, started in a terminal, hears what the program prints: what it printed before the attach, then each piece as it prints it.","issues":[2319]}
+        ]
+      },
       {
         "version": "0.4.48",
         "date": "2026-11-19",
@@ -5430,7 +5437,8 @@
     {"issue":2316,"title":"A root unit function compiled by Engine::compile gives native code its last statement's value","state":"closed","category":"No glue (D593)","release":"0.4.47"},
     {"issue":2317,"title":"`rawr tui` reads bindings with their parts from the inspector, so a map opens to one row per…","state":"closed","category":"Health","release":"0.4.46"},
     {"issue":2318,"title":"Destructuring assignment and assignment to a parenthesized place are unsupported","state":"open","category":"Divergences from rustc"},
-    {"issue":2319,"title":"A runner whose output is a terminal tells it to the session","state":"open","category":"Health"}
+    {"issue":2319,"title":"A runner whose output is a terminal tells it to the session","state":"closed","category":"Health","release":"0.4.49"},
+    {"issue":2320,"title":"A dependency's own writes to a terminal reach the run's session","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -8216,7 +8224,8 @@
             {"number":2305,"title":"An assignment through a `&T` says rawr doesn't support it, not rustc's E0594","state":"closed"},
             {"number":2308,"title":"A runner registers its debugger in its running engine, replacing the debugger generation","state":"closed"},
             {"number":2309,"title":"The debugger evaluates only in the innermost frame, even with another frame selected","state":"closed"},
-            {"number":2319,"title":"A runner whose output is a terminal tells it to the session","state":"open"}
+            {"number":2319,"title":"A runner whose output is a terminal tells it to the session","state":"closed"},
+            {"number":2320,"title":"A dependency's own writes to a terminal reach the run's session","state":"open"}
           ],
           "milestone": "0.5"
         },

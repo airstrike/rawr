@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.49 (2026-11-19)
+
+- A shell attached to `rawr run` of a program with Rust dependencies, started in a terminal, hears what the program prints: what it printed before the attach, then each piece as it prints it. (#2319)
+
 ## 0.4.48 (2026-11-19)
 
 - A shell attached to a `rawr run` started in a terminal shows the program's output: the last of what it printed before the attach, then each line as it prints. Programs with Rust dependencies get this when their output isn't a terminal. (#2288)

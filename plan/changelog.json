@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.4.49",
+      "date": "2026-11-19",
+      "entries": [
+        {"text":"A shell attached to `rawr run` of a program with Rust dependencies, started in a terminal, hears what the program prints: what it printed before the attach, then each piece as it prints it.","issues":[2319]}
+      ]
+    },
+    {
       "version": "0.4.48",
       "date": "2026-11-19",
       "entries": [
