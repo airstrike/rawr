@@ -24,7 +24,7 @@ pub(crate) mod tools;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{mpsc, Arc, Condvar, Mutex, PoisonError};
+use std::sync::{mpsc, Arc, Mutex, PoisonError};
 
 use serde_json::{json, Value};
 
@@ -39,9 +39,6 @@ pub(crate) struct Server {
     root: PathBuf,
     out: mpsc::Sender<Value>,
     calls: Mutex<HashMap<String, Arc<process::Cancel>>>,
-    /// How many calls run now: the server ends once none does.
-    running: Mutex<usize>,
-    idle: Condvar,
     sessions: session::Sessions,
     checks: check::Checks,
     /// The tool names last listed, to tell the client when installs change
@@ -105,53 +102,47 @@ pub fn serve_on(
                 }
             }
         })?;
-    let server = Arc::new(Server {
+    let server = Server {
         root,
         out,
         calls: Mutex::new(HashMap::new()),
-        running: Mutex::new(0),
-        idle: Condvar::new(),
         sessions: session::Sessions::default(),
         checks: check::Checks::default(),
         listed: Mutex::new(Vec::new()),
+    };
+    // Each call runs on a thread of this scope, and the scope ends once
+    // every call has seen its cancel and returned.
+    std::thread::scope(|calls| {
+        for line in input.lines() {
+            let Ok(line) = line else {
+                break;
+            };
+            if line.trim().is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<Value>(&line) {
+                Ok(message) => handle(&server, calls, message),
+                Err(error) => server.send(json!({
+                    "jsonrpc": "2.0",
+                    "id": null,
+                    "error": { "code": -32700, "message": error.to_string() },
+                })),
+            }
+        }
+        // The client went away: what the server started goes too.
+        server.shut_down();
     });
-    for line in input.lines() {
-        let Ok(line) = line else {
-            break;
-        };
-        if line.trim().is_empty() {
-            continue;
-        }
-        match serde_json::from_str::<Value>(&line) {
-            Ok(message) => handle(&server, message),
-            Err(error) => server.send(json!({
-                "jsonrpc": "2.0",
-                "id": null,
-                "error": { "code": -32700, "message": error.to_string() },
-            })),
-        }
-    }
-    // The client went away: what the server started goes too.
-    server.shut_down();
-    // Each call ends once it sees its cancel; then the writer ends with the
-    // server's last sender.
-    let mut running = server
-        .running
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
-    while *running > 0 {
-        running = server
-            .idle
-            .wait(running)
-            .unwrap_or_else(PoisonError::into_inner);
-    }
-    drop(running);
+    // The writer ends with the server's sender.
     drop(server);
     let _ = writer.join();
     Ok(())
 }
 
-fn handle(server: &Arc<Server>, message: Value) {
+fn handle<'scope>(
+    server: &'scope Server,
+    calls: &'scope std::thread::Scope<'scope, '_>,
+    message: Value,
+) {
     let Some(method) = message.get("method").and_then(Value::as_str) else {
         // A response to nothing the server asked.
         return;
@@ -202,22 +193,27 @@ fn handle(server: &Arc<Server>, message: Value) {
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .insert(key.clone(), Arc::clone(&cancel));
-            let running = Running::new(server);
             let spawned = std::thread::Builder::new()
                 .name("rawr-mcp-call".into())
-                .spawn(move || {
-                    let working = &running.0;
-                    let result = tools::call(working, &params, &cancel);
-                    working
+                .spawn_scoped(calls, move || {
+                    // A call that panics gets no answer and the server goes
+                    // on: its unwind ends here, so the scope's end doesn't
+                    // raise it again.
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        tools::call(server, &params, &cancel)
+                    }));
+                    server
                         .calls
                         .lock()
                         .unwrap_or_else(PoisonError::into_inner)
                         .remove(&key);
                     // An install the call saw is told before its answer.
-                    tell_changes(working);
+                    tell_changes(server);
                     // A cancelled request gets no answer.
-                    if !cancel.is_cancelled() {
-                        working.reply(id, result);
+                    if let Ok(result) = result
+                        && !cancel.is_cancelled()
+                    {
+                        server.reply(id, result);
                     }
                 });
             if let Err(error) = spawned {
@@ -225,31 +221,6 @@ fn handle(server: &Arc<Server>, message: Value) {
             }
         }
         method => server.error(id, -32601, &format!("unknown method `{method}`")),
-    }
-}
-
-/// A call in flight: the server counts it as running until it drops, even
-/// by a panic.
-struct Running(Arc<Server>);
-
-impl Running {
-    fn new(server: &Arc<Server>) -> Self {
-        *server
-            .running
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) += 1;
-        Self(Arc::clone(server))
-    }
-}
-
-impl Drop for Running {
-    fn drop(&mut self) {
-        *self
-            .0
-            .running
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) -= 1;
-        self.0.idle.notify_all();
     }
 }
 
