@@ -83,7 +83,7 @@ args = { program = "{0}" }</code></pre></div>
 </ul>
 
 <h2 id="with-agents">With an agent on the same run</h2>
-<p>Every shell attached to a run hears each pause, resume and reload. An agent&rsquo;s <code>click</code> through <code>rawr mcp</code> that reaches a breakpoint stops the editor there too, and a <code>continue</code> from the editor lets the agent&rsquo;s program go on. The run&rsquo;s output reaches every shell when a shell started the run.</p>
+<p>Every shell attached to a run hears each pause, resume and reload. An agent&rsquo;s <code>click</code> through <code>rawr mcp</code> that reaches a breakpoint stops the editor there too, and a <code>continue</code> from the editor lets the agent&rsquo;s program go on. The run&rsquo;s output reaches every shell, even when the run started in a terminal. A shell that attaches later first shows the last of what the run printed before it. A program with Rust dependencies that runs in a terminal writes there itself, so its output reaches no shell.</p>
 <p>Breakpoints are the run&rsquo;s, not one shell&rsquo;s. A breakpoint set or cleared from <code>rawr tui</code>, <code>rawr gui</code>, an agent or another editor shows in every other shell at once: the editor adds or removes it in its gutter, and a shell that attaches later shows those already set.</p>
 
 <h2 id="limits">Limits</h2>

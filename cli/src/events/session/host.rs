@@ -19,7 +19,7 @@ use super::state::{Phase, State};
 /// The protocol's version, which `hello` says.
 const PROTOCOL: u64 = 1;
 /// Output kept for shells that attach later, oldest first out.
-const OUTPUT: usize = 256 * 1024;
+pub(super) const OUTPUT: usize = 256 * 1024;
 
 /// The error a `program` request ends with when no program will answer it.
 pub const NOT_RUNNING: i64 = -32001;
@@ -49,6 +49,15 @@ struct Inner {
     output: VecDeque<Value>,
     output_bytes: usize,
     listeners: Vec<Listener>,
+    /// The program's connection that tells its output, in a run no shell
+    /// started.
+    teller: Option<Teller>,
+    /// A shell said `hello`: the program tells each piece of its output
+    /// as it writes it.
+    listening: bool,
+    /// The run's output reaches the session: a shell started the run, or
+    /// its program or owner tells it.
+    tells: bool,
     inspector: Option<Served>,
     debugger: Debugger,
     /// The next program the owner starts waits at its start for the shell
@@ -61,6 +70,15 @@ struct Inner {
 struct Listener {
     connection: u64,
     send: mpsc::Sender<Arc<str>>,
+}
+
+/// The program's connection that tells its output (`teller::open`): it
+/// keeps the last of it until the session asks for it with `listen`, then
+/// says `told` and tells each piece as it writes it.
+struct Teller {
+    connection: u64,
+    send: mpsc::Sender<Arc<str>>,
+    told: bool,
 }
 
 /// The program's inspector, listening on `socket` while its connection
@@ -150,9 +168,21 @@ pub fn record(event: &Value) {
     }
 }
 
+/// Tell `bytes` the program wrote to `stream` to every shell attached to the
+/// session this process hosts, and keep them for shells that attach later:
+/// an owner that holds the program's output calls it as it copies it to
+/// the terminal. A shell that started the run holds that output itself,
+/// and tells it.
+pub fn output(stream: rawr::Output, bytes: &[u8]) {
+    if let Some(shared) = current() {
+        shared.copied(stream, bytes);
+    }
+}
+
 /// Ready `command`, which starts the program, for the session: never the
-/// listener this run was handed, the debugger's sockets, and unless a
-/// shell asked for the debugger already,
+/// listener this run was handed, the debugger's sockets, where the program
+/// tells its output when no shell holds it, and unless a shell asked for
+/// the debugger already,
 /// [`DEBUGGER_ON_REQUEST`](crate::events::DEBUGGER_ON_REQUEST). The
 /// program then serves the inspector and registers the debugger at a
 /// shell's first request for it, keeping its state (#2266, #2297); one
@@ -160,10 +190,18 @@ pub fn record(event: &Value) {
 pub fn prepare(command: &mut Command) {
     command
         .env_remove(handover::LISTENER)
-        .env_remove(crate::events::HOLD);
-    let Some(shared) = current() else {
-        return;
-    };
+        .env_remove(crate::events::HOLD)
+        .env_remove(crate::events::OUTPUT);
+    if let Some(shared) = current() {
+        ready(&shared, command);
+    }
+}
+
+/// Ready `command` for the session `shared`, as [`prepare`] does.
+fn ready(shared: &Shared, command: &mut Command) {
+    if !shared.handed {
+        command.env(crate::events::OUTPUT, shared.place.socket());
+    }
     let mut inner = shared.inner();
     hold(&mut inner, command);
     if inner.debugger == Debugger::OnRequest {
@@ -376,6 +414,15 @@ impl Shared {
             (Some("emit"), None) if params["event"] == "breakpoints" => self.tell(&params),
             (Some("emit"), None) if params.is_object() => self.record(params),
             (Some("output"), None) => self.output(connection, params),
+            (Some("tell"), None) => self.teller(connection, send),
+            (Some("told"), None) => {
+                if let Some(teller) = self.inner().teller.as_mut()
+                    && teller.connection == connection
+                {
+                    teller.told = true;
+                }
+                self.changed.notify_all();
+            }
             (Some(method), Some(id)) => {
                 let _ = send.send(line(&json!({
                     "jsonrpc": "2.0",
@@ -388,9 +435,21 @@ impl Shared {
     }
 
     /// Answer `hello`: the events so far and the output kept, and from now
-    /// on every event and piece of output.
+    /// on every event and piece of output. The first `hello` of a run whose
+    /// program tells its output waits for the last of what it wrote before.
     fn greet(&self, connection: u64, id: &Value, send: &mpsc::Sender<Arc<str>>) {
         let mut inner = self.inner();
+        if !std::mem::replace(&mut inner.listening, true)
+            && let Some(teller) = &inner.teller
+        {
+            let _ = teller.send.send(asking());
+        }
+        while inner.teller.as_ref().is_some_and(|teller| !teller.told) {
+            inner = self
+                .changed
+                .wait(inner)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
         let events: Vec<Value> = inner
             .state
             .events()
@@ -410,7 +469,7 @@ impl Shared {
             "screenshot",
             "menu",
         ];
-        if self.handed {
+        if self.handed || inner.tells {
             capabilities.push("output");
         }
         let result = json!({
@@ -470,6 +529,21 @@ impl Shared {
         told
     }
 
+    /// Tell `bytes` the owner copied from the program's `stream`, unless a
+    /// shell that started the run holds that output.
+    fn copied(&self, stream: rawr::Output, bytes: &[u8]) {
+        if self.handed {
+            return;
+        }
+        self.inner().tells = true;
+        let stream = match stream {
+            rawr::Output::Stderr => "stderr",
+            _ => "stdout",
+        };
+        let text = String::from_utf8_lossy(bytes);
+        self.output(0, json!({ "stream": stream, "text": text }));
+    }
+
     /// Keep output the shell on `from` read, and tell the others.
     fn output(&self, from: u64, piece: Value) {
         let Some(bytes) = piece["text"].as_str().map(str::len) else {
@@ -492,8 +566,23 @@ impl Shared {
         }
     }
 
+    /// Connection `connection` is the program's, which tells its output. A
+    /// program started after a shell said `hello` tells it at once.
+    fn teller(&self, connection: u64, send: &mpsc::Sender<Arc<str>>) {
+        let mut inner = self.inner();
+        inner.tells = true;
+        if inner.listening {
+            let _ = send.send(asking());
+        }
+        inner.teller = Some(Teller {
+            connection,
+            send: send.clone(),
+            told: false,
+        });
+    }
+
     /// Connection `connection` closed: it hears nothing more, and an
-    /// inspector it served is gone.
+    /// inspector it served, or output it told, is gone.
     fn left(&self, connection: u64) {
         let mut inner = self.inner();
         inner
@@ -505,6 +594,13 @@ impl Shared {
             .is_some_and(|served| served.connection == connection)
         {
             inner.inspector = None;
+        }
+        if inner
+            .teller
+            .as_ref()
+            .is_some_and(|teller| teller.connection == connection)
+        {
+            inner.teller = None;
         }
         drop(inner);
         self.changed.notify_all();
@@ -642,6 +738,12 @@ fn numbered(seq: u64, event: &Value) -> Value {
 
 fn line(message: &Value) -> Arc<str> {
     Arc::from(format!("{message}\n"))
+}
+
+/// What asks the program for the output it kept, and for each piece from
+/// then on.
+fn asking() -> Arc<str> {
+    line(&json!({ "jsonrpc": "2.0", "method": "listen" }))
 }
 
 #[cfg(test)]
@@ -910,6 +1012,110 @@ mod tests {
             json!([{ "event": "running", "seq": 1 }]),
             "the list stays out of the history"
         );
+        drop(host);
+    }
+
+    /// The `hello` answer, past the notifications before it.
+    fn greeted(shell: &Shell) -> Value {
+        shell.send(&json!({ "jsonrpc": "2.0", "id": 0, "method": "hello" }));
+        loop {
+            let message = shell.next();
+            if message["id"] == 0 {
+                return message["result"].clone();
+            }
+        }
+    }
+
+    fn says_output(hello: &Value) -> bool {
+        hello["capabilities"]
+            .as_array()
+            .is_some_and(|capabilities| capabilities.contains(&json!("output")))
+    }
+
+    /// Output an owner copies to the terminal reaches the shells attached,
+    /// and `hello` replays it to a shell that attaches later (#2288).
+    #[test]
+    fn output_the_owner_copies_reaches_every_shell() {
+        let (host, place) = host("copied", false);
+        host.0.copied(rawr::Output::Stdout, b"before\n");
+        let shell = Shell::connect(&place.socket());
+        let hello = greeted(&shell);
+        assert!(says_output(&hello), "{hello}");
+        assert_eq!(
+            hello["output"],
+            json!([{ "stream": "stdout", "text": "before\n" }])
+        );
+        host.0.copied(rawr::Output::Stderr, b"after\n");
+        assert_eq!(
+            shell.next(),
+            json!({
+                "jsonrpc": "2.0",
+                "method": "output",
+                "params": { "stream": "stderr", "text": "after\n" },
+            })
+        );
+        drop(host);
+    }
+
+    /// A shell that started the run holds its output and tells it: the
+    /// owner tells none of it, and its program isn't asked to.
+    #[test]
+    fn a_run_a_shell_started_tells_no_output_of_its_own() {
+        let tells = |shared: &super::Shared| {
+            let mut command = std::process::Command::new("true");
+            super::ready(shared, &mut command);
+            command
+                .get_envs()
+                .any(|(name, value)| name == crate::events::OUTPUT && value.is_some())
+        };
+        let (plain, _) = host("tells-plain", false);
+        assert!(tells(&plain.0));
+        let (handed, place) = host("tells-handed", true);
+        assert!(!tells(&handed.0));
+        handed.0.copied(rawr::Output::Stdout, b"twice\n");
+        let shell = Shell::connect(&place.socket());
+        assert_eq!(greeted(&shell)["output"], json!([]));
+        drop((plain, handed));
+    }
+
+    /// A program whose run no shell started keeps its output until the
+    /// first `hello`, which waits for it: the session asks with `listen`,
+    /// the program tells what it kept and `told`, then each piece as it
+    /// writes it (#2288).
+    #[test]
+    fn the_first_hello_has_the_output_the_program_kept() {
+        let (host, place) = host("teller", false);
+        let teller = UnixStream::connect(place.socket()).unwrap();
+        writeln!(&teller, "{}", json!({ "jsonrpc": "2.0", "method": "tell" })).unwrap();
+        let piece = |text: &str| {
+            json!({
+                "jsonrpc": "2.0", "method": "output",
+                "params": { "stream": "stdout", "text": text },
+            })
+        };
+        let program = std::thread::spawn(move || {
+            let mut asked = String::new();
+            BufReader::new(teller.try_clone().unwrap())
+                .read_line(&mut asked)
+                .unwrap();
+            let asked: Value = serde_json::from_str(&asked).unwrap();
+            assert_eq!(asked["method"], "listen", "{asked}");
+            writeln!(&teller, "{}", piece("kept\n")).unwrap();
+            writeln!(&teller, "{}", json!({ "jsonrpc": "2.0", "method": "told" })).unwrap();
+            teller
+        });
+        let shell = Shell::connect(&place.socket());
+        let hello = greeted(&shell);
+        assert!(says_output(&hello), "{hello}");
+        assert_eq!(
+            hello["output"],
+            json!([{ "stream": "stdout", "text": "kept\n" }]),
+            "{hello}"
+        );
+        // What the program writes after the `hello` reaches the shell.
+        let teller = program.join().unwrap();
+        writeln!(&teller, "{}", piece("live\n")).unwrap();
+        assert_eq!(shell.next()["params"]["text"], "live\n");
         drop(host);
     }
 

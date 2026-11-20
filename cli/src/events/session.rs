@@ -40,6 +40,15 @@
 //! while its connection stays open, and `emit` (an event) when the program
 //! pauses and goes on and when its breakpoints change.
 //!
+//! In a run no shell started, the program's output reaches the session
+//! another way (#2288). An owner that copies the program's output to the
+//! terminal tells each piece itself ([`output()`]). A program that writes
+//! to the terminal itself tells it on a connection of its own
+//! ([`teller`]): it says `tell`, keeps the last of its output until the
+//! first `hello`, at which the session says `listen` and waits, then tells
+//! what it kept as `output`, says `told`, and tells each piece from then
+//! on.
+//!
 //! A run no shell started registers no debugger. Its program serves its
 //! inspector all the same ([`prepare`]), and a shell's first request that
 //! needs the debugger has the program register one, keeping its state:
@@ -51,9 +60,10 @@ mod handover;
 mod host;
 mod place;
 mod state;
+pub mod teller;
 
 pub use handover::{adopt, handed, LISTENER};
-pub use host::{open, prepare, record, Host, CANCELLED, NOT_RUNNING};
+pub use host::{open, output, prepare, record, Host, CANCELLED, NOT_RUNNING};
 pub use place::{root, Place};
 pub use state::{Phase, State};
 

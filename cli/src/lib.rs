@@ -692,22 +692,32 @@ pub fn run_once(loaded: base::Loaded) -> ExitCode {
     match base::run(loaded) {
         Ok(None) => ExitCode::SUCCESS,
         Ok(Some(error)) => {
-            eprintln!("{error}");
+            program_stderr(&format!("{error}\n"));
             ExitCode::FAILURE
         }
         Err(base::Failed::Compile(report)) => failure(&report),
         Err(base::Failed::Panic(report)) => {
             // What a Cargo-built program prints when it panics.
-            eprint!("{}", rawr::diagnostic::panic(&report));
+            program_stderr(&rawr::diagnostic::panic(&report));
             // A profile's `panic = "abort"` aborts the process, as the
             // binary Cargo builds with it does.
             if panic == rawr::project::cargo::Panic::Abort {
+                #[cfg(unix)]
+                events::session::teller::finish();
                 std::process::abort();
             }
             // Rust's exit status for a panic.
             ExitCode::from(101)
         }
     }
+}
+
+/// Write `text` to stderr as the program's own, which the run's session
+/// hears too.
+fn program_stderr(text: &str) {
+    eprint!("{text}");
+    #[cfg(unix)]
+    events::session::teller::tell(rawr::Output::Stderr, text);
 }
 
 /// `rawr new --help`: the usage and the templates installed binaries offer.
