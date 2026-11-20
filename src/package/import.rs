@@ -1268,6 +1268,9 @@ fn diagnostic_path(error: &crate::resolve::Error) -> Option<(String, ImportedNam
         | R::Refutable { .. }
         | R::PatternFields { .. }
         | R::UnboundAlternative { .. }
+        | R::ArrayPatternLength { .. }
+        | R::TupleArity { .. }
+        | R::RepeatedRest { .. }
         | R::UnsupportedNominalSyntax { .. }
         | R::Syntax { .. }
         | R::UnlabeledJumpInWhileCondition { .. }

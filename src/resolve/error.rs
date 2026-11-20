@@ -936,6 +936,42 @@ pub enum Error {
         /// Where another alternative binds it.
         binding: Span,
     },
+    /// An array pattern of more or fewer elements than its array has,
+    /// which rustc refuses (E0527), or of more with a `..` (E0528).
+    ArrayPatternLength {
+        /// The matched array's type name.
+        owner: ImmutableString,
+        /// How many elements the pattern has, besides `..`.
+        fixed: usize,
+        /// How many elements the array has.
+        length: usize,
+        /// Whether the pattern has a `..`.
+        rest: bool,
+        /// The pattern.
+        pattern: Span,
+    },
+    /// A tuple pattern of more or fewer elements than the tuple it
+    /// matches has, which rustc refuses (E0308).
+    TupleArity {
+        /// The matched tuple's type name.
+        expected: ImmutableString,
+        /// How many elements the tuple has.
+        arity: usize,
+        /// How many elements the pattern has, besides `..`.
+        found: usize,
+        /// The pattern.
+        pattern: Span,
+    },
+    /// A second `..` in one tuple or slice pattern, which rustc refuses
+    /// without a code.
+    RepeatedRest {
+        /// Whether the pattern is a slice pattern, not a tuple's.
+        slice: bool,
+        /// The first `..`.
+        previous: Span,
+        /// The second `..`.
+        rest: Span,
+    },
     /// A nominal script reaches syntax deliberately deferred to a later step.
     UnsupportedNominalSyntax {
         /// Stable description of the unsupported construct.
@@ -1282,6 +1318,9 @@ impl Error {
             Self::Refutable { .. } => Category::Refutable,
             Self::PatternFields { .. } => Category::PatternFields,
             Self::UnboundAlternative { .. } => Category::UnboundAlternative,
+            Self::ArrayPatternLength { .. } => Category::InvalidMatch,
+            Self::TupleArity { .. } => Category::TypeMismatch,
+            Self::RepeatedRest { .. } => Category::Syntax,
             Self::UnsupportedNominalSyntax { .. } => Category::UnsupportedNominalSyntax,
             Self::Syntax { .. } => Category::Syntax,
             Self::UnlabeledJumpInWhileCondition { .. } => Category::UnlabeledJumpInWhileCondition,
@@ -1334,7 +1373,10 @@ impl Error {
             | Self::InvalidConstruction { owner, .. }
             | Self::MissingCapability { owner, .. }
             | Self::InvalidMatch { owner, .. }
-            | Self::PatternFields { owner, .. } => owner.as_str(),
+            | Self::PatternFields { owner, .. }
+            | Self::ArrayPatternLength { owner, .. } => owner.as_str(),
+            Self::TupleArity { expected, .. } => expected.as_str(),
+            Self::RepeatedRest { .. } => "..",
             Self::NonExhaustive { ty, .. } | Self::Refutable { ty, .. } => ty.as_str(),
             Self::TypeMismatch { expected, .. }
             | Self::Unboxed { expected, .. }
@@ -1416,7 +1458,10 @@ impl Error {
             Self::NonExhaustive { scrutinee, .. } => *scrutinee,
             Self::Refutable { pattern, .. }
             | Self::PatternFields { pattern, .. }
-            | Self::UnboundAlternative { pattern, .. } => *pattern,
+            | Self::UnboundAlternative { pattern, .. }
+            | Self::ArrayPatternLength { pattern, .. }
+            | Self::TupleArity { pattern, .. } => *pattern,
+            Self::RepeatedRest { rest, .. } => *rest,
             Self::UnsupportedNominalSyntax { source, .. } => *source,
             Self::AsyncMain { at } | Self::UnscopedWrite { at, .. } => *at,
             Self::InvalidAssignee { operator, .. } => *operator,
@@ -1465,6 +1510,7 @@ impl Error {
             Self::ImmutableReceiver { receiver, .. } => Some(*receiver),
             Self::InvalidAssignee { assignee, .. } => Some(*assignee),
             Self::UnboundAlternative { binding, .. } => Some(*binding),
+            Self::RepeatedRest { previous, .. } => Some(*previous),
             Self::InvalidImport { declaration, .. } | Self::PrivateItem { declaration, .. } => {
                 *declaration
             }
@@ -1496,6 +1542,8 @@ impl Error {
             | Self::NonExhaustive { .. }
             | Self::Refutable { .. }
             | Self::PatternFields { .. }
+            | Self::ArrayPatternLength { .. }
+            | Self::TupleArity { .. }
             | Self::UnsupportedNominalSyntax { .. }
             | Self::Syntax { .. }
             | Self::AsyncMain { .. }
@@ -1779,6 +1827,87 @@ impl fmt::Display for PatternFields {
             self.noun(),
             Self::fields(self.expected)
         )
+    }
+}
+
+/// `count` elements, as rustc counts them: "1 element", "2 elements".
+fn elements(count: usize) -> String {
+    format!("{count} element{}", if count == 1 { "" } else { "s" })
+}
+
+/// rustc's E0527 for an array pattern of `fixed` elements on an array of
+/// `length`, or its E0528 for one with a `..` (`rest`) of more.
+pub(crate) struct ArrayLength {
+    pub(crate) fixed: usize,
+    pub(crate) length: usize,
+    pub(crate) rest: bool,
+}
+
+impl ArrayLength {
+    /// rustc's code: E0528 with a `..`, else E0527.
+    pub(crate) const fn code(&self) -> &'static str {
+        if self.rest {
+            "E0528"
+        } else {
+            "E0527"
+        }
+    }
+
+    /// rustc's label on the pattern: "expected 3 elements".
+    pub(crate) fn label(&self) -> String {
+        if self.rest {
+            format!("pattern cannot match array of {}", elements(self.length))
+        } else {
+            format!("expected {}", elements(self.length))
+        }
+    }
+}
+
+impl fmt::Display for ArrayLength {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "pattern requires {}{} but array has {}",
+            if self.rest { "at least " } else { "" },
+            elements(self.fixed),
+            self.length
+        )
+    }
+}
+
+/// rustc's E0308 label for a tuple pattern of `found` elements on a tuple
+/// of `arity`.
+pub(crate) struct TupleArity {
+    pub(crate) arity: usize,
+    pub(crate) found: usize,
+}
+
+impl TupleArity {
+    /// "expected a tuple with 3 elements, found one with 2 elements".
+    pub(crate) fn label(&self) -> String {
+        format!(
+            "expected a tuple with {}, found one with {}",
+            elements(self.arity),
+            elements(self.found)
+        )
+    }
+}
+
+/// rustc's error for a second `..` in one tuple pattern, or in one slice
+/// pattern (`true`).
+pub(crate) struct RepeatedRest(pub(crate) bool);
+
+impl RepeatedRest {
+    /// rustc's label on the second `..`.
+    pub(crate) fn label(&self) -> String {
+        let pattern = if self.0 { "slice" } else { "tuple" };
+        format!("can only be used once per {pattern} pattern")
+    }
+}
+
+impl fmt::Display for RepeatedRest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "`..` {}", self.label())
     }
 }
 
@@ -2307,6 +2436,37 @@ impl fmt::Display for Written<'_> {
             ),
             Error::UnboundAlternative { name, pattern, .. } => {
                 write!(formatter, "{} at {pattern} (E0408)", UnboundAlternative(name))
+            }
+            Error::ArrayPatternLength {
+                fixed,
+                length,
+                rest,
+                pattern,
+                ..
+            } => {
+                let array = ArrayLength {
+                    fixed: *fixed,
+                    length: *length,
+                    rest: *rest,
+                };
+                write!(formatter, "{array} at {pattern} ({})", array.code())
+            }
+            Error::TupleArity {
+                arity,
+                found,
+                pattern,
+                ..
+            } => write!(
+                formatter,
+                "mismatched types: {} at {pattern} (E0308)",
+                TupleArity {
+                    arity: *arity,
+                    found: *found
+                }
+                .label()
+            ),
+            Error::RepeatedRest { slice, rest, .. } => {
+                write!(formatter, "{} at {rest}", RepeatedRest(*slice))
             }
             Error::UnsupportedNominalSyntax { construct, source } => {
                 write!(formatter, "{} at {source}", Unsupported(construct))

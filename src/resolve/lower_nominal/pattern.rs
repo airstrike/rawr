@@ -178,6 +178,12 @@ impl Prelude {
     }
 }
 
+/// The span of a pattern from `start` through its closing `)`, `]` or
+/// `}` at `close`, which a token's position starts.
+fn closed(start: Position, close: Position) -> Span {
+    span(start, text_end(close, ")"))
+}
+
 impl Syntax {
     pub(super) fn span(&self) -> Span {
         match self {
@@ -195,13 +201,23 @@ impl Syntax {
             | Self::Slice { span, .. }
             | Self::Rest { span, .. }
             | Self::Reference { span, .. } => *span,
-            Self::Enum(pattern) => Span::new(
-                pattern.owner_span.start(),
-                text_end(pattern.variant_span.start(), &pattern.variant),
-            ),
+            Self::Enum(pattern) => pattern.span,
             Self::At {
                 name_span, pattern, ..
             } => Span::new(name_span.start(), pattern.span().end()),
+        }
+    }
+
+    /// The type rustc names a tuple pattern of `members` by: a `_` for each
+    /// member but `..`, as `(_, _)` or `(_,)`.
+    pub(super) fn tuple_shape(members: &[Self]) -> String {
+        let count = members
+            .iter()
+            .filter(|member| !matches!(member, Self::Rest { .. }))
+            .count();
+        match count {
+            1 => "(_,)".to_string(),
+            count => format!("({})", vec!["_"; count].join(", ")),
         }
     }
 
@@ -356,6 +372,8 @@ pub(super) struct EnumSyntax {
     /// `Point { x, y }` on a facade struct: `owner` is the whole path and
     /// `variant` its last name.
     pub(super) host_struct: bool,
+    /// The whole pattern, from its path through its payload's closer.
+    pub(super) span: Span,
 }
 
 /// The statement a pattern that must match every value binds in, which
@@ -1167,7 +1185,7 @@ impl<'a> Parser<'a> {
             }
             return Ok(Syntax::Tuple {
                 members: members.into_boxed_slice(),
-                span: span(start, end),
+                span: closed(start, end),
             });
         }
         // `b"tag1"` on a `&[u8]`: the slice pattern of its bytes, as rustc
@@ -1338,7 +1356,7 @@ impl<'a> Parser<'a> {
             return Ok(Syntax::Cow {
                 owned,
                 payload: Box::new(payload),
-                span: span(start, end),
+                span: closed(start, end),
             });
         }
         // std's `Poll::Ready(..)` and `Poll::Pending`, as `Some(..)` and
@@ -1379,7 +1397,7 @@ impl<'a> Parser<'a> {
             return Ok(Syntax::Prelude {
                 variant,
                 payload: Some(Box::new(payload)),
-                span: span(start, end),
+                span: closed(start, end),
             });
         }
         // `W(a, b)`, `module::W(a)`, `module::S`.
@@ -1433,7 +1451,7 @@ impl<'a> Parser<'a> {
                 segments[0].1.start(),
                 text_end(variant_span.start(), &variant),
             );
-            let (fields, rest, _) = self.parse_field_patterns()?;
+            let (fields, rest, end) = self.parse_field_patterns()?;
             let mut names = Vec::with_capacity(fields.len());
             let mut payload = Vec::with_capacity(fields.len());
             for (name, name_span, pattern) in fields {
@@ -1441,6 +1459,7 @@ impl<'a> Parser<'a> {
                 payload.push(pattern);
             }
             return Ok(Syntax::Enum(EnumSyntax {
+                span: closed(owner_span.start(), end),
                 owner: segments.into_boxed_slice(),
                 owner_span,
                 variant,
@@ -1484,16 +1503,20 @@ impl<'a> Parser<'a> {
         let owner_span = Span::new(segments[0].1.start(), owner_end);
         let mut payload = Vec::new();
         let mut named = None;
+        let start = owner_span.start();
+        // The whole pattern: through its payload's closer, or its variant.
+        let mut span = Span::new(start, text_end(variant_span.start(), &variant));
         if matches!(self.peek(), Token::LeftBrace) {
-            let (fields, rest, _) = self.parse_field_patterns()?;
+            let (fields, rest, end) = self.parse_field_patterns()?;
             let mut names = Vec::with_capacity(fields.len());
             for (name, name_span, pattern) in fields {
                 names.push((name, name_span));
                 payload.push(pattern);
             }
             named = Some((names.into_boxed_slice(), rest));
+            span = closed(start, end);
         } else if matches!(self.peek(), Token::Unit) {
-            self.next();
+            span = Span::new(start, text_end(self.next().1, "()"));
         } else if matches!(self.peek(), Token::LeftParen) {
             self.next();
             while !matches!(self.peek(), Token::RightParen | Token::EOF) {
@@ -1504,10 +1527,12 @@ impl<'a> Parser<'a> {
                     return Err(self.unsupported("payload patterns in a match pattern require ','"));
                 }
             }
-            self.expect(Token::RightParen, "')' after match payload patterns")?;
+            let end = self.expect(Token::RightParen, "')' after match payload patterns")?;
+            span = closed(start, end);
         }
 
         Ok(Syntax::Enum(EnumSyntax {
+            span,
             owner: segments.into_boxed_slice(),
             owner_span,
             variant,
@@ -1521,14 +1546,15 @@ impl<'a> Parser<'a> {
     /// `[a, b, rest @ .., z]`, after its `[` at `start`.
     pub(super) fn parse_slice_pattern(&mut self, start: Position) -> Result<Syntax, Error> {
         self.next();
-        let (mut before, mut rest, mut after) = (Vec::new(), None, Vec::new());
+        let (mut before, mut rest, mut after) = (Vec::new(), None::<Box<Syntax>>, Vec::new());
         while !matches!(self.peek(), Token::RightBracket | Token::EOF) {
             let element = self.parse_pattern_syntax()?;
             if let Syntax::Rest { span, .. } = &element {
-                if rest.is_some() {
-                    return Err(Error::UnsupportedNominalSyntax {
-                        construct: "`..` can only be used once per slice pattern".into(),
-                        source: *span,
+                if let Some(previous) = &rest {
+                    return Err(Error::RepeatedRest {
+                        slice: true,
+                        previous: previous.span(),
+                        rest: *span,
                     });
                 }
                 rest = Some(Box::new(element));
@@ -1548,7 +1574,7 @@ impl<'a> Parser<'a> {
             before: before.into_boxed_slice(),
             rest,
             after: after.into_boxed_slice(),
-            span: span(start, end),
+            span: closed(start, end),
         })
     }
 
@@ -1878,17 +1904,18 @@ impl<'a> Parser<'a> {
                 let Ty::Tuple(types) = &expected else {
                     return Err(Error::TypeMismatch {
                         expected: expected.name(&self.models),
-                        actual: format!("a tuple of {} elements", members.len()).into(),
+                        actual: Syntax::tuple_shape(members).into(),
                         expression: *span,
                     });
                 };
                 let discard = Syntax::Discard { span: *span };
                 let members = tuple_members(members, types.len(), &discard)?;
                 if types.len() != members.len() {
-                    return Err(Error::TypeMismatch {
+                    return Err(Error::TupleArity {
                         expected: expected.name(&self.models),
-                        actual: format!("a tuple of {} elements", members.len()).into(),
-                        expression: *span,
+                        arity: types.len(),
+                        found: members.len(),
+                        pattern: *span,
                     });
                 }
                 let mut proofs = Vec::with_capacity(members.len());
@@ -2039,28 +2066,16 @@ impl<'a> Parser<'a> {
                 let fixed = before.len() + after.len();
                 self.slice_arity.set(self.slice_arity.get().max(fixed));
                 // Rust's E0527 and E0528.
-                match length {
-                    Some(length) if rest.is_none() && fixed != length => {
-                        return Err(Error::InvalidMatch {
-                            owner: owner.into(),
-                            reason: format!(
-                                "pattern requires {fixed} elements but array has {length}"
-                            )
-                            .into(),
-                            pattern: *span,
-                        })
-                    }
-                    Some(length) if fixed > length => {
-                        return Err(Error::InvalidMatch {
-                            owner: owner.into(),
-                            reason: format!(
-                                "pattern requires at least {fixed} elements but array has {length}"
-                            )
-                            .into(),
-                            pattern: *span,
-                        })
-                    }
-                    _ => {}
+                if let Some(length) = length
+                    && (rest.is_none() && fixed != length || fixed > length)
+                {
+                    return Err(Error::ArrayPatternLength {
+                        owner: expected.name(&self.models),
+                        fixed,
+                        length,
+                        rest: rest.is_some(),
+                        pattern: *span,
+                    });
                 }
                 // A slice's length is tested; an array's is known.
                 if length.is_none() {
@@ -2724,8 +2739,9 @@ impl<'a> Parser<'a> {
             .map(|field| instantiate(&Ty::from_resolved(&field.ty), &substitution))
             .collect::<Box<[_]>>();
         let mut members = Vec::new();
+        // The position of the closing `)`: one past the `(` of a `()`.
         let end = if matches!(self.peek(), Token::Unit) {
-            self.next().1
+            text_end(self.next().1, "(")
         } else {
             self.expect(Token::LeftParen, "'(' after a tuple struct in a pattern")?;
             while !matches!(self.peek(), Token::RightParen | Token::EOF) {
@@ -2738,7 +2754,7 @@ impl<'a> Parser<'a> {
             }
             self.expect(Token::RightParen, "')' after tuple struct patterns")?
         };
-        let span = span(start.start(), end);
+        let span = closed(start.start(), end);
         let written = members
             .iter()
             .filter(|member| !matches!(member, Syntax::Rest { .. }))
@@ -2787,7 +2803,7 @@ impl<'a> Parser<'a> {
         #[cfg(feature = "rust-import")]
         self.models.read_fields(&definition);
         let (written, rest, end) = self.parse_field_patterns()?;
-        let span = span(start.start(), end);
+        let span = closed(start.start(), end);
         let names = written
             .iter()
             .map(|(name, name_span, _)| (name.clone(), *name_span))
@@ -2957,6 +2973,7 @@ impl<'a> Parser<'a> {
                         });
                     };
                     return Ok(Syntax::Enum(EnumSyntax {
+                        span: *span,
                         owner: owner
                             .iter()
                             .map(|name| (name.text.clone(), name.span))
