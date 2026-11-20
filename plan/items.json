@@ -2328,7 +2328,10 @@
     {"t":"T2326","issue":2326,"title":"T2326: ?play snippets can't use radio, tooltip, combo_box, text_editor, vertical_slider, mouse_area or stack","state":"open","category":"Platforms","labels":["platform"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T2327","issue":2327,"title":"T2327: Pattern type mismatches lack rustc's second label and note, and name the pattern in rawr's words","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"d8db15053","release":"0.4.53"},
     {"t":"T2328","issue":2328,"title":"T2328: Diagnostics render rustc's code suggestions: E0529's `v[..]` and the `mut b` help","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"1559d7713","release":"0.4.54"},
-    {"t":"T2329","issue":2329,"title":"T2329: Sub-diagnostics with their own snippet: rustc's positioned `note:` and `help:` sections","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T2330","issue":2330,"title":"T2330: Help texts rustc shows as code that rawr still writes as prose","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T2329","issue":2329,"title":"T2329: Sub-diagnostics with their own snippet: rustc's positioned `note:` and `help:` sections","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"245a606f4","release":"0.4.55"},
+    {"t":"T2330","issue":2330,"title":"T2330: Help texts rustc shows as code that rawr still writes as prose","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T2331","issue":2331,"title":"T2331: Diagnostic places rawr lacks: E0061 arguments, E0277 bound, E0624 inline module, E0603 nouns","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T2332","issue":2332,"title":"T2332: `pub(in path)` visibility is not enforced","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T2333","issue":2333,"title":"T2333: `let _: m::q::S<i32>;` is a parse error","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }

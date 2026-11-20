@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.55 (2026-11-20)
+
+- Errors show rustc's notes that point at a place of their own as their own sections: E0382's note on the parameter that takes the value and on a type that could implement `Clone`, E0061's "function defined here", E0603's "the function `f` is defined here", and a match arm's "to declare a mutable binding use: `mut b`" with its suggestion to remove the `&mut`. A match on a number takes `&` patterns. `rawr mcp` diagnostics list each note among their `help`. (#2329)
+
 ## 0.4.54 (2026-11-20)
 
 - Errors show rustc's code suggestions under their own `help:`, as the line the change makes, or beside the code for a short one. A slice pattern on a `Vec` suggests `v[..]`, and a `let`'s `&mut b` pattern on a `&` value gets "to declare a mutable variable use: `mut b`". Assigning twice to an immutable binding suggests `mut` where it is declared. A moved value suggests `.clone()`, a macro called as a function suggests its `!`, and a method read as a field suggests `()`. A value where a `Box<dyn Error>` is expected suggests `Box::new(..)` or `.into()`. `rawr mcp` diagnostics carry the first edit as `suggestion`. (#2328)
