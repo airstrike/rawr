@@ -265,8 +265,8 @@ export default function Playground() {
         <SplitBar between="columns" label="Resize the code and the output" onMove={moveCode} onEnd={keepCodeShare} at={codeLine} />
         <section className="pane flex min-h-0 flex-col border-t border-grid px-4 pt-4 pb-6 md:border-t-0 md:px-6">
           <p className="playcap mb-2 flex justify-between gap-2">
-            <span><span className="text-red">//</span> Output</span>
-            <span id="status" className="truncate">{state.status}</span>
+            <span className="shrink-0"><span className="text-red">//</span> Output</span>
+            <span id="status">{state.status}</span>
           </p>
           <div id="out" className={state.output.kind === "frame" ? "out framed" : "out"} aria-live="polite">
             {/* The universe's frames (session.ts), which the session adds and removes itself. */}
@@ -290,7 +290,7 @@ export default function Playground() {
 }
 
 /** Why the debugger icon is off in a browser that can't pause a program. */
-const NO_PAUSE = "The debugger needs WebAssembly JSPI, which this browser doesn't have yet. Chrome and Edge have it.";
+const NO_PAUSE = "The debugger needs WebAssembly JSPI, which this browser doesn't support.";
 
 /**
  * The debugger icon, which turns the debugger on and off. In a browser

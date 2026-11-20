@@ -7,7 +7,8 @@ body.play { font-size: var(--fs-base); line-height: 1.5; }
 #playground { display: flex; flex: 1; min-height: 0; flex-direction: column; }
 .playcap, .playfoot { font-size: var(--fs-label); font-weight: var(--w-strong); letter-spacing: var(--track-label); text-transform: uppercase; color: var(--quiet); }
 .playcap { color: var(--ink); }
-.playcap #status { color: var(--quiet); font-weight: 600; }
+/* The status wraps: a phone shows all of it, a long fallback reason too. */
+.playcap #status { color: var(--quiet); font-weight: 600; min-width: 0; text-align: right; overflow-wrap: anywhere; }
 .playfoot a { color: var(--quiet); text-decoration-color: var(--grid); }
 .playfoot a:hover { color: var(--ink); text-decoration-color: currentColor; }
 

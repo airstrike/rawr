@@ -55,6 +55,30 @@ import { Screen } from "../lib/terminal.ts";
  */
 export const NO_JSPI = "This browser can't run a program that sleeps: it has no WebAssembly JS Promise Integration (JSPI).";
 
+/**
+ * A module with one function whose body is an empty `try_table` with a
+ * `catch_all`: it validates only where the engine has WebAssembly's
+ * exception references (exnref).
+ */
+const EXNREF_PROBE = new Uint8Array([
+  0, 97, 115, 109, 1, 0, 0, 0, 1, 4, 1, 96, 0, 0, 3, 2, 1, 0, 10, 13, 1, 11, 0, 2, 64, 31, 64, 1, 2, 0, 11, 11, 11,
+]);
+
+/**
+ * What `wasm`, an engine's WebAssembly, lacks that the universe's module
+ * needs, or null when it has it all. The module's JSPI wrappers
+ * (wasm-bindgen's) catch with `try_table` and import `WebAssembly.JSTag`:
+ * without either the module can't compile or link, so a page asks before
+ * it fetches the module.
+ */
+export function lacking(wasm: typeof WebAssembly | null | undefined = globalThis.WebAssembly): string | null {
+  if (typeof wasm !== "object" || wasm === null) return "this browser has WebAssembly turned off";
+  const tag = (wasm as { JSTag?: unknown }).JSTag;
+  if (typeof wasm.Tag !== "function" || !(tag instanceof wasm.Tag)) return "this browser has no WebAssembly.JSTag";
+  if (!wasm.validate(EXNREF_PROBE)) return "this browser has no WebAssembly exception references (exnref)";
+  return null;
+}
+
 /** The universe's files, beside rawr-web's (web/build.sh). */
 export const UNIVERSE_GLUE = "/web/universe.js";
 export const UNIVERSE_WASM = "/web/universe_bg.wasm";
@@ -121,6 +145,8 @@ export interface UniverseEnv {
   compile(response: Promise<Response>): Promise<WebAssembly.Module>;
   /** Which build of the module its frames run: PLAIN unless named. */
   build?: Build;
+  /** The engine's WebAssembly, which `lacking` asks: the page's unless named. */
+  wasm?: typeof WebAssembly;
 }
 
 /**
@@ -277,7 +303,7 @@ function terminal(frame: Frame): void {
 }
 
 /** The page's universe: the module compiled once, an instance per frame. */
-export function universe({ document, fetch, compile, build = PLAIN }: UniverseEnv) {
+export function universe({ document, fetch, compile, build = PLAIN, wasm = globalThis.WebAssembly }: UniverseEnv) {
   // The manifest alone, for a page that asks which snippets use crates
   // before it fetches the module. A fetch that failed is tried again.
   let manifest: Promise<string> | null = null;
@@ -292,8 +318,12 @@ export function universe({ document, fetch, compile, build = PLAIN }: UniverseEn
         throw error;
       }));
   let loaded: Promise<Loaded> | null = null;
+  // An engine that can't compile the module says why at once, and the
+  // module is never fetched.
+  const missing = lacking(wasm);
+  const fetched = () => (missing ? Promise.reject(new Error(missing)) : Promise.all([compile(fetch(build.wasm)), readManifest()]));
   const load = () =>
-    (loaded ??= Promise.all([compile(fetch(build.wasm)), readManifest()]).then(
+    (loaded ??= fetched().then(
       ([module, manifest]) => ({ module, manifest }),
       // A module that didn't load is fetched again by the next frame.
       (error) => {
