@@ -366,7 +366,8 @@ impl fmt::Display for ParseErrorType {
                 crate::resolve::Error::DuplicateMember { owner, member, .. } => {
                     write!(f, "Duplicate member '{owner}::{member}'")
                 }
-                crate::resolve::Error::UnknownMember { owner, member, .. } => {
+                crate::resolve::Error::UnknownMember { owner, member, .. }
+                | crate::resolve::Error::NoItem { owner, member, .. } => {
                     write!(f, "Unknown member '{owner}::{member}'")
                 }
                 crate::resolve::Error::NotInModule { module, item, .. } => {

@@ -530,6 +530,7 @@ impl Parser<'_> {
                 derive: false,
                 declared: None,
                 required_by: Some(crate::resolve::Required::by(spawner.path())),
+                formatted: None,
             });
         }
         self.pending_bounds

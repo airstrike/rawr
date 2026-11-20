@@ -767,6 +767,45 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// The type rustc's E0599 names for `receiver`, a value of the
+    /// program's `owner` or a reference to one: a reference as found, a
+    /// struct or enum by its declared parameters, its definition marked.
+    pub(super) fn receiver(&self, owner: type_def::Id, receiver: &Ty) -> crate::resolve::Receiver {
+        let receiver = self.inference.resolve(receiver);
+        let found = receiver.name(&self.models);
+        let model = self.models.definition(owner);
+        let kind = match (&receiver, model) {
+            (Ty::Reference { mutable: true, .. }, _) => "mutable reference",
+            (Ty::Reference { .. }, _) => "reference",
+            (_, Nominal::Struct { .. }) => "struct",
+            (_, Nominal::Enum { .. }) => "enum",
+        };
+        if matches!(receiver, Ty::Reference { .. }) {
+            return crate::resolve::Receiver {
+                kind,
+                declared: found.clone(),
+                found,
+                definition: None,
+            };
+        }
+        let parameters: Vec<&str> = model
+            .generics()
+            .iter()
+            .map(|generic| generic.name.text.as_str())
+            .collect();
+        let declared = if parameters.is_empty() {
+            model.name().into()
+        } else {
+            format!("{}<{}>", model.name(), parameters.join(", ")).into()
+        };
+        crate::resolve::Receiver {
+            kind,
+            declared,
+            found,
+            definition: self.models.name_declared_here(model),
+        }
+    }
+
     /// The instances of the supertrait `parent` that `dyn sub<..>` has:
     /// `[[i64]]` of `Convert` for `dyn Both<i64>` (`trait Both<T>:
     /// Convert<T>`).
@@ -1414,6 +1453,7 @@ impl<'a> Parser<'a> {
                     derive: matches!(owner, Ty::Script(..)),
                     declared: self.declared_name(&owner),
                     required_by: None,
+                    formatted: None,
                 });
             }
             // `impl Both<i64> for C` needs `C: Convert<i64>` for `trait
@@ -1444,6 +1484,7 @@ impl<'a> Parser<'a> {
                         derive: matches!(owner, Ty::Script(..)),
                         declared: self.declared_name(&owner),
                         required_by: None,
+                        formatted: None,
                     });
                 }
             }
@@ -1496,6 +1537,7 @@ impl<'a> Parser<'a> {
                         "{}::{}",
                         trait_name.text, name.text
                     ))),
+                    formatted: None,
                 });
             }
             self.check_associated_equalities(&trait_name.text, name, &ty, &owner)?;

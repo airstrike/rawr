@@ -421,6 +421,12 @@ impl Tables {
         self.declarations.values()
     }
 
+    /// Every declaration at its address, which no read notes: what a
+    /// suggested import reads (`Resolver::own_candidates`).
+    pub(super) fn addressed(&self) -> impl Iterator<Item = (&Address, &Declaration)> {
+        self.declarations.iter()
+    }
+
     /// Every re-export, which no read notes: what the whole program reads
     /// (`Resolver::validate_exports`).
     pub(super) fn exports(&self) -> impl Iterator<Item = (&Address, &Export)> {

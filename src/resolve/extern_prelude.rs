@@ -98,6 +98,7 @@ impl Prelude {
             name: name.into(),
             reference: at,
             path: true,
+            imports: Box::default(),
         })
     }
 }

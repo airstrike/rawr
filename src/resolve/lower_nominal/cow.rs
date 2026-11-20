@@ -270,6 +270,7 @@ impl Parser<'_> {
                 derive: false,
                 declared: None,
                 required_by: None,
+                formatted: None,
             });
         };
         self.inference.commit(checkpoint);
@@ -349,6 +350,7 @@ impl Parser<'_> {
                     derive: false,
                     declared: None,
                     required_by: Some(crate::resolve::Required::by("std::borrow::Cow")),
+                    formatted: None,
                 })?
         } else {
             reference_to(borrowed.clone())
@@ -395,6 +397,7 @@ impl Parser<'_> {
                             derive: false,
                             declared: None,
                             required_by: None,
+                            formatted: None,
                         });
                     }
                     return Ok(Some(self.operator_expr(

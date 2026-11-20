@@ -1,5 +1,7 @@
 //! Code a report suggests: edits to its sources, which rustc shows as the
-//! source they make, or beside the code one changes.
+//! source they make, or beside the code one changes. A suggestion may offer
+//! other ways to make it, rustc's several substitutions, each shown after
+//! the first.
 
 use crate::{ImmutableString, Span};
 
@@ -28,12 +30,14 @@ pub struct Edit {
     replacement: ImmutableString,
 }
 
-/// Code a report suggests: its message and the edits that make it.
+/// Code a report suggests: its message, the edits that make it, and the
+/// edits of each other way to make it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Suggestion {
     message: ImmutableString,
     style: Style,
     edits: Vec<Edit>,
+    alternatives: Vec<Vec<Edit>>,
 }
 
 impl Edit {
@@ -106,6 +110,7 @@ impl Suggestion {
             message: message.into(),
             style,
             edits: vec![edit],
+            alternatives: Vec::new(),
         }
     }
 
@@ -117,7 +122,18 @@ impl Suggestion {
             message: message.into(),
             style,
             edits,
+            alternatives: Vec::new(),
         })
+    }
+
+    /// The suggestion with `edits`, made in order, as another way to make
+    /// it, shown after those before it. No edits are no way.
+    #[must_use]
+    pub fn alternative(mut self, edits: Vec<Edit>) -> Self {
+        if !edits.is_empty() {
+            self.alternatives.push(edits);
+        }
+        self
     }
 
     /// The suggestion with `edit` made too.
@@ -145,8 +161,27 @@ impl Suggestion {
         &self.edits
     }
 
-    pub(super) fn edits_mut(&mut self) -> &mut [Edit] {
-        &mut self.edits
+    /// Return the edits of each other way to make it, in the order they
+    /// were given.
+    #[must_use]
+    pub fn alternatives(&self) -> &[Vec<Edit>] {
+        &self.alternatives
+    }
+
+    /// Each way's edits: its own, then each alternative's.
+    pub(super) fn ways(&self) -> impl Iterator<Item = &[Edit]> {
+        std::iter::once(self.edits.as_slice()).chain(self.alternatives.iter().map(Vec::as_slice))
+    }
+
+    /// Every edit of every way.
+    pub(super) fn all_edits(&self) -> impl Iterator<Item = &Edit> {
+        self.ways().flatten()
+    }
+
+    pub(super) fn edits_mut(&mut self) -> impl Iterator<Item = &mut Edit> {
+        self.edits
+            .iter_mut()
+            .chain(self.alternatives.iter_mut().flatten())
     }
 
     pub(super) fn written(
@@ -159,12 +194,15 @@ impl Suggestion {
 
     /// The `help:` label rustc writes beside the code instead of the
     /// suggestion's own section, and the edit it is written at: for a
-    /// report's only suggestion that is [`Style::Inline`], one edit of
-    /// one line, under a message of fewer than ten words.
+    /// report's only suggestion that is [`Style::Inline`], one way of one
+    /// edit of one line, under a message of fewer than ten words.
     pub(super) fn inline(suggestions: &[Self]) -> Option<(&Edit, String)> {
         let [suggestion] = suggestions else {
             return None;
         };
+        if !suggestion.alternatives.is_empty() {
+            return None;
+        }
         let [edit] = suggestion.edits.as_slice() else {
             return None;
         };

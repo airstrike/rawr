@@ -276,7 +276,7 @@ impl Report {
                 report
                     .suggestions
                     .iter()
-                    .flat_map(Suggestion::edits)
+                    .flat_map(Suggestion::all_edits)
                     .map(super::suggestion::Edit::source),
             );
         for source in placed {
@@ -504,13 +504,12 @@ impl Builder {
     #[must_use]
     pub fn suggestion(mut self, suggestion: Suggestion) -> Self {
         if suggestion
-            .edits()
-            .iter()
+            .all_edits()
             .any(super::suggestion::Edit::expanded)
         {
             return self;
         }
-        for edit in suggestion.edits() {
+        for edit in suggestion.all_edits() {
             self = self.source(edit.source().clone());
         }
         self.report.suggestions.push(suggestion.written(written));

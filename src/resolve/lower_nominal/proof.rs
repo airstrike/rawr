@@ -169,6 +169,7 @@ impl<'a> Parser<'a> {
                                 required_by: Some(crate::resolve::Required::by(
                                     crate::host::path::public(&item.path()).as_ref(),
                                 )),
+                                formatted: None,
                             });
                         }
                     }

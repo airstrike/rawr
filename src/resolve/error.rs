@@ -1,5 +1,6 @@
 //! Structured Rawr resolution errors.
 
+use super::Imports;
 use crate::{ImmutableString, Span};
 use std::fmt;
 
@@ -518,6 +519,48 @@ impl Required {
     }
 }
 
+/// The program's own enum a `match` misses variants of, as rustc's E0004
+/// notes it at its definition.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct Uncovered {
+    /// The enum's name where it is declared.
+    pub name: Span,
+    /// The name of each variant no arm covers, where it is declared.
+    pub variants: Box<[Span]>,
+}
+
+/// The placeholder of a format string whose argument's type lacks the trait
+/// it formats with, as rustc's E0277 marks it.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct Placeholder {
+    /// The placeholder in the string, `{:?}`.
+    pub at: Span,
+    /// Whether it names its argument itself, `{s:?}`: rustc marks it alone.
+    pub inline: bool,
+}
+
+impl Error {
+    /// The error with the placeholder that formats its value, where it is
+    /// the value's missing `Display` or `Debug` and `placed`, each format
+    /// argument's span, trait and placeholder, has one for the value.
+    #[must_use]
+    pub(crate) fn formatted(mut self, placed: &[(Span, &str, Placeholder)]) -> Self {
+        if let Self::MissingCapability {
+            capability,
+            operation,
+            formatted: formatted @ None,
+            ..
+        } = &mut self
+            && let Some((.., placeholder)) = placed
+                .iter()
+                .find(|(argument, name, _)| argument == operation && *name == capability.as_str())
+        {
+            *formatted = Some(Box::new(*placeholder));
+        }
+        self
+    }
+}
+
 /// A bound the program writes on a function's generic parameter, and the
 /// call whose argument doesn't meet it, as rustc's E0277 marks them.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -748,6 +791,8 @@ pub enum Error {
         /// Whether the name is a path's first segment, as `Type::item` and
         /// `module::item` write it, which rustc reports as E0433.
         path: bool,
+        /// The items a `use` could bring in under the name.
+        imports: Box<Imports>,
     },
     /// A `use` item references no registered static module, type, or item.
     UnknownImport {
@@ -840,11 +885,10 @@ pub enum Error {
     UnknownFunction {
         /// The name as written.
         name: ImmutableString,
-        /// A function of that name, to import: `iced::widget::center`, or
-        /// the program's `crate::m::f`.
-        import: Option<ImmutableString>,
-        /// Where rustc puts the `use` it suggests.
-        placement: Option<crate::Position>,
+        /// The items a `use` could bring in under the name: a library's
+        /// function, `iced::widget::center`, or the program's
+        /// `crate::m::f`.
+        imports: Box<Imports>,
         /// Exact source reference.
         reference: Span,
     },
@@ -852,6 +896,8 @@ pub enum Error {
     UnknownVariable {
         /// The name as written.
         name: ImmutableString,
+        /// The items a `use` could bring in under the name.
+        imports: Box<Imports>,
         /// Exact source reference.
         reference: Span,
     },
@@ -949,6 +995,20 @@ pub enum Error {
         /// Exact source reference.
         reference: Span,
     },
+    /// `value.member(..)` or `Type::member` where the program's own
+    /// struct or enum, or a reference to one, has no item of that name,
+    /// which rustc refuses (E0599) naming the type's kind and marking its
+    /// definition.
+    NoItem {
+        /// Nominal owner type, as [`Self::UnknownMember`] names it.
+        owner: ImmutableString,
+        /// The missing method or associated item.
+        member: ImmutableString,
+        /// The member's name in the source.
+        reference: Span,
+        /// The type as rustc names it.
+        receiver: Box<Receiver>,
+    },
     /// A path names no item of a module that exists, as rustc's E0425
     /// "cannot find function `load` in module `google`": an item the crate
     /// doesn't have, or one rawr has no binding for yet.
@@ -991,6 +1051,9 @@ pub enum Error {
         /// A called field's parenthesized arguments, which rustc suggests
         /// removing.
         arguments: Option<Span>,
+        /// The program's own struct whose field is called, as rustc names
+        /// it.
+        receiver: Option<Box<Receiver>>,
     },
     /// A nominal construction omits, duplicates, or miscounts members.
     InvalidConstruction {
@@ -1166,6 +1229,9 @@ pub enum Error {
         /// The item whose bound requires the trait, as rustc's "required by
         /// a bound in" note names it.
         required_by: Option<Required>,
+        /// The format string's placeholder that formats the value with the
+        /// trait.
+        formatted: Option<Box<Placeholder>>,
     },
     /// A statically-known nominal enum match has an invalid pattern set.
     InvalidMatch {
@@ -1187,6 +1253,9 @@ pub enum Error {
         scrutinee: Span,
         /// The arms, where rustc suggests one more.
         arms: Box<Arms>,
+        /// The program's own enum whose variants the arms miss, where the
+        /// error's file declares it.
+        uncovered: Option<Box<Uncovered>>,
     },
     /// A pattern that must match every value, in a `let` without `else`, a
     /// `for` or a parameter, which misses some, which rustc refuses
@@ -1684,7 +1753,9 @@ impl Error {
             Self::LoweringUnavailable { .. } => Category::LoweringUnavailable,
             Self::InvalidDerive { .. } | Self::ExpansionRequired { .. } => Category::InvalidDerive,
             Self::DuplicateMember { .. } => Category::DuplicateMember,
-            Self::UnknownMember { .. } | Self::MemberKind { .. } => Category::UnknownMember,
+            Self::UnknownMember { .. } | Self::NoItem { .. } | Self::MemberKind { .. } => {
+                Category::UnknownMember
+            }
             Self::NotInModule { .. } => Category::NotInModule,
             Self::UnknownFunction { .. } => Category::UnknownFunction,
             Self::UnknownVariable { .. } => Category::UnknownVariable,
@@ -1772,6 +1843,7 @@ impl Error {
             | Self::LocalTypeNeeded { name, .. }
             | Self::UnboundAlternative { name, .. } => name.as_str(),
             Self::UnknownMember { owner, .. }
+            | Self::NoItem { owner, .. }
             | Self::MemberKind { owner, .. }
             | Self::InvalidConstruction { owner, .. }
             | Self::MissingCapability { owner, .. }
@@ -1829,6 +1901,7 @@ impl Error {
             }
             Self::DuplicateMember { declaration, .. } => *declaration,
             Self::UnknownMember { reference, .. }
+            | Self::NoItem { reference, .. }
             | Self::MemberKind { reference, .. }
             | Self::NotInModule { reference, .. }
             | Self::PrivateItem { reference, .. } => *reference,
@@ -1937,6 +2010,7 @@ impl Error {
             | Self::InvalidTypeArguments { .. }
             | Self::LoweringUnavailable { .. } => None,
             Self::UnknownMember { .. }
+            | Self::NoItem { .. }
             | Self::MemberKind { .. }
             | Self::NotInModule { .. }
             | Self::UnknownFunction { .. }
@@ -2008,6 +2082,23 @@ impl fmt::Display for SelfOutside {
             "expected value, found module `self`"
         })
     }
+}
+
+/// The type an E0599 is about, as rustc names it: the program's own struct
+/// or enum, or a reference.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct Receiver {
+    /// What rustc calls it: `struct`, `enum`, `reference` or `mutable
+    /// reference`.
+    pub kind: &'static str,
+    /// The type as the message names it: a struct or enum with its
+    /// declared parameters, `G<T>`.
+    pub declared: ImmutableString,
+    /// The type as the label names it, the one found: `G<i32>`.
+    pub found: ImmutableString,
+    /// The struct's or enum's name where the program declares it, in the
+    /// error's file: rustc marks its definition.
+    pub definition: Option<Span>,
 }
 
 /// rustc's E0599 message for the method `member` of a trait out of scope,
@@ -2124,7 +2215,12 @@ impl Unresolved {
             Self::Crate => Some(format!("no external crate `{path}`")),
             Self::Unlinked => Some(NotFound::Module(path).undeclared()),
             Self::Item { module, .. } => Some(format!("no `{last}` in `{module}`")),
-            Self::Module(module) => Some(format!("could not find `{last}` in `{module}`")),
+            // rustc names the module the segment is missing from by its own
+            // name.
+            Self::Module(module) => Some(format!(
+                "could not find `{last}` in `{}`",
+                module.rsplit("::").next().unwrap_or(module)
+            )),
             Self::Value { noun, module } => Some(format!(
                 "expected type, found {noun} `{last}` in `{module}`"
             )),
@@ -2674,6 +2770,16 @@ impl fmt::Display for NotFound<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let (kind, name) = match self {
             Self::Value(name) => ("value", *name),
+            // rustc reads a call of a capitalized name as a tuple struct's
+            // or variant's too.
+            Self::Function(name)
+                if name
+                    .rsplit("::")
+                    .next()
+                    .is_some_and(|last| last.starts_with(char::is_uppercase)) =>
+            {
+                ("function, tuple struct or tuple variant", *name)
+            }
             Self::Function(name) => ("function", *name),
             Self::Type(name) => ("type", *name),
             Self::Module(name) => ("module or crate", *name),
@@ -2785,6 +2891,7 @@ impl fmt::Display for Written<'_> {
                 name,
                 reference,
                 path,
+                ..
             } => write!(
                 formatter,
                 "{} at {reference} ({})",
@@ -2857,6 +2964,16 @@ impl fmt::Display for Written<'_> {
                 member,
                 reference,
             } => write!(formatter, "unknown member `{owner}::{member}` at {reference}"),
+            Error::NoItem {
+                member,
+                reference,
+                receiver,
+                ..
+            } => write!(
+                formatter,
+                "no item `{member}` of {} `{}` at {reference} (E0599)",
+                receiver.kind, receiver.declared
+            ),
             Error::NotInModule {
                 module,
                 item,
@@ -2890,7 +3007,9 @@ impl fmt::Display for Written<'_> {
             Error::UnknownFunction {
                 name, reference, ..
             } => write!(formatter, "{} at {reference} (E0425)", NotFound::Function(name)),
-            Error::UnknownVariable { name, reference } => {
+            Error::UnknownVariable {
+                name, reference, ..
+            } => {
                 write!(formatter, "{} at {reference} (E0425)", NotFound::Value(name))
             }
             Error::UnknownMacro {

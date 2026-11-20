@@ -902,6 +902,7 @@ impl<'a> Parser<'a> {
                         derive: false,
                         declared: None,
                         required_by: None,
+                        formatted: None,
                     });
                 }
                 // A hand-written `Clone` runs for the value's type.
@@ -1486,15 +1487,17 @@ impl<'a> Parser<'a> {
                             field: true,
                             reference: member_span,
                             arguments: parenthesized,
+                            receiver: Some(Box::new(self.receiver(definition_id, &value.ty))),
                         });
                     }
                     _ => {
                         return Err(self
                             .private_member(definition_id, &member, member_span)
-                            .unwrap_or_else(|| Error::UnknownMember {
+                            .unwrap_or_else(|| Error::NoItem {
                                 owner: model.name().into(),
                                 member,
                                 reference: member_span,
+                                receiver: Box::new(self.receiver(definition_id, &value.ty)),
                             }));
                     }
                 };
@@ -2324,6 +2327,7 @@ impl<'a> Parser<'a> {
                     derive: false,
                     declared: None,
                     required_by: None,
+                    formatted: None,
                 })
             }
             Ty::Array { element, .. } => Ty::Array {
@@ -3299,6 +3303,7 @@ impl<'a> Parser<'a> {
             derive: matches!(ty, Ty::Script(..)),
             declared: this.declared_name(ty),
             required_by: None,
+            formatted: None,
         };
         let (a, b) = (self.temporary("left"), self.temporary("right"));
         let pair = (
@@ -3507,6 +3512,7 @@ impl<'a> Parser<'a> {
                 derive: matches!(key, Ty::Script(..)),
                 declared: this.declared_name(key),
                 required_by: None,
+                formatted: None,
             })
         };
         let (half, mid) = (self.temporary("half"), self.temporary("mid"));
@@ -3605,6 +3611,7 @@ impl<'a> Parser<'a> {
                     derive: matches!(output, Ty::Script(..)),
                     declared: self.declared_name(&output),
                     required_by: None,
+                    formatted: None,
                 })?
             } else {
                 origin::Fragment::plain(format!("{function}.__rawr_call({best}, {current})"))
@@ -3622,6 +3629,7 @@ impl<'a> Parser<'a> {
                 derive: matches!(element, Ty::Script(..)),
                 declared: self.declared_name(element),
                 required_by: None,
+                formatted: None,
             })?
         };
         let key_value = if keyed {
@@ -3738,6 +3746,7 @@ impl<'a> Parser<'a> {
                     derive: matches!(error.as_ref(), Ty::Script(..)),
                     declared: self.declared_name(error.as_ref()),
                     required_by: None,
+                    formatted: None,
                 });
             };
             let returned = self.prelude_op(PreludeOp::Err, [converted]);

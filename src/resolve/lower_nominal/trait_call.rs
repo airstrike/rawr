@@ -990,6 +990,7 @@ impl<'a> Parser<'a> {
             derive: matches!(ty, Ty::Script(..)),
             declared: this.declared_name(ty),
             required_by: None,
+            formatted: None,
         };
         let generic_trait = self
             .models

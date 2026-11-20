@@ -251,6 +251,7 @@ impl<'a> Parser<'a> {
             derive: false,
             declared: None,
             required_by: None,
+            formatted: None,
         })
     }
 
@@ -1449,6 +1450,7 @@ impl<'a> Parser<'a> {
                     derive: matches!(target, Ty::Script(..)),
                     declared: self.declared_name(&target),
                     required_by: None,
+                    formatted: None,
                 });
             };
             let helper = if helper.ends_with(", ") {

@@ -595,6 +595,7 @@ impl Parser<'_> {
                         derive: matches!(inner, Ty::Script(..)),
                         declared: self.declared_name(&inner),
                         required_by: None,
+                        formatted: None,
                     });
                 }
                 let default = self.default_source(&inner, member_span)?;
@@ -658,6 +659,7 @@ impl Parser<'_> {
                     derive: matches!(inner, Ty::Script(..)),
                     declared: self.declared_name(&inner),
                     required_by: None,
+                    formatted: None,
                 })
             }
         };

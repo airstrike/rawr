@@ -1123,7 +1123,9 @@ fn rust_miss(
     let path = match error {
         R::UnknownImport { path, .. } => path.to_string(),
         R::UnknownType { name, .. } => name.to_string(),
-        R::UnknownMember { owner, member, .. } => format!("{owner}::{member}"),
+        R::UnknownMember { owner, member, .. } | R::NoItem { owner, member, .. } => {
+            format!("{owner}::{member}")
+        }
         R::NotInModule { module, item, .. } => format!("{module}::{item}"),
         R::MacroExpansionRequired { .. } => return macro_miss(error),
         // A crate's type the program never names, as the `Bytes` of
@@ -1154,7 +1156,7 @@ fn rust_miss(
     // implements provides. A demanded type brings its own impl tables, and
     // demanding `Type::member` brings the member of each trait it
     // implements. Demanded once, a member still missing is a real miss.
-    if matches!(error, R::UnknownMember { .. }) {
+    if matches!(error, R::UnknownMember { .. } | R::NoItem { .. }) {
         return Some(Miss::Demand(path, through_alias, true));
     }
     match contract.rust_lookup(&path) {
@@ -1211,6 +1213,7 @@ fn diagnostic_path(error: &crate::resolve::Error) -> Option<(String, ImportedNam
     match error {
         R::InvalidTypeArguments { ty, .. } => Some((ty.to_string(), ImportedNamespace::Type)),
         R::UnknownMember { owner, .. }
+        | R::NoItem { owner, .. }
         | R::InvalidConstruction { owner, .. }
         | R::MissingCapability { owner, .. }
         | R::InvalidMatch { owner, .. } => Some((owner.to_string(), ImportedNamespace::Type)),

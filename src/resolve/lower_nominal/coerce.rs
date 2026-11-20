@@ -400,6 +400,7 @@ impl<'a> Parser<'a> {
                     derive: matches!(from_error.as_ref(), Ty::Script(..)),
                     declared: self.declared_name(from_error.as_ref()),
                     required_by: None,
+                    formatted: None,
                 });
             };
             let mut boxed = origin::Fragment::plain(format!("{{ let {result} = "));
@@ -435,6 +436,7 @@ impl<'a> Parser<'a> {
                     derive: matches!(source, Ty::Script(..)),
                     declared: self.declared_name(&source),
                     required_by: None,
+                    formatted: None,
                 });
             };
             *value = self.operator_expr(object, target, value.span);
@@ -619,6 +621,7 @@ impl<'a> Parser<'a> {
                     derive: matches!(concrete, Ty::Script(..)),
                     declared: self.declared_name(&concrete),
                     required_by: None,
+                    formatted: None,
                 });
             }
             // `dyn Shape<Output = i64>`: the type's `Output` is `i64`.
@@ -1139,6 +1142,7 @@ impl<'a> Parser<'a> {
                         derive: true,
                         declared: None,
                         required_by: None,
+                        formatted: None,
                     });
                 };
                 let item = crate::item::Value::new(

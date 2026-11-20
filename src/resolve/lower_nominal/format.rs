@@ -1,6 +1,7 @@
 //! Format strings and their specs: `format!`'s arguments, `Debug` text,
 //! and the panic and assert macros that format.
 
+use super::literal;
 use super::lvalue::Lvalue;
 use super::models::{Models, Nominal};
 use super::op::{Op, PreludeOp};
@@ -9,12 +10,13 @@ use super::{
     cargo_env, cell, counted, cow, origin, point_span, span, split_arguments, stringify_tokens,
     text_end, thread, token_text, Binding, BindingKind, ParseError, ParsedExpr, Parser, STR_PIECES,
 };
-use crate::resolve::{type_ref, Error};
+use crate::resolve::{type_ref, Error, Placeholder};
 use crate::tokenizer::Token;
 use crate::types::dynamic::Union;
 use crate::{capability, Dynamic, ImmutableString, Position, Span, INT};
 use std::collections::BTreeSet;
 use std::fmt::Write;
+use std::ops::Range;
 
 /// A `.into()` whose `From` impl is chosen when its target is known.
 /// A `format!` piece whose value's type was not known yet where it was
@@ -1036,10 +1038,61 @@ impl DebugSpec {
     }
 }
 
+/// Where a format string's `{}` and `{:?}` placeholders are, which an error
+/// marks: the literal, its value, and each one's argument, the trait it
+/// formats with, its characters in the value and whether it names its
+/// argument itself.
+#[derive(Default)]
+struct Placements {
+    literal: Span,
+    template: String,
+    placeholders: Vec<(Span, &'static str, Range<usize>, bool)>,
+}
+
+impl Placements {
+    /// Each placeholder's argument, trait and place in `text`, the source.
+    fn spans(&self, text: &str) -> Vec<(Span, &'static str, Placeholder)> {
+        self.placeholders
+            .iter()
+            .filter_map(|(argument, trait_name, characters, inline)| {
+                let at = literal::value_span(
+                    self.literal.text(text),
+                    self.literal.start(),
+                    &self.template,
+                    characters.clone(),
+                )?;
+                Some((
+                    *argument,
+                    *trait_name,
+                    Placeholder {
+                        at,
+                        inline: *inline,
+                    },
+                ))
+            })
+            .collect()
+    }
+}
+
 impl<'a> Parser<'a> {
     /// `format!` with `{}`, `{0}`, `{name}` (a named argument or a captured
-    /// local) and `{{`/`}}`. Arguments are evaluated once, in order.
+    /// local) and `{{`/`}}`. Arguments are evaluated once, in order. A
+    /// value whose type lacks the trait its placeholder formats with is
+    /// refused at that placeholder too, as rustc marks it.
     pub(super) fn parse_format(&mut self, start: Span, opened: bool) -> Result<ParsedExpr, Error> {
+        let mut placed = Placements::default();
+        self.parse_placed_format(start, opened, &mut placed)
+            .map_err(|error| error.formatted(&placed.spans(self.text)))
+    }
+
+    /// [`Self::parse_format`], with where its placeholders are in
+    /// `placed`.
+    fn parse_placed_format(
+        &mut self,
+        start: Span,
+        opened: bool,
+        placed: &mut Placements,
+    ) -> Result<ParsedExpr, Error> {
         self.settle_parses()?;
         if !opened {
             self.expect(Token::LeftParen, "'(' after `format!`")?;
@@ -1105,6 +1158,10 @@ impl<'a> Parser<'a> {
         }
 
         let mut pieces = Vec::<Result<String, (usize, Spec)>>::new();
+        // Each `{}` and `{:?}` piece's argument, the trait it formats with,
+        // its placeholder's characters in the value and whether it names
+        // its argument itself.
+        let mut placeholders = Vec::<(usize, &'static str, Range<usize>, bool)>::new();
         let mut text = String::new();
         let mut next_positional = 0;
         let mut counted = BTreeSet::<usize>::new();
@@ -1138,6 +1195,12 @@ impl<'a> Parser<'a> {
                             }
                         }
                     }
+                    // The placeholder, braces and all, in the value.
+                    let opening = template.chars().count()
+                        - chars.clone().count()
+                        - written.chars().count()
+                        - 2;
+                    let placeholder = opening..opening + written.chars().count() + 2;
                     let (key, raw) = match written.split_once(':') {
                         Some((name, spec)) => (name.trim().to_string(), spec.to_string()),
                         None => (written.trim().to_string(), String::new()),
@@ -1330,6 +1393,18 @@ impl<'a> Parser<'a> {
                             counted.insert(*argument);
                         }
                     }
+                    let trait_name = match spec.kind {
+                        Kind::Display => Some("Display"),
+                        Kind::Debug | Kind::HexDebug(_) => Some("Debug"),
+                        Kind::Radix(_) | Kind::Exp { .. } => None,
+                    };
+                    if let Some(trait_name) = trait_name {
+                        // A name no explicit argument has is the value it
+                        // names, which the placeholder captures.
+                        let inline = matches!(spec.argument_of(&key), Some(Argument::Name(_)))
+                            && arguments[index].1.span == expression;
+                        placeholders.push((index, trait_name, placeholder, inline));
+                    }
                     pieces.push(Ok(std::mem::take(&mut text)));
                     pieces.push(Err((index, spec.resolved(width, precision))));
                 }
@@ -1395,6 +1470,14 @@ impl<'a> Parser<'a> {
             }
             types.push((ty, argument.span));
         }
+        placed.literal = template_span;
+        placed.placeholders = placeholders
+            .into_iter()
+            .map(|(index, trait_name, placeholder, inline)| {
+                (types[index].1, trait_name, placeholder, inline)
+            })
+            .collect();
+        placed.template = template;
 
         let mut text = origin::Fragment::plain("\"\"");
         for piece in pieces {
@@ -1417,6 +1500,7 @@ impl<'a> Parser<'a> {
                     derive: false,
                     declared: None,
                     required_by: None,
+                    formatted: None,
                 });
             }
             let name = origin::Fragment::plain(names[index].as_str());
@@ -1834,6 +1918,7 @@ impl<'a> Parser<'a> {
             derive: false,
             declared: self.declared_name(ty),
             required_by: None,
+            formatted: None,
         }
     }
 
@@ -2422,6 +2507,7 @@ impl<'a> Parser<'a> {
                         derive: matches!(ty, Ty::Script(..)),
                         declared: self.declared_name(&ty),
                         required_by: None,
+                        formatted: None,
                     });
                 }
                 if self.models.std_traits.contains("Debug") {
@@ -2639,6 +2725,7 @@ impl<'a> Parser<'a> {
                     derive: matches!(ty, Ty::Script(..)),
                     declared: self.declared_name(&ty),
                     required_by: None,
+                    formatted: None,
                 })
             }
         })

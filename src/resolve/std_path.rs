@@ -373,7 +373,7 @@ pub(crate) fn bound_type(qualified: &str) -> Option<ImmutableString> {
 /// nothing in scope binds: no declaration, no `use` and not std's prelude.
 /// E0425 where it names a type; E0433 where it heads a path (`head`), as
 /// `HashMap::new()`. `None` for any other name. The caller has looked
-/// `name` up in its scope.
+/// `name` up in its scope, and offers the imports.
 pub(crate) fn unbound_type(name: &str, head: bool, reference: Span) -> Option<Error> {
     let represented = TYPES.iter().any(|(definition, _)| {
         !definition.starts_with("core::fmt::") && definition.rsplit("::").next() == Some(name)
@@ -381,17 +381,16 @@ pub(crate) fn unbound_type(name: &str, head: bool, reference: Span) -> Option<Er
     if !represented || qualified(name, None).is_some() {
         return None;
     }
-    let (code, label) = if head {
-        ("E0433", format!("use of undeclared type `{name}`"))
-    } else {
-        ("E0425", "not found in this scope".to_owned())
-    };
-    Some(Error::StdPath {
-        code,
-        message: format!("cannot find type `{name}` in this scope").into(),
-        label: Some(label.into()),
-        note: None,
-        reference,
+    // The name whole, where the reference is the point it starts at.
+    let mut end = reference.start();
+    for _ in name.chars() {
+        end.advance();
+    }
+    Some(Error::UnknownType {
+        name: name.into(),
+        reference: Span::new(reference.start(), end.max(reference.end())),
+        path: head,
+        imports: Box::default(),
     })
 }
 

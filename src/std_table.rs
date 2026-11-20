@@ -544,6 +544,42 @@ pub(crate) fn public_path(definition: &str) -> Option<&'static str> {
         .min_by_key(|path| path.len())
 }
 
+/// The items through `std` named `name` in `namespace`, each by the
+/// shortest path that names it outside the prelude and std's hidden
+/// modules, in the order of their paths: what a `use` could import under
+/// the name.
+pub(crate) fn named(name: &str, namespace: Namespace) -> Vec<Path> {
+    let suffix = format!("::{name}\t{}\t", namespace.letter());
+    let mut found: Vec<Path> = Vec::new();
+    for line in Table::get()
+        .paths
+        .from("std::")
+        .iter()
+        .take_while(|line| line.starts_with("std::"))
+        .filter(|line| line.contains(&suffix))
+    {
+        let candidate = path_line(line);
+        if candidate.path.starts_with("std::prelude::")
+            || candidate
+                .path
+                .split("::")
+                .any(|segment| segment.starts_with('_'))
+        {
+            continue;
+        }
+        match found
+            .iter_mut()
+            .find(|known| known.definition == candidate.definition)
+        {
+            Some(known) if candidate.path.len() < known.path.len() => *known = candidate,
+            Some(_) => {}
+            None => found.push(candidate),
+        }
+    }
+    found.sort_by_key(|candidate| candidate.path);
+    found
+}
+
 /// Whether `path` is a module.
 pub(crate) fn is_module(path: &str) -> bool {
     self::path(path, Namespace::Type).is_some_and(|found| found.kind == "mod")

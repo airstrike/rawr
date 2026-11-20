@@ -771,6 +771,7 @@ impl<'a> Parser<'a> {
                 derive: matches!(value.ty, Ty::Script(..)),
                 declared: self.declared_name(&value.ty),
                 required_by: None,
+                formatted: None,
             });
         }
         Ok(value)
@@ -1430,6 +1431,7 @@ impl<'a> Parser<'a> {
             field,
             reference: member_span,
             arguments: parenthesized,
+            receiver: None,
         };
         match (called, has_field, has_method) {
             (false, true, _) => Ok((format!("{EXPORTED_FIELD}{member}").into(), field)),

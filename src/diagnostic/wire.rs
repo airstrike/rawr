@@ -68,6 +68,7 @@ impl Report {
                 "help": section.level() == Level::Help,
                 "message": section.message(),
                 "labels": section.labels().iter().map(label).collect::<Vec<_>>(),
+                "notes": section.notes().iter().map(crate::ImmutableString::as_str).collect::<Vec<_>>(),
             })
         });
         let external = self.external_labels().iter().map(|label| {
@@ -83,17 +84,27 @@ impl Report {
             })
         });
         let suggestions = self.suggestions().iter().map(|suggestion| {
-            let edits = suggestion.edits().iter().map(|edit| {
-                json!({
-                    "source": sources.iter().position(|source| source == edit.source()),
-                    "span": [place(edit.span().start()), place(edit.span().end())],
-                    "replacement": edit.replacement(),
-                })
-            });
+            let edits = |edits: &[Edit]| {
+                edits
+                    .iter()
+                    .map(|edit| {
+                        json!({
+                            "source": sources.iter().position(|source| source == edit.source()),
+                            "span": [place(edit.span().start()), place(edit.span().end())],
+                            "replacement": edit.replacement(),
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            };
             json!({
                 "message": suggestion.message(),
                 "inline": suggestion.style() == Style::Inline,
-                "edits": edits.collect::<Vec<_>>(),
+                "edits": edits(suggestion.edits()),
+                "alternatives": suggestion
+                    .alternatives()
+                    .iter()
+                    .map(|alternative| edits(alternative))
+                    .collect::<Vec<_>>(),
             })
         });
         json!({
@@ -221,16 +232,24 @@ fn section(value: &Value, sources: &[Source]) -> Result<Section, Error> {
     let labels = value
         .get("labels")
         .and_then(Value::as_array)
+        .ok_or(malformed.clone())?;
+    let notes = value
+        .get("notes")
+        .and_then(Value::as_array)
         .ok_or(malformed)?;
-    labels
-        .iter()
-        .try_fold(Section::new(level, message.into()), |section, value| {
-            let (source, span, kind, message) = label(value, sources)?;
-            Ok(match kind {
-                LabelKind::Primary => section.primary(source, span, message),
-                LabelKind::Secondary => section.secondary(source, span, message),
-            })
-        })
+    let section =
+        labels
+            .iter()
+            .try_fold(Section::new(level, message.into()), |section, value| {
+                let (source, span, kind, message) = label(value, sources)?;
+                Ok::<_, Error>(match kind {
+                    LabelKind::Primary => section.primary(source, span, message),
+                    LabelKind::Secondary => section.secondary(source, span, message),
+                })
+            })?;
+    notes.iter().try_fold(section, |section, note| {
+        Ok(section.followed(string(note, "section")?))
+    })
 }
 
 /// The suggestion `value` holds, its edits in `sources`.
@@ -242,32 +261,40 @@ fn suggestion(value: &Value, sources: &[Source]) -> Result<Suggestion, Error> {
         Some(false) => Style::Verbose,
         None => return Err(malformed),
     };
-    let mut edits = value
-        .get("edits")
+    let edits = |edits: &Value| {
+        edits
+            .as_array()
+            .ok_or(malformed.clone())?
+            .iter()
+            .map(|edit| {
+                let source = edit
+                    .get("source")
+                    .and_then(Value::as_u64)
+                    .and_then(|index| sources.get(usize::try_from(index).ok()?))
+                    .ok_or(Error::Malformed("edit"))?;
+                let span = edit
+                    .get("span")
+                    .and_then(span)
+                    .ok_or(Error::Malformed("span"))?;
+                let replacement = string(
+                    edit.get("replacement").ok_or(Error::Malformed("edit"))?,
+                    "edit",
+                )?;
+                Ok::<_, Error>(Edit::new(source.clone(), span, replacement)?)
+            })
+            .collect::<Result<Vec<_>, Error>>()
+    };
+    let first = edits(value.get("edits").ok_or(malformed.clone())?)?;
+    let alternatives = value
+        .get("alternatives")
         .and_then(Value::as_array)
-        .ok_or(malformed.clone())?
-        .iter()
-        .map(|edit| {
-            let source = edit
-                .get("source")
-                .and_then(Value::as_u64)
-                .and_then(|index| sources.get(usize::try_from(index).ok()?))
-                .ok_or(Error::Malformed("edit"))?;
-            let span = edit
-                .get("span")
-                .and_then(span)
-                .ok_or(Error::Malformed("span"))?;
-            let replacement = string(
-                edit.get("replacement").ok_or(Error::Malformed("edit"))?,
-                "edit",
-            )?;
-            Ok::<_, Error>(Edit::new(source.clone(), span, replacement)?)
-        });
-    let first = edits.next().ok_or(malformed)??;
-    edits.try_fold(
-        Suggestion::new(message, style, first),
-        |suggestion, edit| Ok(suggestion.edit(edit?)),
-    )
+        .ok_or(malformed.clone())?;
+    let mut suggestion =
+        Suggestion::of(message, style, first).ok_or(Error::Malformed("suggestion"))?;
+    for alternative in alternatives {
+        suggestion = suggestion.alternative(edits(alternative)?);
+    }
+    Ok(suggestion)
 }
 
 /// `position` as `[line, position]`, each zero for none.

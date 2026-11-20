@@ -331,6 +331,7 @@ fn sourced_builder(error: &resolve::Error, source: &Source, primary: Span) -> Bu
         name,
         reference,
         path: false,
+        imports,
     } = error
         && let Some((module, item)) = name.rsplit_once("::")
     {
@@ -338,7 +339,17 @@ fn sourced_builder(error: &resolve::Error, source: &Source, primary: Span) -> Bu
             name: format!("{}::{item}", written_type_module(source, primary, module)).into(),
             reference: *reference,
             path: false,
+            imports: imports.clone(),
         });
+    }
+    if let Some(missing) = Missing::of(error, source, primary) {
+        return Report::error(
+            code::RESOLVE_NO_METHOD,
+            format!(
+                "no {} named `{}` found for {} `{}` in the current scope",
+                missing.item, missing.member, missing.receiver.kind, missing.receiver.declared
+            ),
+        );
     }
     let resolve::Error::UnknownMember { owner, member, .. } = error else {
         return resolution_builder(error);
@@ -363,9 +374,9 @@ fn sourced_builder(error: &resolve::Error, source: &Source, primary: Span) -> Bu
         ),
         Member::Associated => {
             let item = if member.starts_with(char::is_uppercase) {
-                "variant or associated item"
+                ENUM_ITEM
             } else {
-                "function or associated item"
+                TYPE_ITEM
             };
             Report::error(
                 code::RESOLVE_NO_METHOD,
@@ -489,6 +500,22 @@ fn bound_place(error: &resolve::Error) -> Option<&resolve::Bound> {
     }
 }
 
+/// The placeholder that formats the value `error`, rustc's E0277, says
+/// lacks a trait.
+fn formatting(error: &resolve::Error) -> Option<&resolve::Placeholder> {
+    match error {
+        resolve::Error::MissingCapability {
+            formatted: Some(placeholder),
+            ..
+        } => Some(placeholder),
+        _ => None,
+    }
+}
+
+/// rustc's note after a value's missing `Display` in a format string.
+const DEBUG_INSTEAD: &str =
+    "in format strings you may be able to use `{:?}` (or {:#?} for pretty-print) instead";
+
 /// An unknown member's span, which covers its name as rustc underlines it;
 /// an unmet bound's argument and a wrong argument count's callee.
 fn member_span(error: &resolve::Error) -> Span {
@@ -496,6 +523,10 @@ fn member_span(error: &resolve::Error) -> Span {
     // An unmet bound is at the argument that has to meet it.
     if let Some(place) = bound_place(error) {
         return place.argument;
+    }
+    // A value a placeholder names itself is formatted at the placeholder.
+    if let Some(placeholder) = formatting(error).filter(|placeholder| placeholder.inline) {
+        return placeholder.at;
     }
     // rustc's E0061 is at the callee, its arguments labelled beside it.
     if let resolve::Error::ArgumentCount {
@@ -506,6 +537,7 @@ fn member_span(error: &resolve::Error) -> Span {
         return arguments.callee;
     }
     let (resolve::Error::UnknownMember { member, .. }
+    | resolve::Error::NoItem { member, .. }
     | resolve::Error::MemberKind { member, .. }
     | resolve::Error::NotInModule { item: member, .. }) = error
     else {
@@ -535,6 +567,51 @@ fn short(owner: &str) -> std::borrow::Cow<'_, str> {
     let segment = &owner[path..];
     shortened.push_str(segment.rsplit("::").next().unwrap_or(segment));
     shortened.into()
+}
+
+/// What rustc's E0599 calls an associated item an enum misses.
+const ENUM_ITEM: &str = "variant, associated function, or constant";
+
+/// What it calls one another type misses.
+const TYPE_ITEM: &str = "associated function or constant";
+
+/// The item rustc's E0599 says the program's own struct or enum, or a
+/// reference to one, misses: what it calls the item, the item and the
+/// type.
+struct Missing<'a> {
+    item: &'static str,
+    member: std::borrow::Cow<'a, str>,
+    receiver: &'a resolve::Receiver,
+}
+
+impl<'a> Missing<'a> {
+    /// The item `error` misses at `at` in `source`: a method, or an
+    /// associated item `Type::member` names.
+    fn of(error: &'a resolve::Error, source: &Source, at: Span) -> Option<Self> {
+        let (member, receiver) = match error {
+            resolve::Error::NoItem {
+                member, receiver, ..
+            }
+            | resolve::Error::MemberKind {
+                member,
+                field: true,
+                receiver: Some(receiver),
+                ..
+            } => (member, receiver),
+            _ => return None,
+        };
+        let member = crate::tokenizer::raw_names(member);
+        let item = match member_kind(source, at, &member) {
+            Some(Member::Associated) if receiver.kind == "enum" => ENUM_ITEM,
+            Some(Member::Associated) => TYPE_ITEM,
+            _ => "method",
+        };
+        Some(Self {
+            item,
+            member,
+            receiver,
+        })
+    }
 }
 
 /// How source names a member: `value.member()`, `value.member` or
@@ -681,6 +758,22 @@ fn resolution_report_with_sources(
             missing.label(path).map(Into::into),
         )?;
     }
+    // rustc marks the definition of the type that misses the item.
+    if let Some(missing) = Missing::of(error, &source, error.primary_span())
+        && let Some(definition) = missing.receiver.definition
+    {
+        builder = builder.secondary(
+            source.clone(),
+            super::definition::header(&source, definition),
+            Some(
+                format!(
+                    "{} `{}` not found for this {}",
+                    missing.item, missing.member, missing.receiver.kind
+                )
+                .into(),
+            ),
+        )?;
+    }
     // rustc labels each operand with its type, and an assignment's left
     // operand with the operator it can't use.
     if let resolve::Error::BinaryOperation { operation, .. } = error {
@@ -703,6 +796,13 @@ fn resolution_report_with_sources(
             source.clone(),
             place.callee,
             Some("required by a bound introduced by this call".into()),
+        )?;
+    }
+    if let Some(placeholder) = formatting(error).filter(|placeholder| !placeholder.inline) {
+        builder = builder.secondary(
+            source.clone(),
+            placeholder.at,
+            Some("required by this formatting parameter".into()),
         )?;
     }
     let secondary_source = secondary_source.unwrap_or_else(|| source.clone());
@@ -921,6 +1021,22 @@ fn referent_section(referent: &resolve::Referent, source: &Source) -> Section {
 /// The notes rustc gives `error` with places of their own, in `source`.
 fn sections(error: &resolve::Error, source: &Source) -> Vec<Section> {
     match error {
+        // The enum's name, and each variant no arm covers.
+        resolve::Error::NonExhaustive {
+            ty,
+            uncovered: Some(uncovered),
+            ..
+        } => {
+            let section = Section::note(format!("`{ty}` defined here")).primary(
+                source.clone(),
+                uncovered.name,
+                None,
+            );
+            let section = uncovered.variants.iter().fold(section, |section, variant| {
+                section.secondary(source.clone(), *variant, Some("not covered".into()))
+            });
+            vec![section.followed(format!("the matched value is of type `{ty}`"))]
+        }
         // E0364 notes the re-export it refuses at that re-export.
         resolve::Error::StdPath {
             code: "E0364",
@@ -986,14 +1102,18 @@ fn sections(error: &resolve::Error, source: &Source) -> Vec<Section> {
             let help = declared
                 .filter(|_| capability == "Display")
                 .map(|declared| {
-                    Section::help(format!(
+                    let help = Section::help(format!(
                         "the trait `std::fmt::Display` is not implemented for `{owner}`"
                     ))
                     .primary(
                         source.clone(),
                         super::definition::span(source, declared),
                         None,
-                    )
+                    );
+                    match formatting(error) {
+                        Some(_) => help.followed(DEBUG_INSTEAD),
+                        None => help,
+                    }
                 });
             let bound = match required_by {
                 Some(resolve::Required {
@@ -1114,6 +1234,26 @@ fn above(
     Ok(Some(Suggestion::new(message, Style::Verbose, edit)))
 }
 
+/// rustc's suggestion to import one of `imports` in `source`: each item's
+/// `use` on a line of its own above the line rustc puts it at, as
+/// indented, the items as alternatives.
+fn imported(imports: &resolve::Imports, source: &Source) -> Result<Option<Suggestion>, Error> {
+    let (Some(message), Some(at)) = (imports.message(), imports.placement) else {
+        return Ok(None);
+    };
+    let mut suggestion: Option<Suggestion> = None;
+    for candidate in &imports.candidates {
+        let Some(way) = above(&message, &format!("use {};", candidate.path), at, source)? else {
+            continue;
+        };
+        suggestion = Some(match suggestion {
+            Some(suggestion) => suggestion.alternative(way.edits().to_vec()),
+            None => way,
+        });
+    }
+    Ok(suggestion)
+}
+
 /// The code rustc suggests for `error`, in `source`.
 fn suggestion(error: &resolve::Error, source: &Source) -> Result<Option<Suggestion>, Error> {
     let suggestion = |message: &str, style, span: Span, replacement: &str| {
@@ -1204,16 +1344,9 @@ fn suggestion(error: &resolve::Error, source: &Source) -> Result<Option<Suggesti
                 &format!(" as {other}"),
             )
         }
-        resolve::Error::UnknownFunction {
-            import: Some(path),
-            placement: Some(at),
-            ..
-        } => above(
-            "consider importing this function",
-            &format!("use {path};"),
-            *at,
-            source,
-        ),
+        resolve::Error::UnknownFunction { imports, .. }
+        | resolve::Error::UnknownVariable { imports, .. }
+        | resolve::Error::UnknownType { imports, .. } => imported(imports, source),
         resolve::Error::UnscopedMethod {
             member,
             path,
@@ -1503,10 +1636,27 @@ fn primary_label(
             }
             .into(),
         ),
+        // At the formatted value, as std's `Debug` and `Display` word it.
+        resolve::Error::MissingCapability {
+            owner, capability, ..
+        } if formatting(error).is_some() => Some(
+            match capability.as_str() {
+                "Debug" => format!(
+                    "`{owner}` cannot be formatted using `{{:?}}` because it doesn't implement \
+                     `Debug`"
+                ),
+                _ => format!("`{owner}` cannot be formatted with the default formatter"),
+            }
+            .into(),
+        ),
         resolve::Error::ImmutableBinding { .. } => {
             Some("cannot assign twice to immutable variable".into())
         }
         resolve::Error::MemberKind { field: true, .. } => Some("field, not a method".into()),
+        resolve::Error::NoItem { receiver, .. } => {
+            let item = Missing::of(error, source, primary).map_or("method", |missing| missing.item);
+            Some(format!("{item} not found in `{}`", receiver.found).into())
+        }
         resolve::Error::MovedValue {
             previous_iteration: true,
             ..
@@ -1712,9 +1862,12 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
             note: Some(note),
             ..
         } if *code != "E0364" => builder.note(note.clone()),
-        resolve::Error::NonExhaustive { ty, .. } => {
-            builder.note(format!("the matched value is of type `{ty}`"))
-        }
+        // After the enum's note, when it has one (`sections`).
+        resolve::Error::NonExhaustive {
+            ty,
+            uncovered: None,
+            ..
+        } => builder.note(format!("the matched value is of type `{ty}`")),
         resolve::Error::Refutable {
             witnesses,
             ty,
@@ -1782,8 +1935,17 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
             // definition.
             let builder = match capability.as_str() {
                 "Display" if declared.is_some() => builder,
-                "Display" => builder.help(format!(
-                    "the trait `std::fmt::Display` is not implemented for `{owner}`"
+                "Display" => {
+                    let builder = builder.help(format!(
+                        "the trait `std::fmt::Display` is not implemented for `{owner}`"
+                    ));
+                    match formatting(error) {
+                        Some(_) => builder.note(DEBUG_INSTEAD),
+                        None => builder,
+                    }
+                }
+                "Debug" if formatting(error).is_some() => builder.help(format!(
+                    "the trait `Debug` is not implemented for `{owner}`"
                 )),
                 "PartialEq" => builder.help(format!(
                     "the trait `PartialEq` is not implemented for `{owner}`"
@@ -1987,7 +2149,8 @@ fn resolution_message(error: &resolve::Error) -> String {
         resolve::Error::DuplicateMember { owner, member, .. } => {
             format!("duplicate member `{owner}::{member}`")
         }
-        resolve::Error::UnknownMember { owner, member, .. } => {
+        resolve::Error::UnknownMember { owner, member, .. }
+        | resolve::Error::NoItem { owner, member, .. } => {
             format!("unknown member `{owner}::{member}`")
         }
         resolve::Error::NotInModule { module, item, .. } => {
@@ -2246,6 +2409,7 @@ mod tests {
                     name: format!("model::extension::registry::{item}").into(),
                     reference: span,
                     path: false,
+                    imports: Box::default(),
                 })),
                 span.start(),
                 Default::default(),
@@ -2299,6 +2463,7 @@ mod tests {
             derive,
             declared: None,
             required_by: None,
+            formatted: None,
         };
 
         let report = Report::from_resolution(source.clone(), None, &missing("FromStr", true))

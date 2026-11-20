@@ -249,6 +249,7 @@ impl<'a> Parser<'a> {
                     derive: matches!(ty, Ty::Script(..)),
                     declared: self.declared_name(&ty),
                     required_by: site,
+                    formatted: None,
                 });
             }
         }
@@ -276,6 +277,7 @@ impl<'a> Parser<'a> {
                         derive: false,
                         declared: None,
                         required_by: None,
+                        formatted: None,
                     });
                 }
                 // rustc names the innermost type std's impls needed it
@@ -321,6 +323,7 @@ impl<'a> Parser<'a> {
                     derive: matches!(ty, Ty::Script(..)),
                     declared: self.declared_name(&ty),
                     required_by: site,
+                    formatted: None,
                 });
             }
         }
@@ -563,6 +566,7 @@ impl<'a> Parser<'a> {
                             derive: false,
                             declared: None,
                             required_by: None,
+                            formatted: None,
                         });
                     }
                     format!("{DEFAULT_DISPATCHER}({})", witness_variable(name))

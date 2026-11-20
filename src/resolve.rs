@@ -5,6 +5,7 @@ pub(crate) mod borrowck;
 mod error;
 pub(crate) mod extern_prelude;
 mod forward;
+pub(crate) mod imports;
 mod infinite;
 mod intrinsic;
 pub(crate) mod item;
@@ -31,8 +32,10 @@ pub use error::{
     Annotation, Arguments, Arms, Assignment, Beyond, BinaryOperation, BindingSite, Bound, Boxing,
     Callee, Category, Cloning, Detail, Error, Expansion, Fields, Import, Imported, Instead, Lint,
     MacroScope, Missing, MissingImpl, MoveCause, MovedPlace, MutBinding, OwningParameter,
-    PatternOrigin, PatternTypes, Private, Referent, Required, Unexpected, Unresolved,
+    PatternOrigin, PatternTypes, Placeholder, Private, Receiver, Referent, Required, Uncovered,
+    Unexpected, Unresolved,
 };
+pub use imports::{Candidate, Imports};
 use std::collections::BTreeMap;
 
 pub(crate) struct LocatedError {
@@ -268,6 +271,7 @@ impl LoweringFailure {
             Error::UnknownMember { owner, .. } if owner.as_str() == "!" => None,
             Error::UnknownType { .. }
             | Error::UnknownMember { .. }
+            | Error::NoItem { .. }
             | Error::NotInModule { .. }
             | Error::UnknownImport { .. } => Some(error),
             Error::ImportedApplicationRequired {
@@ -323,6 +327,7 @@ impl LoweringFailure {
             crate::ParseErrorType::Resolution(
                 Error::UnknownType { .. }
                     | Error::UnknownMember { .. }
+                    | Error::NoItem { .. }
                     | Error::NotInModule { .. }
                     | Error::UnknownImport { .. }
             )
@@ -2376,21 +2381,24 @@ pub(super) fn whole_import(error: Error, tree: &crate::item::UseTree) -> Error {
         alias.as_ref().map_or(last.span, |alias| alias.span)
     };
     // The import's written segments, and where its leaf starts: a path's
-    // first segment, a group member's own name.
+    // first segment as the source writes it, a group member's own name. A
+    // path a group's member goes on with starts at the member.
     let leaf = match tree {
         UseTree::Path(written, alias) => written
             .segments
             .last()
             .filter(|last| bound(&last.name, alias) == reference)
             .map(|_| {
-                (
-                    written
-                        .segments
-                        .iter()
-                        .map(|segment| &segment.name)
-                        .collect(),
-                    0,
-                )
+                let names: Vec<_> = written
+                    .segments
+                    .iter()
+                    .map(|segment| &segment.name)
+                    .collect();
+                let start = names
+                    .iter()
+                    .position(|name| name.span.start() >= written.span.start())
+                    .unwrap_or(0);
+                (names, start)
             }),
         UseTree::Group {
             prefix, members, ..
@@ -2431,6 +2439,16 @@ pub(super) fn whole_import(error: Error, tree: &crate::item::UseTree) -> Error {
                 .get(segments.len() - 1)
                 .filter(|name| segments.last() == Some(&name.text.as_str()))
                 .map_or(reference, |name| name.span);
+            (at, Unresolved::Module(module))
+        }
+        missing => (reference, missing),
+    };
+    // A group's `self` imports its prefix, a module: one std doesn't have
+    // is missing on the way, at its own segment.
+    let (reference, missing) = match missing {
+        Unresolved::Item { module, .. } if names[names.len() - 1].text == "self" => {
+            let segments = path.split("::").count();
+            let at = names.get(segments - 1).map_or(reference, |name| name.span);
             (at, Unresolved::Module(module))
         }
         missing => (reference, missing),
@@ -3253,6 +3271,7 @@ fn crate_trait_generics(
                     name: qualified.into(),
                     reference: bound.span,
                     path: false,
+                    imports: Box::default(),
                 };
                 site.record(&error);
                 return Err(error);
@@ -5569,6 +5588,7 @@ fn resolve_trait(
             name: qualified.clone(),
             reference: span,
             path: false,
+            imports: Box::default(),
         };
         if let Some(site) = native.filter(|site| site.missing_binding(host, &qualified)) {
             site.record(&error);
@@ -5609,6 +5629,7 @@ fn resolve_trait(
             name,
             reference: span,
             path: false,
+            imports: Box::default(),
         });
     }
     Err(Error::UnsupportedNominalSyntax {
@@ -5852,6 +5873,7 @@ fn check_generic_arity(
                         name: name.into(),
                         reference: path.span,
                         path: false,
+                        imports: Box::default(),
                     });
                 };
                 let bindings = ty.dyn_bindings();

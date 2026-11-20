@@ -344,6 +344,7 @@ pub(super) fn resolve(
                     name: written.into(),
                     reference: span,
                     path: false,
+                    imports: Box::default(),
                 });
             }
             resolve_path(
@@ -790,6 +791,7 @@ fn resolve_path(
             name,
             reference: span,
             path: false,
+            imports: Box::default(),
         };
         #[cfg(feature = "rust-import")]
         if let Some(native) = missing {
