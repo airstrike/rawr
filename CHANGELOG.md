@@ -6,6 +6,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.66 (2026-11-20)
+
+- The playground's console and `rawr mcp`'s eval take an assignment as Rust does, with or without its `;`, and answer `()`. Code evaluated in a file whose macro calls are expanded compiles in the paused frame, and its errors point at the code typed. (#2353)
+- The playground's bindings panel edits a value in place: click it, type Rust and press Enter to assign it in the selected call. rustc's error shows under it when Rust refuses, and Escape cancels. (#2354)
+
 ## 0.4.65 (2026-11-20)
 
 - Editors can set a value while the program is paused. The VS Code Variables pane and watch expressions assign the new value through eval in that value's frame, for fields, list items and map entries. A write Rust doesn't allow, such as to an immutable binding or a field behind `&self`, fails with rustc's error. (#2350)

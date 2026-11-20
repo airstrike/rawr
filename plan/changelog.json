@@ -8,6 +8,14 @@
   },
   "releases": [
     {
+      "version": "0.4.66",
+      "date": "2026-11-20",
+      "entries": [
+        {"text":"The playground's console and `rawr mcp`'s eval take an assignment as Rust does, with or without its `;`, and answer `()`. Code evaluated in a file whose macro calls are expanded compiles in the paused frame, and its errors point at the code typed.","issues":[2353]},
+        {"text":"The playground's bindings panel edits a value in place: click it, type Rust and press Enter to assign it in the selected call. rustc's error shows under it when Rust refuses, and Escape cancels.","issues":[2354]}
+      ]
+    },
+    {
       "version": "0.4.65",
       "date": "2026-11-20",
       "entries": [
