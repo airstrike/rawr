@@ -972,7 +972,14 @@ impl<'a> Parser<'a> {
                         .models
                         .trait_methods
                         .contains_key(&(owner, member.clone()))
+                    && let unscoped = self.unscoped_method(owner, &member, &builtin, member_span)
+                    // std's own method of the name, where the crate trait's
+                    // is out of scope.
+                    && (unscoped.is_none() || std_method::inherent(&receiver, &member).is_none())
                 {
+                    if let Some(error) = unscoped {
+                        return Err(error);
+                    }
                     let (args, end) = self.parse_call_arguments("method arguments")?;
                     let owner_name = receiver.name(&self.models);
                     value = match self.call_owner_method(
@@ -1441,6 +1448,11 @@ impl<'a> Parser<'a> {
                     value = self.operator_expr(text, Ty::String, span(value.span.start(), end));
                     continue;
                 }
+                if let Some(error) =
+                    self.unscoped_method(definition_id, &member, &value.ty, member_span)
+                {
+                    return Err(error);
+                }
                 let (returned, rest) = match self.call_owner_method(
                     value,
                     definition_id,
@@ -1716,13 +1728,16 @@ impl<'a> Parser<'a> {
         member: &ImmutableString,
         member_span: Span,
     ) -> Result<ParsedExpr, Error> {
+        let owner = type_def::Id::builtin(crate::resolve::BLANKET_OWNER);
+        if let Some(error) = self.unscoped_method(owner, member, &value.ty, member_span) {
+            return Err(error);
+        }
         if matches!(impl_self_ty(definition, &BTreeMap::new()), Ty::Iter(..))
             && let Some(iterator) = self.iterator_of(&value)
         {
             value = iterator;
         }
         let (args, end) = self.parse_call_arguments("method arguments")?;
-        let owner = type_def::Id::builtin(crate::resolve::BLANKET_OWNER);
         let owner_name = value.ty.name(&self.models);
         match self.call_owner_method(
             value,

@@ -3875,3 +3875,146 @@ fn a_parenthesized_place_is_borrowed_whole() {
         "{shown}"
     );
 }
+
+/// A crate trait's method is callable only where the trait is in scope:
+/// rustc's E0599 at the method, with its help and the `use` it suggests
+/// (#2335). A trait in scope by any import or in its own module is
+/// called, and an inherent method of the name comes first.
+#[test]
+fn a_crate_traits_method_out_of_scope_is_e0599() {
+    let source = "mod m {\n    pub trait T {\n        fn t(&self) {}\n    }\n    impl T for i32 \
+                  {}\n}\nfn main() {\n    1i32.t();\n}\n";
+    assert_eq!(
+        refused(source),
+        (
+            "E0599".into(),
+            "no method named `t` found for type `i32` in the current scope".into(),
+            label("method not found in `i32`")
+        )
+    );
+    let report = rendered(source);
+    assert!(report.contains(" --> main.rs:8:10"), "{report}");
+    assert!(
+        report.ends_with(concat!(
+            "  = help: items from traits can only be used if the trait is in scope\n",
+            "help: trait `T` which provides `t` is implemented but not in scope; perhaps you \
+             want to import it\n",
+            "  |\n",
+            "1 + use crate::m::T;\n",
+            "  |\n",
+        )),
+        "{report}"
+    );
+    // A struct's, an enum's and a reference's, from another module.
+    let owner = |declared: &str, made: &str| {
+        refused(&format!(
+            "mod m {{\n    pub trait T {{\n        fn t(&self) -> i32 {{\n            1\n        \
+             }}\n    }}\n    {declared}\n}}\nmod n {{\n    pub fn f() -> i32 {{\n        let v = \
+             {made};\n        v.t()\n    }}\n}}\nfn main() {{\n    n::f();\n}}\n"
+        ))
+        .1
+    };
+    assert_eq!(
+        owner("pub struct S;\n    impl T for S {}", "crate::m::S"),
+        "no method named `t` found for struct `S` in the current scope"
+    );
+    assert_eq!(
+        owner(
+            "pub enum E {\n        A,\n    }\n    impl T for E {}",
+            "crate::m::E::A"
+        ),
+        "no method named `t` found for enum `E` in the current scope"
+    );
+    assert_eq!(
+        owner("pub struct S;\n    impl T for S {}", "&crate::m::S"),
+        "no method named `t` found for reference `&S` in the current scope"
+    );
+    // In scope by a `use`, a glob, `as _`, a rename, `use super::*`, a
+    // block's `use`, or its own module.
+    let traits = "mod m {\n    pub trait T {\n        fn t(&self) -> i32 {\n            1\n        \
+                  }\n    }\n    impl T for i32 {}\n    pub fn own() -> i32 {\n        2i32.t()\n    \
+                  }\n    pub mod child {\n        use super::*;\n        pub fn f() -> i32 {\n            \
+                  3i32.t()\n        }\n    }\n}\n";
+    for caller in [
+        "use m::T;\nfn f() -> i32 {\n    1i32.t()\n}\n",
+        "use m::*;\nfn f() -> i32 {\n    1i32.t()\n}\n",
+        "use m::T as _;\nfn f() -> i32 {\n    1i32.t()\n}\n",
+        "use m::T as Other;\nfn f() -> i32 {\n    1i32.t()\n}\n",
+        "fn f() -> i32 {\n    use crate::m::T;\n    1i32.t()\n}\n",
+        "fn f() -> i32 {\n    m::own() + m::child::f()\n}\n",
+        "use m::T;\nstruct S;\nimpl S {\n    fn t(&self) -> i32 {\n        5\n    }\n}\nimpl T \
+         for S {}\nfn f() -> i32 {\n    S.t()\n}\n",
+    ] {
+        let source = format!("{traits}{caller}fn main() {{\n    f();\n}}\n");
+        Engine::new()
+            .compile(&source)
+            .unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+    // A block's `use` reaches its block alone.
+    let (code, ..) = refused(&format!(
+        "{traits}fn g() {{\n    use crate::m::T;\n}}\nfn f() -> i32 {{\n    1i32.t()\n}}\nfn \
+         main() {{\n    g();\n    f();\n}}\n"
+    ));
+    assert_eq!(code, "E0599");
+}
+
+/// `&mut place` of a place a local not declared `mut` owns is rustc's
+/// E0596 at the borrow, with its `mut` suggestion, whether or not the
+/// reference is used (#2336). A place below a `&mut` local needs no `mut`.
+#[test]
+fn a_mut_borrow_of_a_local_not_declared_mut_is_e0596() {
+    let source = "fn main() {\n    let c = 1;\n    let r = &mut c;\n}\n";
+    assert_eq!(
+        refused(source),
+        (
+            "E0596".into(),
+            "cannot borrow `c` as mutable, as it is not declared as mutable".into(),
+            label("cannot borrow as mutable")
+        )
+    );
+    let report = rendered(source);
+    assert!(
+        report.ends_with(concat!(
+            " --> main.rs:3:13\n",
+            "  |\n",
+            "3 |     let r = &mut c;\n",
+            "  |             ^^^^^^ cannot borrow as mutable\n",
+            "  |\n",
+            "help: consider changing this to be mutable\n",
+            "  |\n",
+            "2 |     let mut c = 1;\n",
+            "  |         +++\n",
+        )),
+        "{report}"
+    );
+    // At the borrow, before a use of the reference.
+    let used = rendered("fn main() {\n    let c = 1;\n    let r = &mut c;\n    *r = 2;\n}\n");
+    assert!(used.contains(" --> main.rs:3:13\n"), "{used}");
+    let message = |body: &str| {
+        refused(&format!(
+            "struct S {{\n    p: (i32, i32),\n}}\nfn main() {{\n    {body}\n}}\n"
+        ))
+        .1
+    };
+    assert_eq!(
+        message("let s = S { p: (1, 2) };\n    let r = &mut s.p.0;"),
+        "cannot borrow `s.p.0` as mutable, as `s` is not declared as mutable"
+    );
+    assert_eq!(
+        message("let a = [1, 2];\n    let r = &mut a[0];"),
+        "cannot borrow `a[_]` as mutable, as `a` is not declared as mutable"
+    );
+    assert_eq!(
+        message("let v = vec![1];\n    let r = &mut v[0];"),
+        "cannot borrow `v` as mutable, as it is not declared as mutable"
+    );
+    // Below a `&mut` local, the referent is changed.
+    Engine::new()
+        .compile(
+            "struct S {\n    a: i32,\n}\nfn main() {\n    let mut v = S { a: 1 };\n    let r = \
+             &mut v;\n    let q = &mut r.a;\n    *q = 3;\n    let w = &mut *r;\n    w.a += 1;\n    \
+             println!(\"{}\", v.a);\n}\n",
+        )
+        .map(|_| ())
+        .unwrap_or_else(|error| panic!("{error}"));
+}

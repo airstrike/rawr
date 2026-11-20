@@ -58,6 +58,9 @@ pub(super) struct Tables {
         BTreeMap<(crate::program::source::Id, ImmutableString), crate::resolve::item::Binding>,
     /// Each source's original imports and their lexical scopes (D652).
     pub(super) lexical: BTreeMap<crate::program::source::Id, Box<[crate::item::Use]>>,
+    /// The crate traits each source's `use`s put in scope, each with the
+    /// block its `use` is in (`None` for the module's).
+    pub(super) trait_imports: TraitImports,
     /// Where rustc puts a `use` it suggests in each source's module.
     pub(super) placements: BTreeMap<crate::program::source::Id, Position>,
     /// The blocks a name is in scope in when only blocks' `use`s bind it
@@ -166,6 +169,11 @@ pub(super) struct Tables {
     /// call from them, where the resolver read their paths.
     pub(super) laid_out: LaidOut,
 }
+
+/// The crate traits each source's `use`s put in scope, each with the block
+/// its `use` is in (`None` for the module's).
+pub(super) type TraitImports =
+    BTreeMap<crate::program::source::Id, Box<[(Option<Span>, ImmutableString)]>>;
 
 /// The tokens of each call's expansion laid out past its file's lines, by
 /// its source and where the call is written (`Tables::laid_out`).
@@ -924,6 +932,7 @@ impl Models {
             features: program.features().clone(),
             imports,
             lexical: program.lexical.clone(),
+            trait_imports: trait_imports(&program.items),
             placements: program.placements.clone(),
             block_scopes,
             by_name,
@@ -1563,6 +1572,51 @@ impl Models {
         })
     }
 
+    /// Whether the crate trait `name` is in scope at the lowering's place
+    /// in this source, as rustc asks before it calls one of the trait's
+    /// methods: declared in this module, or in a block around the place,
+    /// or brought in by a `use` of the module or of such a block.
+    pub(super) fn crate_trait_in_scope(&self, name: &str) -> bool {
+        let here = self.namespaces.get(&self.context);
+        let reached = |block: &Option<Span>| block.is_none_or(|block| self.reaches(block, self.at));
+        let declared = self.traits.get(name).is_some_and(|(source, declared)| {
+            self.namespaces.get(source) == here && reached(&declared.header.scope)
+        });
+        declared
+            || self
+                .trait_imports
+                .get(&self.context)
+                .is_some_and(|imports| {
+                    imports
+                        .iter()
+                        .any(|(block, imported)| imported == name && reached(block))
+                })
+    }
+
+    /// The path rustc suggests importing the crate trait `name` by, from
+    /// this source's module: `crate::shapes::Area` within this package,
+    /// else through the trait's package.
+    pub(super) fn trait_import_path(&self, name: &str) -> Option<String> {
+        let (source, declared) = self.traits.get(name)?;
+        let module = self.namespaces.get(source)?;
+        let here = self.namespaces.get(&self.context)?;
+        let root = if module.package == here.package {
+            "crate"
+        } else {
+            module.package.as_str()
+        };
+        // A trait two modules declare is known by its path; its own name
+        // is the path's last segment.
+        let own = declared.name.text.rsplit("::").next()?;
+        Some(
+            std::iter::once(root)
+                .chain(module.modules.iter().map(ImmutableString::as_str))
+                .chain(std::iter::once(own))
+                .collect::<Vec<_>>()
+                .join("::"),
+        )
+    }
+
     /// Every import in scope at the lowering's place in this source: the
     /// module's `use`s and those of each block around it, as rustc puts a
     /// trait a function's `use itertools::Itertools;` names in scope for
@@ -1666,6 +1720,26 @@ impl Nominal {
     pub(super) fn capabilities(&self) -> capability::Set {
         self.definition().capabilities()
     }
+}
+
+/// The crate traits each source's `use`s put in scope, each with the block
+/// its `use` is in.
+fn trait_imports(items: &[item::Shell]) -> TraitImports {
+    let mut imports = BTreeMap::<_, Vec<_>>::new();
+    for shell in items {
+        let item::Kind::Use(used) = &shell.kind else {
+            continue;
+        };
+        imports.entry(shell.source).or_default().extend(
+            used.traits
+                .iter()
+                .map(|name| (used.header.scope, name.clone())),
+        );
+    }
+    imports
+        .into_iter()
+        .map(|(source, traits)| (source, traits.into_boxed_slice()))
+        .collect()
 }
 
 /// The tokens of each expansion the program's bodies lay out

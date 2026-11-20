@@ -373,6 +373,68 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// rustc's E0596 for `&mut place`, the borrow `whole`, of `operand`, a
+    /// place that a local not declared `mut` owns: the local, or a field or
+    /// element below it. A place below a reference or a shared pointer the
+    /// local holds is not its own, and needs no `mut`.
+    /// An element of anything but an array is `IndexMut`'s, which borrows
+    /// the indexed place, as rustc says.
+    pub(super) fn immutable_borrow(&self, operand: &ParsedExpr, whole: Span) -> Option<Error> {
+        let name = operand.lvalue.as_ref()?.binding();
+        let binding = self.bindings.get(name.as_str())?;
+        if binding.mutable
+            || !matches!(binding.kind, BindingKind::Local | BindingKind::Invocation)
+            || self.aliases.contains_key(name.as_str())
+            || self.entry_aliases.contains_key(name.as_str())
+            || self.cell_guards.contains_key(name.as_str())
+        {
+            return None;
+        }
+        let ty = self.inference.resolve(&binding.ty);
+        if matches!(
+            ty,
+            Ty::Reference { .. } | Ty::Counted(..) | Ty::Weak(..) | Ty::Cell(..) | Ty::Unknown
+        ) {
+            return None;
+        }
+        // The place as written after `&mut`.
+        let written = self.written(whole)?;
+        let place = written
+            .strip_prefix('&')?
+            .trim_start()
+            .strip_prefix("mut")?
+            .trim_start();
+        if !place.starts_with(name.as_str()) && !place.starts_with('*') {
+            return None;
+        }
+        let array = matches!(
+            ty,
+            Ty::Array {
+                kind: sequence::Kind::Array(_),
+                ..
+            }
+        );
+        let (place, access) = match place.rfind('[') {
+            Some(open) if !array && place.ends_with(']') => {
+                let indexed = place[..open].trim_end();
+                (
+                    described_place(indexed),
+                    Span::new(
+                        operand.span.start(),
+                        text_end(operand.span.start(), indexed),
+                    ),
+                )
+            }
+            _ => (described_place(place), whole),
+        };
+        Some(Error::immutable_borrow(
+            &place,
+            name,
+            access,
+            binding.declaration,
+        ))
+    }
+
     /// The binding a change through `name` changes. A closure's `self` is
     /// the method's own: the statement making the closure writes it back
     /// (`lend_self`).

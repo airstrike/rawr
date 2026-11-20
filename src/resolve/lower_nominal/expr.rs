@@ -378,6 +378,9 @@ impl<'a> Parser<'a> {
                     operand.span = whole;
                     return Ok(operand.retain_origin());
                 }
+                if let Some(error) = self.immutable_borrow(&operand, whole) {
+                    return Err(error);
+                }
                 let inner = self.may_hold_borrow(&operand.ty);
                 let reference = borrows::is_reference(&self.inference.resolve(&operand.ty));
                 self.flow().borrow(

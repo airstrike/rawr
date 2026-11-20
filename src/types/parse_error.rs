@@ -421,6 +421,9 @@ impl fmt::Display for ParseErrorType {
                 crate::resolve::Error::BorrowConflict { message, code, .. } => {
                     write!(f, "{message} ({code})")
                 }
+                crate::resolve::Error::ImmutableBorrow { message, .. } => {
+                    write!(f, "{message} (E0596)")
+                }
                 crate::resolve::Error::MovedValue {
                     name,
                     moved,
@@ -514,6 +517,12 @@ impl fmt::Display for ParseErrorType {
                 crate::resolve::Error::UnscopedWrite { owner, .. } => {
                     write!(f, "cannot write into `{owner}`")
                 }
+                crate::resolve::Error::UnscopedMethod {
+                    kind,
+                    owner,
+                    member,
+                    ..
+                } => f.write_str(&crate::resolve::unscoped_method(kind, owner, member)),
                 crate::resolve::Error::StdPath { message, .. } => f.write_str(message),
                 crate::resolve::Error::NonExhaustive { witnesses, .. } => {
                     write!(f, "{}", crate::resolve::NonExhaustive(witnesses))

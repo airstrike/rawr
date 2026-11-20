@@ -103,6 +103,9 @@ pub enum Category {
     /// `write!` into a value whose `Write` trait is not in scope, as
     /// rustc's E0599.
     UnscopedWrite,
+    /// A method of a crate trait called where the trait is not in scope,
+    /// as rustc's E0599.
+    UnscopedMethod,
     /// An assignment to a value that is no place, as rustc's E0070 (E0067
     /// for a compound assignment).
     InvalidAssignee,
@@ -185,7 +188,7 @@ impl fmt::Display for Category {
                 formatter.write_str("unlabeled jump in a `while` condition")
             }
             Self::AsyncMain => formatter.write_str("async main"),
-            Self::UnscopedWrite => formatter.write_str("trait not in scope"),
+            Self::UnscopedWrite | Self::UnscopedMethod => formatter.write_str("trait not in scope"),
             Self::InvalidAssignee => formatter.write_str(INVALID_ASSIGNEE),
             Self::StdPath => formatter.write_str("std path"),
             Self::NotYet => formatter.write_str("not yet run"),
@@ -920,6 +923,18 @@ pub enum Error {
         /// The borrow it conflicts with.
         borrow: Span,
     },
+    /// A `&mut` borrow of a place that a local not declared `mut` owns,
+    /// which rustc refuses (E0596 "cannot borrow `c` as mutable, as it is
+    /// not declared as mutable"), suggesting `mut` where the local is
+    /// declared.
+    ImmutableBorrow {
+        /// rustc's message.
+        message: ImmutableString,
+        /// The borrow.
+        access: Span,
+        /// The local's name where it is declared.
+        declared: Span,
+    },
     /// A struct field or enum variant reference cannot be resolved.
     UnknownMember {
         /// Nominal owner type.
@@ -1307,6 +1322,25 @@ pub enum Error {
         /// Where rustc puts the `use` of `Write` it suggests.
         placement: Option<crate::Position>,
     },
+    /// `value.member(..)` where only a crate trait out of scope has
+    /// `member` for the value's type, which rustc refuses (E0599 "no
+    /// method named `t` found for type `i32` in the current scope"): a
+    /// trait's methods are callable only where the trait is in scope.
+    UnscopedMethod {
+        /// What rustc calls the receiver's type: `type`, `struct`, `enum`
+        /// or `reference`.
+        kind: &'static str,
+        /// The receiver's type, as rustc writes it.
+        owner: ImmutableString,
+        /// The method.
+        member: ImmutableString,
+        /// The trait's path rustc suggests importing, `crate::m::T`.
+        path: ImmutableString,
+        /// The method's name in the call.
+        at: Span,
+        /// Where rustc puts the `use` it suggests.
+        placement: Option<crate::Position>,
+    },
     /// An assignment whose left side is a value, not a place, as
     /// `(x + y) = 42` or `f(x) += 1`, which rustc refuses (E0070, E0067 for
     /// a compound assignment).
@@ -1588,6 +1622,27 @@ impl Error {
         }
     }
 
+    /// rustc's E0596 for `&mut place`, the borrow at `access`, of `place`,
+    /// `binding` or a part of it, a local not declared `mut`, whose name is
+    /// at `declared` where it is declared.
+    pub(crate) fn immutable_borrow(
+        place: &str,
+        binding: &str,
+        access: Span,
+        declared: Span,
+    ) -> Self {
+        let message = if place == binding {
+            format!("cannot borrow `{binding}` as mutable, as it is not declared as mutable")
+        } else {
+            format!("cannot borrow `{place}` as mutable, as `{binding}` is not declared as mutable")
+        };
+        Self::ImmutableBorrow {
+            message: message.into(),
+            access,
+            declared,
+        }
+    }
+
     /// rustc's E0594 for an assignment to `place`, a part of `binding`, a
     /// variable not declared `mut`.
     pub(crate) fn assign_immutable(place: &str, binding: &str, access: Span) -> Self {
@@ -1625,7 +1680,7 @@ impl Error {
             Self::WrongKind { .. } => Category::WrongKind,
             Self::Unimplemented { .. } => Category::Unimplemented,
             Self::MovedValue { .. } => Category::MovedValue,
-            Self::BorrowConflict { .. } => Category::BorrowConflict,
+            Self::BorrowConflict { .. } | Self::ImmutableBorrow { .. } => Category::BorrowConflict,
             Self::InvalidConstruction { .. } => Category::InvalidConstruction,
             Self::TypeMismatch { .. } | Self::Unboxed { .. } => Category::TypeMismatch,
             Self::IfWithoutElse { .. } => Category::IfWithoutElse,
@@ -1656,6 +1711,7 @@ impl Error {
             Self::UnlabeledJumpInWhileCondition { .. } => Category::UnlabeledJumpInWhileCondition,
             Self::AsyncMain { .. } => Category::AsyncMain,
             Self::UnscopedWrite { .. } => Category::UnscopedWrite,
+            Self::UnscopedMethod { .. } => Category::UnscopedMethod,
             Self::InvalidAssignee { .. } => Category::InvalidAssignee,
             Self::StdPath { .. } => Category::StdPath,
             Self::NotYet { .. } => Category::NotYet,
@@ -1684,7 +1740,9 @@ impl Error {
             | Self::MacroExpansionRequired { path: name, .. }
             | Self::WrongKind { name, .. }
             | Self::MovedValue { name, .. } => name.as_str(),
-            Self::BorrowConflict { message, .. } => message.as_str(),
+            Self::BorrowConflict { message, .. } | Self::ImmutableBorrow { message, .. } => {
+                message.as_str()
+            }
             Self::UnknownImport { path, .. } | Self::InvalidImport { path, .. } => path.as_str(),
             Self::InvalidTypeArguments { ty, .. } => ty.as_str(),
             Self::LoweringUnavailable { item, .. } => item.as_str(),
@@ -1728,6 +1786,7 @@ impl Error {
             Self::UnlabeledJumpInWhileCondition { keyword, .. } => keyword.as_str(),
             Self::AsyncMain { .. } => "main",
             Self::UnscopedWrite { owner, .. } => owner.as_str(),
+            Self::UnscopedMethod { member, .. } => member.as_str(),
             Self::InvalidAssignee { .. } => "assignment",
             Self::StdPath { message, .. } => message.as_str(),
             Self::NotYet { path, .. } => path.as_str(),
@@ -1767,7 +1826,7 @@ impl Error {
             | Self::MacroExpansionRequired { reference, .. }
             | Self::WrongKind { reference, .. } => *reference,
             Self::MovedValue { reference, .. } => *reference,
-            Self::BorrowConflict { access, .. } => *access,
+            Self::BorrowConflict { access, .. } | Self::ImmutableBorrow { access, .. } => *access,
             Self::InvalidConstruction { construction, .. } => *construction,
             Self::TypeMismatch { expression, .. }
             | Self::Unboxed { expression, .. }
@@ -1794,7 +1853,9 @@ impl Error {
             | Self::SlicePattern { pattern, .. } => *pattern,
             Self::RepeatedRest { rest, .. } => *rest,
             Self::UnsupportedNominalSyntax { source, .. } => *source,
-            Self::AsyncMain { at } | Self::UnscopedWrite { at, .. } => *at,
+            Self::AsyncMain { at }
+            | Self::UnscopedWrite { at, .. }
+            | Self::UnscopedMethod { at, .. } => *at,
             Self::InvalidAssignee { operator, .. } => *operator,
             Self::StdPath { reference, .. } | Self::NotYet { reference, .. } => *reference,
             Self::TypeAnnotationsNeeded { reference, .. } => *reference,
@@ -1884,6 +1945,8 @@ impl Error {
             | Self::Syntax { .. }
             | Self::AsyncMain { .. }
             | Self::UnscopedWrite { .. }
+            | Self::UnscopedMethod { .. }
+            | Self::ImmutableBorrow { .. }
             | Self::StdPath { .. }
             | Self::NotYet { .. }
             | Self::TypeAnnotationsNeeded { .. }
@@ -1927,6 +1990,12 @@ impl fmt::Display for SelfOutside {
             "expected value, found module `self`"
         })
     }
+}
+
+/// rustc's E0599 message for the method `member` of a trait out of scope,
+/// on a `kind` (`type`, `struct`, ..) `owner`.
+pub(crate) fn unscoped_method(kind: &str, owner: &str, member: &str) -> String {
+    format!("no method named `{member}` found for {kind} `{owner}` in the current scope")
 }
 
 /// rustc's message for a `match` that misses the values of `witnesses`
@@ -2780,6 +2849,9 @@ impl fmt::Display for Written<'_> {
                 access,
                 ..
             } => write!(formatter, "{message} at {access} ({code})"),
+            Error::ImmutableBorrow {
+                message, access, ..
+            } => write!(formatter, "{message} at {access} (E0596)"),
             Error::InvalidConstruction {
                 owner,
                 reason,
@@ -2973,6 +3045,13 @@ impl fmt::Display for Written<'_> {
             Error::UnscopedWrite { owner, at, .. } => {
                 write!(formatter, "cannot write into `{owner}` at {at}")
             }
+            Error::UnscopedMethod {
+                kind,
+                owner,
+                member,
+                at,
+                ..
+            } => write!(formatter, "{} at {at}", unscoped_method(kind, owner, member)),
             Error::InvalidAssignee { operator, .. } => {
                 write!(formatter, "{INVALID_ASSIGNEE} at {operator}")
             }
