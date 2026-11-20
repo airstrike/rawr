@@ -101,8 +101,11 @@ program uses.
 The universe program also holds whole programs (#1000): every iced
 example that `play/universe/examples.txt` names, at the universe's pinned
 rev, and ?play's own in `play/universe/programs` (iced's solar_system drawn
-with plain shapes, since iced's own reads image files, and `ui.rs`, the landing
-page's ratatui snippet, which draws a to-do screen into a buffer and prints it).
+with plain shapes, since iced's own reads image files; `greeting.rs`, a
+`text_input` with `on_input` and `on_submit`, which on the server also types
+into it through iced_test's simulator, as iced's todos test does; and `ui.rs`,
+the landing page's ratatui snippet, which draws a to-do screen into a buffer
+and prints it).
 `play/universe/examples.sh` copies them into `src/examples/`, each a
 module with its own `main`, from iced's checkout as Cargo resolved the
 universe's iced; the image runs it before it builds the runner. A module
