@@ -4,13 +4,19 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
-    "entries": [
-      {"text":"The home page shows the debugger in every shell (VS Code, `rawr gui`, `rawr tui`, the playground), and the debugging docs explain the window pane by pane and list the terminal shell's keys.","issues":[2321]},
-      {"text":"/play says why the browser universe did not load when it falls back to the server, skips the browser at once on an engine without wasm exception references or WebAssembly.JSTag, and wraps its status line on a phone. The debugger's tooltip says only what this browser lacks.","issues":[2322]},
-      {"text":"The home page shows the debugger's four shells with the same tabs as the libraries above them.","issues":[2323]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.4.50",
+      "date": "2026-11-19",
+      "entries": [
+        {"text":"The home page shows the debugger in every shell (VS Code, `rawr gui`, `rawr tui`, the playground), and the debugging docs explain the window pane by pane and list the terminal shell's keys.","issues":[2321]},
+        {"text":"/play says why the browser universe did not load when it falls back to the server, skips the browser at once on an engine without wasm exception references or WebAssembly.JSTag, and wraps its status line on a phone. The debugger's tooltip says only what this browser lacks.","issues":[2322]},
+        {"text":"The home page shows the debugger's four shells with the same tabs as the libraries above them.","issues":[2323]},
+        {"text":"Destructuring assignment works as in Rust: `(a, b) = (b, a);`, `[x, .., y] = arr;`, `S { f, .. } = s;`, `T(x, _) = t;`, `_ = value;` and nested forms, with the value evaluated first and the places left to right. `(x) = 1;` and `(*r) += 1;` assign the parenthesized place. Errors match rustc's E0384, E0070, E0067 and E0005.","issues":[2318]}
+      ]
+    },
     {
       "version": "0.4.49",
       "date": "2026-11-19",

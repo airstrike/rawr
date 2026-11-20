@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-19",
-  "version": "0.4.49",
+  "version": "0.4.50",
   "examples": {
     "running": 56,
     "total": 56,
@@ -9,15 +9,18 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
-      "entries": [
-        {"text":"The home page shows the debugger in every shell (VS Code, `rawr gui`, `rawr tui`, the playground), and the debugging docs explain the window pane by pane and list the terminal shell's keys.","issues":[2321]},
-        {"text":"/play says why the browser universe did not load when it falls back to the server, skips the browser at once on an engine without wasm exception references or WebAssembly.JSTag, and wraps its status line on a phone. The debugger's tooltip says only what this browser lacks.","issues":[2322]},
-        {"text":"The home page shows the debugger's four shells with the same tabs as the libraries above them.","issues":[2323]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.50",
+        "date": "2026-11-19",
+        "entries": [
+          {"text":"The home page shows the debugger in every shell (VS Code, `rawr gui`, `rawr tui`, the playground), and the debugging docs explain the window pane by pane and list the terminal shell's keys.","issues":[2321]},
+          {"text":"/play says why the browser universe did not load when it falls back to the server, skips the browser at once on an engine without wasm exception references or WebAssembly.JSTag, and wraps its status line on a phone. The debugger's tooltip says only what this browser lacks.","issues":[2322]},
+          {"text":"The home page shows the debugger's four shells with the same tabs as the libraries above them.","issues":[2323]},
+          {"text":"Destructuring assignment works as in Rust: `(a, b) = (b, a);`, `[x, .., y] = arr;`, `S { f, .. } = s;`, `T(x, _) = t;`, `_ = value;` and nested forms, with the value evaluated first and the places left to right. `(x) = 1;` and `(*r) += 1;` assign the parenthesized place. Errors match rustc's E0384, E0070, E0067 and E0005.","issues":[2318]}
+        ]
+      },
       {
         "version": "0.4.49",
         "date": "2026-11-19",
@@ -5443,13 +5446,14 @@
     {"issue":2315,"title":"A debugger attached to a running program names the function it pauses in and reads that…","state":"closed","category":"Health","release":"0.4.45"},
     {"issue":2316,"title":"A root unit function compiled by Engine::compile gives native code its last statement's value","state":"closed","category":"No glue (D593)","release":"0.4.47"},
     {"issue":2317,"title":"`rawr tui` reads bindings with their parts from the inspector, so a map opens to one row per…","state":"closed","category":"Health","release":"0.4.46"},
-    {"issue":2318,"title":"Destructuring assignment and assignment to a parenthesized place are unsupported","state":"open","category":"Divergences from rustc"},
+    {"issue":2318,"title":"Destructuring assignment and assignment to a parenthesized place are unsupported","state":"closed","category":"Divergences from rustc","release":"0.4.50"},
     {"issue":2319,"title":"A runner whose output is a terminal tells it to the session","state":"closed","category":"Health","release":"0.4.49"},
     {"issue":2320,"title":"A dependency's own writes to a terminal reach the run's session","state":"open","category":"Health"},
-    {"issue":2321,"title":"The home page shows the debugger in every shell (VS Code, `rawr gui`, `rawr tui`, the…","state":"open","category":"Health"},
-    {"issue":2322,"title":"/play says why the browser universe did not load when it falls back to the server, skips the…","state":"open","category":"Health"},
-    {"issue":2323,"title":"The home page shows the debugger's four shells with the same tabs as the libraries above them","state":"open","category":"Health"},
-    {"issue":2324,"title":"Find why /play's universe frame fails on iOS WebKit","state":"open","category":"Health"}
+    {"issue":2321,"title":"The home page shows the debugger in every shell (VS Code, `rawr gui`, `rawr tui`, the…","state":"closed","category":"Health","release":"0.4.50"},
+    {"issue":2322,"title":"/play says why the browser universe did not load when it falls back to the server, skips the…","state":"closed","category":"Health","release":"0.4.50"},
+    {"issue":2323,"title":"The home page shows the debugger's four shells with the same tabs as the libraries above them","state":"closed","category":"Health","release":"0.4.50"},
+    {"issue":2324,"title":"Find why /play's universe frame fails on iOS WebKit","state":"open","category":"Health"},
+    {"issue":2325,"title":"Let-pattern diagnostics diverge from rustc: array length, tuple arity, a second `..`, a tuple-struct pattern's span","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -7629,7 +7633,7 @@
             {"number":2290,"title":"A crate macro call sent to rustc keeps hidden-segment paths in its input","state":"open"},
             {"number":2291,"title":"rustc's expansion of a crate macro call gives line!() at the expansion input, not the call","state":"open"},
             {"number":2306,"title":"An assignment to a value that is no place says rawr doesn't support it, not rustc's E0070","state":"closed"},
-            {"number":2318,"title":"Destructuring assignment and assignment to a parenthesized place are unsupported","state":"open"}
+            {"number":2318,"title":"Destructuring assignment and assignment to a parenthesized place are unsupported","state":"closed"}
           ]
         },
         {

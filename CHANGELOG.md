@@ -5,9 +5,13 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
+
+## 0.4.50 (2026-11-19)
+
 - The home page shows the debugger in every shell (VS Code, `rawr gui`, `rawr tui`, the playground), and the debugging docs explain the window pane by pane and list the terminal shell's keys. (#2321)
 - /play says why the browser universe did not load when it falls back to the server, skips the browser at once on an engine without wasm exception references or WebAssembly.JSTag, and wraps its status line on a phone. The debugger's tooltip says only what this browser lacks. (#2322)
 - The home page shows the debugger's four shells with the same tabs as the libraries above them. (#2323)
+- Destructuring assignment works as in Rust: `(a, b) = (b, a);`, `[x, .., y] = arr;`, `S { f, .. } = s;`, `T(x, _) = t;`, `_ = value;` and nested forms, with the value evaluated first and the places left to right. `(x) = 1;` and `(*r) += 1;` assign the parenthesized place. Errors match rustc's E0384, E0070, E0067 and E0005. (#2318)
 
 ## 0.4.49 (2026-11-19)
 
