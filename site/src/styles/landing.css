@@ -108,13 +108,38 @@ main > section > .wrap { padding: 0; }
 .status { max-width: 40em; }
 .status + .status { margin-top: 12px; }
 
-/* The debugger's shells, two to a row. Each figure grows by its image's
-   width over height (--ratio), so the images in a row share one height. */
-.shells { display: grid; gap: 16px; margin-top: 32px; }
-.shells .row { display: flex; gap: 16px; }
-.shell { flex: var(--ratio) 1 0; min-width: 0; margin: 0; }
+/* The debugger's shells. Without JavaScript the four figures sit two to a
+   row. With it (.tabbed) a tab per shell shows one figure at a time in a box
+   whose height doesn't change between tabs, and the hidden figures' images
+   load only when their tab is chosen. */
+.shells { margin-top: 32px; min-width: 0; }
+.shots { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
+.shell { min-width: 0; margin: 0; }
 .shell img { display: block; width: 100%; height: auto; background: var(--term); }
 .shell .file { border-bottom: 1px solid var(--grid); }
+.shelltabs {
+  /* The bar and each tab reach 4px past their text, room for a focused tab's
+     outline, which the scrolling bar would clip. The rule and the red mark
+     keep to the text's width. */
+  display: flex; gap: 0 20px; margin: 0 -4px 10px;
+  background: linear-gradient(var(--rule), var(--rule)) 4px 100% / calc(100% - 8px) 1px no-repeat;
+  overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none;
+}
+.shelltabs::-webkit-scrollbar { display: none; }
+.shelltabs button {
+  position: relative; flex: none; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left;
+  padding: 8px 4px 9px; background: none; border: 0; cursor: pointer; color: var(--quiet);
+}
+.shelltabs b { font-family: var(--sans); font-size: var(--fs-label); font-weight: var(--w-strong); letter-spacing: var(--track-label); text-transform: uppercase; }
+.shelltabs span { font: 12px/1.4 var(--mono); color: var(--quiet); white-space: nowrap; }
+.shelltabs button:hover, .shelltabs button[aria-selected="true"] { color: var(--ink); }
+.shelltabs button[aria-selected="true"]::after { content: ""; position: absolute; left: 4px; right: 4px; bottom: 0; height: 3px; background: var(--red); }
+.shelltabs button:focus-visible { outline: 2px solid var(--red); outline-offset: -1px; }
+.tabbed .shots { display: block; aspect-ratio: 16 / 10; border: 1px solid var(--grid); background: var(--wash); }
+.tabbed .shell { height: 100%; border: 0; }
+.tabbed .shell[hidden] { display: none; }
+.tabbed .shell .file { display: none; }
+.tabbed .shell img { height: 100%; object-fit: contain; background: transparent; }
 
 @media (max-width: 960px) {
   .hero { grid-template-columns: minmax(0, 1fr); gap: 40px; padding: 40px 0 48px; }
@@ -130,8 +155,12 @@ main > section > .wrap { padding: 0; }
   .block pre { font-size: 12px; padding: 12px; }
   .file, .run { padding-left: 12px; padding-right: 12px; }
   .tabs .hint { display: none; }
-  .shells .row { flex-direction: column; }
-  .shell { flex: none; }
+  .shots { grid-template-columns: minmax(0, 1fr); }
+  .tabbed .shots { aspect-ratio: 720 / 654; }
+  /* The hints wrap, so all four tabs fit a phone; past that the bar scrolls. */
+  .shelltabs { gap: 0 8px; }
+  .shelltabs button { flex: 0 1 auto; }
+  .shelltabs span { white-space: normal; }
   .pair { grid-template-columns: minmax(0, 1fr); }
   .pair .shot { justify-self: start; }
 }
