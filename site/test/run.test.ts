@@ -250,3 +250,22 @@ test("a debugged run that panics tells its end with status 101", async () => {
   await new Promise((next) => setTimeout(next, 0));
   assert.deepEqual(ended, [101]);
 });
+
+test("an engine without the module's exception handling is named, and the module is never fetched", async () => {
+  const { universe, lacking } = await import("../src/scripts/universe.ts");
+  assert.equal(lacking(WebAssembly), null, "Node's engine has all the module needs");
+  assert.equal(lacking(null), "this browser has WebAssembly turned off");
+  const noTag = { ...WebAssembly, Tag: WebAssembly.Tag, validate: WebAssembly.validate } as unknown as typeof WebAssembly;
+  assert.equal(lacking(noTag), "this browser has no WebAssembly.JSTag");
+  const noExnref = Object.create(WebAssembly, { validate: { value: () => false } }) as typeof WebAssembly;
+  assert.equal(lacking(noExnref), "this browser has no WebAssembly exception references (exnref)");
+  const fetched: string[] = [];
+  const page = universe({
+    document: {} as Document,
+    fetch: (async (url: string) => (fetched.push(url), new Response("[dependencies]\n"))) as typeof fetch,
+    compile: async () => ({}) as WebAssembly.Module,
+    wasm: noExnref,
+  });
+  await assert.rejects(page.frame({} as Element), /no WebAssembly exception references/);
+  assert.deepEqual(fetched, []);
+});

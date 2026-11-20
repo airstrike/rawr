@@ -320,7 +320,7 @@ test("a universe that does not load runs the snippet on the server", async () =>
   const page = standIn({ code: "iced::run(x)", universe });
   await page.session.go();
   assert.deepEqual(page.fetched.map((f) => f.url), ["/play/render"]);
-  assert.match(page.session.state.status, /on the server: the universe did not load$/);
+  assert.match(page.session.state.status, /on the server: the universe did not load: 404$/);
   assert.equal(page.session.state.where, "browser", "the next run tries the browser again");
 });
 
@@ -416,4 +416,12 @@ test("an edit after a compile error, with no program running, runs in a fresh fr
   assert.deepEqual(edits, [], "no program runs to reload");
   assert.equal(stand.runs.length, 2);
   assert.equal(page.session.state.output.kind, "frame");
+});
+
+test("why a load failed is its message's first line, without the error's name, cut short", async () => {
+  const { why } = await import("../src/play/session.ts");
+  assert.equal(why(new Error("LinkError: Tag import is not a Tag\nat line 2")), "Tag import is not a Tag");
+  assert.equal(why("plain"), "plain");
+  assert.equal(why(new Error("")), "no reason given");
+  assert.equal(why(new Error("x".repeat(200))).length, 120);
 });

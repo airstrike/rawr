@@ -116,7 +116,7 @@ args = { program = "{0}" }</code></pre></div>
   <li>Click a line number to set a breakpoint there, and click it again to clear it. Breakpoints set before a run are in place before <code>main</code> starts.</li>
   <li>The panel&rsquo;s toolbar continues (F8), pauses (F8), and steps over (F10), into (F11) and out (Shift+F11), as in DevTools. The paused line is highlighted, and the panel lists the frames and the bindings of the one you pick.</li>
   <li>The console runs Rust where the program is paused, in the frame you pick. Enter evaluates, Shift+Enter adds a line, and each answer stays above the prompt.</li>
-  <li>The debugger needs WebAssembly JS Promise Integration (JSPI), which Chrome and Edge have. In a browser without it, the bug icon is greyed, and a tap or a click on it says why.</li>
+  <li>The debugger needs WebAssembly JS Promise Integration (JSPI). In a browser without it, the bug icon is greyed, and a tap or a click on it says why.</li>
   <li>A pause stops <code>main</code>&rsquo;s own code, and the functions it calls. A function the page calls, such as an iced <code>view</code> or <code>update</code>, runs whole.</li>
 </ul>
 

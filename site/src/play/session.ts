@@ -490,9 +490,10 @@ export class Session {
     let frame: Frame;
     try {
       frame = await this.nextFrame(host);
-    } catch {
-      if (this.state.debugging) return this.undebuggable();
-      return this.server("the universe did not load");
+    } catch (error) {
+      console.error("The universe did not load:", error);
+      if (this.state.debugging) return this.undebuggable(why(error));
+      return this.server("the universe did not load: " + why(error));
     }
     // A newer run takes this frame.
     if (mine !== this.runs) return;
@@ -587,10 +588,10 @@ export class Session {
   }
 
   /** The debugger's module didn't load: it turns off, and the program runs as before. */
-  private async undebuggable(): Promise<void> {
+  private async undebuggable(reason: string): Promise<void> {
     this.set({ debugging: false });
     await this.browser();
-    this.set({ status: this.state.status + " · the debugger did not load" });
+    this.set({ status: this.state.status + " · the debugger did not load: " + reason });
   }
 
   /** What a run gave, from the browser or the server: its output or its report. */
@@ -622,6 +623,16 @@ export class Session {
       if (this.restored && this.state.where === "browser" && this.runs === 0) this.browser();
     }, () => {});
   }
+}
+
+/**
+ * Why a load failed, short enough for the status line: the first line of
+ * the error's message, without the error's name, cut at 120 characters.
+ */
+export function why(error: unknown): string {
+  const text = (error instanceof Error ? error.message : String(error)).split("\n")[0].replace(/^\w*Error: /, "").trim();
+  if (!text) return "no reason given";
+  return text.length > 120 ? text.slice(0, 119) + "…" : text;
 }
 
 /** A plain program's output: stdout, stderr in its own colour, then the exit status if not 0. */
