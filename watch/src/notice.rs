@@ -108,7 +108,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rawr::reload::scheduler::{Admission, Gate};
+    use rawr::reload::scheduler::Gate;
 
     #[test]
     fn notice_burst_retains_only_the_latest_revision_and_rearms() {
@@ -121,17 +121,7 @@ mod tests {
         assert_eq!(receiver.wake.try_iter().count(), 1);
         // Restore the single wake removed only to inspect its boundedness.
         sender.wake.try_send(()).unwrap();
-        let Notice::Changed(observed) = receiver.try_recv().unwrap() else {
-            panic!("expected latest change");
-        };
-        let mailbox = rawr::reload::scheduler::mailbox::Slot::<
-            rawr::reload::scheduler::mailbox::Revision<(), ()>,
-            (),
-        >::new();
-        assert!(matches!(
-            gate.publish_notice(observed, (), &mailbox),
-            Admission::Current(Ok(()))
-        ));
+        assert!(matches!(receiver.try_recv(), Ok(Notice::Changed(_))));
         assert!(matches!(receiver.try_recv(), Err(TryRecvError::Empty)));
         sender.publish(Notice::Changed(gate.observe(now).unwrap()));
         assert!(matches!(receiver.try_recv(), Ok(Notice::Changed(_))));

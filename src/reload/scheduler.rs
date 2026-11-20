@@ -4,7 +4,6 @@ use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-pub mod mailbox;
 pub mod notice;
 pub mod publication;
 
@@ -97,7 +96,7 @@ impl Gate {
     pub fn observe(&self, now: Instant) -> Result<notice::Observed, Error> {
         lock(&self.scheduler)
             .observe(now)
-            .map(|revision| notice::Observed::new(Arc::clone(&self.stamp), revision))
+            .map(|_| notice::Observed::new())
     }
 
     /// Evaluate pure relevance and observe it under the same gate lock.
@@ -114,9 +113,6 @@ impl Gate {
     }
 
     /// Evaluate pure relevance and return a non-install observation proof.
-    ///
-    /// The returned value can publish progress for this revision, but cannot
-    /// be transformed into compile or installation authority.
     pub fn observe_if_notice(
         &self,
         now: Instant,
@@ -128,8 +124,7 @@ impl Gate {
         }
         scheduler
             .observe(now)
-            .map(|revision| notice::Observed::new(Arc::clone(&self.stamp), revision))
-            .map(Some)
+            .map(|_| Some(notice::Observed::new()))
     }
 
     /// Return the newest queued revision's debounce deadline.
@@ -257,94 +252,6 @@ impl Gate {
             return Admission::Obsolete(value);
         }
         Admission::Current(admit(value))
-    }
-
-    /// Publish one finished value only while its revision remains current.
-    ///
-    /// The revision check and one-slot replacement are linearized under the
-    /// scheduler lock. Replaced values and wakes are released only after both
-    /// scheduler and mailbox locks have been released.
-    #[must_use = "the publication admission result must be handled"]
-    pub fn publish_latest<T, N, E>(
-        &self,
-        candidate: Candidate<T>,
-        mailbox: &mailbox::Slot<mailbox::Revision<T, N>, E>,
-    ) -> Admission<T, Result<(), Candidate<T>>> {
-        let Candidate {
-            stamp,
-            revision,
-            value,
-        } = candidate;
-        let scheduler = lock(&self.scheduler);
-        if !self.is_current(&stamp, revision, &scheduler) {
-            drop(scheduler);
-            return Admission::Obsolete(value);
-        }
-        let candidate = Candidate {
-            stamp,
-            revision,
-            value,
-        };
-        match mailbox.publish_candidate(candidate) {
-            Ok(transition) => {
-                drop(scheduler);
-                transition.finish();
-                Admission::Current(Ok(()))
-            }
-            Err(candidate) => {
-                drop(scheduler);
-                Admission::Current(Err(candidate))
-            }
-        }
-    }
-
-    /// Publish progress for one exact observed revision without install authority.
-    #[must_use = "the notice admission result must be handled"]
-    pub fn publish_notice<T, N, E>(
-        &self,
-        observed: notice::Observed,
-        value: N,
-        mailbox: &mailbox::Slot<mailbox::Revision<T, N>, E>,
-    ) -> Admission<N, Result<(), notice::Value<N>>> {
-        let (stamp, revision) = observed.into_parts();
-        self.publish_notice_revision(stamp, revision, value, mailbox)
-    }
-
-    /// Publish progress for one exact started request without consuming it.
-    #[must_use = "the started-notice admission result must be handled"]
-    pub fn publish_started<T, N, E>(
-        &self,
-        request: &Request,
-        value: N,
-        mailbox: &mailbox::Slot<mailbox::Revision<T, N>, E>,
-    ) -> Admission<N, Result<(), notice::Value<N>>> {
-        self.publish_notice_revision(Arc::clone(&request.stamp), request.revision, value, mailbox)
-    }
-
-    fn publish_notice_revision<T, N, E>(
-        &self,
-        stamp: Arc<Stamp>,
-        revision: Revision,
-        value: N,
-        mailbox: &mailbox::Slot<mailbox::Revision<T, N>, E>,
-    ) -> Admission<N, Result<(), notice::Value<N>>> {
-        let scheduler = lock(&self.scheduler);
-        if !self.is_current(&stamp, revision, &scheduler) {
-            drop(scheduler);
-            return Admission::Obsolete(value);
-        }
-        let notice = notice::Value::new(revision, value);
-        match mailbox.publish_notice(notice) {
-            Ok(transition) => {
-                drop(scheduler);
-                transition.finish();
-                Admission::Current(Ok(()))
-            }
-            Err(notice) => {
-                drop(scheduler);
-                Admission::Current(Err(notice))
-            }
-        }
     }
 
     fn is_current(&self, stamp: &Arc<Stamp>, revision: Revision, scheduler: &Scheduler) -> bool {
@@ -686,94 +593,6 @@ mod tests {
     }
 
     #[test]
-    fn replaced_completion_destructor_runs_after_gate_and_mailbox_unlock() {
-        let now = Instant::now();
-        let gate = Arc::new(Gate::new(Duration::ZERO));
-        let mailbox = super::mailbox::Slot::<super::mailbox::Revision<Revokes, ()>, ()>::new();
-
-        gate.observe(now).unwrap();
-        let old = gate.start(now).unwrap().complete(Revokes {
-            gate: Arc::clone(&gate),
-            now,
-        });
-        assert!(matches!(
-            gate.publish_latest(old, &mailbox),
-            super::Admission::Current(Ok(()))
-        ));
-
-        gate.observe(now).unwrap();
-        let current = gate.start(now).unwrap().complete(Revokes {
-            gate: Arc::clone(&gate),
-            now,
-        });
-        assert!(matches!(
-            gate.publish_latest(current, &mailbox),
-            super::Admission::Current(Ok(()))
-        ));
-
-        assert!(gate.start(now).is_some());
-        mailbox.close();
-    }
-
-    #[test]
-    fn notices_are_revision_bound_without_minting_candidate_authority() {
-        let now = Instant::now();
-        let gate = Gate::new(Duration::ZERO);
-        let mailbox = super::mailbox::Slot::<super::mailbox::Revision<(), &'static str>, ()>::new();
-
-        let old = gate.observe(now).unwrap();
-        let current = gate.observe(now).unwrap();
-        assert!(matches!(
-            gate.publish_notice(old, "old checking", &mailbox),
-            super::Admission::Obsolete("old checking")
-        ));
-        assert!(matches!(
-            gate.publish_notice(current, "checking", &mailbox),
-            super::Admission::Current(Ok(()))
-        ));
-
-        let request = gate.start(now).unwrap();
-        assert!(matches!(
-            gate.publish_started(&request, "reloading", &mailbox),
-            super::Admission::Current(Ok(()))
-        ));
-        let Some(super::mailbox::Entry::Revision(super::mailbox::Revision::Notice(notice))) =
-            mailbox.take_latest()
-        else {
-            panic!("latest progress must remain a non-install notice");
-        };
-        assert_eq!(notice.into_inner(), "reloading");
-        drop(request);
-    }
-
-    #[test]
-    fn revision_proofs_are_bound_to_their_originating_gate() {
-        let now = Instant::now();
-        let origin = Gate::new(Duration::ZERO);
-        let foreign = Gate::new(Duration::ZERO);
-        let mailbox =
-            super::mailbox::Slot::<super::mailbox::Revision<&'static str, &'static str>, ()>::new();
-
-        let observed = origin.observe(now).unwrap();
-        let request = origin.start(now).unwrap();
-        foreign.observe(now).unwrap();
-
-        assert!(matches!(
-            foreign.publish_notice(observed, "checking", &mailbox),
-            super::Admission::Obsolete("checking")
-        ));
-        assert!(matches!(
-            foreign.publish_started(&request, "reloading", &mailbox),
-            super::Admission::Obsolete("reloading")
-        ));
-        assert!(matches!(
-            foreign.publish_latest(request.complete("finished"), &mailbox),
-            super::Admission::Obsolete("finished")
-        ));
-        assert!(mailbox.take_latest().is_none());
-    }
-
-    #[test]
     fn watcher_checkpoint_admits_only_without_an_intervening_event() {
         let now = Instant::now();
         let gate = Gate::new(Duration::ZERO);
@@ -836,29 +655,6 @@ mod tests {
             )),
             super::Admission::Obsolete("revoked")
         );
-    }
-
-    #[test]
-    fn cross_gate_rejection_releases_payload_after_both_locks() {
-        let now = Instant::now();
-        let origin = Gate::new(Duration::ZERO);
-        let foreign = Arc::new(Gate::new(Duration::ZERO));
-        let mailbox = super::mailbox::Slot::<super::mailbox::Revision<Revokes, ()>, ()>::new();
-
-        origin.observe(now).unwrap();
-        let candidate = origin.start(now).unwrap().complete(Revokes {
-            gate: Arc::clone(&foreign),
-            now,
-        });
-        foreign.observe(now).unwrap();
-
-        let super::Admission::Obsolete(value) = foreign.publish_latest(candidate, &mailbox) else {
-            panic!("another gate must reject the candidate");
-        };
-        drop(value);
-
-        assert!(foreign.start(now).is_some());
-        assert!(mailbox.take_latest().is_none());
     }
 
     #[test]
