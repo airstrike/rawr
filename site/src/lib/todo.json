@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-19",
-  "version": "0.4.47",
+  "version": "0.4.48",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.48",
+        "date": "2026-11-19",
+        "entries": [
+          {"text":"A shell attached to a `rawr run` started in a terminal shows the program's output: the last of what it printed before the attach, then each line as it prints. Programs with Rust dependencies get this when their output isn't a terminal.","issues":[2288]}
+        ]
+      },
       {
         "version": "0.4.47",
         "date": "2026-11-19",
@@ -5392,7 +5399,7 @@
     {"issue":2285,"title":"A native module reading a private field through a value whose type it never names isn't counted as seeing it","state":"open","category":"No glue (D593)"},
     {"issue":2286,"title":"`rawr gui` and `rawr tui` draw the source in syntax colours, and the window follows the system's…","state":"closed","category":"Health","release":"0.4.24"},
     {"issue":2287,"title":"A step on a paused iced program never reaches a new pause","state":"closed","category":"Health","release":"0.4.26"},
-    {"issue":2288,"title":"A run started in a terminal tells its output to the session","state":"open","category":"Health"},
+    {"issue":2288,"title":"A run started in a terminal tells its output to the session","state":"closed","category":"Health","release":"0.4.48"},
     {"issue":2289,"title":"End-to-end test lanes and started projects beyond the warm set outlive a killed or failing run and fill the disk","state":"closed","category":"Health"},
     {"issue":2290,"title":"A crate macro call sent to rustc keeps hidden-segment paths in its input","state":"open","category":"No glue (D593)"},
     {"issue":2291,"title":"rustc's expansion of a crate macro call gives line!() at the expansion input, not the call","state":"open","category":"No glue (D593)"},
@@ -5422,7 +5429,8 @@
     {"issue":2315,"title":"A debugger attached to a running program names the function it pauses in and reads that…","state":"closed","category":"Health","release":"0.4.45"},
     {"issue":2316,"title":"A root unit function compiled by Engine::compile gives native code its last statement's value","state":"closed","category":"No glue (D593)","release":"0.4.47"},
     {"issue":2317,"title":"`rawr tui` reads bindings with their parts from the inspector, so a map opens to one row per…","state":"closed","category":"Health","release":"0.4.46"},
-    {"issue":2318,"title":"Destructuring assignment and assignment to a parenthesized place are unsupported","state":"open","category":"Divergences from rustc"}
+    {"issue":2318,"title":"Destructuring assignment and assignment to a parenthesized place are unsupported","state":"open","category":"Divergences from rustc"},
+    {"issue":2319,"title":"A runner whose output is a terminal tells it to the session","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -8198,7 +8206,7 @@
             {"number":2258,"title":"One debugger session per run that any number of shells attach to, with rawr mcp as its first shell","state":"closed"},
             {"number":2266,"title":"A shell attaching to a plain `rawr run` restarts the program to register a debugger, losing its state","state":"closed"},
             {"number":2278,"title":"The session tells shells when breakpoints change","state":"closed"},
-            {"number":2288,"title":"A run started in a terminal tells its output to the session","state":"open"},
+            {"number":2288,"title":"A run started in a terminal tells its output to the session","state":"closed"},
             {"number":2296,"title":"Input that arrives while the debugger registers passes a breakpoint just set","state":"closed"},
             {"number":2297,"title":"A base-language `rawr run` restarts its program to register a debugger","state":"closed"},
             {"number":2298,"title":"A `mut` binding of a `&mut` parameter is a step stop on the signature line","state":"closed"},
@@ -8207,7 +8215,8 @@
             {"number":2301,"title":"inspect::tests::a_step_out_of_a_call_from_native_code_pauses_in_an_evaluation_already_running hangs now and then","state":"closed"},
             {"number":2305,"title":"An assignment through a `&T` says rawr doesn't support it, not rustc's E0594","state":"closed"},
             {"number":2308,"title":"A runner registers its debugger in its running engine, replacing the debugger generation","state":"closed"},
-            {"number":2309,"title":"The debugger evaluates only in the innermost frame, even with another frame selected","state":"closed"}
+            {"number":2309,"title":"The debugger evaluates only in the innermost frame, even with another frame selected","state":"closed"},
+            {"number":2319,"title":"A runner whose output is a terminal tells it to the session","state":"open"}
           ],
           "milestone": "0.5"
         },
