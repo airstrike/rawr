@@ -782,6 +782,16 @@ pub enum Error {
         /// The first import.
         previous_declaration: Box<Import>,
     },
+    /// A trait name nothing in scope declares: rustc's E0405 "cannot find
+    /// trait `Display` in this scope".
+    UnknownTrait {
+        /// The name as written.
+        name: ImmutableString,
+        /// The name.
+        reference: Span,
+        /// The traits a `use` could bring in under the name.
+        imports: Box<Imports>,
+    },
     /// A header referenced neither a script type, builtin, nor host type.
     UnknownType {
         /// Qualified type name as written.
@@ -802,6 +812,14 @@ pub enum Error {
         reference: Span,
         /// Where the path stops resolving, as rustc labels it.
         missing: Unresolved,
+    },
+    /// Several members of one `use` that each name nothing, which rustc
+    /// reports as one E0432 with a label at each: built by
+    /// [`Error::with_unknown_import`].
+    UnknownImports {
+        /// Each member's [`Error::UnknownImport`], in source order; two or
+        /// more.
+        imports: Box<[Error]>,
     },
     /// A `use` group prefix is not a static namespace.
     InvalidImport {
@@ -1008,6 +1026,9 @@ pub enum Error {
         reference: Span,
         /// The type as rustc names it.
         receiver: Box<Receiver>,
+        /// An item of the type whose name is like `member`, which rustc
+        /// suggests.
+        similar: Option<Box<Similar>>,
     },
     /// A path names no item of a module that exists, as rustc's E0425
     /// "cannot find function `load` in module `google`": an item the crate
@@ -1579,6 +1600,50 @@ pub enum Error {
 }
 
 impl Error {
+    /// This error, the unresolved members of one `use` so far, with
+    /// `import`, another member's [`Error::UnknownImport`]: rustc's one
+    /// E0432 for them all, its members in source order.
+    pub(crate) fn with_unknown_import(self, import: Self) -> Self {
+        debug_assert!(
+            matches!(import, Self::UnknownImport { .. }),
+            "a `use` gathers its members' unresolved imports alone"
+        );
+        // Members past one missing prefix miss it at the same place, once.
+        let known = match &self {
+            Self::UnknownImports { imports } => imports.contains(&import),
+            first => *first == import,
+        };
+        if known {
+            return self;
+        }
+        let mut imports = match self {
+            Self::UnknownImports { imports } => imports.into_vec(),
+            first => vec![first],
+        };
+        imports.push(import);
+        imports.sort_by_key(Self::primary_span);
+        Self::UnknownImports {
+            imports: imports.into_boxed_slice(),
+        }
+    }
+
+    /// rustc's E0432 message for an unresolved import: "unresolved import
+    /// `a::b`", or "unresolved imports `a::b`, `a::c`" for several members
+    /// of one `use`.
+    pub(crate) fn unresolved_import_message(&self) -> Option<String> {
+        match self {
+            Self::UnknownImport { path, .. } => Some(format!("unresolved import `{path}`")),
+            Self::UnknownImports { imports } => {
+                let paths = imports
+                    .iter()
+                    .map(|import| format!("`{}`", import.name()))
+                    .collect::<Vec<_>>();
+                Some(format!("unresolved imports {}", paths.join(", ")))
+            }
+            _ => None,
+        }
+    }
+
     /// This error, a use of a moved value where the use borrows it, as a
     /// format argument does: rustc's "borrow of moved value".
     pub(crate) fn borrowing(mut self) -> Self {
@@ -1747,7 +1812,7 @@ impl Error {
             Self::DuplicateItem { .. } => Category::DuplicateItem,
             Self::DuplicateImport { .. } => Category::DuplicateImport,
             Self::UnknownType { .. } => Category::UnknownType,
-            Self::UnknownImport { .. } => Category::UnknownImport,
+            Self::UnknownImport { .. } | Self::UnknownImports { .. } => Category::UnknownImport,
             Self::InvalidImport { .. } => Category::InvalidImport,
             Self::InvalidTypeArguments { .. } => Category::InvalidTypeArguments,
             Self::LoweringUnavailable { .. } => Category::LoweringUnavailable,
@@ -1798,7 +1863,7 @@ impl Error {
             Self::UnscopedWrite { .. } => Category::UnscopedWrite,
             Self::UnscopedMethod { .. } => Category::UnscopedMethod,
             Self::InvalidAssignee { .. } => Category::InvalidAssignee,
-            Self::StdPath { .. } => Category::StdPath,
+            Self::StdPath { .. } | Self::UnknownTrait { .. } => Category::StdPath,
             Self::NotYet { .. } => Category::NotYet,
             Self::TypeAnnotationsNeeded { .. } => Category::TypeAnnotationsNeeded,
             Self::ArgumentCount { .. } => Category::ArgumentCount,
@@ -1830,6 +1895,7 @@ impl Error {
                 message.as_str()
             }
             Self::UnknownImport { path, .. } | Self::InvalidImport { path, .. } => path.as_str(),
+            Self::UnknownImports { imports } => imports[0].name(),
             Self::InvalidTypeArguments { ty, .. } => ty.as_str(),
             Self::LoweringUnavailable { item, .. } => item.as_str(),
             Self::InvalidDerive { owner, .. }
@@ -1876,6 +1942,7 @@ impl Error {
             Self::UnscopedMethod { member, .. } => member.as_str(),
             Self::InvalidAssignee { .. } => "assignment",
             Self::StdPath { message, .. } => message.as_str(),
+            Self::UnknownTrait { name, .. } => name.as_str(),
             Self::NotYet { path, .. } => path.as_str(),
             Self::TypeAnnotationsNeeded { parameter, .. } => parameter.as_str(),
             Self::ArgumentCount { name, .. } => name.as_str(),
@@ -1895,6 +1962,7 @@ impl Error {
             Self::UnknownImport { reference, .. }
             | Self::InvalidImport { reference, .. }
             | Self::InvalidTypeArguments { reference, .. } => *reference,
+            Self::UnknownImports { imports } => imports[0].primary_span(),
             Self::LoweringUnavailable { body, .. } => *body,
             Self::InvalidDerive { attribute, .. } | Self::ExpansionRequired { attribute, .. } => {
                 *attribute
@@ -1946,7 +2014,9 @@ impl Error {
             | Self::UnscopedWrite { at, .. }
             | Self::UnscopedMethod { at, .. } => *at,
             Self::InvalidAssignee { operator, .. } => *operator,
-            Self::StdPath { reference, .. } | Self::NotYet { reference, .. } => *reference,
+            Self::StdPath { reference, .. }
+            | Self::UnknownTrait { reference, .. }
+            | Self::NotYet { reference, .. } => *reference,
             Self::TypeAnnotationsNeeded { reference, .. } => *reference,
             Self::ArgumentCount { call, .. } => *call,
             Self::Syntax { at, .. }
@@ -2007,6 +2077,7 @@ impl Error {
             } => Some(*definition),
             Self::UnknownType { .. }
             | Self::UnknownImport { .. }
+            | Self::UnknownImports { .. }
             | Self::InvalidTypeArguments { .. }
             | Self::LoweringUnavailable { .. } => None,
             Self::UnknownMember { .. }
@@ -2039,6 +2110,7 @@ impl Error {
             | Self::UnscopedMethod { .. }
             | Self::ImmutableBorrow { .. }
             | Self::StdPath { .. }
+            | Self::UnknownTrait { .. }
             | Self::NotYet { .. }
             | Self::TypeAnnotationsNeeded { .. }
             | Self::CannotCompare { .. }
@@ -2099,6 +2171,34 @@ pub struct Receiver {
     /// The struct's or enum's name where the program declares it, in the
     /// error's file: rustc marks its definition.
     pub definition: Option<Span>,
+}
+
+/// An item of the type an E0599 is about whose name is like the missing
+/// one's, which rustc suggests: "there is a method `go` with a similar
+/// name".
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct Similar {
+    /// The item's name.
+    pub name: ImmutableString,
+    /// What rustc calls it: `method`, `associated function` or
+    /// `associated constant`.
+    pub kind: &'static str,
+    /// The item's name where the program declares it.
+    pub declared: Span,
+    /// How rustc shows it.
+    pub shown: Shown,
+}
+
+/// How rustc shows a [`Similar`] item.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum Shown {
+    /// In place of the missing name, which the call's arguments fit.
+    Replaced,
+    /// At its definition.
+    Defined,
+    /// At its definition, a method whose parameters the call's arguments
+    /// don't fit: "but with different arguments".
+    DifferentArguments,
 }
 
 /// rustc's E0599 message for the method `member` of a trait out of scope,
@@ -2903,6 +3003,10 @@ impl fmt::Display for Written<'_> {
             } => {
                 write!(formatter, "unresolved import `{path}` at {reference} (E0432)")
             }
+            Error::UnknownImports { imports } => {
+                let shown = imports.iter().map(ToString::to_string).collect::<Vec<_>>();
+                formatter.write_str(&shown.join("; "))
+            }
             Error::InvalidImport {
                 path,
                 reason,
@@ -3272,6 +3376,12 @@ impl fmt::Display for Written<'_> {
                 reference,
                 ..
             } => write!(formatter, "{message} at {reference} ({code})"),
+            Error::UnknownTrait {
+                name, reference, ..
+            } => write!(
+                formatter,
+                "cannot find trait `{name}` in this scope at {reference} (E0405)"
+            ),
             Error::NotYet { path, reference } => {
                 write!(formatter, "rawr doesn't run `{path}` yet at {reference}")
             }

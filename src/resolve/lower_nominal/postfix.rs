@@ -1540,9 +1540,15 @@ impl<'a> Parser<'a> {
                             .private_member(definition_id, &member, member_span)
                             .unwrap_or_else(|| Error::NoItem {
                                 owner: model.name().into(),
-                                member,
                                 reference: member_span,
                                 receiver: Box::new(self.receiver(definition_id, &value.ty)),
+                                similar: self.similar_item(
+                                    definition_id,
+                                    &member,
+                                    similar::Named::Method,
+                                    Some(args.len()),
+                                ),
+                                member,
                             }));
                     }
                 };

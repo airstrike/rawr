@@ -77,6 +77,7 @@ mod proof;
 mod relocate;
 mod scope;
 mod sequence;
+mod similar;
 #[cfg(feature = "rust-import")]
 mod splice;
 use places::PlacePattern;

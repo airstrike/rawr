@@ -3,7 +3,9 @@
 //! files:
 //!
 //! - `paths.tsv`: every public path a program can write, with its
-//!   namespace (`t`, `v` or `m`), its kind, the stability of the path (its
+//!   namespace (`t`, `v` or `m`), its kind (a unit or tuple struct's
+//!   constructor, in the value namespace, is a `unit-struct` or a
+//!   `tuple-struct`), the stability of the path (its
 //!   modules' and its item's: `s`, or `u feature issue reason`), and the
 //!   definition it names (`=` when it is that path);
 //! - `impls.tsv` (step 3): each impl of a stable trait in std's crates that
@@ -29,7 +31,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use rustc_driver::{Callbacks, Compilation};
-use rustc_hir::def::{CtorOf, DefKind, Res};
+use rustc_hir::def::{CtorKind, CtorOf, DefKind, Res};
 use rustc_middle::ty::fast_reject::SimplifiedType;
 use rustc_middle::ty::{self, GenericParamDefKind, TyCtxt};
 use rustc_span::def_id::{CrateNum, DefId};
@@ -94,7 +96,8 @@ fn kind_text(kind: DefKind) -> &'static str {
         DefKind::Enum => "enum",
         DefKind::Variant => "variant",
         DefKind::Ctor(CtorOf::Variant, _) => "variant",
-        DefKind::Ctor(CtorOf::Struct, _) => "struct",
+        DefKind::Ctor(CtorOf::Struct, CtorKind::Fn) => "tuple-struct",
+        DefKind::Ctor(CtorOf::Struct, CtorKind::Const) => "unit-struct",
         DefKind::Trait => "trait",
         DefKind::TraitAlias => "trait-alias",
         DefKind::TyAlias => "type",
@@ -277,10 +280,11 @@ fn table(tcx: TyCtxt<'_>, out: &Path) -> Result<(), String> {
                         table.path(path, 't', "primitive", &stability, primitive.name_str());
                     }
                     Res::Def(kind, def_id) => {
-                        // A unit or tuple struct's constructor is its type's
-                        // path in the value namespace: the type's line
-                        // answers for both.
-                        if matches!(kind, DefKind::Field | DefKind::Ctor(CtorOf::Struct, _)) {
+                        // A unit or tuple struct's constructor is its path in
+                        // the value namespace, which names the struct's
+                        // definition: `std::cmp::Reverse` as `Reverse(1)`
+                        // calls it.
+                        if kind == DefKind::Field {
                             continue;
                         }
                         let namespace = match kind.ns() {

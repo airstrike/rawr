@@ -745,18 +745,29 @@ fn resolution_report_with_sources(
             builder = builder.secondary(source.clone(), *field, label)?;
         }
     }
-    if let resolve::Error::UnknownImport {
-        path,
-        missing: missing @ resolve::Unresolved::Item { segment, .. },
-        reference,
-    } = error
-        && segment != reference
-    {
-        builder = builder.secondary(
-            source.clone(),
-            *segment,
-            missing.label(path).map(Into::into),
-        )?;
+    // Each unresolved member of one `use` is marked as the first is.
+    let imports = match error {
+        resolve::Error::UnknownImports { imports } => imports.as_ref(),
+        _ => std::slice::from_ref(error),
+    };
+    for (index, import) in imports.iter().enumerate() {
+        if index > 0 {
+            let label = primary_label(import, &source, import.primary_span());
+            builder = builder.also_primary(source.clone(), import.primary_span(), label)?;
+        }
+        if let resolve::Error::UnknownImport {
+            path,
+            missing: missing @ resolve::Unresolved::Item { segment, .. },
+            reference,
+        } = import
+            && segment != reference
+        {
+            builder = builder.secondary(
+                source.clone(),
+                *segment,
+                missing.label(path).map(Into::into),
+            )?;
+        }
     }
     // rustc marks the definition of the type that misses the item.
     if let Some(missing) = Missing::of(error, &source, error.primary_span())
@@ -1021,6 +1032,23 @@ fn referent_section(referent: &resolve::Referent, source: &Source) -> Section {
 /// The notes rustc gives `error` with places of their own, in `source`.
 fn sections(error: &resolve::Error, source: &Source) -> Vec<Section> {
     match error {
+        // A similar item the call can't take in place, at its definition.
+        resolve::Error::NoItem {
+            similar: Some(similar),
+            ..
+        } if similar.shown != resolve::Shown::Replaced => {
+            let suffix = match similar.shown {
+                resolve::Shown::DifferentArguments => ", but with different arguments",
+                _ => "",
+            };
+            vec![
+                Section::help(format!("{}{suffix}", similar_message(similar))).primary(
+                    source.clone(),
+                    super::definition::span(source, similar.declared),
+                    None,
+                ),
+            ]
+        }
         // The enum's name, and each variant no arm covers.
         resolve::Error::NonExhaustive {
             ty,
@@ -1255,6 +1283,20 @@ fn imported(imports: &resolve::Imports, source: &Source) -> Result<Option<Sugges
 }
 
 /// The code rustc suggests for `error`, in `source`.
+/// rustc's help naming `similar`: "there is a method `go` with a similar
+/// name".
+fn similar_message(similar: &resolve::Similar) -> String {
+    let article = if similar.kind.starts_with('a') {
+        "an"
+    } else {
+        "a"
+    };
+    format!(
+        "there is {article} {} `{}` with a similar name",
+        similar.kind, similar.name
+    )
+}
+
 fn suggestion(error: &resolve::Error, source: &Source) -> Result<Option<Suggestion>, Error> {
     let suggestion = |message: &str, style, span: Span, replacement: &str| {
         Edit::new(source.clone(), span, replacement)
@@ -1264,6 +1306,15 @@ fn suggestion(error: &resolve::Error, source: &Source) -> Result<Option<Suggesti
     let before = |span: Span| Span::new(span.start(), span.start());
     let after = |span: Span| Span::new(span.end(), span.end());
     match error {
+        resolve::Error::NoItem {
+            similar: Some(similar),
+            ..
+        } if similar.shown == resolve::Shown::Replaced => suggestion(
+            &similar_message(similar),
+            Style::Verbose,
+            member_span(error),
+            &similar.name,
+        ),
         resolve::Error::MemberKind {
             field: true,
             arguments: Some(arguments),
@@ -1346,7 +1397,8 @@ fn suggestion(error: &resolve::Error, source: &Source) -> Result<Option<Suggesti
         }
         resolve::Error::UnknownFunction { imports, .. }
         | resolve::Error::UnknownVariable { imports, .. }
-        | resolve::Error::UnknownType { imports, .. } => imported(imports, source),
+        | resolve::Error::UnknownType { imports, .. }
+        | resolve::Error::UnknownTrait { imports, .. } => imported(imports, source),
         resolve::Error::UnscopedMethod {
             member,
             path,
@@ -1520,6 +1572,7 @@ fn primary_label(
             Some(format!("`{name}` reimported here").into())
         }
         resolve::Error::StdPath { label, .. } => label.clone(),
+        resolve::Error::UnknownTrait { .. } => Some("not found in this scope".into()),
         resolve::Error::UnscopedMethod { owner, .. } => {
             Some(format!("method not found in `{owner}`").into())
         }
@@ -1595,6 +1648,7 @@ fn primary_label(
             ..
         } if segment != reference => None,
         resolve::Error::UnknownImport { path, missing, .. } => missing.label(path).map(Into::into),
+        resolve::Error::UnknownImports { imports } => primary_label(&imports[0], source, primary),
         resolve::Error::UnknownType {
             name, path: true, ..
         } => Some(
@@ -1653,9 +1707,13 @@ fn primary_label(
             Some("cannot assign twice to immutable variable".into())
         }
         resolve::Error::MemberKind { field: true, .. } => Some("field, not a method".into()),
-        resolve::Error::NoItem { receiver, .. } => {
+        resolve::Error::NoItem {
+            receiver, similar, ..
+        } => {
             let item = Missing::of(error, source, primary).map_or("method", |missing| missing.item);
-            Some(format!("{item} not found in `{}`", receiver.found).into())
+            // rustc drops a method's label where it suggests a similar one.
+            (item != "method" || similar.is_none())
+                .then(|| format!("{item} not found in `{}`", receiver.found).into())
         }
         resolve::Error::MovedValue {
             previous_iteration: true,
@@ -1793,6 +1851,7 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         },
         resolve::Category::StdPath => match error {
             resolve::Error::StdPath { code, .. } => code::std_path(code),
+            resolve::Error::UnknownTrait { .. } => code::RESOLVE_UNKNOWN_TRAIT,
             _ => unreachable!("a std path's category"),
         },
         resolve::Category::NotYet => code::RESOLVE_NOT_YET,
@@ -2118,7 +2177,9 @@ fn resolution_message(error: &resolve::Error) -> String {
         resolve::Error::UnknownType { name, path, .. } => {
             resolve::NotFound::type_named(name, *path).to_string()
         }
-        resolve::Error::UnknownImport { path, .. } => format!("unresolved import `{path}`"),
+        resolve::Error::UnknownImport { .. } | resolve::Error::UnknownImports { .. } => error
+            .unresolved_import_message()
+            .expect("an unresolved import has rustc's message"),
         resolve::Error::InvalidImport { path, reason, .. } => {
             format!("invalid import `{path}`: {reason}")
         }
@@ -2259,6 +2320,9 @@ fn resolution_message(error: &resolve::Error) -> String {
         } => resolve::unscoped_method(kind, owner, member),
         resolve::Error::InvalidAssignee { .. } => resolve::INVALID_ASSIGNEE.to_string(),
         resolve::Error::StdPath { message, .. } => message.to_string(),
+        resolve::Error::UnknownTrait { name, .. } => {
+            format!("cannot find trait `{name}` in this scope")
+        }
         resolve::Error::NonExhaustive { witnesses, .. } => {
             resolve::NonExhaustive(witnesses).to_string()
         }

@@ -1709,6 +1709,14 @@ impl Nominal {
         }
     }
 
+    /// The type's lifetime parameters, `'a` of `<'a, T>`.
+    pub(super) fn lifetimes(&self) -> &[ImmutableString] {
+        match self {
+            Self::Struct { item, .. } => &item.regions.params,
+            Self::Enum { item, .. } => &item.regions.params,
+        }
+    }
+
     /// The type's generic parameters.
     pub(super) fn generics(&self) -> &[item::Generic] {
         match self {

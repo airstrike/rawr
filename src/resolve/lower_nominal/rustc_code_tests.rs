@@ -4738,3 +4738,273 @@ fn a_turbofish_call_of_an_unbound_name_is_e0425_for_a_function() {
         )
     );
 }
+
+/// A struct's or struct variant's witness names its fields that aren't
+/// `_`, and `..` for the rest, as rustc writes it; a struct is noted at
+/// its definition (#2347).
+#[test]
+fn a_struct_witness_names_its_fields() {
+    let program = |body: &str| {
+        format!(
+            "enum E {{ A, B(i32), C {{ x: i32, y: bool }}, D {{}} }}\nstruct S {{ a: bool, b: \
+             i32 }}\nfn main() {{\n    let e = E::A;\n    let s = S {{ a: true, b: 1 }};\n    \
+             let o = Some(E::A);\n    {body}\n    let _ = (s.b, o);\n}}\n"
+        )
+    };
+    let message = |body: &str| refused(&program(body)).1;
+    assert_eq!(
+        message("match e { E::A => {}, E::B(_) => {}, E::D {} => {} }"),
+        "non-exhaustive patterns: `E::C { .. }` not covered"
+    );
+    assert_eq!(
+        message("match e { E::A => {}, E::B(_) => {}, E::D {} => {}, E::C { y: true, .. } => {} }"),
+        "non-exhaustive patterns: `E::C { y: false, .. }` not covered"
+    );
+    // An empty struct variant is `{  }`, as rustc prints it.
+    assert_eq!(
+        message(
+            "match o { None => {}, Some(E::A) => {}, Some(E::B(_)) => {}, Some(E::C { .. }) => {} }"
+        ),
+        "non-exhaustive patterns: `Some(E::D {  })` not covered"
+    );
+    let shown = rendered(&program("match s { S { a: true, .. } => {} }"));
+    assert!(
+        shown.starts_with(
+            "error[E0004]: non-exhaustive patterns: `S { a: false, .. }` not covered\n"
+        ) && shown.contains(concat!(
+            "note: `S` defined here\n",
+            " --> main.rs:2:8\n",
+            "  |\n",
+            "2 | struct S { a: bool, b: i32 }\n",
+            "  |        ^\n",
+            "  = note: the matched value is of type `S`\n",
+        )) && shown.contains("S { a: true, .. } => {}, S { a: false, .. } => todo!() }\n"),
+        "{shown}"
+    );
+    let refutable = rendered(&program("let E::A = e;"));
+    assert!(
+        refutable.contains("patterns `E::B(_)`, `E::C { .. }` and `E::D {  }` not covered\n"),
+        "{refutable}"
+    );
+}
+
+/// Every member of one `use` that names nothing is one E0432, with a
+/// label at each (#2347).
+#[test]
+fn every_unresolved_member_of_one_use_is_one_e0432() {
+    let module = "mod model {\n    pub mod inner {}\n    pub struct Thing;\n}\n";
+    let shown = |import: &str| rendered(&format!("{module}{import}\nfn main() {{}}\n"));
+    assert_eq!(
+        shown("use crate::model::{inner::{gone, other}};"),
+        concat!(
+            "error[E0432]: unresolved imports `crate::model::inner::gone`, \
+             `crate::model::inner::other`\n",
+            " --> main.rs:5:28\n",
+            "  |\n",
+            "5 | use crate::model::{inner::{gone, other}};\n",
+            "  |                            ^^^^  ^^^^^ no `other` in `model::inner`\n",
+            "  |                            |\n",
+            "  |                            no `gone` in `model::inner`\n",
+        )
+    );
+    assert_eq!(
+        shown("use crate::model::{inner::gone2, inner::other2};"),
+        concat!(
+            "error[E0432]: unresolved imports `crate::model::inner::gone2`, \
+             `crate::model::inner::other2`\n",
+            " --> main.rs:5:20\n",
+            "  |\n",
+            "5 | use crate::model::{inner::gone2, inner::other2};\n",
+            "  |                    ^^^^^^^-----  ^^^^^^^------\n",
+            "  |                           |             |\n",
+            "  |                           |             no `other2` in `model::inner`\n",
+            "  |                           no `gone2` in `model::inner`\n",
+        )
+    );
+    // A module missing on the way beside an item, and a renamed member.
+    let mixed = shown("use crate::model::{nomod::x, absent3};");
+    assert!(
+        mixed.starts_with(
+            "error[E0432]: unresolved imports `crate::model::nomod`, `crate::model::absent3`\n"
+        ) && mixed.contains("  |                    ^^^^^     ^^^^^^^ no `absent3` in `model`\n")
+            && mixed.contains("  |                    could not find `nomod` in `model`\n"),
+        "{mixed}"
+    );
+    let renamed = shown("use crate::model::{absent4 as a4, absent5};");
+    assert!(
+        renamed.contains("  |                    -------^^^^^^  ^^^^^^^ no `absent5` in `model`\n"),
+        "{renamed}"
+    );
+    // std's, in a file without modules too.
+    let std = rendered("use std::collections::{HashMap, Nope, Nada};\nfn main() {}\n");
+    assert!(
+        std.starts_with(
+            "error[E0432]: unresolved imports `std::collections::Nope`, \
+             `std::collections::Nada`\n --> main.rs:1:33\n"
+        ) && std.contains(
+            "  |                                 ^^^^  ^^^^ no `Nada` in `collections`\n"
+        ),
+        "{std}"
+    );
+    // One member alone keeps the singular.
+    assert!(shown("use crate::model::{inner::gone6, Thing as T6};")
+        .starts_with("error[E0432]: unresolved import `crate::model::inner::gone6`\n"));
+}
+
+/// rustc's E0599 suggests the type's item with a similar name, in place
+/// where the call's arguments fit it, else at its definition; a method's
+/// label goes where it does (#2347).
+#[test]
+fn a_missing_method_suggests_one_with_a_similar_name() {
+    let program = |body: &str| {
+        rendered(&format!(
+            "struct S;\nimpl S {{\n    fn go(&self) {{}}\n    fn make(n: i32) -> i32 {{ n }}\n    \
+             const LIMIT: i32 = 1;\n    fn two(&self, a: i32, b: i32) -> i32 {{ a + b }}\n}}\nfn \
+             main() {{\n    let s = S;\n    {body}\n}}\n"
+        ))
+    };
+    assert_eq!(
+        program("s.goo();"),
+        concat!(
+            "error[E0599]: no method named `goo` found for struct `S` in the current scope\n",
+            "  --> main.rs:10:7\n",
+            "   |\n",
+            " 1 | struct S;\n",
+            "   | -------- method `goo` not found for this struct\n",
+            "...\n",
+            "10 |     s.goo();\n",
+            "   |       ^^^\n",
+            "   |\n",
+            "help: there is a method `go` with a similar name\n",
+            "   |\n",
+            "10 -     s.goo();\n",
+            "10 +     s.go();\n",
+            "   |\n",
+        )
+    );
+    assert!(
+        program("s.g();").ends_with("10 |     s.go();\n   |        +\n"),
+        "{}",
+        program("s.g();")
+    );
+    // An associated function keeps its label.
+    let associated = program("let _ = S::mak(1);");
+    assert!(
+        associated
+            .contains("   |                ^^^ associated function or constant not found in `S`\n")
+            && associated.ends_with(concat!(
+                "help: there is an associated function `make` with a similar name\n",
+                "   |\n",
+                "10 |     let _ = S::make(1);\n",
+                "   |                   +\n",
+            )),
+        "{associated}"
+    );
+    assert!(program("let _ = S::LIMT;")
+        .contains("help: there is an associated constant `LIMIT` with a similar name\n"));
+    // Arguments that don't fit: the item at its definition.
+    let different = program("S::goo(&s);");
+    assert!(
+        different.ends_with(concat!(
+            "help: there is a method `go` with a similar name, but with different arguments\n",
+            "  --> main.rs:3:5\n",
+            "   |\n",
+            " 3 |     fn go(&self) {}\n",
+            "   |     ^^^^^^^^^^^^\n",
+        )),
+        "{different}"
+    );
+    let missing = program("let _ = S::mak();");
+    assert!(
+        missing.contains("help: there is an associated function `make` with a similar name\n")
+            && missing.contains(" 4 |     fn make(n: i32) -> i32 { n }\n"),
+        "{missing}"
+    );
+    // A trait's method, and a name with none like it.
+    let traits = rendered(
+        "trait T {\n    fn walk(&self);\n}\nstruct S;\nimpl T for S {\n    fn walk(&self) {}\n}\nfn \
+         main() {\n    S.wlk();\n}\n",
+    );
+    assert!(
+        traits.contains("help: there is a method `walk` with a similar name\n"),
+        "{traits}"
+    );
+    assert!(program("s.zzz();").contains("^^^ method not found in `S`\n"));
+}
+
+/// rustc's E0599 names a type's lifetime parameters, and elides them in
+/// the type it found (#2347).
+#[test]
+fn a_missing_method_names_the_types_lifetimes() {
+    let shown = rendered(
+        "struct R<'a, T> {\n    v: &'a T,\n}\nfn main() {\n    let x = 1;\n    let r = R { v: &x \
+         };\n    r.nope();\n    let _ = r.v;\n}\n",
+    );
+    assert!(
+        shown.starts_with(
+            "error[E0599]: no method named `nope` found for struct `R<'a, T>` in the current \
+             scope\n"
+        ) && shown.contains("  |       ^^^^ method not found in `R<'_, {integer}>`\n"),
+        "{shown}"
+    );
+    let program = |body: &str| {
+        rendered(&format!(
+            "struct R<'a> {{\n    v: &'a i32,\n}}\nfn main() {{\n    let x = 1;\n    let r = R \
+             {{ v: &x }};\n    let _ = r.v;\n    {body}\n}}\n"
+        ))
+    };
+    assert!(program("r.nope();").contains("method not found in `R<'_>`\n"));
+    assert!(program("(&r).nope();").starts_with(
+        "error[E0599]: no method named `nope` found for reference `&R<'_>` in the current scope\n"
+    ));
+    assert!(program("R::nope();").starts_with(
+        "error[E0599]: no associated function or constant named `nope` found for struct `R<'a>`"
+    ));
+}
+
+/// std's and core's items a `use` could import, as rustc lists them:
+/// core's only where they aren't as many as std's, after std's; a trait
+/// a bound or an `impl` names; a unit or tuple struct a value names
+/// (#2347, #2349).
+#[test]
+fn std_and_core_import_candidates_match_rustcs() {
+    let display = "help: consider importing this trait\n  |\n1 + use std::fmt::Display;\n  |\n";
+    for source in [
+        "struct S;\nimpl Display for S {}\nfn main() {}\n",
+        "fn f<T: Display>(_x: T) {}\nfn main() {}\n",
+        "fn f(_x: impl Display) {}\nfn main() {}\n",
+    ] {
+        let shown = rendered(source);
+        assert!(
+            shown.starts_with("error[E0405]: cannot find trait `Display` in this scope\n")
+                && shown.ends_with(display),
+            "{shown}"
+        );
+    }
+    let iter = import_help("fn f(_x: Iter) {}\nfn main() {}\n");
+    assert!(
+        iter.ends_with(
+            "1 + use std::collections::hash_map::Iter;\n  |\n  = and 12 other candidates\n"
+        ),
+        "{iter}"
+    );
+    let help = |noun: &str, line: &str| {
+        format!("help: consider importing this {noun}\n  |\n{line}\n  |\n")
+    };
+    assert_eq!(
+        import_help("fn main() {\n    let _r = Reverse(1);\n}\n"),
+        help("tuple struct", "1 + use std::cmp::Reverse;")
+    );
+    assert_eq!(
+        import_help("fn main() {\n    let _f = Reverse;\n}\n"),
+        help("tuple struct", "1 + use std::cmp::Reverse;")
+    );
+    assert_eq!(
+        import_help("fn main() {\n    let _p: std::marker::PhantomData<i32> = PhantomData;\n}\n"),
+        help("unit struct", "1 + use std::marker::PhantomData;")
+    );
+    assert_eq!(
+        import_help("fn main() {\n    let _w = Wrapping(1);\n}\n"),
+        help("tuple struct", "1 + use std::num::Wrapping;")
+    );
+}

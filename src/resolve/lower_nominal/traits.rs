@@ -772,8 +772,21 @@ impl<'a> Parser<'a> {
     /// struct or enum by its declared parameters, its definition marked.
     pub(super) fn receiver(&self, owner: type_def::Id, receiver: &Ty) -> crate::resolve::Receiver {
         let receiver = self.inference.resolve(receiver);
-        let found = receiver.name(&self.models);
         let model = self.models.definition(owner);
+        // The found type's lifetimes are elided, first, as rustc writes
+        // them: `R<'_, i32>` of `R<'a, T>`, and `&R<'_>`.
+        let lifetimes = model.lifetimes();
+        let found = receiver.name(&self.models);
+        let found: ImmutableString = if lifetimes.is_empty() {
+            found
+        } else {
+            let elided = vec!["'_"; lifetimes.len()].join(", ");
+            match found.split_once('<') {
+                Some((name, arguments)) => format!("{name}<{elided}, {arguments}"),
+                None => format!("{found}<{elided}>"),
+            }
+            .into()
+        };
         let kind = match (&receiver, model) {
             (Ty::Reference { mutable: true, .. }, _) => "mutable reference",
             (Ty::Reference { .. }, _) => "reference",
@@ -788,10 +801,16 @@ impl<'a> Parser<'a> {
                 definition: None,
             };
         }
-        let parameters: Vec<&str> = model
-            .generics()
+        // Lifetimes first, as declared: `R<'a, T>`.
+        let parameters: Vec<String> = lifetimes
             .iter()
-            .map(|generic| generic.name.text.as_str())
+            .map(|lifetime| format!("'{lifetime}"))
+            .chain(
+                model
+                    .generics()
+                    .iter()
+                    .map(|generic| generic.name.text.to_string()),
+            )
             .collect();
         let declared = if parameters.is_empty() {
             model.name().into()

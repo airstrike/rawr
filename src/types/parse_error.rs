@@ -327,8 +327,9 @@ impl fmt::Display for ParseErrorType {
                 crate::resolve::Error::UnknownType { name, path, .. } => {
                     write!(f, "{}", crate::resolve::NotFound::type_named(name, *path))
                 }
-                crate::resolve::Error::UnknownImport { path, .. } => {
-                    write!(f, "unresolved import `{path}`")
+                error @ (crate::resolve::Error::UnknownImport { .. }
+                | crate::resolve::Error::UnknownImports { .. }) => {
+                    f.write_str(&error.unresolved_import_message().unwrap_or_default())
                 }
                 crate::resolve::Error::InvalidImport { path, reason, .. } => {
                     write!(f, "Invalid compile-time import '{path}': {reason}")
@@ -525,6 +526,9 @@ impl fmt::Display for ParseErrorType {
                     ..
                 } => f.write_str(&crate::resolve::unscoped_method(kind, owner, member)),
                 crate::resolve::Error::StdPath { message, .. } => f.write_str(message),
+                crate::resolve::Error::UnknownTrait { name, .. } => {
+                    write!(f, "cannot find trait `{name}` in this scope")
+                }
                 crate::resolve::Error::NonExhaustive { witnesses, .. } => {
                     write!(f, "{}", crate::resolve::NonExhaustive(witnesses))
                 }

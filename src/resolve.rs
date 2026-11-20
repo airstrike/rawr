@@ -17,6 +17,7 @@ pub(crate) mod native;
 pub(crate) mod package;
 #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
 pub(crate) mod record;
+pub(crate) mod similar;
 pub(crate) mod std_path;
 pub(crate) mod std_trait;
 pub(crate) mod type_ref;
@@ -32,8 +33,8 @@ pub use error::{
     Annotation, Arguments, Arms, Assignment, Beyond, BinaryOperation, BindingSite, Bound, Boxing,
     Callee, Category, Cloning, Detail, Error, Expansion, Fields, Import, Imported, Instead, Lint,
     MacroScope, Missing, MissingImpl, MoveCause, MovedPlace, MutBinding, OwningParameter,
-    PatternOrigin, PatternTypes, Placeholder, Private, Receiver, Referent, Required, Uncovered,
-    Unexpected, Unresolved,
+    PatternOrigin, PatternTypes, Placeholder, Private, Receiver, Referent, Required, Shown,
+    Similar, Uncovered, Unexpected, Unresolved,
 };
 pub use imports::{Candidate, Imports};
 use std::collections::BTreeMap;
@@ -274,6 +275,8 @@ impl LoweringFailure {
             | Error::NoItem { .. }
             | Error::NotInModule { .. }
             | Error::UnknownImport { .. } => Some(error),
+            // The first member's miss, which is asked for before the rest.
+            Error::UnknownImports { imports } => imports.first(),
             Error::ImportedApplicationRequired {
                 miss: Some(miss), ..
             } => Some(miss),
@@ -330,6 +333,7 @@ impl LoweringFailure {
                     | Error::NoItem { .. }
                     | Error::NotInModule { .. }
                     | Error::UnknownImport { .. }
+                    | Error::UnknownImports { .. }
             )
         )
     }
@@ -1759,6 +1763,8 @@ fn resolve_imports(
                 }
             }
         }
+        // The members that name nothing, which rustc reports in one error.
+        let mut unresolved: Option<Error> = None;
         for (name, path) in parsed.bindings() {
             if let Some(target) = variant_import(&path) {
                 bindings.push(item::Binding {
@@ -1770,12 +1776,26 @@ fn resolve_imports(
             }
             let qualified = through_module(path.join("::").into());
             let module_only = parsed.binds_module_only(&name);
-            let mut binding = resolve_import_binding(name, qualified, host)
-                .map_err(|error| whole_import(error, &parsed.tree))?;
+            let mut binding = match resolve_import_binding(name, qualified, host) {
+                Ok(binding) => binding,
+                Err(error) => match whole_import(error, &parsed.tree) {
+                    error @ Error::UnknownImport { .. } => {
+                        unresolved = Some(match unresolved.take() {
+                            Some(first) => first.with_unknown_import(error),
+                            None => error,
+                        });
+                        continue;
+                    }
+                    error => return Err(error),
+                },
+            };
             if module_only && matches!(binding.target, item::Import::ModuleItem { .. }) {
                 binding.target = item::Import::Module;
             }
             bindings.push(binding);
+        }
+        if let Some(error) = unresolved {
+            return Err(error);
         }
         for (name, qualified) in globbed {
             let path = qualified
@@ -5464,12 +5484,10 @@ fn type_arguments(segment: &crate::item::type_ref::Segment) -> Vec<crate::item::
 
 /// rustc's E0405 for a trait name nothing in scope declares.
 fn unknown_trait(name: &crate::item::Name) -> Error {
-    Error::StdPath {
-        code: "E0405",
-        message: format!("cannot find trait `{}` in this scope", name.text).into(),
-        label: Some("not found in this scope".into()),
-        note: None,
+    Error::UnknownTrait {
+        name: name.text.clone(),
         reference: name.span,
+        imports: Box::default(),
     }
 }
 

@@ -81,7 +81,9 @@ impl<'a> Parser<'a> {
             .models
             .functions
             .iter()
-            .filter(|((_, named), _)| wanted != Wanted::Type && named == name)
+            .filter(|((_, named), _)| {
+                matches!(wanted, Wanted::Value | Wanted::Call) && named == name
+            })
             .filter_map(|((source, _), function)| {
                 Some(Candidate {
                     path: path(source, &function.definition.header)?.into(),

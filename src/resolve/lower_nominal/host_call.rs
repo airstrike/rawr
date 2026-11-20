@@ -1626,7 +1626,8 @@ impl<'a> Parser<'a> {
             Error::UnknownMember { .. }
             | Error::NotInModule { .. }
             | Error::UnknownType { .. }
-            | Error::UnknownImport { .. } => true,
+            | Error::UnknownImport { .. }
+            | Error::UnknownImports { .. } => true,
             Error::ImportedApplicationRequired { miss, .. } => miss.is_some(),
             _ => false,
         };
