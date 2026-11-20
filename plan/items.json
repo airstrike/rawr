@@ -2345,8 +2345,9 @@
     {"t":"T2343","issue":2343,"title":"T2343: `mk!();` among a file's items fails to parse","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"884c385be","release":"0.4.63"},
     {"t":"T2344","issue":2344,"title":"T2344: A single file with an inline mod prints \"Rawr package snapshot contains a duplicate path\"","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"884c385be","release":"0.4.63"},
     {"t":"T2345","issue":2345,"title":"T2345: `.into()` from a `&str` local into `Box<dyn Error>` is E0308","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"884c385be","release":"0.4.63"},
-    {"t":"T2346","issue":2346,"title":"T2346: A bare `Mutex` or `Sender` type compiles without a `use`","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T2346","issue":2346,"title":"T2346: A bare `Mutex` or `Sender` type compiles without a `use`","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"7c6f66ec2","release":"0.4.64"},
     {"t":"T2347","issue":2347,"title":"T2347: Diagnostics left after #2337: struct-variant witnesses, every unresolved member, similar names, lifetimes","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T2348","issue":2348,"title":"T2348: A format width pads a Display impl's whole output; rustc ignores it for write! and pads per `pad` call","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T2348","issue":2348,"title":"T2348: A format width pads a Display impl's whole output; rustc ignores it for write! and pads per `pad` call","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"7c6f66ec2","release":"0.4.64"},
+    {"t":"T2349","issue":2349,"title":"T2349: `f.align()` needs `fmt::Alignment`, and unbound `Reverse(1)` or `PhantomData` lack rustc's import help","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }

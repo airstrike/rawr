@@ -6,6 +6,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.64 (2026-11-20)
+
+- A std type's name resolves only as rustc resolves it: through a `use` of the type or its module (`mpsc::Sender` after `use std::sync::mpsc;`, `collections::HashMap` after `use std::collections;`), its std path, or the prelude. A bare `Mutex`, `HashMap`, `Rc`, `Ordering` or `Duration`, or a path through a module nothing binds, is rustc's E0425 or E0433 with its import suggestions. (#2346)
+- A `Display` impl formats under the spec its caller gives: `write!` and `write_str` ignore the width, `f.pad` applies it, and `f.width()`, `f.fill()`, `f.precision()`, `f.alternate()` and the sign flags read it. (#2348)
+
 ## 0.4.63 (2026-11-20)
 
 - A parenthesized macro call among a file's items (`mk!();`) expands, as rustc expands it. (#2343)
