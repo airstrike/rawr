@@ -1,6 +1,7 @@
 //! Stable read-only data views for editor and serialization consumers.
 
-use super::{Category, ExternalLabel, Label, LabelKind, Report, Severity, Source};
+use super::suggestion::{Edit, Style};
+use super::{Category, ExternalLabel, Label, LabelKind, Report, Severity, Source, Suggestion};
 
 /// Serializable read-only projection of a report.
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
@@ -15,6 +16,25 @@ pub struct ReportView<'a> {
     external_labels: Vec<ExternalLabelView<'a>>,
     help: Option<&'a str>,
     notes: Vec<&'a str>,
+    suggestions: Vec<SuggestionView<'a>>,
+}
+
+/// Serializable read-only projection of one suggestion.
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SuggestionView<'a> {
+    message: &'a str,
+    style: Style,
+    edits: Vec<EditView<'a>>,
+}
+
+/// Serializable read-only projection of one suggested edit.
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EditView<'a> {
+    source: SourceView<'a>,
+    span: SpanView,
+    replacement: &'a str,
 }
 
 /// Serializable read-only projection of one label.
@@ -83,6 +103,30 @@ impl Report {
                 .collect(),
             help: self.help(),
             notes: self.notes().collect(),
+            suggestions: self.suggestions().iter().map(Suggestion::view).collect(),
+        }
+    }
+}
+
+impl Suggestion {
+    fn view(&self) -> SuggestionView<'_> {
+        SuggestionView {
+            message: self.message(),
+            style: self.style(),
+            edits: self.edits().iter().map(Edit::view).collect(),
+        }
+    }
+}
+
+impl Edit {
+    fn view(&self) -> EditView<'_> {
+        EditView {
+            source: self.source().view(),
+            span: SpanView {
+                start: PositionView::new(self.span().start()),
+                end: PositionView::new(self.span().end()),
+            },
+            replacement: self.replacement(),
         }
     }
 }
@@ -189,6 +233,52 @@ impl<'a> ReportView<'a> {
     #[must_use]
     pub fn notes(&self) -> &[&'a str] {
         &self.notes
+    }
+
+    /// Return suggested code.
+    #[must_use]
+    pub fn suggestions(&self) -> &[SuggestionView<'a>] {
+        &self.suggestions
+    }
+}
+
+impl<'a> SuggestionView<'a> {
+    /// Return what the suggestion says.
+    #[must_use]
+    pub const fn message(&self) -> &'a str {
+        self.message
+    }
+
+    /// Return how it is shown.
+    #[must_use]
+    pub const fn style(&self) -> Style {
+        self.style
+    }
+
+    /// Return its edits.
+    #[must_use]
+    pub fn edits(&self) -> &[EditView<'a>] {
+        &self.edits
+    }
+}
+
+impl<'a> EditView<'a> {
+    /// Return the source the edit changes.
+    #[must_use]
+    pub const fn source(self) -> SourceView<'a> {
+        self.source
+    }
+
+    /// Return the span it replaces.
+    #[must_use]
+    pub const fn span(self) -> SpanView {
+        self.span
+    }
+
+    /// Return the text it puts there.
+    #[must_use]
+    pub const fn replacement(self) -> &'a str {
+        self.replacement
     }
 }
 

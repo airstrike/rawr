@@ -3,7 +3,7 @@
 use crate::{ImmutableString, Span};
 use std::fmt;
 
-use super::{code::Code, Source};
+use super::{code::Code, Source, Suggestion};
 
 /// Stable high-level diagnostic family.
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
@@ -113,6 +113,7 @@ pub struct Report {
     external_labels: Vec<ExternalLabel>,
     help: Option<ImmutableString>,
     notes: Vec<ImmutableString>,
+    suggestions: Vec<Suggestion>,
 }
 
 /// A report under validated construction.
@@ -220,9 +221,16 @@ impl Report {
         self.notes.iter().map(AsRef::as_ref)
     }
 
-    /// The report with each label `moved` gives a new place moved there: a
-    /// text compiled from pieces of others reports where each piece is
-    /// shown (`crate::splice`). A source no label is left in is dropped.
+    /// Return the code the report suggests, in the order it was suggested.
+    #[must_use]
+    pub fn suggestions(&self) -> &[Suggestion] {
+        &self.suggestions
+    }
+
+    /// The report with each label and edit `moved` gives a new place moved
+    /// there: a text compiled from pieces of others reports where each
+    /// piece is shown (`crate::splice`). A source no label or edit is left
+    /// in is dropped.
     pub(crate) fn relabeled(
         &self,
         mut moved: impl FnMut(&Source, Span) -> Option<(Source, Span)>,
@@ -236,10 +244,27 @@ impl Report {
                 label.span = span;
             }
         }
+        for edit in report
+            .suggestions
+            .iter_mut()
+            .flat_map(Suggestion::edits_mut)
+        {
+            if let Some((source, span)) = moved(edit.source(), edit.span()) {
+                left.push(edit.source().clone());
+                edit.moved(source, span);
+            }
+        }
         report.sources.retain(|source| !left.contains(source));
-        for label in &report.labels {
-            if !report.sources.contains(&label.source) {
-                report.sources.push(label.source.clone());
+        let placed = report.labels.iter().map(|label| &label.source).chain(
+            report
+                .suggestions
+                .iter()
+                .flat_map(Suggestion::edits)
+                .map(super::suggestion::Edit::source),
+        );
+        for source in placed {
+            if !report.sources.contains(source) {
+                report.sources.push(source.clone());
             }
         }
         report
@@ -268,6 +293,7 @@ impl Builder {
                 external_labels: Vec::new(),
                 help: None,
                 notes: Vec::new(),
+                suggestions: Vec::new(),
             },
             has_primary: false,
         }
@@ -424,6 +450,24 @@ impl Builder {
     #[must_use]
     pub fn note(mut self, note: impl Into<ImmutableString>) -> Self {
         self.report.notes.push(written(note.into()));
+        self
+    }
+
+    /// Suggest code, as rustc does under a `help:`. A suggestion that edits
+    /// code a macro wrote is dropped, as rustc suggests nothing there.
+    #[must_use]
+    pub fn suggestion(mut self, suggestion: Suggestion) -> Self {
+        if suggestion
+            .edits()
+            .iter()
+            .any(super::suggestion::Edit::expanded)
+        {
+            return self;
+        }
+        for edit in suggestion.edits() {
+            self = self.source(edit.source().clone());
+        }
+        self.report.suggestions.push(suggestion.written(written));
         self
     }
 

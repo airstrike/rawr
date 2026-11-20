@@ -2,7 +2,8 @@
 
 use crate::{program, resolve, EvalAltResult, ParseError, ParseErrorType, Span};
 
-use super::{code, Builder, Error, Report, Source};
+use super::suggestion::{Edit, Style};
+use super::{code, Builder, Error, Report, Source, Suggestion};
 
 impl Report {
     /// Transform one positioned compiler error into the canonical report model.
@@ -452,6 +453,27 @@ fn called(source: &Source, at: Span, name: &str) -> bool {
         .is_some_and(|next| next == '(')
 }
 
+/// `span`, a name's use, through the name `name`: a span that is the
+/// point where the name starts covers it whole.
+fn named(span: Span, name: &str) -> Span {
+    let start = span.start();
+    match (
+        start.line(),
+        start.position(),
+        u16::try_from(name.chars().count()),
+    ) {
+        (Some(line), Some(column), Ok(length)) if span.end() == start && length > 0 => {
+            let line = u16::try_from(line).unwrap_or(u16::MAX);
+            let column = u16::try_from(column).unwrap_or(u16::MAX);
+            Span::new(
+                start,
+                crate::Position::new(line, column.saturating_add(length)),
+            )
+        }
+        _ => span,
+    }
+}
+
 /// An unknown member's span, which covers its name as rustc underlines it.
 fn member_span(error: &resolve::Error) -> Span {
     let primary = error.primary_span();
@@ -461,22 +483,7 @@ fn member_span(error: &resolve::Error) -> Span {
     else {
         return primary;
     };
-    let start = primary.start();
-    match (
-        start.line(),
-        start.position(),
-        u16::try_from(crate::tokenizer::raw_names(member).chars().count()),
-    ) {
-        (Some(line), Some(column), Ok(length)) if primary.end() == start && length > 0 => {
-            let line = u16::try_from(line).unwrap_or(u16::MAX);
-            let column = u16::try_from(column).unwrap_or(u16::MAX);
-            Span::new(
-                start,
-                crate::Position::new(line, column.saturating_add(length)),
-            )
-        }
-        _ => primary,
-    }
+    named(primary, &crate::tokenizer::raw_names(member))
 }
 
 /// A type as rustc names one the script imported: each path's last
@@ -622,6 +629,9 @@ fn resolution_report_with_sources(
             secondary_message,
         )?;
     }
+    if let Some(suggestion) = suggestion(error, &source)? {
+        builder = builder.suggestion(suggestion);
+    }
     // The labels of rustc's note on the parameter that takes the value.
     if let resolve::Error::MovedValue {
         cause: Some(cause), ..
@@ -641,6 +651,98 @@ fn resolution_report_with_sources(
             )?;
     }
     Ok(builder.finish())
+}
+
+/// The code rustc suggests for `error`, in `source`.
+fn suggestion(error: &resolve::Error, source: &Source) -> Result<Option<Suggestion>, Error> {
+    let suggestion = |message: &str, style, span: Span, replacement: &str| {
+        Edit::new(source.clone(), span, replacement)
+            .map(|edit| Some(Suggestion::new(message, style, edit)))
+    };
+    // An insertion where `span` starts, and one where it ends.
+    let before = |span: Span| Span::new(span.start(), span.start());
+    let after = |span: Span| Span::new(span.end(), span.end());
+    match error {
+        resolve::Error::ImmutableBinding { declared, .. } if !declared.is_none() => suggestion(
+            "consider making this binding mutable",
+            Style::Verbose,
+            before(*declared),
+            "mut ",
+        ),
+        resolve::Error::MemberKind { field: false, .. } => suggestion(
+            "use parentheses to call the method",
+            Style::Verbose,
+            after(member_span(error)),
+            "()",
+        ),
+        resolve::Error::WrongKind {
+            expected: "function",
+            found: "macro",
+            name,
+            reference,
+            ..
+        } => suggestion(
+            "use `!` to invoke the macro",
+            Style::Verbose,
+            after(named(*reference, name)),
+            "!",
+        ),
+        resolve::Error::Unboxed {
+            help: Some(resolve::Boxing::New),
+            expression,
+            ..
+        } => Ok(Some(
+            Suggestion::new(
+                "store this in the heap by calling `Box::new`",
+                Style::Verbose,
+                Edit::new(source.clone(), before(*expression), "Box::new(")?,
+            )
+            .edit(Edit::new(source.clone(), after(*expression), ")")?),
+        )),
+        resolve::Error::Unboxed {
+            help: Some(resolve::Boxing::Into(from)),
+            expression,
+            ..
+        } => suggestion(
+            &format!(
+                "call `Into::into` on this expression to convert `{from}` into `Box<dyn \
+                 std::error::Error>`"
+            ),
+            Style::Verbose,
+            after(*expression),
+            ".into()",
+        ),
+        resolve::Error::MovedValue {
+            moved,
+            cause: Some(cause),
+            ..
+        } if cause.cloning == resolve::Cloning::Clone => suggestion(
+            "consider cloning the value if the performance cost is acceptable",
+            Style::Verbose,
+            after(*moved),
+            ".clone()",
+        ),
+        resolve::Error::SlicePattern {
+            sliceable: true,
+            subject: Some(subject),
+            ..
+        } => suggestion(
+            "consider slicing here",
+            Style::Verbose,
+            after(*subject),
+            "[..]",
+        ),
+        resolve::Error::PatternMismatch { types, pattern, .. } => match &types.binding {
+            Some(binding) => suggestion(
+                "to declare a mutable variable use",
+                Style::Inline,
+                *pattern,
+                &format!("mut {binding}"),
+            ),
+            None => Ok(None),
+        },
+        _ => Ok(None),
+    }
 }
 
 /// The label under the primary span, where rustc writes one.
@@ -821,8 +923,7 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
                     "attempted to take value of method `{member}` on type `{}`",
                     short(owner)
                 ),
-            )
-            .help("use parentheses to call the method");
+            );
         }
         _ => {}
     }
@@ -988,26 +1089,13 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
             Some(note) => builder.note(note),
             None => builder,
         },
-        resolve::Error::SlicePattern {
-            sliceable: true, ..
-        } => builder.help("consider slicing here"),
         resolve::Error::UnknownFunction {
             import: Some(path), ..
         } => builder.help(format!("consider importing this function: `use {path};`")),
-        // rustc's help that names the import, after its note.
         resolve::Error::Unboxed {
             help: Some(resolve::Boxing::New),
             ..
-        } => builder
-            .note(resolve::Boxing::HEAP_NOTE)
-            .help("store this in the heap by calling `Box::new`"),
-        resolve::Error::Unboxed {
-            help: Some(resolve::Boxing::Into(from)),
-            ..
-        } => builder.help(format!(
-            "call `Into::into` on this expression to convert `{from}` into `Box<dyn \
-             std::error::Error>`"
-        )),
+        } => builder.note(resolve::Boxing::HEAP_NOTE),
         resolve::Error::UnscopedWrite { .. } => builder
             .note("must implement `io::Write`, `fmt::Write`, or have a `write_fmt` method")
             .help(
@@ -1027,19 +1115,11 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Error::SelfOutsideImpl {
             parameter: true, ..
         } => builder.note("associated functions are those in `impl` or `trait` definitions"),
-        resolve::Error::WrongKind { found: "macro", .. } => {
-            builder.help("use `!` to invoke the macro")
-        }
         resolve::Error::Unimplemented {
             help: Some(help), ..
         } => builder.help(help.clone()),
-        resolve::Error::ImmutableBinding { binding, .. } => builder.help(format!(
-            "consider making this binding mutable: `mut {binding}`"
-        )),
         resolve::Error::MovedValue {
-            name,
-            cause: Some(cause),
-            ..
+            cause: Some(cause), ..
         } => {
             let builder = match &cause.moved {
                 resolve::MovedPlace::Part(part) => builder.note(format!(
@@ -1058,14 +1138,10 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
                 None => builder,
             };
             match &cause.cloning {
-                resolve::Cloning::Clone => builder.help(format!(
-                    "consider cloning the value if the performance cost is acceptable: \
-                     `{name}.clone()`"
-                )),
                 resolve::Cloning::Derivable(ty) => builder.note(format!(
                     "if `{ty}` implemented `Clone`, you could clone the value"
                 )),
-                resolve::Cloning::None => builder,
+                resolve::Cloning::Clone | resolve::Cloning::None => builder,
             }
         }
         resolve::Error::MissingCapability {

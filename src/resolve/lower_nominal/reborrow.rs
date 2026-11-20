@@ -252,6 +252,7 @@ impl Parser<'_> {
                 binding: selector,
                 mutation: target,
                 declaration,
+                declared: declaration,
             });
         }
         let borrowing =

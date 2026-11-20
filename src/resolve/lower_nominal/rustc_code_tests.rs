@@ -423,7 +423,10 @@ fn a_let_without_a_value_assigned_on_a_path_that_may_have_assigned_it_is_e0384()
             "5 |     x = 2;\n",
             "  |     ^^^^^ cannot assign twice to immutable variable\n",
             "  |\n",
-            "  = help: consider making this binding mutable: `mut x`\n",
+            "help: consider making this binding mutable\n",
+            "  |\n",
+            "3 |     let mut x;\n",
+            "  |         +++\n",
         )
     );
     // In a loop, whose next iteration assigns it again: no other
@@ -440,7 +443,10 @@ fn a_let_without_a_value_assigned_on_a_path_that_may_have_assigned_it_is_e0384()
             "5 |         x = 1;\n",
             "  |         ^^^^^ cannot assign twice to immutable variable\n",
             "  |\n",
-            "  = help: consider making this binding mutable: `mut x`\n",
+            "help: consider making this binding mutable\n",
+            "  |\n",
+            "2 |     let mut x: i32;\n",
+            "  |         +++\n",
         )
     );
     // A match arm's assignment after one before the match.
@@ -1297,15 +1303,21 @@ fn a_value_where_a_box_dyn_error_is_expected_is_e0308() {
                  fmt::Display for Oops {\n    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result \
                  {\n        write!(f, \"oops\")\n    }\n}\nimpl Error for Oops {}\nfn take(_: \
                  Box<dyn Error>) {}\n";
-    let boxed = "   = help: store this in the heap by calling `Box::new`\n   = note: for more on \
-                 the distinction between the stack and the heap, read \
-                 https://doc.rust-lang.org/book/ch15-01-box.html, \
-                 https://doc.rust-lang.org/rust-by-example/std/box.html, and \
-                 https://doc.rust-lang.org/std/boxed/index.html\n";
-    let into = |ty: &str| {
+    let note = "   = note: for more on the distinction between the stack and the heap, read \
+                https://doc.rust-lang.org/book/ch15-01-box.html, \
+                https://doc.rust-lang.org/rust-by-example/std/box.html, and \
+                https://doc.rust-lang.org/std/boxed/index.html\n";
+    // rustc's section of the suggestion: the line it makes and its markers.
+    let boxed = |line: &str, marker: &str| {
         format!(
-            "   = help: call `Into::into` on this expression to convert `{ty}` into `Box<dyn \
-             std::error::Error>`\n"
+            "{note}help: store this in the heap by calling `Box::new`\n   |\n13 |     {line}\n   |     \
+             {marker}\n"
+        )
+    };
+    let into = |ty: &str, line: &str, marker: &str| {
+        format!(
+            "help: call `Into::into` on this expression to convert `{ty}` into `Box<dyn \
+             std::error::Error>`\n   |\n13 |     {line}\n   |     {marker}\n"
         )
     };
     for (body, at, found, help) in [
@@ -1313,37 +1325,48 @@ fn a_value_where_a_box_dyn_error_is_expected_is_e0308() {
             "fn fail() -> Box<dyn Error> {\n    Oops\n}\n",
             "13:5",
             "`Oops`",
-            boxed.to_string(),
+            boxed("Box::new(Oops)", "+++++++++    +"),
         ),
         (
             "fn main() {\n    let e: Box<dyn Error> = Oops;\n}\n",
             "13:29",
             "`Oops`",
-            boxed.to_string(),
+            boxed(
+                "let e: Box<dyn Error> = Box::new(Oops);",
+                "                        +++++++++    +",
+            ),
         ),
         (
             "fn main() {\n    take(Oops);\n}\n",
             "13:10",
             "`Oops`",
-            boxed.to_string(),
+            boxed("take(Box::new(Oops));", "     +++++++++    +"),
         ),
         (
             "fn fail() -> Result<(), Box<dyn Error>> {\n    Err(Oops)\n}\n",
             "13:9",
             "`Oops`",
-            boxed.to_string(),
+            boxed("Err(Box::new(Oops))", "    +++++++++    +"),
         ),
         (
             "fn main() {\n    let e: Box<dyn Error> = \"x\";\n}\n",
             "13:29",
             "`&str`",
-            into("&'static str"),
+            into(
+                "&'static str",
+                "let e: Box<dyn Error> = \"x\".into();",
+                "                           +++++++",
+            ),
         ),
         (
             "fn main() {\n    let e: Box<dyn Error> = String::new();\n}\n",
             "13:29",
             "`String`",
-            into("String"),
+            into(
+                "String",
+                "let e: Box<dyn Error> = String::new().into();",
+                "                                     +++++++",
+            ),
         ),
         (
             "fn main() {\n    let e: Box<dyn Error> = 5;\n}\n",
@@ -1360,17 +1383,16 @@ fn a_value_where_a_box_dyn_error_is_expected_is_e0308() {
             )),
             "{report}"
         );
-        // rustc's gutter closes the snippet before its help and notes.
+        // rustc's gutter closes the snippet before its notes and help.
         let help = if help.is_empty() {
             help
         } else {
             format!("   |\n{help}")
         };
         assert!(
-            report.contains(&format!("expected `Box<dyn Error>`, found {found}\n{help}")),
+            report.ends_with(&format!("expected `Box<dyn Error>`, found {found}\n{help}")),
             "{report}"
         );
-        assert!(report.ends_with(&format!("{found}\n{help}")), "{report}");
     }
     // A box of an error unsizes, and `?` and `.into()` convert.
     let lines = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
@@ -1597,10 +1619,12 @@ fn a_move_into_an_owning_parameter_is_e0382_with_rustcs_note_and_clone_help() {
             "8 |     assert_eq!(vec0, [22, 44, 66]);\n",
             "  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ value borrowed here after move\n",
             "  |\n",
-            "  = help: consider cloning the value if the performance cost is acceptable: \
-             `vec0.clone()`\n",
             "  = note: consider changing this parameter type in function `fill_vec` to borrow \
              instead if owning the value isn't necessary\n",
+            "help: consider cloning the value if the performance cost is acceptable\n",
+            "  |\n",
+            "7 |     let vec1 = fill_vec(vec0.clone());\n",
+            "  |                             ++++++++\n",
         )
     );
     // A method's parameter, and a `&` of the moved local.
@@ -1628,8 +1652,8 @@ fn a_move_into_an_owning_parameter_is_e0382_with_rustcs_note_and_clone_help() {
     assert!(!generic.contains("this parameter"), "{generic}");
     assert!(
         generic.ends_with(
-            "  = help: consider cloning the value if the performance cost is acceptable: \
-             `s.clone()`\n"
+            "help: consider cloning the value if the performance cost is acceptable\n  |\n6 |     \
+             take(s.clone());\n  |           ++++++++\n"
         ),
         "{generic}"
     );
@@ -2483,6 +2507,7 @@ fn a_pattern_of_another_type_is_labelled_beside_what_typed_its_value_e0308() {
             "               ^^^^^^   -- this expression has type `&{integer}`",
             "               |",
             "               types differ in mutability",
+            "               help: to declare a mutable variable use: `mut b`",
             "",
             "  = note:      expected reference `&{integer}`",
             "          found mutable reference `&mut _`",
@@ -2608,4 +2633,129 @@ fn a_slice_pattern_on_no_array_or_slice_is_e0529() {
         "{rendered}"
     );
     assert!(rendered.contains("consider slicing here"), "{rendered}");
+}
+
+/// rustc suggests slicing a `Vec` a slice pattern matches whole, as the
+/// source the `[..]` makes under its own `help:`.
+#[test]
+fn a_slice_pattern_on_a_vec_suggests_slicing_it() {
+    assert_eq!(
+        rendered(
+            "fn main() {\n    let v = vec![1, 2, 3];\n    match v {\n        [a, b, c] => \
+             println!(\"{a}{b}{c}\"),\n        _ => {}\n    }\n}\n"
+        ),
+        concat!(
+            "error[E0529]: expected an array or slice, found `Vec<{integer}>`\n",
+            " --> main.rs:4:9\n",
+            "  |\n",
+            "4 |         [a, b, c] => println!(\"{a}{b}{c}\"),\n",
+            "  |         ^^^^^^^^^ pattern cannot match with input type `Vec<{integer}>`\n",
+            "  |\n",
+            "help: consider slicing here\n",
+            "  |\n",
+            "3 |     match v[..] {\n",
+            "  |            ++++\n",
+        )
+    );
+    assert_eq!(
+        rendered("fn main() {\n    let v = vec![1, 2, 3];\n    let [a, ..] = v;\n    println!(\"{a}\");\n}\n"),
+        concat!(
+            "error[E0529]: expected an array or slice, found `Vec<{integer}>`\n",
+            " --> main.rs:3:9\n",
+            "  |\n",
+            "3 |     let [a, ..] = v;\n",
+            "  |         ^^^^^^^ pattern cannot match with input type `Vec<{integer}>`\n",
+            "  |\n",
+            "help: consider slicing here\n",
+            "  |\n",
+            "3 |     let [a, ..] = v[..];\n",
+            "  |                    ++++\n",
+        )
+    );
+    // A slice pattern inside another matches no `Vec` the statement
+    // names: rustc suggests nothing.
+    let nested = rendered(
+        "fn main() {\n    let v = vec![1];\n    match (v,) {\n        ([a],) => {}\n        _ => {}\n    \
+         }\n}\n",
+    );
+    assert!(!nested.contains("help"), "{nested}");
+}
+
+/// A `let`'s `&mut` pattern of one binding on a `&` value: rustc's inline
+/// help declares the binding `mut` instead.
+#[test]
+fn a_lets_mut_reference_pattern_on_a_shared_reference_suggests_a_mut_binding() {
+    assert_eq!(
+        rendered("fn main() {\n    let x = 5;\n    let &mut b = &x;\n    println!(\"{b}\");\n}\n"),
+        concat!(
+            "error[E0308]: mismatched types\n",
+            " --> main.rs:3:9\n",
+            "  |\n",
+            "3 |     let &mut b = &x;\n",
+            "  |         ^^^^^^   -- this expression has type `&{integer}`\n",
+            "  |         |\n",
+            "  |         types differ in mutability\n",
+            "  |         help: to declare a mutable variable use: `mut b`\n",
+            "  |\n",
+            "  = note:      expected reference `&{integer}`\n",
+            "          found mutable reference `&mut _`\n",
+        )
+    );
+    // A match arm's pattern: rustc's help is another.
+    let arm = rendered("fn main() {\n    let x = 5;\n    match &x { &mut b => {} }\n}\n");
+    assert!(!arm.contains("mut b`"), "{arm}");
+}
+
+/// A macro called as a function: rustc suggests the `!` after its path,
+/// and nothing for one named as a value.
+#[test]
+fn a_macro_called_as_a_function_suggests_its_bang() {
+    assert_eq!(
+        rendered("fn main() {\n    std::print(\"hi\");\n}\n"),
+        concat!(
+            "error[E0423]: expected function, found macro `std::print`\n",
+            " --> main.rs:2:5\n",
+            "  |\n",
+            "2 |     std::print(\"hi\");\n",
+            "  |     ^^^^^^^^^^ not a function\n",
+            "  |\n",
+            "help: use `!` to invoke the macro\n",
+            "  |\n",
+            "2 |     std::print!(\"hi\");\n",
+            "  |               +\n",
+        )
+    );
+    let value = rendered("fn main() {\n    let f = eprintln;\n}\n");
+    assert!(!value.contains("help"), "{value}");
+}
+
+/// An assignment to a binding not declared `mut`: rustc suggests the
+/// `mut` before its name, where the binding is declared.
+#[test]
+fn an_assignment_to_an_immutable_binding_suggests_declaring_it_mut() {
+    for (body, suggested, marker) in [
+        ("let x = 5;\n    x = 6;", "let mut x = 5;", "    +++"),
+        (
+            "for x in 0..3 {\n        x = 1;\n    }",
+            "for mut x in 0..3 {",
+            "    +++",
+        ),
+    ] {
+        let rendered = rendered(&format!("fn main() {{\n    {body}\n}}\n"));
+        assert!(
+            rendered.ends_with(&format!(
+                "help: consider making this binding mutable\n  |\n2 |     {suggested}\n  |     \
+                 {marker}\n"
+            )),
+            "{rendered}"
+        );
+    }
+    // A parameter's.
+    let parameter = rendered("fn f(p: i32) {\n    p = 2;\n}\nfn main() {\n    f(1);\n}\n");
+    assert!(
+        parameter.ends_with(
+            "help: consider making this binding mutable\n  |\n1 | fn f(mut p: i32) {\n  |      +++\n"
+        ),
+        "{parameter}"
+    );
 }

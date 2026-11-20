@@ -1418,6 +1418,9 @@ fn augment_external(
     for reason in reasons {
         builder = builder.note(reason);
     }
+    for suggestion in report.suggestions() {
+        builder = builder.suggestion(suggestion.clone());
+    }
     builder.reserve_external_labels(spans.len())?;
     for (span, _, label) in spans {
         builder = builder.secondary_external(external_position(span)?, Some(label.into()));

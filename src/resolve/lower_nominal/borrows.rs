@@ -1777,6 +1777,7 @@ impl Parser<'_> {
                 declaration: twice
                     .first
                     .map_or(Span::NONE, |first| self.expression_span(first)),
+                declared: twice.declared,
             });
         }
         if let Some(moved) = moved

@@ -769,6 +769,9 @@ pub enum Error {
         mutation: Span,
         /// Secondary binding declaration span.
         declaration: Span,
+        /// The binding's name where it is declared, where rustc suggests
+        /// `mut`.
+        declared: Span,
     },
     /// An impl owner is not a visible nominal script type.
     InvalidImplOwner {
@@ -972,6 +975,9 @@ pub enum Error {
         sliceable: bool,
         /// The pattern.
         pattern: Span,
+        /// The matched expression, when the pattern is its statement's or
+        /// arm's whole pattern: where rustc's slicing `[..]` goes.
+        subject: Option<Span>,
     },
     /// A second `..` in one tuple or slice pattern, which rustc refuses
     /// without a code.
@@ -1910,6 +1916,9 @@ pub struct PatternTypes {
     /// The tuple's arity and the tuple pattern's, which rustc's label
     /// names instead of the types.
     pub arity: Option<(usize, usize)>,
+    /// The binding a `let`'s whole pattern, a `&mut` of it, names on a
+    /// `&` value: rustc suggests declaring it `mut` instead.
+    pub binding: Option<ImmutableString>,
 }
 
 impl PatternTypes {
@@ -1998,15 +2007,34 @@ impl PatternOrigin {
 impl Error {
     /// This error, with `origin` as what gave the matched value its type
     /// when it is a pattern's mismatch that names none yet: the innermost
-    /// statement or arm a pattern heads names it.
+    /// statement or arm a pattern heads names it. A slice pattern on a
+    /// `Vec` takes the matched expression as where rustc's slicing goes.
     #[must_use]
     pub(crate) fn matched(mut self, origin: impl FnOnce() -> PatternOrigin) -> Self {
-        if let Self::PatternMismatch {
-            origin: unnamed @ None,
-            ..
-        } = &mut self
-        {
-            *unnamed = Some(origin());
+        match &mut self {
+            Self::PatternMismatch {
+                origin: unnamed @ None,
+                ..
+            } => *unnamed = Some(origin()),
+            // A slice pattern is its statement's whole pattern when the
+            // matched expression is of the pattern's type, or a reference
+            // to it.
+            Self::SlicePattern {
+                ty,
+                sliceable: true,
+                subject: subject @ None,
+                ..
+            } => {
+                if let PatternOrigin::Expression { span, ty: matched } = origin()
+                    && matched
+                        .trim_start_matches(['&', ' '])
+                        .trim_start_matches("mut ")
+                        == ty.as_str()
+                {
+                    *subject = Some(span);
+                }
+            }
+            _ => {}
         }
         self
     }
@@ -2452,6 +2480,7 @@ impl fmt::Display for Written<'_> {
                 binding,
                 mutation,
                 declaration,
+                ..
             } => write!(
                 formatter,
                 "{} at {mutation}; first assigned at {declaration} (E0384)",

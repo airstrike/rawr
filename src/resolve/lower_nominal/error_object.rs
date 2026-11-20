@@ -205,7 +205,7 @@ impl Parser<'_> {
             expected: expected.name(&self.models),
             actual: from.name(&self.models),
             help,
-            expression: value,
+            expression: self.expression_span(value),
         })
     }
 

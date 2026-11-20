@@ -11,6 +11,8 @@ use crate::Span;
 pub(crate) struct AssignedTwice {
     /// The local, as the source names it.
     pub(crate) name: String,
+    /// Where the local is declared.
+    pub(crate) declared: Span,
     /// The second assignment.
     pub(crate) assignment: Span,
     /// The assignment that may have given it its value before, unless it
@@ -71,8 +73,10 @@ pub(crate) fn check(body: &Body) -> Option<AssignedTwice> {
             &locals,
             &mut state,
             &mut |local, assignment, earlier| {
+                let info = &body.locals[local.0 as usize];
                 let twice = AssignedTwice {
-                    name: body.locals[local.0 as usize].name.to_string(),
+                    name: info.name.to_string(),
+                    declared: info.declaration,
                     assignment,
                     first: Some(earlier).filter(|earlier| *earlier != assignment),
                 };

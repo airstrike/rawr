@@ -6,7 +6,8 @@ use std::fmt;
 
 use serde_json::{json, Value};
 
-use super::{code, Category, ExternalPosition, LabelKind, Report, Severity, Source};
+use super::suggestion::{Edit, Style};
+use super::{code, Category, ExternalPosition, LabelKind, Report, Severity, Source, Suggestion};
 use crate::{Position, Span};
 
 /// Why a text is no report [`Report::encode`] wrote.
@@ -69,6 +70,20 @@ impl Report {
                 "message": label.message(),
             })
         });
+        let suggestions = self.suggestions().iter().map(|suggestion| {
+            let edits = suggestion.edits().iter().map(|edit| {
+                json!({
+                    "source": sources.iter().position(|source| source == edit.source()),
+                    "span": [place(edit.span().start()), place(edit.span().end())],
+                    "replacement": edit.replacement(),
+                })
+            });
+            json!({
+                "message": suggestion.message(),
+                "inline": suggestion.style() == Style::Inline,
+                "edits": edits.collect::<Vec<_>>(),
+            })
+        });
         json!({
             "code": self.code().as_str(),
             "category": self.category().to_string(),
@@ -82,6 +97,7 @@ impl Report {
             "external": external.collect::<Vec<_>>(),
             "help": self.help(),
             "notes": self.notes().collect::<Vec<_>>(),
+            "suggestions": suggestions.collect::<Vec<_>>(),
         })
         .to_string()
     }
@@ -156,8 +172,48 @@ impl Report {
         for note in list("notes")? {
             builder = builder.note(string(note, "note")?);
         }
+        for suggestion in list("suggestions")? {
+            builder = builder.suggestion(self::suggestion(suggestion, &sources)?);
+        }
         Ok(builder.finish())
     }
+}
+
+/// The suggestion `value` holds, its edits in `sources`.
+fn suggestion(value: &Value, sources: &[Source]) -> Result<Suggestion, Error> {
+    let malformed = Error::Malformed("suggestion");
+    let message = string(value.get("message").ok_or(malformed.clone())?, "suggestion")?;
+    let style = match value.get("inline").and_then(Value::as_bool) {
+        Some(true) => Style::Inline,
+        Some(false) => Style::Verbose,
+        None => return Err(malformed),
+    };
+    let mut edits = value
+        .get("edits")
+        .and_then(Value::as_array)
+        .ok_or(malformed.clone())?
+        .iter()
+        .map(|edit| {
+            let source = edit
+                .get("source")
+                .and_then(Value::as_u64)
+                .and_then(|index| sources.get(usize::try_from(index).ok()?))
+                .ok_or(Error::Malformed("edit"))?;
+            let span = edit
+                .get("span")
+                .and_then(span)
+                .ok_or(Error::Malformed("span"))?;
+            let replacement = string(
+                edit.get("replacement").ok_or(Error::Malformed("edit"))?,
+                "edit",
+            )?;
+            Ok::<_, Error>(Edit::new(source.clone(), span, replacement)?)
+        });
+    let first = edits.next().ok_or(malformed)??;
+    edits.try_fold(
+        Suggestion::new(message, style, first),
+        |suggestion, edit| Ok(suggestion.edit(edit?)),
+    )
 }
 
 /// `position` as `[line, position]`, each zero for none.
@@ -223,7 +279,8 @@ fn span(value: &Value) -> Option<Span> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{code, ExternalPosition, Report, Source};
+    use super::super::suggestion::{Edit, Style};
+    use super::super::{code, ExternalPosition, Report, Source, Suggestion};
     use crate::{Position, Span};
 
     #[test]
@@ -242,7 +299,7 @@ mod tests {
             "cannot find value `unknown` in this scope",
         )
         .primary(
-            view,
+            view.clone(),
             Span::new(Position::new(2, 13), Position::new(2, 20)),
             Some("not found in this scope".into()),
         )
@@ -257,6 +314,26 @@ mod tests {
         .secondary_external(place, Some("defined here".into()))
         .help("a local variable with a similar name exists")
         .note("the note")
+        .suggestion(
+            Suggestion::new(
+                "consider slicing here",
+                Style::Verbose,
+                Edit::new(
+                    view.clone(),
+                    Span::new(Position::new(2, 20), Position::new(2, 20)),
+                    "[..]",
+                )
+                .expect("the edit is in its source"),
+            )
+            .edit(
+                Edit::new(
+                    view.clone(),
+                    Span::new(Position::new(2, 5), Position::new(2, 8)),
+                    "",
+                )
+                .expect("the edit is in its source"),
+            ),
+        )
         .finish();
         assert_eq!(Report::decode(&report.encode()), Ok(report));
     }

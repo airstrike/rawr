@@ -348,6 +348,7 @@ impl<'a> Parser<'a> {
                 binding: binding.clone(),
                 mutation: at,
                 declaration,
+                declared: declaration,
             },
             Lvalue::Field(field) => {
                 Error::assign_immutable(&format!("{binding}.{}", field.member), binding, at)

@@ -311,6 +311,7 @@ fn export_method_read_like_a_field_is_rustc_e0615() {
     let error = engine().compile("use shop::Order;\nfn f(order: Order) -> f64 {\n    order.total\n}\n").unwrap_err();
     let text = error.to_string();
     assert!(text.starts_with("error[E0615]: attempted to take value of method `total` on type `Order`\n --> <script>:3:11"), "{text}");
+    assert!(text.ends_with("help: use parentheses to call the method\n  |\n3 |     order.total()\n  |                ++"), "{text}");
 }
 
 #[test]
