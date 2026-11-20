@@ -675,6 +675,7 @@ impl<'a> Parser<'a> {
         }
         if otherwise.is_none() {
             let site = match site {
+                Site::Let if self.destructuring.contains(&start) => BindingSite::Assignment,
                 // The statement up to its `;`, where `end` is.
                 Site::Let => BindingSite::Local {
                     statement: self

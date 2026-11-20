@@ -1,5 +1,6 @@
 //! Lower validated nominal operations onto the retained evaluator.
 
+mod assignee;
 mod attributes;
 mod binding;
 mod block_static;
@@ -416,9 +417,13 @@ struct Parser<'a> {
     /// refuses of each.
     unmovable: BTreeMap<Span, Unplaced>,
     /// Expressions that are values and never places, by their span: a
-    /// literal, an operator's result, and either in parentheses. An
-    /// assignment to one is rustc's E0070 (`invalid_assignee`).
+    /// literal, an operator's result, a tuple or an array, and any of them
+    /// in parentheses. An assignment to one is rustc's E0070
+    /// (`invalid_assignee`).
     values: BTreeSet<Span>,
+    /// Where each `let` a destructuring assignment is rewritten into
+    /// starts: its pattern is the assignee, which rustc's E0005 names so.
+    destructuring: BTreeSet<Position>,
     /// Elements reached through `IndexMut` (a `Vec`'s, a `VecDeque`'s), by
     /// their span: an assignment to one borrows its container mutably,
     /// where an array's or a slice's element is a place of its own.
@@ -961,6 +966,7 @@ impl<'a> Parser<'a> {
             shared_field_reads: BTreeSet::new(),
             unmovable: BTreeMap::new(),
             values: BTreeSet::new(),
+            destructuring: BTreeSet::new(),
             index_mut_elements: BTreeSet::new(),
             owning_closures: BTreeSet::new(),
             once_closures: BTreeSet::new(),

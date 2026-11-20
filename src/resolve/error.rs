@@ -1656,6 +1656,8 @@ pub enum BindingSite {
     ForLoop,
     /// A function's parameter.
     Argument,
+    /// A destructuring assignment's assignee, `Some(x) = value`.
+    Assignment,
 }
 
 /// rustc's E0005 for a pattern at `site` that misses the values of
@@ -1677,6 +1679,12 @@ impl Refutable<'_> {
             BindingSite::Local { .. } => &[
                 "`let` bindings require an \"irrefutable pattern\", like a `struct` or an \
                  `enum` with only one variant",
+                "for more information, visit \
+                 https://doc.rust-lang.org/book/ch19-02-refutability.html",
+            ],
+            BindingSite::Assignment => &[
+                "destructuring assignments require an \"irrefutable pattern\", like a `struct` \
+                 or an `enum` with only one variant",
                 "for more information, visit \
                  https://doc.rust-lang.org/book/ch19-02-refutability.html",
             ],
@@ -1719,6 +1727,7 @@ impl fmt::Display for Refutable<'_> {
             BindingSite::Local { .. } => "local binding",
             BindingSite::ForLoop => "`for` loop binding",
             BindingSite::Argument => "function argument",
+            BindingSite::Assignment => "assignment",
         };
         write!(formatter, "refutable pattern in {origin}")
     }

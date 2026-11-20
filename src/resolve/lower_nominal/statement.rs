@@ -453,7 +453,7 @@ impl<'a> Parser<'a> {
         }
         self.coerce_expr(lvalue.ty(), &mut replacement)?;
         if let Some(declaration) = immutable {
-            let assignment = span(value.span.start(), replacement.span.end());
+            let assignment = assignee::assignment_span(value.span, &replacement);
             return Err(self.immutable_assignment(
                 &lvalue,
                 self.expression_span(declaration),
@@ -461,11 +461,11 @@ impl<'a> Parser<'a> {
             ));
         }
         if let Some(receiver) = receiver {
-            let assignment = span(value.span.start(), replacement.span.end());
+            let assignment = assignee::assignment_span(value.span, &replacement);
             return Err(self.receiver_assignment(&receiver, assignment));
         }
         if shared {
-            let assignment = span(value.span.start(), replacement.span.end());
+            let assignment = assignee::assignment_span(value.span, &replacement);
             return Err(self.shared_local_assignment(&binding_name, value.span, assignment));
         }
         self.consume_imported_value(&replacement, &binding_name, replacement.span)?;
@@ -496,7 +496,7 @@ impl<'a> Parser<'a> {
                 if let Some(binding) = self.bindings.get_mut(&binding_name) {
                     binding.available = true;
                     if let Some(first @ None) = self.deferred.get_mut(&binding.declaration) {
-                        *first = Some(span(value.span.start(), replacement.span.end()));
+                        *first = Some(assignee::assignment_span(value.span, &replacement));
                     }
                 }
                 rendered
