@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
+      "entries": [
+        {"text":"The home page shows the debugger in every shell (VS Code, `rawr gui`, `rawr tui`, the playground), and the debugging docs explain the window pane by pane and list the terminal shell's keys.","issues":[2321]}
+      ]
+    },
     "releases": [
       {
         "version": "0.4.49",
@@ -5438,7 +5443,8 @@
     {"issue":2317,"title":"`rawr tui` reads bindings with their parts from the inspector, so a map opens to one row per…","state":"closed","category":"Health","release":"0.4.46"},
     {"issue":2318,"title":"Destructuring assignment and assignment to a parenthesized place are unsupported","state":"open","category":"Divergences from rustc"},
     {"issue":2319,"title":"A runner whose output is a terminal tells it to the session","state":"closed","category":"Health","release":"0.4.49"},
-    {"issue":2320,"title":"A dependency's own writes to a terminal reach the run's session","state":"open","category":"Health"}
+    {"issue":2320,"title":"A dependency's own writes to a terminal reach the run's session","state":"open","category":"Health"},
+    {"issue":2321,"title":"The home page shows the debugger in every shell (VS Code, `rawr gui`, `rawr tui`, the…","state":"open","category":"Health"}
   ],
   "groups": [
     {

@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
+- The home page shows the debugger in every shell (VS Code, `rawr gui`, `rawr tui`, the playground), and the debugging docs explain the window pane by pane and list the terminal shell's keys. (#2321)
 
 ## 0.4.49 (2026-11-19)
 
