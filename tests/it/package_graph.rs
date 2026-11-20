@@ -182,9 +182,12 @@ fn aggregate_compile_rejects_private_import_hops_with_both_sources() {
     assert_eq!(error.category(), Category::Resolution);
     assert_eq!(report.code(), code::RESOLVE_PRIVATE_ITEM);
     assert_eq!(report.message(), "module `inner` is private");
-    assert_eq!(report.labels().len(), 2);
+    // The use is the label; "the module `inner` is defined here" is its own
+    // section at the declaration, as rustc draws it.
+    assert_eq!(report.labels().len(), 1);
     assert!(report.labels()[0].source().identity().ends_with("src/other.rs"));
-    assert!(report.labels()[1].source().identity().ends_with("src/controls.rs"));
+    assert_eq!(report.sections().len(), 1);
+    assert!(report.sections()[0].labels()[0].source().identity().ends_with("src/controls.rs"));
 }
 
 #[test]
@@ -389,7 +392,8 @@ fn relative_header_types_preserve_private_module_boundaries() {
     assert_eq!(error.category(), Category::Resolution);
     assert_eq!(report.code(), code::RESOLVE_PRIVATE_ITEM);
     assert_eq!(report.message(), "module `inner` is private");
-    assert_eq!(report.labels().len(), 2);
+    assert_eq!(report.labels().len(), 1);
+    assert_eq!(report.sections().len(), 1);
 }
 
 #[test]
