@@ -8,6 +8,14 @@
   },
   "releases": [
     {
+      "version": "0.4.56",
+      "date": "2026-11-20",
+      "entries": [
+        {"text":"`pub(in path)`, `pub(super)`, `pub(self)` and `pub(crate)` are enforced as rustc does for functions, types, methods, fields, tuple struct constructors and `use` re-exports, with rustc's E0603, E0624, E0616, E0451, E0364 and E0742. Field privacy is checked.","issues":[2332]},
+        {"text":"A type named through two modules takes its generic arguments where a type follows a pattern (`let _: m::q::S<i32>;`), `let _: T;` binds nothing, and a wrong argument count is rustc's E0107.","issues":[2333]}
+      ]
+    },
+    {
       "version": "0.4.55",
       "date": "2026-11-20",
       "entries": [

@@ -6,6 +6,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.56 (2026-11-20)
+
+- `pub(in path)`, `pub(super)`, `pub(self)` and `pub(crate)` are enforced as rustc does for functions, types, methods, fields, tuple struct constructors and `use` re-exports, with rustc's E0603, E0624, E0616, E0451, E0364 and E0742. Field privacy is checked. (#2332)
+- A type named through two modules takes its generic arguments where a type follows a pattern (`let _: m::q::S<i32>;`), `let _: T;` binds nothing, and a wrong argument count is rustc's E0107. (#2333)
+
 ## 0.4.55 (2026-11-20)
 
 - Errors show rustc's notes that point at a place of their own as their own sections: E0382's note on the parameter that takes the value and on a type that could implement `Clone`, E0061's "function defined here", E0603's "the function `f` is defined here", and a match arm's "to declare a mutable binding use: `mut b`" with its suggestion to remove the `&mut`. A match on a number takes `&` patterns. `rawr mcp` diagnostics list each note among their `help`. (#2329)
