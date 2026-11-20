@@ -30,7 +30,6 @@
 
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
-use std::sync::{Mutex, PoisonError};
 
 use serde_json::{json, Value};
 use wasm_bindgen::prelude::{wasm_bindgen, JsError, JsValue};
@@ -74,6 +73,15 @@ thread_local! {
     /// a sleep may suspend. A call from the page while `main` sleeps runs
     /// on a stack of its own.
     static SUSPENDABLE: Cell<bool> = const { Cell::new(false) };
+    /// What the program wrote, and the message of the panic that stopped
+    /// it.
+    static WRITTEN: RefCell<Written> = const {
+        RefCell::new(Written {
+            chunks: Vec::new(),
+            bytes: 0,
+            panic: None,
+        })
+    };
 }
 
 #[wasm_bindgen]
@@ -90,12 +98,6 @@ struct Written {
     panic: Option<String>,
 }
 
-static WRITTEN: Mutex<Written> = Mutex::new(Written {
-    chunks: Vec::new(),
-    bytes: 0,
-    panic: None,
-});
-
 /// Serve `bindings` to the page: what a runner's `main` calls on wasm32.
 /// A panic's message is kept for [`panic_message`], since a panic on
 /// wasm32 aborts the instance, and goes to the page's sink as it happens.
@@ -107,7 +109,7 @@ pub fn serve(bindings: &'static dyn Bindings) {
                 sink.write(&JsValue::NULL, "stderr", &format!("{message}\n"));
             }
         });
-        written().panic = Some(message);
+        WRITTEN.with_borrow_mut(|written| written.panic = Some(message));
     }));
     future::on_sleep(sleep);
     BINDINGS.set(Some(bindings));
@@ -130,7 +132,7 @@ fn sleep(duration: std::time::Duration) {
         let reason = reason
             .as_string()
             .unwrap_or_else(|| "rawr: this page can't suspend the program".to_owned());
-        written().panic = Some(reason.clone());
+        WRITTEN.with_borrow_mut(|written| written.panic = Some(reason.clone()));
         MAIN.set(false);
         wasm_bindgen::throw_str(&reason);
     }
@@ -169,7 +171,8 @@ pub(super) fn on_main_stack() -> bool {
 /// goes to `sink` first.
 #[wasm_bindgen]
 pub fn set_output(sink: Sink) {
-    for (stream, text) in std::mem::take(&mut written().chunks) {
+    let chunks = WRITTEN.with_borrow_mut(|written| std::mem::take(&mut written.chunks));
+    for (stream, text) in chunks {
         sink.write(&JsValue::NULL, stream_name(stream), &text);
     }
     SINK.set(Some(sink));
@@ -209,7 +212,7 @@ pub fn prepare() -> Result<(), JsError> {
                 .map(|sink| sink.write(&JsValue::NULL, stream_name(stream), text))
         });
         if sent.is_none() {
-            written().push(stream, text);
+            WRITTEN.with_borrow_mut(|written| written.push(stream, text));
         }
     });
     UNIVERSE.set(Some(universe));
@@ -386,17 +389,13 @@ fn package(files: &str) -> Result<Vec<(PathBuf, Box<str>)>, JsError> {
 /// The message of the panic that aborted this instance, if one did.
 #[wasm_bindgen]
 pub fn panic_message() -> Option<String> {
-    written().panic.clone()
-}
-
-fn written() -> std::sync::MutexGuard<'static, Written> {
-    WRITTEN.lock().unwrap_or_else(PoisonError::into_inner)
+    WRITTEN.with_borrow(|written| written.panic.clone())
 }
 
 /// What the program wrote since the last answer, as `?play`'s server gives
 /// output: `{"stream":"stdout"|"stderr","text":..}` chunks.
 fn taken_output() -> Vec<Value> {
-    let written = std::mem::take(&mut *written());
+    let written = WRITTEN.take();
     written
         .chunks
         .iter()
