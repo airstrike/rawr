@@ -4639,6 +4639,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rawr-lock-bench"
+version = "0.1.0"
+dependencies = [
+ "rawr",
+ "rawr-import",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "rawr-macros"
 version = "0.4.66"
 

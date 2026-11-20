@@ -1,6 +1,7 @@
 [workspace]
 members = [
     ".",
+    "benches/locks",
     "canonical",
     "cli",
     "import-cli",
@@ -164,6 +165,10 @@ unstable = []
 
 ## Running under a testing environment.
 testing-environ = []
+
+## Count the locks `benches/locks` reads. Only that bench enables it;
+## without it each counted site compiles to nothing.
+lock-counters = []
 
 [[bin]]
 name = "rawr-repl"

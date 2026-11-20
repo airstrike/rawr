@@ -134,11 +134,13 @@ impl Lockers {
     /// `lock`. A guard dropped without its release is seen at the next
     /// wake, which comes at least once a millisecond.
     fn lock(&self, inner: &Inner) -> crate::Shared<()> {
+        counted!(CellLock);
         let mut gate = self
             .gate
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         while inner.held().0 {
+            counted!(CellWait);
             gate = self
                 .released
                 .wait_timeout(gate, std::time::Duration::from_millis(1))
@@ -152,6 +154,7 @@ impl Lockers {
 
     /// Wake a locker, once a lock is released.
     fn release(&self) {
+        counted!(CellRelease);
         let _gate = self
             .gate
             .lock()

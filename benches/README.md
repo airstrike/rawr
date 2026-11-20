@@ -150,3 +150,53 @@ Harness checks:
 ```bash
 python3 -m unittest discover -s scripts -p 'test_measure_reload.py'
 ```
+
+Lock workloads
+--------------
+
+`benches/locks` (package `rawr-lock-bench`) is the baseline for the lock
+fixes in `.Codex/map/oracle-locks-2026-11-20/synthesis.md`. It keeps only
+counts that a fix moves by removing work. A count that stays the same
+before and after a fix proves nothing, so those sites have no counter, and
+their diffs prove them.
+
+```bash
+# Counts (the default build).
+cargo bench -p rawr-lock-bench --profile local
+# Times: no counted sites, no counting allocator. On a quiet machine.
+cargo bench -p rawr-lock-bench --profile local --no-default-features -- --label quiet
+# Two results side by side.
+cargo bench -p rawr-lock-bench --profile local -- compare BEFORE.json AFTER.json
+```
+
+Options: `--runs N` counted runs (3), `--samples N` timed samples (11), `--only a,b`, `--output PATH`.
+Each workload runs once before it is measured.
+A result is `target/lock-bench/<UTC>-<revision>[-dirty]-<mode>.json`.
+`build.rs` embeds the revision, whether the tree was dirty and the digest of its changes, and the profile.
+The result also records the binary's SHA-256, the toolchain, the machine and the load before and after.
+`compare` flags a different mode, profile, machine or toolchain, a dirty tree and a changed fixture.
+It prints every run's counts, each time's min, quartiles and max, and every value a script reported, run by run.
+
+The counted sites are `rawr::counters::Site`.
+A `counted!(Site)` line at each site expands to nothing without the `lock-counters` feature, which only this bench turns on.
+The commit that fixes a site deletes its `counted!` line.
+
+| Workload | Smell | One run | Before (measured) | After (predicted) |
+|---|---|---|---|---|
+| `mutex-contended` | B3 | 4 threads × 250 locks with a named guard, then 4 × 250 with a temporary guard | cell.lock 2001 (one more to read the total), cell.release 1000 (the temporaries; a named guard never releases), cell.wait varies | cell.release ≥ 2001, because every guard's drop releases; cell.wait still varies |
+| `mutex-handoff` | B3 | 20 handoffs to a parked waiter, by a named guard that never calls release | cell.lock 40, cell.wait 20, cell.release 0; each handoff takes about 1.2 ms, which is the poll | cell.lock 40, cell.wait 20, cell.release ≥ 40; a handoff takes one release's wake |
+| `recompile` | A2 | one save: a body edit of a two-source program, compiled through a runner's resident path | resident.cache 15 per save | resident.cache 0 |
+| `futures` | C1 | 4 worker threads × 250 converted futures, while the owner runs the entry's poll loop (`drive`, `enter`, `drain` per poll) | no counted site; its time | its time; `served()` no longer locks |
+
+- **Allocations.** Every workload also records its allocation counts as a control. No fix here should move them.
+- **What `~` marks.** A count marked `~` (`"stable": false`) differs between runs because it depends on scheduling: contended waits, and allocations on worker threads.
+- **The handoff.** The holder calls `parked(before)`, which blocks on the counters' event (`counters::wait_above`) for `cell.wait` to move. The waiter is then in its wait when the guard ends. There is no spin and no clock, and the handoff runs only in the counters build.
+- **No releasing control.** No guard that rawr holds across other code calls release today. A `match` subject's guard and a method receiver's temporary guard don't hold the lock at all, so a waiter never parks behind them. A guard given to `drop(..)` is never released (#2352). After the fix, `mutex-handoff` is the releasing case, and `mutex-contended`'s temporaries are the releases counted today.
+
+Some smells have no workload:
+
+- **A3.** `place::reading`'s registry is reached through `reading::invoke`, which takes a `Witness`. Only a runtime registry issues one, for a call into an installed generated facade, so a bench can't reach it without a runner. Its diff proves the fix: one registry lock per `{:?}`, `{}`, `==` or `<` of a native place before, and none after for a named policy type.
+- **Removals visible in the diff.** B4, B6, B7, C1's `Made` and `Slot` and the other `DRIVER` locks either keep their lock or remove it by deleting the line, so a count can't tell before from after. B4 also changes no work.
+- **D1** is a torn read between generations. A focused test proves it.
+- **Once per command or run, or not built.** A1 (the non-`sync` arm) ships in no build. B1, B2 and D2 run once per command or only on wasm32. E and F run once per round or request, beside I/O.
+- **G.** `scripts/measure_reload.py` (above) times the watcher end to end on each save.
