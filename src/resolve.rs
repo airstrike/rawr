@@ -28,10 +28,10 @@ pub(crate) use error::{
     Unsupported, ASYNC_MAIN, IF_WITHOUT_ELSE, INVALID_ASSIGNEE, RETURN_WITHOUT_VALUE,
 };
 pub use error::{
-    Arguments, Beyond, BindingSite, Bound, Boxing, Callee, Category, Cloning, Detail, Error,
-    Expansion, Fields, Imported, Instead, Lint, MacroScope, Missing, MoveCause, MovedPlace,
-    MutBinding, OwningParameter, PatternOrigin, PatternTypes, Private, Referent, Required,
-    Unexpected, Unresolved,
+    Annotation, Arguments, Arms, Assignment, Beyond, BindingSite, Bound, Boxing, Callee, Category,
+    Cloning, Detail, Error, Expansion, Fields, Import, Imported, Instead, Lint, MacroScope,
+    Missing, MoveCause, MovedPlace, MutBinding, OwningParameter, PatternOrigin, PatternTypes,
+    Private, Referent, Required, Unexpected, Unresolved,
 };
 use std::collections::BTreeMap;
 
@@ -142,6 +142,8 @@ pub struct Program {
     /// before hoisting: the scope a proof-backed imported call reads, and
     /// where a block's `use` is in scope.
     lexical: BTreeMap<program::source::Id, Box<[crate::item::Use]>>,
+    /// Where rustc puts a `use` it suggests in each source's module.
+    placements: BTreeMap<program::source::Id, crate::Position>,
     /// The program's own `macro_rules!` macros and their scopes.
     macros: macros::Table,
 }
@@ -680,6 +682,11 @@ fn resolve_with_evidence_and_namespace(
         program::source::Id::ROOT,
         unit.imports().to_vec().into_boxed_slice(),
     )]);
+    let placements = unit
+        .use_placement()
+        .map(|at| (program::source::Id::ROOT, at))
+        .into_iter()
+        .collect();
     let macros = macros::Table::new([macros::Module {
         source: program::source::Id::ROOT,
         package: &namespace.package,
@@ -782,6 +789,7 @@ fn resolve_with_evidence_and_namespace(
         .into_boxed_slice(),
         instances: Instances::default(),
         lexical,
+        placements,
         macros,
     };
     validate_invocation_storage(&program).map_err(LocatedError::into_error)?;
@@ -1532,7 +1540,7 @@ fn resolve_imports(
             item::Namespace::Both
                 .sides()
                 .iter()
-                .map(move |side| ((name.clone(), *side), (*span, false)))
+                .map(move |side| ((name.clone(), *side), (*span, None)))
         })
         .collect::<BTreeMap<_, _>>();
     let mut uses = vec![None; parsed_items.len()];
@@ -1768,18 +1776,25 @@ fn resolve_imports(
 
         for binding in &bindings {
             occupied.insert(binding.name.text.clone(), binding.name.span);
+            let import = |side| Import {
+                written: parsed.written(&binding.name),
+                rename: parsed.rename(&binding.name),
+                kind: binding.target.kind(side, &binding.qualified),
+            };
             let previous = binding.target.namespace().sides().iter().find_map(|side| {
-                bound.insert(
+                let previous = bound.insert(
                     (binding.name.text.clone(), *side),
-                    (binding.name.span, true),
-                )
+                    (binding.name.span, Some(import(*side))),
+                );
+                previous.map(|previous| (*side, previous))
             });
-            if let Some((previous_declaration, imported)) = previous {
+            if let Some((side, previous)) = previous {
                 return Err(Error::duplicate(
                     binding.name.text.clone(),
                     binding.name.span,
-                    previous_declaration,
-                    imported,
+                    side.noun(),
+                    import(side),
+                    previous,
                 ));
             }
             if let item::Import::Type { definition, owner } = &binding.target {

@@ -520,9 +520,6 @@ pub struct Bound {
     pub callee: Span,
     /// The argument whose type the parameter is.
     pub argument: Span,
-    /// The argument's type's name where the program declares it, when
-    /// that is in the call's file.
-    pub declared: Option<Span>,
 }
 
 /// A call's arguments and its callee's parameters where rustc's E0061
@@ -538,6 +535,50 @@ pub struct Arguments {
     pub unexpected: Box<[Unexpected]>,
     /// The parameters the call gives nothing, in order.
     pub missing: Box<[Missing]>,
+}
+
+/// The value rustc's E0381 suggests a `let` write for its local, and
+/// where: ` = 42` after `let x: i32`.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct Assignment {
+    /// After the local's name, or its type when the `let` writes one.
+    pub at: Span,
+    /// ` = ` and the value.
+    pub code: ImmutableString,
+}
+
+/// The type rustc's E0282 suggests writing for a local, and where.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct Annotation {
+    /// After the local's name.
+    pub at: Span,
+    /// The type as far as it is known, each unknown part named by the
+    /// parameter it fills (`Vec<T>`), or `/* Type */`.
+    pub ty: ImmutableString,
+    /// The first parameter an unknown part fills.
+    pub parameter: Option<ImmutableString>,
+}
+
+/// An import of a name where rustc's E0252 shows it.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct Import {
+    /// Its path or group member, through any `as` rename.
+    pub written: Span,
+    /// Where an `as` rename of it goes, through the one written.
+    pub rename: Span,
+    /// What it binds, as rustc names it: `type`, `module`, `value` or
+    /// `macro`.
+    pub kind: &'static str,
+}
+
+/// A `match`'s arms as written, after which rustc's E0004 suggests the
+/// arm that covers the values they miss.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct Arms {
+    /// Each arm, from its pattern to its value's end, before any `,`.
+    pub arms: Box<[Span]>,
+    /// The `match` from its scrutinee's end through its `}`.
+    pub after_scrutinee: Span,
 }
 
 /// An argument past what a call's callee takes, as rustc's E0061 labels
@@ -683,10 +724,12 @@ pub enum Error {
     DuplicateImport {
         /// The name both imports bind.
         name: ImmutableString,
-        /// Primary span on the second import's name.
-        declaration: Span,
-        /// Secondary span on the first import's name.
-        previous_declaration: Span,
+        /// The namespace they bind it in: `type`, `value` or `macro`.
+        namespace: &'static str,
+        /// The second import.
+        declaration: Import,
+        /// The first import.
+        previous_declaration: Import,
     },
     /// A header referenced neither a script type, builtin, nor host type.
     UnknownType {
@@ -789,8 +832,11 @@ pub enum Error {
     UnknownFunction {
         /// The name as written.
         name: ImmutableString,
-        /// A library function of that name, to import: `iced::widget::center`.
+        /// A function of that name, to import: `iced::widget::center`, or
+        /// the program's `crate::m::f`.
         import: Option<ImmutableString>,
+        /// Where rustc puts the `use` it suggests.
+        placement: Option<crate::Position>,
         /// Exact source reference.
         reference: Span,
     },
@@ -922,6 +968,9 @@ pub enum Error {
         field: bool,
         /// Exact source reference.
         reference: Span,
+        /// A called field's parenthesized arguments, which rustc suggests
+        /// removing.
+        arguments: Option<Span>,
     },
     /// A nominal construction omits, duplicates, or miscounts members.
     InvalidConstruction {
@@ -969,6 +1018,10 @@ pub enum Error {
         output: ImmutableString,
         /// The `return` keyword.
         at: Span,
+        /// Where the function writes its output type.
+        written: Option<Span>,
+        /// The value rustc suggests the `return` give, as `42`.
+        value: Option<ImmutableString>,
     },
     /// An assignment to a variable declared without `mut`, which rustc
     /// refuses (E0384).
@@ -982,6 +1035,10 @@ pub enum Error {
         /// The binding's name where it is declared, where rustc suggests
         /// `mut`.
         declared: Span,
+        /// Whether a pattern matched against a value declares it, where
+        /// rustc also suggests `ref mut`, which assigns through to the
+        /// value.
+        matched: bool,
     },
     /// An impl owner is not a visible nominal script type.
     InvalidImplOwner {
@@ -1082,6 +1139,10 @@ pub enum Error {
         /// Whether the type is the program's own struct or enum, so a
         /// `#[derive]` on it can provide a derivable trait.
         derive: bool,
+        /// The type's name where the program declares it, when that is in
+        /// the file the error is in: where rustc suggests the `#[derive]`
+        /// and shows `Display`'s help.
+        declared: Option<Span>,
         /// The item whose bound requires the trait, as rustc's "required by
         /// a bound in" note names it.
         required_by: Option<Required>,
@@ -1104,6 +1165,8 @@ pub enum Error {
         ty: ImmutableString,
         /// The scrutinee.
         scrutinee: Span,
+        /// The arms, where rustc suggests one more.
+        arms: Box<Arms>,
     },
     /// A pattern that must match every value, in a `let` without `else`, a
     /// `for` or a parameter, which misses some, which rustc refuses
@@ -1241,6 +1304,8 @@ pub enum Error {
         owner: ImmutableString,
         /// The value written into.
         at: Span,
+        /// Where rustc puts the `use` of `Write` it suggests.
+        placement: Option<crate::Position>,
     },
     /// An assignment whose left side is a value, not a place, as
     /// `(x + y) = 42` or `f(x) += 1`, which rustc refuses (E0070, E0067 for
@@ -1289,6 +1354,9 @@ pub enum Error {
         reference: Span,
         /// The local's declaration, which gives it no value.
         declaration: Span,
+        /// The value rustc suggests its `let` write, for a local its use
+        /// finds with no value on any path, declared alone.
+        assign: Option<Assignment>,
     },
     /// A local whose type nothing settles, or not where rustc needs it
     /// known, which rustc refuses: E0282, or E0283 and E0284 where an
@@ -1308,6 +1376,9 @@ pub enum Error {
         /// rustc's note on the trait the type must implement, as
         /// "the type must implement `From<u8>`".
         note: Option<ImmutableString>,
+        /// The type rustc suggests writing for the local, when its `let`
+        /// declares it alone with no type.
+        annotation: Option<Annotation>,
     },
     /// An integer literal its type can't hold, which rustc's
     /// deny-by-default `overflowing_literals` lint refuses: "literal out of
@@ -1417,26 +1488,28 @@ impl Error {
         self
     }
 
-    /// A name bound twice in one of Rust's namespaces: rustc's E0252 when
-    /// an import bound it before, a duplicate item when a declaration did.
+    /// The import `declaration` of `name`, the name at `named`, bound in
+    /// `namespace` where `previous` bound it before: rustc's E0252 when an
+    /// import did, a duplicate item at the name when a declaration did.
     pub(crate) fn duplicate(
         name: ImmutableString,
-        declaration: Span,
-        previous_declaration: Span,
-        imported: bool,
+        named: Span,
+        namespace: &'static str,
+        declaration: Import,
+        previous: (Span, Option<Import>),
     ) -> Self {
-        if imported {
-            Self::DuplicateImport {
+        match previous {
+            (_, Some(previous_declaration)) => Self::DuplicateImport {
                 name,
+                namespace,
                 declaration,
                 previous_declaration,
-            }
-        } else {
-            Self::DuplicateItem {
+            },
+            (previous_declaration, None) => Self::DuplicateItem {
                 name,
-                declaration,
+                declaration: named,
                 previous_declaration,
-            }
+            },
         }
     }
 
@@ -1669,9 +1742,8 @@ impl Error {
     #[must_use]
     pub const fn primary_span(&self) -> Span {
         match self {
-            Self::DuplicateItem { declaration, .. } | Self::DuplicateImport { declaration, .. } => {
-                *declaration
-            }
+            Self::DuplicateItem { declaration, .. } => *declaration,
+            Self::DuplicateImport { declaration, .. } => declaration.written,
             Self::UnknownType { reference, .. } => *reference,
             Self::UnknownImport { reference, .. }
             | Self::InvalidImport { reference, .. }
@@ -1742,11 +1814,11 @@ impl Error {
             Self::DuplicateItem {
                 previous_declaration,
                 ..
-            }
-            | Self::DuplicateImport {
+            } => Some(*previous_declaration),
+            Self::DuplicateImport {
                 previous_declaration,
                 ..
-            } => Some(*previous_declaration),
+            } => Some(previous_declaration.written),
             Self::InvalidDerive { declaration, .. } => Some(*declaration),
             Self::ExpansionRequired { .. } => None,
             Self::DuplicateMember {
@@ -1875,9 +1947,9 @@ impl NonExhaustive<'_> {
         format!("{noun} {} not covered", self.uncovered())
     }
 
-    /// rustc's help, with the arm it suggests: the one witness, the
-    /// witnesses as one or-pattern, or `_` past three.
-    pub(crate) fn help(&self) -> String {
+    /// rustc's help, and the pattern of the arm it suggests: the one
+    /// witness, the witnesses as one or-pattern, or `_` past three.
+    pub(crate) fn help(&self) -> (String, String) {
         let (how, pattern) = match self.0 {
             [one] => (" or an explicit pattern as shown", one.to_string()),
             witnesses if witnesses.len() <= Self::SHOWN => (
@@ -1886,9 +1958,12 @@ impl NonExhaustive<'_> {
             ),
             _ => (" as shown, or multiple match arms", "_".to_string()),
         };
-        format!(
-            "ensure that all possible cases are being handled by adding a match arm \
-             with a wildcard pattern{how}: `{pattern} => todo!()`"
+        (
+            format!(
+                "ensure that all possible cases are being handled by adding a match arm \
+                 with a wildcard pattern{how}"
+            ),
+            pattern,
         )
     }
 
@@ -1956,11 +2031,13 @@ impl Unresolved {
 /// it in E0005.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum BindingSite {
-    /// `let pattern = value;`: the statement as written, without its `;`,
-    /// when it is on one line, and whether the pattern binds a name.
+    /// `let pattern = value;`: where its `let` and its value are, and
+    /// whether the pattern binds a name.
     Local {
-        /// `let pattern = value`.
-        statement: Option<ImmutableString>,
+        /// The `let` keyword's start.
+        keyword: crate::Position,
+        /// The value's end, before the `;`.
+        value: crate::Position,
         /// Whether the pattern binds a name, which `let else` keeps.
         binds: bool,
     },
@@ -2004,11 +2081,14 @@ impl Refutable<'_> {
         }
     }
 
-    /// rustc's help for a `let`: `let else` when the pattern binds a name,
-    /// `if let` when it binds none, with the statement rewritten.
-    pub(crate) fn help(&self) -> Option<String> {
+    /// rustc's suggestion for a `let`, its message and the code it puts
+    /// at each place: `else { todo!() }` after the value when the pattern
+    /// binds a name, which `let...else` keeps, else `if` before the `let`
+    /// and a block after the value, which ignores the values it misses.
+    pub(crate) fn suggestion(&self) -> Option<(String, Vec<(crate::Position, &'static str)>)> {
         let BindingSite::Local {
-            statement: Some(statement),
+            keyword,
+            value,
             binds,
         } = self.site
         else {
@@ -2020,14 +2100,14 @@ impl Refutable<'_> {
             "variants that aren't"
         };
         Some(if *binds {
-            format!(
-                "you might want to use `let else` to handle the {variants} matched: \
-                 `{statement} else {{ todo!() }};`"
+            (
+                format!("you might want to use `let...else` to handle the {variants} matched"),
+                vec![(*value, " else { todo!() }")],
             )
         } else {
-            format!(
-                "you might want to use `if let` to ignore the {variants} matched: \
-                 `if {statement} {{ todo!() }}`"
+            (
+                format!("you might want to use `if let` to ignore the {variants} matched"),
+                vec![(*keyword, "if "), (*value, " { todo!() }")],
             )
         })
     }
@@ -2534,9 +2614,11 @@ impl fmt::Display for Written<'_> {
                 name,
                 declaration,
                 previous_declaration,
+                ..
             } => write!(
                 formatter,
-                "the name `{name}` is defined multiple times at {declaration}; previously imported at {previous_declaration}"
+                "the name `{name}` is defined multiple times at {}; previously imported at {}",
+                declaration.written, previous_declaration.written
             ),
             Error::UnknownType {
                 name,
@@ -2635,12 +2717,14 @@ impl fmt::Display for Written<'_> {
                 member,
                 field: true,
                 reference,
+                ..
             } => write!(formatter, "field `{owner}::{member}` called like a method at {reference}"),
             Error::MemberKind {
                 owner,
                 member,
                 field: false,
                 reference,
+                ..
             } => write!(formatter, "method `{owner}::{member}` read like a field at {reference}"),
             Error::UnknownFunction {
                 name, reference, ..
@@ -2725,7 +2809,7 @@ impl fmt::Display for Written<'_> {
                 formatter,
                 "{IF_WITHOUT_ELSE} at {expression}: expected `{expected}`, found `()` (E0317)"
             ),
-            Error::ReturnWithoutValue { output, at } => write!(
+            Error::ReturnWithoutValue { output, at, .. } => write!(
                 formatter,
                 "{RETURN_WITHOUT_VALUE} at {at}: expected `{output}` (E0069)"
             ),
@@ -2886,7 +2970,7 @@ impl fmt::Display for Written<'_> {
             Error::UnlabeledJumpInWhileCondition { .. } => formatter
                 .write_str("`break` or `continue` with no label in the condition of a `while` loop"),
             Error::AsyncMain { .. } => formatter.write_str(ASYNC_MAIN),
-            Error::UnscopedWrite { owner, at } => {
+            Error::UnscopedWrite { owner, at, .. } => {
                 write!(formatter, "cannot write into `{owner}` at {at}")
             }
             Error::InvalidAssignee { operator, .. } => {

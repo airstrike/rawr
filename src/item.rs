@@ -930,6 +930,23 @@ impl Use {
         }
     }
 
+    /// Where an `as` rename of the binding `name` goes: after the path's
+    /// last segment or the group member, through the rename written there
+    /// if any, as rustc replaces it to suggest another name.
+    #[must_use]
+    pub fn rename(&self, name: &Name) -> Span {
+        let written = self.written(name);
+        let imported = match &self.tree {
+            UseTree::Path(path, _) => path.span,
+            UseTree::Group { members, .. } => members
+                .iter()
+                .find(|member| member.alias.as_ref().unwrap_or(&member.name).span == name.span)
+                .map_or(name.span, |member| member.name.span),
+            UseTree::Glob { .. } => written,
+        };
+        Span::new(imported.end(), written.end())
+    }
+
     /// What the import binds, apart from where it is written: each name
     /// with its path, and a glob's module under `*`. One import written in
     /// several bodies has one key, and is hoisted once.

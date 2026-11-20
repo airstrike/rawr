@@ -349,6 +349,7 @@ impl<'a> Parser<'a> {
                 mutation: at,
                 declaration,
                 declared: declaration,
+                matched: self.matched_bindings.contains(&declaration.start()),
             },
             Lvalue::Field(field) => {
                 Error::assign_immutable(&format!("{binding}.{}", field.member), binding, at)

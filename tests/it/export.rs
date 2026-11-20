@@ -303,7 +303,8 @@ fn export_field_called_like_a_method_is_rustc_e0599() {
     let error = engine().compile("use shop::Order;\nfn f(order: Order) -> i64 {\n    order.items()\n}\n").unwrap_err();
     let text = error.to_string();
     assert!(text.starts_with("error[E0599]: no method named `items` found for `Order` in the current scope\n --> <script>:3:11"), "{text}");
-    assert!(text.ends_with("= help: to use the field `items`, remove the parentheses"), "{text}");
+    assert!(text.contains("  |           ^^^^^-- help: remove the arguments\n"), "{text}");
+    assert!(text.contains("  |           field, not a method"), "{text}");
 }
 
 #[test]

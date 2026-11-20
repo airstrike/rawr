@@ -157,6 +157,7 @@ impl<'a> Parser<'a> {
                     capability: "Iterator".into(),
                     operation: argument.span,
                     derive: false,
+                    declared: None,
                     required_by: None,
                 });
             }

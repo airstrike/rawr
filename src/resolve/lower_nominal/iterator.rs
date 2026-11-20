@@ -986,6 +986,7 @@ impl Parser<'_> {
             .into(),
             operation: collect,
             derive: false,
+            declared: None,
             required_by: None,
         }
     }
@@ -1301,6 +1302,7 @@ impl Parser<'_> {
                         capability: "Clone".into(),
                         operation: expression,
                         derive: false,
+                        declared: None,
                         required_by: None,
                     });
                 }

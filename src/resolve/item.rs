@@ -131,6 +131,15 @@ pub(crate) enum Namespace {
 }
 
 impl Namespace {
+    /// The namespace as rustc names it: `type`, `value` or `macro`.
+    pub(crate) const fn noun(self) -> &'static str {
+        match self {
+            Self::Type | Self::Both => "type",
+            Self::Value => "value",
+            Self::Macro => "macro",
+        }
+    }
+
     /// The namespaces this one covers, each `Type` or `Value`.
     pub(crate) const fn sides(self) -> &'static [Self] {
         match self {
@@ -143,6 +152,25 @@ impl Namespace {
 }
 
 impl Import {
+    /// What the import of `qualified` binds in `side`, one of its
+    /// namespaces, as rustc's E0252 names it: a `module`, a `trait` or a
+    /// `type`, a `value` or a `macro`. A std path binds as a module here,
+    /// and std says what it names.
+    pub(crate) fn kind(&self, side: Namespace, qualified: &str) -> &'static str {
+        match (side, self) {
+            (Namespace::Type, Self::Module) => {
+                match crate::std_table::path(qualified, crate::std_table::Namespace::Type)
+                    .map(|found| found.kind)
+                {
+                    None | Some("mod") => "module",
+                    Some("trait") => "trait",
+                    Some(_) => "type",
+                }
+            }
+            (side, _) => side.noun(),
+        }
+    }
+
     /// The namespace the import binds its name in.
     pub(crate) const fn namespace(&self) -> Namespace {
         match self {

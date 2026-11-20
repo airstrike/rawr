@@ -30,13 +30,49 @@ impl<'a> Parser<'a> {
         if let Some(error) = self.macro_without_bang(name, "function", reference) {
             return Some(error);
         }
-        let mut imports = self.models.host.functions_named(name).collect::<Vec<_>>();
-        imports.sort_by_key(|path| (path.len(), path.clone()));
         Some(Error::UnknownFunction {
             name: written.as_ref().into(),
-            import: imports.into_iter().next().map(Into::into),
+            import: self.function_import(name),
+            placement: self.models.use_placement(),
             reference: Span::new(at.start(), text_end(at.start(), &written)),
         })
+    }
+
+    /// The path of a function named `name` a `use` could bring into scope,
+    /// as rustc suggests one: the program's own function another module
+    /// declares where this module sees it, else a library's.
+    fn function_import(&self, name: &str) -> Option<ImmutableString> {
+        let here = self.models.namespaces.get(&self.models.context)?;
+        let own = self
+            .models
+            .functions
+            .iter()
+            .filter_map(|((source, named), function)| {
+                let namespace = self.models.namespaces.get(source)?;
+                (named == name
+                    && *source != self.models.context
+                    && namespace.package == here.package
+                    && function.definition.header.scope.is_none()
+                    && namespace.opens_to(function.definition.header.visibility.as_ref(), here))
+                .then(|| {
+                    let modules = namespace.modules.iter().map(ImmutableString::as_str);
+                    std::iter::once("crate")
+                        .chain(modules)
+                        .chain([name])
+                        .collect::<Vec<_>>()
+                        .join("::")
+                })
+            });
+        // rustc offers several as alternatives, which one suggestion's
+        // edits can't be: only one alone is offered.
+        match own.collect::<Vec<_>>().as_slice() {
+            [path] => return Some(path.as_str().into()),
+            [] => {}
+            _ => return None,
+        }
+        let mut imports = self.models.host.functions_named(name).collect::<Vec<_>>();
+        imports.sort_by_key(|path| (path.len(), path.clone()));
+        imports.into_iter().next().map(Into::into)
     }
 
     /// rustc's E0423 for a macro's name used without `!` where a function
@@ -109,17 +145,16 @@ impl<'a> Parser<'a> {
                 reference,
             };
         }
-        let mut imports = self.models.host.functions_named(name).collect::<Vec<_>>();
-        if imports.is_empty() {
+        let Some(import) = self.function_import(name) else {
             return Error::UnknownVariable {
                 name: written.as_ref().into(),
                 reference,
             };
-        }
-        imports.sort_by_key(|path| (path.len(), path.clone()));
+        };
         Error::UnknownFunction {
             name: written.as_ref().into(),
-            import: imports.into_iter().next().map(Into::into),
+            import: Some(import),
+            placement: self.models.use_placement(),
             reference,
         }
     }

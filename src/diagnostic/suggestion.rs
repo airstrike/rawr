@@ -109,6 +109,17 @@ impl Suggestion {
         }
     }
 
+    /// A suggestion of `edits`, made in order, shown in `style` under
+    /// `message`: `None` when there are none.
+    #[must_use]
+    pub fn of(message: impl Into<ImmutableString>, style: Style, edits: Vec<Edit>) -> Option<Self> {
+        (!edits.is_empty()).then(|| Self {
+            message: message.into(),
+            style,
+            edits,
+        })
+    }
+
     /// The suggestion with `edit` made too.
     #[must_use]
     pub fn edit(mut self, edit: Edit) -> Self {

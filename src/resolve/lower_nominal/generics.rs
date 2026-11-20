@@ -164,7 +164,6 @@ impl<'a> Parser<'a> {
                 bound,
                 callee,
                 argument: this.whole_expression(argument.span),
-                declared: None,
             };
             Some(crate::resolve::Required {
                 item: function.name.text.clone(),
@@ -197,20 +196,11 @@ impl<'a> Parser<'a> {
 
     /// The name of the program's type `ty` where it is declared, when that
     /// is in the file being lowered.
-    fn declared_name(&self, ty: &Ty) -> Option<Span> {
+    pub(super) fn declared_name(&self, ty: &Ty) -> Option<Span> {
         let Ty::Script(id, _) = ty else {
             return None;
         };
-        match self.models.definition(*id) {
-            Nominal::Struct { item, .. } => self
-                .models
-                .type_in_this_file(&item.key)
-                .then_some(item.name.span),
-            Nominal::Enum { item, .. } => self
-                .models
-                .type_in_this_file(&item.key)
-                .then_some(item.name.span),
-        }
+        self.models.name_declared_here(self.models.definition(*id))
     }
 
     /// `::<A, B>` after a generic function's name, or fresh types.
@@ -252,16 +242,13 @@ impl<'a> Parser<'a> {
                 _ => self.type_provides(&ty, kind),
             };
             if !provided {
-                let mut required_by = site;
-                if let Some(place) = required_by.as_mut().and_then(|site| site.place.as_mut()) {
-                    place.declared = self.declared_name(&ty);
-                }
                 return Err(Error::MissingCapability {
                     owner: ty.name(&self.models),
                     capability: kind.name().into(),
                     operation: span,
                     derive: matches!(ty, Ty::Script(..)),
-                    required_by,
+                    declared: self.declared_name(&ty),
+                    required_by: site,
                 });
             }
         }
@@ -287,6 +274,7 @@ impl<'a> Parser<'a> {
                         capability: format!("From<{}>", self.fallback_name(&source)).into(),
                         operation: span,
                         derive: false,
+                        declared: None,
                         required_by: None,
                     });
                 }
@@ -326,16 +314,13 @@ impl<'a> Parser<'a> {
                         .join(", ");
                     format!("{trait_name}<{written}>").into()
                 };
-                let mut required_by = site;
-                if let Some(place) = required_by.as_mut().and_then(|site| site.place.as_mut()) {
-                    place.declared = self.declared_name(&ty);
-                }
                 return Err(Error::MissingCapability {
                     owner: ty.name(&self.models),
                     capability,
                     operation: span,
                     derive: matches!(ty, Ty::Script(..)),
-                    required_by,
+                    declared: self.declared_name(&ty),
+                    required_by: site,
                 });
             }
         }
@@ -576,6 +561,7 @@ impl<'a> Parser<'a> {
                             capability: "Default".into(),
                             operation: span,
                             derive: false,
+                            declared: None,
                             required_by: None,
                         });
                     }

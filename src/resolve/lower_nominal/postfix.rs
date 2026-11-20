@@ -900,6 +900,7 @@ impl<'a> Parser<'a> {
                         capability: "Clone".into(),
                         operation: member_span,
                         derive: false,
+                        declared: None,
                         required_by: None,
                     });
                 }
@@ -1425,6 +1426,7 @@ impl<'a> Parser<'a> {
             let model = self.models.definition(definition_id).clone();
 
             if matches!(self.peek(), Token::LeftParen | Token::Unit) {
+                let parenthesized = self.parenthesized_ahead();
                 let (args, end) = self.parse_borrowing_arguments("method arguments")?;
 
                 // `value.to_string()` through a hand-written `Display`.
@@ -1461,6 +1463,19 @@ impl<'a> Parser<'a> {
                     "clone" => capability::Kind::Clone,
                     "copy" => capability::Kind::Copy,
                     "debug" => capability::Kind::Debug,
+                    // A field called like a method: rustc's E0599, which
+                    // suggests removing the arguments.
+                    _ if let Nominal::Struct { item, .. } = &model
+                        && item.fields.iter().any(|field| field.name.text == member) =>
+                    {
+                        return Err(Error::MemberKind {
+                            owner: model.name().into(),
+                            member,
+                            field: true,
+                            reference: member_span,
+                            arguments: parenthesized,
+                        });
+                    }
                     _ => {
                         return Err(self
                             .private_member(definition_id, &member, member_span)
@@ -2292,6 +2307,7 @@ impl<'a> Parser<'a> {
                     capability: "Index<Range<usize>>".into(),
                     operation: span(value.span.start(), end),
                     derive: false,
+                    declared: None,
                     required_by: None,
                 })
             }
@@ -3266,6 +3282,7 @@ impl<'a> Parser<'a> {
             capability: "Ord".into(),
             operation: value.span,
             derive: matches!(ty, Ty::Script(..)),
+            declared: this.declared_name(ty),
             required_by: None,
         };
         let (a, b) = (self.temporary("left"), self.temporary("right"));
@@ -3473,6 +3490,7 @@ impl<'a> Parser<'a> {
                 capability: "Ord".into(),
                 operation: member_span,
                 derive: matches!(key, Ty::Script(..)),
+                declared: this.declared_name(key),
                 required_by: None,
             })
         };
@@ -3570,6 +3588,7 @@ impl<'a> Parser<'a> {
                     capability: "Ord".into(),
                     operation: member_span,
                     derive: matches!(output, Ty::Script(..)),
+                    declared: self.declared_name(&output),
                     required_by: None,
                 })?
             } else {
@@ -3586,6 +3605,7 @@ impl<'a> Parser<'a> {
                 capability: "Ord".into(),
                 operation: member_span,
                 derive: matches!(element, Ty::Script(..)),
+                declared: self.declared_name(element),
                 required_by: None,
             })?
         };
@@ -3701,6 +3721,7 @@ impl<'a> Parser<'a> {
                     capability: "std::error::Error".into(),
                     operation: value.span,
                     derive: matches!(error.as_ref(), Ty::Script(..)),
+                    declared: self.declared_name(error.as_ref()),
                     required_by: None,
                 });
             };

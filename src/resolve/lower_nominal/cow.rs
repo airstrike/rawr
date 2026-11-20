@@ -268,6 +268,7 @@ impl Parser<'_> {
                 capability: format!("From<{}>", source.name(&self.models)).into(),
                 operation: value.span,
                 derive: false,
+                declared: None,
                 required_by: None,
             });
         };
@@ -346,6 +347,7 @@ impl Parser<'_> {
                     capability: "ToOwned".into(),
                     operation: value.span,
                     derive: false,
+                    declared: None,
                     required_by: Some(crate::resolve::Required::by("std::borrow::Cow")),
                 })?
         } else {
@@ -391,6 +393,7 @@ impl Parser<'_> {
                             capability: "Clone".into(),
                             operation: member_span,
                             derive: false,
+                            declared: None,
                             required_by: None,
                         });
                     }

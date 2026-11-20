@@ -1415,6 +1415,7 @@ impl<'a> Parser<'a> {
                     capability: "Sized".into(),
                     operation: at,
                     derive: false,
+                    declared: None,
                     required_by: None,
                 });
             }
@@ -1584,13 +1585,7 @@ impl<'a> Parser<'a> {
                     }
                     Kind::Display => match self.display_piece(&ty, name) {
                         Some(text) => text,
-                        None => {
-                            return Err(Error::TypeMismatch {
-                                expected: "a type with `Display` in `format!`".into(),
-                                actual: ty.name(&self.models),
-                                expression: at,
-                            });
-                        }
+                        None => return Err(self.undisplayable(&ty, at)),
                     },
                 }
             };
@@ -1829,6 +1824,19 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// rustc's E0277 for a value of `ty`, which has no `Display`, at `at`
+    /// in a `format!`.
+    fn undisplayable(&self, ty: &Ty, at: Span) -> Error {
+        Error::MissingCapability {
+            owner: ty.name(&self.models),
+            capability: "Display".into(),
+            operation: at,
+            derive: false,
+            declared: self.declared_name(ty),
+            required_by: None,
+        }
+    }
+
     /// Write each pending `format!` piece over its placeholder, now that
     /// its value's type is known.
     pub(super) fn finish_formats(&mut self) -> Result<(), Error> {
@@ -1895,7 +1903,7 @@ impl<'a> Parser<'a> {
                 }
                 _ => match self.display_piece(&ty, name) {
                     Some(text) => text,
-                    None => return Err(mismatch(expected)),
+                    None => return Err(self.undisplayable(&ty, pending.span)),
                 },
             };
             let rendered = rendered.as_str();
@@ -2412,6 +2420,7 @@ impl<'a> Parser<'a> {
                         capability: "Debug".into(),
                         operation: span,
                         derive: matches!(ty, Ty::Script(..)),
+                        declared: self.declared_name(&ty),
                         required_by: None,
                     });
                 }
@@ -2628,6 +2637,7 @@ impl<'a> Parser<'a> {
                     capability: "Debug".into(),
                     operation: span,
                     derive: matches!(ty, Ty::Script(..)),
+                    declared: self.declared_name(&ty),
                     required_by: None,
                 })
             }

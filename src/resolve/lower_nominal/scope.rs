@@ -140,9 +140,18 @@ pub(super) struct LoopFrame {
 pub(super) struct LocalType {
     pub(super) name: ImmutableString,
     pub(super) declaration: Span,
+    /// The binding as its `let` writes it, `mut` and the name, as rustc
+    /// marks the local's declaration.
+    pub(super) binding: Span,
     pub(super) ty: Ty,
     /// The `let`'s value, when it has one.
     pub(super) value: Option<Span>,
+    /// Where a `let x;` or `let x: i32;` of the local alone would write
+    /// its value, after its name or its type: where rustc suggests one.
+    pub(super) assign: Option<Position>,
+    /// Where a `let` of the local alone, with no type written, would write
+    /// one, after its name: where rustc suggests one.
+    pub(super) annotate: Option<Position>,
 }
 
 /// A use of a `let x;` before an assignment gives it a value

@@ -92,6 +92,7 @@ impl Parser<'_> {
                         capability: "Clone".into(),
                         operation: member_span,
                         derive: false,
+                        declared: None,
                         required_by: None,
                     });
                 }

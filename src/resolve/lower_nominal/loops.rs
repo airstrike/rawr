@@ -498,6 +498,8 @@ impl<'a> Parser<'a> {
                 return Err(Error::ReturnWithoutValue {
                     output: self.inference.resolve(&output).name(&self.models),
                     at: Span::new(start.start(), text_end(start.start(), "return")),
+                    written: self.return_written,
+                    value: self.stand_in(&output).map(Into::into),
                 });
             }
             if let Some(returned) = self.copied_return("()".into()) {

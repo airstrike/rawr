@@ -597,9 +597,15 @@ fn resolution_report_with_sources(
             "binding declared here but left uninitialized".into()
         }
         resolve::Error::LocalTypeNeeded { .. } => "type must be known at this point".into(),
-        resolve::Error::DuplicateImport { name, .. } => {
-            format!("previous import of `{name}` here").into()
-        }
+        resolve::Error::DuplicateImport {
+            name,
+            previous_declaration,
+            ..
+        } => format!(
+            "previous import of the {} `{name}` here",
+            previous_declaration.kind
+        )
+        .into(),
         resolve::Error::UnknownMacro { .. } => {
             "a macro with the same name exists, but it appears later".into()
         }
@@ -628,6 +634,18 @@ fn resolution_report_with_sources(
                 )
                 .into(),
             ),
+        )?;
+    }
+    if let resolve::Error::ReturnWithoutValue {
+        output,
+        written: Some(written),
+        ..
+    } = error
+    {
+        builder = builder.secondary(
+            source.clone(),
+            *written,
+            Some(format!("expected `{output}` because of this return type").into()),
         )?;
     }
     // rustc labels the last of a tuple pattern's declared fields.
@@ -733,6 +751,9 @@ fn resolution_report_with_sources(
     if let Some(suggestion) = suggestion(error, &source)? {
         builder = builder.suggestion(suggestion);
     }
+    for suggestion in binding_suggestions(error, &source)? {
+        builder = builder.suggestion(suggestion);
+    }
     if let Some(suggestion) = detail
         .map(|detail| private_suggestion(detail, &source, &secondary_source))
         .transpose()?
@@ -798,14 +819,7 @@ fn private_suggestion(
         }
         _ => return Ok(None),
     };
-    let mut edits = edits.into_iter();
-    let Some(first) = edits.next() else {
-        return Ok(None);
-    };
-    Ok(Some(edits.fold(
-        Suggestion::new(message, Style::Verbose, first),
-        Suggestion::edit,
-    )))
+    Ok(Suggestion::of(message, Style::Verbose, edits))
 }
 
 /// The note rustc gives `at`, the place in `source` that `error` relates
@@ -940,20 +954,16 @@ fn sections(error: &resolve::Error, source: &Source) -> Vec<Section> {
             };
             parameter.chain(derivable).collect()
         }
-        // A bound the program writes: `Display`'s help at the type's
-        // definition, then the bound.
+        // `Display`'s help at the type's definition, then a bound the
+        // program writes.
         resolve::Error::MissingCapability {
             owner,
             capability,
-            required_by:
-                Some(resolve::Required {
-                    item,
-                    place: Some(place),
-                }),
+            declared,
+            required_by,
             ..
         } => {
-            let help = place
-                .declared
+            let help = declared
                 .filter(|_| capability == "Display")
                 .map(|declared| {
                     Section::help(format!(
@@ -965,12 +975,20 @@ fn sections(error: &resolve::Error, source: &Source) -> Vec<Section> {
                         None,
                     )
                 });
-            let bound = Section::note(format!("required by a bound in `{item}`")).primary(
-                source.clone(),
-                place.bound,
-                Some(format!("required by this bound in `{item}`").into()),
-            );
-            help.into_iter().chain([bound]).collect()
+            let bound = match required_by {
+                Some(resolve::Required {
+                    item,
+                    place: Some(place),
+                }) => Some(
+                    Section::note(format!("required by a bound in `{item}`")).primary(
+                        source.clone(),
+                        place.bound,
+                        Some(format!("required by this bound in `{item}`").into()),
+                    ),
+                ),
+                _ => None,
+            };
+            help.into_iter().chain(bound).collect()
         }
         // An arm's `&mut` pattern of one binding on a `&` value: rustc
         // notes the `mut` binding it may have meant.
@@ -990,6 +1008,63 @@ fn sections(error: &resolve::Error, source: &Source) -> Vec<Section> {
     }
 }
 
+/// rustc's suggestions for a binding assigned twice, in `source`: `mut`,
+/// and `ref mut` for one a pattern matched against a value declares.
+fn binding_suggestions(error: &resolve::Error, source: &Source) -> Result<Vec<Suggestion>, Error> {
+    let resolve::Error::ImmutableBinding {
+        declared, matched, ..
+    } = error
+    else {
+        return Ok(Vec::new());
+    };
+    if declared.is_none() {
+        return Ok(Vec::new());
+    }
+    let before = Span::new(declared.start(), declared.start());
+    let mutable = Suggestion::new(
+        "consider making this binding mutable",
+        Style::Verbose,
+        Edit::new(source.clone(), before, "mut ")?,
+    );
+    let borrow = matched
+        .then(|| Edit::new(source.clone(), before, "ref mut "))
+        .transpose()?
+        .map(|edit| {
+            Suggestion::new(
+                "to modify the original value, take a borrow instead",
+                Style::Verbose,
+                edit,
+            )
+        });
+    Ok([mutable].into_iter().chain(borrow).collect())
+}
+
+/// rustc's suggestion of `code`, under `message`, on a line of its own
+/// above the one `at` is on in `source`, indented as `at` is.
+fn above(
+    message: &str,
+    code: &str,
+    at: crate::Position,
+    source: &Source,
+) -> Result<Option<Suggestion>, Error> {
+    let (Some(line), Some(column)) = (at.line(), at.position()) else {
+        return Ok(None);
+    };
+    let indent: String = source
+        .text()
+        .split('\n')
+        .nth(line.saturating_sub(1))
+        .map(|line| line.chars().take(column.saturating_sub(1)).collect())
+        .unwrap_or_default();
+    let start = crate::Position::new(u16::try_from(line).unwrap_or(u16::MAX), 1);
+    let edit = Edit::new(
+        source.clone(),
+        Span::new(start, start),
+        format!("{indent}{code}\n"),
+    )?;
+    Ok(Some(Suggestion::new(message, Style::Verbose, edit)))
+}
+
 /// The code rustc suggests for `error`, in `source`.
 fn suggestion(error: &resolve::Error, source: &Source) -> Result<Option<Suggestion>, Error> {
     let suggestion = |message: &str, style, span: Span, replacement: &str| {
@@ -1000,12 +1075,11 @@ fn suggestion(error: &resolve::Error, source: &Source) -> Result<Option<Suggesti
     let before = |span: Span| Span::new(span.start(), span.start());
     let after = |span: Span| Span::new(span.end(), span.end());
     match error {
-        resolve::Error::ImmutableBinding { declared, .. } if !declared.is_none() => suggestion(
-            "consider making this binding mutable",
-            Style::Verbose,
-            before(*declared),
-            "mut ",
-        ),
+        resolve::Error::MemberKind {
+            field: true,
+            arguments: Some(arguments),
+            ..
+        } => suggestion("remove the arguments", Style::Inline, *arguments, ""),
         resolve::Error::MemberKind { field: false, .. } => suggestion(
             "use parentheses to call the method",
             Style::Verbose,
@@ -1064,33 +1138,113 @@ fn suggestion(error: &resolve::Error, source: &Source) -> Result<Option<Suggesti
             call,
             ..
         } => super::arguments::suggestion(arguments, source, call.end()),
+        // rustc names the second import `Other` and its name, or
+        // `other_` and a lowercase one.
+        resolve::Error::DuplicateImport {
+            name, declaration, ..
+        } => {
+            let other = if name.starts_with(char::is_uppercase) {
+                format!("Other{name}")
+            } else {
+                format!("other_{name}")
+            };
+            suggestion(
+                "you can use `as` to change the binding name of the import",
+                Style::Verbose,
+                declaration.rename,
+                &format!(" as {other}"),
+            )
+        }
+        resolve::Error::UnknownFunction {
+            import: Some(path),
+            placement: Some(at),
+            ..
+        } => above(
+            "consider importing this function",
+            &format!("use {path};"),
+            *at,
+            source,
+        ),
+        resolve::Error::UnscopedWrite {
+            placement: Some(at),
+            ..
+        } => above(
+            "trait `Write` which provides `write_fmt` is implemented but not in scope; perhaps \
+             you want to import it",
+            "use std::fmt::Write;",
+            *at,
+            source,
+        ),
+        resolve::Error::NonExhaustive {
+            witnesses, arms, ..
+        } => {
+            let (message, pattern) = resolve::NonExhaustive(witnesses).help();
+            super::arm::suggestion(arms, &pattern, message, source)
+        }
+        resolve::Error::Refutable {
+            witnesses, site, ..
+        } => {
+            let Some((message, edits)) = resolve::Refutable { witnesses, site }.suggestion() else {
+                return Ok(None);
+            };
+            let edits = edits
+                .into_iter()
+                .map(|(at, code)| Edit::new(source.clone(), Span::new(at, at), code))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(Suggestion::of(message, Style::Verbose, edits))
+        }
+        resolve::Error::LocalTypeNeeded {
+            name,
+            ty,
+            annotation: Some(annotation),
+            ..
+        } => {
+            let specified = match (&annotation.parameter, ty) {
+                (Some(parameter), _) => {
+                    format!(", where the type for type parameter `{parameter}` is specified")
+                }
+                (None, Some(_)) => ", where the placeholders `_` are specified".to_owned(),
+                (None, None) => String::new(),
+            };
+            suggestion(
+                &format!("consider giving `{name}` an explicit type{specified}"),
+                Style::Verbose,
+                annotation.at,
+                &format!(": {}", annotation.ty),
+            )
+        }
+        resolve::Error::Uninitialized {
+            assign: Some(assignment),
+            ..
+        } => suggestion(
+            "consider assigning a value",
+            Style::Verbose,
+            assignment.at,
+            &assignment.code,
+        ),
+        resolve::Error::ReturnWithoutValue {
+            at,
+            value: Some(value),
+            ..
+        } => suggestion(
+            "give the `return` a value of the expected type",
+            Style::Verbose,
+            after(*at),
+            &format!(" {value}"),
+        ),
         // The derive goes on its own line above the type, as indented.
         resolve::Error::MissingCapability {
             owner,
             capability,
             derive: true,
+            declared: Some(declared),
             ..
-        } if resolve::derivable(capability)
-            && let Some(declared) = bound_place(error).and_then(|place| place.declared) =>
-        {
-            let item = super::definition::span(source, declared).start();
-            let (Some(line), Some(column)) = (item.line(), item.position()) else {
-                return Ok(None);
-            };
-            let indent: String = source
-                .text()
-                .split('\n')
-                .nth(line.saturating_sub(1))
-                .map(|line| line.chars().take(column.saturating_sub(1)).collect())
-                .unwrap_or_default();
-            let start = crate::Position::new(u16::try_from(line).unwrap_or(u16::MAX), 1);
-            suggestion(
-                &format!("consider annotating `{owner}` with `#[derive({capability})]`"),
-                Style::Verbose,
-                Span::new(start, start),
-                &format!("{indent}#[derive({capability})]\n"),
-            )
-        }
+        } if resolve::derivable(capability) => above(
+            &format!("consider annotating `{owner}` with `#[derive({capability})]`"),
+            &format!("#[derive({capability})]"),
+            super::definition::span(source, *declared).start(),
+            source,
+        ),
         resolve::Error::SlicePattern {
             sliceable: true,
             subject: Some(subject),
@@ -1253,6 +1407,7 @@ fn primary_label(
         resolve::Error::ImmutableBinding { .. } => {
             Some("cannot assign twice to immutable variable".into())
         }
+        resolve::Error::MemberKind { field: true, .. } => Some("field, not a method".into()),
         resolve::Error::MovedValue {
             previous_iteration: true,
             ..
@@ -1294,10 +1449,7 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
                     "no method named `{member}` found for `{}` in the current scope",
                     short(owner)
                 ),
-            )
-            .help(format!(
-                "to use the field `{member}`, remove the parentheses"
-            ));
+            );
         }
         resolve::Error::MemberKind {
             owner,
@@ -1429,9 +1581,11 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         | resolve::Error::DuplicateMethod { .. } => {
             builder.help("rename or remove one of the duplicate declarations")
         }
-        resolve::Error::DuplicateImport { .. } => {
-            builder.help("you can use `as` to change the binding name of the import")
-        }
+        resolve::Error::DuplicateImport {
+            name, namespace, ..
+        } => builder.note(format!(
+            "`{name}` must be defined only once in the {namespace} namespace of this module"
+        )),
         // rustc's help where a path starts at no crate or module in scope.
         resolve::Error::UnknownType {
             name, path: true, ..
@@ -1452,9 +1606,9 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
             note: Some(note),
             ..
         } if *code != "E0364" => builder.note(note.clone()),
-        resolve::Error::NonExhaustive { witnesses, ty, .. } => builder
-            .note(format!("the matched value is of type `{ty}`"))
-            .help(resolve::NonExhaustive(witnesses).help()),
+        resolve::Error::NonExhaustive { ty, .. } => {
+            builder.note(format!("the matched value is of type `{ty}`"))
+        }
         resolve::Error::Refutable {
             witnesses,
             ty,
@@ -1462,15 +1616,11 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
             ..
         } => {
             let refutable = resolve::Refutable { witnesses, site };
-            let builder = refutable
+            refutable
                 .notes()
                 .iter()
                 .fold(builder, |builder, note| builder.note(*note))
-                .note(format!("the matched value is of type `{ty}`"));
-            match refutable.help() {
-                Some(help) => builder.help(help),
-                None => builder,
-            }
+                .note(format!("the matched value is of type `{ty}`"))
         }
         resolve::Error::PatternFields {
             help: Some(help), ..
@@ -1479,19 +1629,14 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
             Some(note) => builder.note(note),
             None => builder,
         },
-        resolve::Error::UnknownFunction {
-            import: Some(path), ..
-        } => builder.help(format!("consider importing this function: `use {path};`")),
+
         resolve::Error::Unboxed {
             help: Some(resolve::Boxing::New),
             ..
         } => builder.note(resolve::Boxing::HEAP_NOTE),
-        resolve::Error::UnscopedWrite { .. } => builder
-            .note("must implement `io::Write`, `fmt::Write`, or have a `write_fmt` method")
-            .help(
-                "trait `Write` which provides `write_fmt` is implemented but not in scope; \
-                 perhaps you want to import it: `use std::fmt::Write;`",
-            ),
+        resolve::Error::UnscopedWrite { .. } => {
+            builder.note("must implement `io::Write`, `fmt::Write`, or have a `write_fmt` method")
+        }
         resolve::Error::UnknownMacro {
             scope: resolve::MacroScope::Elsewhere,
             ..
@@ -1499,9 +1644,6 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Error::IfWithoutElse { .. } => builder
             .note("`if` expressions without `else` evaluate to `()`")
             .help("consider adding an `else` block that evaluates to the expected type"),
-        resolve::Error::ReturnWithoutValue { .. } => {
-            builder.help("give the `return` a value of the expected type")
-        }
         resolve::Error::SelfOutsideImpl {
             parameter: true, ..
         } => builder.note("associated functions are those in `impl` or `trait` definitions"),
@@ -1522,12 +1664,13 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
             owner,
             capability,
             derive,
+            declared,
             required_by,
             ..
         } => {
-            // A type the program declares in this file shows the help at
-            // its definition, and the derive as a suggestion there.
-            let declared = bound_place(error).and_then(|place| place.declared);
+            // A type the program declares in this file shows the derive as
+            // a suggestion there, and a bound's `Display` help at its
+            // definition.
             let builder = match capability.as_str() {
                 "Display" if declared.is_some() => builder,
                 "Display" => builder.help(format!(
@@ -1579,14 +1722,9 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
                 "expected {kind} signature `{expected}`\n   found {kind} signature `{found}`"
             ))
         }
-        resolve::Error::Uninitialized { .. } => builder.help("consider assigning a value"),
-        resolve::Error::LocalTypeNeeded { name, note, .. } => {
-            let builder = builder.help(format!("consider giving `{name}` an explicit type"));
-            match note {
-                Some(note) => builder.note(note.clone()),
-                None => builder,
-            }
-        }
+        resolve::Error::LocalTypeNeeded {
+            note: Some(note), ..
+        } => builder.note(note.clone()),
         resolve::Error::KnownPanic { lint, .. } => {
             builder.note(format!("`#[deny({})]` on by default", lint.name()))
         }
@@ -2042,6 +2180,7 @@ mod tests {
             capability: capability.into(),
             operation: at,
             derive,
+            declared: None,
             required_by: None,
         };
 

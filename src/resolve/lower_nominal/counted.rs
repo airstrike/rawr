@@ -507,6 +507,7 @@ impl Parser<'_> {
                         capability: "Clone".into(),
                         operation: call,
                         derive: matches!(element, Ty::Script(..)),
+                        declared: self.declared_name(&element),
                         required_by: None,
                     });
                 }

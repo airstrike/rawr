@@ -128,6 +128,7 @@ impl Parser<'_> {
                         capability: "Display".into(),
                         operation: span,
                         derive: matches!(from, Ty::Script(..)),
+                        declared: self.declared_name(&from),
                         required_by: None,
                     });
                 };

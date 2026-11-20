@@ -1,5 +1,6 @@
 //! Lower validated nominal operations onto the retained evaluator.
 
+mod annotated;
 mod assignee;
 mod attributes;
 mod binding;
@@ -81,6 +82,7 @@ mod splice;
 use places::PlacePattern;
 mod reborrow;
 mod reverse;
+mod stand_in;
 mod statement;
 mod std_impl;
 mod std_item;
@@ -413,6 +415,10 @@ struct Parser<'a> {
     /// assignment gives one a value is rustc's E0381, and one not declared
     /// `mut` takes its first assignment.
     deferred: BTreeMap<Span, Option<Span>>,
+    /// Where each name a pattern matched against a value binds starts:
+    /// rustc suggests a `ref mut` binding there for an assignment that
+    /// meant to change the matched value.
+    matched_bindings: BTreeSet<Position>,
     /// Each use of a `deferred` local before it has a value, reported once
     /// the body's types are settled (`finish_uninitialized`).
     uninitialized: Vec<UninitializedUse>,
@@ -850,6 +856,9 @@ struct Parser<'a> {
     else_less: BTreeSet<Position>,
     /// The declared output of the body being parsed, for `?` and `return`.
     return_ty: Option<Ty>,
+    /// Where the function being parsed writes its output type, which
+    /// rustc's E0069 labels; a closure's is none.
+    return_written: Option<Span>,
     /// A function whose `&mut` output borrows its receiver: each value it
     /// returns is the path to the place below the receiver
     /// (`places::returned_place`).
@@ -976,6 +985,7 @@ impl<'a> Parser<'a> {
             borrowed_captures: BTreeMap::new(),
             deferred: BTreeMap::new(),
             uninitialized: Vec::new(),
+            matched_bindings: BTreeSet::new(),
             local_types: Vec::new(),
             shared_field_reads: BTreeSet::new(),
             unmovable: BTreeMap::new(),
@@ -1114,6 +1124,7 @@ impl<'a> Parser<'a> {
             block_statement: None,
             else_less: BTreeSet::new(),
             return_ty: None,
+            return_written: None,
             place_output: false,
             returns: 0,
             return_blocked: None,
@@ -1168,6 +1179,7 @@ impl<'a> Parser<'a> {
             .map(|parameter| parameter.name.text.clone())
             .or_else(|| definition.formatter().cloned());
         parser.return_ty = Some(Ty::from_resolved(definition.output()));
+        parser.return_written = Some(definition.output().span());
         parser.place_output = definition.name() != "index_mut"
             && matches!(definition.receiver(), Some(receiver::Mode::Mutable))
             && parser
@@ -1307,6 +1319,7 @@ impl<'a> Parser<'a> {
                 .as_ref()
                 .map_or(Ty::Unit, Ty::from_resolved),
         );
+        parser.return_written = definition.output.as_ref().map(type_ref::Type::span);
         parser.place_output = !definition.body.constant
             && this_parameter(definition).is_some()
             && definition

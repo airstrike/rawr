@@ -101,6 +101,21 @@ impl<'a> Parser<'a> {
         name
     }
 
+    /// A match's `arms` as written, and the match after its `scrutinee`
+    /// through the `}` at `close`, where rustc's E0004 suggests an arm.
+    pub(super) fn written_arms(
+        &self,
+        arms: Vec<Span>,
+        scrutinee: Span,
+        mut close: Position,
+    ) -> Box<crate::resolve::Arms> {
+        close.advance();
+        Box::new(crate::resolve::Arms {
+            arms: arms.into(),
+            after_scrutinee: span(scrutinee.end(), close),
+        })
+    }
+
     /// Where rustc points at a match's scrutinee: the whole of a local's
     /// name, which its use's span only starts.
     pub(super) fn scrutinee_span(&self, subject: &ParsedExpr) -> Span {
@@ -219,6 +234,7 @@ impl<'a> Parser<'a> {
         let mut tested = split;
         let mut arm_ends = Vec::new();
         let mut arms = Vec::new();
+        let mut written_arms = Vec::new();
         let coverage_types = vec![subject_ty.clone()];
         let mut coverage_rows = Vec::<Vec<coverage::Pattern>>::new();
         let mut wildcard = false;
@@ -479,6 +495,7 @@ impl<'a> Parser<'a> {
             // A block arm needs no ',' after it, as in Rust.
             let block_arm = matches!(self.peek(), Token::LeftBrace);
             let action = self.parse_match_action();
+            written_arms.push(span(arm_start, self.written_end()));
             if !unreachable {
                 arm_ends.push(self.flow().arm_end());
             }
@@ -546,6 +563,7 @@ impl<'a> Parser<'a> {
                     witnesses,
                     ty: self.matched_type(&binding_ty),
                     scrutinee: scrutinee_span,
+                    arms: self.written_arms(written_arms, scrutinee_span, end),
                 });
             }
         }
@@ -801,6 +819,7 @@ impl<'a> Parser<'a> {
         let original_bindings = self.bindings.clone();
         let mut arm_bindings = Vec::new();
         let mut arms = Vec::new();
+        let mut written_arms = Vec::new();
         let mut exhaustive = false;
         let (mut saw_true, mut saw_false) = (false, false);
         // The values the unguarded arms of an integer or `char` match
@@ -885,6 +904,7 @@ impl<'a> Parser<'a> {
             // A block arm needs no ',' after it, as in Rust.
             let block_arm = matches!(self.peek(), Token::LeftBrace);
             let action = self.parse_match_action()?;
+            written_arms.push(span(pattern_start, self.written_end()));
             let bindings = std::mem::replace(&mut self.bindings, original_bindings.clone());
             if !unreachable {
                 arm_ends.push(self.flow().arm_end());
@@ -935,6 +955,7 @@ impl<'a> Parser<'a> {
                         .collect(),
                     ty: self.matched_type(&written),
                     scrutinee: self.scrutinee_span(&subject),
+                    arms: self.written_arms(written_arms, self.scrutinee_span(&subject), end),
                 });
             }
         }
@@ -1199,6 +1220,7 @@ impl<'a> Parser<'a> {
         let mut unguarded = Vec::new();
         let mut exhaustive = false;
         let mut arms = Vec::new();
+        let mut written_arms = Vec::new();
         while !matches!(self.peek(), Token::RightBrace | Token::EOF) {
             if self.arm_left_out()? {
                 continue;
@@ -1242,6 +1264,7 @@ impl<'a> Parser<'a> {
             // A block arm needs no ',' after it, as in Rust.
             let block_arm = matches!(self.peek(), Token::LeftBrace);
             let action = self.parse_match_action()?;
+            written_arms.push(span(pattern_start, self.written_end()));
             arm_ends.push(self.flow().arm_end());
             self.bindings = original_bindings.clone();
             arms.push((condition, binds, action));
@@ -1297,6 +1320,7 @@ impl<'a> Parser<'a> {
                 witnesses: witnesses.into(),
                 ty: self.matched_type(&written),
                 scrutinee: self.scrutinee_span(&subject),
+                arms: self.written_arms(written_arms, self.scrutinee_span(&subject), end),
             });
         }
         let output = self.coerce_branches(

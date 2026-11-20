@@ -528,6 +528,7 @@ impl Parser<'_> {
                 capability: if unsent.borrowed { "Sync" } else { "Send" }.into(),
                 operation: closure.span,
                 derive: false,
+                declared: None,
                 required_by: Some(crate::resolve::Required::by(spawner.path())),
             });
         }

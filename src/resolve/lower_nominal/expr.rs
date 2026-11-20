@@ -351,7 +351,8 @@ impl<'a> Parser<'a> {
                 self.lent_mut_field = lent;
                 let mut operand =
                     operand.map_err(|error| self.borrowed_operand(error, lone, start))?;
-                let whole = span(start, operand.span.end());
+                // Through the operand's last token, a `(place)`'s `)` too.
+                let whole = span(start, self.written_end());
                 if operand.lvalue.is_none() {
                     // `twice(&mut |x| v.push(x))`: the closure is the
                     // borrowed temporary, and the callee calls it where it
@@ -1015,9 +1016,10 @@ impl<'a> Parser<'a> {
             }
             self.note_known_parenthesized(value.span, span(open, end));
             value.span = span(open, end);
-            // `(x) = 1` and `(*r) += 1` assign the place inside, as rustc
-            // does; elsewhere the lowering reads it as a value.
-            if !assignment_token(&self.peek()) {
+            // `(x) = 1` and `(*r) += 1` assign the place inside, and `&mut
+            // (x)` borrows it, as rustc does; elsewhere the lowering reads it
+            // as a value.
+            if !assignment_token(&self.peek()) && self.lent_mut_field != Some(open) {
                 value.lvalue = None;
             }
             value.source.cover(value.span);
@@ -1472,6 +1474,7 @@ impl<'a> Parser<'a> {
                         capability: format!("From<{}>", source.name(&self.models)).into(),
                         operation: call,
                         derive: false,
+                        declared: None,
                         required_by: None,
                     });
                 }
@@ -1862,6 +1865,7 @@ impl<'a> Parser<'a> {
                     capability: "Default".into(),
                     operation: member_span,
                     derive: false,
+                    declared: None,
                     required_by: None,
                 });
             }

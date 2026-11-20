@@ -4,6 +4,56 @@
 use super::*;
 
 impl<'a> Parser<'a> {
+    /// The parenthesized arguments the next tokens write, `(` through its
+    /// `)`, when they open with one.
+    pub(super) fn parenthesized_ahead(&mut self) -> Option<Span> {
+        let open = self.position();
+        let mut ahead = self.input.clone();
+        let mut depth = 0_usize;
+        loop {
+            let (token, at) = ahead.next()?;
+            match token {
+                Token::Unit if depth == 0 => {
+                    return Some(span(open, text_end(at, "()")));
+                }
+                Token::LeftParen => depth += 1,
+                Token::RightParen if depth == 1 => return Some(span(open, text_end(at, ")"))),
+                Token::RightParen => depth = depth.checked_sub(1)?,
+                Token::EOF => return None,
+                _ if depth == 0 => return None,
+                _ => {}
+            }
+        }
+    }
+
+    /// Where the text the source writes before the next token ends.
+    pub(super) fn written_end(&mut self) -> Position {
+        let next = self.position();
+        self.written_before(next)
+    }
+
+    /// Where the text the source writes before `at` ends, past the
+    /// whitespace between: the point rustc inserts code after what
+    /// precedes a token, as ` = 42` after `let x: i32`.
+    pub(super) fn written_before(&self, at: Position) -> Position {
+        let Some(byte) = location::byte_at(self.text, at) else {
+            return at;
+        };
+        let written = self.text[..byte].trim_end();
+        let line = written.matches('\n').count() + 1;
+        let column = written
+            .rsplit('\n')
+            .next()
+            .unwrap_or_default()
+            .chars()
+            .count()
+            + 1;
+        Position::new(
+            u16::try_from(line).unwrap_or(u16::MAX),
+            u16::try_from(column).unwrap_or(u16::MAX),
+        )
+    }
+
     /// `at`, a point where `name` is written, over the name, as rustc
     /// marks a local where it is declared, moved and used.
     pub(super) fn name_span(&self, at: Span, name: &str) -> Span {

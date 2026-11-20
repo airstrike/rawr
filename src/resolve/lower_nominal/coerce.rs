@@ -398,6 +398,7 @@ impl<'a> Parser<'a> {
                     capability: "std::error::Error".into(),
                     operation: value.span,
                     derive: matches!(from_error.as_ref(), Ty::Script(..)),
+                    declared: self.declared_name(from_error.as_ref()),
                     required_by: None,
                 });
             };
@@ -432,6 +433,7 @@ impl<'a> Parser<'a> {
                     capability: "std::error::Error".into(),
                     operation: value.span,
                     derive: matches!(source, Ty::Script(..)),
+                    declared: self.declared_name(&source),
                     required_by: None,
                 });
             };
@@ -615,6 +617,7 @@ impl<'a> Parser<'a> {
                     capability: trait_name,
                     operation: value.span,
                     derive: matches!(concrete, Ty::Script(..)),
+                    declared: self.declared_name(&concrete),
                     required_by: None,
                 });
             }
@@ -1134,6 +1137,7 @@ impl<'a> Parser<'a> {
                         capability: trait_name,
                         operation: call,
                         derive: true,
+                        declared: None,
                         required_by: None,
                     });
                 };

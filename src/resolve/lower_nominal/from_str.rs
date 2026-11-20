@@ -125,6 +125,7 @@ impl<'a> Parser<'a> {
                 capability: "FromStr".into(),
                 operation: span,
                 derive: false,
+                declared: None,
                 required_by: None,
             }),
         }
