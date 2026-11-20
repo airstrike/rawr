@@ -11,8 +11,7 @@ use rawr::package::Cells;
 use rawr::{diagnostic, project, CallFnOptions, Dynamic, Engine, Scope};
 
 /// A program as the command loaded it: the one parse every later step of
-/// the command uses, its facts, the parse cells it was loaded through and
-/// the command's timing session holding that parse.
+/// the command uses, its facts and the parse cells it was loaded through.
 pub struct Loaded {
     /// The discovered target.
     pub target: project::Target,
@@ -22,8 +21,6 @@ pub struct Loaded {
     pub sheet: Sheet,
     /// The parse cells it was loaded through.
     pub cells: Cells,
-    /// The command's timing session.
-    pub timing: rawr::timing::Session,
 }
 
 /// Discover the program at `path` (the current directory when `None`).
@@ -74,11 +71,7 @@ impl Build {
 pub fn load(path: Option<&PathBuf>, build: Build) -> Result<Loaded, diagnostic::Report> {
     let target = discover(path)?;
     let cells = Cells::new(build.cells(&target));
-    let timing = rawr::timing::Session::start();
-    let graph = timing
-        .observe_result(rawr::timing::Phase::ParseItems, || {
-            rawr::package::Graph::load_with_cells(&build.parser(), &target, &cells)
-        })
+    let graph = rawr::package::Graph::load_with_cells(&build.parser(), &target, &cells)
         .map_err(|error| compile_report(&error, &target))?;
     let mut sheet = Sheet::default();
     sheet.update(&graph);
@@ -87,7 +80,6 @@ pub fn load(path: Option<&PathBuf>, build: Build) -> Result<Loaded, diagnostic::
         graph,
         sheet,
         cells,
-        timing,
     })
 }
 
