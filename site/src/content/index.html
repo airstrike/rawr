@@ -154,7 +154,7 @@ fn main() {
 <section id="apps">
   <div class="wrap sec">
     <div class="side">
-      <h2>Hot reload in the app you already have</h2>
+      <h2>Hot reload out of the box with no extra steps</h2>
       <p>rawr has no framework of its own. Your app keeps its libraries.</p>
       <p>A save reaches the running app, which keeps its state when it can. A save that fails the check prints its error, and the last good version keeps running.</p>
       <div class="actions"><a class="btn" href="/docs/apps">Apps and libraries</a></div>
@@ -381,11 +381,11 @@ fn main() {
 <section id="debugger">
   <div class="wrap sec">
     <div class="side">
-      <h2>One debugger, every shell</h2>
+      <h2>Debug your program while it runs</h2>
     </div>
     <div>
-      <p class="status">A run has one debugger session, and each shell is a view of it. Every shell sees the same breakpoints and the same values. A breakpoint set in one shows in the others at once.</p>
-      <p class="status">A shell attaches to a program already running in a terminal, without restarting it.</p>
+      <p class="status">You can pause the program at a breakpoint and evaluate Rust where it stopped.</p>
+      <p class="status">VS Code, <code>rawr gui</code> and <code>rawr tui</code> can attach to the same run, so a breakpoint set in one shows in the others. They can attach to a program already running in a terminal without restarting it.</p>
       <div class="actions"><a class="btn" href="/docs/debugging">Debugging</a></div>
     </div>
   </div>
@@ -397,25 +397,25 @@ fn main() {
       <input type="radio" name="shell" id="shell-play"><label for="shell-play">Browser</label>
       <div class="lib" id="shell-vscode-panel">
         <div class="block shell">
-          <div class="file"><b>VS Code</b><span>F5, with the rawr extension</span></div>
+          <div class="file"><b>VS Code</b><span>F5 with the Rawr extension</span></div>
           <img src="/img/debugger-vscode-720.webp" srcset="/img/debugger-vscode-720.webp 720w, /img/debugger-vscode-full.webp 2040w" sizes="(max-width: 1280px) 100vw, 1200px" width="720" height="654" decoding="async" alt="VS Code paused at line 18, with the players map opened to one row per key in Variables">
         </div>
       </div>
       <div class="lib" id="shell-gui-panel">
         <div class="block shell">
-          <div class="file"><b>rawr gui</b><span>a window of its own</span></div>
+          <div class="file"><b>rawr gui</b><span>a separate window</span></div>
           <img src="/img/debugger-gui-720.webp" srcset="/img/debugger-gui-720.webp 720w, /img/debugger-gui-full.webp 2400w" sizes="(max-width: 1280px) 100vw, 1200px" width="720" height="511" loading="lazy" decoding="async" alt="The rawr gui window paused at line 18, with its source, call stack, bindings, console and output">
         </div>
       </div>
       <div class="lib" id="shell-tui-panel">
         <div class="block shell">
-          <div class="file"><b>rawr tui</b><span>in any terminal</span></div>
+          <div class="file"><b>rawr tui</b><span>in a terminal</span></div>
           <img src="/img/debugger-tui-720.webp" srcset="/img/debugger-tui-720.webp 720w, /img/debugger-tui-full.webp 1860w" sizes="(max-width: 1280px) 100vw, 1200px" width="720" height="478" loading="lazy" decoding="async" alt="rawr tui in a terminal paused at line 18, with the players map opened in its bindings pane">
         </div>
       </div>
       <div class="lib" id="shell-play-panel">
         <div class="block shell">
-          <div class="file"><b>/play</b><span>the bug icon</span></div>
+          <div class="file"><b>/play</b><span>the bug icon in a browser with JSPI</span></div>
           <img src="/img/debugger-playground-720.webp" srcset="/img/debugger-playground-720.webp 720w, /img/debugger-playground-full.webp 1440w" sizes="(max-width: 1280px) 100vw, 1200px" width="720" height="450" loading="lazy" decoding="async" alt="The playground's debugger panel paused at a breakpoint, beside the code and its output">
         </div>
       </div>
