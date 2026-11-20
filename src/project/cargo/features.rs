@@ -7,7 +7,7 @@
 
 use std::ffi::OsString;
 use std::process::Command;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, OnceLock};
 
 /// The feature flags of one `rawr run`, `rawr check` or `rawr test`,
 /// exactly as written, for Cargo to read: `--features <list>` (or `-F`,
@@ -42,7 +42,7 @@ const TEST: &str = "test";
 
 /// The selection this process runs with; read from [`VARIABLE`] when
 /// nothing selected one.
-static SELECTED: Mutex<Option<Selection>> = Mutex::new(None);
+static SELECTED: OnceLock<Selection> = OnceLock::new();
 
 impl Selection {
     /// The feature flags among `arguments` before any `--`, and the
@@ -86,18 +86,19 @@ impl Selection {
     }
 
     /// Make this the selection every Cargo answer of this process is asked
-    /// with, unless it is empty and the process inherited one.
+    /// with, unless it is empty and the process inherited one. The first
+    /// selection a process makes or reads is the one it keeps.
     pub fn select(self) {
         if self.flags.is_empty() && std::env::var_os(VARIABLE).is_some() {
             return;
         }
-        *lock() = Some(self);
+        let _ = SELECTED.set(self);
     }
 
     /// The selection this process runs with.
     #[must_use]
-    pub fn selected() -> Self {
-        lock().get_or_insert_with(Self::inherited).clone()
+    pub fn selected() -> &'static Self {
+        SELECTED.get_or_init(Self::inherited)
     }
 
     /// The flags, for Cargo.
@@ -307,12 +308,6 @@ impl Operator {
             Self::Any => values.iter().any(|value| *value),
         }
     }
-}
-
-fn lock() -> std::sync::MutexGuard<'static, Option<Selection>> {
-    SELECTED
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 #[cfg(test)]

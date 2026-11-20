@@ -510,14 +510,14 @@ impl Unit {
                     && kept.target == *target
                     && kept.mode == mode
                     && kept.platform.as_deref() == platform
-                    && kept.selection == selection
+                    && kept.selection == *selection
                     && kept.inputs == now
             })
             .map(|kept| kept.unit.clone());
         if let Some(unit) = kept {
             return Ok(unit);
         }
-        let unit = Self::ask(package, target, mode, platform, &selection)?;
+        let unit = Self::ask(package, target, mode, platform, selection)?;
         // Cargo may have written the lockfile, so the inputs are read after.
         let inputs = Inputs::read(files(), Vec::new());
         let mut built = lock(&BUILT);
@@ -532,7 +532,7 @@ impl Unit {
             target: target.clone(),
             mode,
             platform: platform.map(Box::from),
-            selection,
+            selection: selection.clone(),
             inputs,
             unit: unit.clone(),
         });
