@@ -1,5 +1,5 @@
 // The landing page: the subtitle under "rawr" as wide as the word, the
-// cargo run and rawr run sliders, and the debugger's shell tabs.
+// cargo run and rawr run sliders.
 export function setup(): void {
   const brand = document.querySelector(".hero h1");
   if (brand) {
@@ -69,71 +69,6 @@ export function setup(): void {
   }
 
   tabAnchors(document, location, history);
-  for (const shells of document.querySelectorAll<HTMLElement>(".shells")) shellTabs(shells);
-}
-
-/**
- * The tab an arrow, Home or End key moves to from tab `at` of `count`, with
- * the arrows wrapping round, or undefined for any other key.
- */
-export function nextTab(key: string, at: number, count: number): number | undefined {
-  switch (key) {
-    case "ArrowLeft": return (at + count - 1) % count;
-    case "ArrowRight": return (at + 1) % count;
-    case "Home": return 0;
-    case "End": return count - 1;
-  }
-}
-
-/**
- * The debugger's shells as tabs. The page has one figure per shell, all
- * shown, so they read without JavaScript. This builds a tab from each
- * figure's caption and shows one figure at a time. A hidden figure's lazy
- * image loads when its tab is chosen, or once the pointer or focus is on it.
- */
-function shellTabs(shells: HTMLElement): void {
-  const figures = [...shells.querySelectorAll<HTMLElement>(".shell")];
-  const list = document.createElement("div");
-  list.className = "shelltabs";
-  list.setAttribute("role", "tablist");
-  list.setAttribute("aria-label", "Debugger shells");
-  const tabs = figures.map((figure) => {
-    const tab = document.createElement("button");
-    tab.type = "button";
-    tab.id = `${figure.id}-tab`;
-    tab.setAttribute("role", "tab");
-    tab.setAttribute("aria-controls", figure.id);
-    tab.append(...[...figure.querySelector("figcaption")!.children].map((part) => part.cloneNode(true)));
-    figure.setAttribute("role", "tabpanel");
-    figure.setAttribute("aria-labelledby", tab.id);
-    const warm = () => figure.querySelector("img")?.setAttribute("loading", "eager");
-    tab.addEventListener("pointerenter", warm, { once: true });
-    tab.addEventListener("focus", warm, { once: true });
-    list.append(tab);
-    return tab;
-  });
-  const select = (at: number, focus: boolean) => {
-    tabs.forEach((tab, i) => {
-      const on = i === at;
-      tab.setAttribute("aria-selected", String(on));
-      tab.tabIndex = on ? 0 : -1;
-      figures[i].hidden = !on;
-    });
-    if (focus) {
-      tabs[at].focus();
-      tabs[at].scrollIntoView({ block: "nearest", inline: "nearest" });
-    }
-  };
-  tabs.forEach((tab, i) => tab.addEventListener("click", () => select(i, false)));
-  list.addEventListener("keydown", (e) => {
-    const at = nextTab(e.key, tabs.indexOf(e.target as HTMLButtonElement), tabs.length);
-    if (at === undefined) return;
-    e.preventDefault();
-    select(at, true);
-  });
-  shells.prepend(list);
-  shells.classList.add("tabbed");
-  select(0, false);
 }
 
 /** The library tabs' radio inputs by the anchor each one has in the address bar. */

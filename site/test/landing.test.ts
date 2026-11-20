@@ -38,13 +38,3 @@ test("the library tabs open from the address bar's anchor and write theirs when 
   onHash();
   assert.ok(!radios.get("lib-std")!.checked, "an anchor that names no tab changes nothing");
 });
-
-test("the debugger's shell tabs move with the arrows, wrapping, and jump with Home and End", async () => {
-  const { nextTab } = await import("../src/scripts/landing.ts");
-  assert.equal(nextTab("ArrowRight", 0, 4), 1);
-  assert.equal(nextTab("ArrowRight", 3, 4), 0, "right from the last tab wraps to the first");
-  assert.equal(nextTab("ArrowLeft", 0, 4), 3, "left from the first tab wraps to the last");
-  assert.equal(nextTab("Home", 2, 4), 0);
-  assert.equal(nextTab("End", 1, 4), 3);
-  assert.equal(nextTab("Enter", 1, 4), undefined, "any other key moves nowhere");
-});
