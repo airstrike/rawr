@@ -1777,6 +1777,14 @@ impl Shared {
                 event = DebuggerEvent::Break;
             }
         }
+        // An evaluation's first step is told as its start, not as the
+        // breakpoint it may be at: a breakpoint there pauses it.
+        if matches!(event, DebuggerEvent::Start)
+            && self.breaks.contains(position)
+            && self.stop(position, &node).is_some()
+        {
+            event = DebuggerEvent::Break;
+        }
         match event {
             DebuggerEvent::Break => {
                 if let Some(stop) = self.stop(position, &node) {
