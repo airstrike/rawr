@@ -504,14 +504,15 @@ function DebugConsole({ debug, state }: { debug: Debugger; state: DebugState }) 
  * The debugger's panel, right of the output, dense as DevTools' sources
  * sidebar: its toolbar beside where the program is, then the frames and
  * the bindings as compact tables under section bars. A binding with parts
- * opens to them, and stays open across pauses.
+ * opens to them, and stays open across pauses. A value without parts
+ * edits in place, assigned in the selected frame.
  */
 function DebugPanel({ debug, state }: { debug: Debugger; state: DebugState }) {
   const [open, toggle] = useOpen();
   const paused = state.phase === "paused";
   const canPause = state.pause === true;
   const rows: Row[] = state.bindings.map((binding) => ({
-    path: binding.name, depth: 0, name: binding.name, value: binding.value, error: binding.error, children: binding.children,
+    path: binding.name, depth: 0, name: binding.name, value: binding.value, error: binding.error, children: binding.children, place: binding.name,
   }));
   return (
     <section id="debugger" className="pane debugger flex min-h-0 flex-col border-t border-grid pt-4 pb-6 md:border-t-0" aria-label="Debugger">
@@ -559,7 +560,7 @@ function DebugPanel({ debug, state }: { debug: Debugger; state: DebugState }) {
           </ol>
           <h3>Bindings</h3>
           {state.unread && <p className="note px-3">{state.unread}</p>}
-          <ValueTable rows={rows} open={open} toggle={toggle} className="bindings" />
+          <ValueTable rows={rows} open={open} toggle={toggle} className="bindings" assign={(place, value) => debug.assign(place, value)} />
         </div>
       )}
     </section>

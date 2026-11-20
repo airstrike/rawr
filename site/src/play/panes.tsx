@@ -11,9 +11,14 @@
 // A value tree is a compact table, one row per value, as DevTools' scope
 // pane draws one: a value with parts (debugger.ts's Part) opens to a row
 // per field, item or map entry, and a long value elides to one line with
-// its whole text as the row's tooltip.
+// its whole text as the row's tooltip. A tree given `assign` lets a click
+// on a value without parts edit it in place: Enter assigns the text typed
+// to the row's place, rustc's refusal shows under it, and Escape cancels.
 import { useCallback, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
-import type { Part } from "./debugger.ts";
+import type { Assigned, Part } from "./debugger.ts";
+import { editable, visible, type Row } from "./rows.ts";
+
+export type { Row };
 
 /** `value` kept within `low` and `high`; `low` wins when they cross. */
 export function clamp(value: number, low: number, high: number): number {
@@ -124,31 +129,6 @@ function tint(value: string): string {
   return "value";
 }
 
-/** One row of a tree: a binding, or a part of one, at its depth. */
-export interface Row {
-  /** Its path from the tree's root, which keeps it open across pauses. */
-  path: string;
-  depth: number;
-  name: string;
-  value?: string;
-  error?: string;
-  children?: Part[];
-}
-
-/** `rows` and, under each open one, its parts' rows, depth first. */
-function visible(rows: Row[], open: Set<string>): Row[] {
-  const shown: Row[] = [];
-  const walk = (row: Row) => {
-    shown.push(row);
-    if (!row.children?.length || !open.has(row.path)) return;
-    for (const part of row.children) {
-      walk({ path: `${row.path}/${part.name}`, depth: row.depth + 1, name: part.name, value: part.value, children: part.children });
-    }
-  };
-  rows.forEach(walk);
-  return shown;
-}
-
 /** Which rows are open, by path: `toggle` opens or closes one. */
 export function useOpen(): [Set<string>, (path: string) => void] {
   const [open, setOpen] = useState(() => new Set<string>());
@@ -180,33 +160,104 @@ export function Twisty({ row, open, toggle }: { row: Row; open: Set<string>; tog
   );
 }
 
+/** The row being edited, by path, and rustc's refusal of its last write. */
+interface Editing {
+  path: string;
+  error: string | null;
+  busy: boolean;
+}
+
 /**
  * The rows as a two-column table: the name, indented by its depth, and the
  * value on one line. A top-level row carries `data-binding` with its name,
- * a part `data-part` with its path below the root.
+ * a part `data-part` with its path below the root. With `assign`, a value
+ * without parts edits in place.
  */
-export function ValueTable({ rows, open, toggle, className }: { rows: Row[]; open: Set<string>; toggle(path: string): void; className?: string }) {
+export function ValueTable({ rows, open, toggle, className, assign }: {
+  rows: Row[];
+  open: Set<string>;
+  toggle(path: string): void;
+  className?: string;
+  assign?(place: string, value: string): Promise<Assigned>;
+}) {
+  const [editing, setEditing] = useState<Editing | null>(null);
+  const write = async (row: Row, text: string) => {
+    if (!assign || !row.place || !text.trim()) return;
+    setEditing({ path: row.path, error: null, busy: true });
+    const assigned = await assign(row.place, text);
+    setEditing((now) => {
+      if (now?.path !== row.path) return now;
+      return "error" in assigned ? { path: row.path, error: assigned.error, busy: false } : null;
+    });
+  };
+  const key = (row: Row) => (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      if (!editing?.busy) void write(row, event.currentTarget.value);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      setEditing(null);
+    }
+  };
+  const edit = (row: Row) => {
+    if (assign && editable(row)) setEditing({ path: row.path, error: null, busy: false });
+  };
   return (
     <table className={"tree " + (className ?? "")}>
       <tbody>
-        {visible(rows, open).map((row) => (
-          <tr
-            key={row.path}
-            data-binding={row.depth === 0 ? row.name : undefined}
-            data-part={row.depth > 0 ? row.path.slice(row.path.indexOf("/") + 1) : undefined}
-            data-depth={row.depth}
-            onClick={row.children?.length ? () => toggle(row.path) : undefined}
-            className={row.children?.length ? "opens" : undefined}
-          >
-            <td className="name" style={{ paddingLeft: `${4 + row.depth * 12}px` }}>
-              <Twisty row={row} open={open} toggle={toggle} />
-              {row.name}
-            </td>
-            {row.error !== undefined
-              ? <td className="value err" title={row.error}>{row.error}</td>
-              : <td className={tint(row.value ?? "")} title={row.value}>{row.value}</td>}
-          </tr>
-        ))}
+        {visible(rows, open).map((row) => {
+          const editingRow = editing?.path === row.path ? editing : null;
+          const canEdit = assign !== undefined && editable(row);
+          return (
+            <tr
+              key={row.path}
+              data-binding={row.depth === 0 ? row.name : undefined}
+              data-part={row.depth > 0 ? row.path.slice(row.path.indexOf("/") + 1) : undefined}
+              data-depth={row.depth}
+              onClick={row.children?.length ? () => toggle(row.path) : undefined}
+              className={row.children?.length ? "opens" : undefined}
+            >
+              <td className="name" style={{ paddingLeft: `${4 + row.depth * 12}px` }}>
+                <Twisty row={row} open={open} toggle={toggle} />
+                {row.name}
+              </td>
+              {editingRow
+                ? (
+                  <td className="value editing">
+                    <input
+                      className="edit"
+                      defaultValue={row.value}
+                      aria-label={`New value of ${row.name}`}
+                      autoFocus
+                      spellCheck={false}
+                      autoComplete="off"
+                      readOnly={editingRow.busy}
+                      onKeyDown={key(row)}
+                    />
+                    {editingRow.error && <pre className="refusal">{editingRow.error}</pre>}
+                  </td>
+                )
+                : row.error !== undefined
+                  ? <td className="value err" title={row.error}>{row.error}</td>
+                  : (
+                    <td
+                      className={tint(row.value ?? "") + (canEdit ? " edits" : "")}
+                      title={row.value}
+                      tabIndex={canEdit ? 0 : undefined}
+                      onClick={canEdit ? () => edit(row) : undefined}
+                      onKeyDown={canEdit ? (event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          edit(row);
+                        }
+                      } : undefined}
+                    >
+                      {row.value}
+                    </td>
+                  )}
+            </tr>
+          );
+        })}
       </tbody>
     </table>
   );

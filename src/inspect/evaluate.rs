@@ -311,7 +311,19 @@ fn evaluate(
         .positions
         .locate_position(&program.entry, frame.statement)
         .ok_or("the program is paused in code rawr wrote around it")?;
-    let text = file.text();
+    if file.expansion_at(span.start()).is_some() {
+        return Err(
+            "the program is paused in a macro's expansion, where no code is written".into(),
+        );
+    }
+    let identity = file.identity().to_owned();
+    // The file as it is written. The run's source of it goes on past the
+    // file's own lines with the expansions of the macro calls among its
+    // items, which compiling the spliced file lays out again.
+    let text = program
+        .snapshot
+        .read(std::path::Path::new(&identity))
+        .ok_or_else(|| format!("{identity} isn't one of the program's files"))?;
     let at = diagnostic::offset(
         text,
         span.start().line().unwrap_or(1),
@@ -333,7 +345,6 @@ fn evaluate(
         spliced,
         frame: start,
     };
-    let identity = file.identity().to_owned();
     let snapshot = program
         .snapshot
         .with_text(std::path::Path::new(&identity), splice.spliced.text())
@@ -570,7 +581,16 @@ mod tests {
         let (ast, positions) = engine
             .compile_package_snapshot_with_positions(&snapshot)
             .unwrap_or_else(|error| panic!("{error}"));
-        let entry = Source::new(FILE, program).unwrap();
+        // The entry as a run's debugger has it: with the expansions of the
+        // macro calls among its items laid out past the file's own lines.
+        let (candidate, _) = engine
+            .compile_package_snapshot_generation_with_top_level(&snapshot)
+            .unwrap_or_else(|error| panic!("{error}"));
+        let entry = candidate
+            .located()
+            .expect("a run compiled under a debugger is located")
+            .entry
+            .clone();
         let positions = Arc::new(positions);
         let located = Arc::clone(&positions);
         let located_entry = entry.clone();
@@ -639,6 +659,121 @@ fn main() {
         );
         // The program goes on with what the code changed.
         assert_eq!(printed, "1 10\n4 10\n");
+    }
+
+    /// A method that takes `&mut self` and matches its argument, called on
+    /// a value its caller prints after the call.
+    const METHOD: &str = "// rawr
+struct Counter {
+    value: i64,
+}
+
+impl Counter {
+    fn update(&mut self, step: i64) {
+        match step {
+            1 => {
+                self.value += step;
+            }
+            _ => {}
+        }
+    }
+}
+
+fn main() {
+    let mut counter = Counter { value: 0 };
+    counter.update(1);
+    println!(\"{}\", counter.value);
+}
+";
+
+    #[test]
+    fn an_assignment_in_a_method_writes_through_self_with_or_without_its_semicolon() {
+        let (answers, printed) = evaluated(
+            METHOD,
+            10,
+            &[
+                "self.value = 100",
+                "self.value",
+                "self.value = 7;",
+                "self.value *= 2",
+            ],
+        );
+        assert_eq!(
+            answers,
+            [
+                json!({ "value": "()" }),
+                json!({ "value": "100" }),
+                json!({ "value": "()" }),
+                json!({ "value": "()" }),
+            ]
+        );
+        // The paused statement then adds its step to the value written.
+        assert_eq!(printed, "15\n");
+    }
+
+    /// [`METHOD`] with a macro called among its items, whose expansion the
+    /// compiler lays out past the file's own lines.
+    const EXPANDED: &str = "// rawr
+struct Counter {
+    value: i64,
+}
+
+impl Counter {
+    fn update(&mut self, step: i64) {
+        match step {
+            1 => {
+                self.value += step;
+            }
+            _ => {}
+        }
+    }
+}
+
+macro_rules! reader {
+    () => {
+        impl Counter {
+            fn read(&self) -> i64 {
+                self.value
+            }
+        }
+    };
+}
+
+reader!();
+
+fn main() {
+    let mut counter = Counter { value: 0 };
+    counter.update(1);
+    println!(\"{}\", counter.read());
+}
+";
+
+    #[test]
+    fn code_is_written_into_the_files_own_text_not_its_laid_out_expansions() {
+        let (answers, printed) = evaluated(EXPANDED, 10, &["self.value = 4;", "self.read()"]);
+        assert_eq!(answers, [json!({ "value": "()" }), json!({ "value": "4" })]);
+        assert_eq!(printed, "5\n");
+    }
+
+    #[test]
+    fn a_refused_assignment_points_at_the_code_as_written() {
+        let (answers, _) = evaluated(METHOD, 10, &["self.value = \"a\"", "step = 2;"]);
+        let error = |answer: &Value| answer["error"].as_str().unwrap_or_default().to_owned();
+        let mismatched = error(&answers[0]);
+        assert!(
+            mismatched.starts_with("error[E0308]: mismatched types"),
+            "{}",
+            answers[0]
+        );
+        assert!(mismatched.contains("<eval>:1:14"), "{mismatched}");
+        let immutable = error(&answers[1]);
+        assert!(
+            immutable.starts_with("error[E0384]: cannot assign twice to immutable variable `step`"),
+            "{}",
+            answers[1]
+        );
+        assert!(immutable.contains("<eval>:1:1"), "{immutable}");
+        assert!(!immutable.contains("__rawr"), "{immutable}");
     }
 
     /// A frame with a shared and a mutable borrow and an immutable binding.

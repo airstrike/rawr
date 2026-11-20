@@ -113,6 +113,15 @@ body.play { font-size: var(--fs-base); line-height: 1.5; }
 .tree .value.str { color: var(--syn-str); }
 .tree .value.num { color: var(--syn-num); }
 .tree .value.err { color: var(--red); }
+/* A value without parts edits in place: a text cursor over it, then an */
+/* input in its cell, rustc's refusal under it. */
+.tree .value.edits { cursor: text; }
+.tree .value.edits:focus-visible { outline: 1px solid color-mix(in srgb, var(--ink) 35%, transparent); outline-offset: -1px; }
+.tree .value.editing { max-width: none; overflow: visible; white-space: normal; }
+.tree input.edit { width: 100%; font: inherit; color: var(--ink); background: var(--paper); border: 1px solid var(--grid); padding: 0 3px; outline: none; }
+.tree input.edit:focus { border-color: color-mix(in srgb, var(--ink) 35%, transparent); }
+.tree input.edit:read-only { color: var(--quiet); }
+.tree pre.refusal { margin: 2px 0 4px; color: var(--red); font: inherit; white-space: pre-wrap; overflow-x: auto; }
 .twisty { display: inline-block; width: 12px; height: 18px; vertical-align: top; padding: 0; border: 0; background: none; color: var(--quiet); cursor: pointer; position: relative; }
 button.twisty::before { content: ""; position: absolute; left: 2px; top: 5.5px; border: 3.5px solid transparent; border-left: 5px solid currentColor; border-right: 0; transition: transform 80ms; transform-origin: 2px 3.5px; }
 button.twisty[aria-expanded="true"]::before { transform: rotate(90deg); }
