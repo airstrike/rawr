@@ -591,6 +591,10 @@ impl<'a> Parser<'a> {
                     });
                 let uncovered = self.uncovered_type(&binding_ty, missed);
                 let prefix = self.reference_prefix(&binding_ty);
+                let mut sealed = Vec::new();
+                if let Some(first) = witnesses.first().and_then(|witness| witness.first()) {
+                    first.sealed(&mut sealed);
+                }
                 let witnesses = witnesses
                     .iter()
                     .map(|witness| {
@@ -606,6 +610,7 @@ impl<'a> Parser<'a> {
                     scrutinee: scrutinee_span,
                     arms: self.written_arms(written_arms, scrutinee_span, end),
                     uncovered,
+                    sealed: sealed.into(),
                 });
             }
         }
@@ -999,6 +1004,7 @@ impl<'a> Parser<'a> {
                     scrutinee: self.scrutinee_span(&subject),
                     arms: self.written_arms(written_arms, self.scrutinee_span(&subject), end),
                     uncovered: None,
+                    sealed: Box::default(),
                 });
             }
         }
@@ -1044,12 +1050,12 @@ impl<'a> Parser<'a> {
         let Ty::Host { proof, .. } = ty else {
             return None;
         };
-        // An imported Rust enum's variants, each matched through the
-        // bridge (`imported_variant_pattern`).
-        #[cfg(feature = "rust-import")]
-        if proof.definition.identity().imported().is_some()
-            && let crate::host::type_def::Shape::Enum { variants, .. } = proof.definition.shape()
-        {
+        // An enum's variants, in its declaration order: an imported Rust
+        // enum's, each matched through the bridge
+        // (`imported_variant_pattern`), or a linked enum's, as std's
+        // `fmt::Alignment`, each the facade's associated value of its name
+        // matched by `==`.
+        if let crate::host::type_def::Shape::Enum { variants, .. } = proof.definition.shape() {
             return Some(
                 variants
                     .iter()
@@ -1241,7 +1247,6 @@ impl<'a> Parser<'a> {
         let Ty::Host { proof, .. } = &subject_ty else {
             unreachable!("host matches are selected for host types");
         };
-        let owner_path = proof.definition.path();
         // A match through `&T` binds references, as rustc's default binding
         // mode does.
         let written = match self.inference.resolve(&subject.ty) {
@@ -1347,16 +1352,17 @@ impl<'a> Parser<'a> {
                     )?)
         {
             // rustc's witnesses: each variant no arm covers, by the type's
-            // own name; `_` where arms cover each variant only in part, and
-            // for a `#[non_exhaustive]` enum's other values.
-            let owner = owner_path.as_str().rsplit("::").next().unwrap_or_default();
+            // name; `_` where arms cover each variant only in part, and
+            // alone for a `#[non_exhaustive]` enum, whose values outside its
+            // variants no arm but a wildcard covers.
+            let owner = coverage::host_type_name(&proof.definition);
             let prefix = self.reference_prefix(&written);
             let mut witnesses = variants
                 .iter()
-                .filter(|variant| !covered.contains(variant))
+                .filter(|variant| !sealed && !covered.contains(variant))
                 .map(|variant| format!("{prefix}{owner}::{variant}").into())
                 .collect::<Vec<ImmutableString>>();
-            if witnesses.is_empty() || sealed {
+            if witnesses.is_empty() {
                 witnesses.push(format!("{prefix}_").into());
             }
             return Err(Error::NonExhaustive {
@@ -1365,6 +1371,10 @@ impl<'a> Parser<'a> {
                 scrutinee: self.scrutinee_span(&subject),
                 arms: self.written_arms(written_arms, self.scrutinee_span(&subject), end),
                 uncovered: None,
+                sealed: sealed
+                    .then(|| ImmutableString::from(owner))
+                    .into_iter()
+                    .collect(),
             });
         }
         let output = self.coerce_branches(

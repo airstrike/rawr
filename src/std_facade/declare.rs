@@ -39,6 +39,13 @@ pub(super) trait Sink {
         capabilities: &[capability::Kind],
     ) -> Result<(), host::Error>;
 
+    fn variants(
+        &mut self,
+        path: &str,
+        names: &[&'static str],
+        non_exhaustive: bool,
+    ) -> Result<(), host::Error>;
+
     fn alias(&mut self, path: &str, target: &str) -> Result<(), host::Error>;
 
     fn type_alias(
@@ -75,6 +82,15 @@ impl Sink for facade::Builder {
             value.parameters,
             capabilities,
         )
+    }
+
+    fn variants(
+        &mut self,
+        path: &str,
+        names: &[&'static str],
+        non_exhaustive: bool,
+    ) -> Result<(), host::Error> {
+        self.unit_variants(path, names, non_exhaustive).map(drop)
     }
 
     fn alias(&mut self, path: &str, target: &str) -> Result<(), host::Error> {
@@ -159,6 +175,9 @@ pub(super) fn declare(
     for value in &values {
         let path = held::Value::facade(value.std);
         sink.held(value, &capabilities(value))?;
+        if let Some((names, non_exhaustive)) = variants(value) {
+            sink.variants(path, &names, non_exhaustive)?;
+        }
         for form in value.forms().skip(1) {
             sink.alias(held::Value::facade(form), path)?;
         }
@@ -240,6 +259,36 @@ fn capabilities(value: &held::Value) -> Vec<capability::Kind> {
             solve::holds(trait_, &own, &arguments)
         })
         .collect()
+}
+
+/// std's variants of the held enum `value` that stable Rust names, in
+/// their declaration order, and whether a pattern covers the enum only
+/// with a wildcard: when std's enum is `#[non_exhaustive]`, or has a
+/// variant stable Rust can't name, which rustc's witnesses write as `_`.
+/// `None` for a type that is no enum, and for an enum a variant of which
+/// has fields, which a pattern of rawr's can't read from std's value.
+fn variants(value: &held::Value) -> Option<(Vec<&'static str>, bool)> {
+    let definition = solve::definition(value.std);
+    let enumeration = std_table::item(definition).filter(|item| item.kind == "enum")?;
+    let mut variants = std_table::members(definition)
+        .filter(|member| member.kind == "variant")
+        .map(|member| Some((member.variant_index()?, member)))
+        .collect::<Option<Vec<_>>>()?;
+    variants.sort_unstable_by_key(|(index, _)| *index);
+    if variants
+        .iter()
+        .any(|(_, variant)| variant.declaration() != variant.name())
+    {
+        return None;
+    }
+    let stable = |variant: &std_table::Item| variant.stability == std_table::Stability::Stable;
+    let names = variants
+        .iter()
+        .filter(|(_, variant)| stable(variant))
+        .map(|(_, variant)| variant.name())
+        .collect::<Vec<_>>();
+    let unnamed = names.len() < variants.len();
+    Some((names, enumeration.non_exhaustive() || unnamed))
 }
 
 /// std's stable type aliases in `module` whose types rawr represents, as
@@ -492,5 +541,54 @@ mod tests {
         let stdin = capabilities("io::Stdin");
         assert!(stdin.contains(Kind::Debug) && !stdin.contains(Kind::Clone));
         assert!(!capabilities("io::Error").contains(Kind::Clone));
+    }
+
+    #[test]
+    fn std_facade_held_enums_have_stds_variants() {
+        use crate::host::type_def::Shape as Form;
+        let definition = crate::std_facade::definition();
+        let shape = |path: &str| {
+            definition
+                .types()
+                .find(|ty| ty.path() == format!("rawr_std::{path}"))
+                .map(|ty| ty.shape().clone())
+                .expect("a held type")
+        };
+        let variants = |path: &str| match shape(path) {
+            Form::Enum {
+                variants,
+                non_exhaustive,
+            } => (
+                variants
+                    .iter()
+                    .map(|variant| variant.name().to_owned())
+                    .collect::<Vec<_>>(),
+                non_exhaustive,
+            ),
+            other => panic!("`{path}` is no enum: {other:?}"),
+        };
+        // In std's declaration order.
+        assert_eq!(
+            variants("fmt::Alignment"),
+            (vec!["Left".into(), "Right".into(), "Center".into()], false)
+        );
+        assert_eq!(
+            variants("sync::mpsc::TryRecvError"),
+            (vec!["Empty".into(), "Disconnected".into()], false)
+        );
+        // `#[non_exhaustive]`, and `NotAPowerOfTwo` is unstable.
+        assert_eq!(variants("num::IntErrorKind").0.len(), 5);
+        assert!(variants("num::IntErrorKind").1 && variants("io::ErrorKind").1);
+        // `SeekFrom`'s variants have fields, which no pattern reads yet.
+        assert_eq!(shape("io::SeekFrom"), Form::Opaque);
+        // Each variant is bound, so a program names each one it misses.
+        for ty in definition.types() {
+            if let Form::Enum { variants, .. } = ty.shape() {
+                for variant in variants {
+                    let path = format!("{}::{}", ty.path(), variant.name());
+                    assert!(definition.overloads(&path).is_some(), "`{path}` is bound");
+                }
+            }
+        }
     }
 }

@@ -4579,6 +4579,62 @@ fn a_non_exhaustive_match_notes_the_enum_at_its_definition() {
     assert!(!option.contains("defined here"), "{option}");
 }
 
+/// A `match` that misses variants of a std enum Rawr's std holds names
+/// them as rustc does: by the enum's path where another std type has its
+/// name (`std::fmt::Alignment` beside `std::mem::Alignment`). A
+/// `#[non_exhaustive]` one's arms miss `_` alone, which rustc notes, even
+/// with an arm for each variant (#2369).
+#[test]
+fn a_match_on_a_held_std_enum_misses_what_rustcs_does() {
+    let alignment = rendered(
+        "use std::fmt::Alignment;\nfn main() {\n    let a = Alignment::Center;\n    let s = match \
+         a {\n        Alignment::Left => \"left\",\n    };\n    println!(\"{s}\");\n}\n",
+    );
+    assert!(
+        alignment.starts_with(
+            "error[E0004]: non-exhaustive patterns: `std::fmt::Alignment::Right` and \
+             `std::fmt::Alignment::Center` not covered\n"
+        ),
+        "{alignment}"
+    );
+    let nested = rendered(
+        "use std::fmt::Alignment;\nfn main() {\n    let a = Some(Alignment::Center);\n    let s = \
+         match a {\n        Some(Alignment::Left) => \"left\",\n        Some(Alignment::Right) => \
+         \"right\",\n        None => \"none\",\n    };\n    println!(\"{s}\");\n}\n",
+    );
+    assert!(
+        nested.starts_with(
+            "error[E0004]: non-exhaustive patterns: `Some(std::fmt::Alignment::Center)` not \
+             covered\n"
+        ),
+        "{nested}"
+    );
+    let sealed = "is marked as non-exhaustive, so a wildcard `_` is necessary to match \
+                  exhaustively\n";
+    let kind = rendered(
+        "use std::num::IntErrorKind;\nfn main() {\n    let e = \"\".parse::<u8>().unwrap_err();\n    \
+         let s = match e.kind() {\n        IntErrorKind::Empty => \"empty\",\n        \
+         IntErrorKind::InvalidDigit => \"digit\",\n        IntErrorKind::PosOverflow => \"pos\",\n        \
+         IntErrorKind::NegOverflow => \"neg\",\n        IntErrorKind::Zero => \"zero\",\n    };\n    \
+         println!(\"{s}\");\n}\n",
+    );
+    assert!(
+        kind.starts_with("error[E0004]: non-exhaustive patterns: `&_` not covered\n")
+            && kind.contains(&format!("= note: `IntErrorKind` {sealed}")),
+        "{kind}"
+    );
+    let io = rendered(
+        "use std::io::ErrorKind;\nfn main() {\n    let k = Some(ErrorKind::NotFound);\n    let s = \
+         match k {\n        Some(ErrorKind::NotFound) => \"missing\",\n        None => \"none\",\n    \
+         };\n    println!(\"{s}\");\n}\n",
+    );
+    assert!(
+        io.starts_with("error[E0004]: non-exhaustive patterns: `Some(_)` not covered\n")
+            && io.contains(&format!("= note: `ErrorKind` {sealed}")),
+        "{io}"
+    );
+}
+
 /// A std thread type's bare name resolves through a `use` alone, as in
 /// rustc: unbound, it is E0425 with the imports rustc suggests, and a path
 /// through a module's `use` names it (#2346).

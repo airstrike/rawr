@@ -426,10 +426,20 @@ impl Scalar {
     }
 }
 
-/// A crate type's name as a witness writes it: its path's last segment.
-fn host_type_name(definition: &crate::host::type_def::Definition) -> String {
+/// A crate type's name as a witness writes it: its path's last segment. A
+/// type of Rawr's std is named as rustc names std's own: by its name when
+/// no other type of std's has it, else by its path, as
+/// `std::fmt::Alignment` is beside `std::mem::Alignment`.
+pub(super) fn host_type_name(definition: &crate::host::type_def::Definition) -> String {
     let path = definition.path();
-    path.rsplit("::").next().unwrap_or_default().to_owned()
+    let name = path.rsplit("::").next().unwrap_or_default();
+    let std = path
+        .strip_prefix(crate::std_facade::ROOT)
+        .and_then(|rest| rest.strip_prefix("::"));
+    match std {
+        Some(rest) if !crate::std_table::sole_type(name) => format!("std::{rest}"),
+        _ => name.to_owned(),
+    }
 }
 
 /// The facade enum's `variant`, written `name`, as rustc writes a witness
@@ -555,6 +565,9 @@ pub(super) struct Constructor {
 #[derive(Clone)]
 pub(super) enum Witness {
     Wildcard,
+    /// `_` of a `#[non_exhaustive]` enum, by its name as the witness writes
+    /// it, which rustc's note names: `IntErrorKind`.
+    Sealed(ImmutableString),
     Constructor {
         name: ImmutableString,
         payload: Box<[Witness]>,
@@ -572,9 +585,27 @@ impl Witness {
         }
     }
 
+    /// The `#[non_exhaustive]` enums whose `_` the witness holds, each once,
+    /// in the order it writes them.
+    pub(super) fn sealed(&self, names: &mut Vec<ImmutableString>) {
+        match self {
+            Self::Wildcard => {}
+            Self::Sealed(name) => {
+                if !names.contains(name) {
+                    names.push(name.clone());
+                }
+            }
+            Self::Constructor { payload, .. } => {
+                for member in payload {
+                    member.sealed(names);
+                }
+            }
+        }
+    }
+
     pub(super) fn render(&self) -> String {
         match self {
-            Self::Wildcard => "_".to_string(),
+            Self::Wildcard | Self::Sealed(_) => "_".to_string(),
             // rustc names a struct's fields that aren't `_`, and `..` for
             // the rest.
             Self::Constructor {
@@ -585,7 +616,7 @@ impl Witness {
                 let mut members = fields
                     .iter()
                     .zip(payload.iter())
-                    .filter(|(_, member)| !matches!(member, Self::Wildcard))
+                    .filter(|(_, member)| !matches!(member, Self::Wildcard | Self::Sealed(_)))
                     .map(|(field, member)| format!("{field}: {}", member.render()))
                     .collect::<Vec<_>>();
                 if members.len() < fields.len() {
@@ -777,9 +808,10 @@ impl<'a> Parser<'a> {
     /// The values of the facade enum `referenced` that `written`, a pattern
     /// on one of its variants, misses, as rustc lists them: each other
     /// variant, then the first field of the written one whose pattern
-    /// misses some, and `_` for a `#[non_exhaustive]` enum's values that a
-    /// program outside its crate can't name. `let Event::Pressed(label) =
-    /// event` on an enum of that one variant misses none (#1681).
+    /// misses some. A `#[non_exhaustive]` enum's is `_` alone, as its values
+    /// outside its variants, which a program outside its crate can't name,
+    /// are. `let Event::Pressed(label) = event` on an enum of that one
+    /// variant misses none (#1681).
     fn host_variant_uncovered(
         &mut self,
         written: &pattern::EnumSyntax,
@@ -798,6 +830,9 @@ impl<'a> Parser<'a> {
         else {
             return Ok(vec![format!("{prefix}_")]);
         };
+        if *non_exhaustive {
+            return Ok(vec![format!("{prefix}_")]);
+        }
         let owner = host_type_name(&definition);
         let path: ImmutableString = definition.path().as_str().into();
         let discard = pattern::Syntax::Discard { span: at };
@@ -853,9 +888,6 @@ impl<'a> Parser<'a> {
                     break;
                 }
             }
-        }
-        if *non_exhaustive {
-            missed.push(format!("{prefix}_"));
         }
         Ok(missed)
     }
@@ -1026,8 +1058,14 @@ impl<'a> Parser<'a> {
             // A crate enum's variants, whose fields' patterns below a
             // program's pattern are each a binding, `_` or a part tested at
             // run time (`host_coverage`), so their types are not needed.
+            // A `#[non_exhaustive]` enum has values outside its variants, so
+            // it is covered as a type whose values aren't told apart: by a
+            // wildcard alone, its witness `_`.
             Ty::Host { proof, .. } => {
-                let crate::host::type_def::Shape::Enum { variants, .. } = proof.definition.shape()
+                let crate::host::type_def::Shape::Enum {
+                    variants,
+                    non_exhaustive: false,
+                } = proof.definition.shape()
                 else {
                     return None;
                 };
@@ -1344,7 +1382,21 @@ impl<'a> Parser<'a> {
         };
         let Some(constructors) = self.coverage_constructors(&types[0]) else {
             let tails = self.coverage_witnesses(&types[1..], &default_coverage_rows(rows), false);
-            return prefixed(&[Witness::Wildcard], tails);
+            let head = match without_references(&self.inference.resolve(&types[0])) {
+                Ty::Host { proof, .. }
+                    if matches!(
+                        proof.definition.shape(),
+                        crate::host::type_def::Shape::Enum {
+                            non_exhaustive: true,
+                            ..
+                        }
+                    ) =>
+                {
+                    Witness::Sealed(host_type_name(&proof.definition).into())
+                }
+                _ => Witness::Wildcard,
+            };
+            return prefixed(&[head], tails);
         };
         let (present, missing): (Vec<_>, Vec<_>) = constructors.iter().partition(|constructor| {
             rows.iter().any(|row| {
@@ -1472,10 +1524,13 @@ impl<'a> Parser<'a> {
         };
         let resolved = self.inference.resolve(ty);
         let enumerated = match without_references(&resolved) {
+            // A `#[non_exhaustive]` enum's values are not told apart: only a
+            // wildcard covers them.
             Ty::Host { proof, arguments } => match proof.definition.shape() {
-                crate::host::type_def::Shape::Enum { variants, .. } => {
-                    Some((proof.clone(), arguments.clone(), variants.to_vec()))
-                }
+                crate::host::type_def::Shape::Enum {
+                    variants,
+                    non_exhaustive: false,
+                } => Some((proof.clone(), arguments.clone(), variants.to_vec())),
                 _ => None,
             },
             _ => None,

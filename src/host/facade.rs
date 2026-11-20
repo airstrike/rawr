@@ -1002,6 +1002,40 @@ impl Builder {
         self.type_::<T>(path, parameters, capabilities)
     }
 
+    /// Give the declared type at `path`, a linked enum, its unit variants
+    /// `names` in declaration order, which a pattern's coverage lists. Each
+    /// is the type's associated value of its name, which a pattern tests by
+    /// the type's `==`. A `non_exhaustive` enum's patterns cover it only
+    /// with a wildcard.
+    pub(crate) fn unit_variants(
+        &mut self,
+        path: &str,
+        names: &[&str],
+        non_exhaustive: bool,
+    ) -> Result<&mut Self, host::Error> {
+        let relative = host::path::Path::parse(path)?;
+        let qualified = host::path::Path::qualify(&self.root, &relative);
+        let Ok(index) = self.type_index(&qualified) else {
+            return Err(host::Error::UnknownFacadeType {
+                item: path.into(),
+                ty: qualified.to_string().into(),
+            });
+        };
+        let variants = names
+            .iter()
+            .map(|name| host::type_def::Variant::linked_unit((*name).into()))
+            .collect();
+        let definition = self
+            .types
+            .remove(index)
+            .with_shape(host::type_def::Shape::Enum {
+                variants,
+                non_exhaustive,
+            });
+        self.types.insert(index, definition);
+        Ok(self)
+    }
+
     /// [`value_type`](Self::value_type) whose `Default` builds the field of
     /// a derived `Default`; `capabilities` should include
     /// [`capability::Kind::Default`].

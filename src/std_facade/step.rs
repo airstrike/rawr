@@ -59,6 +59,14 @@ pub(super) enum Step {
         std: &'static str,
         capabilities: &'static [capability::Kind],
     },
+    /// A held enum's unit variants, in std's declaration order, and whether
+    /// std's enum is `#[non_exhaustive]`: `fmt::Alignment`'s `Left`,
+    /// `Right` and `Center`.
+    Variants {
+        path: &'static str,
+        names: &'static [&'static str],
+        non_exhaustive: bool,
+    },
     /// Another type a held type stands for, as `path::Path` is `PathBuf`.
     Alias {
         path: &'static str,
@@ -135,6 +143,13 @@ pub(super) fn install(
                     value.parameters,
                     capabilities,
                 )?;
+            }
+            Step::Variants {
+                path,
+                names,
+                non_exhaustive,
+            } => {
+                builder.unit_variants(path, names, *non_exhaustive)?;
             }
             Step::Alias { path, target } => {
                 builder.alias(*path, *target)?;

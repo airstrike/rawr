@@ -3847,7 +3847,9 @@ impl<'a> Parser<'a> {
                 Some(&definition),
             )?);
         }
-        let selector = variant.imported_identity();
+        let Some(selector) = variant.imported_identity() else {
+            unreachable!("an imported enum's variant has the bridge's selector")
+        };
         // A matcher reads the value by its handle and gives new values, its
         // fields, which take its output's witness; the value stays
         // observable after it, but for the one that moves the fields out.

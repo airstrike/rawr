@@ -17,7 +17,10 @@
 //!   type, trait or function, `extra` is its generics, as
 //!   `K V S=std::hash::RandomState A=std::alloc::Global?allocator_api#32838`
 //!   (a default after `=`, an unstable parameter's feature and issue after
-//!   `?` and `#`); for a trait's member, `provided` or `required`. A trait
+//!   `?` and `#`); for a trait's member, `provided` or `required`; for an
+//!   enum's variant, its position in the enum's declaration, then one more
+//!   field, its declaration (`Left`, `Start(u64)`). A `#[non_exhaustive]`
+//!   enum has one more field too, `non_exhaustive`. A trait
 //!   and its members have one more field (D711 step 2): the trait's
 //!   supertraits (`Eq + PartialOrd`), and each member's declaration as a
 //!   program writes it (`fn from_str(s: &str) -> Result<Self, Self::Err>`,
@@ -381,13 +384,37 @@ impl Item {
     }
 
     /// A trait member's declaration, as a program writes it: `fn
-    /// from_str(s: &str) -> Result<Self, Self::Err>` or `type Err`.
+    /// from_str(s: &str) -> Result<Self, Self::Err>` or `type Err`, or an
+    /// enum's variant's: `Start(u64)`.
     pub(crate) fn declaration(&self) -> &'static str {
-        if self.kind == "trait" {
+        if matches!(self.kind, "trait" | "enum") {
             ""
         } else {
             self.detail
         }
+    }
+
+    /// Whether an enum is `#[non_exhaustive]`, so that a program's pattern
+    /// covers it only with a wildcard.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only `declare` reads it, to write `declared`")
+    )]
+    pub(crate) fn non_exhaustive(&self) -> bool {
+        self.kind == "enum" && self.detail == "non_exhaustive"
+    }
+
+    /// A variant's position in its enum's declaration. `None` for any
+    /// other item, and for a table written before variants had one.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only `declare` reads it, to write `declared`")
+    )]
+    pub(crate) fn variant_index(&self) -> Option<usize> {
+        if self.kind != "variant" {
+            return None;
+        }
+        self.extra.parse().ok()
     }
 
     /// A free or associated constant's type, as its declaration writes it:
@@ -545,6 +572,25 @@ pub(crate) fn public_path(definition: &str) -> Option<&'static str> {
         })
         .map(|found| found.path)
         .min_by_key(|path| path.len())
+}
+
+/// Whether one type of std's crates, stable or not, is named `name`, so
+/// that rustc writes it by its name alone: `IntErrorKind`, where it writes
+/// `std::fmt::Alignment` beside `std::mem::Alignment`.
+pub(crate) fn sole_type(name: &str) -> bool {
+    let suffix = format!("::{name}\t{}\t", Namespace::Type.letter());
+    let mut definitions = Table::get()
+        .paths
+        .0
+        .iter()
+        .filter(|line| line.contains(&suffix))
+        .map(|line| path_line(line))
+        .filter(|path| path.kind != "mod")
+        .map(|path| path.definition);
+    let Some(first) = definitions.next() else {
+        return false;
+    };
+    definitions.all(|definition| definition == first)
 }
 
 /// The items through `std`, then through `core`, named `name` in
