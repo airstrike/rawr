@@ -4,8 +4,10 @@ alloc::__export::format_args	m	macro	u liballoc_internals - implementation detai
 alloc::__export::must_use	v	fn	u liballoc_internals - implementation detail	core::hint::must_use
 alloc::alloc	t	mod	s	=
 alloc::alloc::AllocError	t	struct	u allocator_api 32838 -	core::alloc::AllocError
+alloc::alloc::AllocError	v	unit-struct	u allocator_api 32838 -	core::alloc::AllocError
 alloc::alloc::Allocator	t	trait	u allocator_api 32838 -	core::alloc::Allocator
 alloc::alloc::Global	t	struct	u allocator_api 32838 -	=
+alloc::alloc::Global	v	unit-struct	u allocator_api 32838 -	=
 alloc::alloc::GlobalAlloc	t	trait	s	core::alloc::global::GlobalAlloc
 alloc::alloc::Layout	t	struct	s	core::alloc::layout::Layout
 alloc::alloc::LayoutErr	t	type	s	core::alloc::layout::LayoutErr
@@ -29,7 +31,9 @@ alloc::boxed::ThinBox	t	struct	u thin_box 92791 -	alloc::boxed::thin::ThinBox
 alloc::boxed::box_assume_init_into_vec_unsafe	v	fn	u liballoc_internals - -	=
 alloc::bstr	t	mod	u bstr 134915 -	=
 alloc::bstr::ByteStr	t	struct	u bstr 134915 -	core::bstr::ByteStr
+alloc::bstr::ByteStr	v	tuple-struct	u bstr 134915 -	core::bstr::ByteStr
 alloc::bstr::ByteString	t	struct	u bstr 134915 -	=
+alloc::bstr::ByteString	v	tuple-struct	u bstr 134915 -	=
 alloc::collections	t	mod	s	=
 alloc::collections::BTreeMap	t	struct	s	alloc::collections::btree::map::BTreeMap
 alloc::collections::BTreeSet	t	struct	s	alloc::collections::btree::set::BTreeSet
@@ -124,6 +128,7 @@ alloc::fmt::DebugStruct	t	struct	s	core::fmt::builders::DebugStruct
 alloc::fmt::DebugTuple	t	struct	s	core::fmt::builders::DebugTuple
 alloc::fmt::Display	t	trait	s	core::fmt::Display
 alloc::fmt::Error	t	struct	s	core::fmt::Error
+alloc::fmt::Error	v	unit-struct	s	core::fmt::Error
 alloc::fmt::Formatter	t	struct	s	core::fmt::Formatter
 alloc::fmt::FormattingOptions	t	struct	u formatting_options 118117 -	core::fmt::FormattingOptions
 alloc::fmt::FromFn	t	struct	s	core::fmt::builders::FromFn
@@ -304,6 +309,7 @@ alloc::wtf8::Wtf8CodePoints	t	struct	u wtf8_internals - this is internal code fo
 core	t	mod	s	=
 core::alloc	t	mod	s	=
 core::alloc::AllocError	t	struct	u allocator_api 32838 -	=
+core::alloc::AllocError	v	unit-struct	u allocator_api 32838 -	=
 core::alloc::Allocator	t	trait	u allocator_api 32838 -	=
 core::alloc::GlobalAlloc	t	trait	s	core::alloc::global::GlobalAlloc
 core::alloc::Layout	t	struct	s	core::alloc::layout::Layout
@@ -339,8 +345,11 @@ core::asserting::Printable	t	trait	u generic_assert_internals 44838 -	=
 core::asserting::TryCaptureGeneric	t	trait	u generic_assert_internals 44838 -	=
 core::asserting::TryCapturePrintable	t	trait	u generic_assert_internals 44838 -	=
 core::asserting::TryCaptureWithDebug	t	struct	u generic_assert_internals 44838 -	=
+core::asserting::TryCaptureWithDebug	v	unit-struct	u generic_assert_internals 44838 -	=
 core::asserting::TryCaptureWithoutDebug	t	struct	u generic_assert_internals 44838 -	=
+core::asserting::TryCaptureWithoutDebug	v	unit-struct	u generic_assert_internals 44838 -	=
 core::asserting::Wrapper	t	struct	u generic_assert_internals 44838 -	=
+core::asserting::Wrapper	v	tuple-struct	u generic_assert_internals 44838 -	=
 core::async_iter	t	mod	u async_iterator 79024 -	=
 core::async_iter::AsyncIterator	t	trait	u async_iterator 79024 -	core::async_iter::async_iter::AsyncIterator
 core::async_iter::FromIter	t	struct	u async_iterator 79024 -	core::async_iter::from_iter::FromIter
@@ -354,6 +363,7 @@ core::borrow::Borrow	t	trait	s	=
 core::borrow::BorrowMut	t	trait	s	=
 core::bstr	t	mod	u bstr 134915 -	=
 core::bstr::ByteStr	t	struct	u bstr 134915 -	=
+core::bstr::ByteStr	v	tuple-struct	u bstr 134915 -	=
 core::bstr::impl_partial_eq	m	macro	u bstr 134915 -	core::bstr::traits::impl_partial_eq
 core::bstr::impl_partial_eq_n	m	macro	u bstr 134915 -	core::bstr::traits::impl_partial_eq_n
 core::bstr::impl_partial_eq_ord	m	macro	u bstr 134915 -	core::bstr::traits::impl_partial_eq_ord
@@ -416,6 +426,7 @@ core::cmp::PartialEq	t	trait	s	=
 core::cmp::PartialOrd	m	macro	s	=
 core::cmp::PartialOrd	t	trait	s	=
 core::cmp::Reverse	t	struct	s	=
+core::cmp::Reverse	v	tuple-struct	s	=
 core::cmp::max	v	fn	s	=
 core::cmp::max_by	v	fn	s	=
 core::cmp::max_by_key	v	fn	s	=
@@ -681,6 +692,7 @@ core::fmt::DebugStruct	t	struct	s	core::fmt::builders::DebugStruct
 core::fmt::DebugTuple	t	struct	s	core::fmt::builders::DebugTuple
 core::fmt::Display	t	trait	s	=
 core::fmt::Error	t	struct	s	=
+core::fmt::Error	v	unit-struct	s	=
 core::fmt::Formatter	t	struct	s	=
 core::fmt::FormattingOptions	t	struct	u formatting_options 118117 -	=
 core::fmt::FromFn	t	struct	s	core::fmt::builders::FromFn
@@ -762,7 +774,9 @@ core::include_bytes	m	macro	s	core::macros::builtin::include_bytes
 core::include_str	m	macro	s	core::macros::builtin::include_str
 core::index	t	mod	u sliceindex_wrappers 146179 -	=
 core::index::Clamp	t	struct	u sliceindex_wrappers 146179 -	=
+core::index::Clamp	v	tuple-struct	u sliceindex_wrappers 146179 -	=
 core::index::Last	t	struct	u sliceindex_wrappers 146179 -	=
+core::index::Last	v	unit-struct	u sliceindex_wrappers 146179 -	=
 core::intrinsics	t	mod	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	=
 core::intrinsics::AtomicOrdering	t	enum	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	=
 core::intrinsics::abort	v	fn	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	=
@@ -924,6 +938,7 @@ core::intrinsics::mir::ReasonInCleanup	v	variant	u core_intrinsics - intrinsics 
 core::intrinsics::mir::Return	v	fn	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	=
 core::intrinsics::mir::ReturnTo	v	fn	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	=
 core::intrinsics::mir::ReturnToArg	t	struct	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	=
+core::intrinsics::mir::ReturnToArg	v	unit-struct	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	=
 core::intrinsics::mir::SetDiscriminant	v	fn	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	=
 core::intrinsics::mir::Static	v	fn	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	=
 core::intrinsics::mir::StaticMut	v	fn	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	=
@@ -932,6 +947,7 @@ core::intrinsics::mir::StorageLive	v	fn	u core_intrinsics - intrinsics are unlik
 core::intrinsics::mir::TailCall	v	fn	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	=
 core::intrinsics::mir::Unreachable	v	fn	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	=
 core::intrinsics::mir::UnwindActionArg	t	struct	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	=
+core::intrinsics::mir::UnwindActionArg	v	unit-struct	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	=
 core::intrinsics::mir::UnwindCleanup	v	fn	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	=
 core::intrinsics::mir::UnwindContinue	v	fn	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	=
 core::intrinsics::mir::UnwindResume	v	fn	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	=
@@ -1089,6 +1105,7 @@ core::isize::MIN	v	const	s	core::legacy_int_modules::isize::MIN
 core::iter	t	mod	s	=
 core::iter::ArrayChunks	t	struct	u iter_array_chunks 100450 -	core::iter::adapters::array_chunks::ArrayChunks
 core::iter::ByRefSized	t	struct	u std_internals - -	core::iter::adapters::by_ref_sized::ByRefSized
+core::iter::ByRefSized	v	tuple-struct	u std_internals - -	core::iter::adapters::by_ref_sized::ByRefSized
 core::iter::Chain	t	struct	s	core::iter::adapters::chain::Chain
 core::iter::Cloned	t	struct	s	core::iter::adapters::cloned::Cloned
 core::iter::Copied	t	struct	s	core::iter::adapters::copied::Copied
@@ -1173,9 +1190,11 @@ core::marker::PhantomContravariantLifetime	t	struct	u phantom_variance_markers 1
 core::marker::PhantomCovariant	t	struct	u phantom_variance_markers 135806 -	core::marker::variance::PhantomCovariant
 core::marker::PhantomCovariantLifetime	t	struct	u phantom_variance_markers 135806 -	core::marker::variance::PhantomCovariantLifetime
 core::marker::PhantomData	t	struct	s	=
+core::marker::PhantomData	v	unit-struct	s	=
 core::marker::PhantomInvariant	t	struct	u phantom_variance_markers 135806 -	core::marker::variance::PhantomInvariant
 core::marker::PhantomInvariantLifetime	t	struct	u phantom_variance_markers 135806 -	core::marker::variance::PhantomInvariantLifetime
 core::marker::PhantomPinned	t	struct	s	=
+core::marker::PhantomPinned	v	unit-struct	s	=
 core::marker::PointeeSized	t	trait	u sized_hierarchy 144404 -	=
 core::marker::Reborrow	t	trait	u reborrow 145612 -	=
 core::marker::Send	t	trait	s	=
@@ -1283,8 +1302,10 @@ core::num::NonZeroUsize	t	type	s	core::num::nonzero::NonZeroUsize
 core::num::ParseFloatError	t	struct	s	core::num::float_parse::ParseFloatError
 core::num::ParseIntError	t	struct	s	core::num::error::ParseIntError
 core::num::Saturating	t	struct	s	core::num::saturating::Saturating
+core::num::Saturating	v	tuple-struct	s	core::num::saturating::Saturating
 core::num::TryFromIntError	t	struct	s	core::num::error::TryFromIntError
 core::num::Wrapping	t	struct	s	core::num::wrapping::Wrapping
+core::num::Wrapping	v	tuple-struct	s	core::num::wrapping::Wrapping
 core::num::ZeroablePrimitive	t	trait	u nonzero_internals - implementation detail which may disappear or be replaced at any time	core::num::nonzero::ZeroablePrimitive
 core::num::can_not_overflow	v	fn	u std_internals - -	=
 core::num::imp	t	mod	u num_internals - internal routines only exposed for testing	=
@@ -1419,6 +1440,7 @@ core::ops::Range	t	struct	s	core::ops::range::Range
 core::ops::RangeBounds	t	trait	s	core::ops::range::RangeBounds
 core::ops::RangeFrom	t	struct	s	core::ops::range::RangeFrom
 core::ops::RangeFull	t	struct	s	core::ops::range::RangeFull
+core::ops::RangeFull	v	unit-struct	s	core::ops::range::RangeFull
 core::ops::RangeInclusive	t	struct	s	core::ops::range::RangeInclusive
 core::ops::RangeTo	t	struct	s	core::ops::range::RangeTo
 core::ops::RangeToInclusive	t	struct	s	core::ops::range::RangeToInclusive
@@ -1434,6 +1456,7 @@ core::ops::Sub	t	trait	s	core::ops::arith::Sub
 core::ops::SubAssign	t	trait	s	core::ops::arith::SubAssign
 core::ops::Try	t	trait	u try_trait_v2 84277 -	core::ops::try_trait::Try
 core::ops::Yeet	t	struct	u try_trait_v2_yeet 96374 -	core::ops::try_trait::Yeet
+core::ops::Yeet	v	tuple-struct	u try_trait_v2_yeet 96374 -	core::ops::try_trait::Yeet
 core::option	t	mod	s	=
 core::option::IntoIter	t	struct	s	=
 core::option::Iter	t	struct	s	=
@@ -1444,6 +1467,7 @@ core::option_env	m	macro	s	core::macros::builtin::option_env
 core::panic	m	macro	s	core::macros::panic
 core::panic	t	mod	s	=
 core::panic::AssertUnwindSafe	t	struct	s	core::panic::unwind_safe::AssertUnwindSafe
+core::panic::AssertUnwindSafe	v	tuple-struct	s	core::panic::unwind_safe::AssertUnwindSafe
 core::panic::Location	t	struct	s	core::panic::location::Location
 core::panic::PanicInfo	t	struct	s	core::panic::panic_info::PanicInfo
 core::panic::PanicMessage	t	struct	s	core::panic::panic_info::PanicMessage
@@ -2194,6 +2218,7 @@ core::range::Range	t	struct	s	=
 core::range::RangeFrom	t	struct	s	=
 core::range::RangeFromIter	t	struct	s	core::range::iter::RangeFromIter
 core::range::RangeFull	t	struct	s	core::ops::range::RangeFull
+core::range::RangeFull	v	unit-struct	s	core::ops::range::RangeFull
 core::range::RangeInclusive	t	struct	s	=
 core::range::RangeInclusiveIter	t	struct	s	core::range::iter::RangeInclusiveIter
 core::range::RangeIter	t	struct	s	core::range::iter::RangeIter
@@ -2423,13 +2448,16 @@ core::wtf8::Wtf8CodePoints	t	struct	u wtf8_internals - this is internal code for
 std	t	mod	s	=
 std::alloc	t	mod	s	=
 std::alloc::AllocError	t	struct	u allocator_api 32838 -	core::alloc::AllocError
+std::alloc::AllocError	v	unit-struct	u allocator_api 32838 -	core::alloc::AllocError
 std::alloc::Allocator	t	trait	u allocator_api 32838 -	core::alloc::Allocator
 std::alloc::Global	t	struct	u allocator_api 32838 -	alloc::alloc::Global
+std::alloc::Global	v	unit-struct	u allocator_api 32838 -	alloc::alloc::Global
 std::alloc::GlobalAlloc	t	trait	s	core::alloc::global::GlobalAlloc
 std::alloc::Layout	t	struct	s	core::alloc::layout::Layout
 std::alloc::LayoutErr	t	type	s	core::alloc::layout::LayoutErr
 std::alloc::LayoutError	t	struct	s	core::alloc::layout::LayoutError
 std::alloc::System	t	struct	s	=
+std::alloc::System	v	unit-struct	s	=
 std::alloc::__alloc_error_handler	t	mod	u alloc_internals - -	alloc::alloc::__alloc_error_handler
 std::alloc::__alloc_error_handler::__rdl_alloc_error_handler	v	fn	u alloc_internals - -	alloc::alloc::__alloc_error_handler::__rdl_alloc_error_handler
 std::alloc::__default_lib_allocator	t	mod	u alloc_internals - -	=
@@ -2493,7 +2521,9 @@ std::boxed::ThinBox	t	struct	u thin_box 92791 -	alloc::boxed::thin::ThinBox
 std::boxed::box_assume_init_into_vec_unsafe	v	fn	u liballoc_internals - -	alloc::boxed::box_assume_init_into_vec_unsafe
 std::bstr	t	mod	u bstr 134915 -	=
 std::bstr::ByteStr	t	struct	u bstr 134915 -	core::bstr::ByteStr
+std::bstr::ByteStr	v	tuple-struct	u bstr 134915 -	core::bstr::ByteStr
 std::bstr::ByteString	t	struct	u bstr 134915 -	alloc::bstr::ByteString
+std::bstr::ByteString	v	tuple-struct	u bstr 134915 -	alloc::bstr::ByteString
 std::cell	t	mod	s	core::cell
 std::cell::BorrowError	t	struct	s	core::cell::BorrowError
 std::cell::BorrowMutError	t	struct	s	core::cell::BorrowMutError
@@ -2553,6 +2583,7 @@ std::cmp::PartialEq	t	trait	s	core::cmp::PartialEq
 std::cmp::PartialOrd	m	macro	s	core::cmp::PartialOrd
 std::cmp::PartialOrd	t	trait	s	core::cmp::PartialOrd
 std::cmp::Reverse	t	struct	s	core::cmp::Reverse
+std::cmp::Reverse	v	tuple-struct	s	core::cmp::Reverse
 std::cmp::max	v	fn	s	core::cmp::max
 std::cmp::max_by	v	fn	s	core::cmp::max_by
 std::cmp::max_by_key	v	fn	s	core::cmp::max_by_key
@@ -2937,6 +2968,7 @@ std::fmt::DebugStruct	t	struct	s	core::fmt::builders::DebugStruct
 std::fmt::DebugTuple	t	struct	s	core::fmt::builders::DebugTuple
 std::fmt::Display	t	trait	s	core::fmt::Display
 std::fmt::Error	t	struct	s	core::fmt::Error
+std::fmt::Error	v	unit-struct	s	core::fmt::Error
 std::fmt::Formatter	t	struct	s	core::fmt::Formatter
 std::fmt::FormattingOptions	t	struct	u formatting_options 118117 -	core::fmt::FormattingOptions
 std::fmt::FromFn	t	struct	s	core::fmt::builders::FromFn
@@ -3211,6 +3243,7 @@ std::intrinsics::mir::ReasonInCleanup	v	variant	u core_intrinsics - intrinsics a
 std::intrinsics::mir::Return	v	fn	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	core::intrinsics::mir::Return
 std::intrinsics::mir::ReturnTo	v	fn	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	core::intrinsics::mir::ReturnTo
 std::intrinsics::mir::ReturnToArg	t	struct	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	core::intrinsics::mir::ReturnToArg
+std::intrinsics::mir::ReturnToArg	v	unit-struct	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	core::intrinsics::mir::ReturnToArg
 std::intrinsics::mir::SetDiscriminant	v	fn	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	core::intrinsics::mir::SetDiscriminant
 std::intrinsics::mir::Static	v	fn	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	core::intrinsics::mir::Static
 std::intrinsics::mir::StaticMut	v	fn	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	core::intrinsics::mir::StaticMut
@@ -3219,6 +3252,7 @@ std::intrinsics::mir::StorageLive	v	fn	u core_intrinsics - intrinsics are unlike
 std::intrinsics::mir::TailCall	v	fn	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	core::intrinsics::mir::TailCall
 std::intrinsics::mir::Unreachable	v	fn	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	core::intrinsics::mir::Unreachable
 std::intrinsics::mir::UnwindActionArg	t	struct	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	core::intrinsics::mir::UnwindActionArg
+std::intrinsics::mir::UnwindActionArg	v	unit-struct	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	core::intrinsics::mir::UnwindActionArg
 std::intrinsics::mir::UnwindCleanup	v	fn	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	core::intrinsics::mir::UnwindCleanup
 std::intrinsics::mir::UnwindContinue	v	fn	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	core::intrinsics::mir::UnwindContinue
 std::intrinsics::mir::UnwindResume	v	fn	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	core::intrinsics::mir::UnwindResume
@@ -3397,6 +3431,7 @@ std::isize::MIN	v	const	s	core::legacy_int_modules::isize::MIN
 std::iter	t	mod	s	core::iter
 std::iter::ArrayChunks	t	struct	u iter_array_chunks 100450 -	core::iter::adapters::array_chunks::ArrayChunks
 std::iter::ByRefSized	t	struct	u std_internals - -	core::iter::adapters::by_ref_sized::ByRefSized
+std::iter::ByRefSized	v	tuple-struct	u std_internals - -	core::iter::adapters::by_ref_sized::ByRefSized
 std::iter::Chain	t	struct	s	core::iter::adapters::chain::Chain
 std::iter::Cloned	t	struct	s	core::iter::adapters::cloned::Cloned
 std::iter::Copied	t	struct	s	core::iter::adapters::copied::Copied
@@ -3481,9 +3516,11 @@ std::marker::PhantomContravariantLifetime	t	struct	u phantom_variance_markers 13
 std::marker::PhantomCovariant	t	struct	u phantom_variance_markers 135806 -	core::marker::variance::PhantomCovariant
 std::marker::PhantomCovariantLifetime	t	struct	u phantom_variance_markers 135806 -	core::marker::variance::PhantomCovariantLifetime
 std::marker::PhantomData	t	struct	s	core::marker::PhantomData
+std::marker::PhantomData	v	unit-struct	s	core::marker::PhantomData
 std::marker::PhantomInvariant	t	struct	u phantom_variance_markers 135806 -	core::marker::variance::PhantomInvariant
 std::marker::PhantomInvariantLifetime	t	struct	u phantom_variance_markers 135806 -	core::marker::variance::PhantomInvariantLifetime
 std::marker::PhantomPinned	t	struct	s	core::marker::PhantomPinned
+std::marker::PhantomPinned	v	unit-struct	s	core::marker::PhantomPinned
 std::marker::PointeeSized	t	trait	u sized_hierarchy 144404 -	core::marker::PointeeSized
 std::marker::Reborrow	t	trait	u reborrow 145612 -	core::marker::Reborrow
 std::marker::Send	t	trait	s	core::marker::Send
@@ -3599,8 +3636,10 @@ std::num::NonZeroUsize	t	type	s	core::num::nonzero::NonZeroUsize
 std::num::ParseFloatError	t	struct	s	core::num::float_parse::ParseFloatError
 std::num::ParseIntError	t	struct	s	core::num::error::ParseIntError
 std::num::Saturating	t	struct	s	core::num::saturating::Saturating
+std::num::Saturating	v	tuple-struct	s	core::num::saturating::Saturating
 std::num::TryFromIntError	t	struct	s	core::num::error::TryFromIntError
 std::num::Wrapping	t	struct	s	core::num::wrapping::Wrapping
+std::num::Wrapping	v	tuple-struct	s	core::num::wrapping::Wrapping
 std::num::ZeroablePrimitive	t	trait	u nonzero_internals - implementation detail which may disappear or be replaced at any time	core::num::nonzero::ZeroablePrimitive
 std::offload	t	mod	u gpu_offload 131513 -	=
 std::offload::offload	t	mod	u gpu_offload 131513 -	core::offload
@@ -3649,6 +3688,7 @@ std::ops::Range	t	struct	s	core::ops::range::Range
 std::ops::RangeBounds	t	trait	s	core::ops::range::RangeBounds
 std::ops::RangeFrom	t	struct	s	core::ops::range::RangeFrom
 std::ops::RangeFull	t	struct	s	core::ops::range::RangeFull
+std::ops::RangeFull	v	unit-struct	s	core::ops::range::RangeFull
 std::ops::RangeInclusive	t	struct	s	core::ops::range::RangeInclusive
 std::ops::RangeTo	t	struct	s	core::ops::range::RangeTo
 std::ops::RangeToInclusive	t	struct	s	core::ops::range::RangeToInclusive
@@ -3664,6 +3704,7 @@ std::ops::Sub	t	trait	s	core::ops::arith::Sub
 std::ops::SubAssign	t	trait	s	core::ops::arith::SubAssign
 std::ops::Try	t	trait	u try_trait_v2 84277 -	core::ops::try_trait::Try
 std::ops::Yeet	t	struct	u try_trait_v2_yeet 96374 -	core::ops::try_trait::Yeet
+std::ops::Yeet	v	tuple-struct	u try_trait_v2_yeet 96374 -	core::ops::try_trait::Yeet
 std::option	t	mod	s	core::option
 std::option::IntoIter	t	struct	s	core::option::IntoIter
 std::option::Iter	t	struct	s	core::option::Iter
@@ -3674,6 +3715,7 @@ std::option_env	m	macro	s	core::macros::builtin::option_env
 std::panic	m	macro	s	std::macros::panic
 std::panic	t	mod	s	=
 std::panic::AssertUnwindSafe	t	struct	s	core::panic::unwind_safe::AssertUnwindSafe
+std::panic::AssertUnwindSafe	v	tuple-struct	s	core::panic::unwind_safe::AssertUnwindSafe
 std::panic::BacktraceStyle	t	enum	u panic_backtrace_config 93346 -	=
 std::panic::Location	t	struct	s	core::panic::location::Location
 std::panic::PanicHookInfo	t	struct	s	=
@@ -4497,12 +4539,14 @@ std::random	t	mod	u random 130703 -	=
 std::random::Distribution	t	trait	u random 130703 -	core::random::Distribution
 std::random::Rng	t	trait	u random 130703 -	core::random::Rng
 std::random::SystemRng	t	struct	u random 130703 -	=
+std::random::SystemRng	v	unit-struct	u random 130703 -	=
 std::random::random	v	fn	u random 130703 -	=
 std::range	t	mod	s	core::range
 std::range::Range	t	struct	s	core::range::Range
 std::range::RangeFrom	t	struct	s	core::range::RangeFrom
 std::range::RangeFromIter	t	struct	s	core::range::iter::RangeFromIter
 std::range::RangeFull	t	struct	s	core::ops::range::RangeFull
+std::range::RangeFull	v	unit-struct	s	core::ops::range::RangeFull
 std::range::RangeInclusive	t	struct	s	core::range::RangeInclusive
 std::range::RangeInclusiveIter	t	struct	s	core::range::iter::RangeInclusiveIter
 std::range::RangeIter	t	struct	s	core::range::iter::RangeIter
@@ -4687,8 +4731,10 @@ std::sync::mpmc::IntoIter	t	struct	u mpmc_channel 126840 -	=
 std::sync::mpmc::Iter	t	struct	u mpmc_channel 126840 -	=
 std::sync::mpmc::Receiver	t	struct	u mpmc_channel 126840 -	=
 std::sync::mpmc::RecvError	t	struct	u mpmc_channel 126840 -	std::sync::mpsc::RecvError
+std::sync::mpmc::RecvError	v	unit-struct	u mpmc_channel 126840 -	std::sync::mpsc::RecvError
 std::sync::mpmc::RecvTimeoutError	t	enum	u mpmc_channel 126840 -	std::sync::mpsc::RecvTimeoutError
 std::sync::mpmc::SendError	t	struct	u mpmc_channel 126840 -	std::sync::mpsc::SendError
+std::sync::mpmc::SendError	v	tuple-struct	u mpmc_channel 126840 -	std::sync::mpsc::SendError
 std::sync::mpmc::SendTimeoutError	t	enum	u mpmc_channel 126840 -	std::sync::mpmc::error::SendTimeoutError
 std::sync::mpmc::Sender	t	struct	u mpmc_channel 126840 -	=
 std::sync::mpmc::TryIter	t	struct	u mpmc_channel 126840 -	=
@@ -4701,8 +4747,10 @@ std::sync::mpsc::IntoIter	t	struct	s	=
 std::sync::mpsc::Iter	t	struct	s	=
 std::sync::mpsc::Receiver	t	struct	s	=
 std::sync::mpsc::RecvError	t	struct	s	=
+std::sync::mpsc::RecvError	v	unit-struct	s	=
 std::sync::mpsc::RecvTimeoutError	t	enum	s	=
 std::sync::mpsc::SendError	t	struct	s	=
+std::sync::mpsc::SendError	v	tuple-struct	s	=
 std::sync::mpsc::Sender	t	struct	s	=
 std::sync::mpsc::SyncSender	t	struct	s	=
 std::sync::mpsc::TryIter	t	struct	s	=
@@ -4722,6 +4770,7 @@ std::sync::nonpoison::RwLockReadGuard	t	struct	u sync_nonpoison 134645 -	std::sy
 std::sync::nonpoison::RwLockWriteGuard	t	struct	u sync_nonpoison 134645 -	std::sync::nonpoison::rwlock::RwLockWriteGuard
 std::sync::nonpoison::TryLockResult	t	type	u sync_nonpoison 134645 -	=
 std::sync::nonpoison::WouldBlock	t	struct	u sync_nonpoison 134645 -	=
+std::sync::nonpoison::WouldBlock	v	unit-struct	u sync_nonpoison 134645 -	=
 std::sync::oneshot	t	mod	u oneshot_channel 143674 -	=
 std::sync::oneshot::Receiver	t	struct	u oneshot_channel 143674 -	=
 std::sync::oneshot::RecvTimeoutError	t	enum	u oneshot_channel 143674 -	=

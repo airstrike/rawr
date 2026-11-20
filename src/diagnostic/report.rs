@@ -150,6 +150,9 @@ pub enum Error {
     },
     /// A report attempted to install a second primary label.
     MultiplePrimaryLabels,
+    /// A report attempted to install a further primary label before its
+    /// first.
+    MissingPrimaryLabel,
 }
 
 impl Report {
@@ -329,6 +332,28 @@ impl Builder {
         message: impl Into<Option<ImmutableString>>,
     ) -> Result<Self, Error> {
         self.label(source, span, LabelKind::Primary, message.into())
+    }
+
+    /// Attach a further primary label after the first, as rustc marks each
+    /// unresolved member of one `use` (E0432). The first stays the one the
+    /// `-->` arrow names.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error before the first primary label, or for a span
+    /// outside its source.
+    pub fn also_primary(
+        mut self,
+        source: Source,
+        span: Span,
+        message: impl Into<Option<ImmutableString>>,
+    ) -> Result<Self, Error> {
+        if !self.has_primary {
+            return Err(Error::MissingPrimaryLabel);
+        }
+        let label = self.placed(Label::new(source, span, LabelKind::Primary, message.into()))?;
+        self.report.labels.push(label);
+        Ok(self)
     }
 
     /// Attach one related source label.
@@ -662,6 +687,8 @@ impl fmt::Display for Error {
             Self::MultiplePrimaryLabels => {
                 formatter.write_str("diagnostic report has more than one primary label")
             }
+            Self::MissingPrimaryLabel => formatter
+                .write_str("diagnostic report has a further primary label before its first"),
         }
     }
 }

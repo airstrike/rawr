@@ -547,6 +547,9 @@ pub(super) struct Constructor {
     pub(super) key: Key,
     pub(super) name: ImmutableString,
     pub(super) payload: Box<[Ty]>,
+    /// A struct or struct variant's field names, one per payload type,
+    /// which its witness names as rustc does: `E::C { y: false, .. }`.
+    pub(super) fields: Option<Box<[ImmutableString]>>,
 }
 
 #[derive(Clone)]
@@ -555,14 +558,46 @@ pub(super) enum Witness {
     Constructor {
         name: ImmutableString,
         payload: Box<[Witness]>,
+        fields: Option<Box<[ImmutableString]>>,
     },
 }
 
 impl Witness {
+    /// The witness of `constructor` over `payload`, one per payload type.
+    fn of(constructor: &Constructor, payload: Box<[Witness]>) -> Self {
+        Self::Constructor {
+            name: constructor.name.clone(),
+            payload,
+            fields: constructor.fields.clone(),
+        }
+    }
+
     pub(super) fn render(&self) -> String {
         match self {
             Self::Wildcard => "_".to_string(),
-            Self::Constructor { name, payload } if name.is_empty() => format!(
+            // rustc names a struct's fields that aren't `_`, and `..` for
+            // the rest.
+            Self::Constructor {
+                name,
+                payload,
+                fields: Some(fields),
+            } => {
+                let mut members = fields
+                    .iter()
+                    .zip(payload.iter())
+                    .filter(|(_, member)| !matches!(member, Self::Wildcard))
+                    .map(|(field, member)| format!("{field}: {}", member.render()))
+                    .collect::<Vec<_>>();
+                if members.len() < fields.len() {
+                    members.push("..".into());
+                }
+                if members.is_empty() {
+                    format!("{name} {{  }}")
+                } else {
+                    format!("{name} {{ {} }}", members.join(", "))
+                }
+            }
+            Self::Constructor { name, payload, .. } if name.is_empty() => format!(
                 "({})",
                 payload
                     .iter()
@@ -571,14 +606,16 @@ impl Witness {
                     .join(", ")
             ),
             // An array's or slice's length (`coverage_constructors`).
-            Self::Constructor { name, payload } if name.starts_with('[') => {
+            Self::Constructor { name, payload, .. } if name.starts_with('[') => {
                 let mut elements = payload.iter().map(Self::render).collect::<Vec<_>>();
                 if name.as_str() == "[..]" {
                     elements.push("..".into());
                 }
                 format!("[{}]", elements.join(", "))
             }
-            Self::Constructor { name, payload } => render_constructor(name, payload, Self::render),
+            Self::Constructor { name, payload, .. } => {
+                render_constructor(name, payload, Self::render)
+            }
         }
     }
 }
@@ -894,6 +931,7 @@ impl<'a> Parser<'a> {
             key: Key::Prelude(variant),
             name: variant.name().into(),
             payload: payload.into(),
+            fields: None,
         };
         match resolved {
             Ty::Reference { target, .. } => return self.coverage_constructors(&target),
@@ -905,6 +943,7 @@ impl<'a> Parser<'a> {
                             key: Key::Literal(ast::NominalLiteral::Bool(value)),
                             name: value.to_string().into(),
                             payload: Box::default(),
+                            fields: None,
                         })
                         .collect(),
                 );
@@ -919,6 +958,7 @@ impl<'a> Parser<'a> {
                             )),
                             name: format!("Ordering::{name}").into(),
                             payload: Box::default(),
+                            fields: None,
                         })
                         .collect(),
                 );
@@ -928,6 +968,7 @@ impl<'a> Parser<'a> {
                     key: Key::Tuple,
                     name: ImmutableString::new(),
                     payload: members,
+                    fields: None,
                 }]);
             }
             // An array's one length; a slice's lengths up to the longest
@@ -937,6 +978,7 @@ impl<'a> Parser<'a> {
                     key: Key::SliceLength { length, open },
                     name: if open { "[..]" } else { "[]" }.into(),
                     payload: vec![(*element).clone(); length].into(),
+                    fields: None,
                 };
                 return Some(match kind.length() {
                     Some(length) => vec![constructor(length, false)],
@@ -976,6 +1018,7 @@ impl<'a> Parser<'a> {
                             key: Key::Cow(owned),
                             name: if owned { "Cow::Owned" } else { "Cow::Borrowed" }.into(),
                             payload: Box::new([payload]),
+                            fields: None,
                         })
                         .collect(),
                 );
@@ -1000,6 +1043,7 @@ impl<'a> Parser<'a> {
                             },
                             name: format!("{owner}::{}", variant.name()).into(),
                             payload: vec![Ty::Unknown; variant.fields().len()].into(),
+                            fields: None,
                         })
                         .collect(),
                 );
@@ -1025,6 +1069,12 @@ impl<'a> Parser<'a> {
                             .iter()
                             .map(|field| instantiate(&Ty::from_resolved(&field.ty), &substitution))
                             .collect(),
+                        fields: (item.form == crate::item::StructForm::Named).then(|| {
+                            item.fields
+                                .iter()
+                                .map(|field| field.name.text.clone())
+                                .collect()
+                        }),
                     }]
                 });
             }
@@ -1046,6 +1096,10 @@ impl<'a> Parser<'a> {
                         .iter()
                         .map(|payload| instantiate(&Ty::from_resolved(payload), &substitution))
                         .collect(),
+                    fields: variant
+                        .fields
+                        .as_ref()
+                        .map(|fields| fields.iter().map(|field| field.text.clone()).collect()),
                 })
                 .collect(),
         )
@@ -1303,11 +1357,13 @@ impl<'a> Parser<'a> {
                 let heads = if scrutinee || !present.is_empty() {
                     missing
                         .iter()
-                        .map(|constructor| Witness::Constructor {
-                            name: constructor.name.clone(),
-                            payload: (0..constructor.payload.len())
-                                .map(|_| Witness::Wildcard)
-                                .collect(),
+                        .map(|constructor| {
+                            Witness::of(
+                                constructor,
+                                (0..constructor.payload.len())
+                                    .map(|_| Witness::Wildcard)
+                                    .collect(),
+                            )
                         })
                         .collect()
                 } else {
@@ -1325,10 +1381,8 @@ impl<'a> Parser<'a> {
                     .into_iter()
                     .map(|mut witness| {
                         let tail = witness.split_off(constructor.payload.len());
-                        let mut combined = vec![Witness::Constructor {
-                            name: constructor.name.clone(),
-                            payload: witness.into_boxed_slice(),
-                        }];
+                        let mut combined =
+                            vec![Witness::of(constructor, witness.into_boxed_slice())];
                         combined.extend(tail);
                         combined
                     })

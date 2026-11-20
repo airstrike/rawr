@@ -4,10 +4,10 @@
 use super::*;
 
 impl Parser<'_> {
-    /// The program's enum `ty` is, behind any references, where this file
-    /// declares it, with the declarations of the variants `missed` names,
-    /// as rustc's E0004 notes them.
-    fn uncovered_enum<'m>(
+    /// The program's enum or struct `ty` is, behind any references, where
+    /// this file declares it, with the declarations of an enum's variants
+    /// `missed` names, as rustc's E0004 notes them.
+    fn uncovered_type<'m>(
         &self,
         ty: &Ty,
         missed: impl Iterator<Item = &'m str>,
@@ -20,17 +20,17 @@ impl Parser<'_> {
             return None;
         };
         let model = self.models.definition(id);
-        let Nominal::Enum { item, .. } = model else {
-            return None;
-        };
         let name = self.models.name_declared_here(model)?;
         let missed: Vec<&str> = missed.collect();
-        let variants = item
-            .variants
-            .iter()
-            .filter(|variant| missed.contains(&variant.name.text.as_str()))
-            .map(|variant| variant.name.span)
-            .collect();
+        let variants = match model {
+            Nominal::Enum { item, .. } => item
+                .variants
+                .iter()
+                .filter(|variant| missed.contains(&variant.name.text.as_str()))
+                .map(|variant| variant.name.span)
+                .collect(),
+            Nominal::Struct { .. } => Box::default(),
+        };
         Some(Box::new(crate::resolve::Uncovered { name, variants }))
     }
 }
@@ -589,7 +589,7 @@ impl<'a> Parser<'a> {
                         }
                         _ => None,
                     });
-                let uncovered = self.uncovered_enum(&binding_ty, missed);
+                let uncovered = self.uncovered_type(&binding_ty, missed);
                 let prefix = self.reference_prefix(&binding_ty);
                 let witnesses = witnesses
                     .iter()

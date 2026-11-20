@@ -7,6 +7,9 @@
 //! - `paths.tsv`: `path  namespace  kind  stability  definition`, one line
 //!   for every path a program can write into `std`, `core` and `alloc`,
 //!   through every re-export. The namespace is `t`ype, `v`alue or `m`acro.
+//!   A unit or tuple struct's constructor is its path in the value
+//!   namespace, of kind `unit-struct` or `tuple-struct`, whose definition
+//!   is the struct's.
 //!   The definition is `=` when the path is the item's own.
 //! - `items.tsv`: `definition  kind  stability  extra`, one line for each
 //!   definition and each of its members (a trait's items, a type's inherent
@@ -544,40 +547,46 @@ pub(crate) fn public_path(definition: &str) -> Option<&'static str> {
         .min_by_key(|path| path.len())
 }
 
-/// The items through `std` named `name` in `namespace`, each by the
-/// shortest path that names it outside the prelude and std's hidden
-/// modules, in the order of their paths: what a `use` could import under
-/// the name.
+/// The items through `std`, then through `core`, named `name` in
+/// `namespace`, as the two crates every program's extern prelude holds
+/// offer them: in each, every item once, by the shortest path that names
+/// it outside the prelude and the crate's hidden modules, in the order of
+/// their paths. What a `use` could import under the name.
 pub(crate) fn named(name: &str, namespace: Namespace) -> Vec<Path> {
     let suffix = format!("::{name}\t{}\t", namespace.letter());
-    let mut found: Vec<Path> = Vec::new();
-    for line in Table::get()
-        .paths
-        .from("std::")
-        .iter()
-        .take_while(|line| line.starts_with("std::"))
-        .filter(|line| line.contains(&suffix))
-    {
-        let candidate = path_line(line);
-        if candidate.path.starts_with("std::prelude::")
-            || candidate
-                .path
-                .split("::")
-                .any(|segment| segment.starts_with('_'))
+    let mut named = Vec::new();
+    for root in ["std::", "core::"] {
+        let prelude = format!("{root}prelude::");
+        let mut found: Vec<Path> = Vec::new();
+        for line in Table::get()
+            .paths
+            .from(root)
+            .iter()
+            .take_while(|line| line.starts_with(root))
+            .filter(|line| line.contains(&suffix))
         {
-            continue;
+            let candidate = path_line(line);
+            if candidate.path.starts_with(&prelude)
+                || candidate
+                    .path
+                    .split("::")
+                    .any(|segment| segment.starts_with('_'))
+            {
+                continue;
+            }
+            match found
+                .iter_mut()
+                .find(|known| known.definition == candidate.definition)
+            {
+                Some(known) if candidate.path.len() < known.path.len() => *known = candidate,
+                Some(_) => {}
+                None => found.push(candidate),
+            }
         }
-        match found
-            .iter_mut()
-            .find(|known| known.definition == candidate.definition)
-        {
-            Some(known) if candidate.path.len() < known.path.len() => *known = candidate,
-            Some(_) => {}
-            None => found.push(candidate),
-        }
+        found.sort_by_key(|candidate| candidate.path);
+        named.extend(found);
     }
-    found.sort_by_key(|candidate| candidate.path);
-    found
+    named
 }
 
 /// Whether `path` is a module.

@@ -152,10 +152,15 @@ impl Report {
             builder = builder.source(source.clone());
             sources.push(source);
         }
+        let mut primary = false;
         for value in list("labels")? {
             let (source, span, kind, message) = label(value, &sources)?;
             builder = match kind {
-                LabelKind::Primary => builder.primary(source, span, message)?,
+                LabelKind::Primary if primary => builder.also_primary(source, span, message)?,
+                LabelKind::Primary => {
+                    primary = true;
+                    builder.primary(source, span, message)?
+                }
                 LabelKind::Secondary => builder.secondary(source, span, message)?,
             };
         }

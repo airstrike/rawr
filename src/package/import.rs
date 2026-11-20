@@ -1122,6 +1122,8 @@ fn rust_miss(
     use rawr_import::api::ledger::Lookup;
     let path = match error {
         R::UnknownImport { path, .. } => path.to_string(),
+        // One `use`'s members: the first's miss, asked for before the rest.
+        R::UnknownImports { imports } => return rust_miss(contract, &imports[0]),
         R::UnknownType { name, .. } => name.to_string(),
         R::UnknownMember { owner, member, .. } | R::NoItem { owner, member, .. } => {
             format!("{owner}::{member}")
@@ -1223,6 +1225,8 @@ fn diagnostic_path(error: &crate::resolve::Error) -> Option<(String, ImportedNam
         // A module's path called as a function, as iced's `combo_box`: the
         // function beside it says why rawr can't call it.
         R::UnknownImport { path, .. } => Some((path.to_string(), ImportedNamespace::Either)),
+        // One `use`'s members: the first's, which is asked for first.
+        R::UnknownImports { imports } => diagnostic_path(&imports[0]),
         R::NotInModule { module, item, .. } => {
             Some((format!("{module}::{item}"), ImportedNamespace::Either))
         }
@@ -1285,6 +1289,7 @@ fn diagnostic_path(error: &crate::resolve::Error) -> Option<(String, ImportedNam
         | R::UnscopedMethod { .. }
         | R::InvalidAssignee { .. }
         | R::StdPath { .. }
+        | R::UnknownTrait { .. }
         | R::NotYet { .. }
         | R::TypeAnnotationsNeeded { .. }
         | R::CannotCompare { .. }

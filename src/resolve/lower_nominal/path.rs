@@ -1429,11 +1429,28 @@ impl<'a> Parser<'a> {
         }
 
         let owner_id = model.definition().id();
-        let missing = |this: &Self, owner, member| Error::NoItem {
-            owner,
-            member,
-            reference: member_span,
-            receiver: Box::new(this.receiver(owner_id, &Ty::Script(owner_id, Box::default()))),
+        // A call's arguments are counted, as rustc's suggestion of a
+        // similar name reads them.
+        let missing = |this: &mut Self, owner, member: ImmutableString| {
+            let arguments = matches!(this.peek(), Token::LeftParen | Token::Unit)
+                .then(|| this.parse_call_arguments("associated function arguments"))
+                .map(|parsed| parsed.map(|(arguments, _)| arguments.len()));
+            let similar = match arguments {
+                Some(Err(_)) => None,
+                arguments => this.similar_item(
+                    owner_id,
+                    &member,
+                    similar::Named::Path,
+                    arguments.and_then(Result::ok),
+                ),
+            };
+            Error::NoItem {
+                owner,
+                member,
+                reference: member_span,
+                receiver: Box::new(this.receiver(owner_id, &Ty::Script(owner_id, Box::default()))),
+                similar,
+            }
         };
         let Nominal::Enum { definition, item } = model else {
             return Err(self

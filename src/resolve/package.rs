@@ -215,7 +215,8 @@ impl Resolver<'_> {
         name: &str,
         wanted: super::imports::Wanted,
     ) -> Vec<super::Candidate> {
-        if wanted != super::imports::Wanted::Type {
+        use super::imports::Wanted;
+        if !matches!(wanted, Wanted::Type | Wanted::Trait) {
             return Vec::new();
         }
         let namespace = &context.namespace;
@@ -230,6 +231,7 @@ impl Resolver<'_> {
             .filter_map(|(address, declaration)| {
                 let noun = match &declaration.target {
                     Target::Trait(_) => "trait",
+                    _ if wanted == Wanted::Trait => return None,
                     Target::Type(type_ref::Target::Script { definition, .. }) => {
                         match self
                             .type_declarations
@@ -1033,6 +1035,9 @@ impl<'a> Resolver<'a> {
         let mut aliases = BTreeMap::new();
         let mut lexical = BTreeMap::new();
         let mut placements = BTreeMap::new();
+        // Each unit's context, whose names an error past its own
+        // resolution, as a trait an impl names, offers to import.
+        let mut contexts = BTreeMap::new();
         let units = std::mem::take(&mut self.units);
         // Where each derive's expansion is, in the source of its item, and
         // the names the blocks around it bind there, which the expansion
@@ -1054,6 +1059,7 @@ impl<'a> Resolver<'a> {
                 program::source::Id::from_index(context.source.index()),
                 parsed.imports().to_vec().into_boxed_slice(),
             );
+            contexts.insert(context.source, context.clone());
             let placement = parsed.use_placement();
             if let Some(at) = placement {
                 placements.insert(program::source::Id::from_index(context.source.index()), at);
@@ -1135,13 +1141,34 @@ impl<'a> Resolver<'a> {
 
         #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
         let natives = self.resolve_natives(root_types.as_ref())?;
-        let definitions =
-            finish_definitions(self.type_declarations, &shells, self.host, &self.expanded)
-                .map_err(Failure::from_located)?;
+        let definitions = finish_definitions(
+            std::mem::take(&mut self.type_declarations),
+            &shells,
+            self.host,
+            &self.expanded,
+        )
+        .map_err(Failure::from_located)?;
+        let unimported = |error: LocatedError| {
+            let failure = Failure::from_located(error);
+            let placement =
+                placements.get(&program::source::Id::from_index(failure.primary.index()));
+            Failure {
+                error: failure.error.unimported(
+                    |name, wanted| {
+                        contexts
+                            .get(&failure.primary)
+                            .map_or_else(Vec::new, |context| {
+                                self.own_candidates(context, name, wanted)
+                            })
+                    },
+                    placement.copied(),
+                ),
+                ..failure
+            }
+        };
         let (methods, builtin_methods, std_traits) =
-            super::resolve_methods(&mut shells, &definitions, self.host)
-                .map_err(Failure::from_located)?;
-        super::resolve_functions(&mut shells).map_err(Failure::from_located)?;
+            super::resolve_methods(&mut shells, &definitions, self.host).map_err(unimported)?;
+        super::resolve_functions(&mut shells).map_err(unimported)?;
         scripts.sort_by_key(|(source, ..)| source.index());
         let source_maps = scripts
             .iter()
@@ -2111,10 +2138,19 @@ impl<'a> Resolver<'a> {
         };
         let mut order = members.to_vec();
         order.sort_by_key(|index| glob(&parsed_items[*index]));
+        // The members of the first `use` that name nothing, by its span: a
+        // group's hoisted paths share it. rustc reports them in one error.
+        let mut unresolved: Option<(Span, Failure)> = None;
         for index in order {
             let crate::item::Parsed::Use(parsed) = &parsed_items[index] else {
                 continue;
             };
+            if unresolved
+                .as_ref()
+                .is_some_and(|(span, ..)| *span != parsed.span)
+            {
+                continue;
+            }
             let mut bindings = Vec::new();
             let mut traits = Vec::new();
 
@@ -2195,8 +2231,9 @@ impl<'a> Resolver<'a> {
                     Some(_) => Target::Module,
                     None => {
                         let mut active = BTreeSet::new();
-                        self.resolve_any_path(context, &path, name.span, &mut active)
-                            .map_err(|failure| {
+                        match self.resolve_any_path(context, &path, name.span, &mut active) {
+                            Ok(target) => target,
+                            Err(failure) => {
                                 let failure = self.unresolved_use(
                                     context,
                                     &parsed.tree,
@@ -2204,11 +2241,23 @@ impl<'a> Resolver<'a> {
                                     name.span,
                                     failure,
                                 );
-                                Failure {
-                                    error: super::whole_import(failure.error, &parsed.tree),
-                                    ..failure
+                                let error = super::whole_import(failure.error, &parsed.tree);
+                                if !matches!(error, Error::UnknownImport { .. }) {
+                                    return Err(Failure { error, ..failure });
                                 }
-                            })?
+                                unresolved = Some(match unresolved.take() {
+                                    Some((span, first)) => (
+                                        span,
+                                        Failure {
+                                            error: first.error.with_unknown_import(error),
+                                            ..first
+                                        },
+                                    ),
+                                    None => (parsed.span, Failure { error, ..failure }),
+                                });
+                                continue;
+                            }
+                        }
                     }
                 };
                 // A glob's name is shadowed by the one a declaration or an
@@ -2376,7 +2425,10 @@ impl<'a> Resolver<'a> {
                 span: parsed.span,
             });
         }
-        Ok(())
+        match unresolved {
+            Some((_, failure)) => Err(failure),
+            None => Ok(()),
+        }
     }
 
     /// The names each block of the unit that binds a type sees: its own
