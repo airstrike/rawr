@@ -652,6 +652,118 @@ fn keys_and_frames_with_a_scale_factor_answer_with_a_gif() {
     assert_eq!((decoder.width(), decoder.height()), (1536, 1152));
 }
 
+/// A snippet whose types are named otherwise than the universe's greeting
+/// program's (#2312): a text input that greets the name typed into it.
+const FORM_TYPES: &str = r#"use iced::widget::{column, text, text_input, Widget};
+use iced::Center;
+
+#[derive(Default)]
+struct Form {
+    name: String,
+    done: bool,
+}
+
+#[derive(Debug, Clone)]
+enum Msg {
+    Edited(String),
+    Submitted,
+}
+
+impl Form {
+    fn update(&mut self, msg: Msg) {
+        match msg {
+            Msg::Edited(name) => {
+                self.name = name;
+                self.done = false;
+            }
+            Msg::Submitted => self.done = true,
+        }
+    }
+
+    fn view(&self) -> impl Widget<Msg> {
+        let said = if self.done {
+            format!("Hello, {}!", self.name)
+        } else {
+            String::from("Type a name and press Enter")
+        };
+        column![
+            text_input("Who are you?", &self.name)
+                .id("who")
+                .on_input(Msg::Edited)
+                .on_submit(Msg::Submitted)
+                .padding(10)
+                .size(20),
+            text(said).size(30),
+        ]
+        .spacing(20)
+        .padding(20)
+        .align_x(Center)
+    }
+}
+"#;
+
+/// Typing into a text input on the universe (#2312): iced_test's
+/// simulator clicks the input, types a name key by key and presses Enter,
+/// and the messages the input sent, performed in order, leave the name
+/// in the state and the greeting in the view.
+#[test]
+#[ignore = "needs the universe runner"]
+fn a_text_input_takes_typed_text() {
+    let source = format!(
+        r#"{FORM_TYPES}
+fn typed(name: &str) -> Result<String, iced_test::Error> {{
+    use iced::keyboard::key;
+    use iced_test::selector::id;
+    use iced_test::simulator;
+
+    let mut form = Form::default();
+    let mut ui = simulator(form.view());
+    let _input = ui.click(id("who"))?;
+    let _ = ui.typewrite(name);
+    let _ = ui.tap_key(key::Named::Enter);
+    for msg in ui.into_messages() {{
+        form.update(msg);
+    }}
+    let mut ui = simulator(form.view());
+    let said = format!("Hello, {{}}!", form.name);
+    let _ = ui.find(said.as_str())?;
+    Ok(said)
+}}
+
+fn main() {{
+    match typed("Ferris") {{
+        Ok(said) => println!("{{said}}"),
+        Err(error) => println!("not typed: {{error}}"),
+    }}
+}}
+"#
+    );
+    let output = output(&run(&source).stdout);
+    assert_eq!(
+        (output.text().as_str(), output.status),
+        ("Hello, Ferris!\n", 0)
+    );
+}
+
+/// A text input draws on the universe as the program's window shows it
+/// (#2312): with nothing typed, its frame settles at once.
+#[test]
+#[ignore = "needs the universe runner"]
+fn a_text_input_answers_with_its_frame() {
+    let source = format!(
+        "{FORM_TYPES}
+fn main() -> iced::Result {{
+    iced::run(Form::update, Form::view)
+}}
+"
+    );
+    let output = output(&run(&source).stdout);
+    assert_eq!(output.status, 0, "{}", output.text());
+    let png = output.frame.expect("the text input drew a frame");
+    assert_eq!(rawr_play::plain::image_kind(&png), Some("png"));
+    assert_eq!(png_size(&png), (1024, 768));
+}
+
 /// The universe's programs run as snippets (#1000): iced's arc draws on a
 /// canvas of a `.theme(..)`, and ?play's solar system, iced's drawn with
 /// plain shapes, is `application::timed` with a theme function, a cache's
@@ -698,8 +810,8 @@ fn a_call_the_universe_does_not_make_does_not_compile() {
         // A widget it doesn't use is not in its bindings at all, as rustc
         // says of a missing item.
         (
-            "column![iced::widget::toggler(self.count > 0)]",
-            "error[E0425]: cannot find function `toggler` in module `iced::widget`",
+            "column![iced::widget::radio(\"Up\", 1, Some(1), |_: i32| Msg::Up)]",
+            "error[E0425]: cannot find function `radio` in module `iced::widget`",
         ),
         // A method it doesn't call.
         (
