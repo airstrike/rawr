@@ -8,6 +8,14 @@
   },
   "releases": [
     {
+      "version": "0.4.69",
+      "date": "2026-11-20",
+      "entries": [
+        {"text":"rustc's diagnostics in more places: a struct's or struct variant's witness names its fields (`E::C { y: false, .. }`), every unresolved member of one `use` is one E0432 with a label at each, E0599 suggests a method, associated function or constant with a similar name and names lifetime parameters (`R<'a>`, `R<'_>`), and a missing trait (E0405) suggests its import, with core's candidates where rustc lists them.","issues":[2347]},
+        {"text":"An unbound `Reverse(1)` or `PhantomData` suggests `use std::cmp::Reverse;` or `use std::marker::PhantomData;`, as rustc does: the std table lists unit and tuple struct constructors in the value namespace.","issues":[2363],"refs":[2349]}
+      ]
+    },
+    {
       "version": "0.4.68",
       "date": "2026-11-20",
       "entries": [

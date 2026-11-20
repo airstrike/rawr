@@ -6,6 +6,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.69 (2026-11-20)
+
+- rustc's diagnostics in more places: a struct's or struct variant's witness names its fields (`E::C { y: false, .. }`), every unresolved member of one `use` is one E0432 with a label at each, E0599 suggests a method, associated function or constant with a similar name and names lifetime parameters (`R<'a>`, `R<'_>`), and a missing trait (E0405) suggests its import, with core's candidates where rustc lists them. (#2347)
+- An unbound `Reverse(1)` or `PhantomData` suggests `use std::cmp::Reverse;` or `use std::marker::PhantomData;`, as rustc does: the std table lists unit and tuple struct constructors in the value namespace. (#2363; part of #2349)
+
 ## 0.4.68 (2026-11-20)
 
 - Every Run button on the site runs its snippet in your browser. The wide-integer and time examples now run there, and the threads example is a fixed transcript, since a browser tab has one thread. The site no longer sends code to a server, so it has no browser check. (#2361)

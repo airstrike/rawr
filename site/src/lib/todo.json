@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-20",
-  "version": "0.4.68",
+  "version": "0.4.69",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,14 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.69",
+        "date": "2026-11-20",
+        "entries": [
+          {"text":"rustc's diagnostics in more places: a struct's or struct variant's witness names its fields (`E::C { y: false, .. }`), every unresolved member of one `use` is one E0432 with a label at each, E0599 suggests a method, associated function or constant with a similar name and names lifetime parameters (`R<'a>`, `R<'_>`), and a missing trait (E0405) suggests its import, with core's candidates where rustc lists them.","issues":[2347]},
+          {"text":"An unbound `Reverse(1)` or `PhantomData` suggests `use std::cmp::Reverse;` or `use std::marker::PhantomData;`, as rustc does: the std table lists unit and tuple struct constructors in the value namespace.","issues":[2363],"refs":[2349]}
+        ]
+      },
       {
         "version": "0.4.68",
         "date": "2026-11-20",
@@ -5614,7 +5622,7 @@
     {"issue":2344,"title":"A single file with an inline mod prints \"Rawr package snapshot contains a duplicate path\"","state":"closed","category":"Health","release":"0.4.63"},
     {"issue":2345,"title":"`.into()` from a `&str` local into `Box<dyn Error>` is E0308","state":"closed","category":"Health","release":"0.4.63"},
     {"issue":2346,"title":"A bare `Mutex` or `Sender` type compiles without a `use`","state":"closed","category":"Health","release":"0.4.64"},
-    {"issue":2347,"title":"Diagnostics left after #2337: struct-variant witnesses, every unresolved member, similar names, lifetimes","state":"open","category":"Health"},
+    {"issue":2347,"title":"Diagnostics left after #2337: struct-variant witnesses, every unresolved member, similar names, lifetimes","state":"closed","category":"Health","release":"0.4.69"},
     {"issue":2348,"title":"A format width pads a Display impl's whole output; rustc ignores it for write! and pads per `pad` call","state":"closed","category":"Health","release":"0.4.64"},
     {"issue":2349,"title":"`f.align()` needs `fmt::Alignment`, and unbound `Reverse(1)` or `PhantomData` lack rustc's import help","state":"open","category":"Health"},
     {"issue":2350,"title":"The VS Code debugger can't set a variable: `rawr dap` has no setVariable","state":"closed","category":"Health","release":"0.4.65"},
@@ -5629,7 +5637,9 @@
     {"issue":2359,"title":"The playground at /play runs every snippet in the browser","state":"closed","category":"Platforms","release":"0.4.67"},
     {"issue":2360,"title":"A frontmatter snippet's run shares the bot's user and network","state":"open","category":"Health"},
     {"issue":2361,"title":"The docs' server blocks still run visitors' code on the bot","state":"closed","category":"Health","release":"0.4.68"},
-    {"issue":2362,"title":"Deploy ?play's scripts image on a standard instance","state":"open","category":"Platforms"}
+    {"issue":2362,"title":"Deploy ?play's scripts image on a standard instance","state":"open","category":"Platforms"},
+    {"issue":2363,"title":"An unbound `Reverse(1)` or `PhantomData` suggests `use std::cmp::Reverse;` or…","state":"closed","category":"Health","release":"0.4.69"},
+    {"issue":2364,"title":"A trait another module declares is named in an `impl` or a bound without a `use`","state":"open","category":"Health"}
   ],
   "groups": [
     {
