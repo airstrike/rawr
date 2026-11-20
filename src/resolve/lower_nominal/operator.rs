@@ -2,6 +2,7 @@
 //! integer arithmetic, and crate types' `std::ops` and `Index` impls.
 
 use super::*;
+use crate::resolve::BinaryOperation;
 
 impl<'a> Parser<'a> {
     pub(super) fn operator_expr(&self, source: origin::Fragment, ty: Ty, span: Span) -> ParsedExpr {
@@ -626,20 +627,17 @@ impl<'a> Parser<'a> {
             if !matches!(left, Ty::Infer(_)) && !allowed_type(allowed, &left) {
                 let right = self.inference.resolve(&rhs.ty);
                 let (left, right) = (left.name(&self.models), right.name(&self.models));
-                let message = match symbol {
-                    "+" => format!("cannot add `{right}` to `{left}`"),
-                    "-" => format!("cannot subtract `{right}` from `{left}`"),
-                    "*" => format!("cannot multiply `{left}` by `{right}`"),
-                    "/" => format!("cannot divide `{left}` by `{right}`"),
-                    _ => format!("cannot calculate the remainder of `{left}` divided by `{right}`"),
-                };
-                return Err(Error::StdPath {
-                    code: "E0369",
-                    message: message.into(),
-                    label: None,
-                    note: None,
-                    reference: operator_at.unwrap_or(span(lhs.span.start(), rhs.span.end())),
-                });
+                let message = arithmetic_trait(symbol, &left, &right).map_or_else(
+                    || format!("no implementation for `{left} {symbol} {right}`"),
+                    |(message, _)| message,
+                );
+                let capability = crate::resolve::OPERATOR_TRAITS
+                    .iter()
+                    .find_map(|(operator, capability, _)| {
+                        (*operator == symbol).then_some(*capability)
+                    })
+                    .unwrap_or_default();
+                return Err(self.binary_operation(message, capability, operator_at, &lhs, &rhs));
             }
             // A number with another type, as `f64 / usize` or `2.0 *
             // angle` with no crate's `impl Mul<Angle> for f64`: std's impls
@@ -1077,9 +1075,10 @@ impl<'a> Parser<'a> {
                     symbol,
                     trait_name,
                     impls,
+                    lhs,
+                    rhs: rhs.as_deref(),
                 },
                 &lhs_ty,
-                operand_ty.as_ref(),
                 operator_at.unwrap_or(expression),
                 expression,
             ));
@@ -1115,15 +1114,14 @@ impl<'a> Parser<'a> {
     }
 
     /// rustc's error for `operation` on `lhs`, a crate type with no impl of
-    /// its trait for `operand`, at `operator`: E0600 for a unary operator,
-    /// E0369 for a binary operator whose trait the type has no impl of, and
-    /// E0277 for one whose impls take other types. E0368 for a compound
-    /// assignment, at `expression`.
+    /// its trait for the right operand, at `operator`: E0600 for a unary
+    /// operator, E0369 for a binary operator whose trait the type has no
+    /// impl of, and E0277 for one whose impls take other types. E0368 for a
+    /// compound assignment, at `expression`.
     fn missing_operator_impl(
         &self,
         operation: Operation<'_>,
         lhs: &Ty,
-        operand: Option<&Ty>,
         operator: Span,
         expression: Span,
     ) -> Error {
@@ -1131,9 +1129,11 @@ impl<'a> Parser<'a> {
             symbol,
             trait_name,
             impls,
+            lhs: left_operand,
+            rhs: right_operand,
         } = operation;
         let left = lhs.name(&self.models);
-        let Some(operand) = operand else {
+        let Some(right_operand) = right_operand else {
             let symbol = if symbol == "neg" { "-" } else { symbol };
             return Error::StdPath {
                 code: "E0600",
@@ -1143,32 +1143,44 @@ impl<'a> Parser<'a> {
                 reference: operator,
             };
         };
+        // rustc names the left operand's type as written, a reference too.
+        let written = self.compared_name(&left_operand.ty);
         if symbol.ends_with('=') {
-            return Error::StdPath {
-                code: "E0368",
-                message: format!(
-                    "binary assignment operation `{symbol}` cannot be applied to type `{left}`"
-                )
-                .into(),
-                label: None,
-                note: None,
-                reference: expression,
+            return Error::BinaryOperation {
+                operation: Box::new(BinaryOperation {
+                    message: format!(
+                        "binary assignment operation `{symbol}` cannot be applied to type \
+                         `{written}`"
+                    )
+                    .into(),
+                    labels: Box::new([(
+                        self.expression_span(left_operand.span),
+                        format!("cannot use `{symbol}` on type `{written}`").into(),
+                    )]),
+                    missing: self.missing_impl(trait_name, &left_operand.ty, &right_operand.ty),
+                    assigns: true,
+                }),
+                at: self.expression_span(expression),
             };
         }
-        let right = operand.name(&self.models);
+        let right = self.compared_name(&right_operand.ty);
+        if impls == 0 {
+            let message = arithmetic_trait(symbol, &written, &right).map_or_else(
+                || format!("no implementation for `{written} {symbol} {right}`"),
+                |(message, _)| message,
+            );
+            return self.binary_operation(
+                message,
+                trait_name,
+                Some(operator),
+                left_operand,
+                right_operand,
+            );
+        }
         let message = arithmetic_trait(symbol, &left, &right).map_or_else(
             || format!("no implementation for `{left} {symbol} {right}`"),
             |(message, _)| message,
         );
-        if impls == 0 {
-            return Error::StdPath {
-                code: "E0369",
-                message: message.into(),
-                label: None,
-                note: None,
-                reference: operator,
-            };
-        }
         Error::Unimplemented {
             message: message.into(),
             label: format!("no implementation for `{left} {symbol} {right}`").into(),
@@ -1378,6 +1390,10 @@ struct Operation<'a> {
     trait_name: &'a str,
     /// How many impls of the trait the type has.
     impls: usize,
+    /// The left operand, the only one of a unary operator.
+    lhs: &'a ParsedExpr,
+    /// The right operand of a binary operator.
+    rhs: Option<&'a ParsedExpr>,
 }
 
 /// rustc's message for arithmetic `symbol` of `left` and `right` that no

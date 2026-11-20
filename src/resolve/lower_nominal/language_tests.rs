@@ -15848,3 +15848,47 @@ fn language_a_mut_borrow_needs_a_mut_local() {
         2
     );
 }
+
+#[test]
+fn language_an_impl_names_a_trait_by_its_path() {
+    // An impl's trait, a bound's and a `dyn`'s are read through the
+    // module's scope, as rustc reads them: through the trait's module from
+    // here, `crate` or `self`, from a child module through `super`, and by
+    // the name a `use` gives it (#2338).
+    let source = "
+        mod m {
+            pub trait Shape {
+                fn sides(&self) -> i64;
+                fn twice(&self) -> i64 { self.sides() * 2 }
+            }
+            pub mod n {
+                pub struct Square;
+                impl super::Shape for Square { fn sides(&self) -> i64 { 4 } }
+            }
+        }
+        use m::Shape;
+        use m::Shape as Outline;
+        struct Triangle;
+        struct Line;
+        struct Point;
+        struct Pentagon;
+        impl m::Shape for Triangle { fn sides(&self) -> i64 { 3 } }
+        impl crate::m::Shape for Line { fn sides(&self) -> i64 { 1 } }
+        impl self::m::Shape for Point { fn sides(&self) -> i64 { 0 } }
+        impl Outline for Pentagon { fn sides(&self) -> i64 { 5 } }
+        fn doubled<S: m::Shape>(shape: &S) -> i64 { shape.twice() }
+        fn total(shapes: &[Box<dyn crate::m::Shape>]) -> i64 {
+            shapes.iter().map(|shape| shape.sides()).sum()
+        }
+        pub fn run() -> i64 {
+            let shapes: Vec<Box<dyn m::Shape>> = vec![Box::new(Line), Box::new(Point)];
+            Triangle.sides() * 10000
+                + m::n::Square.sides() * 1000
+                + Pentagon.sides() * 100
+                + doubled(&Triangle) * 10
+                + total(&shapes)
+        }
+        run()
+    ";
+    assert_eq!(run(source), 34_561);
+}

@@ -230,6 +230,17 @@ fn std_segments(path: &str) -> Option<Vec<&str>> {
 /// alloc the table covers; else what it names, or rustc's E0432 (std has
 /// no such path) or E0658 (an unstable item).
 pub(crate) fn import(path: &str, reference: Span) -> Result<Option<Resolved>, Error> {
+    resolve_import(path, reference, true)
+}
+
+/// A `use` group's prefix `path`, which names the module its members are
+/// in: as `import`, but std's miss of its last segment is a module's.
+pub(crate) fn import_prefix(path: &str, reference: Span) -> Result<Option<Resolved>, Error> {
+    resolve_import(path, reference, false)
+}
+
+/// A `use` of `path`, the whole import's path when `leaf`.
+fn resolve_import(path: &str, reference: Span, leaf: bool) -> Result<Option<Resolved>, Error> {
     let Some(segments) = std_segments(path) else {
         return Ok(None);
     };
@@ -242,24 +253,41 @@ pub(crate) fn import(path: &str, reference: Span) -> Result<Option<Resolved>, Er
             Some(error) => Err(error),
             None => Ok(Some(resolved)),
         },
-        Err(missing) => Err(unresolved_import(&missing, reference)),
+        Err(missing) => Err(unresolved_import(&missing, reference, leaf)),
     }
 }
 
-/// rustc's E0432 for a `use` std doesn't have.
-fn unresolved_import(missing: &Missing, reference: Span) -> Error {
-    let parent = missing.found.last().map_or("", String::as_str);
+/// rustc's E0432 for a `use` std doesn't have, the whole import's when
+/// `leaf`. rustc names the module from its crate's root: `fs`,
+/// `collections::hash_map`, or `std` for the root itself.
+fn unresolved_import(missing: &Missing, reference: Span, leaf: bool) -> Error {
+    let parent = match &missing.found[..] {
+        [root] => root.clone(),
+        found => found.get(1..).unwrap_or_default().join("::"),
+    };
     let mut through = missing.found.clone();
     through.push(missing.segment.clone());
-    let label = if missing.last {
-        format!("no `{}` in `{parent}`", missing.segment)
-    } else {
-        format!("could not find `{}` in `{parent}`", missing.segment)
-    };
+    // A whole import's miss is marked where its `use` writes the segment
+    // (`whole_import`): its last, an item the module lacks, or a module
+    // missing on the way.
+    if leaf {
+        return Error::UnknownImport {
+            path: through.join("::").into(),
+            reference,
+            missing: if missing.last {
+                super::Unresolved::Item {
+                    module: parent.into(),
+                    segment: reference,
+                }
+            } else {
+                super::Unresolved::Module(parent.into())
+            },
+        };
+    }
     Error::StdPath {
         code: "E0432",
         message: format!("unresolved import `{}`", through.join("::")).into(),
-        label: Some(label.into()),
+        label: Some(format!("could not find `{}` in `{parent}`", missing.segment).into()),
         note: None,
         reference,
     }
@@ -269,8 +297,8 @@ fn unresolved_import(missing: &Missing, reference: Span) -> Error {
 /// `core::time::Instant` or `std::thread::sleep`: what it names, `None`
 /// when it isn't one the table covers, or rustc's error for it (E0433
 /// through a module std doesn't have, E0425 for an item it doesn't have,
-/// E0658 for an unstable one). `kind` is what the use reads its last
-/// segment as: `type`, `function` or `value`.
+/// E0405 for a trait, E0658 for an unstable one). `kind` is what the use
+/// reads its last segment as: `type`, `trait`, `function` or `value`.
 pub(crate) fn check(
     path: &str,
     namespace: Namespace,
@@ -291,7 +319,7 @@ pub(crate) fn check(
         Err(missing) if missing.last => {
             let module = missing.found.join("::");
             Err(Error::StdPath {
-                code: "E0425",
+                code: if kind == "trait" { "E0405" } else { "E0425" },
                 message: format!(
                     "cannot find {kind} `{}` in module `{module}`",
                     missing.segment

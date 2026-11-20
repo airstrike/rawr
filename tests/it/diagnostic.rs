@@ -115,7 +115,7 @@ fn self_outside_a_method_reads_as_rustcs() {
     }
 }
 
-/// rustc's code, message, primary label (its text and its columns) and help
+/// rustc's code, message, label, primary span's columns and help
 /// for each unresolved path: a crate the program doesn't depend on, an item
 /// or a module a present module lacks.
 #[test]
@@ -147,7 +147,8 @@ fn unresolved_paths_read_as_rustcs() {
             Some(format!("if you wanted to use a crate named `ratatui`, {CARGO_ADD}")),
         ),
         ("use ratatui;\n", "E0432", "unresolved import `ratatui`", "no external crate `ratatui`", (5, 12), None),
-        ("mod lib { pub mod widget {} }\nuse lib::widget::Missing;\n", "E0432", "unresolved import `lib::widget::Missing`", "no `Missing` in `lib::widget`", (18, 25), None),
+        // The whole import, labeled at its last segment.
+        ("mod lib { pub mod widget {} }\nuse lib::widget::Missing;\n", "E0432", "unresolved import `lib::widget::Missing`", "no `Missing` in `lib::widget`", (5, 25), None),
         ("mod lib { pub mod widget {} }\nuse lib::nothing::Missing;\n", "E0432", "unresolved import `lib::nothing`", "could not find `nothing` in `lib`", (10, 17), None),
         (
             "mod lib { pub mod widget {} }\nstruct Counter { value: lib::widget::Missing }\n",
@@ -162,10 +163,11 @@ fn unresolved_paths_read_as_rustcs() {
         let report = Report::from_parse(Source::new("main.rs", text).unwrap(), &error).unwrap();
         let primary = &report.labels()[0];
         let at = (primary.span().start().position(), primary.span().end().position());
+        let labeled = report.labels().iter().find_map(|label| label.message());
 
         assert_eq!(report.code().as_str(), code, "{text}");
         assert_eq!(report.message(), message, "{text}");
-        assert_eq!(primary.message(), Some(label), "{text}");
+        assert_eq!(labeled, Some(label), "{text}");
         assert_eq!(at, (Some(columns.0), Some(columns.1)), "{text}");
         assert_eq!(report.help(), help.as_deref(), "{text}");
     }

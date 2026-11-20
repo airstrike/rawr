@@ -668,10 +668,24 @@ fn resolution_report_with_sources(
             builder = builder.secondary(source.clone(), *field, label)?;
         }
     }
-    // rustc labels each operand with its type.
+    if let resolve::Error::UnknownImport {
+        path,
+        missing: missing @ resolve::Unresolved::Item { segment, .. },
+        reference,
+    } = error
+        && segment != reference
+    {
+        builder = builder.secondary(
+            source.clone(),
+            *segment,
+            missing.label(path).map(Into::into),
+        )?;
+    }
+    // rustc labels each operand with its type, and an assignment's left
+    // operand with the operator it can't use.
     if let resolve::Error::BinaryOperation { operation, .. } = error {
-        for (span, ty) in &operation.operands {
-            builder = builder.secondary(source.clone(), *span, Some(ty.clone()))?;
+        for (span, label) in &operation.labels {
+            builder = builder.secondary(source.clone(), *span, Some(label.clone()))?;
         }
     }
     if let resolve::Error::ArgumentCount {
@@ -1001,12 +1015,7 @@ fn sections(error: &resolve::Error, source: &Source) -> Vec<Section> {
             .missing
             .iter()
             .map(|missing| {
-                // A generic type's impl is noted with its right side.
-                let capability = if missing.owner.contains('<') {
-                    format!("{}<{}>", missing.capability, operation.operands[1].1)
-                } else {
-                    missing.capability.to_string()
-                };
+                let capability = missing.written();
                 Section::note(format!(
                     "an implementation of `{capability}` might be missing for `{}`",
                     missing.owner
@@ -1302,12 +1311,15 @@ fn suggestion(error: &resolve::Error, source: &Source) -> Result<Option<Suggesti
             super::definition::span(source, *declared).start(),
             source,
         ),
-        // `PartialOrd` derives with `PartialEq`, its supertrait.
+        // A derivable trait of the type with itself: `PartialOrd` derives
+        // with `PartialEq`, its supertrait. The arithmetic and bit traits
+        // don't derive, and a derive gives no impl for another type.
         resolve::Error::BinaryOperation { operation, .. } => match &operation.missing {
-            Some(missing) => {
+            Some(missing) if missing.operand.is_none() => {
                 let derived = match missing.capability.as_str() {
+                    "PartialEq" => "PartialEq",
                     "PartialOrd" => "PartialEq, PartialOrd",
-                    capability => capability,
+                    _ => return Ok(None),
                 };
                 above(
                     &format!(
@@ -1319,7 +1331,7 @@ fn suggestion(error: &resolve::Error, source: &Source) -> Result<Option<Suggesti
                     source,
                 )
             }
-            None => Ok(None),
+            _ => Ok(None),
         },
         resolve::Error::SlicePattern {
             sliceable: true,
@@ -1442,6 +1454,13 @@ fn primary_label(
         resolve::Error::UnknownVariable { .. }
         | resolve::Error::UnknownFunction { .. }
         | resolve::Error::UnknownType { path: false, .. } => Some("not found in this scope".into()),
+        // A missing item's label is at its last segment, apart from the
+        // whole import.
+        resolve::Error::UnknownImport {
+            missing: resolve::Unresolved::Item { segment, .. },
+            reference,
+            ..
+        } if segment != reference => None,
         resolve::Error::UnknownImport { path, missing, .. } => missing.label(path).map(Into::into),
         resolve::Error::UnknownType {
             name, path: true, ..
@@ -1629,7 +1648,10 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Category::NotYet => code::RESOLVE_NOT_YET,
         resolve::Category::TypeAnnotationsNeeded => code::RESOLVE_TYPE_ANNOTATIONS,
         resolve::Category::CannotCompare => code::RESOLVE_CANNOT_COMPARE,
-        resolve::Category::BinaryOperation => code::RESOLVE_BINARY_OPERATOR,
+        resolve::Category::BinaryOperation => match error {
+            resolve::Error::BinaryOperation { operation, .. } => code::std_path(operation.code()),
+            _ => unreachable!("a binary operation's category"),
+        },
         resolve::Category::ArgumentSignature => code::RESOLVE_ARGUMENT_SIGNATURE,
         resolve::Category::ArgumentCount => match error {
             resolve::Error::ArgumentCount {

@@ -123,7 +123,8 @@ pub enum Category {
     /// for the right operand's, as rustc's E0277.
     CannotCompare,
     /// A binary operator whose left operand's type has no impl of the
-    /// operator's trait, as rustc's E0369.
+    /// operator's trait, as rustc's E0369 (E0368 for a compound
+    /// assignment).
     BinaryOperation,
     /// A closure or function whose parameters differ from the ones its
     /// callable's signature gives, as rustc's E0631.
@@ -1486,11 +1487,12 @@ pub enum Error {
         at: Span,
     },
     /// A binary operator whose left operand's type has no impl of the
-    /// operator's trait, which rustc refuses (E0369).
+    /// operator's trait, which rustc refuses (E0369, E0368 for a compound
+    /// assignment).
     BinaryOperation {
         /// rustc's message and what its labels and note name.
         operation: Box<BinaryOperation>,
-        /// The operator.
+        /// The operator; a compound assignment's whole expression.
         at: Span,
     },
     /// A closure or function passed where a callable of the same arity is
@@ -2091,8 +2093,14 @@ pub enum Unresolved {
     /// unresolved module or unlinked crate `name`".
     Unlinked,
     /// The module before the last segment, as rustc names it, has no item
-    /// of that name: "no `Missing` in `widget`".
-    Item(ImmutableString),
+    /// of that name: "no `Missing` in `widget`", at the last segment
+    /// while the error marks the whole import.
+    Item {
+        /// The module, as rustc names it.
+        module: ImmutableString,
+        /// The last segment, which the label is at.
+        segment: Span,
+    },
     /// The module before the last segment, as rustc names it, has no
     /// module of that name: "could not find `nothing` in `lib`".
     Module(ImmutableString),
@@ -2115,7 +2123,7 @@ impl Unresolved {
             Self::Path => None,
             Self::Crate => Some(format!("no external crate `{path}`")),
             Self::Unlinked => Some(NotFound::Module(path).undeclared()),
-            Self::Item(module) => Some(format!("no `{last}` in `{module}`")),
+            Self::Item { module, .. } => Some(format!("no `{last}` in `{module}`")),
             Self::Module(module) => Some(format!("could not find `{last}` in `{module}`")),
             Self::Value { noun, module } => Some(format!(
                 "expected type, found {noun} `{last}` in `{module}`"
@@ -2317,18 +2325,34 @@ impl fmt::Display for ArrayLength {
 }
 
 /// rustc's E0369 for a binary operator whose left operand's type has no
-/// impl of the operator's trait: its message, and what its labels and
-/// note name.
+/// impl of the operator's trait, or its E0368 for a compound assignment:
+/// its message, and what its labels and note name.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct BinaryOperation {
     /// rustc's message: "binary operation `==` cannot be applied to type
     /// `Value`".
     pub(crate) message: ImmutableString,
-    /// Each operand's span and type, which rustc labels it with.
-    pub(crate) operands: [(Span, ImmutableString); 2],
+    /// Each span rustc labels and its label: each operand with its type,
+    /// or an assignment's left operand with "cannot use `+=` on type
+    /// `Value`".
+    pub(crate) labels: Box<[(Span, ImmutableString)]>,
     /// The program's own type the left operand is, where the program
     /// declares it in the error's file.
     pub(crate) missing: Option<MissingImpl>,
+    /// Whether the operator assigns its result to its left operand, which
+    /// rustc refuses as E0368.
+    pub(crate) assigns: bool,
+}
+
+impl BinaryOperation {
+    /// rustc's code for the operation.
+    pub(crate) fn code(&self) -> &'static str {
+        if self.assigns {
+            "E0368"
+        } else {
+            "E0369"
+        }
+    }
 }
 
 /// A trait the program's own type has no impl of, where rustc notes the
@@ -2337,10 +2361,23 @@ pub struct BinaryOperation {
 pub struct MissingImpl {
     /// The trait.
     pub(crate) capability: ImmutableString,
+    /// The right operand's type, where it differs from the left's: rustc
+    /// names the trait with it, as `Add<{integer}>`.
+    pub(crate) operand: Option<ImmutableString>,
     /// The type, as the program names it.
     pub(crate) owner: ImmutableString,
     /// The type's name in its declaration.
     pub(crate) declared: Span,
+}
+
+impl MissingImpl {
+    /// The trait as rustc's note writes it: `Add`, `Shl<{integer}>`.
+    pub(crate) fn written(&self) -> String {
+        match &self.operand {
+            Some(operand) => format!("{}<{operand}>", self.capability),
+            None => self.capability.to_string(),
+        }
+    }
 }
 
 /// The type a pattern matches and the pattern's own, as rustc's E0308
@@ -3176,7 +3213,12 @@ impl fmt::Display for Written<'_> {
                 callee.code()
             ),
             Error::BinaryOperation { operation, at } => {
-                write!(formatter, "{} at {at} (E0369)", operation.message)
+                write!(
+                    formatter,
+                    "{} at {at} ({})",
+                    operation.message,
+                    operation.code()
+                )
             }
             Error::CannotCompare { lhs, rhs, at, .. } => write!(
                 formatter,

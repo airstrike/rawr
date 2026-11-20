@@ -183,6 +183,10 @@ struct Resolver<'a> {
     /// `home::IntoView` beside `panel::IntoView`. A trait whose
     /// name is the crate's only one is known by its name.
     trait_names: BTreeMap<Address, ImmutableString>,
+    /// Each name a signature may write a crate trait by: every crate
+    /// trait's own name, and each name a `use` binds with `as`
+    /// ([`Resolver::write_trait_names`]).
+    trait_spellings: BTreeSet<ImmutableString>,
     /// Each crate derive whose expansion the graph loaded (#593).
     expanded: crate::capability::Expanded,
     /// The marked types of a native root that rawr's copy of the crate
@@ -392,6 +396,7 @@ impl<'a> Resolver<'a> {
             expansions: BTreeMap::new(),
             type_ids: BTreeSet::new(),
             trait_names: BTreeMap::new(),
+            trait_spellings: BTreeSet::new(),
             expanded,
             #[cfg(feature = "rust-import")]
             mirrors,
@@ -402,6 +407,7 @@ impl<'a> Resolver<'a> {
         };
         resolver.predeclare()?;
         resolver.trait_names = resolver.shared_trait_names();
+        resolver.trait_spellings = resolver.trait_spellings();
         if let Some((kept, changes)) = kept {
             kept.borrow_mut().refresh(&resolver, changes, roots);
         }
@@ -660,6 +666,30 @@ impl<'a> Resolver<'a> {
                 (address.clone(), path.into())
             })
             .collect()
+    }
+
+    /// Each name a signature may write a crate trait by
+    /// ([`Resolver::trait_spellings`]).
+    fn trait_spellings(&self) -> BTreeSet<ImmutableString> {
+        let declared =
+            self.tables
+                .declarations()
+                .filter_map(|declaration| match &declaration.target {
+                    Target::Trait(address) => Some(address.name.clone()),
+                    _ => None,
+                });
+        let renamed = self
+            .units
+            .iter()
+            .flat_map(|unit| unit.parsed.items())
+            .filter_map(|parsed| match parsed {
+                crate::item::Parsed::Use(used) => Some(used.bindings()),
+                _ => None,
+            })
+            .flatten()
+            .filter(|(name, path)| path.last() != Some(&name.text))
+            .map(|(name, _)| name.text);
+        declared.chain(renamed).collect()
     }
 
     /// Bind each private glob import's names, and the variants a public
@@ -2086,13 +2116,17 @@ impl<'a> Resolver<'a> {
                         let mut active = BTreeSet::new();
                         self.resolve_any_path(context, &path, name.span, &mut active)
                             .map_err(|failure| {
-                                self.unresolved_use(
+                                let failure = self.unresolved_use(
                                     context,
                                     &parsed.tree,
                                     &path,
                                     name.span,
                                     failure,
-                                )
+                                );
+                                Failure {
+                                    error: super::whole_import(failure.error, &parsed.tree),
+                                    ..failure
+                                }
                             })?
                     }
                 };
@@ -2366,7 +2400,14 @@ impl<'a> Resolver<'a> {
         types: &mut BTreeMap<ImmutableString, type_ref::Target>,
     ) -> Result<(), Failure> {
         let mut written_paths = Vec::new();
+        // Where each impl's trait is written, which names a trait.
+        let mut traits = BTreeSet::new();
         for item in parsed_items {
+            if let crate::item::Parsed::Impl(item) = item
+                && let Some(path) = &item.trait_
+            {
+                traits.insert(path.span);
+            }
             collect_item_type_paths(item, &mut written_paths);
         }
         for path in written_paths {
@@ -2391,7 +2432,33 @@ impl<'a> Resolver<'a> {
             let mut active = BTreeSet::new();
             let target = self
                 .resolve_path(context, segments, path.span, &mut active)
-                .map_err(|failure| self.unresolved_type_path(context, path, failure))?;
+                .map_err(|failure| {
+                    let noun = if traits.contains(&path.span) {
+                        "trait"
+                    } else {
+                        "type"
+                    };
+                    self.unresolved_type_path(context, path, noun, failure)
+                })?;
+            // An impl's trait path that names another item: rustc's E0404.
+            if traits.contains(&path.span) && !matches!(target, Target::Trait(_)) {
+                return Err(Failure {
+                    primary: context.source,
+                    secondary: None,
+                    error: Error::StdPath {
+                        code: "E0404",
+                        message: format!(
+                            "expected trait, found {} `{}`",
+                            self.private_kind(&target).noun(),
+                            written.join("::")
+                        )
+                        .into(),
+                        label: Some("not a trait".into()),
+                        note: None,
+                        reference: path.span,
+                    },
+                });
+            }
             match target {
                 Target::Type(target) => {
                     types.insert(written.join("::").into(), target);
@@ -2716,16 +2783,17 @@ impl<'a> Resolver<'a> {
         known
     }
 
-    /// Each path of `item`'s signatures and bounds that names a crate trait
-    /// whose name another module's trait has, as `IntoView<'a, Message>`
-    /// in `mod panel` or `crate::home::IntoView`, written as the one
-    /// segment of the path the trait is known by
-    /// ([`Resolver::trait_names`]), its own arguments kept, and a trait
-    /// declaration of such a name so renamed: two traits of one name are
-    /// two items, as rustc's are.
+    /// Each path of `item`'s signatures and bounds that names a crate
+    /// trait, through its module (`m::Shape`, `super::Shape`,
+    /// `crate::home::IntoView`) or by a name a `use` gives it (`Shape as
+    /// Outline`), written as the one segment the trait is known by
+    /// ([`Resolver::known_trait_name`]), its own arguments kept, as the
+    /// module's scope resolves it; and a trait declaration whose name
+    /// another module's trait has renamed to its path: two traits of one
+    /// name are two items, as rustc's are.
     fn write_trait_names(&self, context: &Context, item: &mut crate::item::Parsed) {
         use crate::item::type_ref::{Path, Segment, DYN_SEGMENT};
-        if self.trait_names.is_empty() {
+        if self.trait_spellings.is_empty() {
             return;
         }
         let path = |path: &mut Path| {
@@ -2738,11 +2806,7 @@ impl<'a> Resolver<'a> {
             let Some(last) = written.last() else {
                 return;
             };
-            if !self
-                .trait_names
-                .keys()
-                .any(|address| address.name == last.name.text)
-            {
+            if !self.trait_spellings.contains(&last.name.text) {
                 return;
             }
             let mut names = written
@@ -2756,12 +2820,15 @@ impl<'a> Resolver<'a> {
             let Ok(Target::Trait(address)) = resolved else {
                 return;
             };
-            let Some(known) = self.trait_names.get(&address) else {
+            let known = self.known_trait_name(address);
+            if let [only] = written
+                && only.name.text == known
+            {
                 return;
-            };
+            }
             let segment = Segment {
                 name: crate::item::Name {
-                    text: known.clone(),
+                    text: known,
                     span: last.name.span,
                 },
                 ..last.clone()
@@ -3590,7 +3657,10 @@ impl<'a> Resolver<'a> {
                 Some(end) if end + 1 == path.len() => Error::UnknownImport {
                     path: path.join("::").into(),
                     reference,
-                    missing: Unresolved::Item(self.rustc_module(context, &path[..end])),
+                    missing: Unresolved::Item {
+                        module: self.rustc_module(context, &path[..end]),
+                        segment: reference,
+                    },
                 },
                 Some(end) if let Some(span) = segment(end) => {
                     let module = self.rustc_module(context, &path[..end]);
@@ -3611,11 +3681,13 @@ impl<'a> Resolver<'a> {
 
     /// rustc's E0425 for the type path `path` into a module of this crate
     /// that `failure` refuses as an unresolved import: the module has no
-    /// type of its last segment's name.
+    /// type of its last segment's name. E0405 where `noun` is `trait`, the
+    /// path an impl's trait.
     fn unresolved_type_path(
         &self,
         context: &Context,
         path: &crate::item::type_ref::Path,
+        noun: &str,
         failure: Failure,
     ) -> Failure {
         let segments = path_segments(path);
@@ -3630,6 +3702,23 @@ impl<'a> Resolver<'a> {
             ) if *reference == path.span
                 && self.found_module(context, &segments) == Some(segments.len() - 1) =>
             {
+                if noun == "trait" {
+                    let module = segments[..segments.len() - 1].join("::");
+                    return Failure {
+                        error: Error::StdPath {
+                            code: "E0405",
+                            message: format!(
+                                "cannot find trait `{}` in module `{module}`",
+                                last.name.text
+                            )
+                            .into(),
+                            label: Some(format!("not found in `{module}`").into()),
+                            note: None,
+                            reference: last.name.span,
+                        },
+                        ..failure
+                    };
+                }
                 Failure {
                     error: Error::UnknownType {
                         name: segments.join("::").into(),

@@ -552,7 +552,16 @@ impl<'a> Parser<'a> {
                 || self.std_declared(&peeled)
                     && !matches!(peeled, Ty::Bool | Ty::Char | Ty::Int(_) | Ty::Float(_))
             {
-                return Err(self.binary_operation(symbol, "PartialOrd", operator_at, lhs, rhs));
+                return Err(self.binary_operation(
+                    format!(
+                        "binary operation `{symbol}` cannot be applied to type `{}`",
+                        self.compared_name(&lhs.ty)
+                    ),
+                    "PartialOrd",
+                    operator_at,
+                    lhs,
+                    rhs,
+                ));
             }
             return Ok(None);
         };
@@ -692,42 +701,64 @@ impl<'a> Parser<'a> {
         rhs: &ParsedExpr,
     ) -> Error {
         let symbol = if negate { "!=" } else { "==" };
-        self.binary_operation(symbol, "PartialEq", operator_at, lhs, rhs)
+        self.binary_operation(
+            format!(
+                "binary operation `{symbol}` cannot be applied to type `{}`",
+                self.compared_name(&lhs.ty)
+            ),
+            "PartialEq",
+            operator_at,
+            lhs,
+            rhs,
+        )
     }
 
-    /// rustc's E0369 for `lhs symbol rhs` whose left operand's type has no
-    /// impl of `capability`, at the operator: each operand labeled with its
-    /// type, and the program's own type noted where it is declared.
-    fn binary_operation(
+    /// rustc's E0369 `message` for `lhs <operator> rhs` whose left
+    /// operand's type has no impl of `capability`, at the operator: each
+    /// operand labeled with its type, and the program's own type noted
+    /// where it is declared.
+    pub(super) fn binary_operation(
         &self,
-        symbol: &str,
+        message: String,
         capability: &str,
         operator_at: Option<Span>,
         lhs: &ParsedExpr,
         rhs: &ParsedExpr,
     ) -> Error {
-        let left = self.compared_name(&lhs.ty);
-        let mut owner = self.inference.resolve(&lhs.ty);
-        while let Ty::Reference { target, .. } | Ty::Boxed(target) = owner {
-            owner = self.inference.resolve(&target);
-        }
-        let missing = self.declared_name(&owner).map(|declared| MissingImpl {
-            capability: capability.into(),
-            owner: owner.name(&self.models),
-            declared,
-        });
         Error::BinaryOperation {
             operation: Box::new(BinaryOperation {
-                message: format!("binary operation `{symbol}` cannot be applied to type `{left}`")
-                    .into(),
-                operands: [
-                    (self.expression_span(lhs.span), left),
+                message: message.into(),
+                labels: Box::new([
+                    (self.expression_span(lhs.span), self.compared_name(&lhs.ty)),
                     (self.expression_span(rhs.span), self.compared_name(&rhs.ty)),
-                ],
-                missing,
+                ]),
+                missing: self.missing_impl(capability, &lhs.ty, &rhs.ty),
+                assigns: false,
             }),
             at: operator_at.unwrap_or_else(|| span(lhs.span.start(), rhs.span.end())),
         }
+    }
+
+    /// The program's own type `lhs` is that has no impl of `capability`
+    /// for `rhs`, where it is declared in the file being lowered. std's
+    /// `PartialEq` and `PartialOrd` impls for a reference or a box take
+    /// the referent's, so a comparison's missing impl is the referent's;
+    /// another operator's is the operand's own.
+    pub(super) fn missing_impl(&self, capability: &str, lhs: &Ty, rhs: &Ty) -> Option<MissingImpl> {
+        let left = self.compared_name(lhs);
+        let right = self.compared_name(rhs);
+        let mut owner = self.inference.resolve(lhs);
+        if matches!(capability, "PartialEq" | "PartialOrd") {
+            while let Ty::Reference { target, .. } | Ty::Boxed(target) = owner {
+                owner = self.inference.resolve(&target);
+            }
+        }
+        self.declared_name(&owner).map(|declared| MissingImpl {
+            capability: capability.into(),
+            operand: (right != left).then_some(right),
+            owner: owner.name(&self.models),
+            declared,
+        })
     }
 
     pub(super) fn equality(
@@ -756,6 +787,22 @@ impl<'a> Parser<'a> {
         );
         match self.std_partial_eq(&left, &right) {
             Ok(PartialEqImpl::Own) => {
+                // rustc finds no impl for a program type without
+                // `PartialEq` before it reads the right operand's type:
+                // `a == 1` is E0369, not a mismatch.
+                let mut peeled = left.clone();
+                while let Ty::Reference { target, .. } | Ty::Boxed(target) = peeled {
+                    peeled = self.inference.resolve(&target);
+                }
+                if let Ty::Script(definition, ..) = peeled
+                    && self
+                        .models
+                        .std_impl(definition, "PartialEq", "eq")
+                        .is_none()
+                    && !self.type_provides(&peeled, capability::Kind::PartialEq)
+                {
+                    return Err(self.not_equatable(negate, operator_at, &lhs, &rhs));
+                }
                 self.coerce_expr(&lhs.ty, &mut rhs)?;
             }
             Ok(PartialEqImpl::Between) => {}
