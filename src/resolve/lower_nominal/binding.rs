@@ -928,7 +928,7 @@ impl<'a> Parser<'a> {
             end,
             pending,
         )
-        .map_err(|error| error.matched(|| origin))
+        .map_err(|error| syntax.declared(error.matched(|| origin)))
     }
 
     /// Whether a slice pattern in `syntax` matches a slice of unknown

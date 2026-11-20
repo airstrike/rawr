@@ -5,8 +5,9 @@
 //! A diagnostic as data has the absolute `file`, the one-based `line` and
 //! `column`, `end_line` and `end_column`, the `code`, the `severity`, the
 //! `message` without its position, `help`, and where it came from
-//! (`rawr` or `rustc`). One from rustc may carry a `suggestion`: a span
-//! and its replacement.
+//! (`rawr` or `rustc`). One may carry a `suggestion`: a span and its
+//! replacement, the first edit of the first code it suggests, whose
+//! message is among its `help`.
 
 use std::io::Write as _;
 use std::path::Path;
@@ -70,11 +71,38 @@ pub fn shape(report: &Report, base: &Path) -> Vec<Value> {
             base.join(path).to_string_lossy().into_owned()
         }
     };
+    // rustc's help, then what each suggestion says, as rustc's children
+    // give them.
+    let help: Vec<&str> = view
+        .help()
+        .into_iter()
+        .chain(
+            view.suggestions()
+                .iter()
+                .map(|suggestion| suggestion.message()),
+        )
+        .collect();
+    let help = (!help.is_empty()).then(|| help.join("\n"));
+    let suggestion = view
+        .suggestions()
+        .first()
+        .and_then(|suggestion| suggestion.edits().first())
+        .map(|edit| {
+            let span = edit.span();
+            json!({
+                "file": absolute(edit.source().identity()),
+                "line": span.start().line(),
+                "column": span.start().column(),
+                "end_line": span.end().line(),
+                "end_column": span.end().column(),
+                "replacement": edit.replacement(),
+            })
+        });
     let one = |file: Option<String>,
                start: Option<(usize, usize)>,
                end: Option<(usize, usize)>,
                label: Option<&str>| {
-        json!({
+        let mut shaped = json!({
             "label": label,
             "source": "rawr",
             "file": file,
@@ -85,8 +113,12 @@ pub fn shape(report: &Report, base: &Path) -> Vec<Value> {
             "code": view.code(),
             "severity": severity,
             "message": message.0,
-            "help": view.help(),
-        })
+            "help": help,
+        });
+        if let Some(suggestion) = &suggestion {
+            shaped["suggestion"] = suggestion.clone();
+        }
+        shaped
     };
     // The primary label, else every label, holds the position.
     let labels = view.labels();
@@ -308,7 +340,8 @@ pub fn lines(diagnostics: &[Value]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use rawr::diagnostic::{code, Report, Source};
+    use rawr::diagnostic::suggestion::{Edit, Style};
+    use rawr::diagnostic::{code, Report, Source, Suggestion};
     use rawr::{Position, Span};
     use serde_json::json;
     use std::path::Path;
@@ -344,6 +377,42 @@ mod tests {
             super::lines(&shaped),
             "/work/app/src/main.rs:1:14: error[E0308]: mismatched types\n  label: expected `i64`\n  help: use a number\n"
         );
+    }
+
+    #[test]
+    fn a_reports_suggestion_is_its_first_edit_with_its_message_among_the_help() {
+        let source = Source::new("src/main.rs", "fn main() {\n    vec(1);\n}\n").unwrap();
+        let after = Span::new(Position::new(2, 8), Position::new(2, 8));
+        let report = Report::error(
+            code::RESOLVE_WRONG_KIND,
+            "expected function, found macro `vec`",
+        )
+        .primary(
+            source.clone(),
+            Span::new(Position::new(2, 5), Position::new(2, 8)),
+            Some("not a function".into()),
+        )
+        .unwrap()
+        .suggestion(Suggestion::new(
+            "use `!` to invoke the macro",
+            Style::Verbose,
+            Edit::new(source, after, "!").unwrap(),
+        ))
+        .finish();
+        let shaped = super::shape(&report, Path::new("/work/app"));
+        assert_eq!(shaped[0]["help"], "use `!` to invoke the macro");
+        assert_eq!(
+            shaped[0]["suggestion"],
+            json!({
+                "file": "/work/app/src/main.rs",
+                "line": 2,
+                "column": 8,
+                "end_line": 2,
+                "end_column": 8,
+                "replacement": "!",
+            })
+        );
+        assert!(super::lines(&shaped).ends_with("  suggestion: replace 2:8-2:8 with \"!\"\n"));
     }
 
     #[test]

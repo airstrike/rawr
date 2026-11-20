@@ -6,6 +6,7 @@ mod panic;
 mod render;
 mod report;
 pub(crate) mod source;
+pub mod suggestion;
 mod view;
 pub mod wire;
 
@@ -19,4 +20,8 @@ pub use report::{
     Builder, Category, Error, ExternalLabel, ExternalPosition, Label, LabelKind, Report, Severity,
 };
 pub use source::Source;
-pub use view::{ExternalLabelView, LabelView, PositionView, ReportView, SourceView, SpanView};
+pub use suggestion::Suggestion;
+pub use view::{
+    EditView, ExternalLabelView, LabelView, PositionView, ReportView, SourceView, SpanView,
+    SuggestionView,
+};

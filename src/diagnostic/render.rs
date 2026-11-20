@@ -1,11 +1,16 @@
 //! Human rendering for canonical diagnostic reports, as rustc renders its
 //! own: through `annotate-snippets`, the crate rustc renders with. Each
 //! label is a marker under its source line, the primary one under the
-//! `-->` arrow, and notes and help follow as `= note:` and `= help:`.
+//! `-->` arrow, and notes and help follow as `= note:` and `= help:`. A
+//! suggestion follows them under its own `help:`, as the source its edits
+//! make, or is a `help:` label beside the code it changes.
 
-use annotate_snippets::{Annotation, AnnotationKind, Group, Level, Origin, Renderer, Snippet};
+use annotate_snippets::{
+    Annotation, AnnotationKind, Group, Level, Origin, Patch, Renderer, Snippet,
+};
 
-use super::{ExternalLabel, Label, LabelKind, Report, Severity, Source};
+use super::suggestion::Edit;
+use super::{ExternalLabel, Label, LabelKind, Report, Severity, Source, Suggestion};
 
 /// Whether a rendering carries a terminal's colours.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -48,16 +53,31 @@ pub fn render_with(report: &Report, color: Color) -> String {
         None => title,
     };
     let mut group = Group::with_title(title);
-    for source in labelled(report) {
+    let inline = Suggestion::inline(report.suggestions());
+    let mut snippets = labelled(report);
+    if let Some((edit, _)) = &inline
+        && !snippets.contains(&edit.source())
+    {
+        snippets.push(edit.source());
+    }
+    for source in &snippets {
         let annotations = report
             .labels()
             .iter()
-            .filter(|label| label.source() == source)
+            .filter(|label| label.source() == *source)
             .filter_map(annotation);
+        let help = inline
+            .as_ref()
+            .filter(|(edit, _)| edit.source() == *source)
+            .map(|(edit, label)| {
+                AnnotationKind::Context
+                    .span(range(edit))
+                    .label(label.as_str())
+            });
         group = group.element(
             Snippet::source(source.text())
                 .path(shown(source.identity()))
-                .annotations(annotations),
+                .annotations(annotations.chain(help)),
         );
     }
     let mut unread = Vec::new();
@@ -78,12 +98,11 @@ pub fn render_with(report: &Report, color: Color) -> String {
             }
         }
     }
-    for source in report.sources().iter().filter(|source| {
-        !report
-            .labels()
-            .iter()
-            .any(|label| label.source() == *source)
-    }) {
+    for source in report
+        .sources()
+        .iter()
+        .filter(|source| !snippets.contains(source))
+    {
         group = group.element(Origin::path(shown(source.identity())));
     }
     if let Some(help) = report.help() {
@@ -92,9 +111,51 @@ pub fn render_with(report: &Report, color: Color) -> String {
     for note in report.notes().chain(unread) {
         group = group.element(Level::NOTE.message(note));
     }
-    let mut output = renderer.render(&[group]);
+    let mut groups = vec![group];
+    if inline.is_none() {
+        groups.extend(report.suggestions().iter().map(suggested));
+    }
+    let mut output = renderer.render(&groups);
     output.push('\n');
     output
+}
+
+/// A suggestion's own section: its `help:` line, then each source it edits
+/// as its edits make it, rustc's `+` under what they add, `~` under what
+/// they replace and a `-` line for what they remove.
+fn suggested(suggestion: &Suggestion) -> Group<'_> {
+    let mut sources: Vec<&Source> = Vec::new();
+    for edit in suggestion.edits() {
+        if !sources.contains(&edit.source()) {
+            sources.push(edit.source());
+        }
+    }
+    let snippets = sources.into_iter().map(|source| {
+        let patches = suggestion
+            .edits()
+            .iter()
+            .filter(|edit| edit.source() == source)
+            .map(|edit| Patch::new(range(edit), edit.replacement()));
+        Snippet::source(source.text())
+            .path(shown(source.identity()))
+            .patches(patches)
+    });
+    Group::with_title(Level::HELP.secondary_title(suggestion.message())).elements(snippets)
+}
+
+/// The byte range of `edit` in its source's text.
+fn range(edit: &Edit) -> std::ops::Range<usize> {
+    let span = edit.span();
+    let text = edit.source().text();
+    let at = |position: crate::Position| {
+        offset(
+            text,
+            position.line().unwrap_or(1),
+            position.position().unwrap_or(1),
+        )
+    };
+    let start = at(span.start());
+    start..at(span.end()).max(start)
 }
 
 /// The directory a process with no current directory of its own shows
@@ -199,7 +260,8 @@ fn external_snippet<'text>(
 #[cfg(test)]
 mod tests {
     use super::{render, render_with, Color};
-    use crate::diagnostic::{code, ExternalPosition, Report, Source};
+    use crate::diagnostic::suggestion::{Edit, Style};
+    use crate::diagnostic::{code, Builder, ExternalPosition, Report, Source, Suggestion};
     use crate::{Position, Span};
 
     #[cfg(feature = "rust-import")]
@@ -331,6 +393,81 @@ mod tests {
                 ),
                 file = file
             )
+        );
+    }
+
+    /// A suggestion follows the notes under its own `help:`, as the line
+    /// its edits make; the one short inline suggestion of a report is a
+    /// label beside the code it changes instead.
+    #[test]
+    fn suggestions_render_as_the_source_they_make_or_beside_it() {
+        let source =
+            Source::new("src/main.rs", "fn main() {\n    let b: Box<i32> = 1;\n}\n").unwrap();
+        let value = Span::new(Position::new(2, 23), Position::new(2, 24));
+        let at = |position: Position| Span::new(position, position);
+        let wrap = || {
+            Suggestion::new(
+                "store this in the heap by calling `Box::new`",
+                Style::Verbose,
+                Edit::new(source.clone(), at(value.start()), "Box::new(").unwrap(),
+            )
+            .edit(Edit::new(source.clone(), at(value.end()), ")").unwrap())
+        };
+        let report = |suggestions: Vec<Suggestion>| {
+            suggestions
+                .into_iter()
+                .fold(
+                    Report::error(code::RESOLVE_TYPE_MISMATCH, "mismatched types")
+                        .primary(source.clone(), value, Some("expected `Box<i32>`".into()))
+                        .unwrap()
+                        .note("a note"),
+                    Builder::suggestion,
+                )
+                .finish()
+        };
+        assert_eq!(
+            render(&report(vec![wrap()])),
+            concat!(
+                "error[E0308]: mismatched types\n",
+                " --> src/main.rs:2:23\n",
+                "  |\n",
+                "2 |     let b: Box<i32> = 1;\n",
+                "  |                       ^ expected `Box<i32>`\n",
+                "  |\n",
+                "  = note: a note\n",
+                "help: store this in the heap by calling `Box::new`\n",
+                "  |\n",
+                "2 |     let b: Box<i32> = Box::new(1);\n",
+                "  |                       +++++++++ +\n",
+            )
+        );
+        let inline = || {
+            Suggestion::new(
+                "use a box",
+                Style::Inline,
+                Edit::new(source.clone(), value, "Box::new(1)").unwrap(),
+            )
+        };
+        assert_eq!(
+            render(&report(vec![inline()])),
+            concat!(
+                "error[E0308]: mismatched types\n",
+                " --> src/main.rs:2:23\n",
+                "  |\n",
+                "2 |     let b: Box<i32> = 1;\n",
+                "  |                       ^\n",
+                "  |                       |\n",
+                "  |                       expected `Box<i32>`\n",
+                "  |                       help: use a box: `Box::new(1)`\n",
+                "  |\n",
+                "  = note: a note\n",
+            )
+        );
+        // Beside another suggestion, an inline one has its own section.
+        let both = render(&report(vec![inline(), wrap()]));
+        assert!(
+            both.contains("help: use a box\n  |\n2 -     let b: Box<i32> = 1;\n2 +     let b: Box<i32> = Box::new(1);\n"),
+            "{both}"
         );
     }
 

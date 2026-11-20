@@ -276,6 +276,26 @@ impl Syntax {
         }
     }
 
+    /// `error`, refusing this pattern as a `let`'s whole pattern, with the
+    /// binding rustc suggests declaring `mut` where the pattern is a `&mut`
+    /// of one binding on a `&` value.
+    pub(super) fn declared(&self, mut error: Error) -> Error {
+        if let Error::PatternMismatch { types, pattern, .. } = &mut error
+            && *pattern == self.span()
+            && types.expected.starts_with('&')
+            && !types.expected.starts_with("&mut ")
+            && let Self::Reference {
+                mutable: true,
+                pattern: inner,
+                ..
+            } = self
+            && let Self::Binding { name, .. } = inner.as_ref()
+        {
+            types.binding = Some(name.clone());
+        }
+        error
+    }
+
     /// How many members of a tuple pattern's `members` are elements, not
     /// `..`.
     pub(super) fn tuple_elements(members: &[Self]) -> usize {
@@ -935,7 +955,7 @@ impl<'a> Parser<'a> {
                     end,
                     pending,
                 )
-                .map_err(|error| error.matched(|| origin));
+                .map_err(|error| syntax.declared(error.matched(|| origin)));
         }
         self.reject_invocation(&value.ty, value.span, "kept in a `let` binding")?;
         if let Some(expected) = &annotation {
@@ -959,7 +979,7 @@ impl<'a> Parser<'a> {
                     end,
                     pending,
                 )
-                .map_err(|error| error.matched(|| origin));
+                .map_err(|error| syntax.declared(error.matched(|| origin)));
         }
         let ty = annotation.unwrap_or_else(|| value.ty.clone());
         // `ref mut` bindings are the subject's places: it is not copied.
@@ -1006,7 +1026,7 @@ impl<'a> Parser<'a> {
         let traced = self.begin_trace();
         let destructured = self
             .destructure(&syntax, &whole, &ty)
-            .map_err(|error| error.matched(|| self.let_origin(annotated, &value)));
+            .map_err(|error| syntax.declared(error.matched(|| self.let_origin(annotated, &value))));
         let trace = self.end_trace(traced);
         self.pattern_facts(trace, &matched, value.span, &[])?;
         self.place_root = None;
@@ -2334,6 +2354,7 @@ impl<'a> Parser<'a> {
                 found: name,
                 sorts,
                 arity: None,
+                binding: None,
             }),
             pattern,
             origin: None,
@@ -2370,6 +2391,7 @@ impl<'a> Parser<'a> {
                 }
             ),
             pattern,
+            subject: None,
         }
     }
 
@@ -2388,6 +2410,7 @@ impl<'a> Parser<'a> {
                 found: tuple_type(found).into(),
                 sorts: Some(("tuple", "tuple")),
                 arity: Some((arity, found)),
+                binding: None,
             }),
             pattern,
             origin: None,

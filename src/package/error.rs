@@ -76,7 +76,7 @@ enum Kind {
     #[cfg(feature = "rust-import")]
     Import(super::import::Error),
     #[cfg(feature = "rust-import")]
-    ImportDiagnostic(diagnostic::Report),
+    ImportDiagnostic(Box<diagnostic::Report>),
     Diagnostic(diagnostic::Error),
 }
 
@@ -244,7 +244,7 @@ impl Error {
     pub(crate) fn import_diagnostic(report: diagnostic::Report) -> Self {
         Self {
             sources: Box::default(),
-            kind: Kind::ImportDiagnostic(report),
+            kind: Kind::ImportDiagnostic(Box::new(report)),
             rust_demand: Vec::new(),
             #[cfg(feature = "rust-import")]
             rust_application: None,
@@ -556,7 +556,7 @@ impl Error {
             )
             .finish()),
             #[cfg(feature = "rust-import")]
-            Kind::ImportDiagnostic(report) => Ok(report.clone()),
+            Kind::ImportDiagnostic(report) => Ok(report.as_ref().clone()),
             Kind::Diagnostic(error) => Err(error.clone()),
         }
     }
