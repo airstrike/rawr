@@ -813,10 +813,10 @@ fn a_call_the_universe_does_not_make_does_not_compile() {
             "column![iced::widget::radio(\"Up\", 1, Some(1), |_: i32| Msg::Up)]",
             "error[E0425]: cannot find function `radio` in module `iced::widget`",
         ),
-        // A method it doesn't call.
+        // A method it doesn't call, of a type it binds other methods of.
         (
-            "column![text(self.count)].max_width(300)",
-            "error[E0599]: no method named `max_width` found for `Column`",
+            "column![text(self.count)].clip(true)",
+            "error: this use of a crate is not available in this prebuilt runner",
         ),
         // Two functions where the universe's one adapter holds one: a
         // second slider of an `f32` with another message.

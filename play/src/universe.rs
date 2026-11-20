@@ -261,7 +261,12 @@ fn unmarked(text: &str, entry: &str, program: &str, source: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for line in text.lines() {
         let located = rawr_snippet::located(line).and_then(|(arrow, place)| {
-            Some((arrow, place.strip_prefix(entry)?.strip_prefix(':')?))
+            // The runner names its entry as the path it was built with,
+            // absolute or relative to the root's parent, so the entry is
+            // matched by its ending.
+            let (path, rest) = place.split_once(':')?;
+            let named = entry == path || entry.ends_with(&format!("/{path}"));
+            named.then_some((arrow, rest))
         });
         if let Some((arrow, location)) = located {
             let location = location
