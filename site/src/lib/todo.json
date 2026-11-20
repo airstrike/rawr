@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-19",
-  "version": "0.4.46",
+  "version": "0.4.47",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,14 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.47",
+        "date": "2026-11-19",
+        "entries": [
+          {"text":"An assignment to a value that is no place, as `(x + y) = 42`, `foo(x) = 42`, `123 = 42` or `x.foo() = 42`, is rustc's E0070 \"invalid left-hand side of assignment\" with rustc's label and spans; a compound one, as `(x + y) += 1`, is E0067.","issues":[2306]},
+          {"text":"A block whose last statement ends in `;` has the value `()`, as in Rust, so native code calling a unit function gets `()` whatever its last statement leaves.","issues":[2316]}
+        ]
+      },
       {
         "version": "0.4.46",
         "date": "2026-11-19",
@@ -5402,7 +5410,7 @@
     {"issue":2303,"title":"std_method_tests::a_sync_channel_a_scope_and_a_builder_run_as_std_s fails now and then under the full lib suite","state":"closed","category":"Health","release":"0.4.36"},
     {"issue":2304,"title":"The playground's debugger icon swaps in a debugger build of the browser module and restarts the program under it","state":"open","category":"Platforms"},
     {"issue":2305,"title":"An assignment through a `&T` says rawr doesn't support it, not rustc's E0594","state":"closed","category":"Divergences from rustc","release":"0.4.38"},
-    {"issue":2306,"title":"An assignment to a value that is no place says rawr doesn't support it, not rustc's E0070","state":"open","category":"Divergences from rustc"},
+    {"issue":2306,"title":"An assignment to a value that is no place says rawr doesn't support it, not rustc's E0070","state":"closed","category":"Divergences from rustc","release":"0.4.47"},
     {"issue":2307,"title":"The playground's debugger and console are denser: bindings and console answers open as trees (a…","state":"closed","category":"Platforms","release":"0.4.39"},
     {"issue":2308,"title":"A runner registers its debugger in its running engine, replacing the debugger generation","state":"closed","category":"Health","release":"0.4.41"},
     {"issue":2309,"title":"The debugger evaluates only in the innermost frame, even with another frame selected","state":"closed","category":"Health","release":"0.4.40"},
@@ -5412,8 +5420,9 @@
     {"issue":2313,"title":"The debugger reads a map, set or sequence holding a program's own structs or enums as Rust's…","state":"closed","category":"Divergences from rustc","release":"0.4.44"},
     {"issue":2314,"title":"Superseded builds of rawr's own crates pile up in target/debug despite #1732's prune","state":"closed","category":"Health"},
     {"issue":2315,"title":"A debugger attached to a running program names the function it pauses in and reads that…","state":"closed","category":"Health","release":"0.4.45"},
-    {"issue":2316,"title":"A root unit function compiled by Engine::compile gives native code its last statement's value","state":"open","category":"No glue (D593)"},
-    {"issue":2317,"title":"`rawr tui` reads bindings with their parts from the inspector, so a map opens to one row per…","state":"closed","category":"Health","release":"0.4.46"}
+    {"issue":2316,"title":"A root unit function compiled by Engine::compile gives native code its last statement's value","state":"closed","category":"No glue (D593)","release":"0.4.47"},
+    {"issue":2317,"title":"`rawr tui` reads bindings with their parts from the inspector, so a map opens to one row per…","state":"closed","category":"Health","release":"0.4.46"},
+    {"issue":2318,"title":"Destructuring assignment and assignment to a parenthesized place are unsupported","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -6464,7 +6473,7 @@
             {"number":2280,"title":"Marked code calling a method a native module defines on a marked type","state":"open"},
             {"number":2282,"title":"Since #2276, a private-field edit of a held type under a native module restarts instead of swapping","state":"closed"},
             {"number":2285,"title":"A native module reading a private field through a value whose type it never names isn't counted as seeing it","state":"open"},
-            {"number":2316,"title":"A root unit function compiled by Engine::compile gives native code its last statement's value","state":"open"}
+            {"number":2316,"title":"A root unit function compiled by Engine::compile gives native code its last statement's value","state":"closed"}
           ]
         },
         {
@@ -7592,7 +7601,8 @@
             {"number":2284,"title":"`located::here!()` in a marked module fails to expand: expected expression, found `)`","state":"closed"},
             {"number":2290,"title":"A crate macro call sent to rustc keeps hidden-segment paths in its input","state":"open"},
             {"number":2291,"title":"rustc's expansion of a crate macro call gives line!() at the expansion input, not the call","state":"open"},
-            {"number":2306,"title":"An assignment to a value that is no place says rawr doesn't support it, not rustc's E0070","state":"open"}
+            {"number":2306,"title":"An assignment to a value that is no place says rawr doesn't support it, not rustc's E0070","state":"closed"},
+            {"number":2318,"title":"Destructuring assignment and assignment to a parenthesized place are unsupported","state":"open"}
           ]
         },
         {

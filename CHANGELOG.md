@@ -6,6 +6,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.47 (2026-11-19)
+
+- An assignment to a value that is no place, as `(x + y) = 42`, `foo(x) = 42`, `123 = 42` or `x.foo() = 42`, is rustc's E0070 "invalid left-hand side of assignment" with rustc's label and spans; a compound one, as `(x + y) += 1`, is E0067. (#2306)
+- A block whose last statement ends in `;` has the value `()`, as in Rust, so native code calling a unit function gets `()` whatever its last statement leaves. (#2316)
+
 ## 0.4.46 (2026-11-19)
 
 - `rawr tui` reads bindings with their parts from the inspector, so a map opens to one row per key, and `rawr gui` shows its Frame pane only once the program shows a window, giving the call stack and bindings the whole column otherwise. (#2317)

@@ -8,6 +8,14 @@
   },
   "releases": [
     {
+      "version": "0.4.47",
+      "date": "2026-11-19",
+      "entries": [
+        {"text":"An assignment to a value that is no place, as `(x + y) = 42`, `foo(x) = 42`, `123 = 42` or `x.foo() = 42`, is rustc's E0070 \"invalid left-hand side of assignment\" with rustc's label and spans; a compound one, as `(x + y) += 1`, is E0067.","issues":[2306]},
+        {"text":"A block whose last statement ends in `;` has the value `()`, as in Rust, so native code calling a unit function gets `()` whatever its last statement leaves.","issues":[2316]}
+      ]
+    },
+    {
       "version": "0.4.46",
       "date": "2026-11-19",
       "entries": [
