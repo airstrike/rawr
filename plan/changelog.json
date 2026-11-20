@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.4.57",
+      "date": "2026-11-20",
+      "entries": [
+        {"text":"Wrong argument counts read as rustc's: the error is at the callee, each extra argument and missing parameter is labelled with its type, the missing parameters are marked where the callee is defined, and the fix is suggested. An unmet bound that a program's function writes points at the argument and at the bound. Private items read as rustc's: unit structs and tuple struct constructors by name, items past a private module as not publicly re-exported, the path to import instead, and `pub` for a constructor's private fields. `..base` giving private fields is E0451.","issues":[2331]}
+      ]
+    },
+    {
       "version": "0.4.56",
       "date": "2026-11-20",
       "entries": [
