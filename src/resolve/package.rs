@@ -75,10 +75,10 @@ struct Declaration {
 #[derive(Clone, PartialEq)]
 enum Target {
     Module,
-    /// A crate trait at its address: Rawr's traits are known by name in
-    /// the whole crate, so importing one binds nothing new; a name two
-    /// modules declare a trait of is known by its path
-    /// ([`Resolver::trait_names`]).
+    /// A crate trait at its address, known by its name, or by its path
+    /// when another module's trait or a std trait has that name
+    /// ([`Resolver::trait_names`]). A signature names it through its
+    /// module's scope ([`Resolver::write_trait_names`]).
     Trait(Address),
     HostModuleItem {
         definitions: Box<[host::item::Definition]>,
@@ -178,10 +178,11 @@ struct Resolver<'a> {
     expansions: BTreeMap<source::Id, Box<[crate::diagnostic::source::Expansion]>>,
     /// The ids `type_declarations` hold (`type_def::Id::keyed`).
     type_ids: BTreeSet<type_def::Id>,
-    /// Each crate trait whose name another module's trait has too, by its
-    /// address, with the path it is known by, as rustc names it then:
-    /// `home::IntoView` beside `panel::IntoView`. A trait whose
-    /// name is the crate's only one is known by its name.
+    /// Each crate trait whose name another module's trait or a std trait
+    /// has too, by its address, with the path it is known by, as rustc
+    /// names it then: `home::IntoView` beside `panel::IntoView`, and
+    /// `m::Display` beside std's. A trait whose name is the crate's only
+    /// one is known by its name.
     trait_names: BTreeMap<Address, ImmutableString>,
     /// Each name a signature may write a crate trait by: every crate
     /// trait's own name, and each name a `use` binds with `as`
@@ -693,9 +694,11 @@ impl<'a> Resolver<'a> {
         Ok(())
     }
 
-    /// Each trait whose name another declared trait has, with its path from
-    /// its crate's root, its package's name first outside the entry
-    /// package.
+    /// Each trait whose name another declared trait or a std trait has,
+    /// with its path from its crate's root, its package's name first
+    /// outside the entry package: a module's `Display` is `m::Display`, as
+    /// rustc names it, and the bare name a scope without it writes is
+    /// std's.
     fn shared_trait_names(&self) -> BTreeMap<Address, ImmutableString> {
         let mut by_name = BTreeMap::<&str, Vec<&Address>>::new();
         for declaration in self.tables.declarations() {
@@ -707,9 +710,11 @@ impl<'a> Resolver<'a> {
             }
         }
         by_name
-            .into_values()
-            .filter(|addresses| addresses.len() > 1)
-            .flatten()
+            .into_iter()
+            .filter(|(name, addresses)| {
+                addresses.len() > 1 || super::std_trait::anywhere(name).is_some()
+            })
+            .flat_map(|(_, addresses)| addresses)
             .map(|address| {
                 let package = (address.package != self.package).then_some(&address.package);
                 let path = package
@@ -1313,12 +1318,35 @@ impl<'a> Resolver<'a> {
                 .scope()
                 .and_then(|block| super::block::innermost(&block_types, block))
                 .unwrap_or(&types);
+            // A block's items see the traits the blocks around them declare
+            // or import, which the module's scope doesn't hold.
+            let scope = parsed.scope();
+            let block_binds = |name: &ImmutableString| {
+                scope.is_some_and(|here| {
+                    blocks.iter().any(|(block, declared)| {
+                        super::block::encloses(*block, here) && declared.contains_key(name)
+                    }) || uses.iter().flatten().any(|used| {
+                        used.header.scope.is_some()
+                            && sees(used.header.scope, scope)
+                            && (used.traits.contains(name)
+                                || used
+                                    .bindings
+                                    .iter()
+                                    .any(|binding| binding.name.text == *name))
+                    })
+                })
+            };
             let parsed = {
                 let mut parsed = parsed;
                 qualify_opaque_bounds(&mut parsed, &modules);
                 write_renamed_modules(&mut parsed, &modules);
                 self.write_native_trait_objects(context, &mut parsed, &modules);
-                self.write_trait_names(context, &mut parsed);
+                self.write_trait_names(context, &mut parsed, &block_binds)
+                    .map_err(|error| Failure {
+                        primary: context.source,
+                        secondary: None,
+                        error,
+                    })?;
                 parsed
             };
             let shell = super::resolve_item(
@@ -2847,7 +2875,7 @@ impl<'a> Resolver<'a> {
         modules: &BTreeMap<ImmutableString, ImmutableString>,
     ) {
         use crate::item::type_ref::{Path, Segment};
-        let path = |path: &mut Path| {
+        let path = |path: &mut Path, _: Place| {
             let [dyn_, first, ..] = &path.segments[..] else {
                 return;
             };
@@ -2944,17 +2972,30 @@ impl<'a> Resolver<'a> {
     /// module's scope resolves it; and a trait declaration whose name
     /// another module's trait has renamed to its path: two traits of one
     /// name are two items, as rustc's are.
-    fn write_trait_names(&self, context: &Context, item: &mut crate::item::Parsed) {
+    ///
+    /// A trait's place that writes a crate trait's name nothing in scope
+    /// binds (not the module's items, its `use`s and globs, the blocks
+    /// around the item, `block_binds`, or the prelude) is rustc's E0405:
+    /// a crate trait is named through the scope of the module naming it,
+    /// never by its name alone.
+    fn write_trait_names(
+        &self,
+        context: &Context,
+        item: &mut crate::item::Parsed,
+        block_binds: &impl Fn(&ImmutableString) -> bool,
+    ) -> Result<(), Error> {
         use crate::item::type_ref::{Path, Segment, DYN_SEGMENT};
         if self.trait_spellings.is_empty() {
-            return;
+            return Ok(());
         }
-        let path = |path: &mut Path| {
+        let refused = RefCell::new(None);
+        let path = |path: &mut Path, place: Place| {
             let skip = usize::from(
                 path.segments
                     .first()
                     .is_some_and(|first| first.name.text.as_str() == DYN_SEGMENT),
             );
+            let place = if skip == 0 { place } else { Place::Trait };
             let written = &path.segments[skip..];
             let Some(last) = written.last() else {
                 return;
@@ -2970,8 +3011,21 @@ impl<'a> Resolver<'a> {
                 names.insert(0, "self".into());
             }
             let resolved = self.resolve_path(context, &names, path.span, &mut BTreeSet::new());
-            let Ok(Target::Trait(address)) = resolved else {
-                return;
+            let address = match resolved {
+                Ok(Target::Trait(address)) => address,
+                Err(_)
+                    if place == Place::Trait
+                        && written.len() == 1
+                        && !self.tables.binds(&context.address(&last.name.text))
+                        && !block_binds(&last.name.text)
+                        && !prelude_trait(&last.name.text) =>
+                {
+                    refused
+                        .borrow_mut()
+                        .get_or_insert_with(|| super::unknown_trait(&last.name));
+                    return;
+                }
+                _ => return,
             };
             let known = self.known_trait_name(address);
             if let [only] = written
@@ -3009,9 +3063,10 @@ impl<'a> Resolver<'a> {
                         .flat_map(|generic| generic.bounds.iter_mut()),
                 )
             {
-                path(bound);
+                path(bound, Place::Trait);
             }
         }
+        refused.into_inner().map_or(Ok(()), Err)
     }
 
     /// `crate::…`, `super::…` or child-module paths that land in a `.rs`
@@ -4581,7 +4636,7 @@ pub(super) fn write_renamed_modules(
     if renamed.is_empty() {
         return;
     }
-    let path = |path: &mut Path| {
+    let path = |path: &mut Path, _: Place| {
         if path.global {
             return;
         }
@@ -4610,14 +4665,34 @@ pub(super) fn write_renamed_modules(
     each_signature_path(item, &path);
 }
 
-/// Call `path` on each path of `item`'s signatures: its types, at any depth
-/// of their arguments, its generic bounds and an impl's trait.
+/// Whether the prelude has a trait of `name`, which every module sees.
+fn prelude_trait(name: &str) -> bool {
+    crate::std_table::prelude(super::std_path::EDITION)
+        .any(|path| path.kind == "trait" && path.path.rsplit("::").next() == Some(name))
+}
+
+/// Where a signature writes a path: as a type, or as a trait it bounds or
+/// implements.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Place {
+    /// A type: a field's, a parameter's, an alias's target or an impl's
+    /// owner, at any depth of their arguments. A trait object's path
+    /// (`dyn::Trait`) is one.
+    Type,
+    /// A trait a generic bound, an argument-position or return-position
+    /// `impl Trait`, or an impl's header names.
+    Trait,
+}
+
+/// Call `path` on each path of `item`'s signatures, with the place it is
+/// written in: its types, at any depth of their arguments, its generic
+/// bounds, an `impl Trait`'s and an impl's trait.
 fn each_signature_path(
     item: &mut crate::item::Parsed,
-    path: &impl Fn(&mut crate::item::type_ref::Path),
+    path: &impl Fn(&mut crate::item::type_ref::Path, Place),
 ) {
-    use crate::item::type_ref::{Argument, Path, Type};
-    fn ty(written: &mut Type, path: &impl Fn(&mut Path)) {
+    use crate::item::type_ref::{Argument, Path, Type, IMPL_TYPE};
+    fn ty(written: &mut Type, path: &impl Fn(&mut Path, Place)) {
         match written {
             Type::Unit(_) => {}
             Type::Tuple { members, .. } => {
@@ -4626,11 +4701,26 @@ fn each_signature_path(
                 }
             }
             Type::Path(written) => {
-                path(written);
+                path(written, Place::Type);
+                // `impl Bound + Bound` parses to the path `impl<Bound,
+                // Bound>`: its arguments are traits.
+                let opaque = matches!(&written.segments[..], [segment]
+                    if segment.name.text == IMPL_TYPE);
                 for segment in written.segments.iter_mut() {
                     for argument in segment.arguments.iter_mut() {
-                        if let Argument::Type(argument) = argument {
-                            ty(argument, path);
+                        match argument {
+                            Argument::Type(Type::Path(bound)) if opaque => {
+                                path(bound, Place::Trait);
+                                for segment in bound.segments.iter_mut() {
+                                    for argument in segment.arguments.iter_mut() {
+                                        if let Argument::Type(argument) = argument {
+                                            ty(argument, path);
+                                        }
+                                    }
+                                }
+                            }
+                            Argument::Type(argument) => ty(argument, path),
+                            Argument::Lifetime(_) => {}
                         }
                     }
                 }
@@ -4642,7 +4732,7 @@ fn each_signature_path(
         for generic in generics.iter_mut() {
             let mut bounds = generic.bounds.to_vec();
             for bound in &mut bounds {
-                path(bound);
+                path(bound, Place::Trait);
             }
             generic.bounds = bounds.into_boxed_slice();
         }
@@ -4675,7 +4765,7 @@ fn each_signature_path(
             generics(&mut item.generics);
             ty(&mut item.owner, path);
             if let Some(trait_) = &mut item.trait_ {
-                path(trait_);
+                path(trait_, Place::Trait);
             }
             for member in item.functions.iter_mut() {
                 function(member);
