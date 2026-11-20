@@ -245,7 +245,6 @@ where
         use std::task::Poll::{Pending, Ready};
         let this = self.get_mut();
         if let Some(output) = &this.output {
-            counted!(RuntimeMade);
             let mut state = lock(output);
             return match state.0.take() {
                 Some(value) => Ready(value),
@@ -282,7 +281,6 @@ where
                 };
                 let made = finish(value);
                 let waker = {
-                    counted!(RuntimeMade);
                     let mut state = lock(&shared);
                     state.0 = Some(made);
                     state.1.take()
@@ -925,7 +923,6 @@ impl Slot {
             output: Mutex::new((None, Some(waker.clone()))),
         });
         if owns() {
-            counted!(RuntimeMade);
             lock(&slot.output).0 = Some(finish());
         } else {
             let shared = Arc::downgrade(&slot);
@@ -935,7 +932,6 @@ impl Slot {
                 };
                 let output = finish();
                 let waker = {
-                    counted!(RuntimeMade);
                     let mut state = lock(&shared.output);
                     state.0 = Some(output);
                     state.1.take()
@@ -949,7 +945,6 @@ impl Slot {
     }
 
     fn poll(&self, cx: &mut Context<'_>) -> std::task::Poll<RawrResultOf<Dynamic>> {
-        counted!(RuntimeMade);
         let mut state = lock(&self.output);
         match state.0.take() {
             Some(output) => std::task::Poll::Ready(output),
@@ -1615,7 +1610,6 @@ thread_local! {
 /// queue for [`drain`] and wake it (D527).
 #[cfg(feature = "sync")]
 pub fn drive(waker: &Waker) {
-    counted!(RuntimeDrive);
     *lock(&DRIVER) = Some(waker.clone());
 }
 
@@ -1679,7 +1673,6 @@ pub fn on_owner(work: impl FnOnce() + MaybeSend + 'static) {
 /// Whether an owner thread runs the steps other threads send it: the
 /// runtime entry's poll drains them (D527), or a forward hands them on.
 fn served() -> bool {
-    counted!(RuntimeServed);
     #[cfg(feature = "sync")]
     if lock(&DRIVER).is_some() {
         return true;

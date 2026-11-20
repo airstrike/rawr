@@ -45,7 +45,6 @@ impl Builder {
 
     /// The builder and the name of its thread, taken from its place.
     fn take(value: &Dynamic) -> Result<(std::thread::Builder, Option<String>), Box<EvalAltResult>> {
-        counted!(ThreadBuilder);
         let configured = value
             .read_lock::<Self>()
             .and_then(|builder| {

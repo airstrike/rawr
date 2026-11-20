@@ -1,43 +1,30 @@
-//! What a result was measured with and on: the binary, the source it was
-//! built from, the toolchain, the machine and its load. Load is recorded,
-//! never used to refuse a run.
+//! What a result was measured with and on: the build (embedded by
+//! build.rs when it was compiled), the toolchain, the machine and its
+//! load. Load is recorded, never used to refuse a run.
 
 use serde_json::{json, Value};
-use std::path::Path;
 use std::process::Command;
 
-/// The bench binary, its hash, and rawr's version and build.
-pub fn binary() -> Value {
+/// The build: its revision, whether its tree had changes and their
+/// digest, its profile, whether it counts, and the binary's hash.
+pub fn build() -> Value {
     use sha2::Digest as _;
-    let path = std::env::current_exe().ok();
-    let hash = path
-        .as_deref()
+    let hash = std::env::current_exe()
+        .ok()
         .and_then(|path| std::fs::read(path).ok())
         .map(|bytes| hex(&sha2::Sha256::digest(bytes)));
+    let changes = env!("LOCK_BENCH_CHANGES");
     json!({
-        "path": path,
-        "sha256": hash,
-        "rawr": rawr::VERSION,
+        "revision": env!("LOCK_BENCH_REVISION"),
+        "dirty": env!("LOCK_BENCH_DIRTY") == "true",
+        "changes": (!changes.is_empty()).then_some(changes),
+        "profile": env!("LOCK_BENCH_PROFILE"),
+        "opt_level": env!("LOCK_BENCH_OPT_LEVEL"),
         "debug_assertions": cfg!(debug_assertions),
+        "counters": cfg!(feature = "counters"),
+        "rawr": rawr::VERSION,
+        "binary_sha256": hash,
     })
-}
-
-/// The commit the bench was built from and whether the tree had changes.
-pub fn source() -> Value {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let revision = output(
-        Command::new("git")
-            .arg("-C")
-            .arg(root)
-            .args(["rev-parse", "HEAD"]),
-    );
-    let dirty = output(Command::new("git").arg("-C").arg(root).args([
-        "status",
-        "--porcelain",
-        "--untracked-files=no",
-    ]))
-    .map(|status| !status.is_empty());
-    json!({ "revision": revision, "dirty": dirty })
 }
 
 /// The toolchain on `PATH`, which `cargo bench` built with unless a

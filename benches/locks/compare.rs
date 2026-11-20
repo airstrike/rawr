@@ -1,6 +1,6 @@
-//! Two results side by side: each workload's counts, allocations and
-//! times before and after, and every difference in what they were
-//! measured with that makes a figure less comparable.
+//! Two results side by side: each workload's counts, allocations, times
+//! and reported values before and after, and every difference in what they
+//! were measured with that makes a figure less comparable.
 
 use serde_json::Value;
 use std::path::Path;
@@ -20,52 +20,69 @@ pub fn print(before: &Path, after: &Path) {
         }
     }
     let differences = [
-        ("machine", &before["machine"], &after["machine"]),
-        ("toolchain", &before["toolchain"], &after["toolchain"]),
         ("mode", &before["mode"], &after["mode"]),
-        ("options", &before["options"], &after["options"]),
+        (
+            "profile",
+            &before["build"]["profile"],
+            &after["build"]["profile"],
+        ),
+        (
+            "opt level",
+            &before["build"]["opt_level"],
+            &after["build"]["opt_level"],
+        ),
         (
             "debug assertions",
-            &before["binary"]["debug_assertions"],
-            &after["binary"]["debug_assertions"],
+            &before["build"]["debug_assertions"],
+            &after["build"]["debug_assertions"],
         ),
+        ("machine", &before["machine"], &after["machine"]),
+        ("toolchain", &before["toolchain"], &after["toolchain"]),
+        ("options", &before["options"], &after["options"]),
     ];
     for (what, was, now) in differences {
         if was != now {
             println!("note: the {what} differs: {was} then {now}");
         }
     }
-    println!(
-        "before: {} {} at {}, load {} .. {}",
-        before["source"]["revision"],
-        before["label"],
-        before["started_utc"],
-        before["load"]["before"],
-        before["load"]["after"]
-    );
-    println!(
-        "after:  {} {} at {}, load {} .. {}",
-        after["source"]["revision"],
-        after["label"],
-        after["started_utc"],
-        after["load"]["before"],
-        after["load"]["after"]
-    );
-    for was in workloads(&before) {
-        let name = &was["name"];
-        let Some(now) = workloads(&after).find(|now| now["name"] == *name) else {
+    for (which, result) in [("before", &before), ("after", &after)] {
+        let build = &result["build"];
+        if build["dirty"] == true {
             println!(
-                "\n{} is only in the first result",
-                name.as_str().unwrap_or_default()
+                "note: {which} was built from a dirty tree (changes {})",
+                build["changes"]
             );
+        }
+        println!(
+            "{which:<6} {} {} {} at {}, load {} .. {}",
+            build["revision"],
+            build["profile"],
+            result["label"],
+            result["started_utc"],
+            result["load"]["before"],
+            result["load"]["after"]
+        );
+    }
+    for was in workloads(&before) {
+        let name = was["name"].as_str().unwrap_or_default();
+        let Some(now) = workloads(&after).find(|now| now["name"] == was["name"]) else {
+            println!("\n{name} is only in the first result");
             continue;
         };
-        println!("\n{}", name.as_str().unwrap_or_default());
+        println!("\n{name}");
         if was["fixture_sha256"] != now["fixture_sha256"] {
-            println!("  note: the fixture changed; its counts measure another program");
+            println!("  note: the fixture changed; its figures measure another program");
         }
         compare_counts(&was["counted"], &now["counted"]);
         compare_times(&was["timed"], &now["timed"]);
+        let reported = |result: &Value| {
+            if result["counted"].is_null() {
+                result["timed"]["reported"].clone()
+            } else {
+                result["counted"]["reported"].clone()
+            }
+        };
+        compare_reported(&reported(was), &reported(now));
     }
     for now in workloads(&after) {
         if !workloads(&before).any(|was| was["name"] == now["name"]) {
@@ -78,23 +95,18 @@ pub fn print(before: &Path, after: &Path) {
 }
 
 fn compare_counts(was: &Value, now: &Value) {
+    if was.is_null() || now.is_null() {
+        return;
+    }
     let mut sites: Vec<&String> = Vec::new();
     for counted in [was, now] {
-        for site in counted["sites"]
-            .as_object()
-            .into_iter()
-            .flatten()
-            .map(|(site, _)| site)
-        {
+        for (site, _) in counted["sites"].as_object().into_iter().flatten() {
             if !sites.contains(&site) {
                 sites.push(site);
             }
         }
     }
-    println!(
-        "  {:<20} {:>13} {:>13} {:>13}",
-        "count (median)", "before", "after", "change"
-    );
+    println!("  {:<16} {:>24} {:>24}", "count by run", "before", "after");
     for site in sites {
         line(site, &was["sites"][site], &now["sites"][site]);
     }
@@ -106,16 +118,28 @@ fn compare_counts(was: &Value, now: &Value) {
     );
 }
 
+/// One count's runs before and after; `~` marks runs that differed.
+fn line(name: &str, was: &Value, now: &Value) {
+    let shown = |series: &Value| {
+        let mark = if series["stable"] == true { "" } else { "~" };
+        format!("{mark}{}", series["runs"])
+    };
+    println!("  {name:<16} {:>24} {:>24}", shown(was), shown(now));
+}
+
 fn compare_times(was: &Value, now: &Value) {
     if was.is_null() || now.is_null() {
         return;
     }
-    let (was, now) = (&was["samples"], &now["samples"]);
-    for (what, key) in [("time median ms", "median"), ("time max ms", "max")] {
-        let before = was[key].as_f64().map(|ns| ns / 1e6);
-        let after = now[key].as_f64().map(|ns| ns / 1e6);
+    println!(
+        "  {:<16} {:>10} {:>10} {:>10}",
+        "time ms", "before", "after", "change"
+    );
+    for key in ["min", "q1", "median", "q3", "max"] {
+        let before = was["samples"][key].as_f64().map(|ns| ns / 1e6);
+        let after = now["samples"][key].as_f64().map(|ns| ns / 1e6);
         println!(
-            "  {what:<20} {:>13} {:>13} {:>13}",
+            "  {key:<16} {:>10} {:>10} {:>10}",
             figure(before),
             figure(after),
             change(before, after)
@@ -123,44 +147,31 @@ fn compare_times(was: &Value, now: &Value) {
     }
 }
 
-/// One count's medians before and after, and the change; `~` marks a
-/// count whose runs differed. A site a result has no entry for took its
-/// lock no time.
-fn line(name: &str, was: &Value, now: &Value) {
-    let mark = |series: &Value| {
-        if series.is_null() || series["stable"] == true {
-            ""
-        } else {
-            "~"
+/// Each series a program reported, run by run, before and after.
+fn compare_reported(was: &Value, now: &Value) {
+    for (name, series) in was.as_object().into_iter().flatten() {
+        let unit = series["unit"].as_str().unwrap_or_default();
+        for (which, series) in [("before", series), ("after", &now[name])] {
+            println!(
+                "  {name} {which} ({unit}), median {}, by run:",
+                series["median"]
+            );
+            for run in series["runs"].as_array().into_iter().flatten() {
+                println!("    {run}");
+            }
         }
-    };
-    let median = |series: &Value| {
-        if series.is_null() {
-            Some(0.0)
-        } else {
-            series["median"].as_f64()
-        }
-    };
-    let (before, after) = (median(was), median(now));
-    println!(
-        "  {name:<20} {:>13} {:>13} {:>13}",
-        format!("{}{}", mark(was), figure(before)),
-        format!("{}{}", mark(now), figure(after)),
-        change(before, after)
-    );
+    }
 }
 
 fn figure(value: Option<f64>) -> String {
-    value.map_or_else(
-        || "-".to_owned(),
-        |value| format!("{value:.3}").trim_end_matches(".000").to_owned(),
-    )
+    value.map_or_else(|| "-".to_owned(), |value| format!("{value:.3}"))
 }
 
 fn change(before: Option<f64>, after: Option<f64>) -> String {
     match (before, after) {
-        (Some(before), Some(after)) if before == 0.0 => format!("{:+}", after - before),
-        (Some(before), Some(after)) => format!("{:+.1}%", (after - before) / before * 100.0),
+        (Some(before), Some(after)) if before > 0.0 => {
+            format!("{:+.1}%", (after - before) / before * 100.0)
+        }
         _ => "-".to_owned(),
     }
 }

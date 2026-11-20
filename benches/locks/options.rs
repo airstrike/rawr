@@ -4,13 +4,15 @@ use std::path::PathBuf;
 
 /// How to call the bench, printed with a bad argument.
 pub const USAGE: &str = "\
-usage: cargo bench --bench locks --features sync,rust-import,debugging,lock-counters -- [options]
-       cargo bench --bench locks --features ... -- compare BEFORE.json AFTER.json
+usage: cargo bench -p rawr-lock-bench --profile local [-- options]
+         counts (the default build)
+       cargo bench -p rawr-lock-bench --profile local --no-default-features [-- options]
+         times: no counted sites, no counting allocator
+       cargo bench -p rawr-lock-bench --profile local -- compare BEFORE.json AFTER.json
 
 options:
-  --counters        count only: no timed samples (fast, load-independent)
-  --runs N          counted runs per workload (default 3)
-  --samples N       timed samples per workload (default 11)
+  --runs N          counted runs per workload, after one warm-up (default 3)
+  --samples N       timed samples per workload, after one warm-up (default 11)
   --only A,B        only these workloads
   --label TEXT      a label kept in the result (`quiet`, `busy`, a branch)
   --output PATH     where to write the result (default target/lock-bench/<utc>-<rev>.json)";
@@ -20,9 +22,9 @@ pub struct Options {
     command: Command,
 }
 
-/// What a run measures and where it writes.
+/// What a run measures and where it writes. Whether it counts or times is
+/// the build's: the `counters` feature counts.
 pub struct Run {
-    pub timed: bool,
     pub runs: usize,
     pub samples: usize,
     pub only: Option<Vec<String>>,
@@ -54,7 +56,6 @@ impl Options {
             });
         }
         let mut run = Run {
-            timed: true,
             runs: 3,
             samples: 11,
             only: None,
@@ -64,7 +65,6 @@ impl Options {
         while let Some(arg) = args.next() {
             let mut value = |name: &str| args.next().ok_or_else(|| format!("{name} takes a value"));
             match arg.as_str() {
-                "--counters" => run.timed = false,
                 "--runs" => run.runs = count(&value("--runs")?)?,
                 "--samples" => run.samples = count(&value("--samples")?)?,
                 "--only" => {

@@ -1,8 +1,6 @@
-//! A1, B4 and B6: a runner's compile on save. The runner's compiler keeps
-//! its parses and lowerings behind two `Mutex`es on the shared `Engine`
-//! (A1), each compile is an attempt on the import account, whose refusal
-//! latch every charge locks (B4), and each resolve keeps its native-miss
-//! record behind an `Arc<Mutex>` it never shares (B6).
+//! A2: a runner's compile on save. The runner's compiler keeps its parses
+//! and lowerings for the next save behind two `Mutex`es on the shared
+//! `Engine`, where the fix has the runner lend them `&mut`.
 //!
 //! This is the path a generated runner takes on each save
 //! (`Engine::compile_package_snapshot_resident_plain`), on a compiler
@@ -80,7 +78,9 @@ impl Counter {
 fn saved(generation: u64) -> Snapshot {
     let root = PathBuf::from("/lock-bench");
     let entry = root.join("src/main.rs");
-    let main = format!("{MAIN}\nfn factor() -> i64 {{ {generation} }}\n");
+    // A fixed width: a longer text would allocate more, and the count
+    // would move when the save number gains a digit.
+    let main = format!("{MAIN}\nfn factor() -> i64 {{ {generation:08} }}\n");
     Snapshot::new(
         entry.clone(),
         vec![
@@ -103,7 +103,7 @@ pub fn workload() -> Workload {
     compile(&engine, generation);
     let about = About {
         name: NAME,
-        smells: &["A1", "B4", "B6"],
+        smells: &["A2"],
         run: "one save: a body edit of a two-source program, compiled as a runner compiles it",
     };
     let fixture = format!("{MAIN}\n// model.rs\n{MODEL}");

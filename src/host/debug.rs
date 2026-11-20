@@ -27,7 +27,6 @@ pub fn register<T: std::fmt::Debug + 'static>() {
 
 /// The `Debug` text of `value`, when its type was registered.
 pub(crate) fn text(value: &dyn Any) -> Option<String> {
-    counted!(HostDebug);
     let format = *formats().read().ok()?.get(&value.type_id())?;
     format(value)
 }

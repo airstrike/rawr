@@ -170,7 +170,6 @@ impl Attempt {
 
     /// Refuse a new scope once the account has latched.
     fn admit(&self) -> Result<(), Error> {
-        counted!(AccountLatch);
         match *lock(&self.latch) {
             Some(_) => Err(Error::Allocation),
             None => Ok(()),
@@ -185,7 +184,6 @@ impl Attempt {
 
 impl ImportAllocation for Attempt {
     fn retain_checked(&mut self, items: Option<usize>, bytes: Option<usize>) -> Result<(), Error> {
-        counted!(AccountLatch);
         let mut latch = lock(&self.latch);
         // A refusal is terminal for the whole shared account. Every later
         // admission (a charge, a fresh attempt or a reconstruction sharing

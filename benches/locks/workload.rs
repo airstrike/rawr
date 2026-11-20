@@ -60,7 +60,9 @@ impl Workload {
 }
 
 impl Ran {
-    /// Keep `values`, in `unit`, under `name`.
+    /// Keep `values`, in `unit`, under `name`. Only the handoff reports,
+    /// and only a counters build has it.
+    #[cfg_attr(not(feature = "counters"), allow(dead_code))]
     pub fn report(&mut self, name: impl Into<String>, unit: &'static str, values: Vec<f64>) {
         self.reported.push(Reported {
             name: name.into(),

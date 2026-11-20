@@ -1,5 +1,5 @@
 //! A run: every chosen workload measured, written as one versioned JSON
-//! result, and its counts printed.
+//! result, and printed. A counters build counts; any other times.
 
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -9,7 +9,14 @@ use crate::{machine, measure, workloads};
 
 /// The result format's name and version. A change to the format changes
 /// the version, and `compare` refuses two results of different versions.
-pub const SCHEMA: &str = "rawr-lock-bench/1";
+pub const SCHEMA: &str = "rawr-lock-bench/2";
+
+/// What this build measures.
+const MODE: &str = if cfg!(feature = "counters") {
+    "counters"
+} else {
+    "timed"
+};
 
 /// Measure what `run` asks and write its result.
 pub fn run(run: &Run) {
@@ -19,7 +26,7 @@ pub fn run(run: &Run) {
             for name in only {
                 if !workloads::NAMES.contains(&name.as_str()) {
                     eprintln!(
-                        "locks bench: no workload `{name}`; there are: {}",
+                        "locks bench: this {MODE} build has no workload `{name}`; it has: {}",
                         workloads::NAMES.join(", ")
                     );
                     std::process::exit(2);
@@ -40,40 +47,46 @@ pub fn run(run: &Run) {
     for name in names {
         eprintln!("locks bench: {name}");
         let mut workload = workloads::prepare(name).expect("every name in NAMES prepares");
-        let counted = measure::counted(&mut workload, run.runs);
-        let timed = run
-            .timed
-            .then(|| measure::timed(&mut workload, run.samples));
         let about = workload.about();
-        measured.push(json!({
+        let mut entry = json!({
             "name": about.name,
             "smells": about.smells,
             "run": about.run,
             "fixture_sha256": fixture_hash(workload.fixture()),
-            "counted": counted,
-            "timed": timed,
-        }));
+        });
+        #[cfg(feature = "counters")]
+        {
+            entry["counted"] = measure::counted(&mut workload, run.runs);
+        }
+        #[cfg(not(feature = "counters"))]
+        {
+            entry["timed"] = measure::timed(&mut workload, run.samples);
+        }
+        measured.push(entry);
     }
-    let source = machine::source();
+    let build = machine::build();
     let result = json!({
         "schema": SCHEMA,
-        "mode": if run.timed { "timed" } else { "counters" },
+        "mode": MODE,
         "label": run.label,
         "started_utc": started,
         "finished_utc": machine::utc_now(),
-        "binary": machine::binary(),
-        "source": source,
+        "build": build,
         "toolchain": machine::toolchain(),
         "machine": machine::machine(),
         "load": { "before": load_before, "after": machine::load() },
-        "options": { "runs": run.runs, "samples": run.timed.then_some(run.samples) },
+        "options": if cfg!(feature = "counters") {
+            json!({ "runs": run.runs })
+        } else {
+            json!({ "samples": run.samples })
+        },
         "workloads": measured,
     });
     print(&result);
     let path = run
         .output
         .clone()
-        .unwrap_or_else(|| default_path(&started, &source, run.timed));
+        .unwrap_or_else(|| default_path(&started, &build));
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).expect("the result's directory can be made");
     }
@@ -82,8 +95,8 @@ pub fn run(run: &Run) {
     println!("\nwrote {}", path.display());
 }
 
-/// Each workload's counts, one line per site: the median of its runs,
-/// marked `~` when the runs differ.
+/// Each workload's counts, one line per site with every run's count, or its
+/// times; and what the program reported, run by run.
 fn print(result: &Value) {
     for workload in result["workloads"].as_array().into_iter().flatten() {
         println!(
@@ -104,38 +117,51 @@ fn print(result: &Value) {
             .flatten()
             .map(|(site, series)| (site.clone(), series))
             .collect();
-        lines.push(("allocations".to_owned(), &counted["allocations"]));
-        lines.push(("allocated bytes".to_owned(), &counted["allocated_bytes"]));
+        if !counted.is_null() {
+            lines.push(("allocations".to_owned(), &counted["allocations"]));
+            lines.push(("allocated bytes".to_owned(), &counted["allocated_bytes"]));
+        }
         for (site, series) in lines {
             let mark = if series["stable"] == true { " " } else { "~" };
-            let median = series["median"].as_f64().unwrap_or_default();
-            println!("  {site:<20} {mark}{median:>12}");
+            println!("  {site:<16} {mark} {}", series["runs"]);
         }
-        let timed = &workload["timed"]["samples"];
-        if let Some(median) = timed["median"].as_f64() {
-            let max = timed["max"].as_f64().unwrap_or(median);
+        let samples = &workload["timed"]["samples"];
+        if !samples.is_null() {
+            let ms = |key: &str| samples[key].as_f64().unwrap_or_default() / 1e6;
             println!(
-                "  {:<20}  {:>12.3} ms median, {:.3} ms max",
-                "time",
-                median / 1e6,
-                max / 1e6
+                "  time ms           min {:.3}  q1 {:.3}  median {:.3}  q3 {:.3}  max {:.3}",
+                ms("min"),
+                ms("q1"),
+                ms("median"),
+                ms("q3"),
+                ms("max")
             );
+        }
+        let reported = if counted.is_null() {
+            &workload["timed"]["reported"]
+        } else {
+            &counted["reported"]
+        };
+        for (name, series) in reported.as_object().into_iter().flatten() {
+            println!(
+                "  {name} ({}), median {}, by run:",
+                series["unit"].as_str().unwrap_or_default(),
+                series["median"]
+            );
+            for run in series["runs"].as_array().into_iter().flatten() {
+                println!("    {run}");
+            }
         }
     }
 }
 
-/// `target/lock-bench/<utc>-<revision>[-counters].json`, in the target
+/// `target/lock-bench/<utc>-<revision>[-dirty]-<mode>.json`, in the target
 /// directory this binary was built in.
-fn default_path(started: &str, source: &Value, timed: bool) -> PathBuf {
-    let revision = source["revision"]
+fn default_path(started: &str, build: &Value) -> PathBuf {
+    let revision = build["revision"]
         .as_str()
         .map_or("unknown", |rev| &rev[..rev.len().min(10)]);
-    let dirty = if source["dirty"] == true {
-        "-dirty"
-    } else {
-        ""
-    };
-    let mode = if timed { "" } else { "-counters" };
+    let dirty = if build["dirty"] == true { "-dirty" } else { "" };
     // The binary is target/<profile>/deps/locks-<hash>.
     let target = std::env::current_exe()
         .ok()
@@ -143,7 +169,7 @@ fn default_path(started: &str, source: &Value, timed: bool) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("target"));
     target
         .join("lock-bench")
-        .join(format!("{started}-{revision}{dirty}{mode}.json"))
+        .join(format!("{started}-{revision}{dirty}-{MODE}.json"))
 }
 
 fn fixture_hash(fixture: &str) -> String {

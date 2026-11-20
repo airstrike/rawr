@@ -1,11 +1,12 @@
-//! How often each lock the locks review named is taken, for the locks
+//! How often the locks review's B5 and A1 locks are taken, for the locks
 //! bench (`benches/locks`). Only a `lock-counters` build has this module;
 //! the `counted!` call at each site expands to nothing in any other.
 //!
-//! A count is a relaxed add on a cache line of its own, so counting one
-//! site never contends with counting another.
+//! Each count moves when its fix removes work: a wait that ends at a poll,
+//! a guard that never releases, a lock of a cache that leaves `Engine`.
 
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Condvar, Mutex, PoisonError};
 
 /// One counted lock site.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -17,56 +18,17 @@ pub enum Site {
     CellWait,
     /// B5: a script `Mutex` guard's release, which wakes one waiter.
     CellRelease,
-    /// C: `served()` reading `DRIVER`.
-    RuntimeServed,
-    /// C: `drive()` setting `DRIVER`.
-    RuntimeDrive,
-    /// C: a `Made<T>` or `Slot` cell of a native output.
-    RuntimeMade,
-    /// C1: a `thread::Builder` taken from its place.
-    ThreadBuilder,
-    /// B3: a host value's `==` map.
-    HostEqual,
-    /// B3: a host value's `<` map.
-    HostCompare,
-    /// B3: a host value's `{:?}` map.
-    HostDebug,
-    /// B3: a host value's `{}` map.
-    HostDisplay,
-    /// A3: `place::reading`'s registry.
-    PlaceReading,
-    /// B4: the import account's refusal latch.
-    AccountLatch,
-    /// A1: the resident compile caches on `Engine`.
+    /// A1: a lock of the resident compile caches on `Engine`.
     ResidentCache,
-    /// B6: one compile's native-miss record.
-    CaptureTerminal,
-    /// D1: the inspector's locator.
-    InspectLocate,
-    /// D1: a hosted inspector's compiled files.
-    InspectFiles,
 }
 
 impl Site {
     /// Every site, in the order a result lists them.
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 4] = [
         Self::CellLock,
         Self::CellWait,
         Self::CellRelease,
-        Self::RuntimeServed,
-        Self::RuntimeDrive,
-        Self::RuntimeMade,
-        Self::ThreadBuilder,
-        Self::HostEqual,
-        Self::HostCompare,
-        Self::HostDebug,
-        Self::HostDisplay,
-        Self::PlaceReading,
-        Self::AccountLatch,
         Self::ResidentCache,
-        Self::CaptureTerminal,
-        Self::InspectLocate,
-        Self::InspectFiles,
     ];
 
     /// The site's name in a result.
@@ -76,20 +38,7 @@ impl Site {
             Self::CellLock => "cell.lock",
             Self::CellWait => "cell.wait",
             Self::CellRelease => "cell.release",
-            Self::RuntimeServed => "runtime.served",
-            Self::RuntimeDrive => "runtime.drive",
-            Self::RuntimeMade => "runtime.made",
-            Self::ThreadBuilder => "thread.builder",
-            Self::HostEqual => "host.equal",
-            Self::HostCompare => "host.compare",
-            Self::HostDebug => "host.debug",
-            Self::HostDisplay => "host.display",
-            Self::PlaceReading => "place.reading",
-            Self::AccountLatch => "account.latch",
             Self::ResidentCache => "resident.cache",
-            Self::CaptureTerminal => "capture.terminal",
-            Self::InspectLocate => "inspect.locate",
-            Self::InspectFiles => "inspect.files",
         }
     }
 
@@ -107,9 +56,33 @@ struct Count(AtomicU64);
 
 static COUNTS: [Count; Site::ALL.len()] = [const { Count(AtomicU64::new(0)) }; Site::ALL.len()];
 
-/// Count one taking of `site`'s lock.
+/// What a [`wait_above`] waits on: told each time a script `Mutex::lock`
+/// starts a wait, under the lock's gate.
+static WAITS: (Mutex<()>, Condvar) = (Mutex::new(()), Condvar::new());
+
+/// Count one taking of `site`'s lock. A `CellWait` also wakes every
+/// [`wait_above`].
 pub(crate) fn bump(site: Site) {
     COUNTS[site as usize].0.fetch_add(1, Ordering::Relaxed);
+    if site == Site::CellWait {
+        let _told = WAITS.0.lock().unwrap_or_else(PoisonError::into_inner);
+        WAITS.1.notify_all();
+    }
+}
+
+/// Wait for `site` to count more than `count`: for `CellWait`, for a
+/// script `Mutex::lock` to wait, which a holder waits for to know its
+/// waiter is parked. It waits on the count's event, never on a clock.
+///
+/// # Panics
+///
+/// For a site other than `CellWait`, whose count wakes no one.
+pub fn wait_above(site: Site, count: u64) {
+    assert_eq!(site, Site::CellWait, "only a wait's count is told");
+    let mut told = WAITS.0.lock().unwrap_or_else(PoisonError::into_inner);
+    while site.count() <= count {
+        told = WAITS.1.wait(told).unwrap_or_else(PoisonError::into_inner);
+    }
 }
 
 /// Start every count again from zero.

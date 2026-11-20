@@ -1,9 +1,11 @@
-//! The lock sites' workloads: what each lock the locks review agreed on
-//! costs a program that takes it, as counts first and wall-clock times
-//! second, written to one JSON result that a later run compares against.
+//! The lock sites' workloads: what each lock fix of the locks review
+//! removes, as counts in the default build and as wall-clock times in a
+//! build without the counters, written to one JSON result that a later run
+//! compares against.
 //!
 //! See benches/README.md, "Lock workloads".
 
+#[cfg(feature = "counters")]
 mod allocations;
 mod compare;
 mod machine;

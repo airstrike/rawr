@@ -11,15 +11,14 @@ pub struct Script {
 }
 
 impl Script {
-    /// `source` compiled on a fresh engine.
+    /// `source` compiled on `engine`, whose output it keeps.
     ///
     /// # Panics
     ///
     /// When rawr refuses `source`: a workload's fixture is a program rawr
     /// runs, so a refusal is the fixture's bug or rawr's.
-    pub fn compile(source: &str) -> Self {
+    pub fn compile(mut engine: rawr::Engine, source: &str) -> Self {
         let printed = Arc::new(Mutex::new(String::new()));
-        let mut engine = rawr::Engine::new();
         let sink = Arc::clone(&printed);
         engine.on_output(move |_, text| {
             sink.lock()
