@@ -703,7 +703,7 @@ pub fn run_once(loaded: base::Loaded) -> ExitCode {
             // binary Cargo builds with it does.
             if panic == rawr::project::cargo::Panic::Abort {
                 #[cfg(unix)]
-                events::session::teller::finish();
+                rawr::teller::finish();
                 std::process::abort();
             }
             // Rust's exit status for a panic.
@@ -717,7 +717,7 @@ pub fn run_once(loaded: base::Loaded) -> ExitCode {
 fn program_stderr(text: &str) {
     eprint!("{text}");
     #[cfg(unix)]
-    events::session::teller::tell(rawr::Output::Stderr, text);
+    rawr::teller::tell(rawr::Output::Stderr, text);
 }
 
 /// `rawr new --help`: the usage and the templates installed binaries offer.

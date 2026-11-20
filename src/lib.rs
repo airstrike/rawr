@@ -193,6 +193,10 @@ pub mod resolve;
 pub mod result;
 /// Scoped loans: a borrow native code lends script code for one call.
 pub mod scope;
+/// What a program writes to the terminal, told to the run's session too
+/// (#2288).
+#[cfg(unix)]
+pub mod teller;
 /// A crate's own interpreter: a marked file loaded against the generated
 /// bindings the crate links, and reloaded in process (#1387).
 #[cfg(all(feature = "rust-import", feature = "sync"))]

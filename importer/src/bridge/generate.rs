@@ -5715,6 +5715,13 @@ fn prepare_engine(
     // What a test prints shows with its failure, as libtest shows it.
     if tests.is_some_and(__rawr_internal::package::test::harness::Options::captures) {
         __rawr_internal::package::test::harness::capture(&mut engine);
+    } else {
+        // What the program prints to a terminal reaches the run's session
+        // too; the owner tells what it copies off a pipe (#2319).
+        #[cfg(unix)]
+        if __rawr_internal::teller::is_open() {
+            engine.on_output(__rawr_internal::teller::write);
+        }
     }
     // The wake and the breakpoints take the engine whole: it is readied
     // for the debugger here, and takes it once it is made.
@@ -6208,16 +6215,24 @@ mod __rawr_profile {
             None => 0,
             Some(Ok(value)) => match value.try_cast::<Result<__rawr_internal::Dynamic, __rawr_internal::Dynamic>>() {
                 Some(Err(error)) => {
-                    eprintln!("Error: {error:?}");
+                    stderr(&format!("Error: {error:?}\n"));
                     1
                 }
                 _ => 0,
             },
             Some(Err(error)) => {
-                eprint!("{}", __rawr_internal::island::main_failure(&error));
+                stderr(&__rawr_internal::island::main_failure(&error));
                 101
             }
         })
+    }
+
+    /// Write `text` to stderr as the program's own, which the run's
+    /// session hears too when stderr is a terminal (#2319).
+    fn stderr(text: &str) {
+        eprint!("{text}");
+        #[cfg(unix)]
+        __rawr_internal::teller::tell(__rawr_internal::Output::Stderr, text);
     }
 
     pub fn compile_generation(
@@ -6337,6 +6352,7 @@ fn next_frame(next: &std::sync::mpsc::Receiver<__RawrFrame>) -> std::io::Result<
 
 fn exit(status: i32) -> ! {
     use std::io::Write as _;
+    __rawr_internal::teller::finish();
     let _ = std::io::stdout().flush();
     let _ = std::io::stderr().flush();
     std::process::exit(status)
@@ -7068,6 +7084,9 @@ fn admitted() {
 pub(super) fn main() {
     __rawr_internal::process::unblock_signals();
     __rawr_internal::hot::publish();
+    // What the program prints to a terminal reaches the run's session; the
+    // owner tells what it copies off a pipe itself (#2319).
+    __rawr_internal::teller::open(__rawr_internal::teller::Streams::Terminals);
     // A program `rawr run` runs shows rawr's menus beside its own (#1990).
     if std::env::var_os("RAWR_RUNNER_LIFECYCLE").is_some_and(|lifecycle| lifecycle == "run") {
         __rawr_internal::inspect::menu::install();
@@ -29543,7 +29562,7 @@ mod tests {
     use super::{
         projected_event_message, render_container_path, render_item_turbofish, DRIVER_SOURCE,
         LIFECYCLE_PROFILE_RUNNER_MAIN, NEUTRAL_PROFILE_HOST_SOURCE, NEUTRAL_PROFILE_SOURCE,
-        PROFILE_RUNNER_MAIN, RUNNER_MAIN, RUNTIME_SOURCE,
+        PROFILE_RUNNER_MAIN, RUNNER_MAIN, RUNTIME_SOURCE, SHELL_SOURCE,
     };
     use crate::classify::representability::convert::{Builtin, Constant, Type};
     use crate::classify::representability::signature::{Kind, Parameter, Signature};
@@ -30335,6 +30354,55 @@ mod tests {
         let main = runner.split_once("fn main() {").expect("runner main").1;
         assert!(main.contains("finish(run_protocol(stream, key, first))"));
         assert!(!main.contains("keep_main_thread"));
+    }
+
+    /// A runner tells the run's session what its program prints to a
+    /// terminal, and only that: its owner tells what it copies off a pipe
+    /// (#2319).
+    #[test]
+    fn generated_runner_tells_its_terminal_output_to_the_session() {
+        let shell = std::str::from_utf8(SHELL_SOURCE).expect("shell source is UTF-8");
+        let main = shell
+            .split_once("#[cfg(unix)]\npub(super) fn main() {")
+            .expect("the runner's unix main")
+            .1
+            .split_once("owner::main()")
+            .expect("the owner's main")
+            .0;
+        assert!(main.contains(
+            "__rawr_internal::teller::open(__rawr_internal::teller::Streams::Terminals);"
+        ));
+        let driver = std::str::from_utf8(DRIVER_SOURCE).expect("driver source is UTF-8");
+        let prepare = driver
+            .split_once("fn prepare_engine(")
+            .expect("engine preparation")
+            .1
+            .split_once("install_compiler_bindings")
+            .expect("bindings installed after the output")
+            .0;
+        // A test's capture keeps its output; every other engine tees.
+        let (capture, tee) = prepare
+            .split_once("} else {")
+            .expect("the capture or the session's tee");
+        assert!(capture.contains("harness::capture(&mut engine)"));
+        assert!(tee.contains("engine.on_output(__rawr_internal::teller::write);"));
+        // What a program's `main` ends with is its output too, and what was
+        // kept is told as the runner ends.
+        let neutral =
+            std::str::from_utf8(NEUTRAL_PROFILE_SOURCE).expect("neutral profile source is UTF-8");
+        assert!(neutral.contains("stderr(&__rawr_internal::island::main_failure(&error));"));
+        assert!(neutral
+            .contains("__rawr_internal::teller::tell(__rawr_internal::Output::Stderr, text);"));
+        let runner = std::str::from_utf8(RUNNER_MAIN).expect("runner source is UTF-8");
+        let exit = runner
+            .split_once("fn exit(status: i32)")
+            .expect("runner exit")
+            .1;
+        assert!(exit
+            .split_once("std::process::exit(status)")
+            .expect("the exit")
+            .0
+            .contains("__rawr_internal::teller::finish();"));
     }
 
     #[test]
