@@ -1319,6 +1319,7 @@ impl<'a> Parser<'a> {
                 capability: format!("Index<{}>", index_ty.name(&self.models)).into(),
                 operation: expression,
                 derive: matches!(owner_ty, Ty::Script(..)),
+                declared: self.declared_name(&owner_ty),
                 required_by: None,
             });
         };

@@ -605,6 +605,7 @@ impl<'a> Parser<'a> {
         // `?` in the body returns from the closure, as in Rust.
         let closure_output = annotated.clone().unwrap_or_else(|| self.inference.fresh());
         let outer_return = self.return_ty.replace(closure_output.clone());
+        let outer_written = self.return_written.take();
         let outer_returns = std::mem::replace(&mut self.returns, 0);
         let outer_blocked = self.return_blocked.take();
         let outer_bindings = self.bindings.clone();
@@ -695,6 +696,7 @@ impl<'a> Parser<'a> {
                     let _ = self.flow().closure_exit(closure_split);
                     self.bindings = outer_bindings;
                     self.return_ty = outer_return;
+                    self.return_written = outer_written;
                     self.returns = outer_returns;
                     self.return_blocked = outer_blocked;
                     self.drop_scopes = outer_drops;
@@ -782,6 +784,7 @@ impl<'a> Parser<'a> {
         let closure_blocks = self.flow().closure_exit(closure_split);
         self.bindings = outer_bindings;
         self.return_ty = outer_return;
+        self.return_written = outer_written;
         let returned = std::mem::replace(&mut self.returns, outer_returns) > 0;
         self.return_blocked = outer_blocked;
         let scope = self.closures.pop().expect("the closure pushed its scope");

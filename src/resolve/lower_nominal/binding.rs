@@ -237,11 +237,14 @@ impl<'a> Parser<'a> {
             }
             return self.parse_pattern_binding(start);
         }
+        let binding_start = self.position();
         let mutable = let_keyword && matches!(self.peek(), Token::Mut);
         if mutable {
             self.next();
         }
         let (name, name_span) = self.expect_name("binding name")?;
+        // The binding as written, `mut` and the name.
+        let binding = span(binding_start, self.name_span(name_span, &name).end());
         let annotation = if matches!(self.peek(), Token::Colon) {
             self.next();
             // `let mut f: fn(i32) -> i32`: a call of `f` borrows it shared.
@@ -253,7 +256,8 @@ impl<'a> Parser<'a> {
             None
         };
         if let_keyword && matches!(self.peek(), Token::SemiColon) {
-            return self.parse_deferred_binding(start, name, name_span, mutable, annotation);
+            return self
+                .parse_deferred_binding(start, name, binding, name_span, mutable, annotation);
         }
         // `const X = 3;`: a constant needs its type, as rustc says.
         if !let_keyword && annotation.is_none() {
@@ -324,6 +328,7 @@ impl<'a> Parser<'a> {
                 capability: "Sized".into(),
                 operation: name_span,
                 derive: false,
+                declared: None,
                 required_by: None,
             });
         }
@@ -586,6 +591,7 @@ impl<'a> Parser<'a> {
         }
         // `let x = todo!();`: a value that never comes coerces to any
         // type, so the local's is the one its uses give it.
+        let annotate = annotation.is_none().then(|| binding.end());
         let ty = annotation.unwrap_or_else(|| match self.inference.resolve(&value.ty) {
             Ty::Never => self.inference.fresh_diverging(),
             _ => value.ty.clone(),
@@ -605,8 +611,11 @@ impl<'a> Parser<'a> {
         self.local_types.push(LocalType {
             name: name.clone(),
             declaration: name_span,
+            binding,
             ty: ty.clone(),
             value: Some(value.span),
+            assign: None,
+            annotate,
         });
         let keyword = self.binding_keyword(mutable, &ty);
         self.bindings.insert(
@@ -721,10 +730,12 @@ impl<'a> Parser<'a> {
         &mut self,
         start: Position,
         name: ImmutableString,
+        binding: Span,
         name_span: Span,
         mutable: bool,
         annotation: Option<Ty>,
     ) -> Result<(), Error> {
+        let annotated = annotation.is_some();
         let ty = annotation.unwrap_or_else(|| self.inference.fresh());
         self.entry_aliases.remove(&name);
         if mutable {
@@ -736,11 +747,18 @@ impl<'a> Parser<'a> {
         // It drops where its scope ends on the paths that gave it a value:
         // on the others its slot holds `()`, which the glue passes over.
         let hold = self.note_drop(&name, name_span, &ty)?.unwrap_or_default();
+        // A tuple's `let`s (`split_deferred_tuple`) are written at their
+        // names: the local isn't the pattern alone, and has no value of
+        // its own to write.
+        let assign = (start != name_span.start()).then(|| self.written_end());
         self.local_types.push(LocalType {
             name: name.clone(),
             declaration: name_span,
             ty: ty.clone(),
+            binding,
             value: None,
+            assign,
+            annotate: assign.filter(|_| !annotated).map(|_| binding.end()),
         });
         self.bindings.insert(
             name.clone(),

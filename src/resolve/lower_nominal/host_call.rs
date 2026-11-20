@@ -769,6 +769,7 @@ impl<'a> Parser<'a> {
                 capability: "Default".into(),
                 operation: expression,
                 derive: matches!(value.ty, Ty::Script(..)),
+                declared: self.declared_name(&value.ty),
                 required_by: None,
             });
         }
@@ -1421,13 +1422,14 @@ impl<'a> Parser<'a> {
         let field = format!("{}::{EXPORTED_FIELD}{member}", definition.path());
         let has_field = self.models.host_items(&field).is_some();
         let has_method = self.models.host_items(&path).is_some();
-        let called = self.pending_arguments.is_some()
-            || matches!(self.peek(), Token::LeftParen | Token::Unit);
+        let parenthesized = self.parenthesized_ahead();
+        let called = self.pending_arguments.is_some() || parenthesized.is_some();
         let kind = |field| Error::MemberKind {
             owner: definition.path().into(),
             member: member.clone(),
             field,
             reference: member_span,
+            arguments: parenthesized,
         };
         match (called, has_field, has_method) {
             (false, true, _) => Ok((format!("{EXPORTED_FIELD}{member}").into(), field)),

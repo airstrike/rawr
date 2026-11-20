@@ -708,12 +708,12 @@ impl<'a> Parser<'a> {
         if let Some(assigned) = self.deferred.get(&binding.declaration)
             && !self.moved_at.contains_key(&binding.declaration)
         {
-            return Error::Uninitialized {
-                name: name.into(),
-                possibly: assigned.is_some(),
-                reference: self.name_span(reference, name),
-                declaration: self.name_span(binding.declaration, name),
-            };
+            return self.uninitialized(
+                name,
+                assigned.is_some(),
+                self.name_span(reference, name),
+                binding.declaration,
+            );
         }
         let moved = self
             .moved_at

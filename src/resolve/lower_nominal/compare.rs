@@ -1057,6 +1057,7 @@ impl<'a> Parser<'a> {
                 capability: "Ord".into(),
                 operation: member_span,
                 derive: matches!(ty, Ty::Script(..)),
+                declared: self.declared_name(&ty),
                 required_by: None,
             });
         };
@@ -1354,6 +1355,7 @@ impl<'a> Parser<'a> {
                         capability: "PartialEq".into(),
                         operation: span,
                         derive: matches!(ty, Ty::Script(..)),
+                        declared: self.declared_name(&ty),
                         required_by: None,
                     });
                 }
@@ -1367,6 +1369,7 @@ impl<'a> Parser<'a> {
                         capability: "PartialEq".into(),
                         operation: span,
                         derive: matches!(ty, Ty::Script(..)),
+                        declared: self.declared_name(&ty),
                         required_by: None,
                     });
                 }
@@ -1389,6 +1392,7 @@ impl<'a> Parser<'a> {
                         capability: "PartialEq".into(),
                         operation: span,
                         derive: matches!(ty, Ty::Script(..)),
+                        declared: self.declared_name(ty),
                         required_by: None,
                     });
                 }

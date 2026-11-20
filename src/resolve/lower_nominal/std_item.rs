@@ -517,6 +517,7 @@ impl<'a> Parser<'a> {
                         capability: "Default".into(),
                         operation: call,
                         derive: matches!(target, Ty::Script(..)),
+                        declared: self.declared_name(&target),
                         required_by: None,
                     });
                 }
@@ -582,6 +583,7 @@ impl<'a> Parser<'a> {
                         capability: "Default".into(),
                         operation: call,
                         derive: matches!(target, Ty::Script(..)),
+                        declared: self.declared_name(&target),
                         required_by: None,
                     });
                 }

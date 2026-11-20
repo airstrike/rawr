@@ -469,6 +469,7 @@ impl<'a> Parser<'a> {
             capability: capability.name().into(),
             operation: span,
             derive: true,
+            declared: self.models.name_declared_here(model),
             required_by: None,
         })
     }

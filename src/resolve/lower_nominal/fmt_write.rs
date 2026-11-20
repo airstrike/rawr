@@ -63,6 +63,7 @@ impl Parser<'_> {
         (!self.fmt_write_in_scope(target.start())).then(|| Error::UnscopedWrite {
             owner: owner.name(&self.models),
             at: target,
+            placement: self.models.use_placement(),
         })
     }
 

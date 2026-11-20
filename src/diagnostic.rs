@@ -2,6 +2,7 @@
 
 mod adapter;
 mod arguments;
+mod arm;
 pub mod code;
 mod definition;
 mod panic;

@@ -260,6 +260,7 @@ impl Parser<'_> {
                 capability: capability.into(),
                 operation: span,
                 derive: matches!(key, Ty::Script(..)),
+                declared: self.declared_name(&key),
                 required_by: None,
             })
         }
@@ -595,6 +596,7 @@ impl Parser<'_> {
                         capability: "Clone".into(),
                         operation: expression,
                         derive: false,
+                        declared: None,
                         required_by: None,
                     });
                 }

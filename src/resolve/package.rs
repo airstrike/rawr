@@ -47,7 +47,8 @@ enum HeaderPaths {
 
 /// Each name of Rust's namespaces a scope binds, with where, and whether an
 /// import bound it: two imports are rustc's E0252.
-type Bound = BTreeMap<(ImmutableString, item::Namespace), (source::Id, Span, bool)>;
+type Bound =
+    BTreeMap<(ImmutableString, item::Namespace), (source::Id, Span, Option<super::Import>)>;
 
 #[derive(Debug)]
 pub(crate) struct Failure {
@@ -947,6 +948,7 @@ impl<'a> Resolver<'a> {
         let prelude = self.prelude();
         let mut aliases = BTreeMap::new();
         let mut lexical = BTreeMap::new();
+        let mut placements = BTreeMap::new();
         let units = std::mem::take(&mut self.units);
         // Where each derive's expansion is, in the source of its item, and
         // the names the blocks around it bind there, which the expansion
@@ -968,6 +970,9 @@ impl<'a> Resolver<'a> {
                 program::source::Id::from_index(context.source.index()),
                 parsed.imports().to_vec().into_boxed_slice(),
             );
+            if let Some(at) = parsed.use_placement() {
+                placements.insert(program::source::Id::from_index(context.source.index()), at);
+            }
             let (source_map, parsed_items, statements, statement_source) = parsed.into_parts();
             if context.source == self.entry_source {
                 super::async_main(&parsed_items, prelude.as_ref()).map_err(|error| Failure {
@@ -1103,6 +1108,7 @@ impl<'a> Resolver<'a> {
                 ..super::Instances::default()
             },
             lexical,
+            placements,
             macros,
         };
         super::validate_invocation_storage(&program).map_err(Failure::from_located)?;
@@ -1573,7 +1579,7 @@ impl<'a> Resolver<'a> {
         &self,
         context: &Context,
         parsed: &crate::item::Use,
-        bound: &BTreeMap<(ImmutableString, item::Namespace), (source::Id, Span, bool)>,
+        bound: &Bound,
     ) -> Result<Vec<UsePath>, Failure> {
         let crate::item::UseTree::Glob { prefix, span } = &parsed.tree else {
             return Ok(Vec::new());
@@ -1898,8 +1904,7 @@ impl<'a> Resolver<'a> {
         // Each name bound in each of Rust's namespaces, which an import of
         // that name in that namespace collides with, and whether an import
         // bound it: two imports are rustc's E0252.
-        let mut bound =
-            BTreeMap::<(ImmutableString, item::Namespace), (source::Id, Span, bool)>::new();
+        let mut bound = Bound::new();
         let declared = self
             .tables
             .declared_in(&context.namespace.package, &context.namespace.modules);
@@ -1912,7 +1917,7 @@ impl<'a> Resolver<'a> {
             for side in namespace.sides() {
                 bound.insert(
                     (address.name.clone(), *side),
-                    (declaration.source, declaration.span, false),
+                    (declaration.source, declaration.span, None),
                 );
             }
             if matches!(declaration.target, Target::Module) {
@@ -2195,17 +2200,29 @@ impl<'a> Resolver<'a> {
                     }
                 };
                 occupied.insert(name.text.clone(), (context.source, name.span));
+                let written = |side| super::Import {
+                    written: parsed.written(&name),
+                    rename: parsed.rename(&name),
+                    kind: import.kind(side, &qualified),
+                };
                 let previous = import.namespace().sides().iter().find_map(|side| {
-                    bound.insert(
+                    let previous = bound.insert(
                         (name.text.clone(), *side),
-                        (context.source, name.span, true),
-                    )
+                        (context.source, name.span, Some(written(*side))),
+                    );
+                    previous.map(|previous| (*side, previous))
                 });
-                if let Some((previous_source, previous_span, imported)) = previous {
+                if let Some((side, (previous_source, previous_span, imported))) = previous {
                     return Err(Failure {
                         primary: context.source,
                         secondary: Some(previous_source),
-                        error: Error::duplicate(name.text, name.span, previous_span, imported),
+                        error: Error::duplicate(
+                            name.text.clone(),
+                            name.span,
+                            side.noun(),
+                            written(side),
+                            (previous_span, imported),
+                        ),
                     });
                 }
                 // A std type imported under another name, as iced's `Never`
@@ -2292,7 +2309,7 @@ impl<'a> Resolver<'a> {
                     _ => item::Namespace::Both,
                 };
                 for side in namespace.sides() {
-                    bound.insert((name.clone(), *side), (context.source, *span, false));
+                    bound.insert((name.clone(), *side), (context.source, *span, None));
                 }
                 occupied.insert(name.clone(), (context.source, *span));
                 if let Target::Type(target) = target {

@@ -1046,6 +1046,7 @@ impl<'a> Parser<'a> {
                         capability: "Copy".into(),
                         operation: member_span,
                         derive: matches!(target.as_ref(), Ty::Script(..)),
+                        declared: self.declared_name(target.as_ref()),
                         required_by: None,
                     });
                 }
@@ -1328,6 +1329,7 @@ impl<'a> Parser<'a> {
                     capability: "Debug".into(),
                     operation: member_span,
                     derive: matches!(this.inference.resolve(ty), Ty::Script(..)),
+                    declared: this.declared_name(&this.inference.resolve(ty)),
                     required_by: None,
                 })
             }
@@ -1727,6 +1729,7 @@ impl<'a> Parser<'a> {
                             capability: "Default".into(),
                             operation: span,
                             derive: true,
+                            declared: None,
                             required_by: None,
                         }
                     })?;
@@ -1773,6 +1776,7 @@ impl<'a> Parser<'a> {
                             capability: "Default".into(),
                             operation: span,
                             derive: matches!(ty, Ty::Script(..)),
+                            declared: self.declared_name(&ty),
                             required_by: None,
                         });
                     }
@@ -1797,6 +1801,7 @@ impl<'a> Parser<'a> {
                     capability: "Default".into(),
                     operation: span,
                     derive: matches!(ty, Ty::Script(..)),
+                    declared: self.declared_name(&ty),
                     required_by: None,
                 })
             }

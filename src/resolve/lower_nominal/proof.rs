@@ -165,6 +165,7 @@ impl<'a> Parser<'a> {
                                 capability: capability.name().into(),
                                 operation: span,
                                 derive: matches!(ty, Ty::Script(..)),
+                                declared: self.declared_name(&ty),
                                 required_by: Some(crate::resolve::Required::by(
                                     crate::host::path::public(&item.path()).as_ref(),
                                 )),

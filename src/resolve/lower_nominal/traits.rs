@@ -1363,6 +1363,7 @@ impl<'a> Parser<'a> {
                     capability,
                     operation: trait_name.span,
                     derive: matches!(owner, Ty::Script(..)),
+                    declared: self.declared_name(&owner),
                     required_by: None,
                 });
             }
@@ -1392,6 +1393,7 @@ impl<'a> Parser<'a> {
                         capability: format!("{parent}<{names}>").into(),
                         operation: trait_name.span,
                         derive: matches!(owner, Ty::Script(..)),
+                        declared: self.declared_name(&owner),
                         required_by: None,
                     });
                 }
@@ -1440,6 +1442,7 @@ impl<'a> Parser<'a> {
                     capability,
                     operation: name.span,
                     derive: matches!(ty, Ty::Script(..)),
+                    declared: self.declared_name(&ty),
                     required_by: Some(crate::resolve::Required::by(format!(
                         "{}::{}",
                         trait_name.text, name.text

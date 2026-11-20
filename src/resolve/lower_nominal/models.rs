@@ -58,6 +58,8 @@ pub(super) struct Tables {
         BTreeMap<(crate::program::source::Id, ImmutableString), crate::resolve::item::Binding>,
     /// Each source's original imports and their lexical scopes (D652).
     pub(super) lexical: BTreeMap<crate::program::source::Id, Box<[crate::item::Use]>>,
+    /// Where rustc puts a `use` it suggests in each source's module.
+    pub(super) placements: BTreeMap<crate::program::source::Id, Position>,
     /// The blocks a name is in scope in when only blocks' `use`s bind it
     /// in its source: rustc scopes a block's `use` to the block (#7).
     pub(super) block_scopes: BTreeMap<(crate::program::source::Id, ImmutableString), Box<[Span]>>,
@@ -922,6 +924,7 @@ impl Models {
             features: program.features().clone(),
             imports,
             lexical: program.lexical.clone(),
+            placements: program.placements.clone(),
             block_scopes,
             by_name,
             block_nominals,
@@ -1391,6 +1394,21 @@ impl Models {
                 .files
                 .get(&source)
                 .is_some_and(|file| self.files.get(&self.context) == Some(file))
+    }
+
+    /// The name of the program's type `model` where it is declared, when
+    /// that is in the file being lowered.
+    pub(super) fn name_declared_here(&self, model: &Nominal) -> Option<Span> {
+        let (key, name) = match model {
+            Nominal::Struct { item, .. } => (&item.key, item.name.span),
+            Nominal::Enum { item, .. } => (&item.key, item.name.span),
+        };
+        self.type_in_this_file(key).then_some(name)
+    }
+
+    /// Where rustc puts a `use` it suggests in the module being lowered.
+    pub(super) fn use_placement(&self) -> Option<Position> {
+        self.placements.get(&self.context).copied()
     }
 
     /// Whether `owner` implements the crate trait `trait_name`.

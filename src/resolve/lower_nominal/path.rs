@@ -620,6 +620,7 @@ impl<'a> Parser<'a> {
                             capability: format!("From<{}>", self.fallback_name(&source)).into(),
                             operation: call,
                             derive: false,
+                            declared: None,
                             required_by: None,
                         });
                     };
@@ -1249,6 +1250,7 @@ impl<'a> Parser<'a> {
                     capability: format!("From<{}>", self.fallback_name(&source)).into(),
                     operation: call,
                     derive: true,
+                    declared: None,
                     required_by: None,
                 });
             };
@@ -2297,6 +2299,7 @@ impl<'a> Parser<'a> {
                 capability: format!("From<{}>", source.name(&self.models)).into(),
                 operation: expression,
                 derive: false,
+                declared: None,
                 required_by: None,
             });
         }

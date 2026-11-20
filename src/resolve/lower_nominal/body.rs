@@ -757,7 +757,9 @@ impl<'a> Parser<'a> {
             .value
             .filter(|value| !(value.start() <= needed.start() && needed.end() <= value.end()))
             .filter(|_| ty != unknown);
+        let annotation = self.annotation(local.declaration);
         Some(Error::LocalTypeNeeded {
+            annotation,
             code: if ambiguous.is_some() && made.is_none() {
                 "E0283"
             } else {
@@ -765,7 +767,7 @@ impl<'a> Parser<'a> {
             },
             name: local.name.clone(),
             ty: (ty != unknown).then(|| ty.name(&self.models)),
-            declaration: self.name_span(local.declaration, &local.name),
+            declaration: local.binding,
             needed: Some(made.unwrap_or(needed)),
             note: ambiguous
                 .filter(|_| made.is_none())
@@ -824,10 +826,12 @@ impl<'a> Parser<'a> {
         let Some(first) = std::mem::take(&mut self.uninitialized).into_iter().next() else {
             return Ok(());
         };
-        let declaration = self.name_span(first.declaration, &first.name);
+        let declaration = self.binding_span(first.declaration, &first.name);
         let unknown = matches!(self.inference.resolve(&first.ty), Ty::Infer(_));
+        let annotation = self.annotation(first.declaration);
         Err(match first.operator {
             Some((code, needed)) => Error::LocalTypeNeeded {
+                annotation,
                 code,
                 name: first.name,
                 ty: None,
@@ -836,6 +840,7 @@ impl<'a> Parser<'a> {
                 note: None,
             },
             None if unknown => Error::LocalTypeNeeded {
+                annotation,
                 code: "E0282",
                 name: first.name,
                 ty: None,
@@ -843,12 +848,72 @@ impl<'a> Parser<'a> {
                 needed: None,
                 note: None,
             },
-            None => Error::Uninitialized {
-                reference: self.name_span(first.reference, &first.name),
-                name: first.name,
-                possibly: first.possibly,
-                declaration,
-            },
+            None => self.uninitialized(
+                &first.name,
+                first.possibly,
+                self.name_span(first.reference, &first.name),
+                first.declaration,
+            ),
         })
+    }
+
+    /// The type rustc suggests writing for the local declared at
+    /// `declaration`, when its `let` declares it alone with no type.
+    pub(super) fn annotation(&self, declaration: Span) -> Option<crate::resolve::Annotation> {
+        let local = self
+            .local_types
+            .iter()
+            .find(|local| local.declaration == declaration)?;
+        let at = local.annotate?;
+        let (ty, parameter) = self
+            .annotated(&local.ty)
+            .unwrap_or_else(|| ("/* Type */".to_owned(), None));
+        Some(crate::resolve::Annotation {
+            at: Span::new(at, at),
+            ty: ty.into(),
+            parameter,
+        })
+    }
+
+    /// rustc's E0381 for the local `name` declared at `declaration`, used
+    /// at `reference` before it has a value, which some path to the use
+    /// gives it when `possibly`. Where no path does, rustc suggests the
+    /// value its `let` could write.
+    pub(super) fn uninitialized(
+        &self,
+        name: &str,
+        possibly: bool,
+        reference: Span,
+        declaration: Span,
+    ) -> Error {
+        let assign = self
+            .local_types
+            .iter()
+            .find(|local| local.declaration == declaration)
+            .filter(|_| !possibly)
+            .and_then(|local| {
+                let at = local.assign?;
+                let value = self.stand_in(&local.ty)?;
+                Some(crate::resolve::Assignment {
+                    at: Span::new(at, at),
+                    code: format!(" = {value}").into(),
+                })
+            });
+        Error::Uninitialized {
+            name: name.into(),
+            possibly,
+            reference,
+            declaration: self.binding_span(declaration, name),
+            assign,
+        }
+    }
+
+    /// The local `name` declared at `declaration` as its `let` writes it,
+    /// `mut` and the name, as rustc marks it.
+    pub(super) fn binding_span(&self, declaration: Span, name: &str) -> Span {
+        self.local_types
+            .iter()
+            .find(|local| local.declaration == declaration)
+            .map_or_else(|| self.name_span(declaration, name), |local| local.binding)
     }
 }

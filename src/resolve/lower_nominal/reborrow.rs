@@ -253,6 +253,7 @@ impl Parser<'_> {
                 mutation: target,
                 declaration,
                 declared: declaration,
+                matched: self.matched_bindings.contains(&declaration.start()),
             });
         }
         let borrowing =

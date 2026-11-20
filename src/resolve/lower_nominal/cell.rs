@@ -593,6 +593,7 @@ impl Parser<'_> {
                         capability: "Default".into(),
                         operation: member_span,
                         derive: matches!(inner, Ty::Script(..)),
+                        declared: self.declared_name(&inner),
                         required_by: None,
                     });
                 }
@@ -655,6 +656,7 @@ impl Parser<'_> {
                     capability: name.into(),
                     operation: member_span,
                     derive: matches!(inner, Ty::Script(..)),
+                    declared: self.declared_name(&inner),
                     required_by: None,
                 })
             }

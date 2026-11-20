@@ -988,6 +988,7 @@ impl<'a> Parser<'a> {
             capability: trait_name.clone(),
             operation: call,
             derive: matches!(ty, Ty::Script(..)),
+            declared: this.declared_name(ty),
             required_by: None,
         };
         let generic_trait = self

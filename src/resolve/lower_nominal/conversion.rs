@@ -249,6 +249,7 @@ impl<'a> Parser<'a> {
             capability: format!("TryFrom<{source}>").into(),
             operation: call,
             derive: false,
+            declared: None,
             required_by: None,
         })
     }
@@ -995,10 +996,11 @@ impl<'a> Parser<'a> {
         });
         match local {
             Some((local, ty)) => Error::LocalTypeNeeded {
+                annotation: self.annotation(local.declaration),
                 code: "E0283",
                 name: local.name.clone(),
                 ty: (!open(&ty)).then(|| ty.name(&self.models)),
-                declaration: self.name_span(local.declaration, &local.name),
+                declaration: local.binding,
                 needed: Some(call),
                 note: Some(note.into()),
             },
@@ -1445,6 +1447,7 @@ impl<'a> Parser<'a> {
                     capability: format!("From<{}>", self.fallback_name(&conversion.source)).into(),
                     operation: conversion.span,
                     derive: matches!(target, Ty::Script(..)),
+                    declared: self.declared_name(&target),
                     required_by: None,
                 });
             };

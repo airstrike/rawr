@@ -184,6 +184,31 @@ impl Unit {
         &self.inner_attributes
     }
 
+    /// Where rustc puts a `use` it suggests among the module's items: at
+    /// its first `use`, else at its first item, attributes included.
+    #[must_use]
+    pub(crate) fn use_placement(&self) -> Option<Position> {
+        let module = |header: &item::Header| header.scope.is_none();
+        let first_use = self
+            .imports
+            .iter()
+            .filter(|used| module(&used.header) && used.scope.is_none())
+            .map(|used| used.header.written_span(used.span).start())
+            .min();
+        first_use.or_else(|| {
+            let items = self
+                .items
+                .iter()
+                .filter(|item| module(item.header()))
+                .map(|item| item.header().written_span(item.span()).start());
+            let macros = self
+                .macros
+                .iter()
+                .map(|rules| rules.header.written_span(rules.span).start());
+            items.chain(macros).min()
+        })
+    }
+
     /// Access the parsed unit's source text and positions.
     #[must_use]
     pub const fn source(&self) -> &source::Map {

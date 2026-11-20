@@ -391,6 +391,69 @@ impl Syntax {
     }
 
     /// Whether a `ref mut` binding is in the pattern.
+    /// Where each name the pattern binds starts, when it destructures its
+    /// value: `a` and `b` of `(a, b)`, and none for a lone `x`.
+    pub(super) fn destructured_names(&self) -> Vec<Position> {
+        fn names(syntax: &Syntax, found: &mut Vec<Position>) {
+            match syntax {
+                Syntax::Binding { span, .. } | Syntax::Ref { span, .. } => {
+                    found.push(span.start());
+                }
+                Syntax::Rest {
+                    binding: Some((_, span)),
+                    ..
+                } => found.push(span.start()),
+                Syntax::At {
+                    name_span, pattern, ..
+                } => {
+                    found.push(name_span.start());
+                    names(pattern, found);
+                }
+                Syntax::TupleStruct { members, .. } | Syntax::Tuple { members, .. } => {
+                    members.iter().for_each(|member| names(member, found));
+                }
+                Syntax::Or { alternatives, .. } => {
+                    alternatives.iter().for_each(|member| names(member, found));
+                }
+                Syntax::Slice {
+                    before,
+                    rest,
+                    after,
+                    ..
+                } => before
+                    .iter()
+                    .chain(rest.as_deref())
+                    .chain(after.iter())
+                    .for_each(|member| names(member, found)),
+                Syntax::Enum(pattern) => {
+                    pattern
+                        .payload
+                        .iter()
+                        .for_each(|member| names(member, found));
+                }
+                Syntax::Prelude {
+                    payload: Some(payload),
+                    ..
+                }
+                | Syntax::Cow { payload, .. }
+                | Syntax::Reference {
+                    pattern: payload, ..
+                } => names(payload, found),
+                Syntax::Prelude { payload: None, .. }
+                | Syntax::Discard { .. }
+                | Syntax::UnitStruct { .. }
+                | Syntax::Literal { .. }
+                | Syntax::Range { .. }
+                | Syntax::Rest { binding: None, .. } => {}
+            }
+        }
+        let mut found = Vec::new();
+        if !matches!(self, Self::Binding { .. }) {
+            names(self, &mut found);
+        }
+        found
+    }
+
     pub(super) fn has_ref_mut(&self) -> bool {
         match self {
             Self::Ref { mutable, .. } => *mutable,
@@ -782,11 +845,10 @@ impl<'a> Parser<'a> {
         if otherwise.is_none() {
             let site = match site {
                 Site::Let if self.destructuring.contains(&start) => BindingSite::Assignment,
-                // The statement up to its `;`, where `end` is.
+                // The value ends before the `;`, where `end` is.
                 Site::Let => BindingSite::Local {
-                    statement: self
-                        .written(span(start, end))
-                        .map(|statement| statement.trim_end().into()),
+                    keyword: start,
+                    value: self.written_before(end),
                     binds: !resolved.bindings.is_empty(),
                 },
                 Site::For => BindingSite::ForLoop,
@@ -904,6 +966,7 @@ impl<'a> Parser<'a> {
     pub(super) fn parse_pattern_binding(&mut self, start: Position) -> Result<(), Error> {
         let pending = self.field_entries.len();
         let syntax = self.parse_pattern_no_alt()?;
+        self.matched_bindings.extend(syntax.destructured_names());
         // The written type, and where it is written.
         let (annotation, annotated) = if matches!(self.peek(), Token::Colon) {
             self.next();
@@ -1082,6 +1145,7 @@ impl<'a> Parser<'a> {
             self.next();
         }
         let first = self.parse_pattern_no_alt()?;
+        self.matched_bindings.extend(first.destructured_names());
         if !matches!(self.peek(), Token::Pipe) {
             return Ok(first);
         }

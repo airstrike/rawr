@@ -747,7 +747,13 @@ fn a_non_exhaustive_match_is_e0004() {
         );
         let label = label.message().unwrap_or_default().to_string();
         let notes = report.notes().map(str::to_string).collect::<Vec<_>>();
-        let help = report.help().unwrap_or_default().to_string();
+        // The suggestion's message, and the arm it adds.
+        let suggestion = report.suggestions().first().expect("rustc suggests an arm");
+        let arm = suggestion.edits()[0].replacement();
+        let help = (
+            suggestion.message().to_string(),
+            arm.trim_start_matches(',').trim().to_string(),
+        );
         (report.message().to_string(), label, notes, help)
     };
     let explicit = "ensure that all possible cases are being handled by adding a match arm with a \
@@ -768,7 +774,13 @@ fn a_non_exhaustive_match_is_e0004() {
     assert_eq!(text, message("`Message::Decrement`"));
     assert_eq!(label, "pattern `Message::Decrement` not covered");
     assert_eq!(notes, ["the matched value is of type `Message`"]);
-    assert_eq!(help, format!("{explicit}: `Message::Decrement => todo!()`"));
+    assert_eq!(
+        help,
+        (
+            explicit.to_string(),
+            "Message::Decrement => todo!()".to_string()
+        )
+    );
 
     // Two variants, as one or-pattern; past three, `and N more` and `_`.
     let letters = "enum M { A, B, C, D, E }";
@@ -779,14 +791,20 @@ fn a_non_exhaustive_match_is_e0004() {
     );
     assert_eq!(text, message("`M::D` and `M::E`"));
     assert_eq!(label, "patterns `M::D` and `M::E` not covered");
-    assert_eq!(help, format!("{or_patterns}: `M::D | M::E => todo!()`"));
+    assert_eq!(
+        help,
+        (
+            or_patterns.to_string(),
+            "M::D | M::E => todo!()".to_string()
+        )
+    );
     let (text, label, _, help) = missing(letters, "M::A", "M::A => {}");
     assert_eq!(text, message("`M::B`, `M::C`, `M::D` and 1 more"));
     assert_eq!(
         label,
         "patterns `M::B`, `M::C`, `M::D` and 1 more not covered"
     );
-    assert_eq!(help, format!("{wildcard}: `_ => todo!()`"));
+    assert_eq!(help, (wildcard.to_string(), "_ => todo!()".to_string()));
     // A variant an arm names in part isn't reported while others are
     // missing, as in rustc.
     let (text, ..) = missing("enum N { X(bool), Y, Z }", "N::Y", "N::X(true) => {}");
@@ -798,7 +816,7 @@ fn a_non_exhaustive_match_is_e0004() {
     let (text, _, notes, help) = missing("", "Some(1)", "Some(_) => {}");
     assert_eq!(text, message("`None`"));
     assert_eq!(notes, ["the matched value is of type `Option<i32>`"]);
-    assert_eq!(help, format!("{explicit}: `None => todo!()`"));
+    assert_eq!(help, (explicit.to_string(), "None => todo!()".to_string()));
     let (text, ..) = missing("", "Some(1)", "None => {}");
     assert_eq!(text, message("`Some(_)`"));
     let (text, ..) = missing("", "Some(1)", "Some(1) => {}");
@@ -816,7 +834,10 @@ fn a_non_exhaustive_match_is_e0004() {
     assert_eq!(notes, ["the matched value is of type `i32`"]);
     assert_eq!(
         help,
-        format!("{or_patterns}: `i32::MIN..=0_i32 | 2_i32..=i32::MAX => todo!()`")
+        (
+            or_patterns.to_string(),
+            "i32::MIN..=0_i32 | 2_i32..=i32::MAX => todo!()".to_string()
+        )
     );
     let (text, ..) = missing(
         "",
@@ -886,7 +907,10 @@ fn a_refutable_pattern_in_a_let_or_a_for_is_e0005() {
         );
         let label = label.message().unwrap_or_default().to_string();
         let notes = report.notes().map(str::to_string).collect::<Vec<_>>();
-        let help = report.help().map(str::to_string);
+        let help = report
+            .suggestions()
+            .first()
+            .map(|suggestion| suggestion.message().to_string());
         (report.message().to_string(), label, notes, help)
     };
     let inform = [
@@ -908,20 +932,14 @@ fn a_refutable_pattern_in_a_let_or_a_for_is_e0005() {
     );
     assert_eq!(
         help.as_deref(),
-        Some(
-            "you might want to use `let else` to handle the variant that isn't matched: \
-             `let Some(x) = o else { todo!() };`"
-        )
+        Some("you might want to use `let...else` to handle the variant that isn't matched")
     );
     // A pattern that binds nothing is `if let`'s.
     let (_, label, _, help) = refutable("let None = o;");
     assert_eq!(label, "pattern `Some(_)` not covered");
     assert_eq!(
         help.as_deref(),
-        Some(
-            "you might want to use `if let` to ignore the variant that isn't matched: \
-             `if let None = o { todo!() }`"
-        )
+        Some("you might want to use `if let` to ignore the variant that isn't matched")
     );
     // `for`: no `let` notes and no help.
     let (text, label, notes, help) = refutable("for Some(x) in vec![o] {}");
@@ -940,10 +958,7 @@ fn a_refutable_pattern_in_a_let_or_a_for_is_e0005() {
     );
     assert_eq!(
         help.as_deref(),
-        Some(
-            "you might want to use `if let` to ignore the variants that aren't matched: \
-             `if let 1 = 2 { todo!() }`"
-        )
+        Some("you might want to use `if let` to ignore the variants that aren't matched")
     );
     // A closure's parameter is a function argument.
     let (text, label, notes, help) = refutable("let f = |Some(x): Option<i32>| x;");
@@ -1426,11 +1441,14 @@ fn a_write_with_no_write_trait_in_scope_is_e0599() {
     let report = rendered(string);
     assert!(report.contains(" --> main.rs:3:12"), "{report}");
     assert!(
-        report.contains(
-            "  = help: trait `Write` which provides `write_fmt` is implemented but not in \
-             scope; perhaps you want to import it: `use std::fmt::Write;`\n  = note: must \
-             implement `io::Write`, `fmt::Write`, or have a `write_fmt` method\n"
-        ),
+        report.ends_with(concat!(
+            "  = note: must implement `io::Write`, `fmt::Write`, or have a `write_fmt` method\n",
+            "help: trait `Write` which provides `write_fmt` is implemented but not in scope; \
+             perhaps you want to import it\n",
+            "  |\n",
+            "1 + use std::fmt::Write;\n",
+            "  |\n",
+        )),
         "{report}"
     );
     // `&mut s`, and a `use` in another function's block.
@@ -3499,6 +3517,361 @@ fn an_unmet_derivable_bound_suggests_the_derive() {
             "  |\n",
             "2 +     #[derive(PartialEq)]\n",
         )),
+        "{shown}"
+    );
+}
+
+/// A `return;` where the function returns a value: rustc labels the
+/// output type and suggests the value its type takes, as `42` for an
+/// integer and `Default::default()` for a type with a default.
+#[test]
+fn a_return_without_a_value_suggests_one_of_the_output_type() {
+    assert_eq!(
+        rendered("fn f() -> i32 {\n    return;\n}\nfn main() {}\n"),
+        concat!(
+            "error[E0069]: `return;` in a function whose return type is not `()`\n",
+            " --> main.rs:2:5\n",
+            "  |\n",
+            "1 | fn f() -> i32 {\n",
+            "  |           --- expected `i32` because of this return type\n",
+            "2 |     return;\n",
+            "  |     ^^^^^^ return type is not `()`\n",
+            "  |\n",
+            "help: give the `return` a value of the expected type\n",
+            "  |\n",
+            "2 |     return 42;\n",
+            "  |            ++\n",
+        )
+    );
+    let value = |output: &str| {
+        let shown = rendered(&format!(
+            "struct P;\n#[derive(Default)]\nstruct D;\nfn f() -> {output} {{ return; }}\n\
+             fn main() {{}}\n"
+        ));
+        let line = shown
+            .lines()
+            .rfind(|line| line.starts_with("4 | fn f()"))
+            .unwrap_or_else(|| panic!("{shown}"))
+            .to_string();
+        let value = line.rfind("return ").expect("the suggested return") + "return ".len();
+        line[value..].trim_end_matches("; }").to_string()
+    };
+    assert_eq!(value("String"), "Default::default()");
+    assert_eq!(value("D"), "Default::default()");
+    assert_eq!(value("P"), "/* value */");
+    assert_eq!(value("Option<i32>"), "None");
+    assert_eq!(value("Result<i32, String>"), "Ok(42)");
+    assert_eq!(value("Vec<i32>"), "vec![]");
+    assert_eq!(value("(i32, bool)"), "(42, false)");
+    assert_eq!(value("&'static str"), "\"\"");
+    assert_eq!(value("[i32; 3]"), "[42; 3]");
+    assert_eq!(value("[String; 2]"), "/* value */");
+    assert_eq!(value("Box<f64>"), "Box::new(3.14159)");
+    assert_eq!(value("char"), "'x'");
+}
+
+/// A `let` whose local a use reads before any value: rustc suggests the
+/// value after its name or its type, when the `let` declares it alone.
+#[test]
+fn an_uninitialized_local_suggests_assigning_a_value() {
+    assert_eq!(
+        rendered("fn main() {\n    let mut x: i32;\n    x += 1;\n}\n"),
+        concat!(
+            "error[E0381]: used binding `x` isn't initialized\n",
+            " --> main.rs:3:5\n",
+            "  |\n",
+            "2 |     let mut x: i32;\n",
+            "  |         ----- binding declared here but left uninitialized\n",
+            "3 |     x += 1;\n",
+            "  |     ^ `x` used here but it isn't initialized\n",
+            "  |\n",
+            "help: consider assigning a value\n",
+            "  |\n",
+            "2 |     let mut x: i32 = 42;\n",
+            "  |                    ++++\n",
+        )
+    );
+    let shown = rendered("fn main() {\n    let x;\n    let y: i32 = x;\n}\n");
+    assert!(
+        shown.ends_with("2 |     let x = 42;\n  |           ++++\n"),
+        "{shown}"
+    );
+    let shown = rendered("fn main() {\n    let a  :  String ;\n    println!(\"{a}\");\n}\n");
+    assert!(
+        shown.ends_with(concat!(
+            "2 |     let a  :  String = Default::default() ;\n",
+            "  |                      ++++++++++++++++++++\n",
+        )),
+        "{shown}"
+    );
+    // A tuple's local isn't its pattern alone.
+    let shown = rendered("fn main() {\n    let (f, g): (i32, i32);\n    let c = f;\n}\n");
+    assert!(!shown.contains("help:"), "{shown}");
+}
+
+/// A refutable `let`: rustc writes `else` after the value of one that
+/// binds names, and `if` before one that binds none.
+#[test]
+fn a_refutable_let_suggests_let_else_or_if_let_as_code() {
+    let shown = rendered("fn main() {\n    let o: Option<i32> = None;\n    let Some(x) = o;\n}\n");
+    assert!(
+        shown.ends_with(concat!(
+            "help: you might want to use `let...else` to handle the variant that isn't matched\n",
+            "  |\n",
+            "3 |     let Some(x) = o else { todo!() };\n",
+            "  |                     ++++++++++++++++\n",
+        )),
+        "{shown}"
+    );
+    let shown = rendered("fn main() {\n    let o: Option<i32> = None;\n    let None = o;\n}\n");
+    assert!(
+        shown.ends_with(concat!(
+            "help: you might want to use `if let` to ignore the variant that isn't matched\n",
+            "  |\n",
+            "3 |     if let None = o { todo!() };\n",
+            "  |     ++              +++++++++++\n",
+        )),
+        "{shown}"
+    );
+    let shown = rendered(
+        "fn main() {\n    let o: Result<i32, i32> = Ok(1);\n    let Ok(x) =\n        o;\n}\n",
+    );
+    assert!(
+        shown.ends_with("4 |         o else { todo!() };\n  |           ++++++++++++++++\n"),
+        "{shown}"
+    );
+}
+
+/// A `match` that misses values: rustc writes the arm that covers them
+/// after the last arm, on a line of its own when the arms are, or the
+/// braces again around it for a `match` with none.
+#[test]
+fn a_non_exhaustive_match_suggests_the_arm_as_code() {
+    let suggested = |arms: &str| {
+        let shown = rendered(&format!(
+            "enum E {{ A, B, C }}\nfn main() {{\n    let e = E::A;\n    {arms}\n}}\n"
+        ));
+        let help = shown.find("help: ").unwrap_or_else(|| panic!("{shown}"));
+        let lines = shown[help..].lines().skip(2);
+        lines
+            .take_while(|line| line.trim() != "|")
+            .map(|line| format!("{line}\n"))
+            .collect::<String>()
+    };
+    assert_eq!(
+        suggested("match e {\n        E::A => {}\n        E::B => {}\n    }"),
+        "6 ~         E::B => {},\n7 +         E::C => todo!()\n"
+    );
+    assert_eq!(
+        suggested("match e {\n        E::A => 1,\n    };"),
+        "5 ~         E::A => 1,\n6 ~         E::B | E::C => todo!(),\n"
+    );
+    assert_eq!(
+        suggested("match e {}"),
+        "4 ~     match e {\n5 +         E::A | E::B | E::C => todo!(),\n6 ~     }\n"
+    );
+    assert_eq!(
+        suggested("let _ = match e { E::A => 1, E::B => 2 };"),
+        concat!(
+            "4 |     let _ = match e { E::A => 1, E::B => 2, E::C => todo!() };\n",
+            "  |                                           +++++++++++++++++\n",
+        )
+    );
+}
+
+/// A binding a destructuring pattern declares, assigned twice: rustc
+/// suggests `mut`, and `ref mut`, which changes the matched value.
+#[test]
+fn a_destructured_binding_assigned_twice_suggests_a_borrow_too() {
+    let borrow = "help: to modify the original value, take a borrow instead\n  |\n";
+    for (source, line) in [
+        (
+            "fn main() {\n    let t = (1, 2);\n    let (a, b) = t;\n    a = 3;\n}\n",
+            "3 |     let (ref mut a, b) = t;\n  |          +++++++\n",
+        ),
+        (
+            "struct S { x: i32 }\nfn main() {\n    let s = S { x: 1 };\n    let S { x } = s;\n    \
+             x = 2;\n}\n",
+            "4 |     let S { ref mut x } = s;\n  |             +++++++\n",
+        ),
+        (
+            "fn main() {\n    let o = Some(1);\n    if let Some(a) = o { a = 2; }\n}\n",
+            "3 |     if let Some(ref mut a) = o { a = 2; }\n  |                 +++++++\n",
+        ),
+    ] {
+        let shown = rendered(source);
+        assert!(shown.ends_with(&format!("{borrow}{line}")), "{shown}");
+    }
+    // A `let` of the binding alone suggests only `mut`.
+    let shown = rendered("fn main() {\n    let a = 1;\n    a = 2;\n}\n");
+    assert!(!shown.contains("ref mut"), "{shown}");
+}
+
+/// Two imports of one name: rustc marks both paths, notes the namespace
+/// and suggests renaming the second with `as`.
+#[test]
+fn a_name_imported_twice_suggests_a_rename_as_code() {
+    assert_eq!(
+        rendered("use std::fmt::Result;\nuse std::io::Result;\nfn main() {}\n"),
+        concat!(
+            "error[E0252]: the name `Result` is defined multiple times\n",
+            " --> main.rs:2:5\n",
+            "  |\n",
+            "1 | use std::fmt::Result;\n",
+            "  |     ---------------- previous import of the type `Result` here\n",
+            "2 | use std::io::Result;\n",
+            "  |     ^^^^^^^^^^^^^^^ `Result` reimported here\n",
+            "  |\n",
+            "  = note: `Result` must be defined only once in the type namespace of this module\n",
+            "help: you can use `as` to change the binding name of the import\n",
+            "  |\n",
+            "2 | use std::io::Result as OtherResult;\n",
+            "  |                     ++++++++++++++\n",
+        )
+    );
+}
+
+/// A field called like a method: rustc labels the field and suggests
+/// removing the arguments beside them.
+#[test]
+fn a_called_field_suggests_removing_the_arguments() {
+    let shown = rendered(
+        "struct S {\n    f: i32,\n}\nfn main() {\n    let s = S { f: 1 };\n    s.f();\n}\n",
+    );
+    assert!(
+        shown.ends_with(concat!(
+            "6 |     s.f();\n",
+            "  |       ^-- help: remove the arguments\n",
+            "  |       |\n",
+            "  |       field, not a method\n",
+        )),
+        "{shown}"
+    );
+}
+
+/// A local whose type nothing settles: rustc marks its binding and
+/// suggests its type after its name, each unknown part named by the
+/// parameter it fills.
+#[test]
+fn a_local_type_nothing_settles_suggests_an_explicit_type() {
+    let shown = rendered(
+        "fn main() {\n    let mut numbers = Vec::new();\n    let n1: u8 = 42;\n    \
+         numbers.push(n1.into());\n    let n2: i8 = -1;\n    numbers.push(n2.into());\n    \
+         println!(\"{numbers:?}\");\n}\n",
+    );
+    assert!(shown.contains("  |         ^^^^^^^^^^^   "), "{shown}");
+    assert!(
+        shown.ends_with(concat!(
+            "help: consider giving `numbers` an explicit type, where the type for type \
+             parameter `T` is specified\n",
+            "  |\n",
+            "2 |     let mut numbers: Vec<T> = Vec::new();\n",
+            "  |                    ++++++++\n",
+        )),
+        "{shown}"
+    );
+    let shown = rendered("fn main() {\n    let x;\n    println!(\"{x}\");\n}\n");
+    assert!(
+        shown.ends_with(concat!(
+            "help: consider giving `x` an explicit type\n",
+            "  |\n",
+            "2 |     let x: /* Type */;\n",
+            "  |          ++++++++++++\n",
+        )),
+        "{shown}"
+    );
+}
+
+/// A derivable trait a program's type lacks where a format string needs
+/// it: rustc suggests the `#[derive]`, and shows `Display`'s help at the
+/// type's definition.
+#[test]
+fn a_format_argument_lacking_a_trait_suggests_the_derive() {
+    let shown = rendered("struct S;\nfn main() {\n    println!(\"{:?}\", S);\n}\n");
+    assert!(
+        shown.ends_with(concat!(
+            "help: consider annotating `S` with `#[derive(Debug)]`\n",
+            "  |\n",
+            "1 + #[derive(Debug)]\n",
+            "  |\n",
+        )),
+        "{shown}"
+    );
+    assert_eq!(
+        rendered("struct S;\nfn main() {\n    println!(\"{}\", S);\n}\n"),
+        concat!(
+            "error[E0277]: `S` doesn't implement `std::fmt::Display`\n",
+            " --> main.rs:3:20\n",
+            "  |\n",
+            "3 |     println!(\"{}\", S);\n",
+            "  |                    ^\n",
+            "  |\n",
+            "help: the trait `std::fmt::Display` is not implemented for `S`\n",
+            " --> main.rs:1:1\n",
+            "  |\n",
+            "1 | struct S;\n",
+            "  | ^^^^^^^^\n",
+        )
+    );
+}
+
+/// A function no `use` brings into scope, which another module declares:
+/// rustc suggests the `use` at the module's first `use`, else at its
+/// first item, as indented.
+#[test]
+fn a_function_another_module_declares_suggests_its_import() {
+    let suggested = |source: &str| {
+        let shown = rendered(source);
+        let help = shown.find("help: ").unwrap_or_else(|| panic!("{shown}"));
+        shown[help..].to_string()
+    };
+    let help = |line: &str| format!("help: consider importing this function\n  |\n{line}\n  |\n");
+    assert_eq!(
+        suggested("mod m {\n    pub fn f() {}\n}\nfn main() {\n    f();\n}\n"),
+        help("1 + use crate::m::f;")
+    );
+    assert_eq!(
+        suggested(
+            "// a comment\n\n#[derive(Debug)]\nstruct S;\nmod m {\n    pub fn f() {}\n}\nfn \
+             main() {\n    f();\n}\n"
+        ),
+        help("3 + use crate::m::f;")
+    );
+    assert_eq!(
+        suggested(
+            "mod m {\n    pub fn f() {}\n}\nfn g() {}\nuse std::fmt;\nfn main() {\n    f();\n}\n"
+        ),
+        help("5 + use crate::m::f;")
+    );
+    assert_eq!(
+        suggested(
+            "mod m {\n    pub fn f() {}\n}\nmod n {\n    pub fn g() {\n        f();\n    \
+             }\n}\nfn main() {}\n"
+        ),
+        help("5 +     use crate::m::f;")
+    );
+    // A private function is no import.
+    let shown = rendered("mod m {\n    fn f() {}\n}\nfn main() {\n    f();\n}\n");
+    assert!(!shown.contains("help:"), "{shown}");
+}
+
+/// `&mut (place)` borrows the place, as rustc reads parentheses, and its
+/// span is the whole expression.
+#[test]
+fn a_parenthesized_place_is_borrowed_whole() {
+    Engine::new()
+        .compile(
+            "fn main() {\n    let mut c = 1;\n    let r = &mut (c);\n    *r = 2;\n    \
+             println!(\"{c}\");\n}\n",
+        )
+        .map(|_| ())
+        .unwrap_or_else(|error| panic!("{error}"));
+    let shown = rendered(
+        "fn take(v: &mut Vec<i32>) { v.push(1); }\nfn main() {\n    let v = vec![1];\n    \
+         take(&mut (v));\n}\n",
+    );
+    assert!(
+        shown.contains("4 |     take(&mut (v));\n  |          ^^^^^^^^"),
         "{shown}"
     );
 }
