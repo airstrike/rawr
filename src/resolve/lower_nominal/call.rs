@@ -1327,6 +1327,7 @@ impl<'a> Parser<'a> {
             && matches!(self.peek(), Token::LeftParen)
             && self.unknown_function(&name, name_span).is_some()
         {
+            let guard = self.dropped_cell_guard();
             let (mut arguments, end) = self.parse_call_arguments("call arguments")?;
             let call = span(name_span.start(), end);
             let [argument] = arguments.as_mut_slice() else {
@@ -1338,6 +1339,12 @@ impl<'a> Parser<'a> {
                     call,
                 ));
             };
+            // A borrow's guard drops here, and its borrow ends with it.
+            if let Some(source) =
+                guard.and_then(|guard| self.drop_cell_guard(&guard, argument.span))
+            {
+                return Ok(self.operator_expr(source, Ty::Unit, call));
+            }
             self.move_local(argument)?;
             // A value with drop glue runs it here.
             let source = if self.needs_drop(&argument.ty, argument.span)? {

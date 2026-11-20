@@ -570,6 +570,88 @@ main();
     assert_eq!(printed(source), "[3, 4, 5, 6]\n");
 }
 
+/// A guard given to `drop` ends its borrow there: a `Mutex` locks again
+/// and a `RefCell` borrows again, though the guard was used in between,
+/// and a use of the guard after it is rustc's E0382 (#2352).
+#[test]
+fn a_guard_given_to_drop_releases_its_lock() {
+    let source = r#"
+use std::cell::RefCell;
+use std::sync::Mutex;
+
+fn main() {
+    let m = Mutex::new(vec![1]);
+    let mut g = m.lock().unwrap();
+    g.push(2);
+    drop(g);
+    let h = m.lock().unwrap();
+    println!("{:?}", *h);
+    std::mem::drop(h);
+    m.lock().unwrap().push(3);
+    let r = RefCell::new(0);
+    for round in 0..3 {
+        let mut b = r.borrow_mut();
+        *b += round;
+        if round % 2 == 0 {
+            drop(b);
+            println!("{} {}", r.borrow(), m.lock().unwrap().len());
+        }
+    }
+}
+main();
+"#;
+    assert_eq!(printed(source), "[1, 2]\n0 3\n3 3\n");
+    let report = refused(
+        "use std::sync::Mutex;\nfn main() { let m = Mutex::new(0); \
+         let g = m.lock().unwrap(); drop(g); println!(\"{}\", *g); }\nmain();\n",
+    );
+    assert!(report.contains("E0382"), "{report}");
+}
+
+/// A read through a lock's temporary guard, as a value, a method's
+/// receiver and a `match` subject, waits for the guard another thread
+/// holds, so it reads what that thread stored before letting go (#2357).
+#[cfg(feature = "sync")]
+#[test]
+fn a_read_through_a_temporary_guard_waits_for_the_held_lock() {
+    let source = r#"
+use std::sync::{mpsc, Arc, Mutex};
+use std::thread;
+
+fn main() {
+    let m = Arc::new(Mutex::new(1u64));
+    let mut held = m.lock().unwrap();
+    let reader = Arc::clone(&m);
+    let (started, start) = mpsc::channel();
+    let read = thread::spawn(move || {
+        started.send(()).unwrap();
+        let mut seen = Vec::new();
+        for _ in 0..50 {
+            seen.push(*reader.lock().unwrap());
+            seen.push(reader.lock().unwrap().wrapping_add(0));
+            seen.push(match *reader.lock().unwrap() {
+                2 => 2,
+                other => other,
+            });
+        }
+        seen
+    });
+    start.recv().unwrap();
+    // Work the reader's reads would overtake if they didn't wait.
+    let mut work = 0u64;
+    for n in 0..20_000 {
+        work = work.wrapping_add(n);
+    }
+    *held = 2 + work % 1;
+    drop(held);
+    let seen = read.join().unwrap();
+    println!("{} {}", seen.len(), seen.iter().all(|value| *value == 2));
+}
+main();
+"#;
+    assert_eq!(printed(source), "150 true\n");
+}
+
 #[test]
 fn language_clone_from_and_try_into_go_through_method_lookup() {
     // `clone_from` is `Clone`'s provided method, on a std type and a
