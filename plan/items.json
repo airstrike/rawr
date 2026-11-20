@@ -2351,6 +2351,8 @@
     {"t":"T2349","issue":2349,"title":"T2349: `f.align()` needs `fmt::Alignment`, and unbound `Reverse(1)` or `PhantomData` lack rustc's import help","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T2350","issue":2350,"title":"T2350: The VS Code debugger can't set a variable: `rawr dap` has no setVariable","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":["D1076"],"commit":"9abd9395e","release":"0.4.65"},
     {"t":"T2351","issue":2351,"title":"T2351: Every iced project rebuilds its bindings: build scripts differ under rawr's nightly, and the run prints why in red","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":["D608"],"commit":null,"release":null},
-    {"t":"T2352","issue":2352,"title":"T2352: A script Mutex guard passed to drop() never releases the lock","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T2352","issue":2352,"title":"T2352: A script Mutex guard passed to drop() never releases the lock","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T2353","issue":2353,"title":"T2353: Playground console eval: `x = 1` fails inside `format!`, and `x = 1;` runs outside the paused frame","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":["D1076"],"commit":null,"release":null},
+    {"t":"T2354","issue":2354,"title":"T2354: The playground's bindings panel edits a value in place","state":"open","category":"Health","labels":["health","playground"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }
