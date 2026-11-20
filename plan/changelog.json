@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.4.70",
+      "date": "2026-11-20",
+      "entries": [
+        {"text":"A build script that gives rawr's nightly build other output than the project's build no longer prints anything when rawr handles it, so VS Code's debug console shows no red lines for it. Once a rerun confirms the difference, every project that builds with the same nightly and gets the same output treats it as known, so a cleaned target or another workspace member no longer cleans and extracts again.","issues":[2365],"refs":[2351]}
+      ]
+    },
+    {
       "version": "0.4.69",
       "date": "2026-11-20",
       "entries": [

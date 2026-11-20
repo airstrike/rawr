@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.70 (2026-11-20)
+
+- A build script that gives rawr's nightly build other output than the project's build no longer prints anything when rawr handles it, so VS Code's debug console shows no red lines for it. Once a rerun confirms the difference, every project that builds with the same nightly and gets the same output treats it as known, so a cleaned target or another workspace member no longer cleans and extracts again. (#2365; part of #2351)
+
 ## 0.4.69 (2026-11-20)
 
 - rustc's diagnostics in more places: a struct's or struct variant's witness names its fields (`E::C { y: false, .. }`), every unresolved member of one `use` is one E0432 with a label at each, E0599 suggests a method, associated function or constant with a similar name and names lifetime parameters (`R<'a>`, `R<'_>`), and a missing trait (E0405) suggests its import, with core's candidates where rustc lists them. (#2347)
