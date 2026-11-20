@@ -214,6 +214,26 @@ fn main() {
     assert_eq!(printed(source), "41\n5\nlocal\nshadowed\nlocal\n");
 }
 
+/// A call among a file's items in each delimiter expands to its items,
+/// `mk!();` too, whose `()` the lexer reads as one token (#2343).
+#[test]
+fn an_item_call_in_each_delimiter_expands() {
+    let source = r#"
+macro_rules! mk {
+    ($name:ident, $value:expr) => { fn $name() -> i32 { $value } };
+    () => { fn unit() -> i32 { 1 } };
+}
+mk!();
+mk!(paren, 2);
+mk![bracket, 3];
+mk! { brace, 4 }
+fn main() {
+    println!("{} {} {} {}", unit(), paren(), bracket(), brace());
+}
+"#;
+    assert_eq!(printed(source), "1 2 3 4\n");
+}
+
 /// A call where a type or a pattern goes is the type or the pattern it
 /// expands to (#961), and one that expands 120 deep, which rustc's limit
 /// of 128 allows, nests as deep as it does (#962).

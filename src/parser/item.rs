@@ -581,7 +581,7 @@ fn crate_call(
     let (open, start) = input.next().expect("token streams always end with EOF");
     if !matches!(
         open,
-        Token::LeftBrace | Token::MapStart | Token::LeftParen | Token::LeftBracket
+        Token::LeftBrace | Token::MapStart | Token::LeftParen | Token::LeftBracket | Token::Unit
     ) {
         return Err(unexpected(
             format!("expected one of `(`, `[`, or `{{`, found {}", found(&open)),
@@ -592,8 +592,9 @@ fn crate_call(
         ));
     }
     let braced = matches!(open, Token::LeftBrace | Token::MapStart);
-    let mut depth = 1_usize;
-    let mut close = start;
+    // The lexer reads `()` as one token, a group already closed.
+    let mut depth = usize::from(open != Token::Unit);
+    let mut close = after(start, 1);
     while depth > 0 {
         let (token, position) = input.next().expect("token streams always end with EOF");
         match token {
@@ -658,7 +659,7 @@ fn expand_items(
     let braced = matches!(open, Token::LeftBrace | Token::MapStart);
     if !matches!(
         open,
-        Token::LeftBrace | Token::MapStart | Token::LeftParen | Token::LeftBracket
+        Token::LeftBrace | Token::MapStart | Token::LeftParen | Token::LeftBracket | Token::Unit
     ) {
         return Err(unexpected(
             format!("expected one of `(`, `[`, or `{{`, found {}", found(&open)),
@@ -668,9 +669,15 @@ fn expand_items(
             position,
         ));
     }
+    // The lexer reads `()` as one token, a group already closed, which
+    // ends the call `lay_out` reads.
+    let mut depth = usize::from(open != Token::Unit);
+    let mut end = if open == Token::Unit {
+        after(position, 1)
+    } else {
+        position
+    };
     call.push((open, position));
-    let mut depth = 1_usize;
-    let mut end = position;
     while depth > 0 {
         let (token, position) = input.next().expect("token streams always end with EOF");
         match &token {

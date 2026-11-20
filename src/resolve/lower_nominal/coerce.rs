@@ -412,6 +412,18 @@ impl<'a> Parser<'a> {
             *value = self.operator_expr(boxed, target, value.span);
             return Ok(None);
         }
+        // `text.into()` whose target nothing fixed before this
+        // `Box<dyn Error>` is expected of it: std's `From<&str>` and
+        // `From<String>` for the box, which rawr makes from the text's
+        // `String`, as `box_returned_error` does for an `Err(..)`.
+        if self.boxed_std_error(&target)
+            && let Ty::Infer(_) = source
+            && let Some(into) = self.text_into.iter().find(|into| into.span == value.span)
+        {
+            let into = into.target.clone();
+            self.unify_type(&into, &Ty::String);
+            source = Ty::String;
+        }
         // A box of an error, or `.into()` of a `&str` or a `String`, where a
         // `Box<dyn Error>` is expected: boxed as std's `dyn Error`, as
         // `Box`'s unsizing and its `From` impls make one

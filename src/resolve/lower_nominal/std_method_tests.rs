@@ -1096,3 +1096,96 @@ main();
         "\"hi\\n\" 3 3\n[33, 63] 5\n0\n!? [104, 105, 10, 33, 63]\n5\n"
     );
 }
+
+/// A std type's associated function rawr doesn't run, named through the
+/// `use` that brings the type in, is the not-yet error its full path
+/// gives, naming the std path (#1254).
+#[test]
+fn an_imported_std_types_function_rawr_doesnt_run_is_not_yet() {
+    for (head, call, path) in [
+        (
+            "use std::fs::File;",
+            "File::create(\"out.txt\")",
+            "std::fs::File::create",
+        ),
+        (
+            "use std::sync::RwLock;",
+            "RwLock::new(1)",
+            "std::sync::RwLock::new",
+        ),
+        (
+            "use std::sync::Barrier;",
+            "Barrier::new(1)",
+            "std::sync::Barrier::new",
+        ),
+        (
+            "",
+            "std::fs::File::create(\"out.txt\")",
+            "std::fs::File::create",
+        ),
+        ("", "std::sync::RwLock::new(1)", "std::sync::RwLock::new"),
+    ] {
+        let report = refused(&format!(
+            "{head}\nfn main() {{ let _x = {call}; }}\nmain();\n"
+        ));
+        assert!(
+            report.contains(&format!("rawr doesn't run `{path}` yet")),
+            "{report}"
+        );
+    }
+    let report = refused("use std::fs::File;\nfn main() { let _x = File::nope(); }\nmain();\n");
+    assert!(!report.contains("doesn't run"), "{report}");
+}
+
+/// `Formatter::pad` writes its text under the format's width, fill,
+/// alignment and precision, as std's does (#1255).
+#[test]
+fn a_display_impl_pads_its_text() {
+    let source = r#"
+use std::fmt;
+
+struct Name;
+
+impl fmt::Display for Name {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.pad("ab")
+    }
+}
+
+fn main() {
+    println!("[{}] [{:>5}] [{:<5}] [{:^6}] [{:.1}] [{:*^7.1}]", Name, Name, Name, Name, Name, Name);
+    let text = format!("{Name:->4}");
+    println!("{text}");
+}
+main();
+"#;
+    assert_eq!(
+        printed(source),
+        "[ab] [   ab] [ab   ] [  ab  ] [a] [***a***]\n--ab\n"
+    );
+}
+
+/// `text.into()` of a `&str` or a `String` where a `Box<dyn Error>` is
+/// expected, by a `let`'s type or a body's, is std's `From` for the box
+/// (#2345).
+#[test]
+fn text_into_a_boxed_error_where_one_is_expected() {
+    let source = r#"
+use std::error::Error;
+
+fn boxed(text: &str) -> Box<dyn Error> {
+    text.into()
+}
+
+fn main() {
+    let t: &str = "local";
+    let b: Box<dyn Error> = t.into();
+    let s = String::from("owned");
+    let c: Box<dyn Error> = s.into();
+    let d: Box<dyn Error> = "literal".into();
+    println!("{b} {c} {d} {} {:?}", boxed("body"), boxed("debug"));
+}
+main();
+"#;
+    assert_eq!(printed(source), "local owned literal body \"debug\"\n");
+}

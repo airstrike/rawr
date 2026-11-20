@@ -594,8 +594,11 @@ impl<'a> Parser<'a> {
                 value = self.parse_debug_builder(value, &member)?;
                 continue;
             }
-            // `f.write_str(text)` into a `fmt` body's formatter.
-            if member == "write_str"
+            // `f.write_str(text)` into a `fmt` body's formatter, and
+            // `f.pad(text)`: the formatter's width, fill, alignment and
+            // precision apply to what the body writes, as std's `pad`
+            // applies them to its text.
+            if matches!(member.as_str(), "write_str" | "pad")
                 && matches!(self.peek(), Token::LeftParen)
                 && self
                     .formatter
