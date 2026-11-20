@@ -1,9 +1,10 @@
 // node --test test/session.test.ts
 // The playground's Session against stand-ins for the browser: where a run
-// goes, what it shows, the address and the theme.
+// goes in the browser, what it shows, the address and the theme. No run
+// ever reaches a server.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Session, WEB_MODULE, type Example, type PlayData, type Universe, type Web } from "../src/play/session.ts";
+import { onlyHere, Session, WEB_MODULE, type Example, type PlayData, type Universe, type Web } from "../src/play/session.ts";
 import type { Frame } from "../src/scripts/universe.ts";
 
 const EXAMPLES: Example[] = [
@@ -17,28 +18,22 @@ interface Options {
   url?: string;
   shared?: string | null;
   examples?: Example[];
-  sitekey?: string | null;
-  pass?: boolean;
   draft?: string | null;
   theme?: "dark" | "light";
-  /** Whether #ts is in the page yet. */
-  container?: boolean;
   universe?: Universe;
 }
 
 /** A Session on stand-ins, with what it did. */
 function standIn(options: Options = {}) {
-  const { code = "", web = null, url = "http://localhost/play", shared = null, examples = [], sitekey = null, pass = false, draft = null, theme = "dark", container = true, universe } = options;
-  const data: PlayData = { snippet: { code }, examples, sitekey, pass, shared };
+  const { code = "", web = null, url = "http://localhost/play", shared = null, examples = [], draft = null, theme = "dark", universe } = options;
+  const data: PlayData = { snippet: { code }, examples, shared };
   const parsed = new URL(url);
   const loads: string[] = [];
   const fetched: { url: string; body: any }[] = [];
   const addresses: string[] = [];
   const stored = new Map<string, string>(draft ? [["rawr-play-draft", draft]] : []);
   const timers: (() => void)[] = [];
-  let respond: (url: string) => Response = () =>
-    Response.json({ kind: "text", status: 0, output: [{ stream: "stdout", text: "from the server\n" }] });
-  const widgets: string[] = [];
+  let respond: (url: string) => Response = () => Response.json({ id: "abcDEF1234" });
   const session = new Session(
     data,
     {
@@ -56,9 +51,6 @@ function standIn(options: Options = {}) {
       },
       now: () => 0,
       clipboard: async () => {},
-      turnstile: () => ({ render: () => (widgets.push("render"), "w1"), reset: () => void widgets.push("reset"), remove: () => void widgets.push("remove") }),
-      loadTurnstile: () => {},
-      hasContainer: () => container,
       setTimeout: (f) => (timers.push(f), timers.length),
       clearTimeout: () => {},
       universe,
@@ -67,14 +59,14 @@ function standIn(options: Options = {}) {
     theme,
   );
   return {
-    session, loads, fetched, addresses, stored, widgets,
+    session, loads, fetched, addresses, stored,
     respond: (next: (url: string) => Response) => void (respond = next),
     /** Runs the timers set so far, as their time passing would. */
     tick: () => timers.splice(0).forEach((f) => f()),
   };
 }
 
-test("Run in browser runs a plain program in rawr-web and shows its output as the server's", async () => {
+test("a plain program runs in rawr-web and shows its output as the bot's", async () => {
   const page = standIn({ code: 'println!("hi")', web: { run_text: () => JSON.stringify({ kind: "text", status: 3, output: [{ stream: "stdout", text: "hi\n" }] }) } });
   await page.session.go();
   assert.deepEqual(page.loads, [WEB_MODULE]);
@@ -90,16 +82,16 @@ test("a snippet that does not compile shows its report", async () => {
   assert.equal(page.session.state.status, "error");
 });
 
-test("Run in browser falls back to the server when the module does not load", async () => {
+test("a module that does not load says why and runs nothing anywhere else", async () => {
   const failed = standIn({ code: "1 + 2", web: null });
   await failed.session.go();
-  assert.deepEqual(failed.fetched.map((f) => f.url), ["/play/render"]);
-  assert.match(failed.session.state.status, /on the server: rawr-web did not load$/);
-  assert.equal(failed.session.state.where, "server", "the choice goes back to the server");
-  assert.deepEqual(failed.addresses, [], "the fallback does not write ?run=server");
+  assert.deepEqual(failed.fetched, [], "nothing goes to a server");
+  assert.deepEqual(failed.session.state.output, { kind: "error", text: "rawr did not load in this browser: 404" });
+  assert.equal(failed.session.state.status, "did not run");
+  assert.deepEqual(failed.addresses, []);
 });
 
-test("a trap in rawr-web runs that program on the server and the next on a fresh module", async () => {
+test("a trap in rawr-web says why, and the next run loads a fresh module", async () => {
   let traps = 1;
   const web: Partial<Web> = {
     run_text: () => {
@@ -109,54 +101,19 @@ test("a trap in rawr-web runs that program on the server and the next on a fresh
   };
   const page = standIn({ code: "1 + 2", web });
   await page.session.go();
-  assert.deepEqual(page.fetched.map((f) => f.url), ["/play/render"]);
-  assert.match(page.session.state.status, /on the server: rawr-web stopped$/);
-  assert.equal(page.session.state.where, "browser", "the next run is in the browser again");
+  assert.deepEqual(page.fetched, [], "nothing goes to a server");
+  assert.deepEqual(page.session.state.output, { kind: "error", text: "rawr stopped in the browser: unreachable. The next run loads it again." });
   await page.session.go();
   assert.equal(page.loads.length, 2, "the next run loads a fresh module");
-  assert.equal(page.fetched.length, 1);
   assert.match(page.session.state.status, /in the browser$/);
 });
 
-test("the server answers with text or a refusal", async () => {
-  const page = standIn({ code: "x" });
-  page.session.choose("server");
-  await new Promise((done) => setTimeout(done, 0));
-  assert.deepEqual(page.fetched.at(-1)?.body.code, "x");
-  assert.equal(page.session.state.output.kind, "term");
-  page.respond(() => new Response("slow down", { status: 429 }));
-  await page.session.go();
-  assert.deepEqual(page.session.state.output, { kind: "error", text: "slow down" });
-  assert.equal(page.session.state.status, "slow down");
-});
-
-test("the server answers an iced program with its text and its frame", async () => {
-  const page = standIn({ code: "iced::run(update, view)" });
-  const result = {
-    kind: "text",
-    status: 0,
-    output: [{ stream: "stdout", text: "counting\n" }],
-    frame: { type: "image/gif", data: "R0lGODlh" },
-  };
-  page.respond(() => Response.json(result));
-  page.session.choose("server");
-  await new Promise((done) => setTimeout(done, 0));
-  const output = page.session.state.output;
-  assert.equal(output.kind, "term");
-  assert.equal(output.kind === "term" ? output.image : "", "data:image/gif;base64,R0lGODlh");
-  assert.deepEqual(output.kind === "term" ? output.chunks : [], result.output);
-  assert.equal(page.session.state.status, "0 ms");
-});
-
-test("the address restores an example from its hash and the server from ?run=server", () => {
+test("the address restores an example from its hash, and drops an old run mode", () => {
   const page = standIn({ url: "http://localhost/play?run=server#traits", examples: EXAMPLES });
   assert.equal(page.session.state.code, "traits code");
-  assert.equal(page.session.state.where, "server");
-  assert.deepEqual(page.addresses, ["/play?run=server#traits"]);
-  // The browser is the default: ?run=browser is dropped, and the hash kept.
+  assert.deepEqual(page.addresses, ["/play#traits"], "the page runs in the browser only");
   const browser = standIn({ url: "http://localhost/play?run=browser#word-count", examples: EXAMPLES });
   assert.equal(browser.session.state.code, "word count code");
-  assert.equal(browser.session.state.where, "browser");
   assert.deepEqual(browser.addresses, ["/play#word-count"]);
   // A bare address writes nothing.
   assert.deepEqual(standIn({ examples: EXAMPLES }).addresses, []);
@@ -173,57 +130,49 @@ test("bare /play restores the draft; a share shows the share", () => {
 });
 
 test("a share's code wins over an example's hash, which the share page drops", () => {
-  const page = standIn({ code: "shared code", url: "http://localhost/play/abcDEF1234?run=server#traits", shared: "abcDEF1234", examples: EXAMPLES });
+  const page = standIn({ code: "shared code", url: "http://localhost/play/abcDEF1234#traits", shared: "abcDEF1234", examples: EXAMPLES });
   assert.equal(page.session.state.code, "shared code");
-  assert.deepEqual(page.addresses, ["/play/abcDEF1234?run=server"]);
+  assert.deepEqual(page.addresses, ["/play/abcDEF1234"]);
 });
 
-test("a share's link keeps ?run=server and drops the example's hash", async () => {
-  const page = standIn({ code: "x", url: "http://localhost/play?run=server#traits", examples: EXAMPLES });
+test("a share's link drops the example's hash", async () => {
+  const page = standIn({ code: "x", url: "http://localhost/play#traits", examples: EXAMPLES });
   const copied: string[] = [];
   page.session.deps.clipboard = async (text) => void copied.push(text);
   page.respond(() => Response.json({ id: "abcDEF1234" }));
   await page.session.share();
-  assert.equal(page.addresses.at(-1), "/play/abcDEF1234?run=server");
-  assert.deepEqual(copied, ["http://localhost/play/abcDEF1234?run=server"]);
+  assert.deepEqual(page.fetched.map((f) => f.url), ["/play/share"]);
+  assert.equal(page.addresses.at(-1), "/play/abcDEF1234");
+  assert.deepEqual(copied, ["http://localhost/play/abcDEF1234"]);
   assert.equal(page.session.state.status, "link copied · abcDEF1234");
 });
 
-test("choosing an example, the run mode and an edit keep the address with replaceState", async () => {
+test("choosing an example and an edit keep the address with replaceState", async () => {
   const web: Partial<Web> = { run_text: () => JSON.stringify({ kind: "text", status: 0, output: [] }) };
   const page = standIn({ code: "x", url: "http://localhost/play/abcDEF1234", shared: "abcDEF1234", examples: EXAMPLES, web });
   page.session.pick("traits");
   assert.equal(page.session.state.code, "traits code");
   assert.equal(page.session.state.mark, "traits");
   assert.equal(page.addresses.at(-1), "/play#traits");
-  page.session.choose("server");
-  assert.equal(page.addresses.at(-1), "/play?run=server#traits");
   // An edit drops the hash: the code is no longer the example's.
   page.session.setCode("traits code, edited");
-  assert.equal(page.addresses.at(-1), "/play?run=server");
-  page.session.choose("browser");
   assert.equal(page.addresses.at(-1), "/play");
   page.session.pick("reset");
   assert.equal(page.session.state.code, "word count code", "Reset is the first example");
   await new Promise((done) => setTimeout(done, 10));
 });
 
-test("in the browser an edit runs again after a pause; on the server it waits for Run", async () => {
+test("an edit runs again after a pause", async () => {
   const ran: string[] = [];
   const page = standIn({ code: "x", web: { run_text: (code: string) => (ran.push(code), JSON.stringify({ kind: "text", status: 0, output: [] })) } });
   page.session.setCode("y");
   page.tick();
   await new Promise((done) => setTimeout(done, 0));
   assert.deepEqual(ran, ["y"]);
-  page.session.choose("server");
-  await new Promise((done) => setTimeout(done, 0));
-  const asked = page.fetched.length;
-  page.session.setCode("z");
-  page.tick();
-  assert.equal(page.fetched.length, asked);
+  assert.deepEqual(page.fetched, []);
 });
 
-test("in the browser, rawr-web loads once the page has loaded, and a restored example runs", async () => {
+test("rawr-web loads once the page has loaded, and a restored example runs", async () => {
   const ran: string[] = [];
   const web: Partial<Web> = { run_text: (code: string) => (ran.push(code), JSON.stringify({ kind: "text", status: 0, output: [] })) };
   const page = standIn({ url: "http://localhost/play#word-count", examples: EXAMPLES, web });
@@ -232,35 +181,6 @@ test("in the browser, rawr-web loads once the page has loaded, and a restored ex
   await new Promise((done) => setTimeout(done, 10));
   assert.deepEqual(page.loads, [WEB_MODULE]);
   assert.deepEqual(ran, ["word count code"]);
-  // On the server, nothing loads.
-  const server = standIn({ url: "http://localhost/play?run=server", web });
-  server.session.preload();
-  await new Promise((done) => setTimeout(done, 10));
-  assert.deepEqual(server.loads, []);
-});
-
-test("a pass skips Turnstile until the server refuses it", async () => {
-  const page = standIn({ code: "x", sitekey: "0xKEY", pass: true, url: "http://localhost/play?run=server" });
-  assert.deepEqual(page.widgets, [], "no widget with a pass");
-  let calls = 0;
-  page.respond(() => (++calls === 1 ? new Response("no", { status: 403 }) : Response.json({ kind: "text", status: 0, output: [] })));
-  const running = page.session.go();
-  // The refused pass mounts the widget, and the run waits for its token.
-  await new Promise((done) => setTimeout(done, 0));
-  assert.deepEqual(page.widgets, ["render"]);
-  // The run now waits for the widget's token; it is not awaited here.
-  void running;
-  const fresh = standIn({ code: "x", sitekey: "0xKEY" });
-  assert.deepEqual(fresh.widgets, ["render"], "without a pass the widget mounts at once");
-});
-
-test("Turnstile waits for its container instead of throwing before the island renders it", () => {
-  // The session starts before React renders #ts; rendering then would throw
-  // and blank the playground, as it did live.
-  const early = standIn({ code: "x", sitekey: "0xKEY", container: false });
-  assert.deepEqual(early.widgets, [], "no render while #ts is missing");
-  early.tick();
-  assert.deepEqual(early.widgets, [], "still waiting");
 });
 
 /** A universe stand-in whose frames record their removal, and the runs it was given. */
@@ -280,7 +200,7 @@ function universeStandIn(answer: (code: string) => any, manifest = '[dependencie
   return { universe, frames, runs };
 }
 
-test("Run in browser runs a snippet that uses a crate the universe declares in a frame, and a plain one in rawr-web", async () => {
+test("a snippet that uses a crate the prebuilt runner declares runs in a frame, and a plain one in rawr-web", async () => {
   const { universe, frames, runs } = universeStandIn(() => ({ kind: "text", status: 0, output: [{ stream: "stdout", text: "drawn\n" }] }));
   const web = { run_text: () => JSON.stringify({ kind: "text", status: 0, output: [{ stream: "stdout", text: "plain\n" }] }) };
   const page = standIn({ code: "use iced::widget::button;\nfn main() {}", web, universe });
@@ -312,16 +232,90 @@ test("a universe snippet that does not compile shows its report in place of its 
   assert.equal(frames[0].removed, true);
 });
 
-test("a universe that does not load runs the snippet on the server", async () => {
+test("a report from the browser's prebuilt runner names the snippet play.rs", async () => {
+  const { universe } = universeStandIn(() => ({ kind: "error", text: "error[E0425]: cannot find value `x`\n --> /universe/src/main.rs:1:11" }));
+  const page = standIn({ code: "iced::run(x)", universe });
+  await page.session.go();
+  assert.deepEqual(page.session.state.output, { kind: "error", text: "error[E0425]: cannot find value `x`\n --> play.rs:1:11" });
+});
+
+test("a prebuilt runner that does not load says why and runs nothing anywhere else", async () => {
   const { universe } = universeStandIn(() => null);
   universe.frame = async () => {
     throw new Error("404");
   };
   const page = standIn({ code: "iced::run(x)", universe });
   await page.session.go();
-  assert.deepEqual(page.fetched.map((f) => f.url), ["/play/render"]);
-  assert.match(page.session.state.status, /on the server: the universe did not load: 404$/);
-  assert.equal(page.session.state.where, "browser", "the next run tries the browser again");
+  assert.deepEqual(page.fetched, [], "nothing goes to a server");
+  assert.deepEqual(page.session.state.output, { kind: "error", text: "The browser's prebuilt runner did not load: 404" });
+  assert.equal(page.session.state.status, "did not run");
+});
+
+/** The browser's manifest, as universe.toml has it: a native table and a browser's. */
+const MANIFEST = `[package]
+name = "play"
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+iced = { git = "https://github.com/iced-rs/iced", rev = "be88873", features = ["canvas"] }
+iced_test = { git = "https://github.com/iced-rs/iced", rev = "be88873" }
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+iced = { git = "https://github.com/iced-rs/iced", rev = "be88873", default-features = false }
+tokio = { version = "1", features = ["macros", "rt"] }
+ratatui = { version = "0.30", default-features = false, features = ["std"] }
+`;
+
+test("a frontmatter whose dependencies the browser has runs with its block blanked", async () => {
+  const { universe, runs } = universeStandIn(() => ({ kind: "text", status: 0, output: [] }), MANIFEST);
+  const ran: string[] = [];
+  const web = { run_text: (code: string) => (ran.push(code), JSON.stringify({ kind: "text", status: 0, output: [] })) };
+  const code = '---\n[dependencies]\ntokio = { version = "1.40", features = ["rt"] }\n---\nuse tokio::runtime::Builder;\nfn main() {}\n';
+  const page = standIn({ code, web, universe });
+  await page.session.go();
+  const blanked = code.replace(/^[\s\S]*?\n---\n/, (block) => block.replace(/[^\n]/g, " "));
+  assert.deepEqual(runs, [blanked], "lines and columns stay the snippet's");
+  assert.ok(blanked.startsWith("   \n") && blanked.endsWith("\nuse tokio::runtime::Builder;\nfn main() {}\n"));
+  // A frontmatter that names nothing runs in rawr-web, blanked too.
+  page.session.setCode('---\n[package]\nedition = "2021"\n---\nprintln!("hi")');
+  await page.session.go();
+  assert.equal(ran.length, 1);
+  assert.ok(ran[0].endsWith('\nprintln!("hi")') && !ran[0].includes("---"), ran[0]);
+  assert.deepEqual(page.fetched, []);
+});
+
+test("a frontmatter dependency the browser lacks gets one line, and nothing runs", async () => {
+  const { universe, runs } = universeStandIn(() => ({ kind: "text", status: 0, output: [] }), MANIFEST);
+  const page = standIn({ code: '---\n[dependencies]\nlibc = "0.2.172"\n---\nfn main() {}\n', universe, web: { run_text: () => "{}" } });
+  await page.session.go();
+  const line = "The browser runs only snippets whose dependencies are among iced, ratatui and tokio. The ?play bot on Discord builds more crates.";
+  assert.deepEqual(page.session.state.output, { kind: "error", text: line });
+  assert.deepEqual([runs, page.loads, page.fetched], [[], [], []]);
+  // A crate it has at another version, or from another source, is not the browser's either.
+  for (const dependency of ['tokio = "0.2"', 'iced = "0.13"', 'iced = { git = "https://github.com/iced-rs/iced", branch = "master" }', 'ratatui = { path = "../ratatui" }', 'iced_test = { git = "https://github.com/iced-rs/iced", rev = "be88873" }']) {
+    page.session.setCode(`---\n[dependencies]\n${dependency}\n---\nfn main() {}\n`);
+    await page.session.go();
+    assert.deepEqual(page.session.state.output, { kind: "error", text: line }, dependency);
+  }
+  assert.deepEqual(runs, []);
+  assert.equal(onlyHere([]), "This browser runs no snippet with dependencies. The ?play bot on Discord builds more crates.");
+});
+
+test("a frontmatter block is read as cargo reads it: its tables, inline or not, and its fences", async () => {
+  const { frontmatter, satisfied, offered } = await import("../src/play/frontmatter.ts");
+  const block = frontmatter('#!/usr/bin/env rawr\n\n---cargo\n[dependencies]\nc = { package = "libc", version = "0.2" } # libc\n[dependencies.tokio]\nversion = "1"\nfeatures = ["rt"]\n[dev-dependencies]\nratatui = "0.30.1"\n---\nfn main() {}');
+  assert.ok(block);
+  assert.deepEqual(
+    block.dependencies.map((d) => [d.package, d.version, d.table]),
+    [["libc", "0.2", "dependencies"], ["tokio", "1", "dependencies"], ["ratatui", "0.30.1", "dev-dependencies"]],
+  );
+  assert.ok(block.blanked.endsWith("\nfn main() {}") && block.blanked.split("\n").length === 12);
+  // No block, a block another tool reads, and an unclosed one are no frontmatter.
+  for (const code of ["fn main() {}", "1 - 2", "---toml\na = 1\n---\n", "---\n[dependencies]\n", "--\nx\n--\n"]) assert.equal(frontmatter(code), null, code);
+  // A closing fence with more dashes doesn't close the block.
+  assert.equal(frontmatter("---\na = 1\n----\n"), null);
+  const has = offered(MANIFEST);
+  assert.deepEqual(has.map((d) => d.package), ["iced", "tokio", "ratatui"]);
+  const wanted = (version: string) => ({ package: "ratatui", version, other: false, table: "dependencies" });
+  assert.ok(satisfied(wanted("0.30.2"), has) && satisfied(wanted("^0.30"), has) && satisfied(wanted("*"), has));
+  assert.ok(!satisfied(wanted("0.29"), has) && !satisfied(wanted(">=0.30, <0.31"), has));
 });
 
 test("a universe snippet is one that names a crate of the manifest's dependency tables", async () => {

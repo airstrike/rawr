@@ -13,7 +13,10 @@
       // A registry address, not a Dockerfile, so deploy never calls docker.
       "image": "registry.cloudflare.com/fce80b8101fbb2f85548560babc6c7bc/rawr-play:487c21f0a678",
       // lite: 1/16 vCPU, 256 MiB. A render peaks well under that (see
-      // play/README.md); "basic" (1/4 vCPU, 1 GiB) renders faster.
+      // play/README.md); "basic" (1/4 vCPU, 1 GiB) renders faster. The
+      // image that builds snippets' approved dependencies (play/Dockerfile's
+      // `scripts` target) compiles in the container: it needs a "standard"
+      // instance, for its toolchain's memory and its caches' disk.
       "instance_type": "lite",
       "max_instances": 1
     }

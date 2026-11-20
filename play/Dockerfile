@@ -5,7 +5,9 @@
 # for the target platform (amd64 or arm64) when it differs, so no emulation is
 # needed, and build natively when it matches (GitHub Actions on x86-64).
 # A snippet runs on the universe runner (the `universe` stage below), which
-# needs no GPU. TLS (Discord's gateway and API) is OpenSSL through native-tls: the
+# needs no GPU. The `scripts` target also builds a snippet's approved
+# dependencies when its frontmatter names them (`--target scripts`). TLS
+# (Discord's gateway and API) is OpenSSL through native-tls: the
 # build links the target's libssl-dev, and the distroless cc runtime already
 # ships libssl3 and the CA bundle.
 #
@@ -105,7 +107,56 @@ RUN --mount=type=cache,id=rawr-play-universe-registry,target=/usr/local/cargo/re
     && cp -r play/universe/. /universe/ \
     && sh /universe/examples.sh \
     && RAWR_UNIVERSE_RUNNER=1 RAWR_UNIVERSE_OUT=/out/universe /src/target/release/rawr-import run /universe \
-    && install -D -m 0644 /universe/Cargo.toml /out/universe/Cargo.toml
+    && install -D -m 0644 /universe/Cargo.toml /out/universe/Cargo.toml \
+    && install -D -m 0755 -t /out/tools /src/target/release/rawr-import /src/target/release/rawr-import-driver
+
+# The image that also runs snippets with a frontmatter block
+# (play/src/script.rs): `--target scripts`. A snippet's approved
+# dependencies are built in the running container, so the image holds the
+# extraction nightly, rawr-import beside its driver (the pinned nightly's
+# driver is the one beside rawr-import), the approved crates' vendored
+# sources (play/approved) and rawr's home, with rawr's runtime and each
+# approved crate built once. A snippet's build runs in the container's own
+# bounds, so the container needs a few GiB of memory and disk: a lite
+# instance can't compile a runner. The default image below stays without
+# them.
+FROM rust:1.99.0-slim-bookworm AS scripts
+ARG PLAY_VERSION=dev
+ARG CARGO_BUILD_JOBS=2
+ENV RUSTUP_TOOLCHAIN=nightly-2026-07-11 \
+    RAWR_HOME=/var/lib/rawr \
+    PLAY_APPROVED=/approved \
+    PLAY_SCRIPTS=/var/lib/rawr-play/scripts \
+    PLAY_UNIVERSE=/universe \
+    PLAY_WORKERS=1 PLAY_MEMORY_MB=1024 PLAY_VERSION=$PLAY_VERSION
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates libssl3 \
+    && rm -rf /var/lib/apt/lists/* \
+    && rustup toolchain install nightly-2026-07-11 --profile minimal --component rustc-dev,rust-src --no-self-update
+COPY --from=build /out/ /usr/local/bin/
+COPY --from=universe /out/tools/ /usr/local/bin/
+COPY --from=universe /out/universe/ /universe/
+COPY play/universe/shell /universe/shell
+COPY play/approved /approved
+# rawr's runtime and the pinned nightly's std table, built once while the
+# build still has the network: they resolve rawr's own dependencies, which
+# the approved crates don't include.
+RUN cd /tmp && rawr-import cache warm
+# From here every build reads the approved crates alone. Cargo is offline,
+# crates.io and iced's repository are the vendored copy, and iced_winit is
+# ?play's headless shell, as in the prebuilt runner. `rawr-play warm` then
+# builds each approved crate once, as a snippet that names it builds it, in
+# the build directory every snippet shares ($RAWR_HOME/scripts/build).
+RUN cargo vendor --locked --manifest-path /approved/Cargo.toml /approved/vendor > /approved/vendor.toml \
+    && { cat /approved/vendor.toml; \
+         printf '\n[net]\noffline = true\n\n[patch."https://github.com/iced-rs/iced"]\niced_winit = { path = "/universe/shell" }\n'; \
+       } > "$CARGO_HOME/config.toml" \
+    && rawr-play warm \
+    && useradd --uid 65532 --create-home play \
+    && mkdir -p "$PLAY_SCRIPTS" \
+    && chown -R play "$CARGO_HOME" "$RAWR_HOME" /var/lib/rawr-play
+USER play
+ENTRYPOINT ["/usr/local/bin/rawr-play-bot"]
 
 FROM gcr.io/distroless/cc-debian12:nonroot
 # The commit the image was built from, reported on the dashboard.

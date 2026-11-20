@@ -364,6 +364,22 @@ fn diagnostic(program: &str) -> Option<rawr::diagnostic::Source> {
     rawr::diagnostic::Source::new(SOURCE_NAME, program).ok()
 }
 
+/// The report on `program`'s parse, rendered as rustc renders it, naming
+/// the program `play.rs`: `None` when it parses. A parse needs no crate,
+/// so a program whose syntax is wrong is reported before anything is built
+/// for it. A frontmatter block cargo refuses fails here, with cargo's
+/// message at the place cargo points.
+pub(crate) fn parse_report(program: &str) -> Option<String> {
+    let error = rawr::future::facade::engine().parse_unit(program).err()?;
+    let report = diagnostic(program)
+        .ok_or(rawr::diagnostic::Error::EmptySourceIdentity)
+        .and_then(|source| rawr::diagnostic::Report::from_parse(source, &error));
+    Some(match report {
+        Ok(report) => rawr::diagnostic::render(&report),
+        Err(_) => error.to_string(),
+    })
+}
+
 /// A base Engine with the untrusted-snippet limits whose output goes to
 /// `sink`; it stops a program at the deadline or once `sink` is full.
 fn engine(limits: &Limits, deadline: deadline::Watch, sink: &Arc<Mutex<Output>>) -> Engine {

@@ -276,12 +276,13 @@ fn main() {
     let output = text(server.run(first, &limits(30_000)).unwrap());
     assert_eq!((output.text().as_str(), output.status), ("first 2\n", 0));
     // The first snippet's function is not this one's.
-    let rawr_play::PlayError::Compile(error) = server
+    let error = server
         .run(
             "fn main() {\n    println!(\"{}\", helper());\n}\n",
             &limits(30_000),
         )
-        .unwrap_err();
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("helper"), "{error}");
     // The same snippet again starts from nothing.
     let output = text(server.run(first, &limits(30_000)).unwrap());
@@ -839,9 +840,10 @@ fn main() -> iced::Result {{
 "
         );
         let line = source.lines().position(|line| line.contains(view)).unwrap() + 1;
-        let rawr_play::PlayError::Compile(error) = server
+        let error = server
             .run(&source, &limits(30_000))
-            .expect_err("a call outside the universe compiles");
+            .expect_err("a call outside the universe compiles")
+            .to_string();
         assert!(
             error.starts_with(message) && error.contains(&format!(" --> play.rs:{line}:")),
             "{error}"

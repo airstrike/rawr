@@ -6,7 +6,13 @@
 //!
 //! `-` reads the snippet from stdin or writes the result to stdout. The bot
 //! runs one of these per snippet, so `--memory-mb` caps the whole process,
-//! and a run on the universe runner too.
+//! and a run on the universe runner too. A snippet whose frontmatter
+//! declares dependencies builds them first, within the container's own
+//! bounds: the cap is then its run's alone.
+//!
+//! `rawr-play warm` builds each approved crate once (`PLAY_APPROVED`), as
+//! a snippet that names it builds it, so the image's first snippet that
+//! names one finds it compiled.
 //!
 //! A program writes its output as one JSON object
 //! (`rawr_play::Output::to_json`):
@@ -66,6 +72,9 @@ fn run(args: Vec<String>) -> Result<(), String> {
     {
         return server_tokens(command == "decrypt-server", &args[1..]);
     }
+    if args.first().is_some_and(|command| command == "warm") {
+        return warm(&args[1..]);
+    }
     let mut input = None;
     let mut output = None;
     let mut limits = rawr_play::Limits::default();
@@ -89,7 +98,6 @@ fn run(args: Vec<String>) -> Result<(), String> {
             }
             "--memory-mb" => {
                 let bytes = number(value("--memory-mb")?)?.saturating_mul(1024 * 1024);
-                limit_memory(bytes)?;
                 limits.memory = Some(bytes);
             }
             "-h" | "--help" => return Err(USAGE.to_owned()),
@@ -109,6 +117,14 @@ fn run(args: Vec<String>) -> Result<(), String> {
         std::fs::read_to_string(&input).map(|text| source = text)
     };
     read.map_err(|error| format!("cannot read {input}: {error}"))?;
+    // The cap is the whole process's, and its children's, unless the run
+    // builds the snippet's dependencies first: the build then has the
+    // container's bounds, and the snippet's own run has the cap.
+    if let Some(bytes) = limits.memory
+        && !rawr_play::script::builds(&source)
+    {
+        limit_memory(bytes)?;
+    }
     let ran = rawr_play::run(&source, &limits).map_err(|error| error.to_string())?;
     let bytes = ran.to_json().into_bytes();
     let frame = ran.frame.as_deref().map_or_else(String::new, |frame| {
@@ -128,6 +144,24 @@ fn run(args: Vec<String>) -> Result<(), String> {
         println!("{output} ({summary})");
     }
     Ok(())
+}
+
+/// `rawr-play warm`: build each approved crate once, as a snippet that
+/// names it builds it.
+fn warm(args: &[String]) -> Result<(), String> {
+    if let Some(extra) = args.first() {
+        return Err(format!("`warm` takes no argument, not `{extra}`"));
+    }
+    let approved = rawr_play::approved::Approved::from_env()
+        .ok_or_else(|| {
+            format!(
+                "set {} to the approved crates' directory",
+                rawr_play::approved::DIRECTORY
+            )
+        })?
+        .map_err(|error| error.to_string())?;
+    rawr_play::script::warm(&approved, &rawr_play::script::Builder::from_env())
+        .map_err(|error| error.to_string())
 }
 
 /// Cap this process's address space, so an allocation past it fails and the

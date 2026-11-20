@@ -1,10 +1,10 @@
-<meta name="description" content="How the playground and the ?play bot run snippets: the sandbox, output, limits, where ?play differs from rawr run, and every note and error reply.">
+<meta name="description" content="How the playground and the ?play bot run snippets: the sandbox, output, limits, dependencies, where ?play differs from rawr run, and every note and error reply.">
 <article>
 <h1>Play sandbox</h1>
-<p class="lede">How the playground and the <code class="nw">?play</code> bot run a snippet. Both run plain Rust programs with the same limits.</p>
+<p class="lede">How the playground and the <code class="nw">?play</code> bot run a snippet. The bot runs it on its server. The playground runs it in your browser. Both run plain Rust programs with the same limits.</p>
 <h2 id="sandbox">The sandbox</h2>
-<p>A snippet has no files, no environment variables, no process and no network. rawr&rsquo;s engine starts with none of them, and ?play grants none (see <a href="/docs/embedding#access">Access</a>). A call that needs one fails at the call, as the operating system would refuse it. On the server each run is also its own process, and that process starts with an empty environment.</p>
-<p>The grant covers the snippet&rsquo;s own code. A crate the bot&rsquo;s universe binds, such as iced or tokio, runs as native code and calls the operating system directly. The server&rsquo;s container bounds what that code can reach.</p>
+<p>A snippet has no files, no environment variables, no process and no network. rawr&rsquo;s engine starts with none of them, and ?play grants none (see <a href="/docs/embedding#access">Access</a>). A call that needs one fails at the call, as the operating system would refuse it. On the bot&rsquo;s server each run is also its own process, and that process starts with an empty environment.</p>
+<p>The grant covers the snippet&rsquo;s own code. A crate the snippet uses, such as iced or tokio, runs as native code and calls the operating system directly. So the bot approves no crate or feature whose code reads files, opens sockets, spawns processes or reads the environment for the snippet. The bot&rsquo;s container bounds what the rest can reach.</p>
 <table>
   <tr><th>The snippet uses</th><th>What happens</th></tr>
   <tr><td><code>std::fs::read_to_string("notes.txt")</code></td><td>It returns <code>Err</code>, an <code>io::Error</code> of kind <code>PermissionDenied</code>. So do <code>fs::read</code>, <code>fs::write</code> and the other <code>std::fs</code> functions, and nothing is read or written.</td></tr>
@@ -18,7 +18,8 @@
   <tr><td><code>std::net</code></td><td>The snippet doesn&rsquo;t compile. rawr doesn&rsquo;t have the module.</td></tr>
   <tr><td><code>std::thread::spawn</code> in the browser</td><td>It panics as std does on the web, with <code>failed to spawn thread</code>: a page runs one thread.</td></tr>
   <tr><td><code>std::thread::sleep</code> in the browser</td><td>It waits as long as it says. A run that ends holds the page while it waits, and the wait counts against the <a href="#limits">time budget</a>. A program that loops in a frame of its own, as the landing page&rsquo;s plain loop does, hands the page its time at each sleep: the page stays live, and an edit reloads the program while it runs, with its state kept. A browser without WebAssembly JS Promise Integration (JSPI) stops such a program at its first sleep and says so in its frame.</td></tr>
-  <tr><td><code>use reqwest;</code> or any other crate</td><td>The snippet doesn&rsquo;t compile. The error is rustc&rsquo;s <code>error[E0432]: unresolved import `reqwest`</code>.</td></tr>
+  <tr><td><code>use reqwest;</code> or any other crate, with no frontmatter</td><td>The snippet doesn&rsquo;t compile. The error is rustc&rsquo;s <code>error[E0432]: unresolved import `reqwest`</code>.</td></tr>
+  <tr><td><code>reqwest = "0.12"</code> in a frontmatter block</td><td>The bot refuses the snippet before it builds anything. The reply is one line that lists the <a href="#dependencies">approved crates</a>.</td></tr>
 </table>
 
 
@@ -33,28 +34,29 @@
 <h2 id="limits">Limits</h2>
 <table>
   <tr><th>Limit</th><th>Value</th></tr>
-  <tr><td>Time budget</td><td>None while no other snippet waits for the server, up to 10 minutes of real time. Once another snippet waits, the run has 60 more seconds of real time.</td></tr>
+  <tr><td>Time budget</td><td>None while no other snippet waits for the bot, up to 10 minutes of real time. Once another snippet waits, the run has 60 more seconds of real time.</td></tr>
   <tr><td>Whole run</td><td>120 seconds after another snippet begins to wait. The process is stopped after that.</td></tr>
   <tr><td>Memory</td><td>256 MB of address space per run.</td></tr>
-  <tr><td>Operations</td><td>1,000,000 per run on the server.</td></tr>
+  <tr><td>Dependency builds</td><td>No limit of their own. A build runs within the bot&rsquo;s container. The time budget and the memory limit are the snippet&rsquo;s run&rsquo;s.</td></tr>
+  <tr><td>Operations</td><td>1,000,000 per run on the bot&rsquo;s server.</td></tr>
   <tr><td>Call depth</td><td>32.</td></tr>
   <tr><td>Strings</td><td>65,536 bytes.</td></tr>
   <tr><td>Arrays, vectors and maps</td><td>65,536 items.</td></tr>
   <tr><td>Program output</td><td>64 KiB. Longer output ends with <code>&hellip; output truncated</code>, and the program is stopped.</td></tr>
   <tr><td>Discord reply</td><td>2000 characters.</td></tr>
   <tr><td>Runs in Discord</td><td>4 a minute per user. 12 a minute per channel.</td></tr>
-  <tr><td>Runs in the playground</td><td>6 a minute and 60 an hour per visitor.</td></tr>
+  <tr><td>Docs snippets that run on the bot</td><td>6 a minute and 60 an hour per visitor.</td></tr>
   <tr><td>Playground code</td><td>16 KiB. A share can be up to 64 KiB.</td></tr>
 </table>
-<p>In the browser a run has 10 seconds of real time. It has no operation limit there.</p>
+<p>The playground runs every snippet in the browser. There a run has 10 seconds of real time. It has no operation limit there.</p>
 <p>A run over the Discord rate limit gets an hourglass reaction instead of a reply. An edit over the limit is ignored.</p>
 
 
 <h2 id="differences">Where ?play differs from rawr run</h2>
-<p>A snippet has no <code>Cargo.toml</code>, no files and no window.</p>
+<p>A snippet has no files and no window. It has no <code>Cargo.toml</code>, but it can declare its dependencies in a <a href="#dependencies">frontmatter block</a>.</p>
 
 <h3 id="crates">Crates</h3>
-<p>In <code class="nw">?play</code> a snippet can use iced, iced_test, tokio and ratatui, through bindings built once with the bot. It can make the calls into them that the bot&rsquo;s universe program makes (<code>play/universe</code>), at the types that program makes them. Those are tokio&rsquo;s <code>spawn</code>, <code>sleep</code> and <code>spawn_blocking</code>, and iced&rsquo;s calls in these examples:</p>
+<p>A snippet with no frontmatter can use iced, iced_test, tokio and ratatui. It runs on the playground&rsquo;s prebuilt runner, whose bindings are built once with the bot. It can make the calls into those crates that the runner&rsquo;s program makes (<code>play/universe</code>), at the types that program makes them. Those are tokio&rsquo;s <code>spawn</code>, <code>sleep</code> and <code>spawn_blocking</code>, and iced&rsquo;s calls in these examples:</p>
 <ul>
   <li>the counter: <code>column!</code> and <code>row!</code> with <code>spacing</code>, <code>padding</code> and alignment, <code>button</code>, and <code>text</code> of an <code>i64</code>, a <code>&amp;str</code> or a <code>String</code> such as <code>format!</code> makes;</li>
   <li>a <code>slider</code> of an <code>f32</code>, and one of <code>Radians</code> over <code>Radians::RANGE</code>;</li>
@@ -63,21 +65,47 @@
   <li><code>iced::run</code>, and <code>iced::application</code> with a <code>subscription</code>, a <code>scale_factor</code>, or both in either order.</li>
 </ul>
 <p>ratatui&rsquo;s calls are those of the landing page&rsquo;s terminal snippet (<code>play/universe/programs/ui.rs</code>). It splits a <code>Rect</code> with <code>Layout::vertical</code> and <code>Constraint</code>s, renders a <code>Paragraph</code> in a <code>Block::bordered()</code> with a title into a <code>Buffer</code>, and reads each cell&rsquo;s <code>symbol()</code>.</p>
-<p>The universe also holds whole programs, and a snippet can make the calls any one of them makes. They are iced&rsquo;s own examples that run under <code>rawr run</code> and need no files, no network and no other crate, listed in <code>play/universe/examples.txt</code>: <code>arc</code>, <code>counter</code>, <code>pick_list</code> and <code>styling</code>. With them is iced&rsquo;s <code>solar_system</code> drawn with plain shapes instead of images, and a greeting whose <code>text_input</code> takes typed text through <code>on_input</code> and <code>on_submit</code>. In <code class="nw">?play</code>, which has no keyboard, a snippet types into one with iced_test&rsquo;s <code>simulator</code>: <code>click</code> of its <code>id</code>, <code>typewrite</code>, <code>tap_key</code>, <code>into_messages</code> and <code>find</code>. Together they add a <code>canvas</code> of a <code>Program</code>, its <code>Cache</code> and <code>Frame</code> with fills, strokes, a <code>LineDash</code>, rotations and translations, <code>iced::application::timed</code>, <code>.theme(..)</code> of a theme or of a function, and styling&rsquo;s <code>checkbox</code>, <code>toggler</code>, <code>progress_bar</code>, <code>scrollable</code>, <code>container</code>, <code>rule</code>, <code>center</code> and <code>text_input</code>.</p>
+<p>The prebuilt runner also holds whole programs, and a snippet can make the calls any one of them makes. They are iced&rsquo;s own examples that run under <code>rawr run</code> and need no files, no network and no other crate, listed in <code>play/universe/examples.txt</code>: <code>arc</code>, <code>counter</code>, <code>pick_list</code> and <code>styling</code>. With them is iced&rsquo;s <code>solar_system</code> drawn with plain shapes instead of images, and a greeting whose <code>text_input</code> takes typed text through <code>on_input</code> and <code>on_submit</code>. In <code class="nw">?play</code>, which has no keyboard, a snippet types into one with iced_test&rsquo;s <code>simulator</code>: <code>click</code> of its <code>id</code>, <code>typewrite</code>, <code>tap_key</code>, <code>into_messages</code> and <code>find</code>. Together they add a <code>canvas</code> of a <code>Program</code>, its <code>Cache</code> and <code>Frame</code> with fills, strokes, a <code>LineDash</code>, rotations and translations, <code>iced::application::timed</code>, <code>.theme(..)</code> of a theme or of a function, and styling&rsquo;s <code>checkbox</code>, <code>toggler</code>, <code>progress_bar</code>, <code>scrollable</code>, <code>container</code>, <code>rule</code>, <code>center</code> and <code>text_input</code>.</p>
 <p>The snippet&rsquo;s types take the places of the types of the program whose calls it makes, in the order it defines them, whatever their names. For the program above, its first three are the state, the message and the enum. The functions a call takes, such as an application&rsquo;s <code>view</code> or a slider&rsquo;s message, may have any names. Each call of that program takes one function at each place, so a snippet that passes two different functions to calls of one kind, such as two <code>f32</code> sliders with two messages, doesn&rsquo;t compile there.</p>
 <p>Another call doesn&rsquo;t compile there either, and the error points at it:</p>
-<div class="block"><pre><code>error: this use of a crate isn&rsquo;t among the universe&rsquo;s bindings
+<div class="block"><pre><code>error: this use of a crate is not available in this prebuilt runner
   --&gt; play.rs:12:17
    |
 12 |         column![text(self.volume as f64), button("Up").on_press(Message::Up)]
-   |                 ^^^^^^^^^^^^^^^^^^^^^^^ the universe&rsquo;s program doesn&rsquo;t make it</code></pre></div>
+   |                 ^^^^^^^^^^^^^^^^^^^^^^^ the runner was not built with this call</code></pre></div>
 <p>A crate item that program doesn&rsquo;t use at all gets rustc&rsquo;s error for a missing item, such as <code>error[E0425]: cannot find function `radio` in module `iced::widget`</code>.</p>
-<p>An iced program answers with what it printed and a picture of its window, drawn at the program&rsquo;s own <code>scale_factor</code>. The picture is a PNG of the window once the program has booted and the tasks it started have finished. When the program keeps changing on its own, through a subscription or a widget&rsquo;s animation, the picture is a GIF of each change instead. It shows 20 frames a second, for at most 100 frames and within the snippet&rsquo;s time, and plays once and holds the last frame. It plays at the program&rsquo;s pace, however long the bot takes to draw each frame: a change made on a frame shows for one frame&rsquo;s 50 ms, and a change made on the program&rsquo;s own clock, such as a <code>time::every</code> tick, shows for the time that clock ran. A program that reads <code>Instant::now()</code> on each frame still sees the bot&rsquo;s time, so its animation can move faster in the GIF than on a fast machine. Use <code>rawr run</code> for a program that needs another crate or call. The playground in the browser uses rawr&rsquo;s std and no crates.</p>
+<p>An iced program answers with what it printed and a picture of its window, drawn at the program&rsquo;s own <code>scale_factor</code>. The picture is a PNG of the window once the program has booted and the tasks it started have finished. When the program keeps changing on its own, through a subscription or a widget&rsquo;s animation, the picture is a GIF of each change instead. It shows 20 frames a second, for at most 100 frames and within the snippet&rsquo;s time, and plays once and holds the last frame. It plays at the program&rsquo;s pace, however long the bot takes to draw each frame: a change made on a frame shows for one frame&rsquo;s 50 ms, and a change made on the program&rsquo;s own clock, such as a <code>time::every</code> tick, shows for the time that clock ran. A program that reads <code>Instant::now()</code> on each frame still sees the bot&rsquo;s time, so its animation can move faster in the GIF than on a fast machine.</p>
+<p>A snippet that needs another call to these crates, or another crate, can name its dependencies in a <a href="#dependencies">frontmatter block</a>. The bot then builds a runner for the calls that snippet makes.</p>
+
+<h3 id="dependencies">Dependencies</h3>
+<p>A snippet that starts with a cargo-script frontmatter block runs on the bot as <code>rawr run play.rs</code> runs a <a href="/docs/run#scripts">script</a>. The bot expands the frontmatter as cargo does. It builds the dependencies, and the bindings for the calls the snippet makes. The snippet then runs on the runner built for it, with the sandbox and the limits of any other snippet.</p>
+<div class="block"><pre><code>---
+[dependencies]
+ratatui = { version = "0.30", default-features = false }
+---
+use ratatui::layout::Rect;
+
+fn main() {
+    println!("{}", Rect::new(0, 0, 20, 4).area());
+}</code></pre></div>
+<p>Every dependency must be one of the bot&rsquo;s approved crates, which <code>play/approved/Cargo.toml</code> lists. A snippet names one by a version that its locked version meets, or by the same git repository at the same rev.</p>
+<table>
+  <tr><th>Crate</th><th>Locked version</th><th>A snippet names it as</th><th>Approved features</th></tr>
+  <tr><td>iced</td><td>0.15.0-dev</td><td><code>iced = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b" }</code></td><td>Its default features, <code>canvas</code> and <code>tokio</code></td></tr>
+  <tr><td>ratatui</td><td>0.30.2</td><td><code>ratatui = "0.30"</code></td><td><code>all-widgets</code>, <code>layout-cache</code>, <code>macros</code>, <code>std</code> and <code>underline-color</code>, with <code>default-features = false</code></td></tr>
+  <tr><td>tokio</td><td>1.54.1</td><td><code>tokio = "1"</code></td><td><code>macros</code>, <code>rt</code>, <code>rt-multi-thread</code>, <code>sync</code> and <code>time</code></td></tr>
+</table>
+<p>A snippet may ask for any of a crate&rsquo;s approved features. The bot builds the crate with all of them, as its image built it, so the build reuses what the image compiled. tokio&rsquo;s <code>fs</code>, <code>net</code>, <code>process</code> and <code>signal</code>, ratatui&rsquo;s terminal backends, and iced&rsquo;s <code>image</code> and <code>svg</code> are not approved. A snippet that asks for them, directly or through its own <code>[features]</code>, is refused. So is one that turns ratatui&rsquo;s default features on.</p>
+<p>The bot refuses a snippet that names any other crate, or an approved one at another version or from another source. It refuses it before it builds anything. The reply is one line that lists the approved crates, or a crate&rsquo;s approved features. A frontmatter may hold <code>[package]</code>, <code>[features]</code>, <code>[lints]</code> and dependency tables. The bot refuses a table that changes how it builds, such as <code>[profile]</code> or <code>[patch]</code>.</p>
+<p>The bot builds offline. Its image holds a copy of each approved crate and of everything they depend on. A snippet&rsquo;s build reads only that copy, so it downloads nothing and runs no build script but the approved crates&rsquo; own.</p>
+<p>Every snippet builds in one build directory on the bot. The bot&rsquo;s image builds each set of approved crates once, with their approved features, and a snippet&rsquo;s build reuses that.</p>
+<p>An error in the frontmatter, or in a dependency&rsquo;s build, is cargo&rsquo;s or rustc&rsquo;s own message, and it names the snippet <code>play.rs</code>. A frontmatter that declares no dependency runs as the same snippet without the block.</p>
+<p>The playground runs a frontmatter snippet in the browser when each dependency it names is a crate of the browser&rsquo;s prebuilt runner. The browser builds nothing, so any other dependency gets one line that says so.</p>
 
 
-<h3 id="browser-universe">The universe in the browser</h3>
-<p>The universe also runs in the browser, built for wasm32 with the same program, so a snippet makes the same calls there. On this site an iced snippet&rsquo;s Run uses it. Its window is drawn in the page, in place of the snippet&rsquo;s output, and its buttons answer clicks there with no round trip to the server. Before Run, the output is the picture the server drew. Each Run gets a fresh copy of the universe, compiled once for the page, because a page runs one event loop per copy. An edit reloads the program in its copy, with its state kept, and gets a fresh copy only when it can&rsquo;t reload there or the program has ended.</p>
-<p>The universe is a WebAssembly module of about 53 MB. The site sends it brotli-compressed, at about 5 MB, and the browser decompresses it as it downloads. A page downloads it once, at its first Run that uses it.</p>
+<h3 id="browser-runner">The prebuilt runner in the browser</h3>
+<p>The prebuilt runner also runs in the browser, built for wasm32 with the same program, so a snippet makes the same calls there. The playground and an iced snippet&rsquo;s Run on this site use it. Its window is drawn in the page, in place of the snippet&rsquo;s output, and its buttons answer clicks there with no round trip to a server. Before Run, the output is the picture the bot drew. Each Run gets a fresh copy of the runner, compiled once for the page, because a page runs one event loop per copy. An edit reloads the program in its copy, with its state kept, and gets a fresh copy only when it can&rsquo;t reload there or the program has ended.</p>
+<p>The runner is a WebAssembly module of about 53 MB. The site sends it brotli-compressed, at about 5 MB, and the browser decompresses it as it downloads. A page downloads it once, at its first Run that uses it.</p>
 <p>iced draws with WebGPU where the browser has it, and with WebGL2 elsewhere. On Safari and on every browser on iOS it draws with WebGL2, because WebKit&rsquo;s WebGPU fails the way iced uploads its shapes and text.</p>
 <p>A snippet&rsquo;s keys reach its window only while that window has focus. A click or Tab gives it focus, and the window shows an outline while it has it.</p>
 
@@ -110,7 +138,10 @@
   <tr><td><code>the run timed out after .. ms</code></td><td>The whole run went on for more than 120 seconds after another snippet began to wait, so its process was stopped.</td></tr>
   <tr><td><code>?play stopped: out of memory or crashed</code></td><td>The process ran out of its 256 MB, or it crashed without a message.</td></tr>
   <tr><td><code>?play crashed. This is a bug in ?play, not in your code.</code></td><td>The run panicked. The line after it is the panic&rsquo;s message.</td></tr>
-  <tr><td><code>the playground is busy; try again in a moment</code></td><td>The server stayed busy for too long. Discord runs go first.</td></tr>
+  <tr><td><code>the playground is busy; try again in a moment</code></td><td>A docs snippet that runs on the bot waited too long for it. Discord runs go first.</td></tr>
+  <tr><td><code>?play builds only these crates: ..</code></td><td>The frontmatter names a crate that isn&rsquo;t <a href="#dependencies">approved</a>, or an approved one at another version or from another source. Nothing was built.</td></tr>
+  <tr><td><code>?play builds tokio only with the features ..</code></td><td>The frontmatter asks for a feature of an approved crate that isn&rsquo;t approved, or turns on default features the bot keeps off. Nothing was built.</td></tr>
+  <tr><td><code>?play doesn&rsquo;t build with a frontmatter&rsquo;s `[profile]`. ..</code></td><td>The frontmatter holds a table that changes how the bot builds. Nothing was built.</td></tr>
   <tr><td><code>put the snippet in a code block: ..</code></td><td>The message has <code>?play</code> but no code block.</td></tr>
   <tr><td><code>?play takes no options: `light`</code></td><td>A word follows <code>?play</code> on its line.</td></tr>
 </table>

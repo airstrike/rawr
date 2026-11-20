@@ -6934,6 +6934,11 @@ fn finish(result: std::io::Result<()>) -> ! {
 /// runs it. The manifest is the one the runner's build compiled, at the
 /// same path, so a program whose native calls the build covered finds every
 /// one of them, and one that makes another fails to compile there.
+///
+/// A `root` that is a file is a cargo script the runner was built for: a
+/// script is a package of its own, its manifest its frontmatter (D608
+/// point 6), so each snippet is loaded as the script's whole text, at the
+/// script's path, and its manifest is read from it as the build read it.
 fn run_play(root: std::path::PathBuf) -> ! {
     let Some(socket) = std::env::var_os(__rawr_internal::play::SOCKET) else {
         eprintln!("error: `{}` names no socket to serve on", __rawr_internal::play::SOCKET);
@@ -6943,17 +6948,21 @@ fn run_play(root: std::path::PathBuf) -> ! {
         eprintln!("error: this runner compiles no program");
         exit(1);
     }
+    let script = root.is_file();
     let manifest_path = root.join("Cargo.toml");
-    let entry = root.join("src").join("main.rs");
-    let prepared = std::fs::read_to_string(&manifest_path)
-        .map_err(|error| error.to_string())
-        .and_then(|manifest| {
-            // A snippet runs on a server whose files, environment and
-            // process are not its own: it reaches none of them.
-            __rawr_internal::universe::Universe::new(&__RawrBindings, __rawr_internal::Access::none())
-                .map(|universe| (manifest, universe))
-                .map_err(|error| error.to_string())
-        });
+    let entry = if script { root.clone() } else { root.join("src").join("main.rs") };
+    let manifest = if script {
+        Ok(None)
+    } else {
+        std::fs::read_to_string(&manifest_path).map(Some).map_err(|error| error.to_string())
+    };
+    let prepared = manifest.and_then(|manifest| {
+        // A snippet runs on a server whose files, environment and
+        // process are not its own: it reaches none of them.
+        __rawr_internal::universe::Universe::new(&__RawrBindings, __rawr_internal::Access::none())
+            .map(|universe| (manifest, universe))
+            .map_err(|error| error.to_string())
+    });
     let (manifest, universe) = match prepared {
         Ok(prepared) => prepared,
         Err(error) => {
@@ -6963,7 +6972,10 @@ fn run_play(root: std::path::PathBuf) -> ! {
     };
     let served = __rawr_internal::play::serve(std::path::Path::new(&socket), |source| {
         // A fork of this process, with its own copy of the universe.
-        let files = vec![(manifest_path.clone(), Box::from(manifest.as_str()))];
+        let files = manifest
+            .iter()
+            .map(|manifest| (manifest_path.clone(), Box::from(manifest.as_str())))
+            .collect();
         match universe.program(entry.clone(), source, files) {
             Ok(program) => exit(program.run()),
             Err(error) => {

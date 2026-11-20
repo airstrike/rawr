@@ -16,6 +16,25 @@ xs.iter().sum::&lt;i64&gt;()
 <p><code>?play</code> takes no options. A word after it on its line gets an error reply.</p>
 <p>If you edit a <code>?play</code> message, the bot runs the snippet again and edits its reply.</p>
 
+<h3 id="dependencies">A snippet with dependencies</h3>
+<p>A snippet can start with a cargo-script frontmatter block that declares its dependencies. The bot runs it as <code>rawr run</code> runs a <a href="/docs/run#scripts">script</a>. It builds the dependencies and the bindings for the calls the snippet makes, and then the snippet runs.</p>
+<div class="block">
+  <div class="file"><b>Discord</b></div>
+  <pre><code><span class="k">?play</span>
+<span class="c">```rust</span>
+---
+[dependencies]
+ratatui = { version = "0.30", default-features = false }
+---
+use ratatui::layout::Rect;
+
+fn main() {
+    println!("{}", Rect::new(0, 0, 20, 4).area());
+}
+<span class="c">```</span></code></pre>
+</div>
+<p>The bot builds only its <a href="/docs/reference/play#dependencies">approved crates</a>, each with its approved features. A snippet that names any other crate or feature gets one line that says what is approved, and nothing is built. The bot&rsquo;s image has built the approved crates already, so a snippet&rsquo;s build reuses them.</p>
+
 
 <h2 id="add-bot">Adding the bot to a server</h2>
 <p>Use the <a href="/bot/invite">invite link</a> to add the bot to a Discord server you manage. The bot answers only in channels a moderator turns on. It doesn&rsquo;t answer in direct messages.</p>

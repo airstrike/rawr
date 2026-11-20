@@ -1,0 +1,44 @@
+# The crates a `?play` snippet may name in its frontmatter (play/README.md):
+# each dependency here, as Cargo.lock locks it, with the features it has
+# here. A snippet names one by its version or by the same source. The bot
+# refuses a snippet that names any other crate, or another feature of one of
+# these, before anything is built.
+#
+# The bot's image vendors these crates and everything they depend on
+# (`cargo vendor --locked`), and builds a snippet offline against that copy
+# alone: no snippet downloads a crate, and no build script runs that isn't
+# one of theirs. `rawr-play warm` then builds them once, in the build
+# directory every snippet shares, and a snippet's build reuses that.
+#
+# To approve a crate or a feature, add it here, run
+# `cargo update --manifest-path play/approved/Cargo.toml`, and commit both
+# files. The next image vendors it and builds it. Approve none whose native
+# code reads files, opens sockets, spawns processes or reads the
+# environment: rawr's sandbox covers a snippet's own code, not a crate's.
+[package]
+name = "approved"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+# iced at its pinned rev, which is not on crates.io, with the prebuilt
+# runner's features. Its default features draw with wgpu and tiny-skia, and
+# its window crate is ?play's headless shell (the patch below). `image` and
+# `svg`, whose widgets read files by path, stay off.
+iced = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b", features = ["canvas", "tokio"] }
+# ratatui's widgets and layout, drawn into a `Buffer`, without its terminal
+# backends: crossterm, its default one, takes the process's terminal.
+ratatui = { version = "0.30", default-features = false, features = ["all-widgets", "layout-cache", "macros", "std", "underline-color"] }
+# tokio's runtime, timers and channels, without `fs`, `net`, `process`,
+# `signal` or `io-std`. tokio has no default features.
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
+
+# Its own workspace: it is not a member of Rawr's.
+[workspace]
+
+# iced has no window on the bot's server: ?play's shell takes iced_winit's
+# place, as in the prebuilt runner. The image patches it in the same way for
+# every snippet's build, so its dependencies are vendored with the rest.
+[patch."https://github.com/iced-rs/iced"]
+iced_winit = { path = "../universe/shell" }

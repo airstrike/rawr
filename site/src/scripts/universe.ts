@@ -310,7 +310,7 @@ export function universe({ document, fetch, compile, build = PLAIN, wasm = globa
   const readManifest = () =>
     (manifest ??= fetch(UNIVERSE_MANIFEST)
       .then((response) => {
-        if (!response.ok) throw new Error(`the universe's manifest answered ${response.status}`);
+        if (!response.ok) throw new Error(`the prebuilt runner's manifest answered ${response.status}`);
         return response.text();
       })
       .catch((error) => {

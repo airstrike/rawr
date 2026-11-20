@@ -23,6 +23,11 @@ reqwest = { version = "0.12", default-features = false, optional = true }
 # A program's output, as JSON, with the frame an iced program drew in base64.
 base64 = "0.22"
 serde_json = "1"
+# A snippet's frontmatter and the approved crates' manifest and lockfile
+# (src/approved.rs), read with rawr's own TOML parser, and the version
+# requirements a snippet names its dependencies by.
+semver = "1"
+toml_edit = { package = "rawr-toml-edit", path = "../toml/edit", default-features = false, features = ["parse", "display"] }
 # The playground render port (already in the bot through reqwest).
 http-body-util = { version = "0.1", optional = true }
 hyper = { version = "1", features = ["http1", "server"], optional = true }

@@ -7,7 +7,7 @@
 // playground's island it runs a plain program in the browser (the default),
 // edits it and sees the output follow, checks that an iced snippet and an
 // async one each show their message, restores an example from its address,
-// picks one from the menu, runs a program on a stand-in server, and checks
+// picks one from the menu, checks that the page offers no server, and checks
 // the phone layout. Then it opens the docs' Play page and runs its snippet.
 // It saves window screenshots in SHOTS_DIR (default target/web-check).
 // CHROME names the browser when it is not in the usual place.
@@ -35,11 +35,10 @@ const examples = [
   { name: "Word count", code: wordCount, group: "Rust" },
 ];
 const page = inject(readFileSync(join(site, "play.html"), "utf8"), {
-  snippet: { code: histogram }, examples, sitekey: null, shared: null, og,
+  snippet: { code: histogram }, examples, shared: null, og,
 });
 const brotli: string[] = [];
 const siteRuns: unknown[] = [];
-const renders: unknown[] = [];
 const types: Record<string, string> = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".svg": "image/svg+xml" };
 const body = (request: import("node:http").IncomingMessage) =>
   new Promise<string>((done) => {
@@ -53,11 +52,6 @@ const server = createServer(async (request, response) => {
   if (path === "/play/run" && request.method === "POST") {
     siteRuns.push(JSON.parse(await body(request)));
     return response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ kind: "text", status: 0, output: [{ stream: "stdout", text: "6\n" }] }));
-  }
-  // A stand-in for the server's renderer: a plain program's output.
-  if (path === "/play/render" && request.method === "POST") {
-    renders.push(JSON.parse(await body(request)));
-    return response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ kind: "text", status: 0, output: [{ stream: "stdout", text: "from the stand-in server\n" }] }));
   }
   if (path.startsWith("/web/")) {
     // The Worker's own /web handler, over the files in WEB_DIR.
@@ -154,14 +148,12 @@ const setCode = async (text: string) => {
   await on("Input.dispatchKeyEvent", { type: "keyUp", key: "a", code: "KeyA", modifiers: mod, windowsVirtualKeyCode: 65 });
   await on("Input.insertText", { text });
 };
-const radio = (group: string, name: string) => `[...document.querySelectorAll('[aria-label="${group}"] [role=radio]')].find((b) => b.textContent === ${JSON.stringify(name)})`;
 /** Picks an example from the menu, as a visitor does. */
 const pick = async (name: string) => {
   await clickOn(`document.querySelector('[aria-label="Examples"]')`);
   await until("the menu", `!!document.querySelector("[role=listbox]")`, 5000);
   await clickOn(`[...document.querySelectorAll("[role=option]")].find((o) => o.textContent === ${JSON.stringify(name)})`);
 };
-const checked = (group: string) => `document.querySelector('[aria-label="${group}"] [role=radio][aria-checked=true]')?.textContent`;
 
 let failed = false;
 const check = (ok: boolean, what: string) => {
@@ -176,7 +168,7 @@ try {
   await on("Page.navigate", { url: `http://127.0.0.1:${port}/play` });
   await until("the island", `document.readyState === "complete" && !!document.querySelector("#playground .cm-content")`);
   check(await evaluate(`!document.querySelector("script[src*=rawr_web]")`), "nothing loads rawr-web in the HTML");
-  check(await evaluate(`${checked("Where it runs")} === "Run in browser"`), "the browser is the default");
+  check(await evaluate(`!document.querySelector('[aria-label="Where it runs"]')`), "the page offers no server to run on");
   check(await evaluate(`document.documentElement.dataset.theme === "dark"`), "the page follows the system's dark theme");
   check(await evaluate(`(${editorText}).includes("struct Histogram")`), "the editor holds the page's snippet");
   check(await evaluate(`document.querySelectorAll("#playground .cm-content .k").length > 10`), "the editor highlights Rust in the site's classes");
@@ -210,15 +202,8 @@ try {
   await until("the histogram", `(document.querySelector("#out pre.term") || {}).textContent?.includes("#")`, 5000);
   check(await evaluate(`location.hash === "#letter-histogram" && (${editorText}).includes("struct Histogram")`), "picking an example loads it, runs it and names it in the address");
 
-  // On the server: the choice is in the address, and a run goes to /play/render.
-  await clickOn(radio("Where it runs", "Run on server"));
-  await until("the server's output", `(document.querySelector("#out pre.term") || {}).textContent?.includes("from the stand-in server")`, 5000);
-  check(await evaluate(`location.search === "?run=server"`), "choosing the server writes ?run=server");
-  check((renders.at(-1) as { code?: string })?.code?.includes("struct Histogram") === true, "the server gets the editor's code");
-  await shot("server.png");
-  await clickOn(radio("Where it runs", "Run in browser"));
 
-  // The phone: no sideways scroll, and the controls in three rows.
+  // The phone: no sideways scroll, and the controls in two rows at most.
   await on("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await on("Page.navigate", { url: `http://127.0.0.1:${port}/play` });
   await until("the island on a phone", `document.readyState === "complete" && !!document.querySelector("#playground .cm-content")`);
@@ -226,7 +211,7 @@ try {
   await shot("phone.png");
   check(await evaluate(`document.documentElement.scrollWidth <= innerWidth`), "a phone has no sideways scroll");
   const rows: number = await evaluate(`new Set([...document.querySelector(".tools").children].filter((e) => e.offsetParent).map((e) => Math.round(e.getBoundingClientRect().top))).size`);
-  check(rows === 3, `the phone's controls sit in three rows (${rows})`);
+  check(rows <= 2, `the phone's controls sit in two rows at most (${rows})`);
   check(await evaluate(`[...document.querySelector(".tools").querySelectorAll("button, input")].every((e) => e.getBoundingClientRect().right <= innerWidth - 15)`), "every control fits inside the gutter");
   await on("Emulation.setDeviceMetricsOverride", { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
 

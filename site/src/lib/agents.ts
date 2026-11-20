@@ -61,12 +61,13 @@ export function landingMarkdown(html: string): string {
 export function playMarkdown(guide: string, reference: string): string {
   const intro = `# rawr playground
 
-> ${SITE}/play runs Rust snippets in the browser. rawr itself is compiled to WebAssembly and loads into the page, so a plain program runs with no server. Run on server sends the snippet to rawr's server instead. The ?play bot in Discord runs snippets on that server, with the same limits.
+> ${SITE}/play runs Rust snippets in the browser, and only there. rawr itself is compiled to WebAssembly and loads into the page, so a program runs with no server. The ?play bot in Discord runs snippets on its own server.
 
-- Open: ${SITE}/play (an example: ${SITE}/play#<example>; the server: ${SITE}/play?run=server).
+- Open: ${SITE}/play (an example: ${SITE}/play#<example>).
 - Share: the Share button saves the code at ${SITE}/play/<id>.
-- A plain snippet uses rawr's std and no crates. A snippet that uses a crate of the bot's universe, such as iced, runs on that universe built for the browser: its window is drawn in the output pane and takes clicks and keys.
-- On the server, and in Discord, a snippet runs in a sandbox with no files, environment, process or network.
+- A plain snippet uses rawr's std and no crates. A snippet that uses iced, tokio or ratatui runs on the playground's prebuilt runner, which is built for the browser. Its window is drawn in the output pane and takes clicks and keys.
+- A snippet may start with a cargo-script frontmatter block. The page runs it when each dependency it names is one of the prebuilt runner's crates. The ?play bot also builds the approved crates that the Play reference lists.
+- In Discord, a snippet runs in a sandbox with no files, environment, process or network.
 - Discord: ${SITE}${mdPath("/docs/play/discord")}. The sandbox in full: ${SITE}${mdPath("/docs/reference/play")}.
 `;
   const body = toMarkdown(guide.replace(/<h1>[\s\S]*?<\/h1>/, ""), mdLink);

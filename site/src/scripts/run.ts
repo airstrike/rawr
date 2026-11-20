@@ -413,16 +413,16 @@ export function setup({ document, window, fetch, web, universe, warm = false }: 
           return;
         } catch (error) {
           // The universe didn't load: the server runs it.
-          console.warn("rawr: the browser's universe could not run this snippet;", error);
+          console.warn("rawr: the browser's prebuilt runner could not run this snippet;", error);
           clear();
           if (browserOnly) {
-            fail("The browser's universe could not load, and this program runs only there. " + (error instanceof Error ? error.message : String(error)));
+            fail("The browser's prebuilt runner could not load, and this program runs only there. " + (error instanceof Error ? error.message : String(error)));
             setState("done");
             return;
           }
         }
       } else if (browserOnly) {
-        fail("This program runs only in the browser's universe, which this page doesn't load.");
+        fail("This program runs only on the browser's prebuilt runner, which this page doesn't load.");
         setState("done");
         return;
       }

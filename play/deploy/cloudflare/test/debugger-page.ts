@@ -79,7 +79,7 @@ fn main() {
 
 const og = { title: "rawr playground", description: "", url: "http://localhost/play", image: "", alt: "" };
 const page = live ? "" : inject(readFileSync(join(site, "play.html"), "utf8"), {
-  snippet: { code: LOOPING }, examples: [], sitekey: null, shared: null, og,
+  snippet: { code: LOOPING }, examples: [], shared: null, og,
 });
 /** Each /web path the page asked for, in order. */
 const served: string[] = [];

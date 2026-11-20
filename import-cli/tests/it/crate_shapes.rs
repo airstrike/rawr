@@ -975,7 +975,9 @@ fn a_universe_runner_loads_a_marked_file_against_the_crates_bindings() {
         .output()
         .unwrap();
     assert!(built.status.success(), "{}", text(&built.stderr));
-    assert_eq!(text(&built.stdout), expected, "{}", text(&built.stderr));
+    // The build runs nothing: a runner its caller takes is the caller's to
+    // start.
+    assert_eq!(text(&built.stdout), "", "{}", text(&built.stderr));
 
     // The runner is where its caller asked for it (#1752).
     let runner = out.join("runner");

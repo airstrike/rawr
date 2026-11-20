@@ -28,7 +28,7 @@ import {
   type Snippet,
 } from "../src/play.ts";
 import { escape } from "../src/dashboard.ts";
-import { DATA, TURNSTILE_JS, inject, slug } from "../src/playpage.ts";
+import { DATA, inject, slug } from "../src/playpage.ts";
 
 const OG = {
   title: "Rawr Playground",
@@ -144,7 +144,6 @@ test("the Worker writes each request's data into the site's playground page", as
   const html = inject(page, {
     snippet: snippet({ code: "</script><script>alert(1)</script>" }),
     examples: [{ name: "Async tasks", code: "fn main() {} // </script><script>x()</script>", group: "Rust" }],
-    sitekey: "0xKEY",
     shared: "abcDEF1234",
     og: OG,
   });
@@ -152,19 +151,15 @@ test("the Worker writes each request's data into the site's playground page", as
   const data = playData(html);
   assert.equal(data.snippet.code, "</script><script>alert(1)</script>");
   assert.equal(data.shared, "abcDEF1234");
-  assert.equal(data.sitekey, "0xKEY");
-  assert.equal(data.pass, false);
   assert.deepEqual(data.examples, [{ name: "Async tasks", code: "fn main() {} // </script><script>x()</script>", group: "Rust", slug: "async-tasks" }]);
-  // Turnstile's script comes up front without a pass, and not with one.
-  assert.ok(html.includes(`<script src="${TURNSTILE_JS}" async defer></script>`));
-  const passed = inject(page, { snippet: snippet(), examples: [], sitekey: "0xKEY", pass: true, shared: null, og: OG });
-  assert.ok(!passed.includes("challenges.cloudflare.com/turnstile/v0/api.js\" async"));
-  assert.equal(playData(passed).pass, true);
-  assert.throws(() => inject("<html></html>", { snippet: snippet(), examples: [], sitekey: null, shared: null, og: OG }), /no #play-data/);
+  // The page runs in the browser only: it holds no browser check.
+  assert.deepEqual(Object.keys(data).sort(), ["examples", "shared", "snippet"]);
+  assert.ok(!html.includes("challenges.cloudflare.com/turnstile"));
+  assert.throws(() => inject("<html></html>", { snippet: snippet(), examples: [], shared: null, og: OG }), /no #play-data/);
 });
 
 test("the playground's link preview is the request's, once", async () => {
-  const html = inject(await built("play.html"), { snippet: snippet(), examples: [], sitekey: null, shared: "abcDEF1234", og: OG });
+  const html = inject(await built("play.html"), { snippet: snippet(), examples: [], shared: "abcDEF1234", og: OG });
   assert.equal(html.match(/property="og:title"/g)?.length, 1);
   assert.equal(html.match(/name="description"/g)?.length, 1);
   assert.ok(html.includes('<meta property="og:image" content="https://rawr.airstrike.fyi/og/card.png">'));
@@ -172,10 +167,10 @@ test("the playground's link preview is the request's, once", async () => {
   assert.ok(html.includes('<meta name="twitter:card" content="summary_large_image">'));
 });
 
-test("the playground page is the island, with Run in browser and Run on server, and loads no rawr-web up front", async () => {
+test("the playground page is the island, with no server to run on, and loads no rawr-web up front", async () => {
   const html = await built("play.html");
   assert.ok(html.includes("<astro-island"), "the island");
-  assert.ok(html.includes(">Run on server<") && html.includes(">Run in browser<"));
+  assert.ok(!html.includes("Run on server") && !html.includes("Where it runs"));
   assert.ok(!/<script[^>]*src="\/web\/rawr_web\.js"/.test(html), "rawr-web loads on demand");
   assert.ok(!html.includes('rel="modulepreload" href="/web/'));
   for (const href of ["/docs/play", "/bot", "/bot/invite"]) assert.ok(html.includes(`href="${href}"`), href);
