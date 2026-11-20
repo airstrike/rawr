@@ -3384,14 +3384,17 @@ pub(super) fn host_number_accepts(parameter: &crate::host::type_ref::Type, sourc
 
 /// Whether `member` of the imported enum `definition` is one of its
 /// variants. Any other member is an associated item, as torin's
-/// `Size::fill()` is beside its variant `Size::Fill`.
+/// `Size::fill()` is beside its variant `Size::Fill`. A linked enum's
+/// variant, as std's `fmt::Alignment::Left`, is the facade's associated
+/// value of its name instead.
 #[cfg(feature = "rust-import")]
 pub(super) fn names_variant(definition: &crate::host::type_def::Definition, member: &str) -> bool {
-    matches!(
-        definition.shape(),
-        crate::host::type_def::Shape::Enum { variants, .. }
-            if variants.iter().any(|variant| variant.name() == member)
-    )
+    definition.identity().imported().is_some()
+        && matches!(
+            definition.shape(),
+            crate::host::type_def::Shape::Enum { variants, .. }
+                if variants.iter().any(|variant| variant.name() == member)
+        )
 }
 
 #[cfg(feature = "rust-import")]

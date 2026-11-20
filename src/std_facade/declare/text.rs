@@ -67,6 +67,18 @@ impl super::Sink for Text {
         Ok(())
     }
 
+    fn variants(
+        &mut self,
+        path: &str,
+        names: &[&'static str],
+        non_exhaustive: bool,
+    ) -> Result<(), host::Error> {
+        self.step(format_args!(
+            "Variants {{ path: {path:?}, names: &{names:?}, non_exhaustive: {non_exhaustive} }}"
+        ));
+        Ok(())
+    }
+
     fn alias(&mut self, path: &str, target: &str) -> Result<(), host::Error> {
         self.step(format_args!(
             "Alias {{ path: {path:?}, target: {target:?} }}"

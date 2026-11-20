@@ -1922,11 +1922,22 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
             ..
         } if *code != "E0364" => builder.note(note.clone()),
         // After the enum's note, when it has one (`sections`).
+        // Each `#[non_exhaustive]` enum the first witness's `_` stands for
+        // follows the type, as rustc notes it.
         resolve::Error::NonExhaustive {
             ty,
             uncovered: None,
+            sealed,
             ..
-        } => builder.note(format!("the matched value is of type `{ty}`")),
+        } => sealed.iter().fold(
+            builder.note(format!("the matched value is of type `{ty}`")),
+            |builder, name| {
+                builder.note(format!(
+                    "`{name}` is marked as non-exhaustive, so a wildcard `_` is necessary to \
+                     match exhaustively"
+                ))
+            },
+        ),
         resolve::Error::Refutable {
             witnesses,
             ty,

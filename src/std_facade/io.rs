@@ -293,10 +293,13 @@ pub(super) fn bind(binds: &mut impl super::Bind) {
         };
     }
     kinds!(
-        NotFound PermissionDenied ConnectionRefused ConnectionReset ConnectionAborted
-        NotConnected AddrInUse AddrNotAvailable BrokenPipe AlreadyExists WouldBlock
-        InvalidInput InvalidData TimedOut WriteZero Interrupted Unsupported UnexpectedEof
-        OutOfMemory Other FileTooLarge
+        NotFound PermissionDenied ConnectionRefused ConnectionReset HostUnreachable
+        NetworkUnreachable ConnectionAborted NotConnected AddrInUse AddrNotAvailable
+        NetworkDown BrokenPipe AlreadyExists WouldBlock NotADirectory IsADirectory
+        DirectoryNotEmpty ReadOnlyFilesystem StaleNetworkFileHandle InvalidInput InvalidData
+        TimedOut WriteZero StorageFull NotSeekable QuotaExceeded FileTooLarge ResourceBusy
+        ExecutableFileBusy Deadlock CrossesDevices TooManyLinks InvalidFilename
+        ArgumentListTooLong Interrupted Unsupported UnexpectedEof OutOfMemory Other
     );
     bind("io::Error::new", |args| {
         let kind = read_value::<ErrorKind>(args[0], "ErrorKind")?;

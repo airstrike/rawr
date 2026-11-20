@@ -148,16 +148,20 @@ pub struct Field {
     imported_fingerprint: [u8; 32],
 }
 
-/// One source-visible imported enum variant.
+/// One source-visible enum variant: an imported enum's, or a linked
+/// enum's, as std's `fmt::Alignment::Left`.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub struct Variant {
     name: ImmutableString,
     fields: Box<[Field]>,
     constructible: bool,
-    imported: ImportedSelector,
+    /// The bridge's selector of an imported enum's variant. A linked
+    /// enum's variant has none: its value is the facade's associated value
+    /// of the variant's name, and a pattern tests it by `==`.
+    imported: Option<ImportedSelector>,
     #[cfg(feature = "rust-import")]
-    imported_fingerprint: [u8; 32],
+    imported_fingerprint: Option<[u8; 32]>,
     unsupported: Option<Box<Unsupported>>,
 }
 
@@ -1038,13 +1042,28 @@ impl Variant {
         constructible: bool,
         imported: rawr_import::surface::identity::Selector,
     ) -> Self {
-        let imported_fingerprint = imported.fingerprint();
+        let imported_fingerprint = Some(imported.fingerprint());
         Self {
             name,
             fields,
             constructible,
-            imported,
+            imported: Some(imported),
             imported_fingerprint,
+            unsupported: None,
+        }
+    }
+
+    /// A unit variant of a linked enum, whose value is the facade's
+    /// associated value `name` of the enum.
+    #[must_use]
+    pub(crate) fn linked_unit(name: ImmutableString) -> Self {
+        Self {
+            name,
+            fields: Box::default(),
+            constructible: true,
+            imported: None,
+            #[cfg(feature = "rust-import")]
+            imported_fingerprint: None,
             unsupported: None,
         }
     }
@@ -1082,9 +1101,11 @@ impl Variant {
         self.constructible
     }
 
+    /// The bridge's selector of an imported enum's variant; `None` for a
+    /// linked enum's.
     #[cfg(feature = "rust-import")]
-    pub(crate) const fn imported_identity(&self) -> &ImportedSelector {
-        &self.imported
+    pub(crate) const fn imported_identity(&self) -> Option<&ImportedSelector> {
+        self.imported.as_ref()
     }
 }
 
@@ -1302,7 +1323,7 @@ mod selector_hash_tests {
         name: &'a crate::ImmutableString,
         fields: &'a [Field],
         constructible: bool,
-        imported: &'a Selector,
+        imported: Option<&'a Selector>,
     }
 
     #[test]
@@ -1366,11 +1387,14 @@ mod selector_hash_tests {
                 name: &variant.name,
                 fields: &variant.fields,
                 constructible: variant.constructible,
-                imported: &variant.imported,
+                imported: variant.imported.as_ref(),
             });
             assert_eq!(writes(&variant), expected);
             assert_eq!(writes(&variant.clone()), expected);
-            assert_eq!(variant.imported_fingerprint, variant.imported.fingerprint());
+            assert_eq!(
+                variant.imported_fingerprint,
+                variant.imported.as_ref().map(Selector::fingerprint)
+            );
             variants.push(variant);
             fields.push(field);
         }

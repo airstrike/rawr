@@ -1277,6 +1277,9 @@ pub enum Error {
         /// The program's own enum whose variants the arms miss, where the
         /// error's file declares it.
         uncovered: Option<Box<Uncovered>>,
+        /// The `#[non_exhaustive]` enums whose `_` the first witness holds,
+        /// by name, each of which rustc notes needs a wildcard.
+        sealed: Box<[ImmutableString]>,
     },
     /// A pattern that must match every value, in a `let` without `else`, a
     /// `for` or a parameter, which misses some, which rustc refuses

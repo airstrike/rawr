@@ -12,7 +12,10 @@
 //!   stable Rust can name, with its header (`Table::impl_line`);
 //! - `items.tsv`: each definition, with its own stability and generics,
 //!   and its members (a trait's items, a type's inherent items, an enum's
-//!   variants) under its path. A trait's line ends with its supertraits,
+//!   variants) under its path. An enum's variant has its position in the
+//!   enum's declaration and its declaration (`Start(u64)`), and a
+//!   `#[non_exhaustive]` enum's line ends with `non_exhaustive`. A trait's
+//!   line ends with its supertraits,
 //!   and each of its members' with its declaration as a program writes it
 //!   (D711 step 2), naming types by their public paths, bare for the
 //!   prelude's. A free function's line ends with its declaration too, and
@@ -224,6 +227,10 @@ struct Table<'tcx> {
     /// Each free or inherent constant's line, which ends with its
     /// declaration: `const UNIX_EPOCH: std::time::SystemTime`.
     constants: BTreeMap<String, DefId>,
+    /// Each variant's line, with its enum and its position in the enum's
+    /// declaration, which ends with the variant's declaration once every
+    /// public path is known: `Start(u64)` of `std::io::SeekFrom::Start`.
+    variants: BTreeMap<String, (DefId, usize)>,
     /// Whether `ty` writes lifetimes: an inherent function's declaration
     /// does, for its borrow summary.
     lifetimes: std::cell::Cell<bool>,
@@ -255,6 +262,7 @@ fn table(tcx: TyCtxt<'_>, out: &Path) -> Result<(), String> {
         functions: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
+        variants: BTreeMap::new(),
         lifetimes: std::cell::Cell::new(false),
     };
     for (krate, name) in &roots {
@@ -436,6 +444,13 @@ impl<'tcx> Table<'tcx> {
             DefKind::Ctor(..) => tcx.parent(def_id),
             _ => def_id,
         };
+        // A variant a path names directly, as the prelude's `Some`, is
+        // written by its enum, with its position in the enum.
+        if tcx.def_kind(def_id) == DefKind::Variant {
+            let enumeration = tcx.parent(def_id);
+            self.item(enumeration, &definition_path(tcx, enumeration));
+            return;
+        }
         if !self.seen.insert(def_id) {
             return;
         }
@@ -455,9 +470,16 @@ impl<'tcx> Table<'tcx> {
         if kind_text(kind) == "macro" && self.items.contains_key(canonical) {
             return;
         }
+        // A `#[non_exhaustive]` enum's line ends with `non_exhaustive`: a
+        // program's pattern covers it only with a wildcard.
+        let sealed = kind == DefKind::Enum && tcx.adt_def(def_id).is_variant_list_non_exhaustive();
         self.items.insert(
             canonical.to_owned(),
-            format!("{}\t{own}\t{generics}", kind_text(kind)),
+            format!(
+                "{}\t{own}\t{generics}{}",
+                kind_text(kind),
+                if sealed { "\tnon_exhaustive" } else { "" }
+            ),
         );
         match kind {
             DefKind::Trait => {
@@ -481,12 +503,12 @@ impl<'tcx> Table<'tcx> {
                 }
             }
             DefKind::Enum => {
-                for variant in tcx.adt_def(def_id).variants() {
+                for (index, variant) in tcx.adt_def(def_id).variants().iter().enumerate() {
                     let stability = member_stability(tcx, variant.def_id, Some(own.clone()));
-                    self.items.insert(
-                        format!("{canonical}::{}", variant.name),
-                        format!("variant\t{stability}\t"),
-                    );
+                    let key = format!("{canonical}::{}", variant.name);
+                    self.items
+                        .insert(key.clone(), format!("variant\t{stability}\t{index}"));
+                    self.variants.insert(key, (def_id, index));
                 }
                 self.inherent(def_id, canonical);
             }
@@ -1182,6 +1204,48 @@ impl<'tcx> Table<'tcx> {
             if let Some(line) = self.items.get_mut(key) {
                 line.push('\t');
                 line.push_str(&clean(&format!("const {name}: {ty}")));
+            }
+        }
+        // A variant's line ends with its declaration, its fields' types in
+        // the public paths a program writes: `Left`, `Start(u64)`, `Named {
+        // field: T }`.
+        let variants = std::mem::take(&mut self.variants);
+        for (key, (enumeration, index)) in &variants {
+            let Some(variant) = tcx.adt_def(*enumeration).variants().iter().nth(*index) else {
+                continue;
+            };
+            let field = |field: &ty::FieldDef| {
+                self.ty(tcx
+                    .type_of(field.did)
+                    .instantiate_identity()
+                    .skip_norm_wip())
+            };
+            let declaration = match variant.ctor_kind() {
+                Some(CtorKind::Const) => variant.name.to_string(),
+                Some(CtorKind::Fn) => format!(
+                    "{}({})",
+                    variant.name,
+                    variant
+                        .fields
+                        .iter()
+                        .map(field)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                None => format!(
+                    "{} {{ {} }}",
+                    variant.name,
+                    variant
+                        .fields
+                        .iter()
+                        .map(|declared| format!("{}: {}", declared.name, field(declared)))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            };
+            if let Some(line) = self.items.get_mut(key) {
+                line.push('\t');
+                line.push_str(&clean(&declaration));
             }
         }
     }

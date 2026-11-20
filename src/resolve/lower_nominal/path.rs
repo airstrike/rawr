@@ -1813,6 +1813,9 @@ impl<'a> Parser<'a> {
         let Some(crate::host::Entry::Type(definition)) = host.entry(&owner) else {
             return Ok(None);
         };
+        if definition.identity().imported().is_none() {
+            return Ok(None);
+        }
         let definition = definition.clone();
         let dependency = host.type_owner(&owner).cloned();
         let variant = canonical.rsplit("::").next().unwrap_or_default().into();
@@ -1872,10 +1875,10 @@ impl<'a> Parser<'a> {
             .map(|_| self.inference.fresh())
             .collect::<Box<[_]>>();
         let fields = variant.fields().to_vec();
-        let rawr_import::surface::identity::Selector::EnumVariant { form, .. } =
+        let Some(selector @ rawr_import::surface::identity::Selector::EnumVariant { form, .. }) =
             variant.imported_identity()
         else {
-            unreachable!("an enum variant's selector names an enum variant")
+            unreachable!("an imported enum variant's selector names an enum variant")
         };
         let selected_owner = self.models.host.type_owner(&path).cloned();
         let (mut arguments, end) = match form {
@@ -2007,12 +2010,7 @@ impl<'a> Parser<'a> {
             output: output.clone(),
             receiver: None,
         };
-        let helper = self.push_imported_op(
-            &path,
-            variant.imported_identity(),
-            Some(imported),
-            construction,
-        )?;
+        let helper = self.push_imported_op(&path, selector, Some(imported), construction)?;
         Ok(ParsedExpr {
             prelude: origin::Fragment::default(),
             source: origin::Fragment::call(

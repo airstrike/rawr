@@ -1339,6 +1339,86 @@ main();
     );
 }
 
+/// A `match` on a std enum Rawr's std holds as std's own value covers it
+/// with an arm for each variant, as rustc's does: `fmt::Alignment`'s,
+/// `TryRecvError`'s and `RecvTimeoutError`'s, through `Option` and `Result`
+/// too, and by a glob of the variants. A `#[non_exhaustive]` one, as
+/// `IntErrorKind` or `io::ErrorKind`, still takes a wildcard (#2369).
+#[test]
+fn a_match_covers_a_held_std_enum_by_its_variants() {
+    let source = r#"
+use std::io::ErrorKind;
+use std::num::IntErrorKind;
+use std::sync::mpsc::{self, RecvTimeoutError, TryRecvError};
+use std::time::Duration;
+
+fn side(a: Option<std::fmt::Alignment>) -> &'static str {
+    use std::fmt::Alignment;
+    match a {
+        Some(Alignment::Left) => "left",
+        Some(Alignment::Right) => "right",
+        Some(Alignment::Center) => "center",
+        None => "none",
+    }
+}
+
+fn globbed(a: std::fmt::Alignment) -> &'static str {
+    use std::fmt::Alignment::*;
+    match a {
+        Left => "left",
+        Right => "right",
+        Center => "center",
+    }
+}
+
+fn kind(e: &IntErrorKind) -> &'static str {
+    match e {
+        IntErrorKind::Empty => "empty",
+        IntErrorKind::InvalidDigit => "digit",
+        IntErrorKind::PosOverflow | IntErrorKind::NegOverflow => "overflow",
+        IntErrorKind::Zero => "zero",
+        _ => "other",
+    }
+}
+
+fn io(k: ErrorKind) -> &'static str {
+    match k {
+        ErrorKind::NotFound => "missing",
+        ErrorKind::IsADirectory => "directory",
+        _ => "other",
+    }
+}
+
+fn main() {
+    println!("{} {} {}", side(Some(std::fmt::Alignment::Center)), side(None), globbed(std::fmt::Alignment::Right));
+    println!("{} {}", kind("".parse::<u8>().unwrap_err().kind()), kind("x".parse::<u8>().unwrap_err().kind()));
+    println!("{} {}", io(ErrorKind::IsADirectory), io(ErrorKind::Other));
+    let (tx, rx) = mpsc::channel::<i32>();
+    let tried = match rx.try_recv() {
+        Ok(v) => v,
+        Err(TryRecvError::Empty) => 1,
+        Err(TryRecvError::Disconnected) => 2,
+    };
+    drop(tx);
+    let timed = match rx.recv_timeout(Duration::from_millis(1)) {
+        Ok(v) => v,
+        Err(RecvTimeoutError::Timeout) => 3,
+        Err(RecvTimeoutError::Disconnected) => 4,
+    };
+    let direct = match rx.try_recv().unwrap_err() {
+        TryRecvError::Empty => "empty",
+        TryRecvError::Disconnected => "gone",
+    };
+    println!("{tried} {timed} {direct}");
+}
+main();
+"#;
+    assert_eq!(
+        printed(source),
+        "center none right\nempty digit\ndirectory other\n1 4 gone\n"
+    );
+}
+
 /// `text.into()` of a `&str` or a `String` where a `Box<dyn Error>` is
 /// expected, by a `let`'s type or a body's, is std's `From` for the box
 /// (#2345).

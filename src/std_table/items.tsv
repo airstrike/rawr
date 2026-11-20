@@ -6,8 +6,8 @@ alloc::alloc::dealloc	fn	s		fn dealloc(ptr: *mut u8, layout: std::alloc::Layout)
 alloc::alloc::handle_alloc_error	fn	s		fn handle_alloc_error(layout: std::alloc::Layout) -> !
 alloc::alloc::realloc	fn	s		fn realloc(ptr: *mut u8, layout: std::alloc::Layout, new_size: usize) -> *mut u8
 alloc::borrow::Cow	enum	s	'a B
-alloc::borrow::Cow::Borrowed	variant	s	
-alloc::borrow::Cow::Owned	variant	s	
+alloc::borrow::Cow::Borrowed	variant	s	0	Borrowed(&B)
+alloc::borrow::Cow::Owned	variant	s	1	Owned(<B as ToOwned>::Owned)
 alloc::borrow::Cow::into_owned	assoc-fn	s		fn into_owned(self) -> <B as ToOwned>::Owned
 alloc::borrow::Cow::is_borrowed	assoc-fn	u cow_is_borrowed 65143 -		fn is_borrowed(c: &std::borrow::Cow<'_, B>) -> bool
 alloc::borrow::Cow::is_owned	assoc-fn	u cow_is_borrowed 65143 -		fn is_owned(c: &std::borrow::Cow<'_, B>) -> bool
@@ -80,8 +80,8 @@ alloc::bstr::ByteString	struct	u bstr 134915 -
 alloc::collections::TryReserveError	struct	s	
 alloc::collections::TryReserveError::kind	assoc-fn	u try_reserve_kind 48043 Uncertain how much info should be exposed		fn kind(&self) -> std::collections::TryReserveErrorKind
 alloc::collections::TryReserveErrorKind	enum	u try_reserve_kind 48043 Uncertain how much info should be exposed	
-alloc::collections::TryReserveErrorKind::AllocError	variant	u try_reserve_kind 48043 Uncertain how much info should be exposed	
-alloc::collections::TryReserveErrorKind::CapacityOverflow	variant	u try_reserve_kind 48043 Uncertain how much info should be exposed	
+alloc::collections::TryReserveErrorKind::AllocError	variant	u try_reserve_kind 48043 Uncertain how much info should be exposed	1	AllocError { layout: std::alloc::Layout, non_exhaustive: () }
+alloc::collections::TryReserveErrorKind::CapacityOverflow	variant	u try_reserve_kind 48043 Uncertain how much info should be exposed	0	CapacityOverflow
 alloc::collections::binary_heap::BinaryHeap	struct	s	T A=std::alloc::Global?allocator_api#32838
 alloc::collections::binary_heap::BinaryHeap::allocator	assoc-fn	u allocator_api 32838 -		fn allocator(&self) -> &A
 alloc::collections::binary_heap::BinaryHeap::append	assoc-fn	s		fn append(&mut self, other: &mut std::collections::BinaryHeap<T, A>)
@@ -208,8 +208,8 @@ alloc::collections::btree::map::UnorderedKeyError	struct	u btree_cursors 107540 
 alloc::collections::btree::map::Values	struct	s	'a K V
 alloc::collections::btree::map::ValuesMut	struct	s	'a K V
 alloc::collections::btree::map::entry::Entry	enum	s	'a K V A=std::alloc::Global?allocator_api#32838
-alloc::collections::btree::map::entry::Entry::Occupied	variant	s	
-alloc::collections::btree::map::entry::Entry::Vacant	variant	s	
+alloc::collections::btree::map::entry::Entry::Occupied	variant	s	1	Occupied(std::collections::btree_map::OccupiedEntry<K, V, A>)
+alloc::collections::btree::map::entry::Entry::Vacant	variant	s	0	Vacant(std::collections::btree_map::VacantEntry<K, V, A>)
 alloc::collections::btree::map::entry::Entry::and_modify	assoc-fn	s		fn and_modify<F: FnOnce(&mut V)>(self, f: F) -> std::collections::btree_map::Entry<'a, K, V, A>
 alloc::collections::btree::map::entry::Entry::insert_entry	assoc-fn	s		fn insert_entry(self, value: V) -> std::collections::btree_map::OccupiedEntry<'a, K, V, A>
 alloc::collections::btree::map::entry::Entry::key	assoc-fn	s		fn key(&self) -> &K
@@ -308,8 +308,8 @@ alloc::collections::btree::set::Range	struct	s	'a T
 alloc::collections::btree::set::SymmetricDifference	struct	s	'a T
 alloc::collections::btree::set::Union	struct	s	'a T
 alloc::collections::btree::set::entry::Entry	enum	u btree_set_entry 133549 -	'a T A=std::alloc::Global?allocator_api#32838
-alloc::collections::btree::set::entry::Entry::Occupied	variant	u btree_set_entry 133549 -	
-alloc::collections::btree::set::entry::Entry::Vacant	variant	u btree_set_entry 133549 -	
+alloc::collections::btree::set::entry::Entry::Occupied	variant	u btree_set_entry 133549 -	0	Occupied(std::collections::btree_set::OccupiedEntry<T, A>)
+alloc::collections::btree::set::entry::Entry::Vacant	variant	u btree_set_entry 133549 -	1	Vacant(std::collections::btree_set::VacantEntry<T, A>)
 alloc::collections::btree::set::entry::Entry::get	assoc-fn	u btree_set_entry 133549 -		fn get(&self) -> &T
 alloc::collections::btree::set::entry::Entry::insert	assoc-fn	u btree_set_entry 133549 -		fn insert(self) -> std::collections::btree_set::OccupiedEntry<'a, T, A>
 alloc::collections::btree::set::entry::Entry::or_insert	assoc-fn	u btree_set_entry 133549 -		fn or_insert(self)
@@ -971,136 +971,136 @@ core::array::repeat	fn	s	T const:N	fn repeat<T: Clone>(val: T) -> [T; N]
 core::array::try_from_fn	fn	u array_try_from_fn 89379 -	R const:N F	fn try_from_fn<R, F: FnMut(usize) -> R>(cb: F) -> <<R as std::ops::Try>::Residual as std::ops::Residual<[<R as std::ops::Try>::Output; N]>>::TryType
 core::ascii::EscapeDefault	struct	s	
 core::ascii::ascii_char::AsciiChar	enum	u ascii_char 110998 -	
-core::ascii::ascii_char::AsciiChar::Acknowledge	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::Ampersand	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::Apostrophe	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::Asterisk	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::Backspace	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::Bell	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::Cancel	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::CapitalA	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::CapitalB	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::CapitalC	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::CapitalD	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::CapitalE	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::CapitalF	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::CapitalG	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::CapitalH	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::CapitalI	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::CapitalJ	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::CapitalK	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::CapitalL	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::CapitalM	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::CapitalN	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::CapitalO	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::CapitalP	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::CapitalQ	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::CapitalR	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::CapitalS	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::CapitalT	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::CapitalU	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::CapitalV	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::CapitalW	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::CapitalX	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::CapitalY	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::CapitalZ	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::CarriageReturn	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::CharacterTabulation	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::CircumflexAccent	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::Colon	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::Comma	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::CommercialAt	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::DataLinkEscape	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::Delete	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::DeviceControlFour	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::DeviceControlOne	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::DeviceControlThree	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::DeviceControlTwo	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::Digit0	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::Digit1	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::Digit2	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::Digit3	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::Digit4	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::Digit5	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::Digit6	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::Digit7	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::Digit8	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::Digit9	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::DollarSign	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::EndOfMedium	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::EndOfText	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::EndOfTransmission	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::EndOfTransmissionBlock	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::Enquiry	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::EqualsSign	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::Escape	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::ExclamationMark	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::FormFeed	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::FullStop	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::GraveAccent	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::GreaterThanSign	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::HyphenMinus	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::InformationSeparatorFour	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::InformationSeparatorOne	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::InformationSeparatorThree	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::InformationSeparatorTwo	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::LeftCurlyBracket	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::LeftParenthesis	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::LeftSquareBracket	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::LessThanSign	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::LineFeed	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::LineTabulation	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::LowLine	variant	u ascii_char_variants 110998 -	
+core::ascii::ascii_char::AsciiChar::Acknowledge	variant	u ascii_char_variants 110998 -	6	Acknowledge
+core::ascii::ascii_char::AsciiChar::Ampersand	variant	u ascii_char_variants 110998 -	38	Ampersand
+core::ascii::ascii_char::AsciiChar::Apostrophe	variant	u ascii_char_variants 110998 -	39	Apostrophe
+core::ascii::ascii_char::AsciiChar::Asterisk	variant	u ascii_char_variants 110998 -	42	Asterisk
+core::ascii::ascii_char::AsciiChar::Backspace	variant	u ascii_char_variants 110998 -	8	Backspace
+core::ascii::ascii_char::AsciiChar::Bell	variant	u ascii_char_variants 110998 -	7	Bell
+core::ascii::ascii_char::AsciiChar::Cancel	variant	u ascii_char_variants 110998 -	24	Cancel
+core::ascii::ascii_char::AsciiChar::CapitalA	variant	u ascii_char_variants 110998 -	65	CapitalA
+core::ascii::ascii_char::AsciiChar::CapitalB	variant	u ascii_char_variants 110998 -	66	CapitalB
+core::ascii::ascii_char::AsciiChar::CapitalC	variant	u ascii_char_variants 110998 -	67	CapitalC
+core::ascii::ascii_char::AsciiChar::CapitalD	variant	u ascii_char_variants 110998 -	68	CapitalD
+core::ascii::ascii_char::AsciiChar::CapitalE	variant	u ascii_char_variants 110998 -	69	CapitalE
+core::ascii::ascii_char::AsciiChar::CapitalF	variant	u ascii_char_variants 110998 -	70	CapitalF
+core::ascii::ascii_char::AsciiChar::CapitalG	variant	u ascii_char_variants 110998 -	71	CapitalG
+core::ascii::ascii_char::AsciiChar::CapitalH	variant	u ascii_char_variants 110998 -	72	CapitalH
+core::ascii::ascii_char::AsciiChar::CapitalI	variant	u ascii_char_variants 110998 -	73	CapitalI
+core::ascii::ascii_char::AsciiChar::CapitalJ	variant	u ascii_char_variants 110998 -	74	CapitalJ
+core::ascii::ascii_char::AsciiChar::CapitalK	variant	u ascii_char_variants 110998 -	75	CapitalK
+core::ascii::ascii_char::AsciiChar::CapitalL	variant	u ascii_char_variants 110998 -	76	CapitalL
+core::ascii::ascii_char::AsciiChar::CapitalM	variant	u ascii_char_variants 110998 -	77	CapitalM
+core::ascii::ascii_char::AsciiChar::CapitalN	variant	u ascii_char_variants 110998 -	78	CapitalN
+core::ascii::ascii_char::AsciiChar::CapitalO	variant	u ascii_char_variants 110998 -	79	CapitalO
+core::ascii::ascii_char::AsciiChar::CapitalP	variant	u ascii_char_variants 110998 -	80	CapitalP
+core::ascii::ascii_char::AsciiChar::CapitalQ	variant	u ascii_char_variants 110998 -	81	CapitalQ
+core::ascii::ascii_char::AsciiChar::CapitalR	variant	u ascii_char_variants 110998 -	82	CapitalR
+core::ascii::ascii_char::AsciiChar::CapitalS	variant	u ascii_char_variants 110998 -	83	CapitalS
+core::ascii::ascii_char::AsciiChar::CapitalT	variant	u ascii_char_variants 110998 -	84	CapitalT
+core::ascii::ascii_char::AsciiChar::CapitalU	variant	u ascii_char_variants 110998 -	85	CapitalU
+core::ascii::ascii_char::AsciiChar::CapitalV	variant	u ascii_char_variants 110998 -	86	CapitalV
+core::ascii::ascii_char::AsciiChar::CapitalW	variant	u ascii_char_variants 110998 -	87	CapitalW
+core::ascii::ascii_char::AsciiChar::CapitalX	variant	u ascii_char_variants 110998 -	88	CapitalX
+core::ascii::ascii_char::AsciiChar::CapitalY	variant	u ascii_char_variants 110998 -	89	CapitalY
+core::ascii::ascii_char::AsciiChar::CapitalZ	variant	u ascii_char_variants 110998 -	90	CapitalZ
+core::ascii::ascii_char::AsciiChar::CarriageReturn	variant	u ascii_char_variants 110998 -	13	CarriageReturn
+core::ascii::ascii_char::AsciiChar::CharacterTabulation	variant	u ascii_char_variants 110998 -	9	CharacterTabulation
+core::ascii::ascii_char::AsciiChar::CircumflexAccent	variant	u ascii_char_variants 110998 -	94	CircumflexAccent
+core::ascii::ascii_char::AsciiChar::Colon	variant	u ascii_char_variants 110998 -	58	Colon
+core::ascii::ascii_char::AsciiChar::Comma	variant	u ascii_char_variants 110998 -	44	Comma
+core::ascii::ascii_char::AsciiChar::CommercialAt	variant	u ascii_char_variants 110998 -	64	CommercialAt
+core::ascii::ascii_char::AsciiChar::DataLinkEscape	variant	u ascii_char_variants 110998 -	16	DataLinkEscape
+core::ascii::ascii_char::AsciiChar::Delete	variant	u ascii_char_variants 110998 -	127	Delete
+core::ascii::ascii_char::AsciiChar::DeviceControlFour	variant	u ascii_char_variants 110998 -	20	DeviceControlFour
+core::ascii::ascii_char::AsciiChar::DeviceControlOne	variant	u ascii_char_variants 110998 -	17	DeviceControlOne
+core::ascii::ascii_char::AsciiChar::DeviceControlThree	variant	u ascii_char_variants 110998 -	19	DeviceControlThree
+core::ascii::ascii_char::AsciiChar::DeviceControlTwo	variant	u ascii_char_variants 110998 -	18	DeviceControlTwo
+core::ascii::ascii_char::AsciiChar::Digit0	variant	u ascii_char_variants 110998 -	48	Digit0
+core::ascii::ascii_char::AsciiChar::Digit1	variant	u ascii_char_variants 110998 -	49	Digit1
+core::ascii::ascii_char::AsciiChar::Digit2	variant	u ascii_char_variants 110998 -	50	Digit2
+core::ascii::ascii_char::AsciiChar::Digit3	variant	u ascii_char_variants 110998 -	51	Digit3
+core::ascii::ascii_char::AsciiChar::Digit4	variant	u ascii_char_variants 110998 -	52	Digit4
+core::ascii::ascii_char::AsciiChar::Digit5	variant	u ascii_char_variants 110998 -	53	Digit5
+core::ascii::ascii_char::AsciiChar::Digit6	variant	u ascii_char_variants 110998 -	54	Digit6
+core::ascii::ascii_char::AsciiChar::Digit7	variant	u ascii_char_variants 110998 -	55	Digit7
+core::ascii::ascii_char::AsciiChar::Digit8	variant	u ascii_char_variants 110998 -	56	Digit8
+core::ascii::ascii_char::AsciiChar::Digit9	variant	u ascii_char_variants 110998 -	57	Digit9
+core::ascii::ascii_char::AsciiChar::DollarSign	variant	u ascii_char_variants 110998 -	36	DollarSign
+core::ascii::ascii_char::AsciiChar::EndOfMedium	variant	u ascii_char_variants 110998 -	25	EndOfMedium
+core::ascii::ascii_char::AsciiChar::EndOfText	variant	u ascii_char_variants 110998 -	3	EndOfText
+core::ascii::ascii_char::AsciiChar::EndOfTransmission	variant	u ascii_char_variants 110998 -	4	EndOfTransmission
+core::ascii::ascii_char::AsciiChar::EndOfTransmissionBlock	variant	u ascii_char_variants 110998 -	23	EndOfTransmissionBlock
+core::ascii::ascii_char::AsciiChar::Enquiry	variant	u ascii_char_variants 110998 -	5	Enquiry
+core::ascii::ascii_char::AsciiChar::EqualsSign	variant	u ascii_char_variants 110998 -	61	EqualsSign
+core::ascii::ascii_char::AsciiChar::Escape	variant	u ascii_char_variants 110998 -	27	Escape
+core::ascii::ascii_char::AsciiChar::ExclamationMark	variant	u ascii_char_variants 110998 -	33	ExclamationMark
+core::ascii::ascii_char::AsciiChar::FormFeed	variant	u ascii_char_variants 110998 -	12	FormFeed
+core::ascii::ascii_char::AsciiChar::FullStop	variant	u ascii_char_variants 110998 -	46	FullStop
+core::ascii::ascii_char::AsciiChar::GraveAccent	variant	u ascii_char_variants 110998 -	96	GraveAccent
+core::ascii::ascii_char::AsciiChar::GreaterThanSign	variant	u ascii_char_variants 110998 -	62	GreaterThanSign
+core::ascii::ascii_char::AsciiChar::HyphenMinus	variant	u ascii_char_variants 110998 -	45	HyphenMinus
+core::ascii::ascii_char::AsciiChar::InformationSeparatorFour	variant	u ascii_char_variants 110998 -	28	InformationSeparatorFour
+core::ascii::ascii_char::AsciiChar::InformationSeparatorOne	variant	u ascii_char_variants 110998 -	31	InformationSeparatorOne
+core::ascii::ascii_char::AsciiChar::InformationSeparatorThree	variant	u ascii_char_variants 110998 -	29	InformationSeparatorThree
+core::ascii::ascii_char::AsciiChar::InformationSeparatorTwo	variant	u ascii_char_variants 110998 -	30	InformationSeparatorTwo
+core::ascii::ascii_char::AsciiChar::LeftCurlyBracket	variant	u ascii_char_variants 110998 -	123	LeftCurlyBracket
+core::ascii::ascii_char::AsciiChar::LeftParenthesis	variant	u ascii_char_variants 110998 -	40	LeftParenthesis
+core::ascii::ascii_char::AsciiChar::LeftSquareBracket	variant	u ascii_char_variants 110998 -	91	LeftSquareBracket
+core::ascii::ascii_char::AsciiChar::LessThanSign	variant	u ascii_char_variants 110998 -	60	LessThanSign
+core::ascii::ascii_char::AsciiChar::LineFeed	variant	u ascii_char_variants 110998 -	10	LineFeed
+core::ascii::ascii_char::AsciiChar::LineTabulation	variant	u ascii_char_variants 110998 -	11	LineTabulation
+core::ascii::ascii_char::AsciiChar::LowLine	variant	u ascii_char_variants 110998 -	95	LowLine
 core::ascii::ascii_char::AsciiChar::MAX	assoc-const	u ascii_char 110998 -		const MAX: std::ascii::Char
 core::ascii::ascii_char::AsciiChar::MIN	assoc-const	u ascii_char 110998 -		const MIN: std::ascii::Char
-core::ascii::ascii_char::AsciiChar::NegativeAcknowledge	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::Null	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::NumberSign	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::PercentSign	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::PlusSign	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::QuestionMark	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::QuotationMark	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::ReverseSolidus	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::RightCurlyBracket	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::RightParenthesis	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::RightSquareBracket	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::Semicolon	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::ShiftIn	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::ShiftOut	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::SmallA	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::SmallB	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::SmallC	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::SmallD	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::SmallE	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::SmallF	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::SmallG	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::SmallH	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::SmallI	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::SmallJ	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::SmallK	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::SmallL	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::SmallM	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::SmallN	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::SmallO	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::SmallP	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::SmallQ	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::SmallR	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::SmallS	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::SmallT	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::SmallU	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::SmallV	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::SmallW	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::SmallX	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::SmallY	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::SmallZ	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::Solidus	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::Space	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::StartOfHeading	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::StartOfText	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::Substitute	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::SynchronousIdle	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::Tilde	variant	u ascii_char_variants 110998 -	
-core::ascii::ascii_char::AsciiChar::VerticalLine	variant	u ascii_char_variants 110998 -	
+core::ascii::ascii_char::AsciiChar::NegativeAcknowledge	variant	u ascii_char_variants 110998 -	21	NegativeAcknowledge
+core::ascii::ascii_char::AsciiChar::Null	variant	u ascii_char_variants 110998 -	0	Null
+core::ascii::ascii_char::AsciiChar::NumberSign	variant	u ascii_char_variants 110998 -	35	NumberSign
+core::ascii::ascii_char::AsciiChar::PercentSign	variant	u ascii_char_variants 110998 -	37	PercentSign
+core::ascii::ascii_char::AsciiChar::PlusSign	variant	u ascii_char_variants 110998 -	43	PlusSign
+core::ascii::ascii_char::AsciiChar::QuestionMark	variant	u ascii_char_variants 110998 -	63	QuestionMark
+core::ascii::ascii_char::AsciiChar::QuotationMark	variant	u ascii_char_variants 110998 -	34	QuotationMark
+core::ascii::ascii_char::AsciiChar::ReverseSolidus	variant	u ascii_char_variants 110998 -	92	ReverseSolidus
+core::ascii::ascii_char::AsciiChar::RightCurlyBracket	variant	u ascii_char_variants 110998 -	125	RightCurlyBracket
+core::ascii::ascii_char::AsciiChar::RightParenthesis	variant	u ascii_char_variants 110998 -	41	RightParenthesis
+core::ascii::ascii_char::AsciiChar::RightSquareBracket	variant	u ascii_char_variants 110998 -	93	RightSquareBracket
+core::ascii::ascii_char::AsciiChar::Semicolon	variant	u ascii_char_variants 110998 -	59	Semicolon
+core::ascii::ascii_char::AsciiChar::ShiftIn	variant	u ascii_char_variants 110998 -	15	ShiftIn
+core::ascii::ascii_char::AsciiChar::ShiftOut	variant	u ascii_char_variants 110998 -	14	ShiftOut
+core::ascii::ascii_char::AsciiChar::SmallA	variant	u ascii_char_variants 110998 -	97	SmallA
+core::ascii::ascii_char::AsciiChar::SmallB	variant	u ascii_char_variants 110998 -	98	SmallB
+core::ascii::ascii_char::AsciiChar::SmallC	variant	u ascii_char_variants 110998 -	99	SmallC
+core::ascii::ascii_char::AsciiChar::SmallD	variant	u ascii_char_variants 110998 -	100	SmallD
+core::ascii::ascii_char::AsciiChar::SmallE	variant	u ascii_char_variants 110998 -	101	SmallE
+core::ascii::ascii_char::AsciiChar::SmallF	variant	u ascii_char_variants 110998 -	102	SmallF
+core::ascii::ascii_char::AsciiChar::SmallG	variant	u ascii_char_variants 110998 -	103	SmallG
+core::ascii::ascii_char::AsciiChar::SmallH	variant	u ascii_char_variants 110998 -	104	SmallH
+core::ascii::ascii_char::AsciiChar::SmallI	variant	u ascii_char_variants 110998 -	105	SmallI
+core::ascii::ascii_char::AsciiChar::SmallJ	variant	u ascii_char_variants 110998 -	106	SmallJ
+core::ascii::ascii_char::AsciiChar::SmallK	variant	u ascii_char_variants 110998 -	107	SmallK
+core::ascii::ascii_char::AsciiChar::SmallL	variant	u ascii_char_variants 110998 -	108	SmallL
+core::ascii::ascii_char::AsciiChar::SmallM	variant	u ascii_char_variants 110998 -	109	SmallM
+core::ascii::ascii_char::AsciiChar::SmallN	variant	u ascii_char_variants 110998 -	110	SmallN
+core::ascii::ascii_char::AsciiChar::SmallO	variant	u ascii_char_variants 110998 -	111	SmallO
+core::ascii::ascii_char::AsciiChar::SmallP	variant	u ascii_char_variants 110998 -	112	SmallP
+core::ascii::ascii_char::AsciiChar::SmallQ	variant	u ascii_char_variants 110998 -	113	SmallQ
+core::ascii::ascii_char::AsciiChar::SmallR	variant	u ascii_char_variants 110998 -	114	SmallR
+core::ascii::ascii_char::AsciiChar::SmallS	variant	u ascii_char_variants 110998 -	115	SmallS
+core::ascii::ascii_char::AsciiChar::SmallT	variant	u ascii_char_variants 110998 -	116	SmallT
+core::ascii::ascii_char::AsciiChar::SmallU	variant	u ascii_char_variants 110998 -	117	SmallU
+core::ascii::ascii_char::AsciiChar::SmallV	variant	u ascii_char_variants 110998 -	118	SmallV
+core::ascii::ascii_char::AsciiChar::SmallW	variant	u ascii_char_variants 110998 -	119	SmallW
+core::ascii::ascii_char::AsciiChar::SmallX	variant	u ascii_char_variants 110998 -	120	SmallX
+core::ascii::ascii_char::AsciiChar::SmallY	variant	u ascii_char_variants 110998 -	121	SmallY
+core::ascii::ascii_char::AsciiChar::SmallZ	variant	u ascii_char_variants 110998 -	122	SmallZ
+core::ascii::ascii_char::AsciiChar::Solidus	variant	u ascii_char_variants 110998 -	47	Solidus
+core::ascii::ascii_char::AsciiChar::Space	variant	u ascii_char_variants 110998 -	32	Space
+core::ascii::ascii_char::AsciiChar::StartOfHeading	variant	u ascii_char_variants 110998 -	1	StartOfHeading
+core::ascii::ascii_char::AsciiChar::StartOfText	variant	u ascii_char_variants 110998 -	2	StartOfText
+core::ascii::ascii_char::AsciiChar::Substitute	variant	u ascii_char_variants 110998 -	26	Substitute
+core::ascii::ascii_char::AsciiChar::SynchronousIdle	variant	u ascii_char_variants 110998 -	22	SynchronousIdle
+core::ascii::ascii_char::AsciiChar::Tilde	variant	u ascii_char_variants 110998 -	126	Tilde
+core::ascii::ascii_char::AsciiChar::VerticalLine	variant	u ascii_char_variants 110998 -	124	VerticalLine
 core::ascii::ascii_char::AsciiChar::as_str	assoc-fn	u ascii_char 110998 -		fn as_str(&self) -> &str
 core::ascii::ascii_char::AsciiChar::digit	assoc-fn	u ascii_char 110998 -		fn digit(d: u8) -> Option<std::ascii::Char>
 core::ascii::ascii_char::AsciiChar::digit_unchecked	assoc-fn	u ascii_char 110998 -		fn digit_unchecked(d: u8) -> std::ascii::Char
@@ -1243,9 +1243,9 @@ core::cell::once::OnceCell::set	assoc-fn	s		fn set(&self, value: T) -> Result<()
 core::cell::once::OnceCell::take	assoc-fn	s		fn take(&mut self) -> Option<T>
 core::cell::once::OnceCell::try_insert	assoc-fn	u once_cell_try_insert 116693 -		fn try_insert(&self, value: T) -> Result<&T, (&T, T)>
 core::char::CharCase	enum	u titlecase 153892 -	
-core::char::CharCase::Lower	variant	u titlecase 153892 -	
-core::char::CharCase::Title	variant	u titlecase 153892 -	
-core::char::CharCase::Upper	variant	u titlecase 153892 -	
+core::char::CharCase::Lower	variant	u titlecase 153892 -	0	Lower
+core::char::CharCase::Title	variant	u titlecase 153892 -	1	Title
+core::char::CharCase::Upper	variant	u titlecase 153892 -	2	Upper
 core::char::EscapeDebug	struct	s	
 core::char::EscapeDefault	struct	s	
 core::char::EscapeUnicode	struct	s	
@@ -1290,9 +1290,9 @@ core::cmp::Ord::cmp	assoc-fn	s	required	fn cmp(&self, other: &Self) -> std::cmp:
 core::cmp::Ord::max	assoc-fn	s	provided	fn max(self, other: Self) -> Self
 core::cmp::Ord::min	assoc-fn	s	provided	fn min(self, other: Self) -> Self
 core::cmp::Ordering	enum	s	
-core::cmp::Ordering::Equal	variant	s	
-core::cmp::Ordering::Greater	variant	s	
-core::cmp::Ordering::Less	variant	s	
+core::cmp::Ordering::Equal	variant	s	1	Equal
+core::cmp::Ordering::Greater	variant	s	2	Greater
+core::cmp::Ordering::Less	variant	s	0	Less
 core::cmp::Ordering::is_eq	assoc-fn	s		fn is_eq(self) -> bool
 core::cmp::Ordering::is_ge	assoc-fn	s		fn is_ge(self) -> bool
 core::cmp::Ordering::is_gt	assoc-fn	s		fn is_gt(self) -> bool
@@ -1550,11 +1550,11 @@ core::ffi::c_str::CStr::to_str	assoc-fn	s		fn to_str(&self) -> Result<&str, std:
 core::ffi::c_str::CStr::to_string_lossy	assoc-fn	s		fn to_string_lossy(&self) -> std::borrow::Cow<'_, str>
 core::ffi::c_str::FromBytesUntilNulError	struct	s	
 core::ffi::c_str::FromBytesWithNulError	enum	s	
-core::ffi::c_str::FromBytesWithNulError::InteriorNul	variant	s	
-core::ffi::c_str::FromBytesWithNulError::NotNulTerminated	variant	s	
+core::ffi::c_str::FromBytesWithNulError::InteriorNul	variant	s	0	InteriorNul { position: usize }
+core::ffi::c_str::FromBytesWithNulError::NotNulTerminated	variant	s	1	NotNulTerminated
 core::ffi::c_void	enum	s	
-core::ffi::c_void::__variant1	variant	u c_void_variant - temporary implementation detail	
-core::ffi::c_void::__variant2	variant	u c_void_variant - temporary implementation detail	
+core::ffi::c_void::__variant1	variant	u c_void_variant - temporary implementation detail	0	__variant1
+core::ffi::c_void::__variant2	variant	u c_void_variant - temporary implementation detail	1	__variant2
 core::ffi::primitives::c_char	type	s		i8
 core::ffi::primitives::c_double	type	s		f64
 core::ffi::primitives::c_float	type	s		f32
@@ -1581,9 +1581,9 @@ core::field::Field::Type	assoc-type	u field_projections 145383 -	required	type T
 core::field::FieldRepresentingType	struct	u field_representing_type_raw - -	T const:VARIANT const:FIELD
 core::field::field_of	macro	u field_projections 145383 -	
 core::fmt::Alignment	enum	s	
-core::fmt::Alignment::Center	variant	s	
-core::fmt::Alignment::Left	variant	s	
-core::fmt::Alignment::Right	variant	s	
+core::fmt::Alignment::Center	variant	s	2	Center
+core::fmt::Alignment::Left	variant	s	0	Left
+core::fmt::Alignment::Right	variant	s	1	Right
 core::fmt::Arguments	struct	s	'a
 core::fmt::Arguments::as_statically_known_str	assoc-fn	u fmt_internals - internal to standard library		fn as_statically_known_str(&self) -> Option<&'static str>
 core::fmt::Arguments::as_str	assoc-fn	s		fn as_str(&self) -> Option<&'static str>
@@ -1596,8 +1596,8 @@ core::fmt::Binary::fmt	assoc-fn	s	required	fn fmt(&self, f: &mut std::fmt::Forma
 core::fmt::Debug	trait	s		
 core::fmt::Debug::fmt	assoc-fn	s	required	fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error>
 core::fmt::DebugAsHex	enum	u formatting_options 118117 -	
-core::fmt::DebugAsHex::Lower	variant	u formatting_options 118117 -	
-core::fmt::DebugAsHex::Upper	variant	u formatting_options 118117 -	
+core::fmt::DebugAsHex::Lower	variant	u formatting_options 118117 -	0	Lower
+core::fmt::DebugAsHex::Upper	variant	u formatting_options 118117 -	1	Upper
 core::fmt::Display	trait	s		
 core::fmt::Display::fmt	assoc-fn	s	required	fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error>
 core::fmt::Error	struct	s	
@@ -1665,8 +1665,8 @@ core::fmt::Pointer	trait	s
 core::fmt::Pointer::fmt	assoc-fn	s	required	fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error>
 core::fmt::Result	type	s		Result<(), std::fmt::Error>
 core::fmt::Sign	enum	u formatting_options 118117 -	
-core::fmt::Sign::Minus	variant	u formatting_options 118117 -	
-core::fmt::Sign::Plus	variant	u formatting_options 118117 -	
+core::fmt::Sign::Minus	variant	u formatting_options 118117 -	1	Minus
+core::fmt::Sign::Plus	variant	u formatting_options 118117 -	0	Plus
 core::fmt::UpperExp	trait	s		
 core::fmt::UpperExp::fmt	assoc-fn	s	required	fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error>
 core::fmt::UpperHex	trait	s		
@@ -1768,10 +1768,10 @@ core::hash::sip::SipHasher13::new	assoc-fn	u hashmap_internals - -		fn new() -> 
 core::hash::sip::SipHasher13::new_with_keys	assoc-fn	u hashmap_internals - -		fn new_with_keys(key0: u64, key1: u64) -> std::hash::SipHasher13
 core::hash::sip::SipHasher::new	assoc-fn	s		fn new() -> std::hash::SipHasher
 core::hash::sip::SipHasher::new_with_keys	assoc-fn	s		fn new_with_keys(key0: u64, key1: u64) -> std::hash::SipHasher
-core::hint::Locality	enum	u hint_prefetch 146941 -	
-core::hint::Locality::L1	variant	u hint_prefetch 146941 -	
-core::hint::Locality::L2	variant	u hint_prefetch 146941 -	
-core::hint::Locality::L3	variant	u hint_prefetch 146941 -	
+core::hint::Locality	enum	u hint_prefetch 146941 -		non_exhaustive
+core::hint::Locality::L1	variant	u hint_prefetch 146941 -	2	L1
+core::hint::Locality::L2	variant	u hint_prefetch 146941 -	1	L2
+core::hint::Locality::L3	variant	u hint_prefetch 146941 -	0	L3
 core::hint::assert_unchecked	fn	s		fn assert_unchecked(cond: bool)
 core::hint::black_box	fn	s	T	fn black_box<T>(dummy: T) -> T
 core::hint::cold_path	fn	s		fn cold_path()
@@ -1789,11 +1789,11 @@ core::hint::unreachable_unchecked	fn	s		fn unreachable_unchecked() -> !
 core::index::Clamp	struct	u sliceindex_wrappers 146179 -	Idx
 core::index::Last	struct	u sliceindex_wrappers 146179 -	
 core::intrinsics::AtomicOrdering	enum	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	
-core::intrinsics::AtomicOrdering::AcqRel	variant	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	
-core::intrinsics::AtomicOrdering::Acquire	variant	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	
-core::intrinsics::AtomicOrdering::Relaxed	variant	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	
-core::intrinsics::AtomicOrdering::Release	variant	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	
-core::intrinsics::AtomicOrdering::SeqCst	variant	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	
+core::intrinsics::AtomicOrdering::AcqRel	variant	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	3	AcqRel
+core::intrinsics::AtomicOrdering::Acquire	variant	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	2	Acquire
+core::intrinsics::AtomicOrdering::Relaxed	variant	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	0	Relaxed
+core::intrinsics::AtomicOrdering::Release	variant	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	1	Release
+core::intrinsics::AtomicOrdering::SeqCst	variant	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	4	SeqCst
 core::intrinsics::abort	fn	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library		fn abort() -> !
 core::intrinsics::add_with_overflow	fn	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library	T	fn add_with_overflow<T: Copy>(x: T, y: T) -> (T, bool)
 core::intrinsics::aggregate_raw_ptr	fn	u core_intrinsics - -	P D M	fn aggregate_raw_ptr<P, D, M>(data: D, meta: M) -> P
@@ -1937,8 +1937,8 @@ core::intrinsics::minimumf32	fn	u core_intrinsics - intrinsics are unlikely to e
 core::intrinsics::minimumf64	fn	u core_intrinsics - intrinsics are unlikely to ever be stabilized, instead they should be used through stabilized interfaces in the rest of the standard library		fn minimumf64(x: f64, y: f64) -> f64
 core::intrinsics::mir::Assume	fn	u custom_mir - MIR is an implementation detail and extremely unstable		fn Assume(operand: bool)
 core::intrinsics::mir::BasicBlock	enum	u custom_mir - MIR is an implementation detail and extremely unstable	
-core::intrinsics::mir::BasicBlock::Cleanup	variant	u custom_mir - MIR is an implementation detail and extremely unstable	
-core::intrinsics::mir::BasicBlock::Normal	variant	u custom_mir - MIR is an implementation detail and extremely unstable	
+core::intrinsics::mir::BasicBlock::Cleanup	variant	u custom_mir - MIR is an implementation detail and extremely unstable	1	Cleanup
+core::intrinsics::mir::BasicBlock::Normal	variant	u custom_mir - MIR is an implementation detail and extremely unstable	0	Normal
 core::intrinsics::mir::Call	fn	u custom_mir - MIR is an implementation detail and extremely unstable		fn Call(call: (), goto: std::intrinsics::mir::ReturnToArg, unwind_action: std::intrinsics::mir::UnwindActionArg)
 core::intrinsics::mir::CastPtrToPtr	fn	u custom_mir - MIR is an implementation detail and extremely unstable	T U	fn CastPtrToPtr<T, U>(operand: T) -> U
 core::intrinsics::mir::CastTransmute	fn	u custom_mir - MIR is an implementation detail and extremely unstable	T U	fn CastTransmute<T, U>(operand: T) -> U
@@ -1967,8 +1967,8 @@ core::intrinsics::mir::UnwindContinue	fn	u custom_mir - MIR is an implementation
 core::intrinsics::mir::UnwindResume	fn	u custom_mir - MIR is an implementation detail and extremely unstable		fn UnwindResume()
 core::intrinsics::mir::UnwindTerminate	fn	u custom_mir - MIR is an implementation detail and extremely unstable		fn UnwindTerminate(reason: std::intrinsics::mir::UnwindTerminateReason) -> std::intrinsics::mir::UnwindActionArg
 core::intrinsics::mir::UnwindTerminateReason	enum	u custom_mir - MIR is an implementation detail and extremely unstable	
-core::intrinsics::mir::UnwindTerminateReason::Abi	variant	u custom_mir - MIR is an implementation detail and extremely unstable	
-core::intrinsics::mir::UnwindTerminateReason::InCleanup	variant	u custom_mir - MIR is an implementation detail and extremely unstable	
+core::intrinsics::mir::UnwindTerminateReason::Abi	variant	u custom_mir - MIR is an implementation detail and extremely unstable	0	Abi
+core::intrinsics::mir::UnwindTerminateReason::InCleanup	variant	u custom_mir - MIR is an implementation detail and extremely unstable	1	InCleanup
 core::intrinsics::mir::UnwindUnreachable	fn	u custom_mir - MIR is an implementation detail and extremely unstable		fn UnwindUnreachable() -> std::intrinsics::mir::UnwindActionArg
 core::intrinsics::mir::Variant	fn	u custom_mir - MIR is an implementation detail and extremely unstable	T	fn Variant<T>(place: T, index: u32)
 core::intrinsics::mir::__debuginfo	fn	u custom_mir - MIR is an implementation detail and extremely unstable	T	fn __debuginfo<T>(name: &'static str, s: T)
@@ -2152,50 +2152,50 @@ core::io::error::Error::last_os_error	assoc-fn	s		fn last_os_error() -> std::io:
 core::io::error::Error::new	assoc-fn	s		fn new<E: Into<Box<dyn std::error::Error + Sync + Send>>>(kind: std::io::ErrorKind, error: E) -> std::io::Error
 core::io::error::Error::other	assoc-fn	s		fn other<E: Into<Box<dyn std::error::Error + Sync + Send>>>(error: E) -> std::io::Error
 core::io::error::Error::raw_os_error	assoc-fn	s		fn raw_os_error(&self) -> Option<i32>
-core::io::error::ErrorKind	enum	s	
-core::io::error::ErrorKind::AddrInUse	variant	s	
-core::io::error::ErrorKind::AddrNotAvailable	variant	s	
-core::io::error::ErrorKind::AlreadyExists	variant	s	
-core::io::error::ErrorKind::ArgumentListTooLong	variant	s	
-core::io::error::ErrorKind::BrokenPipe	variant	s	
-core::io::error::ErrorKind::ConnectionAborted	variant	s	
-core::io::error::ErrorKind::ConnectionRefused	variant	s	
-core::io::error::ErrorKind::ConnectionReset	variant	s	
-core::io::error::ErrorKind::CrossesDevices	variant	s	
-core::io::error::ErrorKind::Deadlock	variant	s	
-core::io::error::ErrorKind::DirectoryNotEmpty	variant	s	
-core::io::error::ErrorKind::ExecutableFileBusy	variant	s	
-core::io::error::ErrorKind::FileTooLarge	variant	s	
-core::io::error::ErrorKind::FilesystemLoop	variant	u io_error_more 86442 -	
-core::io::error::ErrorKind::HostUnreachable	variant	s	
-core::io::error::ErrorKind::InProgress	variant	u io_error_inprogress 130840 -	
-core::io::error::ErrorKind::Interrupted	variant	s	
-core::io::error::ErrorKind::InvalidData	variant	s	
-core::io::error::ErrorKind::InvalidFilename	variant	s	
-core::io::error::ErrorKind::InvalidInput	variant	s	
-core::io::error::ErrorKind::IsADirectory	variant	s	
-core::io::error::ErrorKind::NetworkDown	variant	s	
-core::io::error::ErrorKind::NetworkUnreachable	variant	s	
-core::io::error::ErrorKind::NotADirectory	variant	s	
-core::io::error::ErrorKind::NotConnected	variant	s	
-core::io::error::ErrorKind::NotFound	variant	s	
-core::io::error::ErrorKind::NotSeekable	variant	s	
-core::io::error::ErrorKind::Other	variant	s	
-core::io::error::ErrorKind::OutOfMemory	variant	s	
-core::io::error::ErrorKind::PermissionDenied	variant	s	
-core::io::error::ErrorKind::QuotaExceeded	variant	s	
-core::io::error::ErrorKind::ReadOnlyFilesystem	variant	s	
-core::io::error::ErrorKind::ResourceBusy	variant	s	
-core::io::error::ErrorKind::StaleNetworkFileHandle	variant	s	
-core::io::error::ErrorKind::StorageFull	variant	s	
-core::io::error::ErrorKind::TimedOut	variant	s	
-core::io::error::ErrorKind::TooManyLinks	variant	s	
-core::io::error::ErrorKind::TooManyOpenFiles	variant	u io_error_too_many_open_files 158319 -	
-core::io::error::ErrorKind::Uncategorized	variant	u io_error_uncategorized - -	
-core::io::error::ErrorKind::UnexpectedEof	variant	s	
-core::io::error::ErrorKind::Unsupported	variant	s	
-core::io::error::ErrorKind::WouldBlock	variant	s	
-core::io::error::ErrorKind::WriteZero	variant	s	
+core::io::error::ErrorKind	enum	s		non_exhaustive
+core::io::error::ErrorKind::AddrInUse	variant	s	8	AddrInUse
+core::io::error::ErrorKind::AddrNotAvailable	variant	s	9	AddrNotAvailable
+core::io::error::ErrorKind::AlreadyExists	variant	s	12	AlreadyExists
+core::io::error::ErrorKind::ArgumentListTooLong	variant	s	34	ArgumentListTooLong
+core::io::error::ErrorKind::BrokenPipe	variant	s	11	BrokenPipe
+core::io::error::ErrorKind::ConnectionAborted	variant	s	6	ConnectionAborted
+core::io::error::ErrorKind::ConnectionRefused	variant	s	2	ConnectionRefused
+core::io::error::ErrorKind::ConnectionReset	variant	s	3	ConnectionReset
+core::io::error::ErrorKind::CrossesDevices	variant	s	31	CrossesDevices
+core::io::error::ErrorKind::Deadlock	variant	s	30	Deadlock
+core::io::error::ErrorKind::DirectoryNotEmpty	variant	s	16	DirectoryNotEmpty
+core::io::error::ErrorKind::ExecutableFileBusy	variant	s	29	ExecutableFileBusy
+core::io::error::ErrorKind::FileTooLarge	variant	s	27	FileTooLarge
+core::io::error::ErrorKind::FilesystemLoop	variant	u io_error_more 86442 -	18	FilesystemLoop
+core::io::error::ErrorKind::HostUnreachable	variant	s	4	HostUnreachable
+core::io::error::ErrorKind::InProgress	variant	u io_error_inprogress 130840 -	39	InProgress
+core::io::error::ErrorKind::Interrupted	variant	s	35	Interrupted
+core::io::error::ErrorKind::InvalidData	variant	s	21	InvalidData
+core::io::error::ErrorKind::InvalidFilename	variant	s	33	InvalidFilename
+core::io::error::ErrorKind::InvalidInput	variant	s	20	InvalidInput
+core::io::error::ErrorKind::IsADirectory	variant	s	15	IsADirectory
+core::io::error::ErrorKind::NetworkDown	variant	s	10	NetworkDown
+core::io::error::ErrorKind::NetworkUnreachable	variant	s	5	NetworkUnreachable
+core::io::error::ErrorKind::NotADirectory	variant	s	14	NotADirectory
+core::io::error::ErrorKind::NotConnected	variant	s	7	NotConnected
+core::io::error::ErrorKind::NotFound	variant	s	0	NotFound
+core::io::error::ErrorKind::NotSeekable	variant	s	25	NotSeekable
+core::io::error::ErrorKind::Other	variant	s	41	Other
+core::io::error::ErrorKind::OutOfMemory	variant	s	38	OutOfMemory
+core::io::error::ErrorKind::PermissionDenied	variant	s	1	PermissionDenied
+core::io::error::ErrorKind::QuotaExceeded	variant	s	26	QuotaExceeded
+core::io::error::ErrorKind::ReadOnlyFilesystem	variant	s	17	ReadOnlyFilesystem
+core::io::error::ErrorKind::ResourceBusy	variant	s	28	ResourceBusy
+core::io::error::ErrorKind::StaleNetworkFileHandle	variant	s	19	StaleNetworkFileHandle
+core::io::error::ErrorKind::StorageFull	variant	s	24	StorageFull
+core::io::error::ErrorKind::TimedOut	variant	s	22	TimedOut
+core::io::error::ErrorKind::TooManyLinks	variant	s	32	TooManyLinks
+core::io::error::ErrorKind::TooManyOpenFiles	variant	u io_error_too_many_open_files 158319 -	40	TooManyOpenFiles
+core::io::error::ErrorKind::Uncategorized	variant	u io_error_uncategorized - -	42	Uncategorized
+core::io::error::ErrorKind::UnexpectedEof	variant	s	37	UnexpectedEof
+core::io::error::ErrorKind::Unsupported	variant	s	36	Unsupported
+core::io::error::ErrorKind::WouldBlock	variant	s	13	WouldBlock
+core::io::error::ErrorKind::WriteZero	variant	s	23	WriteZero
 core::io::error::OsFunctions	struct	u core_io_internals - exposed only for libstd	
 core::io::error::RawOsError	type	u raw_os_error_ty 107792 -		i32
 core::io::error::Result	type	s	T	Result<T, std::io::Error>
@@ -2218,9 +2218,9 @@ core::io::seek::Seek::seek_relative	assoc-fn	s	provided	fn seek_relative(&mut se
 core::io::seek::Seek::stream_len	assoc-fn	u seek_stream_len 59359 -	provided	fn stream_len(&mut self) -> Result<u64, std::io::Error>
 core::io::seek::Seek::stream_position	assoc-fn	s	provided	fn stream_position(&mut self) -> Result<u64, std::io::Error>
 core::io::seek::SeekFrom	enum	s	
-core::io::seek::SeekFrom::Current	variant	s	
-core::io::seek::SeekFrom::End	variant	s	
-core::io::seek::SeekFrom::Start	variant	s	
+core::io::seek::SeekFrom::Current	variant	s	2	Current(i64)
+core::io::seek::SeekFrom::End	variant	s	1	End(i64)
+core::io::seek::SeekFrom::Start	variant	s	0	Start(u64)
 core::io::seek::stream_len_default	fn	u core_io_internals - exposed only for libstd	T	fn stream_len_default<T: std::io::Seek + ?Sized>(self_: &mut T) -> Result<u64, std::io::Error>
 core::io::size_hint::SizeHint	trait	u core_io_internals - exposed only for libstd		
 core::io::size_hint::SizeHint::lower_bound	assoc-fn	u core_io_internals - exposed only for libstd	required	fn lower_bound(&self) -> usize
@@ -2645,10 +2645,10 @@ core::mem::transmutability::TransmuteFrom::transmute	assoc-fn	u transmutability 
 core::mem::transmute_copy	fn	s	Src Dst	fn transmute_copy<Src: ?Sized, Dst>(src: &Src) -> Dst
 core::mem::transmute_neo	fn	u transmute_neo 155079 -	Src Dst	fn transmute_neo<Src, Dst>(src: Src) -> Dst
 core::mem::transmute_prefix	fn	u transmute_prefix 155079 -	Src Dst	fn transmute_prefix<Src, Dst>(src: Src) -> Dst
-core::mem::type_info::Abi	enum	u type_info 146922 -	
-core::mem::type_info::Abi::ExternC	variant	u type_info 146922 -	
-core::mem::type_info::Abi::ExternRust	variant	u type_info 146922 -	
-core::mem::type_info::Abi::Named	variant	u type_info 146922 -	
+core::mem::type_info::Abi	enum	u type_info 146922 -		non_exhaustive
+core::mem::type_info::Abi::ExternC	variant	u type_info 146922 -	2	ExternC
+core::mem::type_info::Abi::ExternRust	variant	u type_info 146922 -	1	ExternRust
+core::mem::type_info::Abi::Named	variant	u type_info 146922 -	0	Named(&str)
 core::mem::type_info::Array	struct	u type_info 146922 -	
 core::mem::type_info::Bool	struct	u type_info 146922 -	
 core::mem::type_info::Char	struct	u type_info 146922 -	
@@ -2662,10 +2662,10 @@ core::mem::type_info::FieldId::type_id	assoc-fn	u type_info 146922 -		fn type_id
 core::mem::type_info::Float	struct	u type_info 146922 -	
 core::mem::type_info::FnPtr	struct	u type_info 146922 -	
 core::mem::type_info::FnPtr::splatted	assoc-fn	u type_info 146922 -		fn splatted(&self) -> Option<u8>
-core::mem::type_info::Generic	enum	u type_info 146922 -	
-core::mem::type_info::Generic::Const	variant	u type_info 146922 -	
-core::mem::type_info::Generic::Lifetime	variant	u type_info 146922 -	
-core::mem::type_info::Generic::Type	variant	u type_info 146922 -	
+core::mem::type_info::Generic	enum	u type_info 146922 -		non_exhaustive
+core::mem::type_info::Generic::Const	variant	u type_info 146922 -	2	Const(std::mem::type_info::Const)
+core::mem::type_info::Generic::Lifetime	variant	u type_info 146922 -	0	Lifetime(std::mem::type_info::Lifetime)
+core::mem::type_info::Generic::Type	variant	u type_info 146922 -	1	Type(std::mem::type_info::GenericType)
 core::mem::type_info::GenericType	struct	u type_info 146922 -	
 core::mem::type_info::Int	struct	u type_info 146922 -	
 core::mem::type_info::Lifetime	struct	u type_info 146922 -	
@@ -2680,31 +2680,31 @@ core::mem::type_info::TraitImpl::get_vtable	assoc-fn	u type_info 146922 -		fn ge
 core::mem::type_info::Tuple	struct	u type_info 146922 -	
 core::mem::type_info::Type	struct	u type_info 146922 -	
 core::mem::type_info::Type::of	assoc-fn	u type_info 146922 -		fn of<T: ?Sized>() -> std::mem::type_info::Type
-core::mem::type_info::TypeKind	enum	u type_info 146922 -	
-core::mem::type_info::TypeKind::Array	variant	u type_info 146922 -	
-core::mem::type_info::TypeKind::Bool	variant	u type_info 146922 -	
-core::mem::type_info::TypeKind::Char	variant	u type_info 146922 -	
-core::mem::type_info::TypeKind::DynTrait	variant	u type_info 146922 -	
-core::mem::type_info::TypeKind::Enum	variant	u type_info 146922 -	
-core::mem::type_info::TypeKind::Float	variant	u type_info 146922 -	
-core::mem::type_info::TypeKind::FnPtr	variant	u type_info 146922 -	
-core::mem::type_info::TypeKind::Int	variant	u type_info 146922 -	
-core::mem::type_info::TypeKind::Other	variant	u type_info 146922 -	
-core::mem::type_info::TypeKind::Pointer	variant	u type_info 146922 -	
-core::mem::type_info::TypeKind::Reference	variant	u type_info 146922 -	
-core::mem::type_info::TypeKind::Slice	variant	u type_info 146922 -	
-core::mem::type_info::TypeKind::Str	variant	u type_info 146922 -	
-core::mem::type_info::TypeKind::Struct	variant	u type_info 146922 -	
-core::mem::type_info::TypeKind::Tuple	variant	u type_info 146922 -	
-core::mem::type_info::TypeKind::Union	variant	u type_info 146922 -	
+core::mem::type_info::TypeKind	enum	u type_info 146922 -		non_exhaustive
+core::mem::type_info::TypeKind::Array	variant	u type_info 146922 -	1	Array(std::mem::type_info::Array)
+core::mem::type_info::TypeKind::Bool	variant	u type_info 146922 -	7	Bool(std::mem::type_info::Bool)
+core::mem::type_info::TypeKind::Char	variant	u type_info 146922 -	8	Char(std::mem::type_info::Char)
+core::mem::type_info::TypeKind::DynTrait	variant	u type_info 146922 -	3	DynTrait(std::mem::type_info::DynTrait)
+core::mem::type_info::TypeKind::Enum	variant	u type_info 146922 -	5	Enum(std::mem::type_info::Enum)
+core::mem::type_info::TypeKind::Float	variant	u type_info 146922 -	10	Float(std::mem::type_info::Float)
+core::mem::type_info::TypeKind::FnPtr	variant	u type_info 146922 -	14	FnPtr(std::mem::type_info::FnPtr)
+core::mem::type_info::TypeKind::Int	variant	u type_info 146922 -	9	Int(std::mem::type_info::Int)
+core::mem::type_info::TypeKind::Other	variant	u type_info 146922 -	15	Other
+core::mem::type_info::TypeKind::Pointer	variant	u type_info 146922 -	13	Pointer(std::mem::type_info::Pointer)
+core::mem::type_info::TypeKind::Reference	variant	u type_info 146922 -	12	Reference(std::mem::type_info::Reference)
+core::mem::type_info::TypeKind::Slice	variant	u type_info 146922 -	2	Slice(std::mem::type_info::Slice)
+core::mem::type_info::TypeKind::Str	variant	u type_info 146922 -	11	Str(std::mem::type_info::Str)
+core::mem::type_info::TypeKind::Struct	variant	u type_info 146922 -	4	Struct(std::mem::type_info::Struct)
+core::mem::type_info::TypeKind::Tuple	variant	u type_info 146922 -	0	Tuple(std::mem::type_info::Tuple)
+core::mem::type_info::TypeKind::Union	variant	u type_info 146922 -	6	Union(std::mem::type_info::Union)
 core::mem::type_info::Union	struct	u type_info 146922 -	
 core::mem::type_info::Variant	struct	u type_info 146922 -	
 core::mem::uninitialized	fn	s	T	fn uninitialized<T>() -> T
 core::mem::variant_count	fn	u variant_count 73662 -	T	fn variant_count<T>() -> usize
 core::mem::zeroed	fn	s	T	fn zeroed<T>() -> T
 core::net::ip_addr::IpAddr	enum	s	
-core::net::ip_addr::IpAddr::V4	variant	s	
-core::net::ip_addr::IpAddr::V6	variant	s	
+core::net::ip_addr::IpAddr::V4	variant	s	0	V4(std::net::Ipv4Addr)
+core::net::ip_addr::IpAddr::V6	variant	s	1	V6(std::net::Ipv6Addr)
 core::net::ip_addr::IpAddr::as_octets	assoc-fn	u ip_as_octets 137259 -		fn as_octets(&self) -> &[u8]
 core::net::ip_addr::IpAddr::is_benchmarking	assoc-fn	u ip 27709 -		fn is_benchmarking(&self) -> bool
 core::net::ip_addr::IpAddr::is_documentation	assoc-fn	u ip 27709 -		fn is_documentation(&self) -> bool
@@ -2770,26 +2770,26 @@ core::net::ip_addr::Ipv6Addr::to_canonical	assoc-fn	s		fn to_canonical(&self) ->
 core::net::ip_addr::Ipv6Addr::to_ipv4	assoc-fn	s		fn to_ipv4(&self) -> Option<std::net::Ipv4Addr>
 core::net::ip_addr::Ipv6Addr::to_ipv4_mapped	assoc-fn	s		fn to_ipv4_mapped(&self) -> Option<std::net::Ipv4Addr>
 core::net::ip_addr::Ipv6MulticastScope	enum	u ip 27709 -	
-core::net::ip_addr::Ipv6MulticastScope::AdminLocal	variant	u ip 27709 -	
-core::net::ip_addr::Ipv6MulticastScope::Global	variant	u ip 27709 -	
-core::net::ip_addr::Ipv6MulticastScope::InterfaceLocal	variant	u ip 27709 -	
-core::net::ip_addr::Ipv6MulticastScope::LinkLocal	variant	u ip 27709 -	
-core::net::ip_addr::Ipv6MulticastScope::OrganizationLocal	variant	u ip 27709 -	
-core::net::ip_addr::Ipv6MulticastScope::RealmLocal	variant	u ip 27709 -	
-core::net::ip_addr::Ipv6MulticastScope::Reserved0	variant	u ip_multicast_reserved - not yet assigned by IETF	
-core::net::ip_addr::Ipv6MulticastScope::ReservedF	variant	u ip_multicast_reserved - not yet assigned by IETF	
-core::net::ip_addr::Ipv6MulticastScope::SiteLocal	variant	u ip 27709 -	
-core::net::ip_addr::Ipv6MulticastScope::Unassigned6	variant	u ip 27709 -	
-core::net::ip_addr::Ipv6MulticastScope::Unassigned7	variant	u ip 27709 -	
-core::net::ip_addr::Ipv6MulticastScope::Unassigned9	variant	u ip 27709 -	
-core::net::ip_addr::Ipv6MulticastScope::UnassignedA	variant	u ip 27709 -	
-core::net::ip_addr::Ipv6MulticastScope::UnassignedB	variant	u ip 27709 -	
-core::net::ip_addr::Ipv6MulticastScope::UnassignedC	variant	u ip 27709 -	
-core::net::ip_addr::Ipv6MulticastScope::UnassignedD	variant	u ip 27709 -	
+core::net::ip_addr::Ipv6MulticastScope::AdminLocal	variant	u ip 27709 -	4	AdminLocal
+core::net::ip_addr::Ipv6MulticastScope::Global	variant	u ip 27709 -	14	Global
+core::net::ip_addr::Ipv6MulticastScope::InterfaceLocal	variant	u ip 27709 -	1	InterfaceLocal
+core::net::ip_addr::Ipv6MulticastScope::LinkLocal	variant	u ip 27709 -	2	LinkLocal
+core::net::ip_addr::Ipv6MulticastScope::OrganizationLocal	variant	u ip 27709 -	8	OrganizationLocal
+core::net::ip_addr::Ipv6MulticastScope::RealmLocal	variant	u ip 27709 -	3	RealmLocal
+core::net::ip_addr::Ipv6MulticastScope::Reserved0	variant	u ip_multicast_reserved - not yet assigned by IETF	0	Reserved0
+core::net::ip_addr::Ipv6MulticastScope::ReservedF	variant	u ip_multicast_reserved - not yet assigned by IETF	15	ReservedF
+core::net::ip_addr::Ipv6MulticastScope::SiteLocal	variant	u ip 27709 -	5	SiteLocal
+core::net::ip_addr::Ipv6MulticastScope::Unassigned6	variant	u ip 27709 -	6	Unassigned6
+core::net::ip_addr::Ipv6MulticastScope::Unassigned7	variant	u ip 27709 -	7	Unassigned7
+core::net::ip_addr::Ipv6MulticastScope::Unassigned9	variant	u ip 27709 -	9	Unassigned9
+core::net::ip_addr::Ipv6MulticastScope::UnassignedA	variant	u ip 27709 -	10	UnassignedA
+core::net::ip_addr::Ipv6MulticastScope::UnassignedB	variant	u ip 27709 -	11	UnassignedB
+core::net::ip_addr::Ipv6MulticastScope::UnassignedC	variant	u ip 27709 -	12	UnassignedC
+core::net::ip_addr::Ipv6MulticastScope::UnassignedD	variant	u ip 27709 -	13	UnassignedD
 core::net::parser::AddrParseError	struct	s	
 core::net::socket_addr::SocketAddr	enum	s	
-core::net::socket_addr::SocketAddr::V4	variant	s	
-core::net::socket_addr::SocketAddr::V6	variant	s	
+core::net::socket_addr::SocketAddr::V4	variant	s	0	V4(std::net::SocketAddrV4)
+core::net::socket_addr::SocketAddr::V6	variant	s	1	V6(std::net::SocketAddrV6)
 core::net::socket_addr::SocketAddr::ip	assoc-fn	s		fn ip(&self) -> std::net::IpAddr
 core::net::socket_addr::SocketAddr::is_ipv4	assoc-fn	s		fn is_ipv4(&self) -> bool
 core::net::socket_addr::SocketAddr::is_ipv6	assoc-fn	s		fn is_ipv6(&self) -> bool
@@ -2817,19 +2817,19 @@ core::net::socket_addr::SocketAddrV6::set_ip	assoc-fn	s		fn set_ip(&mut self, ne
 core::net::socket_addr::SocketAddrV6::set_port	assoc-fn	s		fn set_port(&mut self, new_port: u16)
 core::net::socket_addr::SocketAddrV6::set_scope_id	assoc-fn	s		fn set_scope_id(&mut self, new_scope_id: u32)
 core::num::FpCategory	enum	s	
-core::num::FpCategory::Infinite	variant	s	
-core::num::FpCategory::Nan	variant	s	
-core::num::FpCategory::Normal	variant	s	
-core::num::FpCategory::Subnormal	variant	s	
-core::num::FpCategory::Zero	variant	s	
+core::num::FpCategory::Infinite	variant	s	1	Infinite
+core::num::FpCategory::Nan	variant	s	0	Nan
+core::num::FpCategory::Normal	variant	s	4	Normal
+core::num::FpCategory::Subnormal	variant	s	3	Subnormal
+core::num::FpCategory::Zero	variant	s	2	Zero
 core::num::can_not_overflow	fn	u std_internals - -	T	fn can_not_overflow<T>(radix: u32, is_signed_ty: bool, digits: &[u8]) -> bool
-core::num::error::IntErrorKind	enum	s	
-core::num::error::IntErrorKind::Empty	variant	s	
-core::num::error::IntErrorKind::InvalidDigit	variant	s	
-core::num::error::IntErrorKind::NegOverflow	variant	s	
-core::num::error::IntErrorKind::NotAPowerOfTwo	variant	u try_from_int_error_kind 153978 -	
-core::num::error::IntErrorKind::PosOverflow	variant	s	
-core::num::error::IntErrorKind::Zero	variant	s	
+core::num::error::IntErrorKind	enum	s		non_exhaustive
+core::num::error::IntErrorKind::Empty	variant	s	0	Empty
+core::num::error::IntErrorKind::InvalidDigit	variant	s	1	InvalidDigit
+core::num::error::IntErrorKind::NegOverflow	variant	s	3	NegOverflow
+core::num::error::IntErrorKind::NotAPowerOfTwo	variant	u try_from_int_error_kind 153978 -	5	NotAPowerOfTwo
+core::num::error::IntErrorKind::PosOverflow	variant	s	2	PosOverflow
+core::num::error::IntErrorKind::Zero	variant	s	4	Zero
 core::num::error::ParseIntError	struct	s	
 core::num::error::ParseIntError::kind	assoc-fn	s		fn kind(&self) -> &std::num::IntErrorKind
 core::num::error::TryFromIntError	struct	s	
@@ -2892,16 +2892,16 @@ core::num::imp::diy_float::Fp::normalize	assoc-fn	u core_private_diy_float - int
 core::num::imp::diy_float::Fp::normalize_to	assoc-fn	u core_private_diy_float - internal routines only exposed for testing		fn normalize_to(self, e: i16) -> core::num::imp::diy_float::Fp
 core::num::imp::flt2dec::MAX_SIG_DIGITS	const	u flt2dec - internal routines only exposed for testing		const MAX_SIG_DIGITS: usize
 core::num::imp::flt2dec::Sign	enum	u flt2dec - internal routines only exposed for testing	
-core::num::imp::flt2dec::Sign::Minus	variant	u flt2dec - internal routines only exposed for testing	
-core::num::imp::flt2dec::Sign::MinusPlus	variant	u flt2dec - internal routines only exposed for testing	
+core::num::imp::flt2dec::Sign::Minus	variant	u flt2dec - internal routines only exposed for testing	0	Minus
+core::num::imp::flt2dec::Sign::MinusPlus	variant	u flt2dec - internal routines only exposed for testing	1	MinusPlus
 core::num::imp::flt2dec::decoder::DecodableFloat	trait	u flt2dec - internal routines only exposed for testing		Copy
 core::num::imp::flt2dec::decoder::DecodableFloat::min_pos_norm_value	assoc-fn	u flt2dec - internal routines only exposed for testing	required	fn min_pos_norm_value() -> Self
 core::num::imp::flt2dec::decoder::Decoded	struct	u flt2dec - internal routines only exposed for testing	
 core::num::imp::flt2dec::decoder::FullDecoded	enum	u flt2dec - internal routines only exposed for testing	
-core::num::imp::flt2dec::decoder::FullDecoded::Finite	variant	u flt2dec - internal routines only exposed for testing	
-core::num::imp::flt2dec::decoder::FullDecoded::Infinite	variant	u flt2dec - internal routines only exposed for testing	
-core::num::imp::flt2dec::decoder::FullDecoded::Nan	variant	u flt2dec - internal routines only exposed for testing	
-core::num::imp::flt2dec::decoder::FullDecoded::Zero	variant	u flt2dec - internal routines only exposed for testing	
+core::num::imp::flt2dec::decoder::FullDecoded::Finite	variant	u flt2dec - internal routines only exposed for testing	3	Finite(core::num::imp::flt2dec::Decoded)
+core::num::imp::flt2dec::decoder::FullDecoded::Infinite	variant	u flt2dec - internal routines only exposed for testing	1	Infinite
+core::num::imp::flt2dec::decoder::FullDecoded::Nan	variant	u flt2dec - internal routines only exposed for testing	0	Nan
+core::num::imp::flt2dec::decoder::FullDecoded::Zero	variant	u flt2dec - internal routines only exposed for testing	2	Zero
 core::num::imp::flt2dec::decoder::decode	fn	u flt2dec - internal routines only exposed for testing	T	fn decode<T>(v: T) -> (bool, core::num::imp::flt2dec::FullDecoded)
 core::num::imp::flt2dec::estimator::estimate_scaling_factor	fn	u flt2dec - internal routines only exposed for testing		fn estimate_scaling_factor(mant: u64, exp: i16) -> i16
 core::num::imp::flt2dec::round_up	fn	u flt2dec - internal routines only exposed for testing		fn round_up(d: &mut [u8]) -> Option<u8>
@@ -2927,9 +2927,9 @@ core::num::imp::fmt::Formatted	struct	u numfmt - internal routines only exposed 
 core::num::imp::fmt::Formatted::len	assoc-fn	u numfmt - internal routines only exposed for testing		fn len(&self) -> usize
 core::num::imp::fmt::Formatted::write	assoc-fn	u numfmt - internal routines only exposed for testing		fn write(&self, out: &mut [u8]) -> Option<usize>
 core::num::imp::fmt::Part	enum	u numfmt - internal routines only exposed for testing	'a
-core::num::imp::fmt::Part::Copy	variant	u numfmt - internal routines only exposed for testing	
-core::num::imp::fmt::Part::Num	variant	u numfmt - internal routines only exposed for testing	
-core::num::imp::fmt::Part::Zero	variant	u numfmt - internal routines only exposed for testing	
+core::num::imp::fmt::Part::Copy	variant	u numfmt - internal routines only exposed for testing	2	Copy(&[u8])
+core::num::imp::fmt::Part::Num	variant	u numfmt - internal routines only exposed for testing	1	Num(u16)
+core::num::imp::fmt::Part::Zero	variant	u numfmt - internal routines only exposed for testing	0	Zero(usize)
 core::num::imp::fmt::Part::len	assoc-fn	u numfmt - internal routines only exposed for testing		fn len(&self) -> usize
 core::num::imp::fmt::Part::write	assoc-fn	u numfmt - internal routines only exposed for testing		fn write(&self, out: &mut [u8]) -> Option<usize>
 core::num::imp::traits::Float	trait	u num_internals - internal routines only exposed for testing		Sized + std::ops::Div<Output = Self> + std::ops::Neg<Output = Self> + std::ops::Mul<Output = Self> + std::ops::Add<Output = Self> + std::fmt::Debug + PartialEq + PartialOrd + Default + Clone + Copy
@@ -3227,8 +3227,8 @@ core::ops::bit::Shr::shr	assoc-fn	s	required	fn shr(self, rhs: Rhs) -> Self::Out
 core::ops::bit::ShrAssign	trait	s	Rhs=Self	
 core::ops::bit::ShrAssign::shr_assign	assoc-fn	s	required	fn shr_assign(&mut self, rhs: Rhs)
 core::ops::control_flow::ControlFlow	enum	s	B C=()
-core::ops::control_flow::ControlFlow::Break	variant	s	
-core::ops::control_flow::ControlFlow::Continue	variant	s	
+core::ops::control_flow::ControlFlow::Break	variant	s	1	Break(B)
+core::ops::control_flow::ControlFlow::Continue	variant	s	0	Continue(C)
 core::ops::control_flow::ControlFlow::break_ok	assoc-fn	s		fn break_ok(self) -> Result<B, C>
 core::ops::control_flow::ControlFlow::break_value	assoc-fn	s		fn break_value(self) -> Option<B>
 core::ops::control_flow::ControlFlow::continue_ok	assoc-fn	s		fn continue_ok(self) -> Result<C, B>
@@ -3243,8 +3243,8 @@ core::ops::coroutine::Coroutine::Return	assoc-type	u coroutine_trait 43122 -	req
 core::ops::coroutine::Coroutine::Yield	assoc-type	u coroutine_trait 43122 -	required	type Yield
 core::ops::coroutine::Coroutine::resume	assoc-fn	u coroutine_trait 43122 -	required	fn resume(self: std::pin::Pin<&mut Self>, arg: R) -> std::ops::CoroutineState<Self::Yield, Self::Return>
 core::ops::coroutine::CoroutineState	enum	u coroutine_trait 43122 -	Y R
-core::ops::coroutine::CoroutineState::Complete	variant	u coroutine_trait 43122 -	
-core::ops::coroutine::CoroutineState::Yielded	variant	u coroutine_trait 43122 -	
+core::ops::coroutine::CoroutineState::Complete	variant	u coroutine_trait 43122 -	1	Complete(R)
+core::ops::coroutine::CoroutineState::Yielded	variant	u coroutine_trait 43122 -	0	Yielded(Y)
 core::ops::deref::Deref	trait	s		
 core::ops::deref::Deref::Target	assoc-type	s	required	type Target: ?Sized
 core::ops::deref::Deref::deref	assoc-fn	s	required	fn deref(&self) -> &Self::Target
@@ -3270,9 +3270,9 @@ core::ops::index::Index::index	assoc-fn	s	required	fn index(&self, index: Idx) -
 core::ops::index::IndexMut	trait	s	Idx	std::ops::Index<Idx>
 core::ops::index::IndexMut::index_mut	assoc-fn	s	required	fn index_mut(&mut self, index: Idx) -> &mut Self::Output
 core::ops::range::Bound	enum	s	T
-core::ops::range::Bound::Excluded	variant	s	
-core::ops::range::Bound::Included	variant	s	
-core::ops::range::Bound::Unbounded	variant	s	
+core::ops::range::Bound::Excluded	variant	s	1	Excluded(T)
+core::ops::range::Bound::Included	variant	s	0	Included(T)
+core::ops::range::Bound::Unbounded	variant	s	2	Unbounded
 core::ops::range::Bound::as_mut	assoc-fn	u bound_as_ref 80996 -		fn as_mut(&mut self) -> std::collections::Bound<&mut T>
 core::ops::range::Bound::as_ref	assoc-fn	s		fn as_ref(&self) -> std::collections::Bound<&T>
 core::ops::range::Bound::cloned	assoc-fn	s	std::collections::Bound<&T>	fn cloned(self) -> std::collections::Bound<T> where T: Clone
@@ -3284,9 +3284,9 @@ core::ops::range::IntoBounds::into_bounds	assoc-fn	u range_into_bounds 136903 -	
 core::ops::range::OneSidedRange	trait	u one_sided_range 69780 -	T	std::ops::RangeBounds<T>
 core::ops::range::OneSidedRange::bound	assoc-fn	u one_sided_range 69780 -	required	fn bound(self) -> (std::ops::OneSidedRangeBound, T)
 core::ops::range::OneSidedRangeBound	enum	u one_sided_range 69780 -	
-core::ops::range::OneSidedRangeBound::End	variant	u one_sided_range 69780 -	
-core::ops::range::OneSidedRangeBound::EndInclusive	variant	u one_sided_range 69780 -	
-core::ops::range::OneSidedRangeBound::StartInclusive	variant	u one_sided_range 69780 -	
+core::ops::range::OneSidedRangeBound::End	variant	u one_sided_range 69780 -	1	End
+core::ops::range::OneSidedRangeBound::EndInclusive	variant	u one_sided_range 69780 -	2	EndInclusive
+core::ops::range::OneSidedRangeBound::StartInclusive	variant	u one_sided_range 69780 -	0	StartInclusive
 core::ops::range::Range	struct	s	Idx
 core::ops::range::Range::contains	assoc-fn	s		fn contains<U: PartialOrd<Idx> + ?Sized>(&self, item: &U) -> bool where Idx: PartialOrd<U>
 core::ops::range::Range::is_empty	assoc-fn	s		fn is_empty(&self) -> bool where Idx: PartialOrd
@@ -3325,8 +3325,8 @@ core::option::IntoIter	struct	s	A
 core::option::Iter	struct	s	'a A
 core::option::IterMut	struct	s	'a A
 core::option::Option	enum	s	T
-core::option::Option::None	variant	s	
-core::option::Option::Some	variant	s	
+core::option::Option::None	variant	s	0	None
+core::option::Option::Some	variant	s	1	Some(T)
 core::option::Option::and	assoc-fn	s		fn and<U>(self, optb: Option<U>) -> Option<U>
 core::option::Option::and_then	assoc-fn	s		fn and_then<U, F: FnOnce(T) -> Option<U>>(self, f: F) -> Option<U>
 core::option::Option::as_deref	assoc-fn	s		fn as_deref(&self) -> Option<&<T as std::ops::Deref>::Target> where T: std::ops::Deref
@@ -3409,9 +3409,9 @@ core::panic::unwind_safe::AssertUnwindSafe	struct	s	T
 core::panic::unwind_safe::RefUnwindSafe	trait	s		
 core::panic::unwind_safe::UnwindSafe	trait	s		
 core::panicking::AssertKind	enum	u panic_internals - internal details of the implementation of the `panic!` and related macros	
-core::panicking::AssertKind::Eq	variant	u panic_internals - internal details of the implementation of the `panic!` and related macros	
-core::panicking::AssertKind::Match	variant	u panic_internals - internal details of the implementation of the `panic!` and related macros	
-core::panicking::AssertKind::Ne	variant	u panic_internals - internal details of the implementation of the `panic!` and related macros	
+core::panicking::AssertKind::Eq	variant	u panic_internals - internal details of the implementation of the `panic!` and related macros	0	Eq
+core::panicking::AssertKind::Match	variant	u panic_internals - internal details of the implementation of the `panic!` and related macros	2	Match
+core::panicking::AssertKind::Ne	variant	u panic_internals - internal details of the implementation of the `panic!` and related macros	1	Ne
 core::panicking::assert_failed	fn	u panic_internals - internal details of the implementation of the `panic!` and related macros	T U	fn assert_failed<T: std::fmt::Debug + ?Sized, U: std::fmt::Debug + ?Sized>(kind: core::panicking::AssertKind, left: &T, right: &U, args: Option<std::fmt::Arguments<'_>>) -> !
 core::panicking::assert_matches_failed	fn	u panic_internals - internal details of the implementation of the `panic!` and related macros	T	fn assert_matches_failed<T: std::fmt::Debug + ?Sized>(left: &T, right: &str, args: Option<std::fmt::Arguments<'_>>) -> !
 core::panicking::const_panic_fmt	fn	u panic_internals - internal details of the implementation of the `panic!` and related macros		fn const_panic_fmt(fmt: std::fmt::Arguments<'_>) -> !
@@ -3620,8 +3620,8 @@ core::result::IntoIter	struct	s	T
 core::result::Iter	struct	s	'a T
 core::result::IterMut	struct	s	'a T
 core::result::Result	enum	s	T E
-core::result::Result::Err	variant	s	
-core::result::Result::Ok	variant	s	
+core::result::Result::Err	variant	s	1	Err(E)
+core::result::Result::Ok	variant	s	0	Ok(T)
 core::result::Result::and	assoc-fn	s		fn and<U>(self, res: Result<U, E>) -> Result<U, E>
 core::result::Result::and_then	assoc-fn	s		fn and_then<U, F: FnOnce(T) -> Result<U, E>>(self, op: F) -> Result<U, E>
 core::result::Result::as_deref	assoc-fn	s		fn as_deref(&self) -> Result<&<T as std::ops::Deref>::Target, &E> where T: std::ops::Deref
@@ -3661,8 +3661,8 @@ core::result::Result::unwrap_or_default	assoc-fn	s		fn unwrap_or_default(self) -
 core::result::Result::unwrap_or_else	assoc-fn	s		fn unwrap_or_else<F: FnOnce(E) -> T>(self, op: F) -> T
 core::result::Result::unwrap_unchecked	assoc-fn	s		fn unwrap_unchecked(self) -> T
 core::slice::GetDisjointMutError	enum	s	
-core::slice::GetDisjointMutError::IndexOutOfBounds	variant	s	
-core::slice::GetDisjointMutError::OverlappingIndices	variant	s	
+core::slice::GetDisjointMutError::IndexOutOfBounds	variant	s	0	IndexOutOfBounds
+core::slice::GetDisjointMutError::OverlappingIndices	variant	s	1	OverlappingIndices
 core::slice::GetDisjointMutIndex	trait	u get_disjoint_mut_helpers - -		Clone
 core::slice::GetDisjointMutIndex::is_in_bounds	assoc-fn	u get_disjoint_mut_helpers - -	required	fn is_in_bounds(&self, len: usize) -> bool
 core::slice::GetDisjointMutIndex::is_overlapping	assoc-fn	u get_disjoint_mut_helpers - -	required	fn is_overlapping(&self, other: &Self) -> bool
@@ -3798,9 +3798,9 @@ core::str::pattern::ReverseSearcher::next_back	assoc-fn	u pattern 27721 API not 
 core::str::pattern::ReverseSearcher::next_match_back	assoc-fn	u pattern 27721 API not fully fleshed out and ready to be stabilized	provided	fn next_match_back(&mut self) -> Option<(usize, usize)>
 core::str::pattern::ReverseSearcher::next_reject_back	assoc-fn	u pattern 27721 API not fully fleshed out and ready to be stabilized	provided	fn next_reject_back(&mut self) -> Option<(usize, usize)>
 core::str::pattern::SearchStep	enum	u pattern 27721 API not fully fleshed out and ready to be stabilized	
-core::str::pattern::SearchStep::Done	variant	u pattern 27721 API not fully fleshed out and ready to be stabilized	
-core::str::pattern::SearchStep::Match	variant	u pattern 27721 API not fully fleshed out and ready to be stabilized	
-core::str::pattern::SearchStep::Reject	variant	u pattern 27721 API not fully fleshed out and ready to be stabilized	
+core::str::pattern::SearchStep::Done	variant	u pattern 27721 API not fully fleshed out and ready to be stabilized	2	Done
+core::str::pattern::SearchStep::Match	variant	u pattern 27721 API not fully fleshed out and ready to be stabilized	0	Match(usize, usize)
+core::str::pattern::SearchStep::Reject	variant	u pattern 27721 API not fully fleshed out and ready to be stabilized	1	Reject(usize, usize)
 core::str::pattern::Searcher	trait	u pattern 27721 API not fully fleshed out and ready to be stabilized	'a	
 core::str::pattern::Searcher::haystack	assoc-fn	u pattern 27721 API not fully fleshed out and ready to be stabilized	required	fn haystack(&self) -> &str
 core::str::pattern::Searcher::next	assoc-fn	u pattern 27721 API not fully fleshed out and ready to be stabilized	required	fn next(&mut self) -> std::str::pattern::SearchStep
@@ -3808,8 +3808,8 @@ core::str::pattern::Searcher::next_match	assoc-fn	u pattern 27721 API not fully 
 core::str::pattern::Searcher::next_reject	assoc-fn	u pattern 27721 API not fully fleshed out and ready to be stabilized	provided	fn next_reject(&mut self) -> Option<(usize, usize)>
 core::str::pattern::StrSearcher	struct	u pattern 27721 API not fully fleshed out and ready to be stabilized	'a 'b
 core::str::pattern::Utf8Pattern	enum	u pattern 27721 API not fully fleshed out and ready to be stabilized	'a
-core::str::pattern::Utf8Pattern::CharPattern	variant	u pattern 27721 API not fully fleshed out and ready to be stabilized	
-core::str::pattern::Utf8Pattern::StringPattern	variant	u pattern 27721 API not fully fleshed out and ready to be stabilized	
+core::str::pattern::Utf8Pattern::CharPattern	variant	u pattern 27721 API not fully fleshed out and ready to be stabilized	1	CharPattern(char)
+core::str::pattern::Utf8Pattern::StringPattern	variant	u pattern 27721 API not fully fleshed out and ready to be stabilized	0	StringPattern(&str)
 core::str::traits::FromStr	trait	s		Sized
 core::str::traits::FromStr::Err	assoc-type	s	required	type Err
 core::str::traits::FromStr::from_str	assoc-fn	s	required	fn from_str(s: &str) -> Result<Self, Self::Err>
@@ -3864,12 +3864,12 @@ core::sync::atomic::AtomicU32	type	s		std::sync::atomic::Atomic<u32>
 core::sync::atomic::AtomicU64	type	s		std::sync::atomic::Atomic<u64>
 core::sync::atomic::AtomicU8	type	s		std::sync::atomic::Atomic<u8>
 core::sync::atomic::AtomicUsize	type	s		std::sync::atomic::Atomic<usize>
-core::sync::atomic::Ordering	enum	s	
-core::sync::atomic::Ordering::AcqRel	variant	s	
-core::sync::atomic::Ordering::Acquire	variant	s	
-core::sync::atomic::Ordering::Relaxed	variant	s	
-core::sync::atomic::Ordering::Release	variant	s	
-core::sync::atomic::Ordering::SeqCst	variant	s	
+core::sync::atomic::Ordering	enum	s		non_exhaustive
+core::sync::atomic::Ordering::AcqRel	variant	s	3	AcqRel
+core::sync::atomic::Ordering::Acquire	variant	s	2	Acquire
+core::sync::atomic::Ordering::Relaxed	variant	s	0	Relaxed
+core::sync::atomic::Ordering::Release	variant	s	1	Release
+core::sync::atomic::Ordering::SeqCst	variant	s	4	SeqCst
 core::sync::atomic::atomic_compare_exchange	fn	u core_intrinsics - -	T	fn atomic_compare_exchange<T: Copy>(dst: *mut T, old: T, new: T, success: std::sync::atomic::Ordering, failure: std::sync::atomic::Ordering) -> Result<T, T>
 core::sync::atomic::compiler_fence	fn	s		fn compiler_fence(order: std::sync::atomic::Ordering)
 core::sync::atomic::fence	fn	s		fn fence(order: std::sync::atomic::Ordering)
@@ -3884,8 +3884,8 @@ core::sync::sync_view::SyncView::new	assoc-fn	u exclusive_wrapper 98407 -		fn ne
 core::task::poll::Poll	enum	s	T
 core::task::poll::Poll::FINISHED	assoc-const	u async_gen_internals - -		const FINISHED: std::task::Poll<Option<T>>
 core::task::poll::Poll::PENDING	assoc-const	u async_gen_internals - -		const PENDING: std::task::Poll<Option<T>>
-core::task::poll::Poll::Pending	variant	s	
-core::task::poll::Poll::Ready	variant	s	
+core::task::poll::Poll::Pending	variant	s	1	Pending
+core::task::poll::Poll::Ready	variant	s	0	Ready(T)
 core::task::poll::Poll::async_gen_ready	assoc-fn	u async_gen_internals - -	std::task::Poll<Option<T>>	fn async_gen_ready(t: T) -> std::task::Poll<Option<T>>
 core::task::poll::Poll::is_pending	assoc-fn	s		fn is_pending(&self) -> bool
 core::task::poll::Poll::is_ready	assoc-fn	s		fn is_ready(&self) -> bool
@@ -4011,9 +4011,9 @@ core::wtf8::CodePoint::to_trail_surrogate	assoc-fn	u wtf8_internals - this is in
 core::wtf8::CodePoint::to_u32	assoc-fn	u wtf8_internals - this is internal code for representing OsStr on some platforms and not a public API		fn to_u32(&self) -> u32
 core::wtf8::EncodeWide	struct	s	'a
 core::wtf8::Utf8BoundaryError	enum	u wtf8_internals - this is internal code for representing OsStr on some platforms and not a public API	
-core::wtf8::Utf8BoundaryError::BetweenSurrogates	variant	u wtf8_internals - this is internal code for representing OsStr on some platforms and not a public API	
-core::wtf8::Utf8BoundaryError::NotABoundary	variant	u wtf8_internals - this is internal code for representing OsStr on some platforms and not a public API	
-core::wtf8::Utf8BoundaryError::OutOfBounds	variant	u wtf8_internals - this is internal code for representing OsStr on some platforms and not a public API	
+core::wtf8::Utf8BoundaryError::BetweenSurrogates	variant	u wtf8_internals - this is internal code for representing OsStr on some platforms and not a public API	2	BetweenSurrogates
+core::wtf8::Utf8BoundaryError::NotABoundary	variant	u wtf8_internals - this is internal code for representing OsStr on some platforms and not a public API	0	NotABoundary
+core::wtf8::Utf8BoundaryError::OutOfBounds	variant	u wtf8_internals - this is internal code for representing OsStr on some platforms and not a public API	1	OutOfBounds
 core::wtf8::Wtf8	struct	u wtf8_internals - this is internal code for representing OsStr on some platforms and not a public API	
 core::wtf8::Wtf8::as_bytes	assoc-fn	u wtf8_internals - this is internal code for representing OsStr on some platforms and not a public API		fn as_bytes(&self) -> &[u8]
 core::wtf8::Wtf8::as_str	assoc-fn	u wtf8_internals - this is internal code for representing OsStr on some platforms and not a public API		fn as_str(&self) -> Result<&str, std::str::Utf8Error>
@@ -5556,14 +5556,14 @@ std::backtrace::Backtrace::force_capture	assoc-fn	s		fn force_capture() -> std::
 std::backtrace::Backtrace::frames	assoc-fn	u backtrace_frames 79676 -		fn frames(&'a self) -> &'a [std::backtrace::BacktraceFrame]
 std::backtrace::Backtrace::status	assoc-fn	s		fn status(&self) -> std::backtrace::BacktraceStatus
 std::backtrace::BacktraceFrame	struct	u backtrace_frames 79676 -	
-std::backtrace::BacktraceStatus	enum	s	
-std::backtrace::BacktraceStatus::Captured	variant	s	
-std::backtrace::BacktraceStatus::Disabled	variant	s	
-std::backtrace::BacktraceStatus::Unsupported	variant	s	
+std::backtrace::BacktraceStatus	enum	s		non_exhaustive
+std::backtrace::BacktraceStatus::Captured	variant	s	2	Captured
+std::backtrace::BacktraceStatus::Disabled	variant	s	1	Disabled
+std::backtrace::BacktraceStatus::Unsupported	variant	s	0	Unsupported
 std::collections::hash::map::Drain	struct	s	'a K V A=std::alloc::Global?allocator_api#32838
 std::collections::hash::map::Entry	enum	s	'a K V A=std::alloc::Global?allocator_api#32838
-std::collections::hash::map::Entry::Occupied	variant	s	
-std::collections::hash::map::Entry::Vacant	variant	s	
+std::collections::hash::map::Entry::Occupied	variant	s	0	Occupied(std::collections::hash_map::OccupiedEntry<K, V, A>)
+std::collections::hash::map::Entry::Vacant	variant	s	1	Vacant(std::collections::hash_map::VacantEntry<K, V, A>)
 std::collections::hash::map::Entry::and_modify	assoc-fn	s		fn and_modify<F: FnOnce(&mut V)>(self, f: F) -> std::collections::hash_map::Entry<'a, K, V, A>
 std::collections::hash::map::Entry::insert_entry	assoc-fn	s		fn insert_entry(self, value: V) -> std::collections::hash_map::OccupiedEntry<'a, K, V, A>
 std::collections::hash::map::Entry::key	assoc-fn	s		fn key(&self) -> &K
@@ -5638,8 +5638,8 @@ std::collections::hash::map::ValuesMut	struct	s	'a K V
 std::collections::hash::set::Difference	struct	s	'a T S A=std::alloc::Global?allocator_api#32838
 std::collections::hash::set::Drain	struct	s	'a K A=std::alloc::Global?allocator_api#32838
 std::collections::hash::set::Entry	enum	u hash_set_entry 60896 -	'a T S A=std::alloc::Global?allocator_api#32838
-std::collections::hash::set::Entry::Occupied	variant	u hash_set_entry 60896 -	
-std::collections::hash::set::Entry::Vacant	variant	u hash_set_entry 60896 -	
+std::collections::hash::set::Entry::Occupied	variant	u hash_set_entry 60896 -	0	Occupied(std::collections::hash_set::OccupiedEntry<T, S, A>)
+std::collections::hash::set::Entry::Vacant	variant	u hash_set_entry 60896 -	1	Vacant(std::collections::hash_set::VacantEntry<T, S, A>)
 std::collections::hash::set::Entry::get	assoc-fn	u hash_set_entry 60896 -		fn get(&self) -> &T
 std::collections::hash::set::Entry::insert	assoc-fn	u hash_set_entry 60896 -		fn insert(self) -> std::collections::hash_set::OccupiedEntry<'a, T, S, A> where T: std::hash::Hash, S: std::hash::BuildHasher
 std::collections::hash::set::Entry::or_insert	assoc-fn	u hash_set_entry 60896 -		fn or_insert(self) where T: std::hash::Hash, S: std::hash::BuildHasher
@@ -5699,8 +5699,8 @@ std::env::ArgsOs	struct	s
 std::env::JoinPathsError	struct	s	
 std::env::SplitPaths	struct	s	'a
 std::env::VarError	enum	s	
-std::env::VarError::NotPresent	variant	s	
-std::env::VarError::NotUnicode	variant	s	
+std::env::VarError::NotPresent	variant	s	0	NotPresent
+std::env::VarError::NotUnicode	variant	s	1	NotUnicode(std::ffi::OsString)
 std::env::Vars	struct	s	
 std::env::VarsOs	struct	s	
 std::env::args	fn	s		fn args() -> std::env::Args
@@ -5836,8 +5836,8 @@ std::fs::Permissions::readonly	assoc-fn	s		fn readonly(&self) -> bool
 std::fs::Permissions::set_readonly	assoc-fn	s		fn set_readonly(&mut self, readonly: bool)
 std::fs::ReadDir	struct	s	
 std::fs::TryLockError	enum	s	
-std::fs::TryLockError::Error	variant	s	
-std::fs::TryLockError::WouldBlock	variant	s	
+std::fs::TryLockError::Error	variant	s	0	Error(std::io::Error)
+std::fs::TryLockError::WouldBlock	variant	s	1	WouldBlock
 std::fs::canonicalize	fn	s	P	fn canonicalize<P: AsRef<std::path::Path>>(path: P) -> Result<std::path::PathBuf, std::io::Error>
 std::fs::copy	fn	s	P Q	fn copy<P: AsRef<std::path::Path>, Q: AsRef<std::path::Path>>(from: P, to: Q) -> Result<u64, std::io::Error>
 std::fs::create_dir	fn	s	P	fn create_dir<P: AsRef<std::path::Path>>(path: P) -> Result<(), std::io::Error>
@@ -5963,9 +5963,9 @@ std::macros::print	macro	s
 std::macros::println	macro	s	
 std::macros::repetition_utils	macro	u hash_map_internals - -	
 std::net::Shutdown	enum	s	
-std::net::Shutdown::Both	variant	s	
-std::net::Shutdown::Read	variant	s	
-std::net::Shutdown::Write	variant	s	
+std::net::Shutdown::Both	variant	s	2	Both
+std::net::Shutdown::Read	variant	s	0	Read
+std::net::Shutdown::Write	variant	s	1	Write
 std::net::hostname::hostname	fn	u gethostname 135142 -		fn hostname() -> Result<std::ffi::OsString, std::io::Error>
 std::net::socket_addr::ToSocketAddrs	trait	s		
 std::net::socket_addr::ToSocketAddrs::Iter	assoc-type	s	required	type Iter: Iterator<Item = std::net::SocketAddr>
@@ -6039,10 +6039,10 @@ std::net::udp::UdpSocket::take_error	assoc-fn	s		fn take_error(&self) -> Result<
 std::net::udp::UdpSocket::try_clone	assoc-fn	s		fn try_clone(&self) -> Result<std::net::UdpSocket, std::io::Error>
 std::net::udp::UdpSocket::ttl	assoc-fn	s		fn ttl(&self) -> Result<u32, std::io::Error>
 std::net::udp::UdpSocket::write_timeout	assoc-fn	s		fn write_timeout(&self) -> Result<Option<std::time::Duration>, std::io::Error>
-std::panic::BacktraceStyle	enum	u panic_backtrace_config 93346 -	
-std::panic::BacktraceStyle::Full	variant	u panic_backtrace_config 93346 -	
-std::panic::BacktraceStyle::Off	variant	u panic_backtrace_config 93346 -	
-std::panic::BacktraceStyle::Short	variant	u panic_backtrace_config 93346 -	
+std::panic::BacktraceStyle	enum	u panic_backtrace_config 93346 -		non_exhaustive
+std::panic::BacktraceStyle::Full	variant	u panic_backtrace_config 93346 -	1	Full
+std::panic::BacktraceStyle::Off	variant	u panic_backtrace_config 93346 -	2	Off
+std::panic::BacktraceStyle::Short	variant	u panic_backtrace_config 93346 -	0	Short
 std::panic::PanicHookInfo	struct	s	'a
 std::panic::PanicHookInfo::can_unwind	assoc-fn	u panic_can_unwind 92988 -		fn can_unwind(&self) -> bool
 std::panic::PanicHookInfo::force_no_backtrace	assoc-fn	u panic_internals - internal details of the implementation of the `panic!` and related macros		fn force_no_backtrace(&self) -> bool
@@ -6059,8 +6059,8 @@ std::panic::resume_unwind	fn	s		fn resume_unwind(payload: Box<dyn std::any::Any 
 std::panic::set_backtrace_style	fn	u panic_backtrace_config 93346 -		fn set_backtrace_style(style: std::panic::BacktraceStyle)
 std::panicking::begin_panic	fn	u libstd_sys_internals - used by the panic! macro	M	fn begin_panic<M: std::any::Any + Send>(msg: M) -> !
 std::panicking::panic_count::MustAbort	enum	u update_panic_count - -	
-std::panicking::panic_count::MustAbort::AlwaysAbort	variant	u update_panic_count - -	
-std::panicking::panic_count::MustAbort::PanicInHook	variant	u update_panic_count - -	
+std::panicking::panic_count::MustAbort::AlwaysAbort	variant	u update_panic_count - -	0	AlwaysAbort
+std::panicking::panic_count::MustAbort::PanicInHook	variant	u update_panic_count - -	1	PanicInHook
 std::panicking::panic_count::count_is_zero	fn	u update_panic_count - -		fn count_is_zero() -> bool
 std::panicking::panic_count::decrease	fn	u update_panic_count - -		fn decrease()
 std::panicking::panic_count::finished_panic_hook	fn	u update_panic_count - -		fn finished_panic_hook()
@@ -6072,11 +6072,11 @@ std::panicking::take_hook	fn	s		fn take_hook() -> Box<dyn Fn<(&std::panic::Panic
 std::panicking::update_hook	fn	u panic_update_hook 92649 -	F	fn update_hook<F: Fn(&dyn Fn<(&std::panic::PanicHookInfo<'_>,), Output = ()> + Sync + Send, &std::panic::PanicHookInfo<'_>) + Sync + Send>(hook_fn: F)
 std::path::Ancestors	struct	s	'a
 std::path::Component	enum	s	'a
-std::path::Component::CurDir	variant	s	
-std::path::Component::Normal	variant	s	
-std::path::Component::ParentDir	variant	s	
-std::path::Component::Prefix	variant	s	
-std::path::Component::RootDir	variant	s	
+std::path::Component::CurDir	variant	s	2	CurDir
+std::path::Component::Normal	variant	s	4	Normal(&std::ffi::OsStr)
+std::path::Component::ParentDir	variant	s	3	ParentDir
+std::path::Component::Prefix	variant	s	0	Prefix(std::path::PrefixComponent)
+std::path::Component::RootDir	variant	s	1	RootDir
 std::path::Component::as_os_str	assoc-fn	s		fn as_os_str(self) -> &'a std::ffi::OsStr
 std::path::Components	struct	s	'a
 std::path::Components::as_path	assoc-fn	s		fn as_path(&self) -> &'a std::path::Path
@@ -6157,12 +6157,12 @@ std::path::PathBuf::try_reserve	assoc-fn	s		fn try_reserve(&mut self, additional
 std::path::PathBuf::try_reserve_exact	assoc-fn	s		fn try_reserve_exact(&mut self, additional: usize) -> Result<(), std::collections::TryReserveError>
 std::path::PathBuf::with_capacity	assoc-fn	s		fn with_capacity(capacity: usize) -> std::path::PathBuf
 std::path::Prefix	enum	s	'a
-std::path::Prefix::DeviceNS	variant	s	
-std::path::Prefix::Disk	variant	s	
-std::path::Prefix::UNC	variant	s	
-std::path::Prefix::Verbatim	variant	s	
-std::path::Prefix::VerbatimDisk	variant	s	
-std::path::Prefix::VerbatimUNC	variant	s	
+std::path::Prefix::DeviceNS	variant	s	3	DeviceNS(&std::ffi::OsStr)
+std::path::Prefix::Disk	variant	s	5	Disk(u8)
+std::path::Prefix::UNC	variant	s	4	UNC(&std::ffi::OsStr, &std::ffi::OsStr)
+std::path::Prefix::Verbatim	variant	s	0	Verbatim(&std::ffi::OsStr)
+std::path::Prefix::VerbatimDisk	variant	s	2	VerbatimDisk(u8)
+std::path::Prefix::VerbatimUNC	variant	s	1	VerbatimUNC(&std::ffi::OsStr, &std::ffi::OsStr)
 std::path::Prefix::is_verbatim	assoc-fn	s		fn is_verbatim(&self) -> bool
 std::path::PrefixComponent	struct	s	'a
 std::path::PrefixComponent::as_os_str	assoc-fn	s		fn as_os_str(&self) -> &'a std::ffi::OsStr
@@ -6274,8 +6274,8 @@ std::sync::mpmc::Sender::try_send	assoc-fn	u mpmc_channel 126840 -		fn try_send(
 std::sync::mpmc::TryIter	struct	u mpmc_channel 126840 -	'a T
 std::sync::mpmc::channel	fn	u mpmc_channel 126840 -	T	fn channel<T>() -> (std::sync::mpmc::Sender<T>, std::sync::mpmc::Receiver<T>)
 std::sync::mpmc::error::SendTimeoutError	enum	u mpmc_channel 126840 -	T
-std::sync::mpmc::error::SendTimeoutError::Disconnected	variant	u mpmc_channel 126840 -	
-std::sync::mpmc::error::SendTimeoutError::Timeout	variant	u mpmc_channel 126840 -	
+std::sync::mpmc::error::SendTimeoutError::Disconnected	variant	u mpmc_channel 126840 -	1	Disconnected(T)
+std::sync::mpmc::error::SendTimeoutError::Timeout	variant	u mpmc_channel 126840 -	0	Timeout(T)
 std::sync::mpmc::sync_channel	fn	u mpmc_channel 126840 -	T	fn sync_channel<T>(cap: usize) -> (std::sync::mpmc::Sender<T>, std::sync::mpmc::Receiver<T>)
 std::sync::mpsc::IntoIter	struct	s	T
 std::sync::mpsc::Iter	struct	s	'a T
@@ -6289,8 +6289,8 @@ std::sync::mpsc::Receiver::try_iter	assoc-fn	s		fn try_iter(&self) -> std::sync:
 std::sync::mpsc::Receiver::try_recv	assoc-fn	s		fn try_recv(&self) -> Result<T, std::sync::mpsc::TryRecvError>
 std::sync::mpsc::RecvError	struct	s	
 std::sync::mpsc::RecvTimeoutError	enum	s	
-std::sync::mpsc::RecvTimeoutError::Disconnected	variant	s	
-std::sync::mpsc::RecvTimeoutError::Timeout	variant	s	
+std::sync::mpsc::RecvTimeoutError::Disconnected	variant	s	1	Disconnected
+std::sync::mpsc::RecvTimeoutError::Timeout	variant	s	0	Timeout
 std::sync::mpsc::SendError	struct	s	T
 std::sync::mpsc::Sender	struct	s	T
 std::sync::mpsc::Sender::is_disconnected	assoc-fn	u mpsc_is_disconnected 153668 -		fn is_disconnected(&self) -> bool
@@ -6301,11 +6301,11 @@ std::sync::mpsc::SyncSender::send_timeout	assoc-fn	u std_internals - -		fn send_
 std::sync::mpsc::SyncSender::try_send	assoc-fn	s		fn try_send(&self, t: T) -> Result<(), std::sync::mpsc::TrySendError<T>>
 std::sync::mpsc::TryIter	struct	s	'a T
 std::sync::mpsc::TryRecvError	enum	s	
-std::sync::mpsc::TryRecvError::Disconnected	variant	s	
-std::sync::mpsc::TryRecvError::Empty	variant	s	
+std::sync::mpsc::TryRecvError::Disconnected	variant	s	1	Disconnected
+std::sync::mpsc::TryRecvError::Empty	variant	s	0	Empty
 std::sync::mpsc::TrySendError	enum	s	T
-std::sync::mpsc::TrySendError::Disconnected	variant	s	
-std::sync::mpsc::TrySendError::Full	variant	s	
+std::sync::mpsc::TrySendError::Disconnected	variant	s	1	Disconnected(T)
+std::sync::mpsc::TrySendError::Full	variant	s	0	Full(T)
 std::sync::mpsc::channel	fn	s	T	fn channel<T>() -> (std::sync::mpsc::Sender<T>, std::sync::mpsc::Receiver<T>)
 std::sync::mpsc::sync_channel	fn	s	T	fn sync_channel<T>(bound: usize) -> (std::sync::mpsc::SyncSender<T>, std::sync::mpsc::Receiver<T>)
 std::sync::nonpoison::TryLockResult	type	u sync_nonpoison 134645 -	Guard	Result<Guard, std::sync::nonpoison::WouldBlock>
@@ -6391,13 +6391,13 @@ std::sync::oneshot::Receiver::recv_deadline	assoc-fn	u oneshot_channel 143674 -	
 std::sync::oneshot::Receiver::recv_timeout	assoc-fn	u oneshot_channel 143674 -		fn recv_timeout(self, timeout: std::time::Duration) -> Result<T, std::sync::oneshot::RecvTimeoutError<T>>
 std::sync::oneshot::Receiver::try_recv	assoc-fn	u oneshot_channel 143674 -		fn try_recv(self) -> Result<T, std::sync::oneshot::TryRecvError<T>>
 std::sync::oneshot::RecvTimeoutError	enum	u oneshot_channel 143674 -	T
-std::sync::oneshot::RecvTimeoutError::Disconnected	variant	u oneshot_channel 143674 -	
-std::sync::oneshot::RecvTimeoutError::Timeout	variant	u oneshot_channel 143674 -	
+std::sync::oneshot::RecvTimeoutError::Disconnected	variant	u oneshot_channel 143674 -	1	Disconnected
+std::sync::oneshot::RecvTimeoutError::Timeout	variant	u oneshot_channel 143674 -	0	Timeout(std::sync::oneshot::Receiver<T>)
 std::sync::oneshot::Sender	struct	u oneshot_channel 143674 -	T
 std::sync::oneshot::Sender::send	assoc-fn	u oneshot_channel 143674 -		fn send(self, t: T) -> Result<(), std::sync::mpsc::SendError<T>>
 std::sync::oneshot::TryRecvError	enum	u oneshot_channel 143674 -	T
-std::sync::oneshot::TryRecvError::Disconnected	variant	u oneshot_channel 143674 -	
-std::sync::oneshot::TryRecvError::Empty	variant	u oneshot_channel 143674 -	
+std::sync::oneshot::TryRecvError::Disconnected	variant	u oneshot_channel 143674 -	1	Disconnected
+std::sync::oneshot::TryRecvError::Empty	variant	u oneshot_channel 143674 -	0	Empty(std::sync::oneshot::Receiver<T>)
 std::sync::oneshot::channel	fn	u oneshot_channel 143674 -	T	fn channel<T>() -> (std::sync::oneshot::Sender<T>, std::sync::oneshot::Receiver<T>)
 std::sync::poison::LockResult	type	s	T	Result<T, std::sync::PoisonError<T>>
 std::sync::poison::PoisonError	struct	s	T
@@ -6406,8 +6406,8 @@ std::sync::poison::PoisonError::get_ref	assoc-fn	s		fn get_ref(&self) -> &T
 std::sync::poison::PoisonError::into_inner	assoc-fn	s		fn into_inner(self) -> T
 std::sync::poison::PoisonError::new	assoc-fn	s		fn new(data: T) -> std::sync::PoisonError<T>
 std::sync::poison::TryLockError	enum	s	T
-std::sync::poison::TryLockError::Poisoned	variant	s	
-std::sync::poison::TryLockError::WouldBlock	variant	s	
+std::sync::poison::TryLockError::Poisoned	variant	s	0	Poisoned(std::sync::PoisonError<T>)
+std::sync::poison::TryLockError::WouldBlock	variant	s	1	WouldBlock
 std::sync::poison::TryLockResult	type	s	Guard	Result<Guard, std::sync::TryLockError<Guard>>
 std::sync::poison::condvar::Condvar	struct	s	
 std::sync::poison::condvar::Condvar::new	assoc-fn	s		fn new() -> std::sync::Condvar

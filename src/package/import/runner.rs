@@ -726,18 +726,19 @@ fn structural_path<'facade>(
                 .next(),
             // A variant's selector names its constructor and its matchers.
             host::type_def::Shape::Enum { variants, .. } => variants.iter().find_map(|variant| {
-                (variant.imported_identity().fingerprint() == row.selector).then_some(
-                    match row.kind {
-                        StructuralKind::Match
-                        | StructuralKind::Test
-                        | StructuralKind::Take
-                        | StructuralKind::Lend
-                        | StructuralKind::LendMut
-                        | StructuralKind::Read { .. }
-                        | StructuralKind::Borrow { .. } => row.kind,
-                        _ => StructuralKind::Variant,
-                    },
-                )
+                (variant
+                    .imported_identity()
+                    .is_some_and(|selector| selector.fingerprint() == row.selector))
+                .then_some(match row.kind {
+                    StructuralKind::Match
+                    | StructuralKind::Test
+                    | StructuralKind::Take
+                    | StructuralKind::Lend
+                    | StructuralKind::LendMut
+                    | StructuralKind::Read { .. }
+                    | StructuralKind::Borrow { .. } => row.kind,
+                    _ => StructuralKind::Variant,
+                })
             }),
             host::type_def::Shape::Opaque | host::type_def::Shape::Trait(_) => None,
         };
@@ -1101,7 +1102,11 @@ fn retain_shape(
                     bytes
                         .checked_add(std::mem::size_of_val(variant))?
                         .checked_add(variant.name().len())?
-                        .checked_add(variant.imported_identity().retained_bytes()?)
+                        .checked_add(
+                            variant
+                                .imported_identity()
+                                .map_or(Some(0), |selector| selector.retained_bytes())?,
+                        )
                 });
             }
         }
