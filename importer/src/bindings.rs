@@ -11,7 +11,9 @@
 //! or read it from the home, is a miss once: the nightly's run of the package
 //! is cleaned and extraction runs again (`rerun`, D742). A difference that
 //! survives that run is drift between the toolchains, which leaves the table
-//! local and says why, as missing evidence does.
+//! local, as missing evidence does. The run says nothing of either: the
+//! project's drift record keeps the outputs that differ, and only a build
+//! that fails names them.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -947,7 +949,7 @@ impl Settlement {
     /// Publish newly extracted tables only when the nightly and project's
     /// build-script outputs agree. A table whose outputs differ, whether
     /// extracted, staged or shared, is a miss once (D742); drift after that
-    /// leaves it local and names the package. A shared table must still
+    /// leaves it local, silently. A shared table must still
     /// agree with this project.
     ///
     /// # Errors
@@ -1085,8 +1087,6 @@ impl Settlement {
                 .and_then(|stable| stable.get(package))
                 .map(Vec::as_slice)
         };
-        // Said once the run settles: a run prepared again settles again.
-        let mut notes = Vec::new();
         for entry in entries {
             if entry.reruns(&verdicts) {
                 entry.evict(&staged);
@@ -1098,46 +1098,26 @@ impl Settlement {
                     packages,
                     nightly,
                     mut publish,
-                    unshared,
                     ..
                 } => {
-                    let crate_name = &publish.meta.crate_name;
-                    let not_sharing = |reason: &dyn std::fmt::Display| {
-                        format!(
-                            "rawr: not sharing the bindings of `{crate_name}` with other \
-                             projects: {reason}"
-                        )
-                    };
+                    // A table stays with the project, and the run says
+                    // nothing, when its build inputs were not recorded
+                    // (the project's own crates and those that reach them
+                    // among them, D608.4), when the nightly's build-script
+                    // outputs are missing, or when a build script gave the
+                    // nightly other output than this project's build, which
+                    // the project's drift record keeps (`rerun`).
                     if publish.meta.inputs.is_none() {
-                        // The project's own crates, and crates that reach
-                        // them, stay with the project (D608.4).
-                        match unshared {
-                            Some(crate::input::bindings::Unshared::Project) => {}
-                            Some(reason) => notes.push(not_sharing(&reason)),
-                            None => notes.push(not_sharing(&"its build inputs were not recorded")),
-                        }
                         continue;
                     }
                     let Some(nightly) = nightly else {
-                        notes.push(not_sharing(
-                            &"the build-script outputs of rawr's nightly build are missing or \
-                              unreadable",
-                        ));
                         continue;
                     };
-                    let differs = packages.iter().find_map(|package| {
-                        let difference = match nightly.get(package) {
-                            Some(recorded) => difference(recorded, project(package))?,
-                            None => Difference::Missing,
-                        };
-                        Some((package, difference))
+                    let differs = packages.iter().any(|package| match nightly.get(package) {
+                        Some(recorded) => difference(recorded, project(package)).is_some(),
+                        None => true,
                     });
-                    if let Some((package, difference)) = differs {
-                        let name = package_name(package);
-                        notes.push(not_sharing(&format_args!(
-                            "the build script of `{name}` gives rawr's nightly build other \
-                             output than this project's build: {difference}"
-                        )));
+                    if differs {
                         continue;
                     }
                     publish.meta.scripts = nightly;
@@ -1239,9 +1219,6 @@ impl Settlement {
         if !rerun.is_empty() {
             return Err(Error::Rerun(rerun));
         }
-        for note in notes {
-            eprintln!("{note}");
-        }
         refused.map_or(Ok(()), |refused| Err(Error::Refused(refused)))
     }
 }
@@ -1260,25 +1237,24 @@ fn judge(
     let Some(stable) = stable else {
         return BTreeMap::new();
     };
-    let mut differ = BTreeMap::<&str, (&[Script], Vec<Script>, Difference)>::new();
+    let mut differ = BTreeMap::<&str, (&[Script], Vec<Script>)>::new();
     let mut agreed = Vec::new();
     for entry in entries {
         for (package, recorded) in entry.recorded() {
             let Some(project) = stable.get(package) else {
                 continue;
             };
-            match difference(recorded, Some(project)) {
-                None => agreed.push(package),
-                Some(difference) => {
-                    differ.entry(package).or_insert_with(|| {
-                        let seen = project.iter().map(|run| run.seen_by(recorded)).collect();
-                        (recorded, seen, difference)
-                    });
-                }
+            if difference(recorded, Some(project)).is_none() {
+                agreed.push(package);
+                continue;
             }
+            differ.entry(package).or_insert_with(|| {
+                let seen = project.iter().map(|run| run.seen_by(recorded)).collect();
+                (recorded, seen)
+            });
         }
     }
-    let mut record = rerun::Record::read(rawr);
+    let mut record = rerun::Record::read(rawr, nightly);
     for package in agreed {
         if !differ.contains_key(package) {
             record.agreed(package);
@@ -1287,18 +1263,13 @@ fn judge(
     let stale = nightly.map(rerun::Stale::of);
     let verdicts = differ
         .into_iter()
-        .map(|(package, (recorded, project, difference))| {
+        .map(|(package, (recorded, project))| {
+            // Running a script again is rawr's own work: it says nothing.
             let verdict = match &stale {
                 Some(stale) => {
                     let verdict = record.judge(package, recorded, &project);
                     if verdict == rerun::Verdict::Rerun {
                         stale.mark(package);
-                        eprintln!(
-                            "rawr: the build script of `{}` gave rawr's nightly build other \
-                             output than this project's build ({difference}): running it again \
-                             in rawr's nightly build",
-                            package_name(package),
-                        );
                     }
                     verdict
                 }
@@ -2643,6 +2614,36 @@ include!(concat!(env!("OUT_DIR"), "/generated.rs"));
             "{drift}"
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Handling a build-script difference on its own, a settlement writes
+    /// nothing to stderr, which an editor's debug console draws as an
+    /// error: neither the run again nor the drift after it, for a table or
+    /// for facts. Each test runs alone in its own process, with stderr not
+    /// captured.
+    #[test]
+    fn a_handled_difference_writes_nothing_to_stderr() {
+        for name in [
+            "bindings::tests::a_difference_cleans_the_nightly_run_once_and_then_is_drift",
+            "bindings::tests::facts_captured_under_a_stale_output_are_captured_again",
+        ] {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", name, "--test-threads=1", "--nocapture"])
+                .env("RAWR_TEST_ALONE", name)
+                .stdin(std::process::Stdio::null())
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                output.status.success() && stdout.contains("1 passed"),
+                "{name}:\n{stdout}\n{stderr}"
+            );
+            assert!(
+                stderr.trim().is_empty(),
+                "{name} wrote to stderr:\n{stderr}"
+            );
+        }
     }
 
     /// Facts this run captured where a build script gave the nightly other

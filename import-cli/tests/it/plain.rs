@@ -1563,15 +1563,24 @@ fn an_adapter_build_names_a_crate_whose_api_differs_between_toolchains() {
         "{diagnostic}"
     );
     // The first failure may be a stale run in the shared nightly directory:
-    // it runs again once, and the same difference after that is drift
-    // (D742), reported once.
-    assert_eq!(
-        diagnostic
-            .matches("): running it again in rawr's nightly build")
-            .count(),
-        1,
+    // it runs again once, silently, and the same difference after that is
+    // drift (D742), which the project's record keeps and the failure
+    // names once.
+    assert!(
+        !diagnostic.contains("running it again in rawr's nightly build"),
         "{diagnostic}"
     );
+    let record: serde_json::Value = serde_json::from_slice(
+        &fs::read(project.join("target/rawr/build-scripts-differ.json")).unwrap(),
+    )
+    .unwrap();
+    let drift = record
+        .as_object()
+        .unwrap()
+        .iter()
+        .find(|(package, _)| package.contains("adapter-drift-fixture"))
+        .map(|(_, seen)| seen.get("Drift").is_some());
+    assert_eq!(drift, Some(true), "{record}");
     assert_eq!(
         diagnostic.matches("after running it again too").count(),
         1,
@@ -1676,10 +1685,47 @@ fn an_undeclared_build_script_input_runs_again_for_the_project_whose_build_diffe
             .output()
             .unwrap()
     };
+    // A run again says nothing: it shows as the nightly's run of the
+    // script, whose output Cargo writes anew.
+    let script_runs = || {
+        fn walk(path: &Path, found: &mut Vec<(PathBuf, std::time::SystemTime)>) {
+            for entry in fs::read_dir(path).into_iter().flatten().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, found);
+                } else if path.file_name().is_some_and(|name| name == "output")
+                    && path.parent().and_then(Path::file_name).is_some_and(|name| {
+                        name.to_string_lossy()
+                            .starts_with("undeclared-env-fixture-")
+                    })
+                    && let Ok(modified) = entry.metadata().and_then(|meta| meta.modified())
+                {
+                    found.push((path, modified));
+                }
+            }
+        }
+        let mut found = Vec::new();
+        walk(&nightly_directory(&home), &mut found);
+        found
+    };
+    let seen = std::cell::RefCell::new(script_runs());
     let reruns = |output: &Output| {
-        text(&output.stderr)
-            .matches("): running it again in rawr's nightly build")
-            .count()
+        let now = script_runs();
+        let rerun = seen
+            .borrow()
+            .iter()
+            .filter(|(path, modified)| {
+                now.iter()
+                    .any(|(again, since)| again == path && since != modified)
+            })
+            .count();
+        *seen.borrow_mut() = now;
+        assert!(
+            !text(&output.stderr).contains("running it again in rawr's nightly build"),
+            "{}",
+            text(&output.stderr)
+        );
+        rerun.min(1)
     };
     let first = run(&projects[0], "run", "1");
     assert!(first.status.success(), "{}", text(&first.stderr));
