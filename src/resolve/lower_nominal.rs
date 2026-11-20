@@ -229,7 +229,7 @@ use models::ScriptTraitImpl;
 #[cfg(test)]
 use models::{model_clones, reset_model_clones};
 use models::{Models, Nominal, ScriptFunction};
-#[cfg(feature = "debugging")]
+#[cfg(any(test, feature = "debugging"))]
 pub(crate) use naming::DEBUG_DECLARED;
 #[cfg(feature = "debugging")]
 pub(crate) use naming::DEBUG_DISPATCHER;

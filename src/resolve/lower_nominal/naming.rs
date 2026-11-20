@@ -23,7 +23,7 @@ pub(crate) const DEBUG_GENERIC: &str = "\0rawr.generic.debug";
 /// The `Debug` text of a local by its declared type, as a debugger reads
 /// it (`format::register_declared_debug`). Present while a debugger is
 /// registered.
-#[cfg(feature = "debugging")]
+#[cfg(any(test, feature = "debugging"))]
 pub(crate) const DEBUG_DECLARED: &str = "\0rawr.declared.debug";
 /// The generated function from a type witness to that type's default.
 pub(super) const DEFAULT_DISPATCHER: &str = "__rawr_nominal_default";
