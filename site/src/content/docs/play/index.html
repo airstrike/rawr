@@ -11,7 +11,7 @@
 <p>A run that can&rsquo;t start in the browser shows why in the output pane and stops. That happens when rawr or the prebuilt runner doesn&rsquo;t load in the page. It also happens when rawr itself stops on a program, and then the next run loads a fresh copy of rawr.</p>
 
 <h3 id="frontmatter">A frontmatter block</h3>
-<p>A snippet may start with a cargo-script frontmatter block that declares its dependencies. The playground builds nothing. It runs such a snippet when each dependency it names is one of the prebuilt runner&rsquo;s crates, at a version the runner&rsquo;s manifest allows. Any other dependency gets one line that names the crates the browser has. The <a href="/docs/play/discord">?play bot</a> on Discord also builds the <a href="/docs/reference/play#dependencies">approved crates</a>, such as libc.</p>
+<p>A snippet may start with a cargo-script frontmatter block that declares its dependencies. The playground builds nothing. It runs such a snippet when each dependency it names is one of the prebuilt runner&rsquo;s crates, at a version the runner&rsquo;s manifest allows. Any other dependency gets one line that names the crates the browser has. The <a href="/docs/play/discord">?play bot</a> on Discord builds its <a href="/docs/reference/play#dependencies">approved crates</a>.</p>
 
 <h3 id="address">The address</h3>
 <p>The page&rsquo;s address keeps the example you picked. An example you load adds its name after a <code>#</code>, such as <code>/play#word-count</code>. Editing the code drops that name, because the code is no longer the example&rsquo;s. Opening an address restores the example. Picking an example replaces the address and doesn&rsquo;t add to the browser&rsquo;s history.</p>

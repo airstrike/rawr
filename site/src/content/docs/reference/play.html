@@ -4,7 +4,7 @@
 <p class="lede">How the playground and the <code class="nw">?play</code> bot run a snippet. The bot runs it on its server. The playground runs it in your browser. Both run plain Rust programs with the same limits.</p>
 <h2 id="sandbox">The sandbox</h2>
 <p>A snippet has no files, no environment variables, no process and no network. rawr&rsquo;s engine starts with none of them, and ?play grants none (see <a href="/docs/embedding#access">Access</a>). A call that needs one fails at the call, as the operating system would refuse it. On the bot&rsquo;s server each run is also its own process, and that process starts with an empty environment.</p>
-<p>The grant covers the snippet&rsquo;s own code. A crate the snippet uses, such as iced, tokio or libc, runs as native code and calls the operating system directly. The bot&rsquo;s container bounds what that code can reach.</p>
+<p>The grant covers the snippet&rsquo;s own code. A crate the snippet uses, such as iced or tokio, runs as native code and calls the operating system directly. So the bot approves no crate or feature whose code reads files, opens sockets, spawns processes or reads the environment for the snippet. The bot&rsquo;s container bounds what the rest can reach.</p>
 <table>
   <tr><th>The snippet uses</th><th>What happens</th></tr>
   <tr><td><code>std::fs::read_to_string("notes.txt")</code></td><td>It returns <code>Err</code>, an <code>io::Error</code> of kind <code>PermissionDenied</code>. So do <code>fs::read</code>, <code>fs::write</code> and the other <code>std::fs</code> functions, and nothing is read or written.</td></tr>
@@ -81,23 +81,24 @@
 <p>A snippet that starts with a cargo-script frontmatter block runs on the bot as <code>rawr run play.rs</code> runs a <a href="/docs/run#scripts">script</a>. The bot expands the frontmatter as cargo does. It builds the dependencies, and the bindings for the calls the snippet makes. The snippet then runs on the runner built for it, with the sandbox and the limits of any other snippet.</p>
 <div class="block"><pre><code>---
 [dependencies]
-libc = "0.2.172"
+ratatui = { version = "0.30", default-features = false }
 ---
+use ratatui::layout::Rect;
+
 fn main() {
-    println!("{}", libc::EXIT_FAILURE);
+    println!("{}", Rect::new(0, 0, 20, 4).area());
 }</code></pre></div>
 <p>Every dependency must be one of the bot&rsquo;s approved crates, which <code>play/approved/Cargo.toml</code> lists. A snippet names one by a version that its locked version meets, or by the same git repository at the same rev.</p>
 <table>
-  <tr><th>Crate</th><th>Locked version</th><th>A snippet names it as</th></tr>
-  <tr><td>iced</td><td>0.15.0-dev</td><td><code>iced = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b" }</code></td></tr>
-  <tr><td>iced_test</td><td>0.15.0-dev</td><td><code>iced_test = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b" }</code></td></tr>
-  <tr><td>libc</td><td>0.2.191</td><td><code>libc = "0.2"</code></td></tr>
-  <tr><td>ratatui</td><td>0.30.2</td><td><code>ratatui = "0.30"</code></td></tr>
-  <tr><td>tokio</td><td>1.54.1</td><td><code>tokio = "1"</code></td></tr>
+  <tr><th>Crate</th><th>Locked version</th><th>A snippet names it as</th><th>Approved features</th></tr>
+  <tr><td>iced</td><td>0.15.0-dev</td><td><code>iced = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b" }</code></td><td>Its default features, <code>canvas</code> and <code>tokio</code></td></tr>
+  <tr><td>ratatui</td><td>0.30.2</td><td><code>ratatui = "0.30"</code></td><td><code>all-widgets</code>, <code>layout-cache</code>, <code>macros</code>, <code>std</code> and <code>underline-color</code>, with <code>default-features = false</code></td></tr>
+  <tr><td>tokio</td><td>1.54.1</td><td><code>tokio = "1"</code></td><td><code>macros</code>, <code>rt</code>, <code>rt-multi-thread</code>, <code>sync</code> and <code>time</code></td></tr>
 </table>
-<p>The bot refuses a snippet that names any other crate, or an approved one at another version or from another source. It refuses it before it builds anything. The reply is one line that lists the approved crates. A frontmatter may hold <code>[package]</code>, <code>[features]</code>, <code>[lints]</code> and dependency tables. The bot refuses a table that changes how it builds, such as <code>[profile]</code> or <code>[patch]</code>.</p>
+<p>A snippet may ask for any of a crate&rsquo;s approved features. The bot builds the crate with all of them, as its image built it, so the build reuses what the image compiled. tokio&rsquo;s <code>fs</code>, <code>net</code>, <code>process</code> and <code>signal</code>, ratatui&rsquo;s terminal backends, and iced&rsquo;s <code>image</code> and <code>svg</code> are not approved. A snippet that asks for them, directly or through its own <code>[features]</code>, is refused. So is one that turns ratatui&rsquo;s default features on.</p>
+<p>The bot refuses a snippet that names any other crate, or an approved one at another version or from another source. It refuses it before it builds anything. The reply is one line that lists the approved crates, or a crate&rsquo;s approved features. A frontmatter may hold <code>[package]</code>, <code>[features]</code>, <code>[lints]</code> and dependency tables. The bot refuses a table that changes how it builds, such as <code>[profile]</code> or <code>[patch]</code>.</p>
 <p>The bot builds offline. Its image holds a copy of each approved crate and of everything they depend on. A snippet&rsquo;s build reads only that copy, so it downloads nothing and runs no build script but the approved crates&rsquo; own.</p>
-<p>Every snippet builds in one build directory on the bot. A crate that one snippet built is reused by the next snippet that names it with the same features. The bot&rsquo;s image builds each approved crate once with the features <code>play/approved/Cargo.toml</code> gives it. A snippet that asks for other features waits for that build the first time.</p>
+<p>Every snippet builds in one build directory on the bot. The bot&rsquo;s image builds each set of approved crates once, with their approved features, and a snippet&rsquo;s build reuses that.</p>
 <p>An error in the frontmatter, or in a dependency&rsquo;s build, is cargo&rsquo;s or rustc&rsquo;s own message, and it names the snippet <code>play.rs</code>. A frontmatter that declares no dependency runs as the same snippet without the block.</p>
 <p>The playground runs a frontmatter snippet in the browser when each dependency it names is a crate of the browser&rsquo;s prebuilt runner. The browser builds nothing, so any other dependency gets one line that says so.</p>
 
@@ -139,6 +140,7 @@ fn main() {
   <tr><td><code>?play crashed. This is a bug in ?play, not in your code.</code></td><td>The run panicked. The line after it is the panic&rsquo;s message.</td></tr>
   <tr><td><code>the playground is busy; try again in a moment</code></td><td>A docs snippet that runs on the bot waited too long for it. Discord runs go first.</td></tr>
   <tr><td><code>?play builds only these crates: ..</code></td><td>The frontmatter names a crate that isn&rsquo;t <a href="#dependencies">approved</a>, or an approved one at another version or from another source. Nothing was built.</td></tr>
+  <tr><td><code>?play builds tokio only with the features ..</code></td><td>The frontmatter asks for a feature of an approved crate that isn&rsquo;t approved, or turns on default features the bot keeps off. Nothing was built.</td></tr>
   <tr><td><code>?play doesn&rsquo;t build with a frontmatter&rsquo;s `[profile]`. ..</code></td><td>The frontmatter holds a table that changes how the bot builds. Nothing was built.</td></tr>
   <tr><td><code>put the snippet in a code block: ..</code></td><td>The message has <code>?play</code> but no code block.</td></tr>
   <tr><td><code>?play takes no options: `light`</code></td><td>A word follows <code>?play</code> on its line.</td></tr>

@@ -6,12 +6,22 @@
 //!
 //! A dependency is approved when it names an approved crate's package from
 //! that crate's own source: crates.io, with a version requirement the
-//! locked version meets, or the same git repository at the same rev. A
-//! frontmatter block also holds no table that changes how the bot builds,
-//! such as `[profile]` or `[patch]`. The tables cargo refuses in a script
-//! (`[lib]`, `[workspace]`, ..) are left to the build, which refuses them
-//! with cargo's message before it builds anything.
+//! locked version meets, or the same git repository at the same rev. It
+//! asks only for features the approved manifest gives that crate, and turns
+//! its default features on only where the approved manifest has them on. A
+//! `[features]` table enables no other feature of it either. Everything the
+//! vendored copy holds could build otherwise, such as tokio's `fs`, `net`
+//! and `process`, whose native code reaches what rawr's sandbox keeps from
+//! the snippet's own code.
+//!
+//! Each approved dependency is then built with the approved features alone
+//! ([`Approved::pin`]), as `rawr-play warm` built it, so a snippet reuses
+//! that build. A frontmatter block also holds no table that changes how the
+//! bot builds, such as `[profile]` or `[patch]`. The tables cargo refuses in
+//! a script (`[lib]`, `[workspace]`, ..) are left to the build, which
+//! refuses them with cargo's message before it builds anything.
 
+use std::collections::BTreeSet;
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -68,6 +78,10 @@ struct Crate {
     /// Its dependency line, as the approved manifest declares it, with its
     /// features: `name = { .. }`.
     declaration: String,
+    /// The features the approved manifest gives it.
+    features: BTreeSet<String>,
+    /// Whether the approved manifest leaves its default features on.
+    defaults: bool,
 }
 
 /// Where an approved crate comes from.
@@ -117,6 +131,13 @@ pub enum Refusal {
     Crate { approved: Vec<String> },
     /// A table that changes how the bot builds.
     Table { name: String },
+    /// A feature of an approved crate outside its approved set, or its
+    /// default features where the approved manifest turns them off.
+    Feature {
+        name: String,
+        features: Vec<String>,
+        defaults: bool,
+    },
 }
 
 impl fmt::Display for Refusal {
@@ -136,6 +157,26 @@ impl fmt::Display for Refusal {
                 "?play doesn't build with a frontmatter's `[{name}]`. A frontmatter may hold \
                  `[package]`, `[features]`, `[lints]` and dependency tables."
             ),
+            Self::Feature {
+                name,
+                features,
+                defaults,
+            } => {
+                let listed = match features.split_last() {
+                    Some((last, [])) => format!("`{last}`"),
+                    Some((last, rest)) => format!("`{}` and `{last}`", rest.join("`, `")),
+                    None => "none".to_owned(),
+                };
+                let defaults = if *defaults {
+                    ""
+                } else {
+                    " and `default-features = false`"
+                };
+                write!(
+                    formatter,
+                    "?play builds {name} only with the features {listed}{defaults}."
+                )
+            }
         }
     }
 }
@@ -205,14 +246,27 @@ impl Approved {
                             |item| item.to_string(),
                             |value| value.decorated("", "").to_string(),
                         );
-                        (name, format!("{key} = {}", value.trim()))
+                        let features = item
+                            .get("features")
+                            .and_then(Item::as_array)
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|feature| feature.as_str().map(str::to_owned))
+                            .collect::<BTreeSet<_>>();
+                        let defaults = defaults(item).unwrap_or(true);
+                        (
+                            name,
+                            format!("{key} = {}", value.trim()),
+                            features,
+                            defaults,
+                        )
                     })
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
         let crates = declared
             .into_iter()
-            .map(|(name, declaration)| {
+            .map(|(name, declaration, features, defaults)| {
                 let unlocked = || Error::Unlocked { name: name.clone() };
                 let version = locked
                     .iter()
@@ -241,6 +295,8 @@ impl Approved {
                     version,
                     source,
                     declaration,
+                    features,
+                    defaults,
                 })
             })
             .collect::<Result<Vec<_>, Error>>()?;
@@ -283,7 +339,7 @@ impl Approved {
             tables.push(target);
         }
         let admitted = tables
-            .into_iter()
+            .iter()
             .flat_map(|table| DEPENDENCIES.iter().filter_map(|key| table.get(key)))
             .all(|dependencies| {
                 dependencies.as_table_like().is_some_and(|dependencies| {
@@ -292,9 +348,86 @@ impl Approved {
                         .all(|(name, dependency)| self.admits(name, dependency))
                 })
             });
-        (!admitted).then(|| Refusal::Crate {
-            approved: self.crates.iter().map(Crate::named).collect(),
+        if !admitted {
+            return Some(Refusal::Crate {
+                approved: self.crates.iter().map(Crate::named).collect(),
+            });
+        }
+        let dependencies = dependencies(&tables);
+        let asked = dependencies
+            .iter()
+            .flat_map(|(alias, dependency)| {
+                let features = dependency
+                    .get("features")
+                    .and_then(Item::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|feature| feature.as_str().map(str::to_owned));
+                let alias = (*alias).to_owned();
+                features.map(move |feature| (alias.clone(), feature))
+            })
+            .chain(enabled(table));
+        for (alias, feature) in asked {
+            let Some(approved) = self.named_by(&dependencies, &alias) else {
+                continue;
+            };
+            let allowed =
+                approved.features.contains(&feature) || (feature == "default" && approved.defaults);
+            if !allowed {
+                return Some(approved.refusal());
+            }
+        }
+        dependencies.iter().find_map(|(alias, dependency)| {
+            let approved = self.named_by(&dependencies, alias)?;
+            (defaults(dependency) == Some(true) && !approved.defaults).then(|| approved.refusal())
         })
+    }
+
+    /// Build each approved dependency of `manifest`, a frontmatter block's
+    /// that [`Approved::refusal`] admits, with its approved features alone
+    /// and its default features as the approved manifest has them, as
+    /// `rawr-play warm` built it. The version and the source stay the
+    /// snippet's.
+    pub fn pin(&self, manifest: &mut DocumentMut) {
+        let table = manifest.as_table_mut();
+        self.pin_in(table);
+        if let Some(targets) = table.get_mut("target").and_then(Item::as_table_like_mut) {
+            for (_, target) in targets.iter_mut() {
+                if let Some(target) = target.as_table_like_mut() {
+                    self.pin_in(target);
+                }
+            }
+        }
+    }
+
+    /// [`Approved::pin`], for the dependency tables of `table`.
+    fn pin_in(&self, table: &mut dyn TableLike) {
+        for key in DEPENDENCIES {
+            let Some(entries) = table.get_mut(key).and_then(Item::as_table_like_mut) else {
+                continue;
+            };
+            for (alias, dependency) in entries.iter_mut() {
+                let package = dependency
+                    .get("package")
+                    .and_then(Item::as_str)
+                    .unwrap_or(alias.get())
+                    .to_owned();
+                if let Some(approved) = self.crates.iter().find(|approved| approved.name == package)
+                {
+                    approved.pin(dependency);
+                }
+            }
+        }
+    }
+
+    /// The approved crate `alias` names among `dependencies`.
+    fn named_by(&self, dependencies: &[(&str, &Item)], alias: &str) -> Option<&Crate> {
+        let (_, dependency) = dependencies.iter().find(|(name, _)| *name == alias)?;
+        let package = dependency
+            .get("package")
+            .and_then(Item::as_str)
+            .unwrap_or(alias);
+        self.crates.iter().find(|approved| approved.name == package)
     }
 
     /// Whether the dependency `name = dependency` names an approved crate
@@ -340,6 +473,40 @@ impl Approved {
 }
 
 impl Crate {
+    /// The refusal of a feature of it outside its approved set.
+    fn refusal(&self) -> Refusal {
+        Refusal::Feature {
+            name: self.name.clone(),
+            features: self.features.iter().cloned().collect(),
+            defaults: self.defaults,
+        }
+    }
+
+    /// Give `dependency`, a dependency on this crate, its approved features
+    /// and default features, keeping its version and source.
+    fn pin(&self, dependency: &mut Item) {
+        if let Some(version) = dependency.as_str().map(str::to_owned) {
+            let mut table = toml_edit::InlineTable::new();
+            table.insert("version", version.into());
+            *dependency = Item::Value(toml_edit::Value::InlineTable(table));
+        }
+        let Some(table) = dependency.as_table_like_mut() else {
+            return;
+        };
+        table.remove("default_features");
+        if self.defaults {
+            table.remove("default-features");
+        } else {
+            table.insert("default-features", toml_edit::value(false));
+        }
+        let features = self
+            .features
+            .iter()
+            .map(String::as_str)
+            .collect::<toml_edit::Array>();
+        table.insert("features", toml_edit::value(features));
+    }
+
     /// The crate as a refusal names it: its name and version, and the rev
     /// of a git crate.
     fn named(&self) -> String {
@@ -379,6 +546,47 @@ impl Source {
     }
 }
 
+/// Whether a dependency turns its default features on, as it says it.
+fn defaults(dependency: &Item) -> Option<bool> {
+    dependency
+        .get("default-features")
+        .or_else(|| dependency.get("default_features"))
+        .and_then(Item::as_bool)
+}
+
+/// Every dependency the dependency tables of `tables` declare, by the name
+/// it is declared by.
+fn dependencies<'manifest>(
+    tables: &[&'manifest dyn TableLike],
+) -> Vec<(&'manifest str, &'manifest Item)> {
+    tables
+        .iter()
+        .flat_map(|table| DEPENDENCIES.iter().filter_map(|key| table.get(key)))
+        .filter_map(Item::as_table_like)
+        .flat_map(TableLike::iter)
+        .collect()
+}
+
+/// The dependency features a `[features]` table enables: each
+/// `dependency/feature` or `dependency?/feature` of its lists.
+fn enabled(table: &toml_edit::Table) -> Vec<(String, String)> {
+    table
+        .get("features")
+        .and_then(Item::as_table_like)
+        .into_iter()
+        .flat_map(TableLike::iter)
+        .filter_map(|(_, list)| list.as_array())
+        .flatten()
+        .filter_map(|feature| feature.as_str()?.split_once('/'))
+        .map(|(dependency, feature)| {
+            (
+                dependency.trim_end_matches('?').to_owned(),
+                feature.to_owned(),
+            )
+        })
+        .collect()
+}
+
 /// The TOML document at `path`.
 fn document(path: &Path) -> Result<DocumentMut, Error> {
     let text = std::fs::read_to_string(path).map_err(|source| Error::Read {
@@ -415,18 +623,18 @@ mod tests {
             .iter()
             .map(|named| named.split(' ').next().unwrap())
             .collect::<Vec<_>>();
-        assert_eq!(names, ["iced", "iced_test", "libc", "ratatui", "tokio"]);
+        assert_eq!(names, ["iced", "ratatui", "tokio"]);
         assert!(approved[0].ends_with("(git be88873)"), "{approved:?}");
     }
 
     #[test]
     fn a_dependency_on_an_approved_crate_at_its_version_is_admitted() {
         for manifest in [
-            "[dependencies]\nlibc = \"0.2.172\"\n",
-            "[dependencies]\nlibc = { version = \"0.2\", default-features = false }\n",
-            "[dependencies]\nc = { package = \"libc\", version = \"0.2\" }\n",
+            "[dependencies]\ntokio = \"1.40\"\n",
+            "[dependencies]\nratatui = { version = \"0.30\", default-features = false }\n",
+            "[dependencies]\nt = { package = \"tokio\", version = \"1\" }\n",
             "[package]\nedition = \"2021\"\n[dependencies]\ntokio = { version = \"1\", features = [\"rt\"] }\n",
-            "[target.'cfg(unix)'.dependencies]\nlibc = \"*\"\n",
+            "[target.'cfg(unix)'.dependencies]\ntokio = \"*\"\n",
             "[dependencies]\niced = { git = \"https://github.com/iced-rs/iced\", rev = \"be88873d38544455e26c7a104eb757da2cbbac6b\" }\n",
             "[package]\nname = \"demo\"\n",
         ] {
@@ -440,10 +648,12 @@ mod tests {
     fn anything_else_a_frontmatter_names_is_refused() {
         for manifest in [
             "[dependencies]\nserde = \"1\"\n",
-            "[dependencies]\nlibc = \"0.1\"\n",
-            "[dependencies]\nlibc = \"zero\"\n",
-            "[dependencies]\nlibc = { path = \"/src/libc\" }\n",
-            "[dependencies]\nlibc = { git = \"https://example.com/libc\" }\n",
+            "[dependencies]\nlibc = \"0.2.172\"\n",
+            "[dependencies]\ntokio = \"0.2\"\n",
+            "[dependencies]\ntokio = \"zero\"\n",
+            "[dependencies]\ntokio = { path = \"/src/tokio\" }\n",
+            "[dependencies]\ntokio = { git = \"https://example.com/tokio\" }\n",
+            "[dependencies]\niced_test = { git = \"https://github.com/iced-rs/iced\", rev = \"be88873d38544455e26c7a104eb757da2cbbac6b\" }\n",
             "[dependencies]\nevil = { package = \"evil\", version = \"1\" }\n",
             "[dependencies]\niced = \"0.13\"\n",
             "[dependencies]\niced = { git = \"https://github.com/iced-rs/iced\", branch = \"master\" }\n",
@@ -457,8 +667,11 @@ mod tests {
         }
         for (manifest, table) in [
             ("[profile.dev]\nopt-level = 3\n", "profile"),
-            ("[patch.crates-io]\nlibc = { path = \"/x\" }\n", "patch"),
-            ("[replace]\n\"libc:0.2.0\" = { path = \"/x\" }\n", "replace"),
+            ("[patch.crates-io]\ntokio = { path = \"/x\" }\n", "patch"),
+            (
+                "[replace]\n\"tokio:1.0.0\" = { path = \"/x\" }\n",
+                "replace",
+            ),
             (
                 "cargo-features = [\"profile-rustflags\"]\n",
                 "cargo-features",

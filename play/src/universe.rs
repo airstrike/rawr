@@ -88,14 +88,25 @@ impl Root {
     }
 }
 
-/// A snippet as a runner compiles it: the text it is sent, the line of
-/// that text that is a marker it was given, and the snippet as written,
-/// which a report shows.
+/// A snippet as a runner compiles it: the text it is sent, the snippet as
+/// written, which a report shows, and how the two differ.
 #[derive(Clone, Debug)]
 pub struct Snippet<'source> {
     program: String,
-    marker: Option<usize>,
+    /// The program with the snippet's own lines, the wrapping aside: what
+    /// a report is shown against once [`Snippet::added`] is taken out.
+    wrapped: String,
+    added: Option<Added>,
     source: &'source str,
+}
+
+/// The lines a program has that its snippet hasn't, all before the
+/// snippet's code: `count` of them, which the snippet's line `first` and
+/// those after it follow in the program.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Added {
+    pub(crate) first: usize,
+    pub(crate) count: usize,
 }
 
 impl<'source> Snippet<'source> {
@@ -105,17 +116,24 @@ impl<'source> Snippet<'source> {
     pub fn root(source: &'source str) -> Self {
         Self {
             program: program(source),
-            marker: Some(1),
+            wrapped: rawr_snippet::plain::program(source),
+            added: Some(Added { first: 1, count: 1 }),
             source,
         }
     }
 
-    /// `source` as a cargo script's: `program`, whose line `marker`, when
-    /// there is one, is the marker the script was given.
-    pub(crate) fn script(program: String, marker: Option<usize>, source: &'source str) -> Self {
+    /// `source` as a cargo script's: `program`, which has the lines `added`
+    /// that `wrapped` hasn't.
+    pub(crate) fn script(
+        program: String,
+        wrapped: String,
+        added: Option<Added>,
+        source: &'source str,
+    ) -> Self {
         Self {
             program,
-            marker,
+            wrapped,
+            added,
             source,
         }
     }
@@ -127,19 +145,15 @@ impl<'source> Snippet<'source> {
 
     /// A report rendered on the program, which was compiled as `entry`, as
     /// the snippet as written shows it: in `play.rs`, counting without the
-    /// marker's line, and with what the wrapping added cut, as a report on
-    /// a plain run is.
+    /// lines the program added, and with what the wrapping added cut, as a
+    /// report on a plain run is.
     pub(crate) fn report(&self, text: &str, entry: &Path) -> String {
-        let wrapped = match self.marker {
-            Some(marker) => without_line(&self.program, marker),
-            None => self.program.clone(),
-        };
         unmarked(
             text,
             &entry.to_string_lossy(),
-            &wrapped,
+            &self.wrapped,
             self.source,
-            self.marker,
+            self.added,
         )
     }
 }
@@ -366,14 +380,20 @@ fn run_on(
 
 /// A report the runner rendered for a program, the snippet compiled as
 /// `entry`, as the snippet as written shows it: in `play.rs`, counting
-/// without the `marker` line the program was given, and with what the
+/// without the lines `added` the program was given, and with what the
 /// wrapping added cut, as a report on a plain run is. `wrapped` is the
-/// program without that line.
-fn unmarked(text: &str, entry: &str, wrapped: &str, source: &str, marker: Option<usize>) -> String {
+/// program without those lines.
+fn unmarked(text: &str, entry: &str, wrapped: &str, source: &str, added: Option<Added>) -> String {
     let name = rawr_snippet::SOURCE_NAME;
-    // A line after the marker is the one before it, in the snippet.
-    let earlier = |line: &str| match (line.parse::<usize>(), marker) {
-        (Ok(number), Some(marker)) if number > marker => (number - 1).to_string(),
+    // A line after the added ones is its own less them, in the snippet,
+    // and an added one is the snippet's line before them.
+    let earlier = |line: &str| match (line.parse::<usize>(), added) {
+        (Ok(number), Some(Added { first, count })) if number >= first + count => {
+            (number - count).to_string()
+        }
+        (Ok(number), Some(Added { first, .. })) if number >= first => {
+            first.saturating_sub(1).max(1).to_string()
+        }
         _ => line.to_owned(),
     };
     let mut out = String::with_capacity(text.len());
@@ -411,15 +431,6 @@ fn unmarked(text: &str, entry: &str, wrapped: &str, source: &str, marker: Option
 
 /// The line that marks the snippet as Rawr code for the runner.
 pub(crate) const MARKER: &str = "// rawr\n";
-
-/// `text` without its line `line` (1-based).
-fn without_line(text: &str, line: usize) -> String {
-    let mut lines = text.split_inclusive('\n').collect::<Vec<_>>();
-    if let Some(index) = line.checked_sub(1).filter(|index| *index < lines.len()) {
-        lines.remove(index);
-    }
-    lines.concat()
-}
 
 /// The file one run's frame is written to, removed when dropped.
 struct Frame(PathBuf);

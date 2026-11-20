@@ -553,7 +553,7 @@ mod tests {
     #[test]
     fn a_bad_frontmatter_is_cargo_s_message() {
         let error = run(
-            "---\n[dependencies]\nlibc = \"0.2\"\nfn main() {}\n",
+            "---\n[dependencies]\ntokio = \"1\"\nfn main() {}\n",
             &Limits::default(),
         )
         .unwrap_err()
@@ -563,7 +563,7 @@ mod tests {
             "{error}"
         );
         let error = run(
-            "---cargo\n[dependencies\nlibc = \"0.2\"\n---\nfn main() {}\n",
+            "---cargo\n[dependencies\ntokio = \"1\"\n---\nfn main() {}\n",
             &Limits::default(),
         )
         .unwrap_err()

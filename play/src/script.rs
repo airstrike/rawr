@@ -186,7 +186,7 @@ impl<'source> Script<'source> {
         if let Some(refusal) = approved.refusal(&self.manifest) {
             return Err(PlayError::Refused(refusal.to_string()));
         }
-        let snippet = self.snippet();
+        let snippet = self.snippet(&approved);
         // A parse needs no crate: a syntax error is reported unbuilt.
         if let Some(text) = crate::plain::parse_report(snippet.program()) {
             let report = snippet.report(&text, Path::new(SOURCE_NAME));
@@ -200,23 +200,50 @@ impl<'source> Script<'source> {
         Universe::script(slot.script(), runner, builder.home.clone()).run_snippet(&snippet, limits)
     }
 
-    /// The snippet as its runner compiles it: the frontmatter block as
-    /// written, then the marker unless the snippet has one, then the rest,
-    /// wrapped as a plain snippet is. The block keeps its lines, so a report
-    /// counts as the snippet does once the marker's line is taken out.
-    fn snippet(&self) -> Snippet<'source> {
+    /// The snippet as its runner compiles it: the frontmatter block with
+    /// each approved dependency pinned to its approved features
+    /// ([`Approved::pin`]), then the marker unless the snippet has one, then
+    /// the rest, wrapped as a plain snippet is. A report counts as the
+    /// snippet does once the lines the pinning and the marker added are
+    /// taken out.
+    fn snippet(&self, approved: &Approved) -> Snippet<'source> {
         let (lead, rest) = self.source.split_at(self.start);
-        let mut program = lead.to_owned();
-        if !program.ends_with('\n') {
-            program.push('\n');
+        // The pinned manifest in place of the block's, the fences kept. The
+        // block read before, so it reads again.
+        let block = frontmatter::read(lead)
+            .ok()
+            .and_then(|lead| lead.frontmatter)
+            .map(|block| block.manifest);
+        let pinned = block
+            .and_then(|range| {
+                let mut manifest = lead[range.clone()].parse::<DocumentMut>().ok()?;
+                approved.pin(&mut manifest);
+                Some(format!(
+                    "{}{manifest}{}",
+                    &lead[..range.start],
+                    &lead[range.end..]
+                ))
+            })
+            .unwrap_or_else(|| lead.to_owned());
+        let mut program = pinned;
+        let mut wrapped = lead.to_owned();
+        for text in [&mut program, &mut wrapped] {
+            if !text.ends_with('\n') {
+                text.push('\n');
+            }
         }
-        let marker = (!self.marked).then(|| {
-            let line = program.matches('\n').count() + 1;
+        let lines = |text: &str| text.matches('\n').count();
+        let mut count = lines(&program).saturating_sub(lines(&wrapped));
+        if !self.marked {
             program.push_str(universe::MARKER);
-            line
-        });
-        program.push_str(&rawr_snippet::plain::program(rest));
-        Snippet::script(program, marker, self.source)
+            count += 1;
+        }
+        let body = rawr_snippet::plain::program(rest);
+        program.push_str(&body);
+        let first = lines(&wrapped) + 1;
+        wrapped.push_str(&body);
+        let added = (count > 0).then_some(universe::Added { first, count });
+        Snippet::script(program, wrapped, added, self.source)
     }
 }
 
@@ -320,12 +347,25 @@ impl Builder {
     }
 }
 
-/// Build each approved crate once, as a snippet that names it alone builds
-/// it, in the build directory every script shares: what the image runs, so
-/// a snippet that names an approved crate finds it compiled.
+/// Build every set of approved crates once, as a snippet that names those
+/// crates builds them, in the build directory every script shares: what the
+/// image runs. A snippet's crates have their approved features alone, so
+/// each set builds the units a snippet that names it builds, the features
+/// cargo unifies across them among them. The sets are as many as `2^n - 1`
+/// for `n` approved crates, and they share what doesn't differ.
 pub fn warm(approved: &Approved, builder: &Builder) -> Result<(), PlayError> {
-    for declaration in approved.declarations() {
-        let source = format!("---\n[dependencies]\n{declaration}\n---\nfn main() {{}}\n");
+    let declarations = approved.declarations().collect::<Vec<_>>();
+    for set in 1_usize..(1 << declarations.len()) {
+        let named = declarations
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| set & (1 << index) != 0)
+            .map(|(_, declaration)| *declaration)
+            .collect::<Vec<_>>();
+        let source = format!(
+            "---\n[dependencies]\n{}\n---\nfn main() {{}}\n",
+            named.join("\n")
+        );
         let script = match Script::new(&source) {
             Some(script) => script?,
             None => continue,
@@ -333,8 +373,8 @@ pub fn warm(approved: &Approved, builder: &Builder) -> Result<(), PlayError> {
         let slot = Slot::take(&builder.scripts).map_err(|error| {
             PlayError::Compile(format!("?play could not write the snippet: {error}"))
         })?;
-        println!("warming {declaration}");
-        builder.build(&slot, &script.snippet())?;
+        println!("warming {}", named.join(", "));
+        builder.build(&slot, &script.snippet(approved))?;
     }
     Ok(())
 }
@@ -404,10 +444,16 @@ fn manifest_report(source: &str, message: &str, span: std::ops::Range<usize>) ->
 #[cfg(test)]
 mod tests {
     use super::Script;
+    use crate::approved::{Approved, Refusal};
     use crate::PlayError;
 
     fn script(source: &str) -> Script<'_> {
         Script::new(source).expect("a script").expect("it reads")
+    }
+
+    fn approved() -> Approved {
+        let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("approved");
+        Approved::read(&directory).unwrap()
     }
 
     /// A snippet with a frontmatter block is a script, and one without is
@@ -416,16 +462,109 @@ mod tests {
     fn a_frontmatter_block_makes_a_snippet_a_script() {
         assert!(Script::new("fn main() {}\n").is_none());
         assert!(Script::new("1 - 2").is_none());
-        let imports = script("---\n[dependencies]\nlibc = \"0.2.172\"\n---\nfn main() {}\n");
+        let imports = script("---\n[dependencies]\ntokio = \"1\"\n---\nfn main() {}\n");
         assert!(imports.imports());
         assert!(super::builds(
-            "---\n[dependencies]\nlibc = \"0.2.172\"\n---\nfn main() {}\n"
+            "---\n[dependencies]\ntokio = \"1\"\n---\nfn main() {}\n"
         ));
         let bare = script("---\n[package]\nedition = \"2021\"\n---\nprintln!(\"hi\");\n");
         assert!(!bare.imports());
         assert!(!super::builds("fn main() {}\n"));
-        let targeted = script("---\n[target.'cfg(unix)'.dependencies]\nlibc = \"0.2\"\n---\n");
+        let targeted = script("---\n[target.'cfg(unix)'.dependencies]\ntokio = \"1\"\n---\n");
         assert!(targeted.imports());
+    }
+
+    /// libc is no approved crate, and tokio's `fs`, `net` and `process` are
+    /// no approved features: both are refused before anything is built,
+    /// with the line that names what is approved. A snippet within the
+    /// approved features is admitted.
+    #[test]
+    fn libc_and_tokio_s_io_features_are_refused_and_the_approved_ones_admitted() {
+        let approved = approved();
+        let refusal = |manifest: &str| approved.refusal(&script(manifest).manifest);
+        let Some(Refusal::Crate { approved: names }) =
+            refusal("---\n[dependencies]\nlibc = \"0.2.172\"\n---\nfn main() {}\n")
+        else {
+            panic!("libc is refused");
+        };
+        assert!(
+            names.iter().all(|name| !name.starts_with("libc")),
+            "{names:?}"
+        );
+        for asked in [
+            "tokio = { version = \"1\", features = [\"fs\", \"net\", \"process\"] }",
+            "tokio = { version = \"1\", features = [\"rt\", \"net\"] }",
+            "t = { package = \"tokio\", version = \"1\", features = [\"signal\"] }",
+            "tokio = { version = \"1\", optional = true }\n[features]\nio = [\"tokio/fs\"]",
+            "ratatui = { version = \"0.30\", default-features = true }",
+            "ratatui = { version = \"0.30\", default-features = false, features = [\"crossterm\"] }",
+        ] {
+            let refused = refusal(&format!("---\n[dependencies]\n{asked}\n---\nfn main() {{}}\n"));
+            assert!(matches!(refused, Some(Refusal::Feature { .. })), "{asked}: {refused:?}");
+        }
+        assert_eq!(
+            refusal(
+                "---\n[dependencies]\ntokio = { version = \"1\", features = [\"net\"] }\n---\n"
+            )
+            .unwrap()
+            .to_string(),
+            "?play builds tokio only with the features `macros`, `rt`, `rt-multi-thread`, `sync` \
+             and `time`."
+        );
+        for asked in [
+            "tokio = \"1\"",
+            "tokio = { version = \"1.40\", features = [\"rt\", \"time\"] }",
+            "ratatui = \"0.30\"",
+            "ratatui = { version = \"0.30\", default-features = false, features = [\"std\"] }",
+            "iced = { git = \"https://github.com/iced-rs/iced\", rev = \"be88873d38544455e26c7a104eb757da2cbbac6b\", features = [\"canvas\"] }",
+        ] {
+            let manifest = format!("---\n[dependencies]\n{asked}\n---\nfn main() {{}}\n");
+            assert_eq!(refusal(&manifest), None, "{asked}");
+        }
+    }
+
+    /// An approved dependency builds with its approved features alone,
+    /// whatever subset the snippet asked for, so the warm build serves it;
+    /// a report still counts the snippet's own lines.
+    #[test]
+    fn a_dependency_is_pinned_to_its_approved_features() {
+        let source = "---\n[dependencies.tokio]\nversion = \"1\"\n---\n1 + 2\n";
+        let snippet = script(source).snippet(&approved());
+        let manifest = snippet.program().split("---\n").nth(1).unwrap();
+        let pinned = manifest.parse::<toml_edit::DocumentMut>().unwrap();
+        let features = pinned["dependencies"]["tokio"]["features"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|feature| feature.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            features,
+            ["macros", "rt", "rt-multi-thread", "sync", "time"]
+        );
+        let ratatui = script("---\n[dependencies]\nratatui = \"0.30\"\n---\nfn main() {}\n")
+            .snippet(&approved());
+        assert!(
+            ratatui.program().contains("default-features = false"),
+            "{}",
+            ratatui.program()
+        );
+        // The pinned table added a line before the marker's: the code's
+        // `+` on the snippet's line 5 is the program's line 7.
+        let line = snippet
+            .program()
+            .lines()
+            .position(|line| line.contains("1 + 2"))
+            .unwrap()
+            + 1;
+        let rendered = format!(
+            "error: oops\n --> /scripts/0/play.rs:{line}:27\n  |\n{line} | fn main() {{ let __v = {{ 1 + 2\n  | {}^\n",
+            " ".repeat(26)
+        );
+        assert_eq!(
+            snippet.report(&rendered, "/scripts/0/play.rs".as_ref()),
+            "error: oops\n --> play.rs:5:3\n  |\n5 | 1 + 2\n  |   ^\n"
+        );
     }
 
     /// A malformed block or manifest is cargo's error, at the place in
@@ -433,7 +572,7 @@ mod tests {
     #[test]
     fn a_bad_frontmatter_is_cargo_s_error() {
         let Some(Err(PlayError::Compile(unclosed))) =
-            Script::new("---\n[dependencies]\nlibc = \"0.2\"\nfn main() {}\n")
+            Script::new("---\n[dependencies]\ntokio = \"1\"\nfn main() {}\n")
         else {
             panic!("an unclosed block is an error");
         };
@@ -443,7 +582,7 @@ mod tests {
         );
         assert!(unclosed.contains(" --> play.rs:"), "{unclosed}");
         let Some(Err(PlayError::Compile(toml))) =
-            Script::new("---\n[dependencies\nlibc = \"0.2\"\n---\nfn main() {}\n")
+            Script::new("---\n[dependencies\ntokio = \"1\"\n---\nfn main() {}\n")
         else {
             panic!("a manifest that isn't TOML is an error");
         };
@@ -452,20 +591,20 @@ mod tests {
         assert!(toml.contains("2 | [dependencies"), "{toml}");
     }
 
-    /// The runner compiles the block as written, a marker after it, and the
-    /// rest wrapped; a report counts lines as the snippet does.
+    /// The runner compiles the block, a marker after it, and the rest
+    /// wrapped; a report counts lines as the snippet does. A snippet marked
+    /// already keeps its marker where it is.
     #[test]
     fn a_script_is_marked_after_its_block_and_wrapped() {
-        let source = "---\n[dependencies]\nlibc = \"0.2\"\n---\n1 + 2\n";
-        let snippet = script(source).snippet();
+        let source = "---\n[dependencies]\ntokio = { version = \"1\", features = [\"macros\", \"rt\", \"rt-multi-thread\", \"sync\", \"time\"] }\n---\n1 + 2\n";
+        let snippet = script(source).snippet(&approved());
         assert!(
             snippet
                 .program()
-                .starts_with("---\n[dependencies]\nlibc = \"0.2\"\n---\n// rawr\nfn main() { let __v = { 1 + 2\n"),
+                .contains("\n---\n// rawr\nfn main() { let __v = { 1 + 2\n"),
             "{}",
             snippet.program()
         );
-        // The `+` of line 5, after the 24 characters the wrapping added.
         let rendered = format!(
             "error: oops\n --> /scripts/0/play.rs:6:27\n  |\n6 | fn main() {{ let __v = {{ 1 + 2\n  | {}^\n",
             " ".repeat(26)
@@ -474,11 +613,14 @@ mod tests {
             snippet.report(&rendered, "/scripts/0/play.rs".as_ref()),
             "error: oops\n --> play.rs:5:3\n  |\n5 | 1 + 2\n  |   ^\n"
         );
-        // A snippet marked already keeps its marker where it is.
-        let marked = script("---\n[dependencies]\nlibc = \"0.2\"\n---\n// rawr\nfn main() {}\n");
-        assert_eq!(
-            marked.snippet().program(),
-            "---\n[dependencies]\nlibc = \"0.2\"\n---\n// rawr\nfn main() {}\n"
+        let marked = script("---\n[dependencies]\ntokio = \"1\"\n---\n// rawr\nfn main() {}\n");
+        assert!(
+            marked
+                .snippet(&approved())
+                .program()
+                .ends_with("---\n// rawr\nfn main() {}\n"),
+            "{}",
+            marked.snippet(&approved()).program()
         );
         let blanked = marked.blanked();
         assert_eq!(blanked.lines().count(), 6);
@@ -493,8 +635,8 @@ mod tests {
     #[test]
     fn a_script_s_syntax_error_is_reported_unbuilt() {
         let source =
-            "---\n[dependencies]\nlibc = \"0.2.172\"\n---\nfn main() {\n    let x = (1 + 2;\n}\n";
-        let snippet = script(source).snippet();
+            "---\n[dependencies]\ntokio = \"1\"\n---\nfn main() {\n    let x = (1 + 2;\n}\n";
+        let snippet = script(source).snippet(&approved());
         let text = crate::plain::parse_report(snippet.program()).expect("a syntax error");
         let shown = snippet.report(&text, "play.rs".as_ref());
         assert!(

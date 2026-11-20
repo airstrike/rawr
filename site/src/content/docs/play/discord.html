@@ -24,14 +24,16 @@ xs.iter().sum::&lt;i64&gt;()
 <span class="c">```rust</span>
 ---
 [dependencies]
-libc = "0.2.172"
+ratatui = { version = "0.30", default-features = false }
 ---
+use ratatui::layout::Rect;
+
 fn main() {
-    println!("{}", libc::EXIT_FAILURE);
+    println!("{}", Rect::new(0, 0, 20, 4).area());
 }
 <span class="c">```</span></code></pre>
 </div>
-<p>The bot builds only its <a href="/docs/reference/play#dependencies">approved crates</a>. A snippet that names any other crate gets one line that lists them, and nothing is built. The first snippet that names a crate with features no snippet used before waits for that crate&rsquo;s build. The next one reuses it.</p>
+<p>The bot builds only its <a href="/docs/reference/play#dependencies">approved crates</a>, each with its approved features. A snippet that names any other crate or feature gets one line that says what is approved, and nothing is built. The bot&rsquo;s image has built the approved crates already, so a snippet&rsquo;s build reuses them.</p>
 
 
 <h2 id="add-bot">Adding the bot to a server</h2>

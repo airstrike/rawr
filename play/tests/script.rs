@@ -14,7 +14,7 @@
 //! ```
 //!
 //! `PLAY_IMPORT` names another rawr-import. The build is offline, so the
-//! crates the snippets name must be in Cargo's registry cache here.
+//! crates the snippet names must be in Cargo's registry cache here.
 
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -61,40 +61,24 @@ fn run(source: &str) -> std::process::Output {
     child.wait_with_output().unwrap()
 }
 
-/// libc, an approved crate, is built for the snippet and its constant
-/// prints as `cargo run` of the same script prints it.
+/// ratatui, an approved crate, is built for the snippet, and its `Rect`
+/// gives what `cargo run` of the same script prints.
 #[test]
 #[ignore = "needs rawr-import and rawr's runtime for this checkout"]
 fn a_frontmatter_snippet_runs_with_its_approved_dependency() {
     let output = run(concat!(
         "---\n",
         "[dependencies]\n",
-        "libc = \"0.2.172\"\n",
+        "ratatui = { version = \"0.30\", default-features = false }\n",
         "---\n",
+        "use ratatui::layout::Rect;\n",
+        "\n",
         "fn main() {\n",
-        "    println!(\"{}\", libc::EXIT_FAILURE);\n",
+        "    println!(\"{}\", Rect::new(0, 0, 20, 4).area());\n",
         "}\n",
     ));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "{stderr}");
     let ran = rawr_play::Output::from_json(&output.stdout).unwrap();
-    assert_eq!((ran.text().as_str(), ran.status), ("1\n", 0), "{stderr}");
-}
-
-/// A dependency cargo can't resolve is cargo's error, with the snippet
-/// named `play.rs`.
-#[test]
-#[ignore = "needs rawr-import and rawr's runtime for this checkout"]
-fn a_dependency_cargo_refuses_is_cargo_s_error() {
-    let output = run(concat!(
-        "---\n",
-        "[dependencies]\n",
-        "libc = { version = \"0.2\", features = [\"no-such-feature\"] }\n",
-        "---\n",
-        "fn main() {}\n",
-    ));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(!output.status.success(), "{stderr}");
-    assert!(stderr.contains("no-such-feature"), "{stderr}");
-    assert!(!stderr.contains("target/play-scripts"), "{stderr}");
+    assert_eq!((ran.text().as_str(), ran.status), ("80\n", 0), "{stderr}");
 }

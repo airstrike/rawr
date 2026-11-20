@@ -31,11 +31,26 @@ block blanked so lines and columns stay the snippet's.
 Every dependency must be an approved crate: a dependency of
 `play/approved/Cargo.toml`, at the version its `Cargo.lock` locks
 (`src/approved.rs`). A snippet names one by a version requirement the
-locked version meets, or by the same git repository and rev. The first
-list is the prebuilt runner's crates (iced and iced_test at the pinned
-rev, tokio, ratatui) and libc. A snippet that names anything else, or an
-approved crate from another source (a path, a branch, another registry),
-gets one line that lists the approved crates, before anything is built. So
+locked version meets, or by the same git repository and rev. The list is
+iced at the pinned rev (its default features, `canvas`, `tokio`), ratatui
+(its widgets and layout with `default-features = false`, no terminal
+backend) and tokio (`macros`, `rt`, `rt-multi-thread`, `sync`, `time`). A
+snippet that names anything else, or an approved crate from another
+source (a path, a branch, another registry), gets one line that lists the
+approved crates, before anything is built.
+
+A snippet may ask only for a crate's approved features, through the
+dependency or through its own `[features]`, and may turn default
+features on only where the approved manifest has them on. Anything else
+gets one line naming the crate's approved features. The vendored copy
+holds every optional dependency of these crates, so the features are what
+keeps native code that reads files, opens sockets, spawns processes or
+reads the environment out of a snippet's reach: tokio's `fs`, `net`,
+`process` and `signal`, ratatui's crossterm backend, iced's `image` and
+`svg`. iced_test is not approved for the same reason: its snapshots and
+test runs read, write and remove files. Every approved dependency is then
+built with all its approved features (`Approved::pin`), whatever subset
+the snippet asked for, so it is the unit `rawr-play warm` built. So
 does a frontmatter table that changes how the bot builds (`[profile]`,
 `[patch]`, `[replace]`, `cargo-features`). The tables cargo refuses in a
 script (`[lib]`, `[workspace]`, ..) go on to rawr's load, which refuses
@@ -76,16 +91,17 @@ build that runs past it once another snippet waits. Cargo keeps what such
 a build compiled. A report from the frontmatter, cargo, rustc or rawr
 names the snippet `play.rs` and counts its own lines.
 
-`rawr-play warm` builds each approved crate once, as a snippet that names
-it alone with its approved features builds it. The `scripts` target of
+`rawr-play warm` builds every set of approved crates once (seven sets for
+three crates), as a snippet that names that set builds it: cargo unifies
+the features of the dependencies they share, so each set has its own units
+where they differ. The `scripts` target of
 `play/Dockerfile` (`docker build --target scripts`,
 `PLAY_TARGET=scripts ./push-image.sh`) runs it after `rawr-import cache
 warm`, so the image holds rawr's runtime and the approved crates already
 compiled. That image holds the extraction nightly, rawr-import and its
 driver, so it is several GB, and it compiles in the container: it needs a
-"standard" instance rather than "lite". A first snippet that names an
-approved crate with other features waits for that crate's build. The
-default image has none of this. There a snippet with dependencies gets
+"standard" instance rather than "lite". The default image has none of
+this. There a snippet with dependencies gets
 `?play builds no crates on this server.`
 
 ## The universe runner
