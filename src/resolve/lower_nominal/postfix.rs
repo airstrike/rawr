@@ -594,10 +594,40 @@ impl<'a> Parser<'a> {
                 value = self.parse_debug_builder(value, &member)?;
                 continue;
             }
-            // `f.write_str(text)` into a `fmt` body's formatter, and
-            // `f.pad(text)`: the formatter's width, fill, alignment and
-            // precision apply to what the body writes, as std's `pad`
-            // applies them to its text.
+            // `f.width()`, `f.fill()` and kin of a `fmt` body's formatter:
+            // the spec its caller formats with (`FORMAT_SPEC`).
+            if let Some((part, ty)) = format::FormatPart::of_method(&member)
+                && matches!(self.peek(), Token::Unit)
+                && self
+                    .formatter
+                    .as_ref()
+                    .is_some_and(|formatter| value.source.as_str() == formatter.as_str())
+            {
+                let (_, end) = self.next();
+                let source = self.prelude_op(
+                    PreludeOp::FormatPart,
+                    [format::FORMAT_SPEC.into(), part.code().to_string().into()],
+                );
+                value = self.operator_expr(source, ty, span(value.span.start(), end));
+                continue;
+            }
+            // Another of std's `Formatter` methods, as `f.align()`, which
+            // rawr doesn't run yet.
+            if !matches!(member.as_str(), "write_str" | "pad" | "write_fmt")
+                && self
+                    .formatter
+                    .as_ref()
+                    .is_some_and(|formatter| value.source.as_str() == formatter.as_str())
+                && crate::std_table::item(&format!("core::fmt::Formatter::{member}")).is_some()
+            {
+                return Err(Error::NotYet {
+                    path: format!("std::fmt::Formatter::{member}").into(),
+                    reference: member_span,
+                });
+            }
+            // `f.write_str(text)` into a `fmt` body's formatter, as it is,
+            // and `f.pad(text)`, under the spec its caller formats with
+            // (`FORMAT_SPEC`), as std's `pad` writes it.
             if matches!(member.as_str(), "write_str" | "pad")
                 && matches!(self.peek(), Token::LeftParen)
                 && self
@@ -616,10 +646,22 @@ impl<'a> Parser<'a> {
                     ));
                 };
                 self.coerce_expr(&Ty::Str, text)?;
+                let written = if member.as_str() == "pad" {
+                    self.prelude_op(
+                        PreludeOp::FormatSpecDisplay,
+                        [
+                            text.rendered_source(),
+                            format::FORMAT_SPEC.into(),
+                            "0".into(),
+                        ],
+                    )
+                } else {
+                    text.rendered_source()
+                };
                 let mut source = origin::Fragment::plain("{ ");
                 source.push(value.rendered_source());
                 source.push_text(" += (");
-                source.push(text.rendered_source());
+                source.push(written);
                 source.push_text("); ");
                 source.push(self.prelude_op(PreludeOp::Ok, ["()".into()]));
                 source.push_text(" }");

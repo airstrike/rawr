@@ -4578,3 +4578,106 @@ fn a_non_exhaustive_match_notes_the_enum_at_its_definition() {
     );
     assert!(!option.contains("defined here"), "{option}");
 }
+
+/// A std thread type's bare name resolves through a `use` alone, as in
+/// rustc: unbound, it is E0425 with the imports rustc suggests, and a path
+/// through a module's `use` names it (#2346).
+#[test]
+fn a_bare_std_thread_type_nothing_binds_is_e0425() {
+    let help = |line: &str| format!("help: consider importing this struct\n  |\n{line}\n  |\n");
+    assert_eq!(
+        rendered("fn f(_x: JoinHandle<()>) {}\nfn main() {}\n"),
+        concat!(
+            "error[E0425]: cannot find type `JoinHandle` in this scope\n",
+            " --> main.rs:1:10\n",
+            "  |\n",
+            "1 | fn f(_x: JoinHandle<()>) {}\n",
+            "  |          ^^^^^^^^^^ not found in this scope\n",
+            "  |\n",
+            "help: consider importing this struct\n",
+            "  |\n",
+            "1 + use std::thread::JoinHandle;\n",
+            "  |\n",
+        )
+    );
+    assert_eq!(
+        import_help("fn f(_x: Mutex) {}\nfn main() {}\n"),
+        concat!(
+            "help: consider importing one of these structs\n",
+            "  |\n",
+            "1 + use std::sync::Mutex;\n",
+            "  |\n",
+            "1 + use std::sync::nonpoison::Mutex;\n",
+            "  |\n",
+        )
+    );
+    assert_eq!(
+        import_help("fn f(_x: Sender<i32>) {}\nfn main() {}\n"),
+        concat!(
+            "help: consider importing one of these structs\n",
+            "  |\n",
+            "1 + use std::sync::mpmc::Sender;\n",
+            "  |\n",
+            "1 + use std::sync::mpsc::Sender;\n",
+            "  |\n",
+            "1 + use std::sync::oneshot::Sender;\n",
+            "  |\n",
+        )
+    );
+    assert_eq!(
+        import_help("fn f(_x: SyncSender<i32>) {}\nfn main() {}\n"),
+        help("1 + use std::sync::mpsc::SyncSender;")
+    );
+    for source in [
+        "struct S {\n    _m: Mutex<i32>,\n}\nfn main() {}\n",
+        "fn main() {\n    let _v: Vec<JoinHandle<()>> = Vec::new();\n}\n",
+        "fn main() {\n    let (tx, _rx) = std::sync::mpsc::channel::<i32>();\n    let _s: Sender<i32> = tx;\n}\n",
+    ] {
+        let (code, message, _) = refused(source);
+        assert!(code == "E0425" && message.starts_with("cannot find type"), "{message}");
+    }
+    for source in [
+        "use std::sync::mpsc;\nfn f(_x: mpsc::Sender<i32>, _y: mpsc::Receiver<i32>) {}\nfn main() {}\n",
+        "use std::thread;\nfn main() {\n    let h: thread::JoinHandle<()> = thread::spawn(|| {});\n    h.join().unwrap();\n}\n",
+        "use std::sync::mpsc::{Receiver, Sender};\nfn f(_x: Sender<i32>, _y: Receiver<i32>) {}\nfn main() {}\n",
+        "use std::sync;\nfn main() {\n    let _m = sync::Mutex::new(1);\n}\n",
+        "struct Mutex(i32);\nfn f(_x: Mutex) {}\nfn main() {\n    f(Mutex(1));\n}\n",
+    ] {
+        Engine::new()
+            .compile(source)
+            .unwrap_or_else(|error| panic!("{error}\n{source}"));
+    }
+}
+
+/// A call of a turbofish name nothing binds is a function rustc can't
+/// find, marked over the name (#2346).
+#[test]
+fn a_turbofish_call_of_an_unbound_name_is_e0425_for_a_function() {
+    assert_eq!(
+        rendered("fn main() {\n    let _x = channel::<i32>();\n}\n"),
+        concat!(
+            "error[E0425]: cannot find function `channel` in this scope\n",
+            " --> main.rs:2:14\n",
+            "  |\n",
+            "2 |     let _x = channel::<i32>();\n",
+            "  |              ^^^^^^^ not found in this scope\n",
+            "  |\n",
+            "help: consider importing one of these functions\n",
+            "  |\n",
+            "1 + use std::sync::mpmc::channel;\n",
+            "  |\n",
+            "1 + use std::sync::mpsc::channel;\n",
+            "  |\n",
+            "1 + use std::sync::oneshot::channel;\n",
+            "  |\n",
+        )
+    );
+    let (_, message, label) = refused("fn main() {\n    let _e = nope::<i32>;\n}\n");
+    assert_eq!(
+        (message.as_str(), label.as_deref()),
+        (
+            "cannot find value `nope` in this scope",
+            Some("not found in this scope")
+        )
+    );
+}

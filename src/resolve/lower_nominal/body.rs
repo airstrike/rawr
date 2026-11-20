@@ -172,6 +172,7 @@ impl<'a> Parser<'a> {
             ),
         )?;
         self.destructure_parameters(definition.parameters(), definition.body())?;
+        self.open_formatter(definition.body());
 
         while !matches!(self.peek(), Token::RightBrace | Token::EOF) {
             match self.peek() {
@@ -697,6 +698,7 @@ impl<'a> Parser<'a> {
                 .map(|parameter| (parameter.name.text.clone(), parameter.name.span)),
         )?;
         self.destructure_parameters(&definition.parameters, definition.body.span)?;
+        self.open_formatter(definition.body.span);
 
         while !matches!(self.peek(), Token::RightBrace | Token::EOF) {
             match self.peek() {

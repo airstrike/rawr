@@ -1598,15 +1598,24 @@ impl<'a> Parser<'a> {
                 let source = self.copied_call(source, &places)?;
                 return Ok(self.operator_expr(source, output, call));
             }
-            if let Some(formatter) = formatter.and_then(|index| arguments.get(index)) {
+            // A function's formatter takes the body's spec, as std passes
+            // its `Formatter` on, and what it writes is the body's.
+            if let Some(index) = formatter.filter(|index| *index < arguments.len()) {
                 let mut source = origin::Fragment::plain("{ ");
-                source.push(formatter.rendered_source());
-                source.push_text(" = ");
+                source.push(arguments[index].rendered_source());
+                source.push_text(" += ");
                 source.push(origin::Fragment::call(
                     name.as_str(),
                     arguments
                         .iter()
-                        .map(ParsedExpr::rendered_source)
+                        .enumerate()
+                        .map(|(at, argument)| {
+                            if at == index {
+                                format::FORMAT_SPEC.into()
+                            } else {
+                                argument.rendered_source()
+                            }
+                        })
                         .chain(witnesses),
                 ));
                 source.push_text("; ");

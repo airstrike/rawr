@@ -359,10 +359,23 @@ pub(crate) fn glob(module: &str) -> Option<Vec<ImmutableString>> {
     Some(names)
 }
 
-/// The std type a `use` that binds `qualified` brings in: the path, which a
-/// path through the name stands for.
+/// The std type or module a `use` that binds `qualified` brings in: the
+/// path, which a path through the name stands for (`mpsc::Sender` after
+/// `use std::sync::mpsc;` is `std::sync::mpsc::Sender`).
 pub(crate) fn bound_type(qualified: &str) -> Option<ImmutableString> {
+    // A std module the std facade holds (`rawr_std::sync::mpsc`) stands
+    // for its std path.
+    if let Some(rest) = qualified
+        .strip_prefix(crate::std_facade::ROOT)
+        .and_then(|rest| rest.strip_prefix("::"))
+    {
+        let module = format!("std::{rest}");
+        return std_table::is_module(&module).then(|| module.into());
+    }
     let segments = std_segments(qualified)?;
+    if std_table::is_module(qualified) {
+        return Some(qualified.into());
+    }
     match std_table::resolve(&segments, Namespace::Type).ok()? {
         Resolved::Path(path) if path.is_type() => Some(qualified.into()),
         _ => None,

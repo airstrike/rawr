@@ -382,18 +382,26 @@ impl<'a> Parser<'a> {
             let items = value_or_call(macro_or_value(items.into_vec(), false), true);
             return self.parse_host_function(items.into_boxed_slice(), owner, member_span);
         }
-        // `Nope::<i32>`: a turbofish on a name that is no value.
+        // `Nope::<i32>`: a turbofish on a name that is no value. Called,
+        // as `nope::<i32>()`, it is no function, as a call without the
+        // turbofish is.
         if segments.is_empty() {
             if let Some(error) = self.module_value(&member, member_span) {
                 return Err(error);
             }
-            if let Some(error) = self.std_not_yet(&member, member_span) {
+            if matches!(self.peek(), Token::LeftParen | Token::Unit)
+                && let Some(error) = self.unknown_function(&member, member_span)
+            {
+                return Err(error);
+            }
+            let reference = Span::new(member_span.start(), text_end(member_span.start(), &member));
+            if let Some(error) = self.std_not_yet(&member, reference) {
                 return Err(error);
             }
             return Err(Error::UnknownVariable {
                 imports: self.imports(&member, Wanted::Value),
                 name: member,
-                reference: member_span,
+                reference,
             });
         }
         let owner: ImmutableString = segments

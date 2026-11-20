@@ -538,7 +538,12 @@ impl<'a> Parser<'a> {
                         source: call,
                     });
                 }
-                let template = if trait_name == "Debug" { "{:?}" } else { "{}" };
+                let template = if trait_name == "Debug" {
+                    "{:?}"
+                } else {
+                    self.forward_spec = true;
+                    "{}"
+                };
                 tokens = vec![
                     (identifier("write"), start),
                     (Token::Bang, start),

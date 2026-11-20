@@ -108,6 +108,16 @@ impl<'a> Parser<'a> {
         functions.chain(types).collect()
     }
 
+    /// The std path `path` names in this scope, as rustc resolves it:
+    /// through the `use` that binds its first segment, from std's root, or
+    /// through the edition's prelude. `None` for a path nothing in scope
+    /// makes std's.
+    pub(super) fn std_scoped(&self, path: &str) -> Option<String> {
+        let first = path.split("::").next().unwrap_or(path);
+        let binding = self.models.import(first);
+        crate::resolve::std_path::qualified(path, binding.map(|binding| binding.qualified.as_str()))
+    }
+
     /// rustc's E0423 for a macro's name used without `!` where a function
     /// or a value is `expected`: the program's own macro, or std's, as
     /// `print` or `std::print`.

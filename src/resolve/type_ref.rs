@@ -706,6 +706,7 @@ fn resolve_path(
             span,
         });
     }
+    let thread = super::std_thread_type(&name);
     // `std::collections::HashMap` and its kin, and `std::cmp::Reverse`,
     // unless the crate names one.
     let name = match super::std_collection(&name) {
@@ -732,14 +733,10 @@ fn resolve_path(
         {
             pointer.into()
         }
-        // `std::thread::JoinHandle` and `std::sync::mpsc`'s `Sender` and
-        // `Receiver`, unless the crate or a host names the type.
-        None if let Some(thread) = super::std_thread_type(&name)
-            && declared(types, name.as_str()).is_none()
-            && host.source_type(name.as_str()).is_none() =>
-        {
-            thread.into()
-        }
+        // `std::thread::JoinHandle`, `std::sync::Mutex` and
+        // `std::sync::mpsc`'s `Sender` and `Receiver`, by the std path the
+        // scope gave the name.
+        None if let Some(thread) = thread => thread.into(),
         None if declared(types, name.as_str()).is_none()
             && super::std_range(&name).is_some_and(|range| declared(types, range).is_none()) =>
         {
@@ -762,10 +759,7 @@ fn resolve_path(
         || name.as_str() == "VecDeque"
         || name.as_str() == "Rc"
         || name.as_str() == "Arc"
-        || matches!(
-            name.as_str(),
-            "JoinHandle" | super::MPSC_SENDER | super::MPSC_RECEIVER | "Mutex"
-        )
+        || thread.is_some()
         || super::lower_nominal::counted::std_weak(&written).is_some()
         || name.as_str() == "RangeInclusive"
         || name.as_str() == item::type_ref::ITER_TYPE
@@ -787,9 +781,20 @@ fn resolve_path(
         #[cfg(feature = "rust-import")]
         let missing =
             native.filter(|site| parsed.segments.len() > 1 && site.missing_binding(host, &name));
+        // rustc marks a one-segment path's name, not its arguments.
+        let reference = match &parsed.segments[..] {
+            [only] => {
+                let mut end = only.name.span.start();
+                for _ in only.name.text.chars() {
+                    end.advance();
+                }
+                Span::new(only.name.span.start(), end.max(only.name.span.end()))
+            }
+            _ => span,
+        };
         let error = Error::UnknownType {
             name,
-            reference: span,
+            reference,
             path: false,
             imports: Box::default(),
         };

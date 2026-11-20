@@ -32,6 +32,9 @@ pub(super) struct Pending {
     pub(super) span: Span,
 }
 
+/// The local a `fmt` body keeps its caller's spec in (`open_formatter`).
+pub(super) const FORMAT_SPEC: &str = "__rawr_fmt_spec";
+
 /// The placeholder of a pending `format!` piece, which the piece replaces
 /// once its type is known (`finish_formats`).
 pub(super) fn format_placeholder(index: usize) -> String {
@@ -82,6 +85,8 @@ pub(super) struct RawSpec {
     pub(super) fill: char,
     pub(super) align: Option<char>,
     pub(super) sign: bool,
+    /// `-`, which std keeps for `Formatter::sign_minus` alone.
+    pub(super) minus: bool,
     pub(super) alternate: bool,
     pub(super) zero: bool,
     pub(super) width: Option<CountRef>,
@@ -124,6 +129,7 @@ impl RawSpec {
             at = 1;
         }
         let sign = chars.get(at) == Some(&'+');
+        let minus = chars.get(at) == Some(&'-');
         if matches!(chars.get(at), Some('+' | '-')) {
             at += 1;
         }
@@ -203,6 +209,7 @@ impl RawSpec {
             fill,
             align,
             sign,
+            minus,
             alternate,
             zero,
             width,
@@ -228,6 +235,7 @@ impl RawSpec {
             fill: self.fill,
             align: self.align,
             sign: self.sign,
+            minus: self.minus,
             alternate: self.alternate,
             zero: self.zero,
             width,
@@ -243,6 +251,7 @@ pub(super) struct Spec {
     pub(super) fill: char,
     pub(super) align: Option<char>,
     pub(super) sign: bool,
+    pub(super) minus: bool,
     pub(super) alternate: bool,
     pub(super) zero: bool,
     pub(super) width: Option<Count>,
@@ -251,6 +260,37 @@ pub(super) struct Spec {
 }
 
 impl Spec {
+    /// Whether the spec sets anything: a width, a precision, an alignment,
+    /// a fill or a flag.
+    pub(super) fn is_set(&self) -> bool {
+        self.width.is_some()
+            || self.precision.is_some()
+            || self.align.is_some()
+            || self.fill != ' '
+            || self.sign
+            || self.minus
+            || self.alternate
+            || self.zero
+    }
+
+    /// The spec as a `fmt` body's formatter carries it at runtime
+    /// (`DebugSpec`), with `width` and `precision` Rawr expressions.
+    pub(super) fn runtime(&self, width: Option<&str>, precision: Option<&str>) -> String {
+        let align = self
+            .align
+            .map_or_else(|| "()".to_string(), |align| format!("{align:?}"));
+        let flags = i64::from(self.sign)
+            + 2 * i64::from(self.alternate)
+            + 4 * i64::from(self.zero)
+            + 8 * i64::from(self.minus);
+        format!(
+            "[0, {:?}, {align}, {flags}, {}, {}]",
+            self.fill,
+            width.unwrap_or("-1"),
+            precision.unwrap_or("-1"),
+        )
+    }
+
     /// A Rawr block that pads the text named `name` as Rust would: `width`
     /// and `precision` are Rawr expressions (a literal or a local).
     pub(super) fn render(
@@ -821,6 +861,52 @@ pub(super) fn debug_declared(value: &Dynamic, ty: &Ty, models: &Models) -> Strin
     }
 }
 
+/// What a `fmt` body asks its formatter of its spec: `f.width()`,
+/// `f.fill()` and kin, by the code `PreludeOp::FormatPart` takes.
+#[derive(Clone, Copy)]
+pub(super) enum FormatPart {
+    Width,
+    Precision,
+    Fill,
+    Alternate,
+    SignPlus,
+    SignMinus,
+    ZeroPad,
+}
+
+impl FormatPart {
+    /// The part the formatter's method `name` reads, with its type.
+    pub(super) fn of_method(name: &str) -> Option<(Self, Ty)> {
+        let count = || Ty::Option(Box::new(Ty::Int(Int::Usize)));
+        Some(match name {
+            "width" => (Self::Width, count()),
+            "precision" => (Self::Precision, count()),
+            "fill" => (Self::Fill, Ty::Char),
+            "alternate" => (Self::Alternate, Ty::Bool),
+            "sign_plus" => (Self::SignPlus, Ty::Bool),
+            "sign_minus" => (Self::SignMinus, Ty::Bool),
+            "sign_aware_zero_pad" => (Self::ZeroPad, Ty::Bool),
+            _ => return None,
+        })
+    }
+
+    pub(super) const fn code(self) -> INT {
+        self as INT
+    }
+
+    pub(super) fn from_code(code: INT) -> Self {
+        match code {
+            0 => Self::Width,
+            1 => Self::Precision,
+            2 => Self::Fill,
+            3 => Self::Alternate,
+            4 => Self::SignPlus,
+            5 => Self::SignMinus,
+            _ => Self::ZeroPad,
+        }
+    }
+}
+
 /// A builtin leaf of a `Debug` text, which a `{:?}` spec formats.
 #[derive(Clone, Copy)]
 pub(super) enum DebugLeaf {
@@ -871,6 +957,21 @@ impl DebugLeaf {
         }
     }
 
+    /// The code (`from_code`) of a value of `ty` that is a leaf: a
+    /// number, a `bool` or `()`.
+    pub(super) fn code_of(ty: &Ty) -> Option<INT> {
+        Some(match ty {
+            // An integer literal's type defaults to `i32`.
+            Ty::Int(Int::Var(_)) => 1032,
+            Ty::Int(kind) => INT::from(kind.bits()) + if kind.signed() { 1000 } else { 2000 },
+            Ty::Float(Float::F32) => 1,
+            Ty::Float(_) => 2,
+            Ty::Bool => 3,
+            Ty::Unit => 4,
+            _ => return None,
+        })
+    }
+
     /// A leaf by the code `PreludeOp::DebugLeaf` takes: 1 an `f32`, 2 an
     /// `f64`, 3 a `bool`, 4 `()`, and 1000 plus the bits for a signed
     /// integer or 2000 plus the bits for an unsigned one.
@@ -892,12 +993,14 @@ impl DebugLeaf {
 /// A `{:?}` spec as Rust's `Formatter` carries it through a derived
 /// `Debug`: `[hex, fill, align, flags, width, precision]` at runtime, with
 /// `hex` 16 or -16 for `{:x?}` or `{:X?}`, `align` a char or `()`, `flags`
-/// 1 for `+`, 2 for `#` and 4 for `0`, and -1 for no width or precision.
+/// 1 for `+`, 2 for `#`, 4 for `0` and 8 for `-`, and -1 for no width or
+/// precision. Any other value is no spec.
 pub(super) struct DebugSpec {
     pub(super) hex: Option<bool>,
     pub(super) fill: char,
     pub(super) align: Option<char>,
     pub(super) sign: bool,
+    pub(super) minus: bool,
     pub(super) alternate: bool,
     pub(super) zero: bool,
     pub(super) width: Option<usize>,
@@ -910,6 +1013,7 @@ impl DebugSpec {
         fill: ' ',
         align: None,
         sign: false,
+        minus: false,
         alternate: false,
         zero: false,
         width: None,
@@ -935,10 +1039,69 @@ impl DebugSpec {
                 .unwrap_or(' '),
             align: parts.get(2).and_then(|align| align.as_char().ok()),
             sign: flags & 1 != 0,
+            minus: flags & 8 != 0,
             alternate: flags & 2 != 0,
             zero: flags & 4 != 0,
             width: count(4),
             precision: count(5),
+        }
+    }
+
+    /// What the formatter's method `part` reads (`FormatPart`).
+    pub(super) fn part(&self, part: FormatPart) -> Dynamic {
+        let count = |count: Option<usize>| match count {
+            Some(count) => crate::option::some(Dynamic::from(count as INT)),
+            None => crate::option::none(),
+        };
+        match part {
+            FormatPart::Width => count(self.width),
+            FormatPart::Precision => count(self.precision),
+            FormatPart::Fill => self.fill.into(),
+            FormatPart::Alternate => self.alternate.into(),
+            FormatPart::SignPlus => self.sign.into(),
+            FormatPart::SignMinus => self.minus.into(),
+            FormatPart::ZeroPad => self.zero.into(),
+        }
+    }
+
+    /// `value`'s `Display` text as a leaf of kind `leaf` writes it under
+    /// this spec: a number as `Formatter::pad_integral` pads it, anything
+    /// else (its text) as `Formatter::pad` does.
+    pub(super) fn display(&self, value: &Dynamic, leaf: DebugLeaf) -> String {
+        match (leaf, &value.0) {
+            (DebugLeaf::Int { signed: true, .. }, Union::Int(value, ..)) => {
+                self.pad_number(*value < 0, "", &value.unsigned_abs().to_string())
+            }
+            (DebugLeaf::Int { signed: false, .. }, Union::Int(value, ..)) => {
+                self.pad_number(false, "", &(*value as u64).to_string())
+            }
+            (DebugLeaf::Float { single }, Union::Float(value, ..)) => {
+                let value = **value;
+                let text = match (self.precision, single) {
+                    (Some(precision), true) => format!("{:.precision$}", value as f32),
+                    (Some(precision), false) => format!("{value:.precision$}"),
+                    (None, true) => format!("{}", value as f32),
+                    (None, false) => format!("{value}"),
+                };
+                if value.is_nan() {
+                    return self.align_text(&text, '>');
+                }
+                match text.strip_prefix('-') {
+                    Some(digits) => self.pad_number(true, "", digits),
+                    None => self.pad_number(false, "", &text),
+                }
+            }
+            // A number of a type the caller doesn't know writes its own
+            // text, padded as a number.
+            (DebugLeaf::Other, Union::Int(..) | Union::Float(..)) => {
+                let text = value.to_string();
+                match text.strip_prefix('-') {
+                    Some(digits) => self.pad_number(true, "", digits),
+                    None => self.pad_number(false, "", &text),
+                }
+            }
+            (_, Union::Str(text, ..)) => self.pad(text),
+            _ => self.pad(&value.to_string()),
         }
     }
 
@@ -1094,6 +1257,7 @@ impl<'a> Parser<'a> {
         placed: &mut Placements,
     ) -> Result<ParsedExpr, Error> {
         self.settle_parses()?;
+        let forwarded = std::mem::take(&mut self.forward_spec);
         if !opened {
             self.expect(Token::LeftParen, "'(' after `format!`")?;
         }
@@ -1518,6 +1682,23 @@ impl<'a> Parser<'a> {
                 _ => None,
             };
             let number = float || int.is_some();
+            // A `fmt` body's `value.fmt(f)` formats with the body's own
+            // spec; a spec on a type whose `Display` is the program's (or a
+            // generic value's) goes to that `fmt` body as its formatter.
+            // Either way the body applies the spec, not a padding after.
+            let runtime = if forwarded {
+                Some(FORMAT_SPEC.to_string())
+            } else if spec.is_set() && self.display_takes_spec(&ty) {
+                let parts = self.temporary("spec");
+                source.push_text(format!(
+                    "let {parts} = {};\n",
+                    spec.runtime(width.as_deref(), precision.as_deref())
+                ));
+                Some(parts)
+            } else {
+                None
+            };
+            let taken = runtime.is_some() && spec.kind == Kind::Display;
             let mismatch = |expected: &str| Error::TypeMismatch {
                 expected: expected.into(),
                 actual: ty.name(&self.models),
@@ -1562,7 +1743,10 @@ impl<'a> Parser<'a> {
                     || precision.is_some()
                     || spec.sign
                     || spec.zero);
-            let value = if spread {
+            let value = if let Some(runtime) = runtime.filter(|_| taken) {
+                self.display_with_spec(&ty, name, &runtime)
+                    .ok_or_else(|| self.undisplayable(&ty, at))?
+            } else if spread {
                 // `pretty_debug` reads brackets, commas and quotes, so a fill
                 // of one would be read as structure.
                 if spec.alternate && width.is_some() && "{}[](),'\"".contains(spec.fill) {
@@ -1683,6 +1867,7 @@ impl<'a> Parser<'a> {
                 || ty == Ty::Arguments;
             if !quoted
                 && !spread
+                && !taken
                 && (width.is_some() || spec.sign && number || prefixed || truncated)
             {
                 let temporary = self.temporary("format");
@@ -2039,6 +2224,49 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Whether a value of `ty` is written by a `fmt` body, which takes the
+    /// spec it is formatted with: a script type's hand-written `Display`,
+    /// or a generic value's by its bound.
+    fn display_takes_spec(&self, ty: &Ty) -> bool {
+        if self.std_error(ty, true) {
+            return false;
+        }
+        match ty {
+            Ty::Script(id, _) => self.models.std_impl(*id, "Display", "fmt").is_some(),
+            Ty::Param(_) | Ty::Projection(..) | Ty::Dyn(..) => self.type_implements(ty, "Display"),
+            _ => false,
+        }
+    }
+
+    /// `value` of type `ty` as `{}` writes it under the runtime spec
+    /// `spec` (`DebugSpec`): a `fmt` body takes the spec as its
+    /// formatter, and a builtin is padded by it, as std's `Display` pads.
+    fn display_with_spec(
+        &mut self,
+        ty: &Ty,
+        value: origin::Fragment,
+        spec: &str,
+    ) -> Option<origin::Fragment> {
+        if self.display_takes_spec(ty) {
+            return Some(match ty {
+                Ty::Script(id, _) => Self::std_call(
+                    self.models.std_impl(*id, "Display", "fmt")?,
+                    value,
+                    &[spec.into()],
+                ),
+                _ => Self::std_dispatch("Display", "fmt", value, &[spec.into()]),
+            });
+        }
+        let (value, code) = match DebugLeaf::code_of(ty) {
+            Some(code) => (value, code),
+            None => (self.display_piece(ty, value)?, 0),
+        };
+        Some(self.prelude_op(
+            PreludeOp::FormatSpecDisplay,
+            [value, spec.into(), code.to_string().into()],
+        ))
+    }
+
     /// `value.fmt(f)` after its `fmt`: `write!(f, "{}", value)`, or
     /// `{:?}` in a `Debug` impl.
     pub(super) fn parse_value_fmt(
@@ -2052,6 +2280,7 @@ impl<'a> Parser<'a> {
         let template = if self.impl_trait.as_deref() == Some("Debug") {
             "{:?}"
         } else {
+            self.forward_spec = true;
             "{}"
         };
         let temporary = self.temporary("fmt");
@@ -2729,6 +2958,21 @@ impl<'a> Parser<'a> {
                 })
             }
         })
+    }
+
+    /// A `fmt` body's formatter comes in as the spec its caller formats
+    /// with (a `DebugSpec`, or `""` for none), as std's `Formatter` carries
+    /// one: the body keeps it in [`FORMAT_SPEC`], which `pad` and the
+    /// formatter's `width`, `fill` and kin read, and writes its text into
+    /// the formatter from empty, which `wrap_formatter` gives back.
+    pub(super) fn open_formatter(&mut self, body: Span) {
+        let Some(formatter) = self.formatter.clone() else {
+            return;
+        };
+        self.write_written(
+            format!("let {FORMAT_SPEC} = {formatter}; {formatter} = \"\";"),
+            body,
+        );
     }
 
     /// A `fmt` body returns the text it wrote: its `fmt::Result` tail is

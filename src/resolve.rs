@@ -2287,27 +2287,21 @@ pub(crate) const MPSC_RECEIVER: &str = "MpscReceiver";
 /// Rawr's builtin name for `std::sync::mpsc::SyncSender`.
 pub(crate) const MPSC_SYNC_SENDER: &str = "MpscSyncSender";
 
-/// Rawr's builtin name for the std thread type `path` names: `Mutex`,
-/// `JoinHandle`, `ScopedJoinHandle`, `PoisonError`, or a `Sender`,
-/// `SyncSender` or `Receiver` of `std::sync::mpsc`.
+/// Rawr's builtin name for the std thread type the std path `path` names:
+/// `Mutex`, `JoinHandle`, `ScopedJoinHandle`, `PoisonError`, or a `Sender`,
+/// `SyncSender` or `Receiver` of `std::sync::mpsc`. The path is whole, as
+/// the scope makes it: a name a `use` binds is its std path by then
+/// (`type_ref::through_scope`, `std_path::qualified`), and a bare one
+/// nothing binds names no std type, as in rustc.
 pub(crate) fn std_thread_type(path: &str) -> Option<&'static str> {
     match path {
-        "Mutex" | "sync::Mutex" | "std::sync::Mutex" => Some("Mutex"),
-        "JoinHandle" | "thread::JoinHandle" | "std::thread::JoinHandle" => Some("JoinHandle"),
-        "Sender" | "mpsc::Sender" | "sync::mpsc::Sender" | "std::sync::mpsc::Sender" => {
-            Some(MPSC_SENDER)
-        }
-        "Receiver" | "mpsc::Receiver" | "sync::mpsc::Receiver" | "std::sync::mpsc::Receiver" => {
-            Some(MPSC_RECEIVER)
-        }
-        "SyncSender"
-        | "mpsc::SyncSender"
-        | "sync::mpsc::SyncSender"
-        | "std::sync::mpsc::SyncSender" => Some(MPSC_SYNC_SENDER),
-        "ScopedJoinHandle" | "thread::ScopedJoinHandle" | "std::thread::ScopedJoinHandle" => {
-            Some("ScopedJoinHandle")
-        }
-        "PoisonError" | "sync::PoisonError" | "std::sync::PoisonError" => Some("PoisonError"),
+        "std::sync::Mutex" => Some("Mutex"),
+        "std::thread::JoinHandle" => Some("JoinHandle"),
+        "std::sync::mpsc::Sender" => Some(MPSC_SENDER),
+        "std::sync::mpsc::Receiver" => Some(MPSC_RECEIVER),
+        "std::sync::mpsc::SyncSender" => Some(MPSC_SYNC_SENDER),
+        "std::thread::ScopedJoinHandle" => Some("ScopedJoinHandle"),
+        "std::sync::PoisonError" => Some("PoisonError"),
         _ => None,
     }
 }

@@ -1165,6 +1165,143 @@ main();
     );
 }
 
+/// A `fmt` body formats under the spec its caller gives its formatter, as
+/// std's does: `write!` and `write_str` ignore it, `pad` applies it,
+/// `f.width()` and kin read it, and `value.fmt(f)` and a helper taking the
+/// formatter pass it on. Nothing pads the body's text afterwards (#2348).
+#[test]
+fn a_display_impl_reads_the_spec_its_formatter_carries() {
+    let source = r#"
+use std::fmt;
+
+struct Plain;
+impl fmt::Display for Plain {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "ab")
+    }
+}
+
+struct Padded;
+impl fmt::Display for Padded {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "<")?;
+        f.pad("ab")?;
+        f.write_str(">")
+    }
+}
+
+struct Spec;
+impl fmt::Display for Spec {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{:?} {:?} {:?} {} {} {} {}",
+            f.width(),
+            f.fill(),
+            f.precision(),
+            f.alternate(),
+            f.sign_plus(),
+            f.sign_minus(),
+            f.sign_aware_zero_pad()
+        )
+    }
+}
+
+struct Forward(i32);
+impl fmt::Display for Forward {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+struct Explicit(&'static str);
+impl fmt::Display for Explicit {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
+    }
+}
+
+struct Outer(Padded);
+impl fmt::Display for Outer {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "[{}]", self.0)?;
+        self.0.fmt(f)
+    }
+}
+
+struct Helped;
+fn helper(f: &mut fmt::Formatter, text: &str) -> fmt::Result {
+    f.pad(text)
+}
+impl fmt::Display for Helped {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "(")?;
+        helper(f, "xy")?;
+        write!(f, ")")
+    }
+}
+
+struct Single(f32);
+impl fmt::Display for Single {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+fn generic<T: fmt::Display>(value: T) -> String {
+    format!("[{value:>6}] [{value:<6}] [{value}]")
+}
+
+fn main() {
+    println!("[{}] [{:>5}] [{:*^7}] [{:.1}]", Plain, Plain, Plain, Plain);
+    println!("[{}] [{:>5}] [{:*^7}] [{:.1}]", Padded, Padded, Padded, Padded);
+    println!("[{}] [{:>5}] [{:#}]", Spec, Spec, Spec);
+    println!("[{:+08.3}] [{:-<4}] [{:-}]", Spec, Spec, Spec);
+    let width = 9;
+    println!("[{:>width$}]", Spec);
+    println!("[{}] [{:>5}] [{:<5}] [{:+05}]", Forward(7), Forward(7), Forward(-7), Forward(7));
+    println!("[{}] [{:>5}] [{:.2}]", Explicit("abc"), Explicit("abc"), Explicit("abc"));
+    println!("[{:>4}] [{:>4}] [{}]", Outer(Padded), Helped, Helped);
+    println!("[{:>8.2}] [{}] [{:+}]", Single(1.25), Single(0.1), Single(2.0));
+    println!("{} {}", generic(Padded), generic(5));
+    let boxed: Box<dyn fmt::Display> = Box::new(Padded);
+    println!("[{:>5}] {} {}", boxed, format!("{Padded:->4}"), Padded.to_string());
+}
+main();
+"#;
+    assert_eq!(
+        printed(source),
+        concat!(
+            "[ab] [ab] [ab] [ab]\n",
+            "[<ab>] [<   ab>] [<**ab***>] [<a>]\n",
+            "[None ' ' None false false false false] [Some(5) ' ' None false false false false] \
+             [None ' ' None true false false false]\n",
+            "[Some(8) ' ' Some(3) false true false true] [Some(4) '-' None false false false false] \
+             [None ' ' None false false true false]\n",
+            "[Some(9) ' ' None false false false false]\n",
+            "[7] [    7] [-7   ] [+0007]\n",
+            "[abc] [  abc] [ab]\n",
+            "[[<ab>]<  ab>] [(  xy)] [(xy)]\n",
+            "[    1.25] [0.1] [+2]\n",
+            "[<    ab>] [<ab    >] [<ab>] [     5] [5     ] [5]\n",
+            "[<   ab>] <--ab> <ab>\n",
+        )
+    );
+}
+
+/// A `Formatter` method rawr doesn't run is the not-yet error, naming
+/// std's path (#2348).
+#[test]
+fn a_formatter_method_rawr_doesnt_run_is_not_yet() {
+    let report = refused(
+        "use std::fmt;\nstruct A;\nimpl fmt::Display for A {\n    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {\n        write!(f, \"{}\", f.align().is_some())\n    }\n}\nfn main() { println!(\"{}\", A); }\nmain();\n",
+    );
+    assert!(
+        report.contains("rawr doesn't run `std::fmt::Formatter::align` yet"),
+        "{report}"
+    );
+}
+
 /// `text.into()` of a `&str` or a `String` where a `Box<dyn Error>` is
 /// expected, by a `let`'s type or a body's, is std's `From` for the box
 /// (#2345).

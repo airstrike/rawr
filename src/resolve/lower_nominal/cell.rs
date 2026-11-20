@@ -299,14 +299,11 @@ impl Parser<'_> {
         if crate::resolve::std_cell(path) && self.models.get("RefCell").is_none() {
             return Some(CellKind::RefCell);
         }
-        // `std::sync::Mutex`, written with its module or imported.
-        let mutex = |path: &str| crate::resolve::std_thread_type(path) == Some("Mutex");
+        // `std::sync::Mutex`, through the scope (`std_scoped`).
         if self.models.get("Mutex").is_none()
-            && (path.contains("::") && mutex(path)
-                || self
-                    .models
-                    .import(path)
-                    .is_some_and(|binding| mutex(&binding.qualified)))
+            && self.std_scoped(path).is_some_and(|qualified| {
+                crate::resolve::std_thread_type(&qualified) == Some("Mutex")
+            })
         {
             return Some(CellKind::Mutex);
         }

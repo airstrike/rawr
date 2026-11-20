@@ -669,7 +669,12 @@ impl<'a> Parser<'a> {
             {
                 Self::applied_script_type(&model, name_span, arguments)
             }
-            _ if generic => Err(self.unsupported("generic arguments on a non-generic type")),
+            // A name nothing in scope binds is rustc's error for it, its
+            // arguments or not.
+            _ if generic => Err(self
+                .resolve_type(&name, name_span)
+                .err()
+                .unwrap_or_else(|| self.unsupported("generic arguments on a non-generic type"))),
             Some((definition, owner)) if qualified.is_some() => {
                 // The use is of the type's own path, as a path through a
                 // module import (`alignment::Alignment` after `use
