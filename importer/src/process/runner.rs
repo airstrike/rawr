@@ -116,6 +116,10 @@ pub struct Arguments {
     /// child: one would make std fork this process instead of using
     /// `posix_spawn`.
     pub prepare: Option<fn(&mut Command)>,
+    /// Where the program's output also goes as the owner copies it to its
+    /// own stdout and stderr, when the program doesn't write to a terminal
+    /// itself.
+    pub output: Option<fn(Stream, &[u8])>,
 }
 
 /// Closed generated-runner product lifecycle fixed before process admission.
@@ -415,10 +419,16 @@ impl<B> crate::runner::Manifest<crate::runner::Built, B> {
         }
         // `rawr run` shows what the program prints as it prints it.
         let forward = process.lifecycle == Lifecycle::Run;
-        let stdout = stdout
-            .map(|stdout| thread::spawn(move || tail(stdout, forward.then_some(Forward::Stdout))));
-        let stderr = stderr
-            .map(|stderr| thread::spawn(move || tail(stderr, forward.then_some(Forward::Stderr))));
+        let observe = program.and_then(|program| program.output);
+        let forwarded = |stream| {
+            forward.then_some(Forward {
+                stream,
+                also: observe,
+            })
+        };
+        let (out, err) = (forwarded(Stream::Stdout), forwarded(Stream::Stderr));
+        let stdout = stdout.map(|stdout| thread::spawn(move || tail(stdout, out)));
+        let stderr = stderr.map(|stderr| thread::spawn(move || tail(stderr, err)));
         let stream = match accept(&listener, &mut child) {
             Ok(stream) => stream,
             Err(error) => {
@@ -1682,11 +1692,19 @@ fn hex(bytes: &[u8; 32]) -> String {
     output
 }
 
-/// Where a running program's output also goes as it arrives.
-#[derive(Clone, Copy)]
-enum Forward {
+/// A stream a running program writes to.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Stream {
     Stdout,
     Stderr,
+}
+
+/// Where a running program's output also goes as it arrives: this
+/// process's own `stream`, and `also`.
+#[derive(Clone, Copy)]
+struct Forward {
+    stream: Stream,
+    also: Option<fn(Stream, &[u8])>,
 }
 
 fn tail(mut reader: impl std::io::Read, forward: Option<Forward>) -> std::io::Result<Box<[u8]>> {
@@ -1699,15 +1717,19 @@ fn tail(mut reader: impl std::io::Read, forward: Option<Forward>) -> std::io::Re
             return Ok(retained.into_boxed_slice());
         }
         // Best effort: a closed terminal never fails the runner.
-        match forward {
-            Some(Forward::Stdout) => {
-                let mut out = std::io::stdout().lock();
-                let _ = out.write_all(&buffer[..count]).and_then(|()| out.flush());
+        if let Some(forward) = forward {
+            match forward.stream {
+                Stream::Stdout => {
+                    let mut out = std::io::stdout().lock();
+                    let _ = out.write_all(&buffer[..count]).and_then(|()| out.flush());
+                }
+                Stream::Stderr => {
+                    let _ = std::io::stderr().lock().write_all(&buffer[..count]);
+                }
             }
-            Some(Forward::Stderr) => {
-                let _ = std::io::stderr().lock().write_all(&buffer[..count]);
+            if let Some(also) = forward.also {
+                also(forward.stream, &buffer[..count]);
             }
-            None => {}
         }
         retained.extend_from_slice(&buffer[..count]);
         if retained.len() > crate::protocol::STREAM_TAIL_BYTES {
@@ -1873,6 +1895,29 @@ mod tests {
     use std::io::Cursor;
 
     use super::*;
+
+    /// What `tail` handed on, in the order it read it.
+    static HANDED: std::sync::Mutex<Vec<(Stream, Vec<u8>)>> = std::sync::Mutex::new(Vec::new());
+
+    fn hand(stream: Stream, bytes: &[u8]) {
+        HANDED.lock().unwrap().push((stream, bytes.to_vec()));
+    }
+
+    /// A program's output the owner copies to its own stream is handed on
+    /// as it arrives, and kept as its log, for a run's session (#2288).
+    #[test]
+    fn forwarded_output_is_handed_on_as_it_is_copied() {
+        let forward = Forward {
+            stream: Stream::Stderr,
+            also: Some(hand),
+        };
+        let log = tail(Cursor::new(b"said\n".to_vec()), Some(forward)).unwrap();
+        assert_eq!(&*log, b"said\n");
+        assert_eq!(
+            *HANDED.lock().unwrap(),
+            [(Stream::Stderr, b"said\n".to_vec())]
+        );
+    }
 
     #[test]
     fn authentication_is_exact_missing_and_per_spawn() {

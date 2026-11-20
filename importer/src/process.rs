@@ -51,7 +51,7 @@ pub mod value;
 pub use groups::{remove_on_exit, retire_owned, Left};
 pub use terminal::say;
 
-pub use runner::{Admitted, Arguments, Candidate, Error as RunnerError, Lifecycle, Owner};
+pub use runner::{Admitted, Arguments, Candidate, Error as RunnerError, Lifecycle, Owner, Stream};
 
 /// A logical program from the exact importer toolchain.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

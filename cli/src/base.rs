@@ -184,6 +184,18 @@ pub fn run(loaded: Loaded) -> Result<Option<String>, Failed> {
     // The process exits when `main` returns, ending the threads the program
     // left running, as a Rust program's does.
     let engine = engine(Build::Program).leak();
+    // What the program prints goes to the terminal, then to the run's
+    // session, when it has one (#2288).
+    #[cfg(unix)]
+    if crate::events::session::teller::is_open() {
+        engine.on_output(|output, text| {
+            match output {
+                rawr::Output::Stderr => eprint!("{text}"),
+                _ => print!("{text}"),
+            }
+            crate::events::session::teller::tell(output, text);
+        });
+    }
     // The inspector serves from the start; its debugger is registered
     // with the running engine when a shell first needs it (#2297).
     let served = Served::serve(engine);

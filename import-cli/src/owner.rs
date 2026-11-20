@@ -289,6 +289,7 @@ pub fn run_program(
         name: rawr_cli::supervise::program_name(target),
         arguments: arguments.to_vec(),
         prepare: Some(prepare),
+        output: Some(output),
     };
     // Shells attach to the run here (D1053.2).
     let _session = rawr_cli::events::session::open(&rawr_cli::events::session::root(target));
@@ -441,6 +442,7 @@ pub fn run_tests(
         name: rawr_cli::supervise::program_name(target),
         arguments: arguments.to_vec(),
         prepare: None,
+        output: None,
     };
     let lifecycle = rawr_import::process::Lifecycle::Run;
     let mut origin = Origin::graph(Some(graph));
@@ -488,6 +490,16 @@ fn prepare(command: &mut std::process::Command) {
         command.env(rawr_cli::events::reload::VARIABLE, path);
     }
     rawr_cli::events::session::prepare(command);
+}
+
+/// The program's output, as this process copies it to its own stdout and
+/// stderr, goes to the run's session too (#2288).
+fn output(stream: rawr_import::process::Stream, bytes: &[u8]) {
+    let stream = match stream {
+        rawr_import::process::Stream::Stdout => rawr::Output::Stdout,
+        rawr_import::process::Stream::Stderr => rawr::Output::Stderr,
+    };
+    rawr_cli::events::session::output(stream, bytes);
 }
 
 /// The contents of the program's files: its sources, its native modules
