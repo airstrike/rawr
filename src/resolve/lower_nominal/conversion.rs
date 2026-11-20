@@ -996,7 +996,7 @@ impl<'a> Parser<'a> {
         });
         match local {
             Some((local, ty)) => Error::LocalTypeNeeded {
-                annotation: self.annotation(local.declaration),
+                annotation: self.annotation(local.declaration).map(Box::new),
                 code: "E0283",
                 name: local.name.clone(),
                 ty: (!open(&ty)).then(|| ty.name(&self.models)),

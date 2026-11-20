@@ -726,10 +726,10 @@ pub enum Error {
         name: ImmutableString,
         /// The namespace they bind it in: `type`, `value` or `macro`.
         namespace: &'static str,
-        /// The second import.
-        declaration: Import,
+        /// The second import, boxed with the first to keep the error small.
+        declaration: Box<Import>,
         /// The first import.
-        previous_declaration: Import,
+        previous_declaration: Box<Import>,
     },
     /// A header referenced neither a script type, builtin, nor host type.
     UnknownType {
@@ -1378,7 +1378,7 @@ pub enum Error {
         note: Option<ImmutableString>,
         /// The type rustc suggests writing for the local, when its `let`
         /// declares it alone with no type.
-        annotation: Option<Annotation>,
+        annotation: Option<Box<Annotation>>,
     },
     /// An integer literal its type can't hold, which rustc's
     /// deny-by-default `overflowing_literals` lint refuses: "literal out of
@@ -1502,8 +1502,8 @@ impl Error {
             (_, Some(previous_declaration)) => Self::DuplicateImport {
                 name,
                 namespace,
-                declaration,
-                previous_declaration,
+                declaration: Box::new(declaration),
+                previous_declaration: Box::new(previous_declaration),
             },
             (previous_declaration, None) => Self::DuplicateItem {
                 name,

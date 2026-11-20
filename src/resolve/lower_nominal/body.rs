@@ -759,7 +759,7 @@ impl<'a> Parser<'a> {
             .filter(|_| ty != unknown);
         let annotation = self.annotation(local.declaration);
         Some(Error::LocalTypeNeeded {
-            annotation,
+            annotation: annotation.map(Box::new),
             code: if ambiguous.is_some() && made.is_none() {
                 "E0283"
             } else {
@@ -831,7 +831,7 @@ impl<'a> Parser<'a> {
         let annotation = self.annotation(first.declaration);
         Err(match first.operator {
             Some((code, needed)) => Error::LocalTypeNeeded {
-                annotation,
+                annotation: annotation.map(Box::new),
                 code,
                 name: first.name,
                 ty: None,
@@ -840,7 +840,7 @@ impl<'a> Parser<'a> {
                 note: None,
             },
             None if unknown => Error::LocalTypeNeeded {
-                annotation,
+                annotation: annotation.map(Box::new),
                 code: "E0282",
                 name: first.name,
                 ty: None,
