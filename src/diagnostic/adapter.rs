@@ -474,9 +474,37 @@ fn named(span: Span, name: &str) -> Span {
     }
 }
 
-/// An unknown member's span, which covers its name as rustc underlines it.
+/// Where the program writes the bound `error`, rustc's E0277, says a
+/// call's argument doesn't meet.
+fn bound_place(error: &resolve::Error) -> Option<&resolve::Bound> {
+    match error {
+        resolve::Error::MissingCapability {
+            required_by:
+                Some(resolve::Required {
+                    place: Some(place), ..
+                }),
+            ..
+        } => Some(place),
+        _ => None,
+    }
+}
+
+/// An unknown member's span, which covers its name as rustc underlines it;
+/// an unmet bound's argument and a wrong argument count's callee.
 fn member_span(error: &resolve::Error) -> Span {
     let primary = error.primary_span();
+    // An unmet bound is at the argument that has to meet it.
+    if let Some(place) = bound_place(error) {
+        return place.argument;
+    }
+    // rustc's E0061 is at the callee, its arguments labelled beside it.
+    if let resolve::Error::ArgumentCount {
+        arguments: Some(arguments),
+        ..
+    } = error
+    {
+        return arguments.callee;
+    }
     let (resolve::Error::UnknownMember { member, .. }
     | resolve::Error::MemberKind { member, .. }
     | resolve::Error::NotInModule { item: member, .. }) = error
@@ -622,16 +650,68 @@ fn resolution_report_with_sources(
             builder = builder.secondary(source.clone(), *field, label)?;
         }
     }
+    if let resolve::Error::ArgumentCount {
+        arguments: Some(arguments),
+        call,
+        ..
+    } = error
+    {
+        for (span, label) in super::arguments::labels(arguments, &source, call.end()) {
+            builder = builder.secondary(source.clone(), span, Some(label))?;
+        }
+    }
+    if let Some(place) = bound_place(error) {
+        builder = builder.secondary(
+            source.clone(),
+            place.callee,
+            Some("required by a bound introduced by this call".into()),
+        )?;
+    }
     let secondary_source = secondary_source.unwrap_or_else(|| source.clone());
+    let detail = match error {
+        resolve::Error::PrivateItem {
+            detail: Some(detail),
+            ..
+        } => Some(&**detail),
+        _ => None,
+    };
+    match detail {
+        // A constructor's fields, beside the use.
+        Some(resolve::Detail::Constructor(resolve::Fields {
+            fields: Some(fields),
+            ..
+        })) => {
+            builder = builder.secondary(
+                secondary_source.clone(),
+                *fields,
+                Some(
+                    resolve::Private::TupleStructConstructor
+                        .defined_here()
+                        .into(),
+                ),
+            )?;
+        }
+        // The item past a private module, when no public path reaches it.
+        Some(resolve::Detail::Through(resolve::Beyond {
+            item,
+            name,
+            reference,
+            reexport: None,
+            ..
+        })) => {
+            let label = format!("{} `{name}` is not publicly re-exported", item.noun());
+            builder = builder.secondary(source.clone(), *reference, Some(label.into()))?;
+        }
+        _ => {}
+    }
     if let Some(secondary) = error.secondary_span().filter(|span| !span.is_none()) {
         builder = match sectioned(error, &secondary_source, secondary) {
             Some(section) => {
                 let builder = builder.section(section)?;
-                match error {
-                    resolve::Error::PrivateItem {
-                        referent: Some(referent),
-                        ..
-                    } => builder.section(referent_section(referent, &secondary_source))?,
+                match detail {
+                    Some(resolve::Detail::Import(referent)) => {
+                        builder.section(referent_section(referent, &secondary_source))?
+                    }
                     _ => builder,
                 }
             }
@@ -643,7 +723,7 @@ fn resolution_report_with_sources(
                     }
                     _ => secondary,
                 };
-                builder.secondary(secondary_source, secondary, secondary_message)?
+                builder.secondary(secondary_source.clone(), secondary, secondary_message)?
             }
         };
     }
@@ -653,7 +733,79 @@ fn resolution_report_with_sources(
     if let Some(suggestion) = suggestion(error, &source)? {
         builder = builder.suggestion(suggestion);
     }
+    if let Some(suggestion) = detail
+        .map(|detail| private_suggestion(detail, &source, &secondary_source))
+        .transpose()?
+        .flatten()
+    {
+        builder = builder.suggestion(suggestion);
+    }
     Ok(builder.finish())
+}
+
+/// The code rustc suggests for a private item, `detail` beside it, used in
+/// `source` and declared in `declared`: the path the use could name the
+/// item by instead, or `pub ` before each private field of a tuple
+/// struct's constructor.
+fn private_suggestion(
+    detail: &resolve::Detail,
+    source: &Source,
+    declared: &Source,
+) -> Result<Option<Suggestion>, Error> {
+    let (message, edits) = match detail {
+        resolve::Detail::Import(resolve::Referent {
+            item,
+            instead: Some(resolve::Instead::Item(path)),
+            written,
+            ..
+        }) => (
+            format!("consider importing this {} instead", item.noun()),
+            vec![Edit::new(source.clone(), *written, path.as_str())?],
+        ),
+        resolve::Detail::Import(resolve::Referent {
+            instead: Some(resolve::Instead::Import(path)),
+            written,
+            ..
+        }) => (
+            format!(
+                "import `{}` directly",
+                path.rsplit("::").next().unwrap_or(path)
+            ),
+            vec![Edit::new(source.clone(), *written, path.as_str())?],
+        ),
+        resolve::Detail::Through(resolve::Beyond {
+            item,
+            reexport: Some(path),
+            written,
+            ..
+        }) => (
+            format!(
+                "consider importing this {} through its public re-export instead",
+                item.noun()
+            ),
+            vec![Edit::new(source.clone(), *written, path.as_str())?],
+        ),
+        resolve::Detail::Constructor(resolve::Fields { private, count, .. }) => {
+            let field = if *count == 1 { "field" } else { "fields" };
+            let edits = private
+                .iter()
+                .map(|at| Edit::new(declared.clone(), Span::new(*at, *at), "pub "))
+                .collect::<Result<Vec<_>, _>>()?;
+            (
+                format!("consider making the {field} publicly accessible"),
+                edits,
+            )
+        }
+        _ => return Ok(None),
+    };
+    let mut edits = edits.into_iter();
+    let Some(first) = edits.next() else {
+        return Ok(None);
+    };
+    Ok(Some(edits.fold(
+        Suggestion::new(message, Style::Verbose, first),
+        Suggestion::edit,
+    )))
 }
 
 /// The note rustc gives `at`, the place in `source` that `error` relates
@@ -661,8 +813,18 @@ fn resolution_report_with_sources(
 /// beside the error's own.
 fn sectioned(error: &resolve::Error, source: &Source, at: Span) -> Option<Section> {
     let note = match error {
-        resolve::Error::ArgumentCount { callee, .. } => {
-            return Some(Section::note(callee.defined_here()).primary(source.clone(), at, None));
+        // The parameters the call gives nothing are marked beside the
+        // callee's name.
+        resolve::Error::ArgumentCount {
+            callee, arguments, ..
+        } => {
+            let section = Section::note(callee.defined_here()).primary(source.clone(), at, None);
+            let declared = arguments
+                .iter()
+                .flat_map(|arguments| super::arguments::declared(arguments));
+            return Some(declared.fold(section, |section, parameter| {
+                section.secondary(source.clone(), parameter, None)
+            }));
         }
         // An import's note shows its path as written.
         resolve::Error::PrivateItem {
@@ -673,13 +835,28 @@ fn sectioned(error: &resolve::Error, source: &Source, at: Span) -> Option<Sectio
             let note = format!("the {} `{name}` is defined here...", item.noun());
             return Some(Section::note(note).primary(source.clone(), at, None));
         }
+        // E0603 shows a unit struct through its `;`.
+        resolve::Error::PrivateItem {
+            item: item @ (resolve::Private::Struct | resolve::Private::UnitStruct),
+            name,
+            ..
+        } => {
+            let note = format!("the {} `{name}` is defined here", item.noun());
+            let item = super::definition::span(source, at);
+            let (line, column) = (item.end().line(), item.end().position());
+            let semicolon = line.zip(column).is_some_and(|(line, column)| {
+                let text = source.text();
+                text[super::render::offset(text, line, column)..].starts_with(';')
+            });
+            let mut end = item.end();
+            if semicolon {
+                end.advance();
+            }
+            let item = Span::new(item.start(), end);
+            return Some(Section::note(note).primary(source.clone(), item, None));
+        }
         // E0603's note shows the item whole; E0624 labels the function
         // beside the call.
-        // A constructor's label is at its fields, beside the use.
-        resolve::Error::PrivateItem {
-            item: resolve::Private::TupleStructConstructor,
-            ..
-        } => return None,
         resolve::Error::PrivateItem { item, name, .. } if item.code() == "E0603" => {
             format!("the {} `{name}` is defined here", item.noun())
         }
@@ -762,6 +939,38 @@ fn sections(error: &resolve::Error, source: &Source) -> Vec<Section> {
                 resolve::Cloning::Clone | resolve::Cloning::None => None,
             };
             parameter.chain(derivable).collect()
+        }
+        // A bound the program writes: `Display`'s help at the type's
+        // definition, then the bound.
+        resolve::Error::MissingCapability {
+            owner,
+            capability,
+            required_by:
+                Some(resolve::Required {
+                    item,
+                    place: Some(place),
+                }),
+            ..
+        } => {
+            let help = place
+                .declared
+                .filter(|_| capability == "Display")
+                .map(|declared| {
+                    Section::help(format!(
+                        "the trait `std::fmt::Display` is not implemented for `{owner}`"
+                    ))
+                    .primary(
+                        source.clone(),
+                        super::definition::span(source, declared),
+                        None,
+                    )
+                });
+            let bound = Section::note(format!("required by a bound in `{item}`")).primary(
+                source.clone(),
+                place.bound,
+                Some(format!("required by this bound in `{item}`").into()),
+            );
+            help.into_iter().chain([bound]).collect()
         }
         // An arm's `&mut` pattern of one binding on a `&` value: rustc
         // notes the `mut` binding it may have meant.
@@ -850,6 +1059,38 @@ fn suggestion(error: &resolve::Error, source: &Source) -> Result<Option<Suggesti
             after(*moved),
             ".clone()",
         ),
+        resolve::Error::ArgumentCount {
+            arguments: Some(arguments),
+            call,
+            ..
+        } => super::arguments::suggestion(arguments, source, call.end()),
+        // The derive goes on its own line above the type, as indented.
+        resolve::Error::MissingCapability {
+            owner,
+            capability,
+            derive: true,
+            ..
+        } if resolve::derivable(capability)
+            && let Some(declared) = bound_place(error).and_then(|place| place.declared) =>
+        {
+            let item = super::definition::span(source, declared).start();
+            let (Some(line), Some(column)) = (item.line(), item.position()) else {
+                return Ok(None);
+            };
+            let indent: String = source
+                .text()
+                .split('\n')
+                .nth(line.saturating_sub(1))
+                .map(|line| line.chars().take(column.saturating_sub(1)).collect())
+                .unwrap_or_default();
+            let start = crate::Position::new(u16::try_from(line).unwrap_or(u16::MAX), 1);
+            suggestion(
+                &format!("consider annotating `{owner}` with `#[derive({capability})]`"),
+                Style::Verbose,
+                Span::new(start, start),
+                &format!("{indent}#[derive({capability})]\n"),
+            )
+        }
         resolve::Error::SlicePattern {
             sliceable: true,
             subject: Some(subject),
@@ -998,6 +1239,17 @@ fn primary_label(
         }
         resolve::Error::WrongKind { expected, .. } => Some(format!("not a {expected}").into()),
         resolve::Error::Unimplemented { label, .. } => Some(label.clone()),
+        // At an argument a bound needs, as the trait's own wording has it.
+        resolve::Error::MissingCapability {
+            owner, capability, ..
+        } if bound_place(error).is_some() => Some(
+            match capability.as_str() {
+                "Display" => "unsatisfied trait bound".to_owned(),
+                "PartialEq" => format!("no implementation for `{owner} == {owner}`"),
+                _ => format!("the trait `{capability}` is not implemented for `{owner}`"),
+            }
+            .into(),
+        ),
         resolve::Error::ImmutableBinding { .. } => {
             Some("cannot assign twice to immutable variable".into())
         }
@@ -1273,9 +1525,16 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
             required_by,
             ..
         } => {
+            // A type the program declares in this file shows the help at
+            // its definition, and the derive as a suggestion there.
+            let declared = bound_place(error).and_then(|place| place.declared);
             let builder = match capability.as_str() {
+                "Display" if declared.is_some() => builder,
                 "Display" => builder.help(format!(
                     "the trait `std::fmt::Display` is not implemented for `{owner}`"
+                )),
+                "PartialEq" => builder.help(format!(
+                    "the trait `PartialEq` is not implemented for `{owner}`"
                 )),
                 "Sized" => builder.help(format!(
                     "the trait `Sized` is not implemented for `{owner}`"
@@ -1283,10 +1542,12 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
                 _ => builder,
             };
             let builder = match required_by {
-                Some(item) => builder.note(format!("required by a bound in `{item}`")),
-                None => builder,
+                Some(resolve::Required { item, place: None }) => {
+                    builder.note(format!("required by a bound in `{item}`"))
+                }
+                _ => builder,
             };
-            if *derive && resolve::derivable(capability) {
+            if *derive && resolve::derivable(capability) && declared.is_none() {
                 builder.help(format!(
                     "consider annotating `{owner}` with `#[derive({capability})]`"
                 ))
@@ -1339,7 +1600,10 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
                 .note("`#[deny(overflowing_literals)]` on by default")
         }
         resolve::Error::ArgumentCount {
-            expected, found, ..
+            expected,
+            found,
+            arguments: None,
+            ..
         } => builder.help(match (found < expected, expected.abs_diff(*found)) {
             (true, 1) => "provide the argument",
             (true, _) => "provide the arguments",

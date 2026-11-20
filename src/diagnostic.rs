@@ -1,6 +1,7 @@
 //! Presentation-independent structured diagnostics.
 
 mod adapter;
+mod arguments;
 pub mod code;
 mod definition;
 mod panic;

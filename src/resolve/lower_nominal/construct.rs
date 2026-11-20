@@ -38,6 +38,7 @@ impl<'a> Parser<'a> {
         }
         let message = match written {
             Constructor::Path => {
+                let here = self.models.type_in_this_file(&item.key);
                 let fields = item
                     .fields
                     .first()
@@ -49,12 +50,26 @@ impl<'a> Parser<'a> {
                             .map_or(first.span, |visibility| visibility.span);
                         Span::new(start.start(), last.span.end())
                     });
+                // rustc suggests `pub ` before each field with no marker.
+                let private = item
+                    .fields
+                    .iter()
+                    .filter(|field| {
+                        field.visibility.is_none() && !self.models.sees_field(&item.key, field)
+                    })
+                    .map(|field| field.span.start())
+                    .collect();
+                let fields = crate::resolve::Fields {
+                    fields: fields.filter(|_| here),
+                    private: if here { private } else { Box::default() },
+                    count: item.fields.len(),
+                };
                 return Err(Error::PrivateItem {
                     item: crate::resolve::Private::TupleStructConstructor,
                     name: definition.name().into(),
                     reference: name,
-                    declaration: fields.filter(|_| self.models.type_in_this_file(&item.key)),
-                    referent: None,
+                    declaration: here.then_some(item.name.span),
+                    detail: Some(Box::new(crate::resolve::Detail::Constructor(fields))),
                 });
             }
             Constructor::Call => "cannot initialize a tuple struct which contains private fields",
@@ -125,6 +140,10 @@ impl<'a> Parser<'a> {
             .map(|field| instantiate(&Ty::from_resolved(&field.ty), &substitution))
             .collect();
         let arity = inputs.len();
+        let declared = self
+            .models
+            .type_in_this_file(&item.key)
+            .then_some(item.name.span);
         let helper = self.push_op(Op::Struct {
             definition: definition.clone(),
             item: Box::new(item),
@@ -158,13 +177,19 @@ impl<'a> Parser<'a> {
             self.expect(Token::RightParen, "')' after tuple struct fields")?
         };
         if args.len() != arity {
-            return Err(Error::argument_count(
-                Callee::Struct,
-                definition.name(),
-                arity,
-                args.len(),
-                span(expression.start(), end),
-            ));
+            let call = span(expression.start(), end);
+            let callee = self.callee_path(call, definition.name());
+            // rustc marks no field at a tuple struct's definition.
+            let places = self.argument_places(callee, &inputs, &[], false, &args);
+            return Err(Error::ArgumentCount {
+                callee: Callee::Struct,
+                name: definition.name().into(),
+                expected: arity,
+                found: args.len(),
+                call,
+                definition: declared,
+                arguments: Some(places),
+            });
         }
         for (value, expected) in args.iter_mut().zip(inputs.iter()) {
             self.coerce_expr(expected, value)?;
@@ -950,6 +975,33 @@ impl<'a> Parser<'a> {
                     field,
                     *field_span,
                 ));
+            }
+        }
+        // The fields `..base` gives are named by the base, which must see
+        // them too.
+        if let Some(base) = &base {
+            let hidden: Vec<String> = item
+                .fields
+                .iter()
+                .filter(|field| !values.contains_key(&field.name.text))
+                .filter(|field| !self.models.sees_field(&item.key, field))
+                .map(|field| format!("`{}`", field.name.text))
+                .collect();
+            if !hidden.is_empty() {
+                let (fields, are) = match hidden.as_slice() {
+                    [field] => (format!("field {field}"), "is"),
+                    [first, second] => (format!("fields {first} and {second}"), "are"),
+                    [rest @ .., last] => (format!("fields {}, and {last}", rest.join(", ")), "are"),
+                    [] => unreachable!("the hidden fields were checked"),
+                };
+                return Err(Error::StdPath {
+                    code: "E0451",
+                    message: format!("{fields} of struct `{}` {are} private", definition.name())
+                        .into(),
+                    label: Some(format!("{fields} {are} private").into()),
+                    note: None,
+                    reference: self.whole_expression(base.span),
+                });
             }
         }
         // Each value is bound in source order before construction.

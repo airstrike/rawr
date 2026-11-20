@@ -1440,7 +1440,10 @@ impl<'a> Parser<'a> {
                     capability,
                     operation: name.span,
                     derive: matches!(ty, Ty::Script(..)),
-                    required_by: Some(format!("{}::{}", trait_name.text, name.text).into()),
+                    required_by: Some(crate::resolve::Required::by(format!(
+                        "{}::{}",
+                        trait_name.text, name.text
+                    ))),
                 });
             }
             self.check_associated_equalities(&trait_name.text, name, &ty, &owner)?;

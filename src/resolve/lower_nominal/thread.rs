@@ -528,11 +528,11 @@ impl Parser<'_> {
                 capability: if unsent.borrowed { "Sync" } else { "Send" }.into(),
                 operation: closure.span,
                 derive: false,
-                required_by: Some(spawner.path().into()),
+                required_by: Some(crate::resolve::Required::by(spawner.path())),
             });
         }
         self.pending_bounds
-            .push((output.clone(), capability::Kind::Send, call));
+            .push((output.clone(), capability::Kind::Send, call, None));
         Ok(output)
     }
 

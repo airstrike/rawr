@@ -1649,12 +1649,13 @@ impl<'a> Parser<'a> {
                 crate::resolve::Private::AssociatedFunction
             },
             name: definition.name().into(),
-            reference,
+            // rustc marks the name whole.
+            reference: Span::new(reference.start(), text_end(reference.start(), member)),
             declaration: self
                 .models
                 .in_this_file(definition.source())
                 .then_some(definition.name_span()),
-            referent: None,
+            detail: None,
         })
     }
 

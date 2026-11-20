@@ -802,7 +802,17 @@ fn main() {
   |                  ------------ a constructor is private if any of the fields is private
 ...
 5 |     let _ = a::Q(1, 2);
-  |                ^ private tuple struct constructor"
+  |                ^ private tuple struct constructor
+  |
+note: the tuple struct constructor `Q` is defined here
+ --> main.rs:2:5
+  |
+2 |     pub struct Q(pub i32, i32);
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider making the fields publicly accessible
+  |
+2 |     pub struct Q(pub i32, pub i32);
+  |                           +++"
     );
     let source = |statement: &str| {
         format!(
@@ -864,7 +874,12 @@ note: ...and refers to the function `g` which is defined here
   --> main.rs:3:9
    |
  3 |         pub fn g(x: i32) -> i32 { x }
-   |         ^^^^^^^^^^^^^^^^^^^^^^^ you could import this directly"
+   |         ^^^^^^^^^^^^^^^^^^^^^^^ you could import this directly
+help: import `gg` directly
+   |
+12 -     m::gg(1);
+12 +     q::gg(1);
+   |"
     );
     // A private `use`, which its module's descendants alone see.
     let report = rejected(
@@ -991,5 +1006,286 @@ fn a_visibility_restricted_to_no_ancestor_is_refused() {
   |
 2 |     pub(in a) fn f() {}
   |            ^ help: try: `crate::a`"
+    );
+}
+
+/// A private struct named as a value is rustc's unit struct or tuple
+/// struct constructor, noted through its `;`, with the fields that keep a
+/// constructor private marked and `pub` suggested for them; named as a
+/// type it is a struct.
+#[test]
+fn a_private_struct_named_as_a_value_is_its_constructor() {
+    let shown = rejected("mod m {\n    struct U;\n}\nfn main() {\n    let _ = m::U;\n}\n");
+    assert_eq!(
+        shown,
+        concat!(
+            "error[E0603]: unit struct `U` is private\n",
+            " --> main.rs:5:16\n",
+            "  |\n",
+            "5 |     let _ = m::U;\n",
+            "  |                ^ private unit struct\n",
+            "  |\n",
+            "note: the unit struct `U` is defined here\n",
+            " --> main.rs:2:5\n",
+            "  |\n",
+            "2 |     struct U;\n",
+            "  |     ^^^^^^^^^",
+        )
+    );
+    let shown = rejected("mod m {\n    struct U;\n}\nfn main() {\n    let _: m::U;\n}\n");
+    assert_eq!(
+        shown,
+        concat!(
+            "error[E0603]: struct `U` is private\n",
+            " --> main.rs:5:15\n",
+            "  |\n",
+            "5 |     let _: m::U;\n",
+            "  |               ^ private struct\n",
+            "  |\n",
+            "note: the struct `U` is defined here\n",
+            " --> main.rs:2:5\n",
+            "  |\n",
+            "2 |     struct U;\n",
+            "  |     ^^^^^^^^^",
+        )
+    );
+    let shown = rejected("mod m {\n    struct T(i32);\n}\nfn main() {\n    let _ = m::T(1);\n}\n");
+    assert_eq!(
+        shown,
+        concat!(
+            "error[E0603]: tuple struct constructor `T` is private\n",
+            " --> main.rs:5:16\n",
+            "  |\n",
+            "2 |     struct T(i32);\n",
+            "  |              --- a constructor is private if any of the fields is private\n",
+            "...\n",
+            "5 |     let _ = m::T(1);\n",
+            "  |                ^ private tuple struct constructor\n",
+            "  |\n",
+            "note: the tuple struct constructor `T` is defined here\n",
+            " --> main.rs:2:5\n",
+            "  |\n",
+            "2 |     struct T(i32);\n",
+            "  |     ^^^^^^^^^^^^^^\n",
+            "help: consider making the field publicly accessible\n",
+            "  |\n",
+            "2 |     struct T(pub i32);\n",
+            "  |              +++",
+        )
+    );
+    let shown = rejected("mod m {\n    pub struct R(pub i32, u8, u8);\n}\nfn main() {\n    let _ = m::R(1, 2, 3);\n}\n");
+    assert_eq!(
+        shown,
+        concat!(
+            "error[E0603]: tuple struct constructor `R` is private\n",
+            " --> main.rs:5:16\n",
+            "  |\n",
+            "2 |     pub struct R(pub i32, u8, u8);\n",
+            "  |                  --------------- a constructor is private if any of the fields is private\n",
+            "...\n",
+            "5 |     let _ = m::R(1, 2, 3);\n",
+            "  |                ^ private tuple struct constructor\n",
+            "  |\n",
+            "note: the tuple struct constructor `R` is defined here\n",
+            " --> main.rs:2:5\n",
+            "  |\n",
+            "2 |     pub struct R(pub i32, u8, u8);\n",
+            "  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+            "help: consider making the fields publicly accessible\n",
+            "  |\n",
+            "2 |     pub struct R(pub i32, pub u8, pub u8);\n",
+            "  |                           +++     +++",
+        )
+    );
+}
+
+/// A path through a private module: rustc labels the item past it as not
+/// publicly re-exported, or suggests the public re-export the use sees.
+#[test]
+fn a_path_through_a_private_module_names_the_item_past_it() {
+    let shown = rejected("mod m {\n    mod inner {\n        pub fn f() {}\n    }\n}\nfn main() {\n    m::inner::f();\n}\n");
+    assert_eq!(
+        shown,
+        concat!(
+            "error[E0603]: module `inner` is private\n",
+            " --> main.rs:7:8\n",
+            "  |\n",
+            "7 |     m::inner::f();\n",
+            "  |        ^^^^^  - function `f` is not publicly re-exported\n",
+            "  |        |\n",
+            "  |        private module\n",
+            "  |\n",
+            "note: the module `inner` is defined here\n",
+            " --> main.rs:2:5\n",
+            "  |\n",
+            "2 |     mod inner {\n",
+            "  |     ^^^^^^^^^",
+        )
+    );
+    let shown = rejected("mod m {\n    mod inner {\n        pub struct Z;\n    }\n}\nfn main() {\n    let _ = m::inner::Z;\n}\n");
+    assert_eq!(
+        shown,
+        concat!(
+            "error[E0603]: module `inner` is private\n",
+            " --> main.rs:7:16\n",
+            "  |\n",
+            "7 |     let _ = m::inner::Z;\n",
+            "  |                ^^^^^  - unit struct `Z` is not publicly re-exported\n",
+            "  |                |\n",
+            "  |                private module\n",
+            "  |\n",
+            "note: the module `inner` is defined here\n",
+            " --> main.rs:2:5\n",
+            "  |\n",
+            "2 |     mod inner {\n",
+            "  |     ^^^^^^^^^",
+        )
+    );
+    let shown = rejected("mod m {\n    mod hidden {\n        pub fn h() {}\n    }\n    pub use self::hidden::h;\n}\nfn main() {\n    m::hidden::h();\n}\n");
+    assert_eq!(
+        shown,
+        concat!(
+            "error[E0603]: module `hidden` is private\n",
+            " --> main.rs:8:8\n",
+            "  |\n",
+            "8 |     m::hidden::h();\n",
+            "  |        ^^^^^^ private module\n",
+            "  |\n",
+            "note: the module `hidden` is defined here\n",
+            " --> main.rs:2:5\n",
+            "  |\n",
+            "2 |     mod hidden {\n",
+            "  |     ^^^^^^^^^^\n",
+            "help: consider importing this function through its public re-export instead\n",
+            "  |\n",
+            "8 -     m::hidden::h();\n",
+            "8 +     m::h();\n",
+            "  |",
+        )
+    );
+}
+
+/// A private import of an item the use sees: rustc suggests the item's
+/// own path, from `crate::` outside the crate's root.
+#[test]
+fn a_private_import_suggests_the_item_it_binds() {
+    // An item the use doesn't reach is named by the import's own path, and
+    // its own `pub` is what lets the use import it directly.
+    let shown = rejected(
+        "mod m {\n    mod inner {\n        pub fn f() {}\n    }\n    use self::inner::f;\n}\nfn \
+         main() {\n    m::f();\n}\n",
+    );
+    assert!(
+        shown.ends_with(concat!(
+            "3 |         pub fn f() {}\n",
+            "  |         ^^^^^^^^^^ you could import this directly\n",
+            "help: import `f` directly\n",
+            "  |\n",
+            "8 -     m::f();\n",
+            "8 +     self::inner::f();\n",
+            "  |",
+        )),
+        "{shown}"
+    );
+    let shown = rejected("mod m {\n    pub mod inner {\n        pub fn f() {}\n    }\n    use self::inner::f;\n}\nfn main() {\n    m::f();\n}\n");
+    assert_eq!(
+        shown,
+        concat!(
+            "error[E0603]: function import `f` is private\n",
+            " --> main.rs:8:8\n",
+            "  |\n",
+            "8 |     m::f();\n",
+            "  |        ^ private function import\n",
+            "  |\n",
+            "note: the function import `f` is defined here...\n",
+            " --> main.rs:5:9\n",
+            "  |\n",
+            "5 |     use self::inner::f;\n",
+            "  |         ^^^^^^^^^^^^^^\n",
+            "note: ...and refers to the function `f` which is defined here\n",
+            " --> main.rs:3:9\n",
+            "  |\n",
+            "3 |         pub fn f() {}\n",
+            "  |         ^^^^^^^^^^ you could import this directly\n",
+            "help: consider importing this function instead\n",
+            "  |\n",
+            "8 |     m::inner::f();\n",
+            "  |        +++++++",
+        )
+    );
+    let shown = rejected("mod m {\n    pub mod inner {\n        pub fn f() {}\n    }\n    use self::inner::f;\n}\nmod n {\n    pub fn call() {\n        super::m::f();\n    }\n}\nfn main() {}\n");
+    assert_eq!(
+        shown,
+        concat!(
+            "error[E0603]: function import `f` is private\n",
+            " --> main.rs:9:19\n",
+            "  |\n",
+            "9 |         super::m::f();\n",
+            "  |                   ^ private function import\n",
+            "  |\n",
+            "note: the function import `f` is defined here...\n",
+            " --> main.rs:5:9\n",
+            "  |\n",
+            "5 |     use self::inner::f;\n",
+            "  |         ^^^^^^^^^^^^^^\n",
+            "note: ...and refers to the function `f` which is defined here\n",
+            " --> main.rs:3:9\n",
+            "  |\n",
+            "3 |         pub fn f() {}\n",
+            "  |         ^^^^^^^^^^ you could import this directly\n",
+            "help: consider importing this function instead\n",
+            "  |\n",
+            "9 -         super::m::f();\n",
+            "9 +         crate::m::inner::f();\n",
+            "  |",
+        )
+    );
+}
+
+/// `..base` gives the fields a struct expression doesn't name, which the
+/// use must see: rustc's E0451 at the base, naming each private one.
+#[test]
+fn a_struct_update_names_the_private_fields_its_base_gives() {
+    let shown = rejected("mod m {\n    pub struct P {\n        pub a: i32,\n        b: i32,\n    }\n    pub fn p() -> P {\n        P { a: 1, b: 2 }\n    }\n}\nfn main() {\n    let q = m::P { a: 3, ..m::p() };\n    println!(\"{}\", q.a);\n}\n");
+    assert_eq!(
+        shown,
+        concat!(
+            "error[E0451]: field `b` of struct `P` is private\n",
+            "  --> main.rs:11:28\n",
+            "   |\n",
+            "11 |     let q = m::P { a: 3, ..m::p() };\n",
+            "   |                            ^^^^^^ field `b` is private",
+        )
+    );
+    let shown = rejected("mod m {\n    pub struct P {\n        pub a: i32,\n        b: i32,\n        c: i32,\n    }\n    pub fn p() -> P {\n        P { a: 1, b: 2, c: 3 }\n    }\n}\nfn main() {\n    let base = m::p();\n    let q = m::P { a: 3, ..base };\n    println!(\"{}\", q.a);\n}\n");
+    assert_eq!(
+        shown,
+        concat!(
+            "error[E0451]: fields `b` and `c` of struct `P` are private\n",
+            "  --> main.rs:13:28\n",
+            "   |\n",
+            "13 |     let q = m::P { a: 3, ..base };\n",
+            "   |                            ^^^^ fields `b` and `c` are private",
+        )
+    );
+}
+
+/// rustc's E0624 marks a private method's name whole, its definition in
+/// an inline module beside it.
+#[test]
+fn a_private_method_is_marked_whole() {
+    let shown = rejected("mod m {\n    pub struct S;\n    impl S {\n        fn hidden(&self) {}\n    }\n}\nfn main() {\n    m::S.hidden();\n}\n");
+    assert_eq!(
+        shown,
+        concat!(
+            "error[E0624]: method `hidden` is private\n",
+            " --> main.rs:8:10\n",
+            "  |\n",
+            "4 |         fn hidden(&self) {}\n",
+            "  |         ---------------- private method defined here\n",
+            "...\n",
+            "8 |     m::S.hidden();\n",
+            "  |          ^^^^^^ private method",
+        )
     );
 }

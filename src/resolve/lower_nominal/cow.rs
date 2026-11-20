@@ -346,7 +346,7 @@ impl Parser<'_> {
                     capability: "ToOwned".into(),
                     operation: value.span,
                     derive: false,
-                    required_by: Some("std::borrow::Cow".into()),
+                    required_by: Some(crate::resolve::Required::by("std::borrow::Cow")),
                 })?
         } else {
             reference_to(borrowed.clone())

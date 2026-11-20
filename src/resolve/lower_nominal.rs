@@ -314,6 +314,17 @@ use wide::{
 };
 pub(crate) use wide::{wide_operator, wide_range};
 
+/// A trait a generic use requires of an inferred type: the type, the
+/// trait and its arguments, the use, and the bound's place when the
+/// program writes it.
+type PendingTrait = (
+    Ty,
+    ImmutableString,
+    Box<[Ty]>,
+    Span,
+    Option<crate::resolve::Required>,
+);
+
 struct Parser<'a> {
     marker: std::marker::PhantomData<&'a ()>,
     /// The source the tokens were read from, where a diagnostic finds
@@ -744,8 +755,9 @@ struct Parser<'a> {
     /// `pick_list(selected, options, |x| x.to_string())`'s `x`.
     deferred_hints: Option<(Box<[crate::host::item::Definition]>, Option<Ty>)>,
     /// Bounds a generic call requires of its inferred type arguments,
-    /// checked once they are known.
-    pending_bounds: Vec<(Ty, capability::Kind, Span)>,
+    /// checked once they are known, each with the function whose bound
+    /// it is and where the program writes it, when it does.
+    pending_bounds: Vec<(Ty, capability::Kind, Span, Option<crate::resolve::Required>)>,
     /// The user trait bounds of each generic parameter in scope.
     generic_traits: BTreeMap<ImmutableString, Box<[ImmutableString]>>,
     /// `(U, Convert)` to `[i64]` for this body's `U: Convert<i64>`.
@@ -789,8 +801,10 @@ struct Parser<'a> {
     impl_uses: Vec<ImplUse>,
     /// The trait arguments of the impl this method belongs to, as text.
     impl_instance: String,
-    /// User trait bounds a generic use requires of its inferred types.
-    pending_traits: Vec<(Ty, ImmutableString, Box<[Ty]>, Span)>,
+    /// User trait bounds a generic use requires of its inferred types,
+    /// each with the function whose bound it is and where the program
+    /// writes it, when it does.
+    pending_traits: Vec<PendingTrait>,
     /// Associated type equalities a generic use requires of its inferred
     /// types: `T::Output` and the bound's type.
     pending_projections: Vec<(Ty, Ty, Span)>,
