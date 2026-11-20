@@ -2337,8 +2337,9 @@
     {"t":"T2335","issue":2335,"title":"T2335: A program trait's methods resolve without the trait in scope","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"014d0f808","release":"0.4.59"},
     {"t":"T2336","issue":2336,"title":"T2336: `let r = &mut c;` of a local not declared `mut` is accepted, or reported at a later use","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"014d0f808","release":"0.4.59"},
     {"t":"T2337","issue":2337,"title":"T2337: Diagnostics left after #2330: E0599's type kind, several import candidates, E0277 format labels, E0004's enum note","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T2338","issue":2338,"title":"T2338: An impl of a program trait named by its path (`impl m::T for S`) is refused in a single source","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T2338","issue":2338,"title":"T2338: An impl of a program trait named by its path (`impl m::T for S`) is refused in a single source","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"734ddec67","release":"0.4.61"},
     {"t":"T2339","issue":2339,"title":"T2339: Comparing values of a type with no `PartialEq` or `PartialOrd` reads as rustc's E0369: each…","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":"0.4.60"},
-    {"t":"T2340","issue":2340,"title":"T2340: E0432's primary span over the whole path, and E0369 operand labels for arithmetic and bit operators","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T2340","issue":2340,"title":"T2340: E0432's primary span over the whole path, and E0369 operand labels for arithmetic and bit operators","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"734ddec67","release":"0.4.61"},
+    {"t":"T2341","issue":2341,"title":"T2341: E0432 spans: a nested group member and a std group prefix","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }

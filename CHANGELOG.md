@@ -6,6 +6,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.61 (2026-11-20)
+
+- An `impl` can name a trait through its module (`impl m::Shape`, `crate::m::Shape`, `self::m::Shape`, `super::Shape`) or by a name a `use` gives it, and so can a bound or a `dyn`, in a single source as in a package. An impl's trait path that names nothing is rustc's E0405, E0433 or E0404. (#2338)
+- E0369 for an arithmetic or bit operator on a program type labels each operand with its type and notes the missing impl at the type. A compound assignment's E0368 marks the whole assignment. E0432 for a missing item marks the whole import, with its label on the last segment. (#2340)
+
 ## 0.4.60 (2026-11-20)
 
 - Comparing values of a type with no `PartialEq` or `PartialOrd` reads as rustc's E0369: each operand is labelled with its type, a note at the type's declaration says the impl might be missing, and the `#[derive]` is suggested above it. A `use` through a function or a constant, as `use iced::Center::{x};`, says "expected type, found constant `Center` in `iced`". (#2339)

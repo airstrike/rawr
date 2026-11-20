@@ -8,6 +8,14 @@
   },
   "releases": [
     {
+      "version": "0.4.61",
+      "date": "2026-11-20",
+      "entries": [
+        {"text":"An `impl` can name a trait through its module (`impl m::Shape`, `crate::m::Shape`, `self::m::Shape`, `super::Shape`) or by a name a `use` gives it, and so can a bound or a `dyn`, in a single source as in a package. An impl's trait path that names nothing is rustc's E0405, E0433 or E0404.","issues":[2338]},
+        {"text":"E0369 for an arithmetic or bit operator on a program type labels each operand with its type and notes the missing impl at the type. A compound assignment's E0368 marks the whole assignment. E0432 for a missing item marks the whole import, with its label on the last segment.","issues":[2340]}
+      ]
+    },
+    {
       "version": "0.4.60",
       "date": "2026-11-20",
       "entries": [
