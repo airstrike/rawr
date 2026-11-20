@@ -30,7 +30,8 @@ fn static_import_failures_are_positioned_resolution_errors() {
         ParseErrorType::Resolution(resolve::Error::UnknownImport { path, .. })
             if path == "iced::widget::Missing"
     ));
-    assert_eq!(unknown.primary_span().start().position(), Some(19));
+    // rustc marks the whole import of an item its module lacks.
+    assert_eq!(unknown.primary_span().start().position(), Some(5));
 
     // rustc's E0432 at the value a group's prefix names: "expected type,
     // found constant `Center` in `iced`".

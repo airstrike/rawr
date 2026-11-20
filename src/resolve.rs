@@ -1720,7 +1720,7 @@ fn resolve_imports(
         if let crate::item::UseTree::Group { prefix, .. } = &parsed.tree {
             let prefix = through_module(parsed_path(prefix));
             match host.entry(&std_reexport(&prefix, host)) {
-                None if std_path::import(&prefix, prefix_span(&parsed.tree))?.is_some() => {}
+                None if std_path::import_prefix(&prefix, prefix_span(&parsed.tree))?.is_some() => {}
                 Some(host::Entry::Module | host::Entry::ModuleItem(_) | host::Entry::Type(_)) => {}
                 Some(
                     host::Entry::Item(_) | host::Entry::Builtin(_) | host::Entry::TypeAlias(_),
@@ -1752,7 +1752,8 @@ fn resolve_imports(
             }
             let qualified = through_module(path.join("::").into());
             let module_only = parsed.binds_module_only(&name);
-            let mut binding = resolve_import_binding(name, qualified, host)?;
+            let mut binding = resolve_import_binding(name, qualified, host)
+                .map_err(|error| whole_import(error, &parsed.tree))?;
             if module_only && matches!(binding.target, item::Import::ModuleItem { .. }) {
                 binding.target = item::Import::Module;
             }
@@ -2353,6 +2354,91 @@ fn prefix_span(tree: &crate::item::UseTree) -> Span {
             prefix.span
         }
         crate::item::UseTree::Path(path, _) => path.span,
+    }
+}
+
+/// `error`, an unresolved import of `tree` at the name the import binds,
+/// as rustc's E0432 marks it. An item its module lacks marks the whole
+/// import, from its first segment through its `as` name (a group's member
+/// alone), labeled at its last segment; a module that is missing on the
+/// way is marked at its own segment.
+pub(super) fn whole_import(error: Error, tree: &crate::item::UseTree) -> Error {
+    use crate::item::UseTree;
+    let Error::UnknownImport {
+        path,
+        reference,
+        missing,
+    } = error
+    else {
+        return error;
+    };
+    let bound = |last: &crate::item::Name, alias: &Option<crate::item::Name>| {
+        alias.as_ref().map_or(last.span, |alias| alias.span)
+    };
+    // The import's written segments, and where its leaf starts: a path's
+    // first segment, a group member's own name.
+    let leaf = match tree {
+        UseTree::Path(written, alias) => written
+            .segments
+            .last()
+            .filter(|last| bound(&last.name, alias) == reference)
+            .map(|_| {
+                (
+                    written
+                        .segments
+                        .iter()
+                        .map(|segment| &segment.name)
+                        .collect(),
+                    0,
+                )
+            }),
+        UseTree::Group {
+            prefix, members, ..
+        } => members
+            .iter()
+            .find(|member| bound(&member.name, &member.alias) == reference)
+            .map(|member| {
+                let names: Vec<_> = prefix
+                    .segments
+                    .iter()
+                    .map(|segment| &segment.name)
+                    .chain([&member.name])
+                    .collect();
+                let start = names.len() - 1;
+                (names, start)
+            }),
+        UseTree::Glob { .. } => None,
+    };
+    let Some((names, start)) = leaf else {
+        return Error::UnknownImport {
+            path,
+            reference,
+            missing,
+        };
+    };
+    let (reference, missing) = match missing {
+        Unresolved::Item { module, .. } => (
+            Span::new(names[start].span.start(), reference.end()),
+            Unresolved::Item {
+                module,
+                segment: names[names.len() - 1].span,
+            },
+        ),
+        Unresolved::Module(module) => {
+            // The missing module is the last segment of the error's path.
+            let segments = path.split("::").collect::<Vec<_>>();
+            let at = names
+                .get(segments.len() - 1)
+                .filter(|name| segments.last() == Some(&name.text.as_str()))
+                .map_or(reference, |name| name.span);
+            (at, Unresolved::Module(module))
+        }
+        missing => (reference, missing),
+    };
+    Error::UnknownImport {
+        path,
+        reference,
+        missing,
     }
 }
 
@@ -5494,6 +5580,36 @@ fn resolve_trait(
         if host::path::is_hidden(&qualified) {
             return Err(error);
         }
+    }
+    // A module path the crate's modules resolve is the trait's one segment
+    // by now (`Resolver::write_trait_names`): any other names nothing, as
+    // a type path through it would, which the package restates as rustc
+    // does (E0433 through a module nothing names).
+    // A path into std is std's trait or rustc's E0405 at its last segment.
+    if let Some(last) = path.segments.last()
+        && path.segments.len() > 1
+        && path.segments[..path.segments.len() - 1]
+            .iter()
+            .all(|segment| segment.arguments.is_empty())
+    {
+        let name: ImmutableString = path
+            .segments
+            .iter()
+            .map(|segment| segment.name.text.as_str())
+            .collect::<Vec<_>>()
+            .join("::")
+            .into();
+        std_path::check(
+            &name,
+            crate::std_table::Namespace::Type,
+            "trait",
+            last.name.span,
+        )?;
+        return Err(Error::UnknownType {
+            name,
+            reference: span,
+            path: false,
+        });
     }
     Err(Error::UnsupportedNominalSyntax {
         construct: "an `impl` of a trait path that names no crate or std trait".into(),

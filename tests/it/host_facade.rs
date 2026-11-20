@@ -668,7 +668,8 @@ pub fn finish() -> Value { builder().finish() }
         ParseErrorType::Resolution(resolve::Error::UnknownImport { path, .. })
             if path == "hidden::Builder"
     ));
-    assert_eq!(error.primary_span().start(), position_of(imported, "Builder"));
+    // rustc marks the whole import of an item its module lacks.
+    assert_eq!(error.primary_span().start(), position_of(imported, "hidden"));
 }
 
 fn counter_facade(reverse: bool, abi: facade::Abi, receiver: receiver::Mode) -> facade::Definition {

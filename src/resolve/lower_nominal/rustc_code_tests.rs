@@ -185,13 +185,17 @@ fn a_use_of_a_path_that_does_not_exist_is_e0432() {
             label("use of unresolved module or unlinked crate `foo`")
         )
     );
+    // The whole import is marked, its label at the last segment.
+    let source = "mod foo {}\nuse foo::bar;\nfn main() {}\n";
+    let (code, message, _) = refused(source);
     assert_eq!(
-        refused("mod foo {}\nuse foo::bar;\nfn main() {}\n"),
-        (
-            "E0432".into(),
-            "unresolved import `foo::bar`".into(),
-            label("no `bar` in `foo`")
-        )
+        (code.as_str(), message.as_str()),
+        ("E0432", "unresolved import `foo::bar`")
+    );
+    let shown = rendered(source);
+    assert!(
+        shown.contains("  |     ^^^^^---\n  |          |\n  |          no `bar` in `foo`\n"),
+        "{shown}"
     );
 }
 
@@ -4017,4 +4021,219 @@ fn a_mut_borrow_of_a_local_not_declared_mut_is_e0596() {
         )
         .map(|_| ())
         .unwrap_or_else(|error| panic!("{error}"));
+}
+
+/// What rawr renders for `body`, the body of `main` beside `struct Value`
+/// and `struct G<T>`, neither with an impl of an operator's trait.
+fn rendered_operator(body: &str) -> String {
+    rendered(&format!(
+        "struct Value {{ inner: i64 }}\nstruct G<T>(T);\nfn main() {{\n    {body}\n}}\n"
+    ))
+}
+
+#[test]
+fn an_operator_a_program_type_has_no_impl_for_labels_its_operands() {
+    // Each operand labeled with its type, and the impl noted at the type
+    // (#2340).
+    let added = rendered_operator("let a = Value { inner: 1 };\n    let _ = a + a;");
+    assert!(
+        added.starts_with(concat!(
+            "error[E0369]: cannot add `Value` to `Value`\n",
+            " --> main.rs:5:15\n",
+            "  |\n",
+            "5 |     let _ = a + a;\n",
+            "  |             - ^ - Value\n",
+            "  |             |\n",
+            "  |             Value\n",
+            "  |\n",
+            "note: an implementation of `Add` might be missing for `Value`\n",
+            " --> main.rs:1:1\n",
+            "  |\n",
+            "1 | struct Value { inner: i64 }\n",
+            "  | ^^^^^^^^^^^^ must implement `Add`\n",
+        )),
+        "{added}"
+    );
+    // The arithmetic and bit traits don't derive.
+    assert!(!added.contains("derive"), "{added}");
+    // A right operand of another type is the trait's argument.
+    let shifted = rendered_operator("let a = Value { inner: 1 };\n    let _ = a << 1;");
+    assert!(
+        shifted.contains("error[E0369]: no implementation for `Value << {integer}`\n"),
+        "{shifted}"
+    );
+    assert!(
+        shifted.contains("  |             - ^^ - {integer}\n"),
+        "{shifted}"
+    );
+    assert!(
+        shifted.contains("^^^^^^^^^^^^ must implement `Shl<{integer}>`\n"),
+        "{shifted}"
+    );
+    let ored = rendered_operator("let a = Value { inner: 1 };\n    let _ = a | a;");
+    assert!(
+        ored.contains("error[E0369]: no implementation for `Value | Value`\n")
+            && ored.contains("must implement `BitOr`\n"),
+        "{ored}"
+    );
+    // A reference's operator is the reference's, which no impl is noted
+    // for.
+    let borrowed = rendered_operator("let a = Value { inner: 1 };\n    let _ = &a * &a;");
+    assert!(
+        borrowed.contains("error[E0369]: cannot multiply `&Value` by `&Value`\n")
+            && borrowed.contains("  |             -- ^ -- &Value\n")
+            && !borrowed.contains("note:"),
+        "{borrowed}"
+    );
+    // A generic type's impl names no argument when the operands' types
+    // agree.
+    let generic = rendered_operator("let g = G(1i32);\n    let _ = g - G(2i32);");
+    assert!(
+        generic.contains("error[E0369]: cannot subtract `G<i32>` from `G<i32>`\n")
+            && generic.contains("^^^^^^^^^^^ must implement `Sub`\n"),
+        "{generic}"
+    );
+}
+
+#[test]
+fn a_compound_assignment_a_program_type_has_no_impl_for_is_e0368() {
+    // At the whole assignment, its left operand labeled (#2340).
+    let added = rendered_operator("let mut a = Value { inner: 1 };\n    a += Value { inner: 2 };");
+    assert!(
+        added.starts_with(concat!(
+            "error[E0368]: binary assignment operation `+=` cannot be applied to type `Value`\n",
+            " --> main.rs:5:5\n",
+            "  |\n",
+            "5 |     a += Value { inner: 2 };\n",
+            "  |     -^^^^^^^^^^^^^^^^^^^^^^\n",
+            "  |     |\n",
+            "  |     cannot use `+=` on type `Value`\n",
+            "  |\n",
+            "note: an implementation of `AddAssign` might be missing for `Value`\n",
+        )),
+        "{added}"
+    );
+    let xored = rendered_operator("let mut c = Value { inner: 1 };\n    c ^= 3;");
+    assert!(
+        xored.contains("  |     -^^^^^\n")
+            && xored.contains("must implement `BitXorAssign<{integer}>`\n"),
+        "{xored}"
+    );
+    let shifted = rendered_operator("let mut c = Value { inner: 1 };\n    c <<= 2;");
+    assert!(
+        shifted.contains(
+            "error[E0368]: binary assignment operation `<<=` cannot be applied to type `Value`\n"
+        ) && shifted.contains("must implement `ShlAssign<{integer}>`\n"),
+        "{shifted}"
+    );
+}
+
+#[test]
+fn a_comparison_with_another_type_names_it_in_the_missing_impl() {
+    // rustc finds no `PartialEq` before it reads the right operand: no
+    // mismatch, and no derive, which gives no impl for another type.
+    let compared = rendered_operator("let a = Value { inner: 1 };\n    let _ = a == 1;");
+    assert!(
+        compared
+            .contains("error[E0369]: binary operation `==` cannot be applied to type `Value`\n")
+            && compared.contains("  |             - ^^ - {integer}\n")
+            && compared.contains("must implement `PartialEq<{integer}>`\n")
+            && !compared.contains("derive"),
+        "{compared}"
+    );
+    // A generic type's own: the trait alone, and its derive.
+    let generic = rendered_operator("let g = G(1i32);\n    let _ = g == G(2i32);");
+    assert!(
+        generic.contains("^^^^^^^^^^^ must implement `PartialEq`\n")
+            && generic.contains("help: consider annotating `G<i32>` with `#[derive(PartialEq)]`\n"),
+        "{generic}"
+    );
+}
+
+#[test]
+fn an_unresolved_import_marks_the_whole_import() {
+    // The whole import, through its `as` name, labeled at its last
+    // segment (#2340).
+    let module = "mod model {\n    pub struct Thing;\n}\n";
+    let shown = |import: &str| rendered(&format!("{module}{import}\nfn main() {{}}\n"));
+    let missing = shown("use crate::model::missing;");
+    assert!(
+        missing.starts_with(concat!(
+            "error[E0432]: unresolved import `crate::model::missing`\n",
+            " --> main.rs:4:5\n",
+            "  |\n",
+            "4 | use crate::model::missing;\n",
+            "  |     ^^^^^^^^^^^^^^-------\n",
+            "  |                   |\n",
+            "  |                   no `missing` in `model`\n",
+        )),
+        "{missing}"
+    );
+    let renamed = shown("use self::model::missing as other;");
+    assert!(
+        renamed.contains("  |     ^^^^^^^^^^^^^-------^^^^^^^^^\n"),
+        "{renamed}"
+    );
+    // A group's member alone.
+    let grouped = shown("use crate::model::{Thing, absent};");
+    assert!(
+        grouped.contains("  |                           ^^^^^^ no `absent` in `model`\n"),
+        "{grouped}"
+    );
+    let aliased = shown("use crate::model::{absent as other};");
+    assert!(
+        aliased.contains("  |                    ------^^^^^^^^^\n"),
+        "{aliased}"
+    );
+    // std's modules are named from its root.
+    let std = shown("use std::collections::hash_map::Nope;");
+    assert!(
+        std.contains("  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^----\n")
+            && std.contains("no `Nope` in `collections::hash_map`\n"),
+        "{std}"
+    );
+    // A module missing on the way is marked alone.
+    let through = shown("use std::nofs::x;");
+    assert!(
+        through.starts_with("error[E0432]: unresolved import `std::nofs`\n")
+            && through.contains("  |          ^^^^ could not find `nofs` in `std`\n"),
+        "{through}"
+    );
+}
+
+#[test]
+fn an_impl_of_a_path_that_names_no_trait_is_refused_as_rustc_does() {
+    let shown = |header: &str| {
+        rendered(&format!(
+            "mod m {{\n    pub trait T {{}}\n    pub struct U;\n    pub fn g() {{}}\n}}\nstruct \
+             S;\n{header} for S {{}}\nfn main() {{}}\n"
+        ))
+    };
+    let missing = shown("impl crate::m::Nope");
+    assert!(
+        missing.starts_with("error[E0405]: cannot find trait `Nope` in module `crate::m`\n")
+            && missing.contains("  |                ^^^^ not found in `crate::m`\n"),
+        "{missing}"
+    );
+    let structure = shown("impl m::U");
+    assert!(
+        structure.starts_with("error[E0404]: expected trait, found struct `m::U`\n")
+            && structure.contains("  |      ^^^^ not a trait\n"),
+        "{structure}"
+    );
+    let function = shown("impl m::g");
+    assert!(
+        function.starts_with("error[E0404]: expected trait, found function `m::g`\n"),
+        "{function}"
+    );
+    let unlinked = shown("impl nomod::T");
+    assert!(
+        unlinked.starts_with("error[E0433]: cannot find module or crate `nomod` in this scope\n"),
+        "{unlinked}"
+    );
+    let std = shown("impl std::fmt::Nope");
+    assert!(
+        std.starts_with("error[E0405]: cannot find trait `Nope` in module `std::fmt`\n"),
+        "{std}"
+    );
 }
