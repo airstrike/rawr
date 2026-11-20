@@ -63,6 +63,7 @@
   <li>The call stack names each frame by its Rust path, such as <code>counter::App::update</code>.</li>
   <li>The Debug Console shows what the program prints. It also says when a save reloads or restarts the program. A save that fails the check shows its errors there.</li>
   <li>The Debug Console, watch expressions and hovers evaluate code as <a href="#values">Values and evaluation</a> describes.</li>
+  <li>A value in the Variables pane, or a watch expression, can be given a new value. It is assigned with <code>eval</code> in that value&rsquo;s frame, so Rust decides whether the write is allowed. Writing to an immutable binding, or to a field behind <code>&amp;self</code>, fails with rustc&rsquo;s error.</li>
   <li>Launch refuses a program that draws a terminal UI, such as one that uses ratatui or crossterm. Run it with <code>rawr run</code> in a terminal and attach to it.</li>
 </ul>
 

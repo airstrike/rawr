@@ -347,3 +347,120 @@ fn a_dap_client_launches_stops_reads_values_by_reference_evaluates_steps_and_end
     drop(client.input.take());
     assert!(client.child.wait().unwrap().success());
 }
+
+/// The program a client changes values in: `main` holds a struct, an
+/// immutable binding and a map; line 15 adds the step.
+const CHANGED: &str = "// rawr
+use std::collections::HashMap;
+
+#[derive(Debug)]
+struct Counter {
+    count: u64,
+    label: String,
+}
+
+fn main() {
+    let mut counter = Counter { count: 0, label: String::from(\"ticks\") };
+    let step = 1;
+    let mut seen = HashMap::from([(String::from(\"loops\"), 0_u64)]);
+    loop {
+        counter.count += step;
+        *seen.get_mut(\"loops\").unwrap() += 1;
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+}
+";
+
+/// The response to `setVariable` for the variable `name` behind
+/// `reference`.
+fn set(client: &mut Client, reference: &Value, name: &str, value: &str) -> Value {
+    let seq = client.ask(
+        "setVariable",
+        json!({ "variablesReference": reference, "name": name, "value": value }),
+    );
+    client.response(seq, "setVariable")
+}
+
+#[test]
+fn a_dap_client_sets_a_field_a_map_entry_and_an_expression_and_is_refused_an_immutable_binding() {
+    let sandbox = Sandbox::new("dap-set");
+    let made = sandbox.rawr(&["new", "setter"]);
+    super::assert_success(&made);
+    let main = sandbox.work().join("setter/src/main.rs");
+    std::fs::write(&main, CHANGED).unwrap();
+    let mut client = Client::start(&sandbox);
+
+    let capabilities = client.request(
+        "initialize",
+        json!({ "adapterID": "rawr", "linesStartAt1": true }),
+    );
+    assert_eq!(capabilities["supportsSetVariable"], true, "{capabilities}");
+    assert_eq!(
+        capabilities["supportsSetExpression"], true,
+        "{capabilities}"
+    );
+    client.request("launch", json!({ "program": "setter" }));
+    client.event("initialized");
+    client.request(
+        "setBreakpoints",
+        json!({ "source": { "path": main }, "breakpoints": [{ "line": 15 }] }),
+    );
+    client.request("configurationDone", json!({}));
+    assert_eq!(
+        client.stopped("breakpoint"),
+        ("setter::main".to_owned(), 15)
+    );
+
+    let scopes = client.request("scopes", json!({ "frameId": 1 }));
+    let locals = scopes["scopes"][0]["variablesReference"].clone();
+    let bindings = client.variables(&locals);
+    let counter = find(&bindings, "counter").2;
+
+    // A field, through its struct's reference.
+    let field = set(&mut client, &json!(counter), "count", "40");
+    assert_eq!(field["success"], true, "{field}");
+    assert_eq!(field["body"]["value"], "40", "{field}");
+    let bindings = client.variables(&locals);
+    let text = &find(&bindings, "counter").1;
+    assert!(text.starts_with("Counter { count: 40,"), "{text}");
+
+    // An immutable binding: rustc's error.
+    let refused = set(&mut client, &locals, "step", "5");
+    assert_eq!(refused["success"], false, "{refused}");
+    let message = refused["message"].as_str().unwrap();
+    assert!(message.contains("immutable"), "{message}");
+
+    // A map's entry, by its key.
+    let seen = find(&bindings, "seen").2;
+    let entries = client.variables(&json!(seen));
+    assert_eq!(find(&entries, "\"loops\"").1, "0", "{entries:?}");
+    let entry = set(&mut client, &json!(seen), "\"loops\"", "7");
+    assert_eq!(entry["success"], true, "{entry}");
+    assert_eq!(entry["body"]["value"], "7", "{entry}");
+
+    // An expression the client watches.
+    let label = client.request(
+        "setExpression",
+        json!({ "expression": "counter.label", "value": "String::from(\"set\")", "frameId": 1 }),
+    );
+    assert_eq!(label["value"], "\"set\"", "{label}");
+
+    // The program goes on with the values set.
+    client.request("continue", json!({ "threadId": 1 }));
+    client.event("continued");
+    assert_eq!(
+        client.stopped("breakpoint"),
+        ("setter::main".to_owned(), 15)
+    );
+    let evaluated = client.request(
+        "evaluate",
+        json!({ "expression": "(counter.count, seen[\"loops\"], &counter.label)", "frameId": 1 }),
+    );
+    assert_eq!(evaluated["result"], "(41, 8, \"set\")", "{evaluated}");
+
+    client.request("terminate", json!({}));
+    client.event("terminated");
+    client.request("disconnect", json!({}));
+    drop(client.input.take());
+    assert!(client.child.wait().unwrap().success());
+}
