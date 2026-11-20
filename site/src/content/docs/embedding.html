@@ -267,6 +267,7 @@ streaming    -15.49</span></div>
   <tr><td><code>Queued</code></td><td>The new text compiled. The owner takes it at its next call, and then <code>Swapped</code> follows.</td></tr>
   <tr><td><code>Swapped</code></td><td>The program runs the new text, with its state kept.</td></tr>
   <tr><td><code>Failed</code></td><td>The new text doesn&rsquo;t compile. The message is rustc&rsquo;s error. The last good text keeps running.</td></tr>
+  <tr><td><code>Uncovered</code></td><td>The new text calls a crate&rsquo;s API at a place the running bindings don&rsquo;t cover. The message is the error Rust gives at the call. The last good text keeps running, and bindings generated for the new text run it after a restart.</td></tr>
   <tr><td><code>Restarting</code></td><td>The new text can&rsquo;t replace the running one in this process, for example because a struct&rsquo;s fields changed. The last good text keeps running until the program starts again.</td></tr>
 </table>
 <p>A native call that the bindings don&rsquo;t cover is the program&rsquo;s compile error, where the program makes it. The bindings cover the calls the program made when they were generated. The <code class="nw">?play</code> bot runs every snippet this way, in a universe of iced, iced_test, tokio and ratatui.</p>
@@ -406,7 +407,7 @@ engine.set_access(
 <p>An <code>Engine</code> can bound what a script may do. Set the limits on the engine before loading a script.</p>
 <ul>
   <li><code>set_max_operations</code> stops a script after a number of steps. An endless loop then fails with <code>Too many operations</code>.</li>
-  <li><code>set_max_call_levels</code> bounds recursion depth. It is 64 by default, in a debug build as in a release one, so a script behaves the same under both. A script call that finds the host thread&rsquo;s stack nearly full goes on with more stack, so the limit, not the thread, stops the recursion.</li>
+  <li><code>set_max_call_levels</code> bounds recursion depth. The default is 100,000 levels, in a debug build as in a release one, so a script behaves the same under both. That is about as deep as a debug build of a small recursive Rust function goes on an 8 MiB main thread. A script call that finds the host thread&rsquo;s stack nearly full goes on with more stack, so the limit, not the thread, stops the recursion. On wasm32 the stack can&rsquo;t grow, and the default is 64.</li>
   <li><code>set_max_string_size</code>, <code>set_max_array_size</code> and <code>set_max_map_size</code> bound the size of values.</li>
   <li><code>on_progress</code> runs a callback as the script runs. Returning <code>Some(value)</code> from it stops the script. A host can use it for a wall-clock deadline.</li>
 </ul>

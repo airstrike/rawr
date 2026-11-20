@@ -1,4 +1,4 @@
-<meta name="description" content="Patterns and control flow in rawr: match, destructuring, if let, while let, let else, let chains, loops and blocks.">
+<meta name="description" content="Patterns and control flow in rawr: match, destructuring, destructuring assignment, if let, while let, let else, let chains, loops and blocks.">
 <article>
 <h1>Patterns</h1>
 <p class="lede">Patterns, and the expressions that take them.</p>
@@ -17,7 +17,7 @@ println!("{size}");</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-match" data-out="out-match" aria-label="Run match.rs" hidden></button><b>rawr run match.rs</b><span id="out-match" aria-live="polite"></span></div>
 </div>
 <h2 id="destructuring">Destructuring</h2>
-<p>Struct, tuple, enum and slice patterns. <code>..</code> matches the rest. A pattern matched through a reference binds references, as Rust&rsquo;s default binding modes do. A member that is already a reference gets one more, so <code>let (_, x) = &amp;(1, &amp;n);</code> makes <code>x</code> a <code>&amp;&amp;i64</code>.</p>
+<p>Struct, tuple, enum and slice patterns. <code>..</code> matches the rest. A pattern matched through a reference binds references, as Rust&rsquo;s default binding modes do. A member that is already a reference gets one more, so <code>let (_, x) = &amp;(1, &amp;n);</code> makes <code>x</code> a <code>&amp;&amp;i64</code>. A <code>let _: T;</code> with no value binds nothing, as in rustc.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="destructure.rs" id="src-destructure">struct Point {
     x: i64,
@@ -32,6 +32,24 @@ if let [first, .., last] = v.as_slice() {
 }
 println!("{x} {a} {b}");</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-destructure" data-out="out-destructure" aria-label="Run destructure.rs" hidden></button><b>rawr run destructure.rs</b><span id="out-destructure" aria-live="polite"></span></div>
+</div>
+<h2 id="assignment">Destructuring assignment</h2>
+<p>An assignment can take a tuple, array, slice, struct or tuple struct pattern on its left, as in Rust. The forms are <code>(a, b) = (b, a);</code>, <code>[x, .., y] = arr;</code>, <code>S { f, .. } = s;</code>, <code>T(x, _) = t;</code> and their nested forms. <code>_ = value;</code> evaluates the value and assigns nothing. The value on the right is evaluated first, and then the places on the left are assigned from left to right. Parentheses around a place leave it a place, so <code>(x) = 1;</code> assigns to <code>x</code> and <code>(*r) += 1;</code> adds to <code>*r</code>.</p>
+<p>The errors are rustc&rsquo;s. Assigning twice to a local not declared <code>mut</code> is E0384. A left side that is no place, as in <code>(x + y) = 1</code>, is E0070, and a compound assignment to one is E0067. A pattern that can fail, as <code>Some(x) = opt;</code>, is E0005.</p>
+<div class="block">
+  <pre><code data-lang="rust" data-run="assign.rs" id="src-assign">struct Point {
+    x: i64,
+    y: i64,
+}
+
+let (mut a, mut b) = (1, 2);
+(a, b) = (b, a);
+let (first, last);
+[first, .., last] = [1, 2, 3, 4];
+let x;
+Point { x, .. } = Point { x: 5, y: 6 };
+println!("{a} {b} {first} {last} {x}");</code></pre>
+  <div class="run"><button type="button" class="runbtn" data-source="src-assign" data-out="out-assign" aria-label="Run assign.rs" hidden></button><b>rawr run assign.rs</b><span id="out-assign" aria-live="polite"></span></div>
 </div>
 <h2 id="if-let"><code>if let</code>, <code>while let</code> and <code>let else</code></h2>
 <p>Let chains work as in Rust 2024, in <code>if</code> and in <code>while</code>.</p>
@@ -95,6 +113,7 @@ println!("{total}");</code></pre>
 </div>
 <h2 id="mut-patterns">Patterns on <code>&amp;mut</code></h2>
 <p>A binding through <code>&amp;mut</code> is its part of the place it came from, as in Rust. A change through it is made in the place itself, and nothing is copied out. This holds in <code>match</code>, <code>if let</code>, <code>while let</code>, <code>let</code> and <code>let else</code>, in nested patterns, and for <code>ref mut</code>. It holds on a range of elements, as in <code>if let [a, .., b] = &amp;mut v[1..4]</code>, and on what <code>get_mut</code>, <code>last_mut</code> or <code>iter_mut().find(..)</code> gives. Behind a <code>RefCell</code> borrow or an imported type&rsquo;s guard, each use of the binding goes through the guard, which copies its value.</p>
+<p><code>&amp;mut x</code> of a local not declared <code>mut</code> is rustc&rsquo;s E0596 at the borrow, with its suggestion to add <code>mut</code>. This holds whether or not the reference is used.</p>
 <div class="block">
   <pre><code data-lang="rust" data-run="iter-mut.rs" id="src-iter-mut">struct Point {
     x: i64,
