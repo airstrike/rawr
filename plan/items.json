@@ -2360,7 +2360,7 @@
     {"t":"T2358","issue":2358,"title":"T2358: A `?play` snippet in Discord can start with a cargo-script frontmatter block that declares its…","state":"closed","category":"Platforms","labels":["platform","playground"],"gantt":null,"decisions":[],"commit":null,"release":"0.4.67"},
     {"t":"T2359","issue":2359,"title":"T2359: The playground at /play runs every snippet in the browser","state":"closed","category":"Platforms","labels":["platform","playground"],"gantt":null,"decisions":[],"commit":null,"release":"0.4.67"},
     {"t":"T2360","issue":2360,"title":"T2360: A frontmatter snippet's run shares the bot's user and network","state":"open","category":"Health","labels":["health","playground"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T2361","issue":2361,"title":"T2361: The docs' server blocks still run visitors' code on the bot","state":"open","category":"Health","labels":["health","playground"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T2361","issue":2361,"title":"T2361: The docs' server blocks still run visitors' code on the bot","state":"closed","category":"Health","labels":["health","playground"],"gantt":null,"decisions":[],"commit":"075f231d2","release":"0.4.68"},
     {"t":"T2362","issue":2362,"title":"T2362: Deploy ?play's scripts image on a standard instance","state":"open","category":"Platforms","labels":["platform","playground"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }

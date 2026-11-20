@@ -594,7 +594,7 @@ async function play(request: Request, env: Env, ctx: ExecutionContext, path: str
   let shared: string | null = null;
   let og = {
     title: "rawr playground",
-    description: "Write Rust and run it. iced code shows its last frame. An app that moves shows a GIF. Other programs show their output.",
+    description: "Write Rust and run it in your browser. iced and ratatui programs draw on the page, and other programs show their output.",
     url: `${SITE}/play`,
     image: `${SITE}/${CARDS["og/invite.png"]}`,
     alt: "rawr: iced code and the frame it renders",

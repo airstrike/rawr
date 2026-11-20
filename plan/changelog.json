@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.4.68",
+      "date": "2026-11-20",
+      "entries": [
+        {"text":"Every Run button on the site runs its snippet in your browser. The wide-integer and time examples now run there, and the threads example is a fixed transcript, since a browser tab has one thread. The site no longer sends code to a server, so it has no browser check.","issues":[2361]}
+      ]
+    },
+    {
       "version": "0.4.67",
       "date": "2026-11-20",
       "entries": [

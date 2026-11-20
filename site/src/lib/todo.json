@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-20",
-  "version": "0.4.67",
+  "version": "0.4.68",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.68",
+        "date": "2026-11-20",
+        "entries": [
+          {"text":"Every Run button on the site runs its snippet in your browser. The wide-integer and time examples now run there, and the threads example is a fixed transcript, since a browser tab has one thread. The site no longer sends code to a server, so it has no browser check.","issues":[2361]}
+        ]
+      },
       {
         "version": "0.4.67",
         "date": "2026-11-20",
@@ -5621,7 +5628,7 @@
     {"issue":2358,"title":"A `?play` snippet in Discord can start with a cargo-script frontmatter block that declares its…","state":"closed","category":"Platforms","release":"0.4.67"},
     {"issue":2359,"title":"The playground at /play runs every snippet in the browser","state":"closed","category":"Platforms","release":"0.4.67"},
     {"issue":2360,"title":"A frontmatter snippet's run shares the bot's user and network","state":"open","category":"Health"},
-    {"issue":2361,"title":"The docs' server blocks still run visitors' code on the bot","state":"open","category":"Health"},
+    {"issue":2361,"title":"The docs' server blocks still run visitors' code on the bot","state":"closed","category":"Health","release":"0.4.68"},
     {"issue":2362,"title":"Deploy ?play's scripts image on a standard instance","state":"open","category":"Platforms"}
   ],
   "groups": [

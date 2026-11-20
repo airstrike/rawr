@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.68 (2026-11-20)
+
+- Every Run button on the site runs its snippet in your browser. The wide-integer and time examples now run there, and the threads example is a fixed transcript, since a browser tab has one thread. The site no longer sends code to a server, so it has no browser check. (#2361)
+
 ## 0.4.67 (2026-11-20)
 
 - Run's "A native main" opens with a native main.rs and a marked module, then a table of what each save does and a table of what crosses between native and marked code, with one limits list. Native trait objects, statics, slice and text constants, generic functions and the value rules moved to a new Native boundary reference page, and the build copy to How it works. Stale limits were removed: marked code calls the native root's items, any file of the module tree can be marked, `&dyn` and `Rc<dyn>` of a marked type cross, generic methods cross, and the copy takes the feature flags. (#2355)
