@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
-  "updated": "2026-11-19",
-  "version": "0.4.51",
+  "updated": "2026-11-20",
+  "version": "0.4.52",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.52",
+        "date": "2026-11-20",
+        "entries": [
+          {"text":"Let and match patterns of the wrong shape get rustc's errors: E0527 and E0528 for an array pattern of another length, \"expected a tuple with N elements, found one with M elements\" for a tuple of another arity, and rustc's two labels for a second `..`. E0005 and other pattern errors mark the whole pattern, such as `Some(a)`. Destructuring assignments report the same.","issues":[2325]}
+        ]
+      },
       {
         "version": "0.4.51",
         "date": "2026-11-19",
@@ -5460,8 +5467,9 @@
     {"issue":2322,"title":"/play says why the browser universe did not load when it falls back to the server, skips the…","state":"closed","category":"Health","release":"0.4.50"},
     {"issue":2323,"title":"The home page shows the debugger's four shells with the same tabs as the libraries above them","state":"closed","category":"Health","release":"0.4.50"},
     {"issue":2324,"title":"Find why /play's universe frame fails on iOS WebKit","state":"open","category":"Health"},
-    {"issue":2325,"title":"Let-pattern diagnostics diverge from rustc: array length, tuple arity, a second `..`, a tuple-struct pattern's span","state":"open","category":"Health"},
-    {"issue":2326,"title":"?play snippets can't use radio, tooltip, combo_box, text_editor, vertical_slider, mouse_area or stack","state":"open","category":"Platforms"}
+    {"issue":2325,"title":"Let-pattern diagnostics diverge from rustc: array length, tuple arity, a second `..`, a tuple-struct pattern's span","state":"closed","category":"Health","release":"0.4.52"},
+    {"issue":2326,"title":"?play snippets can't use radio, tooltip, combo_box, text_editor, vertical_slider, mouse_area or stack","state":"open","category":"Platforms"},
+    {"issue":2327,"title":"Pattern type mismatches lack rustc's second label and note, and name the pattern in rawr's words","state":"open","category":"Health"}
   ],
   "groups": [
     {

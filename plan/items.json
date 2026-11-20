@@ -2324,7 +2324,8 @@
     {"t":"T2322","issue":2322,"title":"T2322: /play says why the browser universe did not load when it falls back to the server, skips the…","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":"0.4.50"},
     {"t":"T2323","issue":2323,"title":"T2323: The home page shows the debugger's four shells with the same tabs as the libraries above them","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":"0.4.50"},
     {"t":"T2324","issue":2324,"title":"T2324: Find why /play's universe frame fails on iOS WebKit","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T2325","issue":2325,"title":"T2325: Let-pattern diagnostics diverge from rustc: array length, tuple arity, a second `..`, a tuple-struct pattern's span","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T2326","issue":2326,"title":"T2326: ?play snippets can't use radio, tooltip, combo_box, text_editor, vertical_slider, mouse_area or stack","state":"open","category":"Platforms","labels":["platform"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T2325","issue":2325,"title":"T2325: Let-pattern diagnostics diverge from rustc: array length, tuple arity, a second `..`, a tuple-struct pattern's span","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"6cb028cea","release":"0.4.52"},
+    {"t":"T2326","issue":2326,"title":"T2326: ?play snippets can't use radio, tooltip, combo_box, text_editor, vertical_slider, mouse_area or stack","state":"open","category":"Platforms","labels":["platform"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T2327","issue":2327,"title":"T2327: Pattern type mismatches lack rustc's second label and note, and name the pattern in rawr's words","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }

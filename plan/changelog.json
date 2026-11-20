@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.4.52",
+      "date": "2026-11-20",
+      "entries": [
+        {"text":"Let and match patterns of the wrong shape get rustc's errors: E0527 and E0528 for an array pattern of another length, \"expected a tuple with N elements, found one with M elements\" for a tuple of another arity, and rustc's two labels for a second `..`. E0005 and other pattern errors mark the whole pattern, such as `Some(a)`. Destructuring assignments report the same.","issues":[2325]}
+      ]
+    },
+    {
       "version": "0.4.51",
       "date": "2026-11-19",
       "entries": [

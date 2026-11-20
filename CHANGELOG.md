@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.52 (2026-11-20)
+
+- Let and match patterns of the wrong shape get rustc's errors: E0527 and E0528 for an array pattern of another length, "expected a tuple with N elements, found one with M elements" for a tuple of another arity, and rustc's two labels for a second `..`. E0005 and other pattern errors mark the whole pattern, such as `Some(a)`. Destructuring assignments report the same. (#2325)
+
 ## 0.4.51 (2026-11-19)
 
 - ?play's universe binds iced's `text_input`, so a snippet can take typed text. It also holds iced's `styling` example, so snippets can use `checkbox`, `toggler`, `progress_bar`, `scrollable`, `container` and `rule`. (#2312)
