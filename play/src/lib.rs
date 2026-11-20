@@ -6,10 +6,15 @@
 //! base language (see [`plain`]). Every snippet takes that one path: one
 //! that names a crate the runner doesn't have fails as any program would.
 //!
+//! A snippet that starts with a frontmatter block declaring dependencies
+//! is a cargo script instead (see [`script`]): its approved dependencies
+//! are built, offline, and it runs on a runner built for it.
+//!
 //! Snippets are untrusted. Every run is on a fresh Engine with bounded
 //! operations, call depth, data sizes, output and a wall-clock deadline,
 //! and it reads no file.
 
+pub mod approved;
 pub mod budget;
 #[cfg(feature = "bot")]
 pub mod channels;
@@ -17,7 +22,9 @@ pub mod message;
 pub mod plain;
 #[cfg(feature = "bot")]
 pub mod queue;
+pub mod script;
 pub mod server;
+mod slot;
 #[cfg(feature = "bot")]
 pub mod stats;
 pub mod universe;
@@ -71,11 +78,14 @@ impl Default for Limits {
     }
 }
 
-/// Why a snippet did not run: it did not check as Rawr.
+/// Why a snippet did not run: it did not check as Rawr, or it names a
+/// crate the bot doesn't build.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PlayError {
     /// The rendered diagnostics, against the snippet as written.
     Compile(String),
+    /// The line that says which crates the bot builds (see [`approved`]).
+    Refused(String),
 }
 
 impl PlayError {
@@ -83,7 +93,7 @@ impl PlayError {
     #[must_use]
     pub fn text(&self) -> &str {
         match self {
-            Self::Compile(text) => text,
+            Self::Compile(text) | Self::Refused(text) => text,
         }
     }
 }
@@ -96,9 +106,22 @@ impl fmt::Display for PlayError {
 
 impl std::error::Error for PlayError {}
 
-/// Run one snippet: on the universe runner when the environment names one
-/// (`universe::ROOT`, as the image does), and else on the base language.
+/// Run one snippet: a cargo script whose frontmatter declares dependencies
+/// on a runner built for it, and any other on the universe runner when the
+/// environment names one (`universe::ROOT`, as the image does), and else on
+/// the base language. A script that declares none runs as the snippet with
+/// its frontmatter blanked does.
 pub fn run(source: &str, limits: &Limits) -> Result<Output, PlayError> {
+    match script::Script::new(source).transpose()? {
+        Some(script) if script.imports() => script.run(limits),
+        Some(script) => prebuilt(&script.blanked(), limits),
+        None => prebuilt(source, limits),
+    }
+}
+
+/// Run `source`, a snippet that needs no build, on the universe runner when
+/// the environment names one, and else on the base language.
+fn prebuilt(source: &str, limits: &Limits) -> Result<Output, PlayError> {
     if let Some(universe) = universe::Universe::from_env() {
         return universe.run(source, limits);
     }
@@ -150,7 +173,7 @@ fn limit(text: &str, limits: &Limits) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{run, Limits, PlayError};
+    use super::{run, Limits};
 
     fn text(source: &str) -> super::Output {
         let output = run(source, &Limits::default()).unwrap();
@@ -307,10 +330,14 @@ mod tests {
 
     #[test]
     fn run_plain_statement_errors_keep_their_positions() {
-        let PlayError::Compile(text) = run("let x: i64 = \"s\";", &Limits::default()).unwrap_err();
+        let text = run("let x: i64 = \"s\";", &Limits::default())
+            .unwrap_err()
+            .to_string();
         assert!(text.contains("play.rs:1:14"), "{text}");
         assert!(text.contains("\n1 | let x: i64 = \"s\";"), "{text}");
-        let PlayError::Compile(text) = run("let a = 1;\na + true", &Limits::default()).unwrap_err();
+        let text = run("let a = 1;\na + true", &Limits::default())
+            .unwrap_err()
+            .to_string();
         assert!(text.contains("play.rs:2:"), "{text}");
     }
 
@@ -361,11 +388,12 @@ mod tests {
 
     #[test]
     fn run_plain_compile_error_is_a_diagnostic() {
-        let PlayError::Compile(text) = run(
+        let text = run(
             "fn main() {\n    let x: i64 = \"s\";\n}\n",
             &Limits::default(),
         )
-        .unwrap_err();
+        .unwrap_err()
+        .to_string();
         assert!(text.contains("play.rs:2:"), "{text}");
     }
 
@@ -383,7 +411,9 @@ mod tests {
 
     #[test]
     fn unknown_function_in_a_snippet_is_an_error_at_its_name() {
-        let PlayError::Compile(error) = run("nonexistent(1)", &Limits::default()).unwrap_err();
+        let error = run("nonexistent(1)", &Limits::default())
+            .unwrap_err()
+            .to_string();
         assert!(
             error.contains("cannot find function `nonexistent`"),
             "{error}"
@@ -484,8 +514,60 @@ mod tests {
         assert_eq!(plain.text(), "6 2.25\n");
         assert_eq!(plain.status, 0);
         // A file module is still refused: a snippet has no other file.
-        let PlayError::Compile(refused) =
-            run("mod util;\nfn main() {}\n", &Limits::default()).unwrap_err();
+        let refused = run("mod util;\nfn main() {}\n", &Limits::default())
+            .unwrap_err()
+            .to_string();
         assert!(refused.contains("file modules require"), "{refused}");
+    }
+
+    /// A snippet whose frontmatter declares a dependency takes the script
+    /// path, whose first step refuses a crate the bot doesn't build. One
+    /// with no frontmatter takes the prebuilt path, and so does one whose
+    /// frontmatter declares no dependency, with its block blanked.
+    #[test]
+    fn a_frontmatter_snippet_takes_the_script_path() {
+        let refused = run(
+            "---\n[dependencies]\nserde = \"1\"\n---\nfn main() {}\n",
+            &Limits::default(),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&refused, super::PlayError::Refused(line) if line.starts_with("?play builds ")),
+            "{refused:?}"
+        );
+        assert_eq!(text("1 + 2").text(), "3\n");
+        let bare = text("---\n[package]\nedition = \"2021\"\n---\nlet x = 1;\nx + 2");
+        assert_eq!(bare.text(), "3\n");
+        // A report on it counts the snippet's own lines.
+        let error = run(
+            "---\n[package]\nedition = \"2021\"\n---\nlet x: i64 = \"s\";\n",
+            &Limits::default(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains(" --> play.rs:5:14"), "{error}");
+    }
+
+    /// A frontmatter block cargo refuses is cargo's error, before anything
+    /// is built.
+    #[test]
+    fn a_bad_frontmatter_is_cargo_s_message() {
+        let error = run(
+            "---\n[dependencies]\nlibc = \"0.2\"\nfn main() {}\n",
+            &Limits::default(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.starts_with("error: unclosed frontmatter; expected `---`"),
+            "{error}"
+        );
+        let error = run(
+            "---cargo\n[dependencies\nlibc = \"0.2\"\n---\nfn main() {}\n",
+            &Limits::default(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains(" --> play.rs:2:"), "{error}");
     }
 }

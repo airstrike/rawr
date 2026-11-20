@@ -1362,6 +1362,14 @@ fn initial_watched_program(
         drop(lane.shutdown());
         return Ok(None);
     }
+    // A universe runner its caller takes is the caller's to start, as
+    // ?play starts one as the server its snippets run on: the build is the
+    // whole run, and the program doesn't run here, where it would reach
+    // everything a program `rawr run` runs reaches.
+    if rawr_import::universe::enabled() && rawr_import::universe::delivers() {
+        drop(lane.shutdown());
+        return Ok(None);
+    }
     let adapter = match rawr_watch::Adapter::open_inputs(initial.inputs.clone(), DEBOUNCE) {
         Ok(adapter) => adapter,
         Err(error) => {

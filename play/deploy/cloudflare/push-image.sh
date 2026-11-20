@@ -2,6 +2,10 @@
 # Build the linux/amd64 rawr-play image with Apple `container` (no Docker),
 # push it to Cloudflare's registry and point wrangler.jsonc at it.
 #   ./push-image.sh            (CLOUDFLARE_ACCOUNT_ID overrides the account)
+#   PLAY_TARGET=scripts ./push-image.sh
+#                              (the image that also builds snippets' approved
+#                              dependencies; it needs an instance with a few
+#                              GiB of memory and disk, set in wrangler.jsonc)
 # Needs `npx wrangler login` first. Builds the committed HEAD. The release
 # build needs more than the builder's default 2 GB, so the builder VM (26 GB; 20 GB ran out compiling rawr with a cold cache) is
 # started with 20 GB and deleted (with its cache) afterwards.
@@ -20,7 +24,7 @@ git -C "$repo" archive HEAD | tar -x -C "$context"
 container builder delete --force >/dev/null 2>&1 || true
 container builder start --cpus 4 --memory 26g
 trap 'container builder delete --force >/dev/null 2>&1 || true' EXIT
-container build --platform linux/amd64 --build-arg PLAY_VERSION="$sha" -f "$context/play/Dockerfile" -t "$image" "$context"
+container build --platform linux/amd64 --build-arg PLAY_VERSION="$sha" ${PLAY_TARGET:+--target "$PLAY_TARGET"} -f "$context/play/Dockerfile" -t "$image" "$context"
 rm -rf "$context"
 
 # `container image push` can't log in to registry.cloudflare.com (no Bearer

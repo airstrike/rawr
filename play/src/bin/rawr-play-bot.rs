@@ -5,7 +5,9 @@
 //!
 //! Each snippet runs in its own `rawr-play` process (beside this binary, or
 //! `PLAY_RENDERER`), so a run past its time is killed and one past
-//! `PLAY_MEMORY_MB` aborts without touching the bot.
+//! `PLAY_MEMORY_MB` aborts without touching the bot. A snippet whose
+//! frontmatter declares approved crates builds them in that process first
+//! (see [`rawr_play::script`]), with the variables `script::ENV` names.
 //!
 //! A run has no time limit while no other snippet waits, up to a ceiling
 //! of `PLAY_MAX_MS` of script time (see [`rawr_play::budget`]). Once one
@@ -173,8 +175,13 @@ impl Renderer {
                 deadline.path(),
             ))
             .env_clear();
-        // The prebuilt runner snippets run on, which the image names.
-        for name in [rawr_play::universe::ROOT, rawr_play::universe::RUNNER] {
+        // The prebuilt runner snippets run on, which the image names, and
+        // what a snippet whose frontmatter declares dependencies builds
+        // with: the approved crates, the toolchain and rawr's home.
+        let names = [rawr_play::universe::ROOT, rawr_play::universe::RUNNER]
+            .into_iter()
+            .chain(rawr_play::script::ENV);
+        for name in names {
             if let Some(value) = std::env::var_os(name) {
                 command.env(name, value);
             }

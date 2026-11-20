@@ -1,0 +1,38 @@
+# The crates a `?play` snippet may name in its frontmatter (play/README.md):
+# each dependency here, as Cargo.lock locks it. A snippet names one by its
+# version or by the same source, and the bot refuses one that names any
+# other crate, before anything is built.
+#
+# The bot's image vendors these crates and everything they depend on
+# (`cargo vendor --locked`), and builds a snippet offline against that copy
+# alone: no snippet downloads a crate, and no build script runs that isn't
+# one of theirs. `rawr-play warm` then builds each of them once, in the build
+# directory every snippet shares.
+#
+# To approve a crate, add it here, run
+# `cargo update --manifest-path play/approved/Cargo.toml`, and commit both
+# files. The next image vendors it and builds it.
+[package]
+name = "approved"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+# The prebuilt runner's crates (play/universe/Cargo.toml), with its
+# features: iced at its pinned rev, which is not on crates.io, with its
+# test emulator; tokio and ratatui.
+iced = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b", features = ["canvas", "tokio"] }
+iced_test = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b" }
+libc = "0.2.172"
+ratatui = "0.30"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
+
+# Its own workspace: it is not a member of Rawr's.
+[workspace]
+
+# iced has no window on the bot's server: ?play's shell takes iced_winit's
+# place, as in the prebuilt runner. The image patches it in the same way for
+# every snippet's build, so its dependencies are vendored with the rest.
+[patch."https://github.com/iced-rs/iced"]
+iced_winit = { path = "../universe/shell" }

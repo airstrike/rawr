@@ -18,6 +18,10 @@
 //! the file `PLAY_FRAME` names, before the deadline `PLAY_DEADLINE` gives
 //! or the sooner one the file `PLAY_DEADLINE_FILE` names may give later.
 //! A run that wrote one gives that image beside the text it printed.
+//!
+//! A runner may also be built for one cargo script (`crate::script`): its
+//! server then loads each snippet as that script, its manifest the
+//! script's frontmatter, as the script's own build read it.
 
 use std::io::BufRead as _;
 use std::path::{Path, PathBuf};
@@ -51,9 +55,93 @@ const DEADLINE_FILE: &str = "PLAY_DEADLINE_FILE";
 /// server already running it, if one is.
 #[derive(Clone, Debug)]
 pub struct Universe {
-    root: PathBuf,
+    root: Root,
     runner: PathBuf,
     socket: Option<PathBuf>,
+}
+
+/// What a runner was built from, which its server loads each snippet as.
+#[derive(Clone, Debug)]
+enum Root {
+    /// A crate's directory: a snippet is its `src/main.rs`, beside its
+    /// `Cargo.toml`.
+    Crate(PathBuf),
+    /// A cargo script's file, whose manifest rawr keeps in its `home`: a
+    /// snippet is the script's whole text.
+    Script { path: PathBuf, home: PathBuf },
+}
+
+impl Root {
+    /// The path the runner's server loads.
+    fn path(&self) -> &Path {
+        match self {
+            Self::Crate(path) | Self::Script { path, .. } => path,
+        }
+    }
+
+    /// The file a snippet is compiled as, which the runner's reports name.
+    fn entry(&self) -> PathBuf {
+        match self {
+            Self::Crate(directory) => directory.join("src").join("main.rs"),
+            Self::Script { path, .. } => path.clone(),
+        }
+    }
+}
+
+/// A snippet as a runner compiles it: the text it is sent, the line of
+/// that text that is a marker it was given, and the snippet as written,
+/// which a report shows.
+#[derive(Clone, Debug)]
+pub struct Snippet<'source> {
+    program: String,
+    marker: Option<usize>,
+    source: &'source str,
+}
+
+impl<'source> Snippet<'source> {
+    /// `source` as a crate root's: marked and wrapped as `?play` wraps it
+    /// ([`program`]).
+    #[must_use]
+    pub fn root(source: &'source str) -> Self {
+        Self {
+            program: program(source),
+            marker: Some(1),
+            source,
+        }
+    }
+
+    /// `source` as a cargo script's: `program`, whose line `marker`, when
+    /// there is one, is the marker the script was given.
+    pub(crate) fn script(program: String, marker: Option<usize>, source: &'source str) -> Self {
+        Self {
+            program,
+            marker,
+            source,
+        }
+    }
+
+    /// The text the runner compiles.
+    pub(crate) fn program(&self) -> &str {
+        &self.program
+    }
+
+    /// A report rendered on the program, which was compiled as `entry`, as
+    /// the snippet as written shows it: in `play.rs`, counting without the
+    /// marker's line, and with what the wrapping added cut, as a report on
+    /// a plain run is.
+    pub(crate) fn report(&self, text: &str, entry: &Path) -> String {
+        let wrapped = match self.marker {
+            Some(marker) => without_line(&self.program, marker),
+            None => self.program.clone(),
+        };
+        unmarked(
+            text,
+            &entry.to_string_lossy(),
+            &wrapped,
+            self.source,
+            self.marker,
+        )
+    }
 }
 
 impl Universe {
@@ -64,7 +152,7 @@ impl Universe {
         let runner = std::env::var_os(RUNNER).map_or_else(|| root.join("runner"), PathBuf::from);
         let socket = std::env::var_os(SOCKET).map(PathBuf::from);
         Some(Self {
-            root,
+            root: Root::Crate(root),
             runner,
             socket,
         })
@@ -74,7 +162,19 @@ impl Universe {
     #[must_use]
     pub fn new(root: PathBuf, runner: PathBuf) -> Self {
         Self {
-            root,
+            root: Root::Crate(root),
+            runner,
+            socket: None,
+        }
+    }
+
+    /// The runner built for the cargo script at `script`, whose manifest
+    /// and lockfile rawr keeps in `home`: its server loads each snippet as
+    /// that script.
+    #[must_use]
+    pub fn script(script: PathBuf, runner: PathBuf, home: PathBuf) -> Self {
+        Self {
+            root: Root::Script { path: script, home },
             runner,
             socket: None,
         }
@@ -83,9 +183,14 @@ impl Universe {
     /// Run `source` on the named server, or on one started for this run:
     /// the text a program wrote, and the frame an iced program drew.
     pub fn run(&self, source: &str, limits: &Limits) -> Result<Output, PlayError> {
+        self.run_snippet(&Snippet::root(source), limits)
+    }
+
+    /// Run `snippet` as [`Universe::run`] runs a source.
+    pub fn run_snippet(&self, snippet: &Snippet<'_>, limits: &Limits) -> Result<Output, PlayError> {
         match &self.socket {
-            Some(socket) => run_on(&self.root, socket, source, limits),
-            None => self.serve()?.run(source, limits),
+            Some(socket) => run_on(&self.root.entry(), socket, snippet, limits),
+            None => self.serve()?.run_snippet(snippet, limits),
         }
     }
 
@@ -98,12 +203,18 @@ impl Universe {
         let server = SERVERS.fetch_add(1, Ordering::Relaxed);
         let name = format!("rawr-play-{}-{server}.sock", std::process::id());
         let socket = std::env::temp_dir().join(name);
-        let mut child = Command::new(&self.runner)
+        let mut command = Command::new(&self.runner);
+        command
             .env_clear()
-            .env("RAWR_PLAY_ROOT", &self.root)
+            .env("RAWR_PLAY_ROOT", self.root.path())
             .env(rawr::play::SOCKET, &socket)
             // The server has no GPU: iced_test draws with tiny-skia.
-            .env("ICED_TEST_BACKEND", "tiny-skia")
+            .env("ICED_TEST_BACKEND", "tiny-skia");
+        // A script's manifest is where its build kept it, in rawr's home.
+        if let Root::Script { home, .. } = &self.root {
+            command.env("RAWR_HOME", home);
+        }
+        let mut child = command
             // The server stops when this end closes.
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -132,7 +243,7 @@ impl Universe {
 #[derive(Debug)]
 pub struct Server {
     child: Child,
-    root: PathBuf,
+    root: Root,
     socket: PathBuf,
 }
 
@@ -150,7 +261,12 @@ impl Server {
 
     /// Run `source` on it, as [`Universe::run`] does.
     pub fn run(&self, source: &str, limits: &Limits) -> Result<Output, PlayError> {
-        run_on(&self.root, &self.socket, source, limits)
+        self.run_snippet(&Snippet::root(source), limits)
+    }
+
+    /// Run `snippet` on it, as [`Universe::run_snippet`] does.
+    pub fn run_snippet(&self, snippet: &Snippet<'_>, limits: &Limits) -> Result<Output, PlayError> {
+        run_on(&self.root.entry(), &self.socket, snippet, limits)
     }
 }
 
@@ -198,9 +314,13 @@ impl Served {
     }
 }
 
-/// Run `source` on the server at `socket`, which serves the universe at
-/// `root`.
-fn run_on(root: &Path, socket: &Path, source: &str, limits: &Limits) -> Result<Output, PlayError> {
+/// Run `snippet` on the server at `socket`, which compiles it as `entry`.
+fn run_on(
+    entry: &Path,
+    socket: &Path,
+    snippet: &Snippet<'_>,
+    limits: &Limits,
+) -> Result<Output, PlayError> {
     let frame = Frame::new();
     // The run's deadline counts from its fork, a little after this.
     let deadline = std::time::SystemTime::now() + limits.time;
@@ -214,9 +334,8 @@ fn run_on(root: &Path, socket: &Path, source: &str, limits: &Limits) -> Result<O
     if let Some(file) = &limits.deadline {
         env.push((DEADLINE_FILE.into(), file.clone().into()));
     }
-    let wrapped = program(source);
     let request = rawr::play::Request {
-        source: wrapped.clone(),
+        source: snippet.program().to_owned(),
         env,
         time: limits.time,
         deadline: limits.deadline.clone(),
@@ -228,8 +347,7 @@ fn run_on(root: &Path, socket: &Path, source: &str, limits: &Limits) -> Result<O
     let stderr = String::from_utf8_lossy(&ran.stderr);
     // A program that did not compile exits 1 having printed nothing.
     if ran.status == 1 && !ran.limit && stdout.is_empty() {
-        let entry = root.join("src").join("main.rs");
-        let report = unmarked(&stderr, &entry.to_string_lossy(), &wrapped, source);
+        let report = snippet.report(&stderr, entry);
         return Err(PlayError::Compile(report.trim_end().to_owned()));
     }
     let mut output = Output::default();
@@ -246,17 +364,17 @@ fn run_on(root: &Path, socket: &Path, source: &str, limits: &Limits) -> Result<O
     Ok(output)
 }
 
-/// A report the runner rendered for `program`, the snippet compiled as the
-/// universe's `entry`, as the snippet as written shows it: in `play.rs`,
-/// counting without the marker's line, and with what the wrapping added
-/// cut, as a report on a plain run is.
-fn unmarked(text: &str, entry: &str, program: &str, source: &str) -> String {
-    let wrapped = program.strip_prefix(MARKER).unwrap_or(program);
+/// A report the runner rendered for a program, the snippet compiled as
+/// `entry`, as the snippet as written shows it: in `play.rs`, counting
+/// without the `marker` line the program was given, and with what the
+/// wrapping added cut, as a report on a plain run is. `wrapped` is the
+/// program without that line.
+fn unmarked(text: &str, entry: &str, wrapped: &str, source: &str, marker: Option<usize>) -> String {
     let name = rawr_snippet::SOURCE_NAME;
-    // The line before, in the snippet: the marker is line 1.
-    let earlier = |line: &str| match line.parse::<usize>() {
-        Ok(number) => number.saturating_sub(1).max(1).to_string(),
-        Err(_) => line.to_owned(),
+    // A line after the marker is the one before it, in the snippet.
+    let earlier = |line: &str| match (line.parse::<usize>(), marker) {
+        (Ok(number), Some(marker)) if number > marker => (number - 1).to_string(),
+        _ => line.to_owned(),
     };
     let mut out = String::with_capacity(text.len());
     for line in text.lines() {
@@ -292,7 +410,16 @@ fn unmarked(text: &str, entry: &str, program: &str, source: &str) -> String {
 }
 
 /// The line that marks the snippet as Rawr code for the runner.
-const MARKER: &str = "// rawr\n";
+pub(crate) const MARKER: &str = "// rawr\n";
+
+/// `text` without its line `line` (1-based).
+fn without_line(text: &str, line: usize) -> String {
+    let mut lines = text.split_inclusive('\n').collect::<Vec<_>>();
+    if let Some(index) = line.checked_sub(1).filter(|index| *index < lines.len()) {
+        lines.remove(index);
+    }
+    lines.concat()
+}
 
 /// The file one run's frame is written to, removed when dropped.
 struct Frame(PathBuf);
@@ -337,7 +464,6 @@ mod tests {
     #[test]
     fn a_compile_error_points_into_the_snippet_as_written() {
         let source = "fn main() {\n    let x = 1;\n    nothing(x);\n}\n";
-        let program = super::program(source);
         let rendered = concat!(
             "error: this use of a crate is not available in this prebuilt runner\n",
             " --> /universe/src/main.rs:4:5\n",
@@ -346,7 +472,7 @@ mod tests {
             "  |     ^^^^^^^ the runner was not built with this call\n",
         );
         assert_eq!(
-            super::unmarked(rendered, "/universe/src/main.rs", &program, source),
+            super::Snippet::root(source).report(rendered, "/universe/src/main.rs".as_ref()),
             concat!(
                 "error: this use of a crate is not available in this prebuilt runner\n",
                 " --> play.rs:3:5\n",

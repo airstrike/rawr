@@ -21,6 +21,73 @@ A snippet that names a crate the base language doesn't have fails to
 compile, as any program would. An `async fn main` with no runtime's
 attribute is rustc's E0752.
 
+## Snippets with dependencies
+
+A snippet that starts with a cargo-script frontmatter block declaring
+dependencies runs as `rawr run play.rs` runs a script (`src/script.rs`).
+A frontmatter that declares none runs as the snippet without it, with the
+block blanked so lines and columns stay the snippet's.
+
+Every dependency must be an approved crate: a dependency of
+`play/approved/Cargo.toml`, at the version its `Cargo.lock` locks
+(`src/approved.rs`). A snippet names one by a version requirement the
+locked version meets, or by the same git repository and rev. The first
+list is the prebuilt runner's crates (iced and iced_test at the pinned
+rev, tokio, ratatui) and libc. A snippet that names anything else, or an
+approved crate from another source (a path, a branch, another registry),
+gets one line that lists the approved crates, before anything is built. So
+does a frontmatter table that changes how the bot builds (`[profile]`,
+`[patch]`, `[replace]`, `cargo-features`). The tables cargo refuses in a
+script (`[lib]`, `[workspace]`, ..) go on to rawr's load, which refuses
+them with cargo's message, before any build.
+
+To approve a crate, add it to `play/approved/Cargo.toml`, run
+`cargo update --manifest-path play/approved/Cargo.toml`, commit both
+files, and build a new image. The image vendors the approved crates and
+everything they depend on (`cargo vendor --locked`), and its Cargo home
+makes crates.io and iced's repository that vendored copy, with
+`net.offline`. `rawr-play` also sets `CARGO_NET_OFFLINE` for every build.
+So no snippet downloads a crate, and no build script runs but an approved
+crate's or one of their dependencies'.
+
+The build is rawr-import's script path, as `rawr run` takes it, with
+`RAWR_UNIVERSE_RUNNER=1` and `RAWR_UNIVERSE_OUT`: rawr-import expands the
+frontmatter, keeps the script's manifest and lockfile in
+`$RAWR_HOME/scripts/play-<digest>`, builds in the one build directory
+every script shares (`$RAWR_HOME/scripts/build`), generates the bindings
+for the calls the snippet makes, writes the runner out and starts nothing.
+The snippet's file is `$PLAY_SCRIPTS/<slot>/play.rs`: one slot for each
+snippet that builds at once, held by a lock file. The script directory's
+digest is of that path, so a slot keeps one lockfile and one runner from
+run to run, and what is kept is bounded by how many snippets build at
+once. Cargo's build directory keys each compiled crate as cargo does (the
+package, its version and source, its features, the profile and the
+compiler), so a crate one snippet compiled is fresh for the next snippet
+that asks for it with the same features. rawr's runtime and the pinned
+nightly's std table are compiled once in `$RAWR_HOME` too.
+
+The snippet then runs on that runner as a snippet runs on the prebuilt
+one: the runner serves with `RAWR_PLAY_ROOT` naming the script, and the
+snippet runs in a fork of it, reaching no file and no environment, with
+the bot's time budget and the `--memory-mb` cap. The build has neither: it
+runs within the container's bounds, and `rawr-play` caps only the
+snippet's run when the snippet builds. The bot's process kill still ends a
+build that runs past it once another snippet waits. Cargo keeps what such
+a build compiled. A report from the frontmatter, cargo, rustc or rawr
+names the snippet `play.rs` and counts its own lines.
+
+`rawr-play warm` builds each approved crate once, as a snippet that names
+it alone with its approved features builds it. The `scripts` target of
+`play/Dockerfile` (`docker build --target scripts`,
+`PLAY_TARGET=scripts ./push-image.sh`) runs it after `rawr-import cache
+warm`, so the image holds rawr's runtime and the approved crates already
+compiled. That image holds the extraction nightly, rawr-import and its
+driver, so it is several GB, and it compiles in the container: it needs a
+"standard" instance rather than "lite". A first snippet that names an
+approved crate with other features waits for that crate's build. The
+default image has none of this. There a snippet with dependencies gets
+`?play builds no crates on this server.`
+
 ## The universe runner
 
 The image names a universe runner (`PLAY_UNIVERSE`, `/universe`), and then
@@ -242,7 +309,10 @@ Object's storage), else the file `PLAY_CONFIG_FILE`, else
 | `PLAY_TIME_MS` | 2000 | Script time of a run once another snippet waits, counted from then |
 | `PLAY_TIMEOUT_MS` | 10000 | Whole run once another snippet waits, counted from then; the `rawr-play` process is killed after it |
 | `PLAY_MAX_MS` | 600000 | Script time of a run nothing waits behind: the ceiling against a runaway loop |
-| `PLAY_MEMORY_MB` | 1024 | Address-space cap per run process (Linux) |
+| `PLAY_MEMORY_MB` | 1024 | Address-space cap per run process (Linux); a snippet with dependencies has it on its run alone |
+| `PLAY_APPROVED` | — | The approved crates' directory (`Cargo.toml`, `Cargo.lock`): set, snippets with dependencies build |
+| `PLAY_IMPORT` | `rawr-import` | The rawr-import a snippet's build runs |
+| `PLAY_SCRIPTS` | `$TMPDIR/rawr-play-scripts` | Where snippets with dependencies are written, one slot each |
 | `PLAY_USER_PER_MIN` | 4 | Runs per user per minute |
 | `PLAY_CHANNEL_PER_MIN` | 12 | Runs per channel per minute |
 | `PLAY_RENDERER` | beside the bot | Path to the `rawr-play` binary |
@@ -349,8 +419,11 @@ cargo run -p rawr-play -- encrypt-server <guild id>... # the token of a known se
 Rustlings group is rustlings' solutions, under its licence in
 `LICENSE-rustlings` there) and the
 output: a program's output as a terminal with its exit status, or the
-same error text the bot replies with. A run is in the browser by default (rawr-web, `web/`), and on the
-server on request. **Share** stores the code in the Durable Object under a
+same error text the bot replies with. Every run is in the browser
+(rawr-web, `web/`, and the browser's prebuilt runner); no server runs a
+visitor's snippet, and a run that can't start there says why. A snippet
+whose frontmatter names a crate the browser's runner lacks gets one line
+that names the crates it has. **Share** stores the code in the Durable Object under a
 content-addressed id (`/play/<id>`, at most 64 KiB; the same snippet is the
 same id).
 
@@ -362,7 +435,9 @@ The editor keeps the latest snippet in the browser (`localStorage`): bare
 `/play` restores it; a share shows the share until it is edited; Examples →
 Reset brings back the first example.
 
-Server runs go Worker → Durable Object → the bot's HTTP port
+The docs' few server blocks (`data-where="server"`, `site/src/scripts/run.ts`)
+and a share's link preview still run on the bot. Those runs go Worker →
+Durable Object → the bot's HTTP port
 (`PLAY_HTTP_PORT`, 8080, reachable only through the Durable Object) → the
 same child process as `?play`, with the same limits. The bot's `POST
 /render` reads `{"code": ..}` and answers with `application/json`: a
