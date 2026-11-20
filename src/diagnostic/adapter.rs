@@ -548,6 +548,7 @@ fn resolution_report_with_sources(
         resolve::Error::BorrowConflict { .. } => "borrow made here".into(),
         resolve::Error::InvalidAssignee { .. } => "cannot assign to this expression".into(),
         resolve::Error::UnboundAlternative { .. } => "variable not in all patterns".into(),
+        resolve::Error::RepeatedRest { .. } => "previously used here".into(),
         resolve::Error::ArgumentCount { callee, .. } => callee.defined_here().into(),
         resolve::Error::ImmutableBinding { binding, .. } => {
             format!("first assignment to `{binding}`").into()
@@ -683,6 +684,31 @@ fn primary_label(
         ),
         resolve::Error::UnboundAlternative { name, .. } => {
             Some(resolve::UnboundAlternative(name).label().into())
+        }
+        resolve::Error::ArrayPatternLength {
+            fixed,
+            length,
+            rest,
+            ..
+        } => Some(
+            resolve::ArrayLength {
+                fixed: *fixed,
+                length: *length,
+                rest: *rest,
+            }
+            .label()
+            .into(),
+        ),
+        resolve::Error::TupleArity { arity, found, .. } => Some(
+            resolve::TupleArity {
+                arity: *arity,
+                found: *found,
+            }
+            .label()
+            .into(),
+        ),
+        resolve::Error::RepeatedRest { slice, .. } => {
+            Some(resolve::RepeatedRest(*slice).label().into())
         }
         resolve::Error::CannotCompare { lhs, rhs, .. } => {
             Some(format!("no implementation for `{lhs} == {rhs}`").into())
@@ -851,7 +877,13 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Category::ImmutableReceiver => code::RESOLVE_RECEIVER_MUTATION,
         resolve::Category::InvalidMethodSignature => code::RESOLVE_METHOD_SIGNATURE,
         resolve::Category::MissingCapability => code::RESOLVE_CAPABILITY,
-        resolve::Category::InvalidMatch => code::RESOLVE_MATCH,
+        resolve::Category::InvalidMatch => match error {
+            resolve::Error::ArrayPatternLength { rest: false, .. } => code::RESOLVE_ARRAY_LENGTH,
+            resolve::Error::ArrayPatternLength { rest: true, .. } => {
+                code::RESOLVE_ARRAY_LEAST_LENGTH
+            }
+            _ => code::RESOLVE_MATCH,
+        },
         resolve::Category::NonExhaustive => code::RESOLVE_NON_EXHAUSTIVE,
         resolve::Category::Refutable => code::RESOLVE_REFUTABLE,
         resolve::Category::PatternFields => code::RESOLVE_PATTERN_FIELDS,
@@ -1362,6 +1394,19 @@ fn resolution_message(error: &resolve::Error) -> String {
         resolve::Error::UnboundAlternative { name, .. } => {
             resolve::UnboundAlternative(name).to_string()
         }
+        resolve::Error::ArrayPatternLength {
+            fixed,
+            length,
+            rest,
+            ..
+        } => resolve::ArrayLength {
+            fixed: *fixed,
+            length: *length,
+            rest: *rest,
+        }
+        .to_string(),
+        resolve::Error::TupleArity { .. } => "mismatched types".to_string(),
+        resolve::Error::RepeatedRest { slice, .. } => resolve::RepeatedRest(*slice).to_string(),
         resolve::Error::NotYet { path, .. } => format!("rawr doesn't run `{path}` yet"),
         resolve::Error::TypeAnnotationsNeeded { parameter, .. } => {
             format!("type annotations needed: cannot infer the type of the type parameter `{parameter}`")

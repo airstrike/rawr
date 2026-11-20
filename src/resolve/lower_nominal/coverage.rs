@@ -74,7 +74,7 @@ pub(super) fn specialize_slice(
 /// The `..` of a tuple-like pattern's `members`: its index, with Rust's
 /// errors for a second one and for `name @ ..` outside a slice.
 pub(super) fn tuple_rest(members: &[pattern::Syntax]) -> Result<Option<usize>, Error> {
-    let mut found = None;
+    let mut found: Option<(usize, Span)> = None;
     for (index, member) in members.iter().enumerate() {
         let pattern::Syntax::Rest { binding, span } = member else {
             continue;
@@ -88,15 +88,16 @@ pub(super) fn tuple_rest(members: &[pattern::Syntax]) -> Result<Option<usize>, E
                 source: *span,
             });
         }
-        if found.is_some() {
-            return Err(Error::UnsupportedNominalSyntax {
-                construct: "`..` can only be used once per tuple pattern".into(),
-                source: *span,
+        if let Some((_, previous)) = found {
+            return Err(Error::RepeatedRest {
+                slice: false,
+                previous,
+                rest: *span,
             });
         }
-        found = Some(index);
+        found = Some((index, *span));
     }
-    Ok(found)
+    Ok(found.map(|(index, _)| index))
 }
 
 /// `members` of a tuple-like pattern of `arity` elements, its `..` read as

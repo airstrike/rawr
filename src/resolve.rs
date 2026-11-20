@@ -22,10 +22,10 @@ pub(crate) mod type_ref;
 
 use crate::{host, method, parse, program, type_def, ImmutableString, Span};
 pub(crate) use error::{
-    derivable, ArgumentCount, ArgumentSignature, AssignTwice, CannotCompare, Described,
-    NonExhaustive, NotFound, PatternFields, Qualified, Refutable, SelfOutside, TypeNeeded,
-    UnboundAlternative, Uninitialized, Unsatisfied, Unsupported, ASYNC_MAIN, IF_WITHOUT_ELSE,
-    INVALID_ASSIGNEE, RETURN_WITHOUT_VALUE,
+    derivable, ArgumentCount, ArgumentSignature, ArrayLength, AssignTwice, CannotCompare,
+    Described, NonExhaustive, NotFound, PatternFields, Qualified, Refutable, RepeatedRest,
+    SelfOutside, TupleArity, TypeNeeded, UnboundAlternative, Uninitialized, Unsatisfied,
+    Unsupported, ASYNC_MAIN, IF_WITHOUT_ELSE, INVALID_ASSIGNEE, RETURN_WITHOUT_VALUE,
 };
 pub use error::{
     BindingSite, Boxing, Callee, Category, Cloning, Error, Expansion, Lint, MacroScope, MoveCause,

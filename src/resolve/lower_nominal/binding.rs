@@ -1162,11 +1162,23 @@ impl<'a> Parser<'a> {
                 let traced = self.trace_length();
                 let (target, mode) = self.enter_reference(ty);
                 let discard = pattern::Syntax::Discard { span: *span };
+                let shape = pattern::Syntax::tuple_shape(members);
                 let arity = match &target {
-                    Ty::Tuple(types) => types.len(),
-                    _ => members.len(),
+                    Ty::Tuple(types) => Some(types.len()),
+                    _ => None,
                 };
-                let members = match tuple_members(members, arity, &discard) {
+                let members = tuple_members(members, arity.unwrap_or(members.len()), &discard)
+                    .and_then(|members| match arity {
+                        // rustc's E0308 for a tuple of another arity.
+                        Some(arity) if arity != members.len() => Err(Error::TupleArity {
+                            expected: target.name(&self.models),
+                            arity,
+                            found: members.len(),
+                            pattern: *span,
+                        }),
+                        _ => Ok(members),
+                    });
+                let members = match members {
                     Ok(members) => members,
                     Err(error) => {
                         if let Some(mode) = mode {
@@ -1179,8 +1191,15 @@ impl<'a> Parser<'a> {
                 let types = (0..members.len())
                     .map(|_| self.inference.fresh())
                     .collect::<Box<[_]>>();
-                let mut destructure = || {
-                    self.require_type(&Ty::Tuple(types.clone()), &target, *span)?;
+                let destructure = || {
+                    // rustc's E0308 names the pattern by its shape, `(_, _)`.
+                    if !self.unify_type(&target, &Ty::Tuple(types.clone())) {
+                        return Err(Error::TypeMismatch {
+                            expected: self.inference.resolve(&target).name(&self.models),
+                            actual: shape.into(),
+                            expression: *span,
+                        });
+                    }
                     for (index, (member, ty)) in members.iter().zip(types.iter()).enumerate() {
                         let step = self.trace_enter_at(
                             borrowck::Projection::Field(index.to_string().into()),
@@ -1340,15 +1359,12 @@ impl<'a> Parser<'a> {
         };
         let fixed = before.len() + after.len();
         if rest.is_none() && fixed != length || fixed > length {
-            let least = if rest.is_some() { "at least " } else { "" };
-            return Err(Error::TypeMismatch {
-                expected: format!("[_; {length}]").into(),
-                actual: format!(
-                    "a pattern of {fixed} elements (pattern requires {least}{fixed} elements \
-                     but array has {length})"
-                )
-                .into(),
-                expression: pattern,
+            return Err(Error::ArrayPatternLength {
+                owner: ty.name(&self.models),
+                fixed,
+                length,
+                rest: rest.is_some(),
+                pattern,
             });
         }
         let trailing = length - after.len();

@@ -2158,3 +2158,198 @@ fn a_destructuring_assignment_moves_its_value_first_e0382() {
         "{rendered}"
     );
 }
+
+/// The first `lines` lines rawr renders for `body`, the body of `main`:
+/// rustc's message, arrow, source line and labels.
+fn rendered_head(body: &str, lines: usize) -> String {
+    rendered_main(body)
+        .lines()
+        .take(lines)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// rustc's message, arrow and one marker line under the source line
+/// `body`, which starts at column 5 of line 3.
+fn marked(message: &str, column: usize, body: &str, marker: &str) -> String {
+    [
+        message.to_string(),
+        format!(" --> main.rs:3:{column}"),
+        "  |".to_string(),
+        format!("3 |     {body}"),
+        format!("  |     {marker}"),
+    ]
+    .join("\n")
+}
+
+#[test]
+fn an_array_pattern_of_another_length_is_e0527_or_e0528() {
+    let body = "let [a, b] = [1, 2, 3];";
+    assert_eq!(
+        rendered_head(body, 5),
+        marked(
+            "error[E0527]: pattern requires 2 elements but array has 3",
+            9,
+            body,
+            "    ^^^^^^ expected 3 elements"
+        )
+    );
+    let body = "let [a, b, c, d] = [1];";
+    assert_eq!(
+        rendered_head(body, 5),
+        marked(
+            "error[E0527]: pattern requires 4 elements but array has 1",
+            9,
+            body,
+            "    ^^^^^^^^^^^^ expected 1 element"
+        )
+    );
+    let body = "let [a, b, c, d, ..] = [1, 2, 3];";
+    assert_eq!(
+        rendered_head(body, 5),
+        marked(
+            "error[E0528]: pattern requires at least 4 elements but array has 3",
+            9,
+            body,
+            "    ^^^^^^^^^^^^^^^^ pattern cannot match array of 3 elements"
+        )
+    );
+    // A `match` arm and a destructuring assignment are refused alike.
+    let body = "match [1, 2, 3] { [a, b] => {} _ => {} }";
+    assert_eq!(
+        rendered_head(body, 5),
+        marked(
+            "error[E0527]: pattern requires 2 elements but array has 3",
+            23,
+            body,
+            "                  ^^^^^^ expected 3 elements"
+        )
+    );
+    let body = "let (a, b); [a, b] = [1, 2, 3];";
+    assert_eq!(
+        rendered_head(body, 5),
+        marked(
+            "error[E0527]: pattern requires 2 elements but array has 3",
+            17,
+            body,
+            "            ^^^^^^ expected 3 elements"
+        )
+    );
+}
+
+#[test]
+fn a_tuple_pattern_of_another_arity_is_e0308() {
+    let label = |body: &str| {
+        let (code, message, label) = refused(&format!("fn main() {{\n    {body}\n}}\n"));
+        assert_eq!(
+            (code.as_str(), message.as_str()),
+            ("E0308", "mismatched types"),
+            "{body}"
+        );
+        label.expect("a label on the pattern")
+    };
+    let arity = "expected a tuple with 3 elements, found one with 2 elements";
+    assert_eq!(label("let (a, b) = (1, 2, 3);"), arity);
+    assert_eq!(label("let (a, b): (i32, i32, i32) = (1, 2, 3);"), arity);
+    assert_eq!(label("match (1, 2, 3) { (a, b) => {} }"), arity);
+    assert_eq!(label("let (a, b); (a, b) = (1, 2, 3);"), arity);
+    assert_eq!(
+        label("let (a,) = (1, 2);"),
+        "expected a tuple with 2 elements, found one with 1 element"
+    );
+    // A `..` counts as no element.
+    assert_eq!(
+        label("let (a, b, c, d, ..) = (1, 2, 3);"),
+        "expected a tuple with 3 elements, found one with 4 elements"
+    );
+    // On a value that is no tuple, the pattern is named by its shape.
+    assert_eq!(label("let (a, b) = 5;"), "expected integer, found `(_, _)`");
+    assert_eq!(label("let (a, ..) = 5;"), "expected integer, found `(_,)`");
+    let body = "let (a, b) = (1, 2, 3);";
+    assert_eq!(
+        rendered_head(body, 5),
+        marked(
+            "error[E0308]: mismatched types",
+            9,
+            body,
+            "    ^^^^^^ expected a tuple with 3 elements, found one with 2 elements"
+        )
+    );
+}
+
+#[test]
+fn a_second_rest_in_a_pattern_is_rustcs_error() {
+    // The marker line under the source, then the first `..`'s label.
+    let expected = |pattern: &str, column: usize, body: &str, before: usize, gap: usize| {
+        let indent = " ".repeat(before);
+        let label = format!("can only be used once per {pattern} pattern");
+        [
+            marked(
+                &format!("error: `..` {label}"),
+                column,
+                body,
+                &format!("{indent}--{}^^ {label}", " ".repeat(gap)),
+            ),
+            format!("  |     {indent}|"),
+            format!("  |     {indent}previously used here"),
+        ]
+        .join("\n")
+    };
+    let body = "let t = (1, 2, 3); let (a, .., ..) = t;";
+    assert_eq!(rendered_head(body, 7), expected("tuple", 36, body, 27, 2));
+    let body = "let t = (1, 2, 3); match t { (a, .., ..) => {} }";
+    assert_eq!(rendered_head(body, 7), expected("tuple", 42, body, 33, 2));
+    let body = "let (e, f); (e, .., ..) = (1, 2, 3);";
+    assert_eq!(rendered_head(body, 7), expected("tuple", 25, body, 16, 2));
+    let body = "let [a, .., b, ..] = [1, 2, 3];";
+    assert_eq!(rendered_head(body, 7), expected("slice", 20, body, 8, 5));
+}
+
+#[test]
+fn a_refutable_pattern_is_marked_whole_e0005() {
+    // The marker under the pattern, which starts at `column`.
+    let marker = |body: &str| {
+        rendered_main(body)
+            .lines()
+            .nth(4)
+            .expect("a line under the source")
+            .to_string()
+    };
+    let under = |column: usize, width: usize, witness: &str| {
+        format!(
+            "  |{}{} pattern `{witness}` not covered",
+            " ".repeat(column),
+            "^".repeat(width)
+        )
+    };
+    assert_eq!(
+        marker("let o: Option<i32> = None; let Some(a) = o;"),
+        under(36, 7, "None")
+    );
+    assert_eq!(
+        marker("let o: Result<i32, i32> = Ok(1); let Ok(x) = o;"),
+        under(42, 5, "Err(_)")
+    );
+    assert_eq!(
+        marker("let o = Some((1, 2)); let Some((a, b)) = o;"),
+        under(31, 12, "None")
+    );
+    // A user enum's tuple and struct variants, and a parameter.
+    assert_eq!(
+        marker("enum E { A(i32), B } let e = E::B; let E::A(x) = e;"),
+        under(44, 7, "E::B")
+    );
+    assert_eq!(
+        marker("enum E { A { x: i32 }, B } let e = E::B; let E::A { x } = e;"),
+        under(50, 10, "E::B")
+    );
+    assert_eq!(
+        marker("enum E { A(i32), B } fn g(E::A(x): E) {}"),
+        under(31, 7, "E::B")
+    );
+    // A destructuring assignment.
+    assert_eq!(
+        marker("let o: Option<i32> = None; let x; Some(x) = o;"),
+        under(39, 7, "None")
+    );
+}

@@ -538,6 +538,24 @@ impl fmt::Display for ParseErrorType {
                 crate::resolve::Error::UnboundAlternative { name, .. } => {
                     write!(f, "{}", crate::resolve::UnboundAlternative(name))
                 }
+                crate::resolve::Error::ArrayPatternLength {
+                    fixed,
+                    length,
+                    rest,
+                    ..
+                } => write!(
+                    f,
+                    "{}",
+                    crate::resolve::ArrayLength {
+                        fixed: *fixed,
+                        length: *length,
+                        rest: *rest,
+                    }
+                ),
+                crate::resolve::Error::TupleArity { .. } => f.write_str("mismatched types"),
+                crate::resolve::Error::RepeatedRest { slice, .. } => {
+                    write!(f, "{}", crate::resolve::RepeatedRest(*slice))
+                }
                 crate::resolve::Error::NotYet { path, .. } => {
                     write!(f, "rawr doesn't run `{path}` yet")
                 }
