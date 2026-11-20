@@ -613,12 +613,12 @@ impl Engine {
     ) -> RawrResultOf<Option<DebuggerStatus>> {
         let node = node.into();
 
-        // Skip transitive nodes, and the no-op that gives a block ending in
-        // `;` its `()`, which runs nothing.
+        // Skip transitive nodes. A no-op still reaches the debugger: an
+        // evaluation's end is told on one, and its start may be. A
+        // debugger that pauses only at the statements the program wrote
+        // never pauses on one.
         match node {
-            ASTNode::Expr(Expr::Stmt(..))
-            | ASTNode::Stmt(Stmt::Expr(..))
-            | ASTNode::Stmt(Stmt::Noop(..)) => return Ok(None),
+            ASTNode::Expr(Expr::Stmt(..)) | ASTNode::Stmt(Stmt::Expr(..)) => return Ok(None),
             _ => (),
         }
 
