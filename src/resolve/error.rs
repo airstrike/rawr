@@ -103,6 +103,9 @@ pub enum Category {
     /// `write!` into a value whose `Write` trait is not in scope, as
     /// rustc's E0599.
     UnscopedWrite,
+    /// An assignment to a value that is no place, as rustc's E0070 (E0067
+    /// for a compound assignment).
+    InvalidAssignee,
     /// A path into std, core or alloc that rustc refuses: one std doesn't
     /// have (E0432, E0433, E0425), or an unstable item (E0658).
     StdPath,
@@ -183,6 +186,7 @@ impl fmt::Display for Category {
             }
             Self::AsyncMain => formatter.write_str("async main"),
             Self::UnscopedWrite => formatter.write_str("trait not in scope"),
+            Self::InvalidAssignee => formatter.write_str(INVALID_ASSIGNEE),
             Self::StdPath => formatter.write_str("std path"),
             Self::NotYet => formatter.write_str("not yet run"),
             Self::TypeAnnotationsNeeded => formatter.write_str("type annotations needed"),
@@ -975,6 +979,17 @@ pub enum Error {
         /// The value written into.
         at: Span,
     },
+    /// An assignment whose left side is a value, not a place, as
+    /// `(x + y) = 42` or `f(x) += 1`, which rustc refuses (E0070, E0067 for
+    /// a compound assignment).
+    InvalidAssignee {
+        /// Whether the assignment is a compound one, as `+=`.
+        compound: bool,
+        /// The assignment's operator.
+        operator: Span,
+        /// The left side.
+        assignee: Span,
+    },
     /// A path into std, core or alloc that rustc refuses, in rustc's words:
     /// one std doesn't have (E0432, E0433, E0425), or an unstable item
     /// (E0658). From the std table (D711).
@@ -1272,6 +1287,7 @@ impl Error {
             Self::UnlabeledJumpInWhileCondition { .. } => Category::UnlabeledJumpInWhileCondition,
             Self::AsyncMain { .. } => Category::AsyncMain,
             Self::UnscopedWrite { .. } => Category::UnscopedWrite,
+            Self::InvalidAssignee { .. } => Category::InvalidAssignee,
             Self::StdPath { .. } => Category::StdPath,
             Self::NotYet { .. } => Category::NotYet,
             Self::TypeAnnotationsNeeded { .. } => Category::TypeAnnotationsNeeded,
@@ -1339,6 +1355,7 @@ impl Error {
             Self::UnlabeledJumpInWhileCondition { keyword, .. } => keyword.as_str(),
             Self::AsyncMain { .. } => "main",
             Self::UnscopedWrite { owner, .. } => owner.as_str(),
+            Self::InvalidAssignee { .. } => "assignment",
             Self::StdPath { message, .. } => message.as_str(),
             Self::NotYet { path, .. } => path.as_str(),
             Self::TypeAnnotationsNeeded { parameter, .. } => parameter.as_str(),
@@ -1402,6 +1419,7 @@ impl Error {
             | Self::UnboundAlternative { pattern, .. } => *pattern,
             Self::UnsupportedNominalSyntax { source, .. } => *source,
             Self::AsyncMain { at } | Self::UnscopedWrite { at, .. } => *at,
+            Self::InvalidAssignee { operator, .. } => *operator,
             Self::StdPath { reference, .. } | Self::NotYet { reference, .. } => *reference,
             Self::TypeAnnotationsNeeded { reference, .. } => *reference,
             Self::ArgumentCount { call, .. } => *call,
@@ -1445,6 +1463,7 @@ impl Error {
                 ..
             } => Some(*previous_declaration),
             Self::ImmutableReceiver { receiver, .. } => Some(*receiver),
+            Self::InvalidAssignee { assignee, .. } => Some(*assignee),
             Self::UnboundAlternative { binding, .. } => Some(*binding),
             Self::InvalidImport { declaration, .. } | Self::PrivateItem { declaration, .. } => {
                 *declaration
@@ -1810,6 +1829,10 @@ impl fmt::Display for Uninitialized<'_> {
 /// rustc's message and label for an `async fn main` with no runtime's
 /// entry (E0752).
 pub const ASYNC_MAIN: &str = "`main` function is not allowed to be `async`";
+
+/// rustc's message for an assignment to a value that is no place (E0070,
+/// E0067).
+pub const INVALID_ASSIGNEE: &str = "invalid left-hand side of assignment";
 
 /// rustc's message for an `if` with no `else` where a value is expected
 /// (E0317).
@@ -2285,6 +2308,9 @@ impl fmt::Display for Written<'_> {
             Error::AsyncMain { .. } => formatter.write_str(ASYNC_MAIN),
             Error::UnscopedWrite { owner, at } => {
                 write!(formatter, "cannot write into `{owner}` at {at}")
+            }
+            Error::InvalidAssignee { operator, .. } => {
+                write!(formatter, "{INVALID_ASSIGNEE} at {operator}")
             }
             Error::StdPath {
                 code,

@@ -1896,3 +1896,110 @@ fn assigning_through_a_shared_reference_is_e0594() {
         "{element}"
     );
 }
+
+#[test]
+fn an_assignment_to_a_value_is_e0070() {
+    // rustc's message, its mark on the operator and its label on the left
+    // side (#2306).
+    let assigned = |body: &str| {
+        rendered(&format!(
+            "struct S {{ y: i64 }}\nimpl S {{ fn foo(&self) -> i64 {{ self.y }} }}\nfn foo(x: \
+             i64) -> i64 {{ x }}\nfn main() {{\n    {body}\n}}\n"
+        ))
+    };
+    let sum = assigned("let x = 1; let y = 2; (x + y) = 42;");
+    let expected = [
+        "error[E0070]: invalid left-hand side of assignment",
+        " --> main.rs:5:35",
+        "  |",
+        "5 |     let x = 1; let y = 2; (x + y) = 42;",
+        "  |                           ------- ^",
+        "  |                           |",
+        "  |                           cannot assign to this expression",
+    ]
+    .join("\n");
+    assert!(sum.starts_with(&expected), "{sum}");
+    let call = assigned("let x = 1; foo(x) = 42;");
+    assert!(
+        call.starts_with(
+            "error[E0070]: invalid left-hand side of assignment\n --> main.rs:5:23\n  |\n5 |     \
+             let x = 1; foo(x) = 42;\n  |                ------ ^\n"
+        ),
+        "{call}"
+    );
+    let literal = assigned("123 = 42;");
+    assert!(
+        literal.starts_with(
+            "error[E0070]: invalid left-hand side of assignment\n --> main.rs:5:9\n  |\n5 |     \
+             123 = 42;\n  |     --- ^\n"
+        ),
+        "{literal}"
+    );
+    let method = assigned("let x = S { y: 1 }; x.foo() = 42;");
+    assert!(
+        method.starts_with(
+            "error[E0070]: invalid left-hand side of assignment\n --> main.rs:5:33\n  |\n5 |     \
+             let x = S { y: 1 }; x.foo() = 42;\n  |                         ------- ^\n"
+        ),
+        "{method}"
+    );
+    let negation = assigned("let x = 1; -x = 2;");
+    assert!(
+        negation
+            .starts_with("error[E0070]: invalid left-hand side of assignment\n --> main.rs:5:19\n"),
+        "{negation}"
+    );
+    // A match arm's assignment too.
+    let arm = assigned(
+        "let c = true;\n    match c {\n        true => foo(1) = 2,\n        false => {}\n    }",
+    );
+    assert!(
+        arm.starts_with(
+            "error[E0070]: invalid left-hand side of assignment\n --> main.rs:7:24\n  |\n7 |         \
+             true => foo(1) = 2,\n  |                 ------ ^\n"
+        ),
+        "{arm}"
+    );
+}
+
+#[test]
+fn a_compound_assignment_to_a_value_is_e0067() {
+    let (code, message, label) =
+        refused("fn main() {\n    let x = 1;\n    let y = 2;\n    (x + y) += 1;\n}\n");
+    assert_eq!(
+        (code.as_str(), message.as_str(), label),
+        ("E0067", "invalid left-hand side of assignment", None)
+    );
+    let call = rendered("fn f() -> i64 { 1 }\nfn main() {\n    f() -= 1;\n}\n");
+    assert!(
+        call.starts_with(
+            "error[E0067]: invalid left-hand side of assignment\n --> main.rs:3:9\n  |\n3 |     \
+             f() -= 1;\n  |     --- ^^\n  |     |\n  |     cannot assign to this expression\n"
+        ),
+        "{call}"
+    );
+}
+
+#[test]
+fn an_assignment_to_a_field_of_a_temporary_is_no_e0070() {
+    // `f().x` is a place in Rust, which rawr gives no place of its own yet.
+    let field = rendered(
+        "struct P { x: i64 }\nfn f() -> P { P { x: 0 } }\nfn main() {\n    f().x = 1;\n}\n",
+    );
+    assert!(!field.contains("E0070"), "{field}");
+    // `*f(..)` is the place a call's `&mut` refers to, though it ends where
+    // the call does.
+    let dereferenced = Engine::new()
+        .compile(
+            "fn f(n: &mut i64) -> &mut i64 { n }\nfn main() {\n    let mut n = 1;\n    *f(&mut \
+             n) = 2;\n}\n",
+        )
+        .map(|_| ());
+    assert!(
+        !matches!(
+            &dereferenced,
+            Err(error) if error.to_string().contains("E0070")
+        ),
+        "{dereferenced:?}"
+    );
+}

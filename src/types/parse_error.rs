@@ -508,6 +508,9 @@ impl fmt::Display for ParseErrorType {
                 crate::resolve::Error::AsyncMain { .. } => {
                     f.write_str(crate::resolve::ASYNC_MAIN)
                 }
+                crate::resolve::Error::InvalidAssignee { .. } => {
+                    f.write_str(crate::resolve::INVALID_ASSIGNEE)
+                }
                 crate::resolve::Error::UnscopedWrite { owner, .. } => {
                     write!(f, "cannot write into `{owner}`")
                 }

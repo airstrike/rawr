@@ -25,7 +25,7 @@ pub(crate) use error::{
     derivable, ArgumentCount, ArgumentSignature, AssignTwice, CannotCompare, Described,
     NonExhaustive, NotFound, PatternFields, Qualified, Refutable, SelfOutside, TypeNeeded,
     UnboundAlternative, Uninitialized, Unsatisfied, Unsupported, ASYNC_MAIN, IF_WITHOUT_ELSE,
-    RETURN_WITHOUT_VALUE,
+    INVALID_ASSIGNEE, RETURN_WITHOUT_VALUE,
 };
 pub use error::{
     BindingSite, Boxing, Callee, Category, Cloning, Error, Expansion, Lint, MacroScope, MoveCause,

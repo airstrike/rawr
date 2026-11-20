@@ -2704,19 +2704,21 @@ impl Engine {
 
             // See if it needs a terminating semicolon
             let need_semicolon = !stmt.is_self_terminated();
+            let returns_value = stmt.returns_value();
 
             block.statements_mut().push(stmt);
 
             match state.input.peek().unwrap() {
                 // { ... stmt }
                 (Token::RightBrace, ..) => break eat_token(state.input, &Token::RightBrace),
-                // { ... stmt;
-                (Token::SemiColon, ..) if need_semicolon => {
-                    eat_token(state.input, &Token::SemiColon);
-                }
-                // { ... { stmt } ;
-                (Token::SemiColon, ..) if !need_semicolon => {
-                    eat_token(state.input, &Token::SemiColon);
+                // { ... stmt; } and { ... { stmt } ; }: as in Rust, a block
+                // whose last statement ends with `;` has the value `()`,
+                // which a no-op after it gives.
+                (Token::SemiColon, ..) => {
+                    let at = eat_token(state.input, &Token::SemiColon);
+                    if returns_value && matches!(state.input.peek().unwrap().0, Token::RightBrace) {
+                        block.statements_mut().push(Stmt::Noop(at));
+                    }
                 }
                 // { ... { stmt } ???
                 _ if !need_semicolon => (),

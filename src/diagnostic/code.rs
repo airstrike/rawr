@@ -159,6 +159,8 @@ codes!(Resolve in RESOLVE;
     (RESOLVE_MISSING_TRAIT_ITEMS, "E0046", "An impl that misses an item of its trait, as rustc reports it."),
     (RESOLVE_UNKNOWN_TRAIT, "E0405", "A trait name nothing in scope declares, as rustc reports it."),
     (RESOLVE_BINARY_OPERATOR, "E0369", "A binary operator whose left operand's type has no impl of its trait, as rustc reports it."),
+    (RESOLVE_INVALID_ASSIGNEE, "E0070", "An assignment whose left side is a value, not a place, as rustc reports it."),
+    (RESOLVE_INVALID_COMPOUND_ASSIGNEE, "E0067", "A compound assignment whose left side is a value, not a place, as rustc reports it."),
     (RESOLVE_ASSIGN_OPERATOR, "E0368", "A compound assignment whose left operand's type has no impl of its trait, as rustc reports it."),
     (RESOLVE_UNARY_OPERATOR, "E0600", "A unary operator whose operand's type has no impl of its trait, as rustc reports it."),
     (RESOLVE_GENERIC_ARGUMENT_COUNT, "E0107", "A path with more or fewer generic arguments than its type takes, as rustc reports it."),
