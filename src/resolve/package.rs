@@ -2005,6 +2005,7 @@ impl<'a> Resolver<'a> {
                 continue;
             };
             let mut bindings = Vec::new();
+            let mut traits = Vec::new();
 
             let globbed = self.glob_paths(context, parsed, bound)?;
             for (name, path) in use_paths(parsed).into_iter().chain(globbed) {
@@ -2134,6 +2135,9 @@ impl<'a> Resolver<'a> {
                     ),
                     self.host,
                 );
+                if let Target::Trait(address) = &target {
+                    traits.push(self.known_trait_name(address.clone()));
+                }
                 let import = match target {
                     _ if let Some(variant) = variant.clone() => variant,
                     Target::Module | Target::Trait(_) => item::Import::Module,
@@ -2253,6 +2257,7 @@ impl<'a> Resolver<'a> {
             uses[index] = Some(item::Use {
                 header: parsed.header.clone(),
                 bindings: bindings.into_boxed_slice(),
+                traits: traits.into_boxed_slice(),
                 span: parsed.span,
             });
         }

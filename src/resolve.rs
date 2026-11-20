@@ -22,10 +22,10 @@ pub(crate) mod type_ref;
 
 use crate::{host, method, parse, program, type_def, ImmutableString, Span};
 pub(crate) use error::{
-    derivable, ArgumentCount, ArgumentSignature, ArrayLength, AssignTwice, CannotCompare,
-    Described, NonExhaustive, NotFound, PatternFields, Qualified, Refutable, RepeatedRest,
-    SelfOutside, SlicePattern, TypeNeeded, UnboundAlternative, Uninitialized, Unsatisfied,
-    Unsupported, ASYNC_MAIN, IF_WITHOUT_ELSE, INVALID_ASSIGNEE, RETURN_WITHOUT_VALUE,
+    derivable, unscoped_method, ArgumentCount, ArgumentSignature, ArrayLength, AssignTwice,
+    CannotCompare, Described, NonExhaustive, NotFound, PatternFields, Qualified, Refutable,
+    RepeatedRest, SelfOutside, SlicePattern, TypeNeeded, UnboundAlternative, Uninitialized,
+    Unsatisfied, Unsupported, ASYNC_MAIN, IF_WITHOUT_ELSE, INVALID_ASSIGNEE, RETURN_WITHOUT_VALUE,
 };
 pub use error::{
     Annotation, Arguments, Arms, Assignment, Beyond, BindingSite, Bound, Boxing, Callee, Category,
@@ -1862,6 +1862,7 @@ fn resolve_imports(
         uses[index] = Some(item::Use {
             header: parsed.header.clone(),
             bindings: bindings.into_boxed_slice(),
+            traits: Box::default(),
             span: parsed.span,
         });
     }

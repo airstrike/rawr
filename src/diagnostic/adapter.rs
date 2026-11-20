@@ -1009,8 +1009,20 @@ fn sections(error: &resolve::Error, source: &Source) -> Vec<Section> {
 }
 
 /// rustc's suggestions for a binding assigned twice, in `source`: `mut`,
-/// and `ref mut` for one a pattern matched against a value declares.
+/// and `ref mut` for one a pattern matched against a value declares; and
+/// `mut` for a local borrowed `&mut`.
 fn binding_suggestions(error: &resolve::Error, source: &Source) -> Result<Vec<Suggestion>, Error> {
+    if let resolve::Error::ImmutableBorrow { declared, .. } = error {
+        if declared.is_none() {
+            return Ok(Vec::new());
+        }
+        let before = Span::new(declared.start(), declared.start());
+        return Ok(vec![Suggestion::new(
+            "consider changing this to be mutable",
+            Style::Verbose,
+            Edit::new(source.clone(), before, "mut ")?,
+        )]);
+    }
     let resolve::Error::ImmutableBinding {
         declared, matched, ..
     } = error
@@ -1165,6 +1177,23 @@ fn suggestion(error: &resolve::Error, source: &Source) -> Result<Option<Suggesti
             *at,
             source,
         ),
+        resolve::Error::UnscopedMethod {
+            member,
+            path,
+            placement: Some(at),
+            ..
+        } => {
+            let name = path.rsplit("::").next().unwrap_or(path);
+            above(
+                &format!(
+                    "trait `{name}` which provides `{member}` is implemented but not in scope; \
+                     perhaps you want to import it"
+                ),
+                &format!("use {path};"),
+                *at,
+                source,
+            )
+        }
         resolve::Error::UnscopedWrite {
             placement: Some(at),
             ..
@@ -1299,6 +1328,10 @@ fn primary_label(
             Some(format!("`{name}` reimported here").into())
         }
         resolve::Error::StdPath { label, .. } => label.clone(),
+        resolve::Error::UnscopedMethod { owner, .. } => {
+            Some(format!("method not found in `{owner}`").into())
+        }
+        resolve::Error::ImmutableBorrow { .. } => Some("cannot borrow as mutable".into()),
         resolve::Error::NonExhaustive { witnesses, .. } => {
             Some(resolve::NonExhaustive(witnesses).label().into())
         }
@@ -1495,6 +1528,7 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Category::MovedValue => code::RESOLVE_MOVED_VALUE,
         resolve::Category::BorrowConflict => match error {
             resolve::Error::BorrowConflict { code, .. } => code::borrow(code),
+            resolve::Error::ImmutableBorrow { .. } => code::BORROW_NOT_MUTABLE,
             _ => unreachable!("a borrow conflict's category"),
         },
         resolve::Category::InvalidConstruction => code::RESOLVE_CONSTRUCTION,
@@ -1532,7 +1566,9 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Category::Syntax => code::PARSE_SYNTAX,
         resolve::Category::UnlabeledJumpInWhileCondition => code::RESOLVE_JUMP_IN_WHILE_CONDITION,
         resolve::Category::AsyncMain => code::RESOLVE_ASYNC_MAIN,
-        resolve::Category::UnscopedWrite => code::RESOLVE_NO_METHOD,
+        resolve::Category::UnscopedWrite | resolve::Category::UnscopedMethod => {
+            code::RESOLVE_NO_METHOD
+        }
         resolve::Category::InvalidAssignee => match error {
             resolve::Error::InvalidAssignee { compound: true, .. } => {
                 code::RESOLVE_INVALID_COMPOUND_ASSIGNEE
@@ -1636,6 +1672,9 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         } => builder.note(resolve::Boxing::HEAP_NOTE),
         resolve::Error::UnscopedWrite { .. } => {
             builder.note("must implement `io::Write`, `fmt::Write`, or have a `write_fmt` method")
+        }
+        resolve::Error::UnscopedMethod { .. } => {
+            builder.help("items from traits can only be used if the trait is in scope")
         }
         resolve::Error::UnknownMacro {
             scope: resolve::MacroScope::Elsewhere,
@@ -1912,7 +1951,8 @@ fn resolution_message(error: &resolve::Error) -> String {
             if *borrowed { "borrow" } else { "use" },
             if *partial { "partially " } else { "" }
         ),
-        resolve::Error::BorrowConflict { message, .. } => message.to_string(),
+        resolve::Error::BorrowConflict { message, .. }
+        | resolve::Error::ImmutableBorrow { message, .. } => message.to_string(),
         resolve::Error::InvalidConstruction { owner, reason, .. } => {
             format!("invalid construction of `{owner}`: {reason}")
         }
@@ -1978,6 +2018,12 @@ fn resolution_message(error: &resolve::Error) -> String {
         }
         resolve::Error::AsyncMain { .. } => resolve::ASYNC_MAIN.to_string(),
         resolve::Error::UnscopedWrite { owner, .. } => format!("cannot write into `{owner}`"),
+        resolve::Error::UnscopedMethod {
+            kind,
+            owner,
+            member,
+            ..
+        } => resolve::unscoped_method(kind, owner, member),
         resolve::Error::InvalidAssignee { .. } => resolve::INVALID_ASSIGNEE.to_string(),
         resolve::Error::StdPath { message, .. } => message.to_string(),
         resolve::Error::NonExhaustive { witnesses, .. } => {

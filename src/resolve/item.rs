@@ -54,6 +54,11 @@ pub(crate) enum Kind {
 pub(crate) struct Use {
     pub header: crate::item::Header,
     pub bindings: Box<[Binding]>,
+    /// The crate traits the import puts in scope, by the names the
+    /// lowering knows them by: one it names, renames, names `as _` or
+    /// reaches through a glob. A trait's methods are callable only where
+    /// the trait is in scope.
+    pub traits: Box<[crate::ImmutableString]>,
     pub span: Span,
 }
 

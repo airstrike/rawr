@@ -1252,6 +1252,7 @@ fn diagnostic_path(error: &crate::resolve::Error) -> Option<(String, ImportedNam
         | R::ReturnWithoutValue { .. }
         | R::MovedValue { .. }
         | R::BorrowConflict { .. }
+        | R::ImmutableBorrow { .. }
         | R::InvalidImport { .. }
         | R::LoweringUnavailable { .. }
         | R::InvalidDerive { .. }
@@ -1278,6 +1279,7 @@ fn diagnostic_path(error: &crate::resolve::Error) -> Option<(String, ImportedNam
         | R::AsyncMain { .. }
         | R::Unboxed { .. }
         | R::UnscopedWrite { .. }
+        | R::UnscopedMethod { .. }
         | R::InvalidAssignee { .. }
         | R::StdPath { .. }
         | R::NotYet { .. }

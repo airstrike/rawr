@@ -15778,3 +15778,73 @@ main();
          12\nNone 0\n((20, 10), 30)\n99\n[1, 2, 0]\n"
     );
 }
+
+/// A crate trait's methods are called where the trait is in scope, by a
+/// glob, an `as _` import, a rename or a block's `use`, and refused where
+/// it isn't, as rustc's E0599 (#2335).
+#[test]
+fn language_a_trait_method_needs_its_trait_in_scope() {
+    let traits = r#"
+        mod shapes {
+            pub trait Area {
+                fn area(&self) -> i64;
+            }
+            pub struct Square(pub i64);
+            impl Area for Square {
+                fn area(&self) -> i64 { self.0 * self.0 }
+            }
+            impl Area for i64 {
+                fn area(&self) -> i64 { *self }
+            }
+        }
+    "#;
+    let value = run(&format!(
+        r#"{traits}
+        mod globbed {{
+            use crate::shapes::*;
+            pub fn area() -> i64 {{ Square(2).area() }}
+        }}
+        mod anonymous {{
+            use crate::shapes::Area as _;
+            pub fn area() -> i64 {{ 10.area() }}
+        }}
+        mod renamed {{
+            use crate::shapes::Area as Measured;
+            pub fn area(s: &crate::shapes::Square) -> i64 {{ s.area() }}
+        }}
+        pub fn run() -> i64 {{
+            use shapes::Area;
+            globbed::area() + anonymous::area() + renamed::area(&shapes::Square(3)) + 100.area()
+        }}
+        run()
+    "#
+    ));
+    assert_eq!(value, 4 + 10 + 9 + 100);
+    let error = rejected(&format!(
+        "{traits} pub fn run() -> i64 {{ shapes::Square(2).area() }} run()"
+    ));
+    assert!(
+        error.contains("no method named `area` found for struct `Square` in the current scope"),
+        "{error}"
+    );
+}
+
+/// `&mut c` of a local not declared `mut` is refused at the borrow, as
+/// rustc's E0596, whether or not the reference is used (#2336).
+#[test]
+fn language_a_mut_borrow_needs_a_mut_local() {
+    for body in [
+        "let c = 1; let r = &mut c; 0",
+        "let c = 1; let r = &mut c; *r = 2; c",
+    ] {
+        let error = rejected(&format!("pub fn run() -> i64 {{ {body} }} run()"));
+        assert!(
+            error.contains("cannot borrow `c` as mutable, as it is not declared as mutable"),
+            "{body}: {error}"
+        );
+    }
+    assert_eq!(
+        run("pub fn run() -> i64 { let mut c = 1; let r = &mut c; *r = 2; c } run()"),
+        2
+    );
+}

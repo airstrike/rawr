@@ -692,30 +692,79 @@ impl<'a> Parser<'a> {
 
     /// Whether the trait of `definition`, a trait impl's function, is in
     /// scope where the method is called, as Rust's probe asks of a trait
-    /// method before an inherent one: declared in this module or imported
-    /// into it. A std trait counts as in scope.
+    /// method: declared in this module or a block around the call, imported
+    /// into either, or the trait of the impl or the trait default the call
+    /// is in, as rustc puts the trait being implemented in scope in its
+    /// impl. A std trait counts as in scope.
     pub(super) fn trait_in_scope(&self, definition: &method::Definition) -> bool {
         let Some(trait_name) = definition.trait_name() else {
             return true;
         };
-        if self.models.import(trait_name).is_some()
-            || self.models.std_traits.contains(trait_name.as_str())
-            || self
-                .models
-                .traits
-                .get(trait_name.as_str())
-                .is_some_and(|(_, declared)| declared.std.is_some())
-        {
+        let Some((_, declared)) = self.models.traits.get(trait_name.as_str()) else {
+            return true;
+        };
+        if self.models.std_traits.contains(trait_name.as_str()) || declared.std.is_some() {
             return true;
         }
         // A facade trait (iced's `canvas::Program`) is declared at the root
         // for the whole crate; only its import puts it in scope.
-        self.models
-            .traits
-            .get(trait_name.as_str())
-            .is_some_and(|(source, declared)| {
-                declared.declaration.is_none() && *source == self.models.context
-            })
+        if declared.declaration.is_some() {
+            return self.models.import(trait_name).is_some();
+        }
+        // A default body sees its trait's supertraits too, as its generic
+        // `Self` does.
+        let implemented = self.impl_trait.as_ref() == Some(trait_name)
+            || self.default_trait.as_ref().is_some_and(|(_, provider)| {
+                provider == trait_name || supertraits(&self.models, provider).contains(trait_name)
+            });
+        implemented || self.models.crate_trait_in_scope(trait_name)
+    }
+
+    /// rustc's E0599 for `value.member(..)` on `receiver`, of `owner`, where
+    /// no inherent function of `owner` has `member` and the trait of each
+    /// impl function that has it is out of scope (`trait_in_scope`): rustc
+    /// suggests importing the trait.
+    pub(super) fn unscoped_method(
+        &self,
+        owner: type_def::Id,
+        member: &str,
+        receiver: &Ty,
+        member_span: Span,
+    ) -> Option<Error> {
+        if self
+            .models
+            .methods
+            .get(&(owner, member.into()))
+            .is_some_and(|inherent| self.models.sees(inherent))
+        {
+            return None;
+        }
+        let definitions = self.models.trait_methods.get(&(owner, member.into()))?;
+        if definitions
+            .iter()
+            .any(|definition| self.trait_in_scope(definition))
+        {
+            return None;
+        }
+        let trait_name = definitions.first()?.trait_name()?;
+        let path = self.models.trait_import_path(trait_name)?;
+        let receiver = self.inference.resolve(receiver);
+        let kind = match &receiver {
+            Ty::Reference { .. } => "reference",
+            Ty::Script(id, _) => match self.models.definition(*id) {
+                Nominal::Struct { .. } => "struct",
+                Nominal::Enum { .. } => "enum",
+            },
+            _ => "type",
+        };
+        Some(Error::UnscopedMethod {
+            kind,
+            owner: receiver.name(&self.models),
+            member: member.into(),
+            path: path.into(),
+            at: Span::new(member_span.start(), text_end(member_span.start(), member)),
+            placement: self.models.use_placement(),
+        })
     }
 
     /// The instances of the supertrait `parent` that `dyn sub<..>` has:
