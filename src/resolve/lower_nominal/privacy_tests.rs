@@ -619,3 +619,377 @@ fn main() {
         "{report}"
     );
 }
+
+/// `pub(in path)`, `pub(super)`, `pub(crate)` and `pub(self)` open an item
+/// to the module they name and its descendants: functions, methods and
+/// associated functions, fields (read, written, matched and named in a
+/// literal), a tuple struct's constructor and a `use`'s re-export (#2332).
+#[test]
+fn a_restricted_visibility_opens_an_item_to_its_module() {
+    let output = printed(
+        r#"
+mod m {
+    pub mod q {
+        pub(in crate::m) fn g(x: i32) -> i32 { x }
+        pub(super) fn h() -> i32 { 2 }
+        pub(crate) fn c() -> i32 { 3 }
+        pub(self) fn k() -> i32 { 4 }
+        pub fn ok() -> i32 { k() }
+        pub struct S(pub i32);
+        impl S {
+            pub(super) fn m(&self) -> i32 { self.0 }
+            pub(in crate::m) fn n() -> i32 { 5 }
+            pub(crate) fn c(&self) -> i32 { self.0 + 1 }
+        }
+        pub struct P { pub(crate) x: i32, pub(super) y: i32 }
+        pub struct T(pub(in crate::m) i32);
+        pub mod deep {
+            pub(in crate::m::q) fn up() -> i32 { 6 }
+        }
+        pub fn deeper() -> i32 { deep::up() }
+    }
+    pub(in crate::m) use q::g as gg;
+    pub(crate) use q::c as cc;
+    pub fn inside() -> i32 {
+        let mut p = q::P { x: 1, y: 2 };
+        p.y += 10;
+        let q::P { x, y } = p;
+        let q::T(t) = q::T(7);
+        q::g(1) + q::h() + gg(1) + q::S(1).m() + q::S::n() + x + y + t
+    }
+}
+fn main() {
+    println!("{} {} {} {} {}", m::inside(), m::q::c(), m::q::ok(), m::cc(), m::q::deeper());
+    println!("{} {}", m::q::S(4).c(), m::q::S(3).0);
+}
+"#,
+    );
+    assert_eq!(output, "30 3 4 3 6\n5 3\n");
+}
+
+/// A function restricted to a module from outside it is rustc's E0603,
+/// with the function's declaration (#2332).
+#[test]
+fn a_restricted_function_from_outside_its_module_is_e0603() {
+    let report = rejected(
+        r#"mod m {
+    pub mod q {
+        pub(in crate::m) fn g(x: i32) -> i32 { x }
+    }
+}
+fn main() {
+    m::q::g(1);
+}
+"#,
+    );
+    assert_eq!(
+        report,
+        "error[E0603]: function `g` is private
+ --> main.rs:7:11
+  |
+7 |     m::q::g(1);
+  |           ^ private function
+  |
+note: the function `g` is defined here
+ --> main.rs:3:9
+  |
+3 |         pub(in crate::m) fn g(x: i32) -> i32 { x }
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"
+    );
+}
+
+/// A method or associated function restricted to a module, from outside
+/// it, is rustc's E0624, labelled at its declaration in the same file.
+#[test]
+fn a_restricted_method_from_outside_its_module_is_e0624() {
+    let source = |call: &str| {
+        format!(
+            r#"mod m {{
+    pub mod q {{
+        pub struct S(pub i32);
+        impl S {{
+            pub(super) fn m(&self) -> i32 {{ self.0 }}
+            pub(in crate::m) fn n() -> i32 {{ 2 }}
+        }}
+    }}
+}}
+fn main() {{
+    {call};
+}}
+"#
+        )
+    };
+    assert_eq!(
+        rejected(&source("m::q::S(1).m()")),
+        "error[E0624]: method `m` is private
+  --> main.rs:11:16
+   |
+ 5 |             pub(super) fn m(&self) -> i32 { self.0 }
+   |             ----------------------------- private method defined here
+...
+11 |     m::q::S(1).m();
+   |                ^ private method"
+    );
+    assert_eq!(
+        rejected(&source("m::q::S::n()")),
+        "error[E0624]: associated function `n` is private
+  --> main.rs:11:14
+   |
+ 6 |             pub(in crate::m) fn n() -> i32 { 2 }
+   |             ------------------------------ private associated function defined here
+...
+11 |     m::q::S::n();
+   |              ^ private associated function"
+    );
+}
+
+/// A field private to a module, read or written from outside it, is
+/// rustc's E0616; named in a struct literal or pattern, its E0451.
+#[test]
+fn a_private_field_from_outside_its_module_is_e0616_or_e0451() {
+    let source = |statement: &str| {
+        format!(
+            "mod a {{\n    pub struct P {{ pub x: i32, pub(self) y: i32 }}\n    \
+             pub struct Q(pub i32, i32);\n    pub fn p() -> P {{ P {{ x: 1, y: 2 }} }}\n    \
+             pub fn q() -> Q {{ Q(1, 2) }}\n}}\nfn main() {{\n    let mut p = a::p();\n    \
+             {statement}\n}}\n"
+        )
+    };
+    let label = |line: &str, column: usize, width: usize, code: &str, field: &str| {
+        let owner = if field == "1" { "Q" } else { "P" };
+        format!(
+            "error[{code}]: field `{field}` of struct `{owner}` is private\n --> main.rs:9:{column}\n  \
+             |\n9 |     {line}\n  |     {}{} private field",
+            " ".repeat(column - 5),
+            "^".repeat(width)
+        )
+    };
+    for (statement, column, code, field) in [
+        ("let _ = p.y;", 15, "E0616", "y"),
+        ("p.y = 5;", 7, "E0616", "y"),
+        ("let _ = a::q().1;", 20, "E0616", "1"),
+        ("let a::P { y, .. } = p;", 16, "E0451", "y"),
+        ("let _ = a::P { x: 1, y: 2 };", 26, "E0451", "y"),
+    ] {
+        assert_eq!(
+            rejected(&source(statement)),
+            label(statement, column, 1, code, field),
+            "{statement}"
+        );
+    }
+}
+
+/// A tuple struct with a field private to a module has a constructor as
+/// private: through its path it is rustc's E0603, by its name in a call
+/// E0423 and in a pattern E0532.
+#[test]
+fn a_tuple_struct_with_a_private_field_has_a_private_constructor() {
+    let report = rejected(
+        r#"mod a {
+    pub struct Q(pub i32, i32);
+}
+fn main() {
+    let _ = a::Q(1, 2);
+}
+"#,
+    );
+    assert_eq!(
+        report,
+        "error[E0603]: tuple struct constructor `Q` is private
+ --> main.rs:5:16
+  |
+2 |     pub struct Q(pub i32, i32);
+  |                  ------------ a constructor is private if any of the fields is private
+...
+5 |     let _ = a::Q(1, 2);
+  |                ^ private tuple struct constructor"
+    );
+    let source = |statement: &str| {
+        format!(
+            "mod a {{\n    pub struct Q(pub i32, i32);\n    pub fn q() -> Q {{ Q(1, 2) }}\n}}\n\
+             use a::Q;\nfn main() {{\n    {statement}\n}}\n"
+        )
+    };
+    let report = rejected(&source("let _ = Q(1, 2);"));
+    assert!(
+        report.starts_with(
+            "error[E0423]: cannot initialize a tuple struct which contains private fields\n"
+        ),
+        "{report}"
+    );
+    let report = rejected(&source("let Q(x, _) = a::q();"));
+    assert!(
+        report.starts_with(
+            "error[E0532]: cannot match against a tuple struct which contains private fields\n"
+        ),
+        "{report}"
+    );
+}
+
+/// A `use` binding a path reaches from outside the module its marker
+/// opens it to is rustc's E0603, named by what it binds, with the import
+/// and the item it refers to.
+#[test]
+fn an_import_from_outside_its_reach_is_e0603() {
+    let report = rejected(
+        r#"mod m {
+    pub mod q {
+        pub fn g(x: i32) -> i32 { x }
+    }
+    pub(in crate::m) use q::g as gg;
+    pub mod inner {
+        pub fn call() -> i32 { super::gg(2) }
+    }
+}
+fn main() {
+    println!("{}", m::inner::call());
+    m::gg(1);
+}
+"#,
+    );
+    assert_eq!(
+        report,
+        "error[E0603]: function import `gg` is private
+  --> main.rs:12:8
+   |
+12 |     m::gg(1);
+   |        ^^ private function import
+   |
+note: the function import `gg` is defined here...
+  --> main.rs:5:26
+   |
+ 5 |     pub(in crate::m) use q::g as gg;
+   |                          ^^^^^^^^^^
+note: ...and refers to the function `g` which is defined here
+  --> main.rs:3:9
+   |
+ 3 |         pub fn g(x: i32) -> i32 { x }
+   |         ^^^^^^^^^^^^^^^^^^^^^^^ you could import this directly"
+    );
+    // A private `use`, which its module's descendants alone see.
+    let report = rejected(
+        r#"mod a {
+    pub mod b {
+        pub struct N { pub x: i32 }
+    }
+    use b::N;
+}
+fn main() {
+    let _: a::N;
+}
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0603]: struct import `N` is private\n"),
+        "{report}"
+    );
+}
+
+/// A re-export that reaches further than the item it re-exports is
+/// rustc's E0364.
+#[test]
+fn a_reexport_beyond_its_item_s_reach_is_e0364() {
+    let report = rejected(
+        r#"mod m {
+    pub mod q {
+        pub(super) fn h() {}
+    }
+    pub(crate) use q::h as hh;
+}
+fn main() {}
+"#,
+    );
+    assert_eq!(
+        report,
+        "error[E0364]: `h` is private, and cannot be re-exported
+ --> main.rs:5:20
+  |
+5 |     pub(crate) use q::h as hh;
+  |                    ^^^^^^^^^^
+  |
+note: consider marking `h` as `pub` in the imported module
+ --> main.rs:5:20
+  |
+5 |     pub(crate) use q::h as hh;
+  |                    ^^^^^^^^^^"
+    );
+    let report = rejected(
+        "mod m {\n    pub mod q {\n        pub(crate) fn c() {}\n    }\n    pub use q::c;\n}\n\
+         fn main() {}\n",
+    );
+    assert!(
+        report.starts_with(
+            "error[E0364]: `c` is only public within the crate, and cannot be re-exported \
+             outside\n"
+        ),
+        "{report}"
+    );
+}
+
+/// A restriction names an ancestor of its item's module by a path from
+/// `crate`, `self` or `super`: else rustc's E0742, its E0433 for a path
+/// through no module or above the crate root, or its error for a relative
+/// path.
+#[test]
+fn a_visibility_restricted_to_no_ancestor_is_refused() {
+    let first = |source: &str| {
+        let report = rejected(source);
+        report.lines().take(5).collect::<Vec<_>>().join("\n")
+    };
+    assert_eq!(
+        first("mod a {\n    pub mod b {\n        pub(in crate::x) fn f() {}\n    }\n}\nmod x {}\nfn main() {}\n"),
+        "error[E0742]: visibilities can only be restricted to ancestor modules
+ --> main.rs:3:16
+  |
+3 |         pub(in crate::x) fn f() {}
+  |                ^^^^^^^^"
+    );
+    assert_eq!(
+        first("mod a {\n    pub(in crate::x) fn f() {}\n}\nfn main() {}\n"),
+        "error[E0433]: cannot find `x` in `crate`
+ --> main.rs:2:19
+  |
+2 |     pub(in crate::x) fn f() {}
+  |                   ^ could not find `x` in the crate root"
+    );
+    assert_eq!(
+        first("mod a {\n    pub(in self::y) fn g() {}\n}\nfn main() {}\n"),
+        "error[E0433]: cannot find `y` in `self`
+ --> main.rs:2:18
+  |
+2 |     pub(in self::y) fn g() {}
+  |                  ^ could not find `y` in `self`"
+    );
+    assert_eq!(
+        first("mod a {\n    pub fn f() {}\n    pub(in crate::a::f) fn h() {}\n}\nfn main() {}\n"),
+        "error[E0433]: cannot find `f` in `a`
+ --> main.rs:3:22
+  |
+3 |     pub(in crate::a::f) fn h() {}
+  |                      ^ expected type, found function `f` in `a`"
+    );
+    assert_eq!(
+        first("mod a {\n    pub(in super::super) fn z() {}\n}\nfn main() {}\n"),
+        "error[E0433]: too many leading `super` keywords within `crate::a`
+ --> main.rs:2:19
+  |
+2 |     pub(in super::super) fn z() {}
+  |                   ^^^^^ this `super` would go above the crate root"
+    );
+    assert_eq!(
+        first("pub(super) fn top() {}\nfn main() {}\n"),
+        "error[E0433]: too many leading `super` keywords within `crate`
+ --> main.rs:1:5
+  |
+1 | pub(super) fn top() {}
+  |     ^^^^^ this `super` would go above the crate root"
+    );
+    assert_eq!(
+        rejected("mod a {\n    pub(in a) fn f() {}\n}\nfn main() {}\n"),
+        "error: relative paths are not supported in visibilities in 2018 edition or later
+ --> main.rs:2:12
+  |
+2 |     pub(in a) fn f() {}
+  |            ^ help: try: `crate::a`"
+    );
+}

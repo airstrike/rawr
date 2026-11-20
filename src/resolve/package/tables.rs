@@ -95,21 +95,21 @@ enum Answer {
 /// written above an item keeps the resolutions that read the item.
 #[derive(Clone, PartialEq)]
 struct Declared {
-    public: bool,
+    reach: crate::resolve::Reach,
     target: Target,
 }
 
 impl Declared {
     fn of(declaration: &Declaration) -> Self {
         Self {
-            public: declaration.public,
+            reach: declaration.reach.clone(),
             target: declaration.target.clone(),
         }
     }
 
     /// Whether it is what `declaration` declares.
     fn is(&self, declaration: &Declaration) -> bool {
-        self.public == declaration.public && self.target == declaration.target
+        self.reach == declaration.reach && self.target == declaration.target
     }
 }
 

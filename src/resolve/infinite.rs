@@ -54,7 +54,11 @@ impl<'a> Layouts<'a> {
                     name: &name.text,
                     // From `pub`, else the name: the keyword's place isn't kept.
                     header: Span::new(
-                        header.visibility.unwrap_or(name.span).start(),
+                        header
+                            .visibility
+                            .as_ref()
+                            .map_or(name.span, |visibility| visibility.span)
+                            .start(),
                         name.span.end(),
                     ),
                     source: shell.source,

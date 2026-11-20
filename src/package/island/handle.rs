@@ -153,7 +153,8 @@ impl Generator<'_> {
         let visibility = declared
             .header
             .visibility
-            .map_or("", |visibility| slice(file.text, visibility));
+            .as_ref()
+            .map_or("", |visibility| slice(file.text, visibility.span));
         let mut derives = String::new();
         for attribute in &declared.header.attributes {
             if derive(attribute) {

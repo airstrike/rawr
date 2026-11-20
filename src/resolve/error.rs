@@ -311,12 +311,46 @@ pub enum Private {
     Trait,
     /// A type alias.
     TypeAlias,
-    /// A `use` binding, which a path reaches only from inside its module.
-    Import,
+    /// A `use` binding of an item of the kind, which a path reaches only
+    /// where its `pub` marker, or its lack of one, opens it to.
+    Import(Imported),
     /// A method of an inherent impl.
     Method,
     /// An associated function of an inherent impl, which takes no `self`.
     AssociatedFunction,
+    /// A tuple struct's constructor, private where one of its fields is.
+    TupleStructConstructor,
+}
+
+/// The item a private import binds, which rustc's E0603 notes.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct Referent {
+    /// What the item is.
+    pub item: Private,
+    /// The item's name.
+    pub name: ImmutableString,
+    /// The item's name where it is declared.
+    pub declaration: Span,
+    /// Whether the use sees the item itself, which rustc says it could
+    /// import directly.
+    pub visible: bool,
+}
+
+/// What a private import binds, as rustc names it: "function import".
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum Imported {
+    /// A free function.
+    Function,
+    /// A struct.
+    Struct,
+    /// An enum.
+    Enum,
+    /// A module.
+    Module,
+    /// A trait.
+    Trait,
+    /// A type alias.
+    TypeAlias,
 }
 
 impl Private {
@@ -341,9 +375,12 @@ impl Private {
             Self::Module => "private module defined here",
             Self::Trait => "private trait defined here",
             Self::TypeAlias => "private type alias defined here",
-            Self::Import => "private import defined here",
+            Self::Import(_) => "private import defined here",
             Self::Method => "private method defined here",
             Self::AssociatedFunction => "private associated function defined here",
+            Self::TupleStructConstructor => {
+                "a constructor is private if any of the fields is private"
+            }
         }
     }
 
@@ -357,10 +394,35 @@ impl Private {
             Self::Module => "module",
             Self::Trait => "trait",
             Self::TypeAlias => "type alias",
-            Self::Import => "import",
+            Self::Import(Imported::Function) => "function import",
+            Self::Import(Imported::Struct) => "struct import",
+            Self::Import(Imported::Enum) => "enum import",
+            Self::Import(Imported::Module) => "module import",
+            Self::Import(Imported::Trait) => "trait import",
+            Self::Import(Imported::TypeAlias) => "type alias import",
             Self::Method => "method",
             Self::AssociatedFunction => "associated function",
+            Self::TupleStructConstructor => "tuple struct constructor",
         }
+    }
+
+    /// The import of an item of this kind: `None` for what no `use`
+    /// binds by itself, a method or a constructor.
+    #[must_use]
+    pub const fn imported(self) -> Option<Self> {
+        let imported = match self {
+            Self::Function => Imported::Function,
+            Self::Struct => Imported::Struct,
+            Self::Enum => Imported::Enum,
+            Self::Module => Imported::Module,
+            Self::Trait => Imported::Trait,
+            Self::TypeAlias => Imported::TypeAlias,
+            Self::Import(_)
+            | Self::Method
+            | Self::AssociatedFunction
+            | Self::TupleStructConstructor => return None,
+        };
+        Some(Self::Import(imported))
     }
 }
 
@@ -705,6 +767,10 @@ pub enum Error {
         reference: Span,
         /// The item's declaration, when it is in the same source.
         declaration: Option<Span>,
+        /// What a private import binds, when its declaration is in the
+        /// import's source: rustc's "...and refers to the function `f`
+        /// which is defined here".
+        referent: Option<Box<Referent>>,
     },
     /// A member used as the other kind: a field called like a method
     /// (rustc's E0599), or a method read like a field (rustc's E0615).
@@ -1050,7 +1116,9 @@ pub enum Error {
     },
     /// A path into std, core or alloc that rustc refuses, in rustc's words:
     /// one std doesn't have (E0432, E0433, E0425), or an unstable item
-    /// (E0658). From the std table (D711).
+    /// (E0658). From the std table (D711). Another error that is a message
+    /// and a label at one place, as rustc words it, is one too: a private
+    /// field's (E0616, E0451) or a visibility's path (E0742).
     StdPath {
         /// rustc's code.
         code: &'static str,
@@ -1227,6 +1295,29 @@ impl Error {
                 declaration,
                 previous_declaration,
             }
+        }
+    }
+
+    /// rustc's E0616 for a read of the field `field` of the struct `owner`
+    /// from outside the module the field is private to.
+    pub(crate) fn private_field_read(owner: &str, field: &str, reference: Span) -> Self {
+        Self::private_field("E0616", owner, field, reference)
+    }
+
+    /// rustc's E0451 for a struct literal or pattern that names the field
+    /// `field` of the struct `owner` from outside the module the field is
+    /// private to.
+    pub(crate) fn private_field_named(owner: &str, field: &str, reference: Span) -> Self {
+        Self::private_field("E0451", owner, field, reference)
+    }
+
+    fn private_field(code: &'static str, owner: &str, field: &str, reference: Span) -> Self {
+        Self::StdPath {
+            code,
+            message: format!("field `{field}` of struct `{owner}` is private").into(),
+            label: Some("private field".into()),
+            note: None,
+            reference,
         }
     }
 

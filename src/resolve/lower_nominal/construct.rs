@@ -3,7 +3,77 @@
 
 use super::*;
 
+/// How a tuple struct's constructor is written where it is used.
+#[derive(Clone, Copy, PartialEq)]
+pub(super) enum Constructor {
+    /// Through its modules, `a::Q(1)` or `a::Q(x)` in a pattern.
+    Path,
+    /// By its name in a call, `Q(1)`.
+    Call,
+    /// By its name in a pattern, `Q(x)`.
+    Pattern,
+}
+
 impl<'a> Parser<'a> {
+    /// rustc's refusal of the tuple struct `model`'s constructor, written
+    /// as `written` at `name`, where one of its fields is private to a
+    /// module this source is outside of: the constructor is as private as
+    /// its most private field.
+    pub(super) fn private_constructor(
+        &self,
+        model: &Nominal,
+        written: Constructor,
+        name: Span,
+    ) -> Result<(), Error> {
+        let Nominal::Struct { definition, item } = model else {
+            return Ok(());
+        };
+        if item.form != crate::item::StructForm::Tuple
+            || item
+                .fields
+                .iter()
+                .all(|field| self.models.sees_field(&item.key, field))
+        {
+            return Ok(());
+        }
+        let message = match written {
+            Constructor::Path => {
+                let fields = item
+                    .fields
+                    .first()
+                    .zip(item.fields.last())
+                    .map(|(first, last)| {
+                        let start = first
+                            .visibility
+                            .as_ref()
+                            .map_or(first.span, |visibility| visibility.span);
+                        Span::new(start.start(), last.span.end())
+                    });
+                return Err(Error::PrivateItem {
+                    item: crate::resolve::Private::TupleStructConstructor,
+                    name: definition.name().into(),
+                    reference: name,
+                    declaration: fields.filter(|_| self.models.type_in_this_file(&item.key)),
+                    referent: None,
+                });
+            }
+            Constructor::Call => "cannot initialize a tuple struct which contains private fields",
+            Constructor::Pattern => {
+                "cannot match against a tuple struct which contains private fields"
+            }
+        };
+        Err(Error::StdPath {
+            code: match written {
+                Constructor::Pattern => "E0532",
+                _ => "E0423",
+            },
+            message: message.into(),
+            label: None,
+            note: None,
+            reference: name,
+        })
+    }
+
     /// A struct named as a value: `S` of `struct S;`, `W(a, b)` of a tuple
     /// struct, or `W` uncalled, the function from its fields to it, as
     /// Rust's tuple struct constructors are (`.map(W)`).
@@ -866,6 +936,21 @@ impl<'a> Parser<'a> {
                 member: field.clone(),
                 reference: *field_span,
             });
+        }
+        for field in &order {
+            let declared = item
+                .fields
+                .iter()
+                .find(|known| known.name.text == *field)
+                .expect("unknown fields were rejected");
+            if !self.models.sees_field(&item.key, declared) {
+                let (_, field_span) = &values[field];
+                return Err(Error::private_field_named(
+                    definition.name(),
+                    field,
+                    *field_span,
+                ));
+            }
         }
         // Each value is bound in source order before construction.
         let mut prelude = origin::Fragment::plain("{\n");

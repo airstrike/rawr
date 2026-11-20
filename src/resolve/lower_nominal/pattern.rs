@@ -914,6 +914,15 @@ impl<'a> Parser<'a> {
         } else {
             (None, None)
         };
+        // `let _: T;` binds nothing and has no value: only its type is
+        // read, and the statement leaves nothing to run.
+        if matches!(syntax, Syntax::Discard { .. }) && matches!(self.peek(), Token::SemiColon) {
+            let end = self.position();
+            self.write_output(origin::Fragment::default(), span(start, end));
+            self.last_type = Ty::Unit;
+            self.last_expression = None;
+            return self.consume_terminator(start).map(|_| ());
+        }
         self.expect(Token::Equals, "'=' after a `let` pattern")?;
         let borrowing =
             matches!(self.peek(), Token::Ampersand) && matches!(self.peek_second(), Token::Mut);
@@ -1524,6 +1533,12 @@ impl<'a> Parser<'a> {
                 if item.form == crate::item::StructForm::Tuple
                     && matches!(self.peek(), Token::LeftParen | Token::Unit)
                 {
+                    let written = if segments.len() == 1 {
+                        super::construct::Constructor::Pattern
+                    } else {
+                        super::construct::Constructor::Path
+                    };
+                    self.private_constructor(&model, written, *last_span)?;
                     return self.parse_tuple_struct_pattern(model, path);
                 }
                 if item.form != crate::item::StructForm::Tuple
@@ -2947,6 +2962,17 @@ impl<'a> Parser<'a> {
             .collect::<Vec<_>>();
         let declared = item.fields.iter().map(|field| field.name.text.as_str());
         let order = field_order(definition.name(), declared, &names, rest, span)?;
+        for (name, name_span) in &names {
+            if let Some(field) = item.fields.iter().find(|field| field.name.text == *name)
+                && !self.models.sees_field(&item.key, field)
+            {
+                return Err(Error::private_field_named(
+                    definition.name(),
+                    name,
+                    *name_span,
+                ));
+            }
+        }
         let mut written = written
             .into_iter()
             .map(|(_, _, pattern)| Some(pattern))

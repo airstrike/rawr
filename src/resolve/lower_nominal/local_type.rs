@@ -361,11 +361,13 @@ impl<'a> Parser<'a> {
         }
         if matches!(self.peek(), Token::DoubleColon) {
             let first = name.clone();
+            let mut last = name_span;
             while matches!(self.peek(), Token::DoubleColon) {
                 self.next();
                 let (segment, segment_span) = self.expect_qualified_name()?;
                 name = format!("{name}::{segment}").into();
                 name_span = Span::new(name_span.start(), text_end(segment_span.start(), &segment));
+                last = Span::new(segment_span.start(), name_span.end());
             }
             // A crate's re-export of a std type is that type, as serde's
             // `__private::Formatter` is `core::fmt::Formatter` (#593).
@@ -381,8 +383,14 @@ impl<'a> Parser<'a> {
                 self.splice_tokens(tokens);
                 return self.parse_local_type();
             }
-            if let Some(model) = self.models.qualified_owner(name_span) {
-                return Ok(model.ty());
+            // `m::q::S<i32>`: a script type through its modules, with the
+            // generic arguments its path gives.
+            if let Some(model) = self.models.qualified_owner(name_span).cloned() {
+                if !matches!(self.peek(), Token::LessThan) {
+                    return Ok(model.ty());
+                }
+                let arguments = self.parse_local_arguments()?;
+                return Self::applied_script_type(&model, last, arguments);
             }
             if let Some(alias) = self.models.qualified_alias(name_span).cloned() {
                 return self.parse_alias_type(name, name_span, &alias);
@@ -615,23 +623,12 @@ impl<'a> Parser<'a> {
         {
             return self.parse_growable_type(kind, &name, name_span);
         }
-        let mut arguments = Vec::new();
-        let mut generic = false;
-        if matches!(self.peek(), Token::LessThan) {
-            self.next();
-            generic = true;
-            while !matches!(self.peek(), Token::GreaterThan | Token::RightShift) {
-                if !self.skip_lifetime() {
-                    arguments.push(self.parse_local_argument()?);
-                }
-                if matches!(self.peek(), Token::Comma) {
-                    self.next();
-                } else if !matches!(self.peek(), Token::GreaterThan | Token::RightShift) {
-                    return Err(self.unsupported("generic arguments"));
-                }
-            }
-            self.expect_close_angle("'>' after generic arguments")?;
-        }
+        let generic = matches!(self.peek(), Token::LessThan);
+        let mut arguments = if generic {
+            self.parse_local_arguments()?
+        } else {
+            Vec::new()
+        };
         let host = qualified.clone().or_else(|| {
             self.models
                 .import(&name)
@@ -669,18 +666,7 @@ impl<'a> Parser<'a> {
                 && let Some(model) = self.models.get(&name).cloned()
                 && !model.generics().is_empty() =>
             {
-                if arguments.len() != model.generics().len() {
-                    return Err(Error::InvalidTypeArguments {
-                        ty: name,
-                        expected: model.generics().len(),
-                        actual: arguments.len(),
-                        reference: name_span,
-                    });
-                }
-                Ok(Ty::Script(
-                    model.definition().id(),
-                    arguments.into_boxed_slice(),
-                ))
+                Self::applied_script_type(&model, name_span, arguments)
             }
             _ if generic => Err(self.unsupported("generic arguments on a non-generic type")),
             Some((definition, owner)) if qualified.is_some() => {
@@ -706,6 +692,59 @@ impl<'a> Parser<'a> {
             }
             _ => self.resolve_type(&name, name_span),
         }
+    }
+
+    /// The generic arguments `<A, B>` after a type's name, its lifetimes
+    /// left out.
+    fn parse_local_arguments(&mut self) -> Result<Vec<Ty>, Error> {
+        self.expect(Token::LessThan, "'<' before generic arguments")?;
+        let mut arguments = Vec::new();
+        while !matches!(self.peek(), Token::GreaterThan | Token::RightShift) {
+            if !self.skip_lifetime() {
+                arguments.push(self.parse_local_argument()?);
+            }
+            if matches!(self.peek(), Token::Comma) {
+                self.next();
+            } else if !matches!(self.peek(), Token::GreaterThan | Token::RightShift) {
+                return Err(self.unsupported("generic arguments"));
+            }
+        }
+        self.expect_close_angle("'>' after generic arguments")?;
+        Ok(arguments)
+    }
+
+    /// The script type `model` with `arguments` for its generic parameters,
+    /// which must be as many: else rustc's E0107 at `name`, the type's
+    /// name where the path ends.
+    fn applied_script_type(model: &Nominal, name: Span, arguments: Vec<Ty>) -> Result<Ty, Error> {
+        let expected = model.generics().len();
+        if arguments.len() != expected {
+            let plural = |count: usize| match count {
+                1 => "1 generic argument".to_string(),
+                count => format!("{count} generic arguments"),
+            };
+            let kind = match model {
+                Nominal::Struct { .. } => "struct",
+                Nominal::Enum { .. } => "enum",
+            };
+            let supplied = if arguments.len() == 1 { "was" } else { "were" };
+            return Err(Error::StdPath {
+                code: "E0107",
+                message: format!(
+                    "{kind} takes {} but {} {supplied} supplied",
+                    plural(expected),
+                    plural(arguments.len())
+                )
+                .into(),
+                label: Some(format!("expected {}", plural(expected)).into()),
+                note: None,
+                reference: name,
+            });
+        }
+        Ok(Ty::Script(
+            model.definition().id(),
+            arguments.into_boxed_slice(),
+        ))
     }
 
     /// `(A, ..) -> B` after `fn` or `dyn Fn` in a local type.

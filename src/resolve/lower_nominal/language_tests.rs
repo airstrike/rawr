@@ -8898,7 +8898,7 @@ fn language_precise_capture_bounds_and_async_functions() {
 #[test]
 fn language_restricted_item_visibility() {
     let value = run(r#"
-        pub(crate) struct Point { pub(crate) x: i64, pub(super) y: i64 }
+        pub(crate) struct Point { pub(crate) x: i64, pub(self) y: i64 }
         pub(crate) fn sum(p: &Point) -> i64 { p.x + p.y }
         pub(in crate) fn twice(n: i64) -> i64 { n * 2 }
         pub(self) fn one() -> i64 { 1 }
@@ -9188,6 +9188,34 @@ fn language_a_type_alias_named_through_its_module() {
         run()
     "#);
     assert_eq!(value, 7);
+}
+
+/// A generic type named through two modules takes its arguments wherever
+/// a type follows a pattern: a `let` with or without a value, a closure's
+/// parameter, a type's argument; `let _: T;` binds nothing (#2333).
+#[test]
+fn language_a_generic_type_through_modules_after_a_pattern() {
+    let value = run(r#"
+        mod m {
+            pub mod q {
+                pub struct S<T>(pub T);
+            }
+            pub struct E<T>(pub T);
+        }
+        pub fn run() -> i64 {
+            let _: i64;
+            let _: m::E<i64>;
+            let _: m::q::S<i64>;
+            let late: m::q::S<i64>;
+            late = m::q::S(5);
+            let f = |s: m::q::S<i64>| s.0;
+            let v: Vec<m::q::S<m::E<i64>>> = vec![m::q::S(m::E(3))];
+            let (a, _): (i64, m::q::S<i64>) = (4, m::q::S(0));
+            late.0 + f(m::q::S(1)) + v[0].0 .0 + a
+        }
+        run()
+    "#);
+    assert_eq!(value, 13);
 }
 
 #[test]

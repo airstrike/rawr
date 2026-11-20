@@ -113,6 +113,9 @@ pub(super) struct Tables {
     /// The module each source is, which decides what it sees of another
     /// module's private items.
     pub(super) namespaces: BTreeMap<crate::program::source::Id, crate::resolve::Namespace>,
+    /// The file each source is written in, as its diagnostics name it: an
+    /// inline module's is its file's.
+    pub(super) files: BTreeMap<crate::program::source::Id, ImmutableString>,
     pub(super) methods: BTreeMap<(type_def::Id, ImmutableString), method::Definition>,
     /// Each type's `impl From<T>` functions, by the type converted to.
     pub(super) conversions: BTreeMap<type_def::Id, Vec<method::Definition>>,
@@ -948,6 +951,16 @@ impl Models {
                 .iter()
                 .map(|script| (script.source, script.namespace.clone()))
                 .collect(),
+            files: program
+                .scripts
+                .iter()
+                .map(|script| {
+                    (
+                        script.source,
+                        program.source.identity_at(script.source).into(),
+                    )
+                })
+                .collect(),
             methods,
             conversions,
             trait_methods,
@@ -1335,20 +1348,49 @@ impl Models {
             .filter(|method| !self.sees(method))
     }
 
-    /// Whether this source sees `method`: a public one, a trait impl's
-    /// (which is as visible as its trait), or one private to this source's
-    /// module or one of its ancestors.
+    /// Whether this source sees `method`: a trait impl's (which is as
+    /// visible as its trait), or one whose `pub` marker, or its lack of
+    /// one, opens it to this source's module, from the module of its impl.
     pub(super) fn sees(&self, method: &method::Definition) -> bool {
-        method.is_public()
-            || method.trait_name().is_some()
+        method.trait_name().is_some()
             || method.source() == self.context
             || match (
                 self.namespaces.get(&self.context),
                 self.namespaces.get(&method.source()),
             ) {
-                (Some(here), Some(module)) => here.sees_private(module),
-                _ => false,
+                (Some(here), Some(module)) => module.opens_to(method.visibility(), here),
+                _ => method.visibility().is_some(),
             }
+    }
+
+    /// Whether this source sees `field` of the crate struct `owner`: one
+    /// whose `pub` marker, or its lack of one, opens it to this source's
+    /// module, from the struct's module.
+    pub(super) fn sees_field(&self, owner: &type_def::Key, field: &item::Field) -> bool {
+        let Some(here) = self.namespaces.get(&self.context) else {
+            return true;
+        };
+        crate::resolve::Namespace::type_opens_to(owner, field.visibility.as_ref(), here)
+    }
+
+    /// Whether the crate type `key` is declared in the file of the source
+    /// being lowered, so its spans are places the lowering's diagnostics
+    /// may show.
+    pub(super) fn type_in_this_file(&self, key: &type_def::Key) -> bool {
+        let module = crate::resolve::Namespace::of(key);
+        self.namespaces
+            .iter()
+            .any(|(source, namespace)| *namespace == module && self.in_this_file(*source))
+    }
+
+    /// Whether `source` is written in the file of the source being lowered,
+    /// so its spans are places the lowering's diagnostics may show.
+    pub(super) fn in_this_file(&self, source: crate::program::source::Id) -> bool {
+        source == self.context
+            || self
+                .files
+                .get(&source)
+                .is_some_and(|file| self.files.get(&self.context) == Some(file))
     }
 
     /// Whether `owner` implements the crate trait `trait_name`.

@@ -67,7 +67,7 @@ struct Address {
 struct Declaration {
     source: source::Id,
     span: Span,
-    public: bool,
+    reach: super::Reach,
     target: Target,
 }
 
@@ -125,6 +125,11 @@ struct Export {
     context: Context,
     path: Box<[ImmutableString]>,
     span: Span,
+    /// Where the binding is written, its path and its `as` name: what
+    /// rustc shows of an import.
+    written: Span,
+    /// Where the binding is visible, as its `use`'s `pub` marker says.
+    reach: super::Reach,
 }
 
 #[derive(Clone, PartialEq)]
@@ -454,7 +459,7 @@ impl<'a> Resolver<'a> {
                         Declaration {
                             source: context.source,
                             span: module.name.span,
-                            public: module.header.visibility.is_some(),
+                            reach: context.namespace.reach(module.header.visibility.as_ref()),
                             target: Target::Module,
                         },
                     )?;
@@ -473,7 +478,7 @@ impl<'a> Resolver<'a> {
                             Declaration {
                                 source: context.source,
                                 span: alias.name.span,
-                                public: alias.header.visibility.is_some(),
+                                reach: context.namespace.reach(alias.header.visibility.as_ref()),
                                 target,
                             },
                         )?,
@@ -488,7 +493,7 @@ impl<'a> Resolver<'a> {
                         Declaration {
                             source: context.source,
                             span: declared.name.span,
-                            public: declared.header.visibility.is_some(),
+                            reach: context.namespace.reach(declared.header.visibility.as_ref()),
                             target: Target::Trait(address),
                         },
                     )?;
@@ -540,8 +545,9 @@ impl<'a> Resolver<'a> {
                             Declaration {
                                 source: context.source,
                                 span: name.span,
-                                public: header(parsed)
-                                    .is_some_and(|header| header.visibility.is_some()),
+                                reach: context.namespace.reach(
+                                    header(parsed).and_then(|header| header.visibility.as_ref()),
+                                ),
                                 target,
                             },
                         )?,
@@ -566,6 +572,8 @@ impl<'a> Resolver<'a> {
                             context: context.clone(),
                             path,
                             span: name.span,
+                            written: use_item.written(&name),
+                            reach: context.namespace.reach(None),
                         };
                         self.tables.alias_at(address, export);
                     }
@@ -591,6 +599,8 @@ impl<'a> Resolver<'a> {
                             context: context.clone(),
                             path,
                             span: name.span,
+                            written: use_item.written(&name),
+                            reach: context.namespace.reach(use_item.header.visibility.as_ref()),
                         },
                     ) {
                         return Err(Failure {
@@ -687,6 +697,8 @@ impl<'a> Resolver<'a> {
                             context: context.clone(),
                             path: path.into_boxed_slice(),
                             span: *span,
+                            written: *span,
+                            reach: context.namespace.reach(used.header.visibility.as_ref()),
                         };
                         found.insert(address, (export, public));
                     }
@@ -897,6 +909,7 @@ impl<'a> Resolver<'a> {
 
     fn resolve(mut self) -> Result<Program, Failure> {
         super::std_trait::begin();
+        self.validate_restrictions()?;
         self.validate_exports()?;
         let qualified_pattern_owners = self.resolve_qualified_pattern_owners()?;
         let mut shells = Vec::new();
@@ -1357,6 +1370,115 @@ impl<'a> Resolver<'a> {
         }
     }
 
+    /// Whether each restricted visibility's path names an ancestor of the
+    /// module its item is declared in, as rustc requires of `pub(in ..)`.
+    fn validate_restrictions(&self) -> Result<(), Failure> {
+        for unit in &self.units {
+            for parsed in unit.parsed.items() {
+                for visibility in visibilities(parsed) {
+                    self.validate_restriction(&unit.context, visibility)
+                        .map_err(|error| Failure {
+                            primary: unit.context.source,
+                            secondary: None,
+                            error,
+                        })?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// rustc's E0433 for a restriction's path through a module that doesn't
+    /// exist or above the crate root, and its E0742 for one to a module that
+    /// is no ancestor.
+    fn validate_restriction(
+        &self,
+        context: &Context,
+        visibility: &crate::item::Visibility,
+    ) -> Result<(), Error> {
+        let module = &context.namespace.modules;
+        let (Some(restricted), Some(path)) = (
+            visibility.restricted(module),
+            visibility.restriction.as_deref(),
+        ) else {
+            return Ok(());
+        };
+        let scope = match restricted {
+            crate::item::Restricted::AboveRoot(segment) => {
+                let within = std::iter::once("crate")
+                    .chain(module.iter().map(ImmutableString::as_str))
+                    .collect::<Vec<_>>()
+                    .join("::");
+                return Err(Error::StdPath {
+                    code: "E0433",
+                    message: format!("too many leading `super` keywords within `{within}`").into(),
+                    label: Some("this `super` would go above the crate root".into()),
+                    note: None,
+                    reference: segment.span,
+                });
+            }
+            crate::item::Restricted::Module(scope) => scope,
+        };
+        if module.starts_with(&scope) {
+            return Ok(());
+        }
+        // The first segment that names no module, from where the path
+        // starts.
+        let mut at = match path[0].text.as_str() {
+            "crate" => Vec::new(),
+            _ => module.to_vec(),
+        };
+        for (index, segment) in path.iter().enumerate() {
+            match segment.text.as_str() {
+                "crate" | "self" if index == 0 => continue,
+                "super" => {
+                    at.pop();
+                    continue;
+                }
+                _ => {}
+            }
+            let address = Address {
+                package: context.namespace.package.clone(),
+                modules: at.clone().into_boxed_slice(),
+                name: segment.text.clone(),
+            };
+            let declared = self.tables.declaration(&address);
+            if !matches!(
+                declared.map(|declared| &declared.target),
+                Some(Target::Module)
+            ) {
+                let parent = path[index - 1].text.as_str();
+                let label = match declared {
+                    Some(declaration) => format!(
+                        "expected type, found {} `{}` in `{parent}`",
+                        self.private_kind(&declaration.target).noun(),
+                        segment.text
+                    ),
+                    None if parent == "crate" => {
+                        format!("could not find `{}` in the crate root", segment.text)
+                    }
+                    None => format!("could not find `{}` in `{parent}`", segment.text),
+                };
+                return Err(Error::StdPath {
+                    code: "E0433",
+                    message: format!("cannot find `{}` in `{parent}`", segment.text).into(),
+                    label: Some(label.into()),
+                    note: None,
+                    reference: segment.span,
+                });
+            }
+            at.push(segment.text.clone());
+        }
+        let last = path.last().expect("a restriction's path has a segment");
+        Err(Error::StdPath {
+            code: "E0742",
+            message: "visibilities can only be restricted to ancestor modules".into(),
+            label: None,
+            note: None,
+            reference: Span::new(path[0].span.start(), last.span.end()),
+        })
+    }
+
     fn validate_exports(&self) -> Result<(), Failure> {
         for (address, export) in self.tables.exports() {
             self.validated(address, export, || self.validate_export(address, export))?;
@@ -1389,7 +1511,54 @@ impl<'a> Resolver<'a> {
                 },
             });
         }
+        // A re-export reaches no further than what it re-exports: rustc's
+        // E0364.
+        if let Some((address, declaration)) = self.declared_at(&context, &path)
+            && !export.reach.within(&declaration.reach)
+        {
+            let name = &address.name;
+            let message = match &declaration.reach {
+                super::Reach::Within(module) if module.modules.is_empty() => {
+                    format!("`{name}` is only public within the crate, and cannot be re-exported outside")
+                }
+                _ => format!("`{name}` is private, and cannot be re-exported"),
+            };
+            return Err(Failure {
+                primary: export.source,
+                secondary: None,
+                error: Error::StdPath {
+                    code: "E0364",
+                    message: message.into(),
+                    label: None,
+                    note: Some(
+                        format!("consider marking `{name}` as `pub` in the imported module").into(),
+                    ),
+                    reference: export.written,
+                },
+            });
+        }
         Ok(())
+    }
+
+    /// The crate declaration `path` names from `origin`, where no import
+    /// is on the way (`Resolver::origin`), with its address.
+    fn declared_at(
+        &self,
+        origin: &Context,
+        path: &[ImmutableString],
+    ) -> Option<(Address, &Declaration)> {
+        let (name, prefix) = path.split_last()?;
+        let modules = match prefix {
+            [] => origin.namespace.modules.to_vec(),
+            _ => self.local_glob_module(origin, prefix)?,
+        };
+        let address = Address {
+            package: origin.namespace.package.clone(),
+            modules: modules.into_boxed_slice(),
+            name: name.clone(),
+        };
+        let declaration = self.tables.declaration(&address)?;
+        Some((address, declaration))
     }
 
     /// The names a glob import (`use dep::module::*;`) binds: every name
@@ -1524,7 +1693,7 @@ impl<'a> Resolver<'a> {
         let declared = self
             .tables
             .declared_in(package, modules)
-            .filter(|(_, declaration)| declaration.public || inside)
+            .filter(|(_, declaration)| declaration.reach.reaches(&context.namespace))
             .map(|(address, _)| address);
         let exported = self
             .tables
@@ -2778,6 +2947,9 @@ impl<'a> Resolver<'a> {
         }
         if let Some(export) = self.tables.export(&address) {
             self.validate_module_hops(context, &address, reference)?;
+            if !export.reach.reaches(&context.namespace) {
+                return Err(self.private_import(context, &address, export, reference, active));
+            }
             if !active.insert(address.clone()) {
                 return Err(Failure {
                     primary: context.source,
@@ -2798,10 +2970,11 @@ impl<'a> Resolver<'a> {
         // A private `use` is visible to the module's descendants, as in
         // Rust: `use crate::Preset;` inside `mod grid` reaches the root's
         // `use preset::Preset;`.
-        if let Some(alias) = self.tables.alias(&address)
-            && within(context, &address, address.modules.len())
-        {
+        if let Some(alias) = self.tables.alias(&address) {
             self.validate_module_hops(context, &address, reference)?;
+            if !alias.reach.reaches(&context.namespace) {
+                return Err(self.private_import(context, &address, alias, reference, active));
+            }
             if !active.insert(address.clone()) {
                 return Err(Failure {
                     primary: context.source,
@@ -2840,7 +3013,7 @@ impl<'a> Resolver<'a> {
         reference: Span,
     ) -> Result<(), Failure> {
         self.validate_module_hops(context, address, reference)?;
-        if !declaration.public && !within(context, address, address.modules.len()) {
+        if !declaration.reach.reaches(&context.namespace) {
             return Err(self.private(context, address, declaration, reference));
         }
         Ok(())
@@ -2861,7 +3034,7 @@ impl<'a> Resolver<'a> {
             let Some(module) = self.tables.declaration(&module_address) else {
                 return Err(self.unknown_import(context, &[], reference));
             };
-            if !module.public && !within(context, address, depth) {
+            if !module.reach.reaches(&context.namespace) {
                 return Err(self.private(context, &module_address, module, reference));
             }
         }
@@ -2877,7 +3050,71 @@ impl<'a> Resolver<'a> {
         declaration: &Declaration,
         reference: Span,
     ) -> Failure {
-        let item = match &declaration.target {
+        Failure {
+            primary: context.source,
+            secondary: Some(declaration.source),
+            error: Error::PrivateItem {
+                item: self.private_kind(&declaration.target),
+                name: address.name.clone(),
+                reference: last_segment(reference, &address.name),
+                declaration: Some(declaration.span),
+                referent: None,
+            },
+        }
+    }
+
+    /// rustc's E0603 for a path to `import`, a `use` binding at `address`
+    /// that `context` is outside of the reach of: named by what it binds,
+    /// as "function import `f` is private".
+    fn private_import(
+        &self,
+        context: &Context,
+        address: &Address,
+        import: &Export,
+        reference: Span,
+        active: &mut BTreeSet<Address>,
+    ) -> Failure {
+        let mut imported = None;
+        if active.insert(address.clone()) {
+            imported = self
+                .resolve_any_path(&import.context, &import.path, import.span, active)
+                .ok()
+                .and_then(|target| self.private_kind(&target).imported());
+            active.remove(address);
+        }
+        Failure {
+            primary: context.source,
+            secondary: Some(import.source),
+            error: Error::PrivateItem {
+                item: imported.unwrap_or(Private::Import(super::Imported::Function)),
+                name: address.name.clone(),
+                reference: last_segment(reference, &address.name),
+                declaration: Some(import.written),
+                referent: self.referent(context, import).map(Box::new),
+            },
+        }
+    }
+
+    /// The crate item `import` binds, when it is declared in the import's
+    /// file, with whether `context` sees it.
+    fn referent(&self, context: &Context, import: &Export) -> Option<super::Referent> {
+        let (origin, path) = self.origin(&import.context, &import.path);
+        let (address, declaration) = self.declared_at(&origin, &path)?;
+        let file = |source: source::Id| self.evidence[source.index()].identity();
+        (file(declaration.source) == file(import.source)).then(|| super::Referent {
+            item: self.private_kind(&declaration.target),
+            name: address.name.clone(),
+            declaration: declaration.span,
+            visible: declaration.reach.reaches(&context.namespace)
+                && self
+                    .validate_module_hops(context, &address, declaration.span)
+                    .is_ok(),
+        })
+    }
+
+    /// What `target` is, as rustc names it in E0603.
+    fn private_kind(&self, target: &Target) -> Private {
+        match target {
             Target::Module => Private::Module,
             Target::Trait(_) => Private::Trait,
             Target::Type(type_ref::Target::Script { definition, .. })
@@ -2890,16 +3127,6 @@ impl<'a> Resolver<'a> {
             Target::Item(_) | Target::HostItem { .. } | Target::HostModuleItem { .. } => {
                 Private::Function
             }
-        };
-        Failure {
-            primary: context.source,
-            secondary: Some(declaration.source),
-            error: Error::PrivateItem {
-                item,
-                name: address.name.clone(),
-                reference: last_segment(reference, &address.name),
-                declaration: Some(declaration.span),
-            },
         }
     }
 
@@ -3527,6 +3754,26 @@ fn declare_in_block(
     }
     declared.insert(name.text.clone(), (name.span, target));
     Ok(())
+}
+
+/// The `pub` markers of `parsed`: its own, its impl's functions' and its
+/// struct's fields'.
+fn visibilities(parsed: &crate::item::Parsed) -> Vec<&crate::item::Visibility> {
+    let own = header(parsed).and_then(|header| header.visibility.as_ref());
+    let members: Vec<_> = match parsed {
+        crate::item::Parsed::Impl(item) => item
+            .functions
+            .iter()
+            .filter_map(|function| function.header.visibility.as_ref())
+            .collect(),
+        crate::item::Parsed::Struct(item) => item
+            .fields
+            .iter()
+            .filter_map(|field| field.visibility.as_ref())
+            .collect(),
+        _ => Vec::new(),
+    };
+    own.into_iter().chain(members).collect()
 }
 
 fn header(parsed: &crate::item::Parsed) -> Option<&crate::item::Header> {

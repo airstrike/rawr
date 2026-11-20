@@ -28,8 +28,9 @@ pub(crate) use error::{
     Unsupported, ASYNC_MAIN, IF_WITHOUT_ELSE, INVALID_ASSIGNEE, RETURN_WITHOUT_VALUE,
 };
 pub use error::{
-    BindingSite, Boxing, Callee, Category, Cloning, Error, Expansion, Lint, MacroScope, MoveCause,
-    MovedPlace, MutBinding, OwningParameter, PatternOrigin, PatternTypes, Private, Unresolved,
+    BindingSite, Boxing, Callee, Category, Cloning, Error, Expansion, Imported, Lint, MacroScope,
+    MoveCause, MovedPlace, MutBinding, OwningParameter, PatternOrigin, PatternTypes, Private,
+    Referent, Unresolved,
 };
 use std::collections::BTreeMap;
 
@@ -1303,6 +1304,94 @@ impl Namespace {
     fn sees_private(&self, module: &Self) -> bool {
         self.package == module.package && self.modules.starts_with(&module.modules)
     }
+
+    /// The module that declares the crate type `key`.
+    fn of(key: &type_def::Key) -> Self {
+        Self {
+            package: key.package().into(),
+            modules: key.modules().into(),
+        }
+    }
+
+    /// Whether code in the module `here` sees an item of the crate type
+    /// `key`'s module, a field, declared with `visibility`.
+    fn type_opens_to(
+        key: &type_def::Key,
+        visibility: Option<&crate::item::Visibility>,
+        here: &Self,
+    ) -> bool {
+        opens(key.package(), key.modules(), visibility, here)
+    }
+
+    /// Whether code in the module `here` sees an item this module declares
+    /// with `visibility`: [`Self::reach`] without keeping it.
+    fn opens_to(&self, visibility: Option<&crate::item::Visibility>, here: &Self) -> bool {
+        opens(&self.package, &self.modules, visibility, here)
+    }
+
+    /// Where an item this module declares with `visibility` is visible.
+    fn reach(&self, visibility: Option<&crate::item::Visibility>) -> Reach {
+        let Some(visibility) = visibility else {
+            return Reach::Within(self.clone());
+        };
+        match visibility.scope(&self.modules) {
+            Some(modules) => Reach::Within(Self {
+                package: self.package.clone(),
+                modules,
+            }),
+            None => Reach::Everywhere,
+        }
+    }
+}
+
+/// Whether code in the module `here` sees an item that the module
+/// `modules` of `package` declares with `visibility`.
+fn opens(
+    package: &str,
+    modules: &[ImmutableString],
+    visibility: Option<&crate::item::Visibility>,
+    here: &Namespace,
+) -> bool {
+    let scope = match visibility {
+        None => None,
+        Some(visibility) => match visibility.scope(modules) {
+            Some(scope) => Some(scope),
+            None => return true,
+        },
+    };
+    here.package == package
+        && here
+            .modules
+            .starts_with(scope.as_deref().unwrap_or(modules))
+}
+
+/// Where an item is visible, as its `pub` marker or its lack of one says:
+/// everywhere, or in one module of its crate and that module's
+/// descendants.
+#[derive(Clone, Debug, PartialEq)]
+enum Reach {
+    Everywhere,
+    Within(Namespace),
+}
+
+impl Reach {
+    /// Whether code in the module `here` sees the item.
+    fn reaches(&self, here: &Namespace) -> bool {
+        match self {
+            Self::Everywhere => true,
+            Self::Within(module) => here.sees_private(module),
+        }
+    }
+
+    /// Whether everywhere this reach covers, `other` covers too: a
+    /// re-export may reach no further than what it re-exports.
+    fn within(&self, other: &Self) -> bool {
+        match (self, other) {
+            (_, Self::Everywhere) => true,
+            (Self::Everywhere, Self::Within(_)) => false,
+            (Self::Within(module), Self::Within(_)) => other.reaches(module),
+        }
+    }
 }
 
 fn named_declaration(
@@ -2327,6 +2416,7 @@ fn resolve_item(
                     )?,
                     span: field.span,
                     attributes: field.attributes,
+                    visibility: field.visibility,
                 });
             }
 
