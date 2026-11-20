@@ -6,8 +6,12 @@ use std::fmt;
 
 use serde_json::{json, Value};
 
+use super::section::Level;
 use super::suggestion::{Edit, Style};
-use super::{code, Category, ExternalPosition, LabelKind, Report, Severity, Source, Suggestion};
+use super::{
+    code, Category, ExternalPosition, Label, LabelKind, Report, Section, Severity, Source,
+    Suggestion,
+};
 use crate::{Position, Span};
 
 /// Why a text is no report [`Report::encode`] wrote.
@@ -50,12 +54,20 @@ impl Report {
     #[must_use]
     pub fn encode(&self) -> String {
         let sources = self.sources();
-        let labels = self.labels().iter().map(|label| {
+        let label = |label: &Label| {
             json!({
                 "source": sources.iter().position(|source| source == label.source()),
                 "span": [place(label.span().start()), place(label.span().end())],
                 "primary": label.kind() == LabelKind::Primary,
                 "message": label.message(),
+            })
+        };
+        let labels = self.labels().iter().map(label);
+        let sections = self.sections().iter().map(|section| {
+            json!({
+                "help": section.level() == Level::Help,
+                "message": section.message(),
+                "labels": section.labels().iter().map(label).collect::<Vec<_>>(),
             })
         });
         let external = self.external_labels().iter().map(|label| {
@@ -97,6 +109,7 @@ impl Report {
             "external": external.collect::<Vec<_>>(),
             "help": self.help(),
             "notes": self.notes().collect::<Vec<_>>(),
+            "sections": sections.collect::<Vec<_>>(),
             "suggestions": suggestions.collect::<Vec<_>>(),
         })
         .to_string()
@@ -128,22 +141,11 @@ impl Report {
             builder = builder.source(source.clone());
             sources.push(source);
         }
-        for label in list("labels")? {
-            let source = label
-                .get("source")
-                .and_then(Value::as_u64)
-                .and_then(|index| sources.get(usize::try_from(index).ok()?))
-                .ok_or(Error::Malformed("label"))?
-                .clone();
-            let span = label
-                .get("span")
-                .and_then(span)
-                .ok_or(Error::Malformed("span"))?;
-            let message = optional(label.get("message"), "label")?.map(Into::into);
-            builder = match label.get("primary").and_then(Value::as_bool) {
-                Some(true) => builder.primary(source, span, message)?,
-                Some(false) => builder.secondary(source, span, message)?,
-                None => return Err(Error::Malformed("label")),
+        for value in list("labels")? {
+            let (source, span, kind, message) = label(value, &sources)?;
+            builder = match kind {
+                LabelKind::Primary => builder.primary(source, span, message)?,
+                LabelKind::Secondary => builder.secondary(source, span, message)?,
             };
         }
         for label in list("external")? {
@@ -172,11 +174,63 @@ impl Report {
         for note in list("notes")? {
             builder = builder.note(string(note, "note")?);
         }
+        for section in list("sections")? {
+            builder = builder.section(self::section(section, &sources)?)?;
+        }
         for suggestion in list("suggestions")? {
             builder = builder.suggestion(self::suggestion(suggestion, &sources)?);
         }
         Ok(builder.finish())
     }
+}
+
+/// The label `value` holds, in `sources`: its source, span, kind and
+/// message.
+fn label(
+    value: &Value,
+    sources: &[Source],
+) -> Result<(Source, Span, LabelKind, Option<crate::ImmutableString>), Error> {
+    let source = value
+        .get("source")
+        .and_then(Value::as_u64)
+        .and_then(|index| sources.get(usize::try_from(index).ok()?))
+        .ok_or(Error::Malformed("label"))?
+        .clone();
+    let span = value
+        .get("span")
+        .and_then(span)
+        .ok_or(Error::Malformed("span"))?;
+    let message = optional(value.get("message"), "label")?.map(Into::into);
+    let kind = match value.get("primary").and_then(Value::as_bool) {
+        Some(true) => LabelKind::Primary,
+        Some(false) => LabelKind::Secondary,
+        None => return Err(Error::Malformed("label")),
+    };
+    Ok((source, span, kind, message))
+}
+
+/// The section `value` holds, its labels in `sources`.
+fn section(value: &Value, sources: &[Source]) -> Result<Section, Error> {
+    let malformed = Error::Malformed("section");
+    let level = match value.get("help").and_then(Value::as_bool) {
+        Some(true) => Level::Help,
+        Some(false) => Level::Note,
+        None => return Err(malformed),
+    };
+    let message = string(value.get("message").ok_or(malformed.clone())?, "section")?;
+    let labels = value
+        .get("labels")
+        .and_then(Value::as_array)
+        .ok_or(malformed)?;
+    labels
+        .iter()
+        .try_fold(Section::new(level, message.into()), |section, value| {
+            let (source, span, kind, message) = label(value, sources)?;
+            Ok(match kind {
+                LabelKind::Primary => section.primary(source, span, message),
+                LabelKind::Secondary => section.secondary(source, span, message),
+            })
+        })
 }
 
 /// The suggestion `value` holds, its edits in `sources`.
@@ -280,7 +334,7 @@ fn span(value: &Value) -> Option<Span> {
 #[cfg(test)]
 mod tests {
     use super::super::suggestion::{Edit, Style};
-    use super::super::{code, ExternalPosition, Report, Source, Suggestion};
+    use super::super::{code, ExternalPosition, Report, Section, Source, Suggestion};
     use crate::{Position, Span};
 
     #[test]
@@ -305,7 +359,7 @@ mod tests {
         )
         .and_then(|builder| {
             builder.secondary(
-                main,
+                main.clone(),
                 Span::new(Position::new(2, 5), Position::new(2, 14)),
                 None,
             )
@@ -314,6 +368,20 @@ mod tests {
         .secondary_external(place, Some("defined here".into()))
         .help("a local variable with a similar name exists")
         .note("the note")
+        .section(
+            Section::note("defined here")
+                .primary(
+                    main.clone(),
+                    Span::new(Position::new(1, 4), Position::new(1, 8)),
+                    None,
+                )
+                .secondary(
+                    view.clone(),
+                    Span::new(Position::new(1, 8), Position::new(1, 11)),
+                    Some("this one".into()),
+                ),
+        )
+        .expect("the section's places are in their sources")
         .suggestion(
             Suggestion::new(
                 "consider slicing here",

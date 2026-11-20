@@ -29,7 +29,7 @@ pub(crate) use error::{
 };
 pub use error::{
     BindingSite, Boxing, Callee, Category, Cloning, Error, Expansion, Lint, MacroScope, MoveCause,
-    MovedPlace, OwningParameter, PatternOrigin, PatternTypes, Private, Unresolved,
+    MovedPlace, MutBinding, OwningParameter, PatternOrigin, PatternTypes, Private, Unresolved,
 };
 use std::collections::BTreeMap;
 

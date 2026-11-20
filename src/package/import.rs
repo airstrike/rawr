@@ -1418,6 +1418,9 @@ fn augment_external(
     for reason in reasons {
         builder = builder.note(reason);
     }
+    for section in report.sections() {
+        builder = builder.section(section.clone())?;
+    }
     for suggestion in report.suggestions() {
         builder = builder.suggestion(suggestion.clone());
     }

@@ -276,10 +276,10 @@ impl Syntax {
         }
     }
 
-    /// `error`, refusing this pattern as a `let`'s whole pattern, with the
-    /// binding rustc suggests declaring `mut` where the pattern is a `&mut`
-    /// of one binding on a `&` value.
-    pub(super) fn declared(&self, mut error: Error) -> Error {
+    /// `error`, refusing this pattern as a `let`'s whole pattern, or an
+    /// arm's when `arm`, with the binding rustc suggests declaring `mut`
+    /// where the pattern is a `&mut` of one binding on a `&` value.
+    pub(super) fn declared(&self, mut error: Error, arm: bool) -> Error {
         if let Error::PatternMismatch { types, pattern, .. } = &mut error
             && *pattern == self.span()
             && types.expected.starts_with('&')
@@ -289,9 +289,13 @@ impl Syntax {
                 pattern: inner,
                 ..
             } = self
-            && let Self::Binding { name, .. } = inner.as_ref()
+            && let Self::Binding { name, span, .. } = inner.as_ref()
         {
-            types.binding = Some(name.clone());
+            types.binding = Some(crate::resolve::MutBinding {
+                name: name.clone(),
+                span: *span,
+                arm,
+            });
         }
         error
     }
@@ -955,7 +959,7 @@ impl<'a> Parser<'a> {
                     end,
                     pending,
                 )
-                .map_err(|error| syntax.declared(error.matched(|| origin)));
+                .map_err(|error| syntax.declared(error.matched(|| origin), false));
         }
         self.reject_invocation(&value.ty, value.span, "kept in a `let` binding")?;
         if let Some(expected) = &annotation {
@@ -979,7 +983,7 @@ impl<'a> Parser<'a> {
                     end,
                     pending,
                 )
-                .map_err(|error| syntax.declared(error.matched(|| origin)));
+                .map_err(|error| syntax.declared(error.matched(|| origin), false));
         }
         let ty = annotation.unwrap_or_else(|| value.ty.clone());
         // `ref mut` bindings are the subject's places: it is not copied.
@@ -1024,9 +1028,9 @@ impl<'a> Parser<'a> {
             String::new()
         };
         let traced = self.begin_trace();
-        let destructured = self
-            .destructure(&syntax, &whole, &ty)
-            .map_err(|error| syntax.declared(error.matched(|| self.let_origin(annotated, &value))));
+        let destructured = self.destructure(&syntax, &whole, &ty).map_err(|error| {
+            syntax.declared(error.matched(|| self.let_origin(annotated, &value)), false)
+        });
         let trace = self.end_trace(traced);
         self.pattern_facts(trace, &matched, value.span, &[])?;
         self.place_root = None;

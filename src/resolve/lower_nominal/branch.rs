@@ -347,9 +347,11 @@ impl<'a> Parser<'a> {
                 }
             } else {
                 let syntax = self.parse_pattern_syntax()?;
-                let mut resolved = self
-                    .resolve_root_pattern(&syntax, &binding_ty)
-                    .map_err(|error| error.matched(|| self.subject_origin(&place)))?;
+                let mut resolved =
+                    self.resolve_root_pattern(&syntax, &binding_ty)
+                        .map_err(|error| {
+                            syntax.declared(error.matched(|| self.subject_origin(&place)), true)
+                        })?;
                 let trace = std::mem::take(&mut resolved.trace);
                 self.pattern_tests(&trace, &matched, subject_span);
                 self.flow().arm(tested);
@@ -819,8 +821,10 @@ impl<'a> Parser<'a> {
             let syntax = self.parse_pattern_syntax()?;
             let mut binding = None;
             let test = self
-                .scalar_condition(&syntax, &subject_ty, &temporary, &mut binding)
-                .map_err(|error| error.matched(|| self.subject_origin(&subject)))?;
+                .scalar_condition(&syntax, &written, &temporary, &mut binding)
+                .map_err(|error| {
+                    syntax.declared(error.matched(|| self.subject_origin(&subject)), true)
+                })?;
             let trace = self.scalar_trace(
                 test.is_some(),
                 binding
@@ -1388,16 +1392,19 @@ impl<'a> Parser<'a> {
         source
     }
 
-    /// The test a pattern on a scalar subject held in `temporary` makes:
-    /// `None` when it matches every value. `name` and `name @ p` bind the
-    /// subject.
+    /// The test a pattern on a scalar subject of type `written`, held in
+    /// `temporary`, makes: `None` when it matches every value. `name` and
+    /// `name @ p` bind the subject. A `&` pattern matches one reference
+    /// of `written`; any other pattern matches the scalar below them all,
+    /// as rustc's default binding mode reads it.
     pub(super) fn scalar_condition(
         &self,
         syntax: &pattern::Syntax,
-        ty: &Ty,
+        written: &Ty,
         temporary: &str,
         binding: &mut Option<(ImmutableString, Span, bool)>,
     ) -> Result<Option<String>, Error> {
+        let ty = &self.referenced(written);
         let mut bind = |name: &ImmutableString, span: Span, mutable: bool| {
             if binding.as_ref().is_some_and(|(bound, _, _)| bound != name) {
                 return Err(Error::InvalidMatch {
@@ -1425,8 +1432,19 @@ impl<'a> Parser<'a> {
                 pattern,
             } => {
                 bind(name, *name_span, false)?;
-                self.scalar_condition(pattern, ty, temporary, binding)?
+                self.scalar_condition(pattern, written, temporary, binding)?
             }
+            pattern::Syntax::Reference {
+                mutable, pattern, ..
+            } => match self.inference.resolve(written) {
+                Ty::Reference {
+                    mutable: actual,
+                    target,
+                } if actual || !mutable => {
+                    self.scalar_condition(pattern, &target, temporary, binding)?
+                }
+                _ => return Err(self.pattern_mismatch(written, syntax.found(), syntax.span())),
+            },
             pattern::Syntax::Literal {
                 literal,
                 ty: actual,
@@ -1470,7 +1488,7 @@ impl<'a> Parser<'a> {
             pattern::Syntax::Or { alternatives, .. } => {
                 let mut tests = Vec::new();
                 for alternative in alternatives.iter() {
-                    match self.scalar_condition(alternative, ty, temporary, binding)? {
+                    match self.scalar_condition(alternative, written, temporary, binding)? {
                         Some(test) => tests.push(test),
                         None => return Ok(None),
                     }

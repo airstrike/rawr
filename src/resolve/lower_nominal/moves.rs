@@ -787,9 +787,10 @@ impl<'a> Parser<'a> {
             return Cloning::Clone;
         }
         match &ty {
-            Ty::Script(id, _) if self.models.declared_here(*id) => {
-                Cloning::Derivable(self.settled_name(&ty))
-            }
+            Ty::Script(id, _) if self.models.declared_here(*id) => Cloning::Derivable {
+                ty: self.settled_name(&ty),
+                name: self.models.definition(*id).name_span(),
+            },
             _ => Cloning::None,
         }
     }

@@ -1606,11 +1606,6 @@ fn a_move_into_an_owning_parameter_is_e0382_with_rustcs_note_and_clone_help() {
             "error[E0382]: borrow of moved value: `vec0`\n",
             " --> main.rs:8:5\n",
             "  |\n",
-            "1 | fn fill_vec(vec: Vec<i32>) -> Vec<i32> {\n",
-            "  |    --------      -------- this parameter takes ownership of the value\n",
-            "  |    |\n",
-            "  |    in this function\n",
-            "...\n",
             "6 |     let vec0 = vec![22, 44, 66];\n",
             "  |         ---- move occurs because `vec0` has type `Vec<i32>`, which does not \
              implement the `Copy` trait\n",
@@ -1619,8 +1614,14 @@ fn a_move_into_an_owning_parameter_is_e0382_with_rustcs_note_and_clone_help() {
             "8 |     assert_eq!(vec0, [22, 44, 66]);\n",
             "  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ value borrowed here after move\n",
             "  |\n",
-            "  = note: consider changing this parameter type in function `fill_vec` to borrow \
-             instead if owning the value isn't necessary\n",
+            "note: consider changing this parameter type in function `fill_vec` to borrow instead \
+             if owning the value isn't necessary\n",
+            " --> main.rs:1:18\n",
+            "  |\n",
+            "1 | fn fill_vec(vec: Vec<i32>) -> Vec<i32> {\n",
+            "  |    --------      ^^^^^^^^ this parameter takes ownership of the value\n",
+            "  |    |\n",
+            "  |    in this function\n",
             "help: consider cloning the value if the performance cost is acceptable\n",
             "  |\n",
             "7 |     let vec1 = fill_vec(vec0.clone());\n",
@@ -1628,21 +1629,36 @@ fn a_move_into_an_owning_parameter_is_e0382_with_rustcs_note_and_clone_help() {
         )
     );
     // A method's parameter, and a `&` of the moved local.
-    let method = rendered(
-        "struct S;\nimpl S {\n    fn eat(&self, v: Vec<i32>) -> usize {\n        v.len()\n    \
-         }\n}\nfn main() {\n    let v = vec![1];\n    S.eat(v);\n    let r = &v;\n}\n",
-    );
-    assert!(
-        method.starts_with("error[E0382]: borrow of moved value: `v`\n  --> main.rs:10:13\n"),
-        "{method}"
-    );
-    assert!(
-        method.contains("   |        ---           -------- this parameter takes ownership of the value\n   |        |\n   |        in this method\n"),
-        "{method}"
-    );
-    assert!(
-        method.contains("parameter type in method `eat` to borrow"),
-        "{method}"
+    assert_eq!(
+        rendered(
+            "struct S;\nimpl S {\n    fn eat(&self, v: Vec<i32>) -> usize {\n        v.len()\n    \
+             }\n}\nfn main() {\n    let v = vec![1];\n    S.eat(v);\n    let r = &v;\n}\n",
+        ),
+        concat!(
+            "error[E0382]: borrow of moved value: `v`\n",
+            "  --> main.rs:10:13\n",
+            "   |\n",
+            " 8 |     let v = vec![1];\n",
+            "   |         - move occurs because `v` has type `Vec<i32>`, which does not implement \
+             the `Copy` trait\n",
+            " 9 |     S.eat(v);\n",
+            "   |           - value moved here\n",
+            "10 |     let r = &v;\n",
+            "   |             ^^ value borrowed here after move\n",
+            "   |\n",
+            "note: consider changing this parameter type in method `eat` to borrow instead if \
+             owning the value isn't necessary\n",
+            "  --> main.rs:3:22\n",
+            "   |\n",
+            " 3 |     fn eat(&self, v: Vec<i32>) -> usize {\n",
+            "   |        ---           ^^^^^^^^ this parameter takes ownership of the value\n",
+            "   |        |\n",
+            "   |        in this method\n",
+            "help: consider cloning the value if the performance cost is acceptable\n",
+            "   |\n",
+            " 9 |     S.eat(v.clone());\n",
+            "   |            ++++++++\n",
+        )
     );
     // A generic parameter: no note.
     let generic = rendered(
@@ -1659,6 +1675,9 @@ fn a_move_into_an_owning_parameter_is_e0382_with_rustcs_note_and_clone_help() {
     );
 }
 
+/// rustc's note on a moved value whose type is the program's own and not
+/// `Clone` marks the type's definition and the move a clone would keep
+/// the value through, after the note on the parameter that took it.
 #[test]
 fn a_moved_value_that_is_not_clone_gets_rustcs_note_instead_of_the_clone_help() {
     let report = rendered(
@@ -1666,10 +1685,55 @@ fn a_moved_value_that_is_not_clone_gets_rustcs_note_instead_of_the_clone_help() 
          println!(\"{n:?} {m:?}\");\n}\n",
     );
     assert!(
-        report.ends_with("  = note: if `N` implemented `Clone`, you could clone the value\n"),
+        report.ends_with(concat!(
+            "  |\n",
+            "note: if `N` implemented `Clone`, you could clone the value\n",
+            " --> main.rs:2:1\n",
+            "  |\n",
+            "2 | struct N;\n",
+            "  | ^^^^^^^^ consider implementing `Clone` for this type\n",
+            "...\n",
+            "5 |     let m = n;\n",
+            "  |             - you could clone this value\n",
+        )),
         "{report}"
     );
     assert!(!report.contains("help"), "{report}");
+    assert_eq!(
+        rendered(
+            "#[derive(Debug)]\nstruct N;\nfn take(n: N) {}\nfn main() {\n    let n = N;\n    \
+             take(n);\n    println!(\"{n:?}\");\n}\n"
+        ),
+        concat!(
+            "error[E0382]: borrow of moved value: `n`\n",
+            " --> main.rs:7:16\n",
+            "  |\n",
+            "5 |     let n = N;\n",
+            "  |         - move occurs because `n` has type `N`, which does not implement the \
+             `Copy` trait\n",
+            "6 |     take(n);\n",
+            "  |          - value moved here\n",
+            "7 |     println!(\"{n:?}\");\n",
+            "  |                ^ value borrowed here after move\n",
+            "  |\n",
+            "note: consider changing this parameter type in function `take` to borrow instead if \
+             owning the value isn't necessary\n",
+            " --> main.rs:3:12\n",
+            "  |\n",
+            "3 | fn take(n: N) {}\n",
+            "  |    ----    ^ this parameter takes ownership of the value\n",
+            "  |    |\n",
+            "  |    in this function\n",
+            "note: if `N` implemented `Clone`, you could clone the value\n",
+            " --> main.rs:2:1\n",
+            "  |\n",
+            "2 | struct N;\n",
+            "  | ^^^^^^^^ consider implementing `Clone` for this type\n",
+            "...\n",
+            "6 |     take(n);\n",
+            "  |          - you could clone this value\n",
+        )
+    );
 }
 
 #[test]
@@ -2701,9 +2765,108 @@ fn a_lets_mut_reference_pattern_on_a_shared_reference_suggests_a_mut_binding() {
             "          found mutable reference `&mut _`\n",
         )
     );
-    // A match arm's pattern: rustc's help is another.
-    let arm = rendered("fn main() {\n    let x = 5;\n    match &x { &mut b => {} }\n}\n");
-    assert!(!arm.contains("mut b`"), "{arm}");
+}
+
+/// An arm's `&mut` pattern of one binding on a `&` value: rustc notes the
+/// `mut` binding, in a section of its own at the pattern, and suggests
+/// removing the `&mut`.
+#[test]
+fn an_arms_mut_reference_pattern_on_a_shared_reference_notes_a_mut_binding() {
+    assert_eq!(
+        rendered(
+            "fn main() {\n    let x = 5;\n    match &x {\n        &mut b => println!(\"{b}\"),\n    \
+             }\n}\n"
+        ),
+        concat!(
+            "error[E0308]: mismatched types\n",
+            " --> main.rs:4:9\n",
+            "  |\n",
+            "3 |     match &x {\n",
+            "  |           -- this expression has type `&{integer}`\n",
+            "4 |         &mut b => println!(\"{b}\"),\n",
+            "  |         ^^^^^^ types differ in mutability\n",
+            "  |\n",
+            "  = note:      expected reference `&{integer}`\n",
+            "          found mutable reference `&mut _`\n",
+            "note: to declare a mutable binding use: `mut b`\n",
+            " --> main.rs:4:9\n",
+            "  |\n",
+            "4 |         &mut b => println!(\"{b}\"),\n",
+            "  |         ^^^^^^\n",
+            "help: consider removing `&mut` from the pattern\n",
+            "  |\n",
+            "4 -         &mut b => println!(\"{b}\"),\n",
+            "4 +         b => println!(\"{b}\"),\n",
+            "  |\n",
+        )
+    );
+    // A `&` pattern on a `&` value matches the value below it.
+    let program = "fn main() {\n    let x = 5;\n    match &x {\n        &1 => {}\n        &n => \
+                   println!(\"{n}\"),\n    }\n}\n";
+    assert!(Engine::new().compile(program).is_ok());
+}
+
+/// A path to a private item from outside its module: rustc's E0603 notes
+/// the item whole, from its visibility through its signature, in a section
+/// of its own.
+#[test]
+fn a_private_items_definition_is_rustcs_note_of_its_own() {
+    for (item, path, message, shown) in [
+        (
+            "fn f(a: i32) -> i32 { a }",
+            "let _ = m::f(1);",
+            "the function `f` is defined here",
+            "^^^^^^^^^^^^^^^^^^^",
+        ),
+        (
+            "enum E<T> { A(T) }",
+            "let _: m::E<i32>;",
+            "the enum `E` is defined here",
+            "^^^^^^^^^",
+        ),
+        (
+            "mod n { pub fn f() {} }",
+            "m::n::f();",
+            "the module `n` is defined here",
+            "^^^^^",
+        ),
+        (
+            "type A = i32;",
+            "let _: m::A = 1;",
+            "the type alias `A` is defined here",
+            "^^^^^^^^^^^^^",
+        ),
+        (
+            "struct P<T> where T: Copy { a: T }",
+            "let _: m::P<i32>;",
+            "the struct `P` is defined here",
+            "^^^^^^^^^^^^^^^^^^^^^^^^^",
+        ),
+    ] {
+        let rendered = rendered(&format!(
+            "mod m {{\n    {item}\n}}\nfn main() {{\n    {path}\n}}\n"
+        ));
+        assert!(
+            rendered.ends_with(&format!(
+                "  |\nnote: {message}\n --> main.rs:2:5\n  |\n2 |     {item}\n  |     {shown}\n"
+            )),
+            "{rendered}"
+        );
+    }
+}
+
+/// A call with the wrong number of arguments: rustc's E0061 notes where
+/// the callee is defined in a section of its own.
+#[test]
+fn an_argument_counts_callee_is_rustcs_note_of_its_own() {
+    let rendered = rendered("fn f(a: i32) {}\nfn main() {\n    f(1, 2);\n}\n");
+    assert!(
+        rendered.contains(
+            "note: function defined here\n --> main.rs:1:4\n  |\n1 | fn f(a: i32) {}\n  |    ^\n"
+        ),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("- function defined here"), "{rendered}");
 }
 
 /// A macro called as a function: rustc suggests the `!` after its path,

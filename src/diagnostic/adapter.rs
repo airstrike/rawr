@@ -3,7 +3,7 @@
 use crate::{program, resolve, EvalAltResult, ParseError, ParseErrorType, Span};
 
 use super::suggestion::{Edit, Style};
-use super::{code, Builder, Error, Report, Source, Suggestion};
+use super::{code, Builder, Error, Report, Section, Source, Suggestion};
 
 impl Report {
     /// Transform one positioned compiler error into the canonical report model.
@@ -622,35 +622,116 @@ fn resolution_report_with_sources(
             builder = builder.secondary(source.clone(), *field, label)?;
         }
     }
+    let secondary_source = secondary_source.unwrap_or_else(|| source.clone());
     if let Some(secondary) = error.secondary_span().filter(|span| !span.is_none()) {
-        builder = builder.secondary(
-            secondary_source.unwrap_or_else(|| source.clone()),
-            secondary,
-            secondary_message,
-        )?;
+        builder = match sectioned(error, &secondary_source, secondary) {
+            Some(section) => builder.section(section)?,
+            None => {
+                // E0624 labels the private function whole.
+                let secondary = match error {
+                    resolve::Error::PrivateItem { item, .. } if item.code() == "E0624" => {
+                        super::definition::span(&secondary_source, secondary)
+                    }
+                    _ => secondary,
+                };
+                builder.secondary(secondary_source, secondary, secondary_message)?
+            }
+        };
+    }
+    for section in sections(error, &source) {
+        builder = builder.section(section)?;
     }
     if let Some(suggestion) = suggestion(error, &source)? {
         builder = builder.suggestion(suggestion);
     }
-    // The labels of rustc's note on the parameter that takes the value.
-    if let resolve::Error::MovedValue {
-        cause: Some(cause), ..
-    } = error
-        && let Some(parameter) = &cause.parameter
-    {
-        builder = builder
-            .secondary(
-                source.clone(),
-                parameter.ty,
-                Some("this parameter takes ownership of the value".into()),
-            )?
-            .secondary(
-                source,
-                parameter.name,
-                Some(format!("in this {}", parameter.kind).into()),
-            )?;
-    }
     Ok(builder.finish())
+}
+
+/// The note rustc gives `at`, the place in `source` that `error` relates
+/// to, as a section of its own, where it puts no label at that place
+/// beside the error's own.
+fn sectioned(error: &resolve::Error, source: &Source, at: Span) -> Option<Section> {
+    let note = match error {
+        resolve::Error::ArgumentCount { callee, .. } => {
+            return Some(Section::note(callee.defined_here()).primary(source.clone(), at, None));
+        }
+        // E0603's note shows the item whole; E0624 labels the function
+        // beside the call.
+        resolve::Error::PrivateItem { item, name, .. }
+            if item.code() == "E0603" && *item != resolve::Private::Import =>
+        {
+            format!("the {} `{name}` is defined here", item.noun())
+        }
+        _ => return None,
+    };
+    Some(Section::note(note).primary(source.clone(), super::definition::span(source, at), None))
+}
+
+/// The notes rustc gives `error` with places of their own, in `source`.
+fn sections(error: &resolve::Error, source: &Source) -> Vec<Section> {
+    match error {
+        // The parameter that takes the value, which rustc suggests making
+        // a borrow; the type of a value that isn't `Clone`, which rustc
+        // notes could derive it, with the move a clone would keep the
+        // value through.
+        resolve::Error::MovedValue {
+            moved,
+            cause: Some(cause),
+            ..
+        } => {
+            let parameter = cause.parameter.iter().map(|parameter| {
+                Section::note(format!(
+                    "consider changing this parameter type in {} `{}` to borrow instead if \
+                     owning the value isn't necessary",
+                    parameter.kind, parameter.function
+                ))
+                .primary(
+                    source.clone(),
+                    parameter.ty,
+                    Some("this parameter takes ownership of the value".into()),
+                )
+                .secondary(
+                    source.clone(),
+                    parameter.name,
+                    Some(format!("in this {}", parameter.kind).into()),
+                )
+            });
+            let derivable = match &cause.cloning {
+                resolve::Cloning::Derivable { ty, name } => Some(
+                    Section::note(format!(
+                        "if `{ty}` implemented `Clone`, you could clone the value"
+                    ))
+                    .primary(
+                        source.clone(),
+                        super::definition::span(source, *name),
+                        Some("consider implementing `Clone` for this type".into()),
+                    )
+                    .secondary(
+                        source.clone(),
+                        *moved,
+                        Some("you could clone this value".into()),
+                    ),
+                ),
+                resolve::Cloning::Clone | resolve::Cloning::None => None,
+            };
+            parameter.chain(derivable).collect()
+        }
+        // An arm's `&mut` pattern of one binding on a `&` value: rustc
+        // notes the `mut` binding it may have meant.
+        resolve::Error::PatternMismatch { types, pattern, .. } => types
+            .binding
+            .iter()
+            .filter(|binding| binding.arm)
+            .map(|binding| {
+                Section::note(format!(
+                    "to declare a mutable binding use: `mut {}`",
+                    binding.name
+                ))
+                .primary(source.clone(), *pattern, None)
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 /// The code rustc suggests for `error`, in `source`.
@@ -732,12 +813,20 @@ fn suggestion(error: &resolve::Error, source: &Source) -> Result<Option<Suggesti
             after(*subject),
             "[..]",
         ),
+        // An arm's `&mut` is removed, so the binding binds by the default
+        // binding mode; a `let`'s binding is declared `mut` in its place.
         resolve::Error::PatternMismatch { types, pattern, .. } => match &types.binding {
+            Some(binding) if binding.arm => suggestion(
+                "consider removing `&mut` from the pattern",
+                Style::Verbose,
+                Span::new(pattern.start(), binding.span.start()),
+                "",
+            ),
             Some(binding) => suggestion(
                 "to declare a mutable variable use",
                 Style::Inline,
                 *pattern,
-                &format!("mut {binding}"),
+                &format!("mut {}", binding.name),
             ),
             None => Ok(None),
         },
@@ -1120,30 +1209,14 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         } => builder.help(help.clone()),
         resolve::Error::MovedValue {
             cause: Some(cause), ..
-        } => {
-            let builder = match &cause.moved {
-                resolve::MovedPlace::Part(part) => builder.note(format!(
-                    "partial move occurs because `{part}` has type `{}`, which does not \
+        } => match &cause.moved {
+            resolve::MovedPlace::Part(part) => builder.note(format!(
+                "partial move occurs because `{part}` has type `{}`, which does not \
                      implement the `Copy` trait",
-                    cause.ty
-                )),
-                resolve::MovedPlace::Local(_) => builder,
-            };
-            let builder = match &cause.parameter {
-                Some(parameter) => builder.note(format!(
-                    "consider changing this parameter type in {} `{}` to borrow instead if \
-                     owning the value isn't necessary",
-                    parameter.kind, parameter.function
-                )),
-                None => builder,
-            };
-            match &cause.cloning {
-                resolve::Cloning::Derivable(ty) => builder.note(format!(
-                    "if `{ty}` implemented `Clone`, you could clone the value"
-                )),
-                resolve::Cloning::Clone | resolve::Cloning::None => builder,
-            }
-        }
+                cause.ty
+            )),
+            resolve::MovedPlace::Local(_) => builder,
+        },
         resolve::Error::MissingCapability {
             owner,
             capability,

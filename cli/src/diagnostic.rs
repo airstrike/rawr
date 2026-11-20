@@ -4,8 +4,9 @@
 //!
 //! A diagnostic as data has the absolute `file`, the one-based `line` and
 //! `column`, `end_line` and `end_column`, the `code`, the `severity`, the
-//! `message` without its position, `help`, and where it came from
-//! (`rawr` or `rustc`). One may carry a `suggestion`: a span and its
+//! `message` without its position, `help` (each of rustc's notes and
+//! helps, a line each), and where it came from (`rawr` or `rustc`). One
+//! may carry a `suggestion`: a span and its
 //! replacement, the first edit of the first code it suggests, whose
 //! message is among its `help`.
 
@@ -71,11 +72,13 @@ pub fn shape(report: &Report, base: &Path) -> Vec<Value> {
             base.join(path).to_string_lossy().into_owned()
         }
     };
-    // rustc's help, then what each suggestion says, as rustc's children
-    // give them.
+    // rustc's help and notes, those with places of their own, then what
+    // each suggestion says, as rustc's children give them.
     let help: Vec<&str> = view
         .help()
         .into_iter()
+        .chain(view.notes().iter().copied())
+        .chain(view.sections().iter().map(|section| section.message()))
         .chain(
             view.suggestions()
                 .iter()
@@ -341,7 +344,7 @@ pub fn lines(diagnostics: &[Value]) -> String {
 #[cfg(test)]
 mod tests {
     use rawr::diagnostic::suggestion::{Edit, Style};
-    use rawr::diagnostic::{code, Report, Source, Suggestion};
+    use rawr::diagnostic::{code, Report, Section, Source, Suggestion};
     use rawr::{Position, Span};
     use serde_json::json;
     use std::path::Path;
@@ -413,6 +416,35 @@ mod tests {
             })
         );
         assert!(super::lines(&shaped).ends_with("  suggestion: replace 2:8-2:8 with \"!\"\n"));
+    }
+
+    #[test]
+    fn a_reports_notes_and_sections_are_among_its_help_as_rustcs_children() {
+        let source = Source::new(
+            "src/main.rs",
+            "fn f(a: i32) {}\nfn main() {\n    f(1, 2);\n}\n",
+        )
+        .unwrap();
+        let report = Report::error(
+            code::RESOLVE_ARGUMENT_COUNT,
+            "this function takes 1 argument but 2 arguments were supplied",
+        )
+        .primary(
+            source.clone(),
+            Span::new(Position::new(3, 5), Position::new(3, 6)),
+            None,
+        )
+        .unwrap()
+        .note("a note")
+        .section(Section::note("function defined here").primary(
+            source,
+            Span::new(Position::new(1, 4), Position::new(1, 5)),
+            None,
+        ))
+        .unwrap()
+        .finish();
+        let shaped = super::shape(&report, Path::new("/work/app"));
+        assert_eq!(shaped[0]["help"], "a note\nfunction defined here");
     }
 
     #[test]

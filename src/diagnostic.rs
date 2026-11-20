@@ -2,9 +2,11 @@
 
 mod adapter;
 pub mod code;
+mod definition;
 mod panic;
 mod render;
 mod report;
+pub mod section;
 pub(crate) mod source;
 pub mod suggestion;
 mod view;
@@ -19,9 +21,10 @@ pub use render::{render, render_with, show_paths_from, Color};
 pub use report::{
     Builder, Category, Error, ExternalLabel, ExternalPosition, Label, LabelKind, Report, Severity,
 };
+pub use section::Section;
 pub use source::Source;
 pub use suggestion::Suggestion;
 pub use view::{
-    EditView, ExternalLabelView, LabelView, PositionView, ReportView, SourceView, SpanView,
-    SuggestionView,
+    EditView, ExternalLabelView, LabelView, PositionView, ReportView, SectionView, SourceView,
+    SpanView, SuggestionView,
 };

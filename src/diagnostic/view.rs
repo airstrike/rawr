@@ -1,7 +1,10 @@
 //! Stable read-only data views for editor and serialization consumers.
 
+use super::section::Level;
 use super::suggestion::{Edit, Style};
-use super::{Category, ExternalLabel, Label, LabelKind, Report, Severity, Source, Suggestion};
+use super::{
+    Category, ExternalLabel, Label, LabelKind, Report, Section, Severity, Source, Suggestion,
+};
 
 /// Serializable read-only projection of a report.
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
@@ -16,7 +19,18 @@ pub struct ReportView<'a> {
     external_labels: Vec<ExternalLabelView<'a>>,
     help: Option<&'a str>,
     notes: Vec<&'a str>,
+    sections: Vec<SectionView<'a>>,
     suggestions: Vec<SuggestionView<'a>>,
+}
+
+/// Serializable read-only projection of one note or help with places of
+/// its own.
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SectionView<'a> {
+    level: Level,
+    message: &'a str,
+    labels: Vec<LabelView<'a>>,
 }
 
 /// Serializable read-only projection of one suggestion.
@@ -103,7 +117,18 @@ impl Report {
                 .collect(),
             help: self.help(),
             notes: self.notes().collect(),
+            sections: self.sections().iter().map(Section::view).collect(),
             suggestions: self.suggestions().iter().map(Suggestion::view).collect(),
+        }
+    }
+}
+
+impl Section {
+    fn view(&self) -> SectionView<'_> {
+        SectionView {
+            level: self.level(),
+            message: self.message(),
+            labels: self.labels().iter().map(Label::view).collect(),
         }
     }
 }
@@ -235,10 +260,36 @@ impl<'a> ReportView<'a> {
         &self.notes
     }
 
+    /// Return the notes and helps with places of their own.
+    #[must_use]
+    pub fn sections(&self) -> &[SectionView<'a>] {
+        &self.sections
+    }
+
     /// Return suggested code.
     #[must_use]
     pub fn suggestions(&self) -> &[SuggestionView<'a>] {
         &self.suggestions
+    }
+}
+
+impl<'a> SectionView<'a> {
+    /// Return the line it starts with.
+    #[must_use]
+    pub const fn level(&self) -> Level {
+        self.level
+    }
+
+    /// Return what it says.
+    #[must_use]
+    pub const fn message(&self) -> &'a str {
+        self.message
+    }
+
+    /// Return the places it marks.
+    #[must_use]
+    pub fn labels(&self) -> &[LabelView<'a>] {
+        &self.labels
     }
 }
 
