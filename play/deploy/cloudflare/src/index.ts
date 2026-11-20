@@ -20,15 +20,19 @@
 // container on the deployed image whose settings changed.
 //
 // /play is a web playground: the Worker serves the site's static page with
-// each request's data written in (playpage.ts), keeps shares in this
-// Durable Object (content-addressed), limits each IP (by HMAC, never in
+// each request's data written in (playpage.ts) and keeps shares in this
+// Durable Object (content-addressed). The page runs every snippet in the
+// browser. The Worker runs a share once, on the bot, for its link preview.
+//
+// The docs' Run buttons (site/src/scripts/run.ts) still send a few blocks
+// to the bot through the Worker. It limits each IP (by HMAC, never in
 // clear), checks Turnstile, and forwards renders to the bot's HTTP port,
 // which only this Durable Object can reach. A render is a plain program's
 // output, or an iced or async snippet's message (JSON). The Turnstile widget stays
 // invisible unless Cloudflare needs an interaction. After one successful
 // Siteverify the Worker sets a 30-day pass cookie (HttpOnly, Secure,
 // SameSite=Lax), signed with a key derived from TURNSTILE_SECRET. While
-// the pass verifies, /play skips Turnstile.
+// the pass verifies, /play/render skips Turnstile.
 //
 // POST /play/run runs the site's own snippets without Turnstile: only
 // snippets whose SHA-256 is one of the `<code data-run>` texts in the site's
@@ -804,7 +808,7 @@ async function play(request: Request, env: Env, ctx: ExecutionContext, path: str
   // The site's static page (dist/play.html), with this request's preview and data.
   const asset = await env.ASSETS.fetch(new Request(`${SITE}/play`));
   if (!asset.ok) return plain("the playground page is missing", 500);
-  const page = inject(await asset.text(), { snippet, examples: EXAMPLES, sitekey: env.TURNSTILE_SITEKEY ?? null, pass: await hasPass(request, env), shared, og });
+  const page = inject(await asset.text(), { snippet, examples: EXAMPLES, shared, og });
   return html(request.method === "HEAD" ? "" : page);
 }
 

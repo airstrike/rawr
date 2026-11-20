@@ -20,10 +20,7 @@ body.play { font-size: var(--fs-base); line-height: 1.5; }
 .out pre { place-self: start stretch; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.55 var(--mono); color: var(--ink); }
 .out pre.error { border-left: 3px solid var(--red); padding-left: 12px; }
 .out .note { color: var(--quiet); }
-.out img { max-width: 100%; height: auto; }
-.out .drawn { place-self: start stretch; display: grid; gap: 12px; justify-items: center; }
-.out .drawn pre { justify-self: stretch; }
-/* A program that runs on the browser's universe draws in its frame, which */
+/* A program that runs on the browser's prebuilt runner draws in its frame, which */
 /* fills the pane, with what it printed under it (session.ts). */
 .out.framed { place-items: stretch; align-content: start; gap: 12px; padding: 0; }
 .out .frames[hidden], .out iframe.universe[hidden] { display: none; }

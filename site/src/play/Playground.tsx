@@ -1,6 +1,7 @@
 // The playground's island: the controls, the editor and the output, drawn
 // from a Session (session.ts). The page is static; the Worker writes each
-// request's data (the share, the examples, Turnstile's key) into #play-data.
+// request's data (the share and the examples) into #play-data. A snippet
+// runs in the browser only, so the controls have one Run button.
 // Before hydration the server-rendered controls show; the editor mounts
 // once the island runs. The debugger icon runs the program under the
 // debugger build of the universe, opens its panel right of the output and
@@ -12,13 +13,12 @@ import type { EditorView } from "@codemirror/view";
 import { Fragment, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
 import { Button } from "../components/ui/button.tsx";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from "../components/ui/select.tsx";
-import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group.tsx";
 import { onTheme, theme as pageTheme, type Theme } from "../lib/theme.ts";
 import { DEBUGGER, universe } from "../scripts/universe.ts";
 import { canPause, Debugger, ROOT, type DebugState } from "./debugger.ts";
 import { createConsole, createEditor, setDebugging, setDoc, setMarks } from "./editor.ts";
 import { clamp, PartsOf, SplitBar, Twisty, useOpen, useStoredSize, ValueTable, type Row } from "./panes.tsx";
-import { Session, TURNSTILE_JS, WEB_MODULE, type Example, type Output, type PlayData, type State, type Web, type Where } from "./session.ts";
+import { Session, WEB_MODULE, type Example, type Output, type PlayData, type State, type Web } from "./session.ts";
 
 /** The page's data, or a bare page's when the Worker wrote none (a static preview). */
 function readData(): PlayData {
@@ -26,7 +26,7 @@ function readData(): PlayData {
     const data = JSON.parse(document.getElementById("play-data")?.textContent ?? "null");
     if (data) return data;
   } catch {}
-  return { snippet: { code: "" }, examples: [], sitekey: null, pass: false, shared: null };
+  return { snippet: { code: "" }, examples: [], shared: null };
 }
 
 /** The copies of rawr-web loaded so far. */
@@ -51,7 +51,7 @@ function browserDeps() {
       await m.default();
       return m as Web;
     },
-    // The browser's universe, for snippets that use crates.
+    // The browser's prebuilt runner, for snippets that use crates.
     universe: universe({
       document,
       fetch: window.fetch.bind(window),
@@ -70,16 +70,6 @@ function browserDeps() {
     },
     now: () => performance.now(),
     clipboard: (text: string) => navigator.clipboard.writeText(text),
-    turnstile: () => (window as Window & { turnstile?: any }).turnstile,
-    hasContainer: () => document.getElementById("ts") !== null,
-    loadTurnstile: () => {
-      if (document.querySelector(`script[data-turnstile], script[src^="${TURNSTILE_JS.split("?")[0]}"]`)) return;
-      const js = document.createElement("script");
-      js.src = TURNSTILE_JS;
-      js.async = true;
-      js.dataset.turnstile = "";
-      document.head.append(js);
-    },
     setTimeout: (f: () => void, ms: number) => window.setTimeout(f, ms),
     clearTimeout: (id: unknown) => window.clearTimeout(id as number),
   };
@@ -98,7 +88,7 @@ const CONSOLE_MIN = 64;
 const LINE = 1;
 
 const NONE: State = {
-  code: "", theme: "dark", where: "browser", output: { kind: "note" }, status: "ready", busy: false, mark: "", debugging: false,
+  code: "", theme: "dark", output: { kind: "note" }, status: "ready", mark: "", debugging: false,
 };
 
 export default function Playground() {
@@ -238,19 +228,9 @@ export default function Playground() {
           </SelectContent>
         </Select>
         <span className="order-3 hidden grow md:block" />
-        <ToggleGroup
-          type="single"
-          className="order-2 w-full md:order-3 md:w-auto"
-          aria-label="Where it runs"
-          value={state.where}
-          onValueChange={(value) => value && session?.choose(value as Where)}
-        >
-          <ToggleGroupItem className="flex-1 md:flex-none" value="server">Run on server</ToggleGroupItem>
-          <ToggleGroupItem className="flex-1 md:flex-none" value="browser">Run in browser</ToggleGroupItem>
-        </ToggleGroup>
         <DebugIcon session={session} on={state.debugging} />
         <Button id="share" className="order-3" onClick={() => void session?.share()}>Share</Button>
-        <Button id="run" className="order-3" variant="primary" title="Ctrl/Cmd + Enter" disabled={state.busy} onClick={() => void session?.go()}>
+        <Button id="run" className="order-3" variant="primary" title="Ctrl/Cmd + Enter" onClick={() => void session?.go()}>
           Run
         </Button>
       </div>
@@ -259,8 +239,6 @@ export default function Playground() {
           <p className="playcap mb-2"><span className="text-red">//</span> Code</p>
           <div ref={host} className={"editor min-h-[300px] flex-1 " + (debugging ? "md:min-h-[120px]" : "md:min-h-[360px]")} />
           {debugging && <DebugConsole debug={debug!} state={debugState!} />}
-          {/* Always present, so Turnstile finds its container whenever the session mounts it. */}
-          <div id="ts" className="mt-3 empty:hidden" />
         </section>
         <SplitBar between="columns" label="Resize the code and the output" onMove={moveCode} onEnd={keepCodeShare} at={codeLine} />
         <section className="pane flex min-h-0 flex-col border-t border-grid px-4 pt-4 pb-6 md:border-t-0 md:px-6">
@@ -594,7 +572,7 @@ function OutputView({ output }: { output: Output }) {
     }
     case "term": {
       const empty = !output.chunks.some((chunk) => chunk.text !== "");
-      const term = (
+      return (
         <pre className="term">
           {output.chunks.map((chunk, i) => (
             <span key={i} className={chunk.stream === "stderr" ? "err" : undefined}>{chunk.text}</span>
@@ -603,14 +581,6 @@ function OutputView({ output }: { output: Output }) {
           {output.status !== 0 && <span className="exit">exit status {output.status}{"\n"}</span>}
           {output.note && <span className="note">{"\n" + output.note + "\n"}</span>}
         </pre>
-      );
-      if (!output.image) return term;
-      // An iced program's frame, and its text when it printed or failed.
-      return (
-        <div className="drawn">
-          <img src={output.image} alt="What the program drew" />
-          {(!empty || output.status !== 0 || output.note) && term}
-        </div>
       );
     }
   }
