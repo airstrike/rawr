@@ -2334,8 +2334,9 @@
     {"t":"T2332","issue":2332,"title":"T2332: `pub(in path)` visibility is not enforced","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"f00c40d54","release":"0.4.56"},
     {"t":"T2333","issue":2333,"title":"T2333: `let _: m::q::S<i32>;` is a parse error","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"f00c40d54","release":"0.4.56"},
     {"t":"T2334","issue":2334,"title":"T2334: Argument-count and bound errors for std, crate and generic callees, and the derive context line","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T2335","issue":2335,"title":"T2335: A program trait's methods resolve without the trait in scope","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T2336","issue":2336,"title":"T2336: `let r = &mut c;` of a local not declared `mut` is accepted, or reported at a later use","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T2337","issue":2337,"title":"T2337: Diagnostics left after #2330: E0599's type kind, several import candidates, E0277 format labels, E0004's enum note","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T2335","issue":2335,"title":"T2335: A program trait's methods resolve without the trait in scope","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"014d0f808","release":"0.4.59"},
+    {"t":"T2336","issue":2336,"title":"T2336: `let r = &mut c;` of a local not declared `mut` is accepted, or reported at a later use","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"014d0f808","release":"0.4.59"},
+    {"t":"T2337","issue":2337,"title":"T2337: Diagnostics left after #2330: E0599's type kind, several import candidates, E0277 format labels, E0004's enum note","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T2338","issue":2338,"title":"T2338: An impl of a program trait named by its path (`impl m::T for S`) is refused in a single source","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }

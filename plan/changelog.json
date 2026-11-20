@@ -8,6 +8,14 @@
   },
   "releases": [
     {
+      "version": "0.4.59",
+      "date": "2026-11-20",
+      "entries": [
+        {"text":"A program trait's methods are called only where the trait is in scope: declared in the module or a block around the call, imported by `use`, a glob, a rename or `as _`, or the trait of the impl the call is in. Elsewhere the call is rustc's E0599, with its help and the `use` it suggests.","issues":[2335]},
+        {"text":"`&mut c` of a local not declared `mut` is rustc's E0596 at the borrow, with its `mut` suggestion, whether or not the reference is used.","issues":[2336]}
+      ]
+    },
+    {
       "version": "0.4.58",
       "date": "2026-11-20",
       "entries": [

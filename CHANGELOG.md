@@ -6,6 +6,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.59 (2026-11-20)
+
+- A program trait's methods are called only where the trait is in scope: declared in the module or a block around the call, imported by `use`, a glob, a rename or `as _`, or the trait of the impl the call is in. Elsewhere the call is rustc's E0599, with its help and the `use` it suggests. (#2335)
+- `&mut c` of a local not declared `mut` is rustc's E0596 at the borrow, with its `mut` suggestion, whether or not the reference is used. (#2336)
+
 ## 0.4.58 (2026-11-20)
 
 - rustc's suggestions print as code: a value for `return;` and for an uninitialized `let`, `let...else` or `if let` for a refutable `let`, the missing `match` arm, an `as` rename for a duplicate import, the explicit type for E0282, `ref mut` for a destructured binding, removing a called field's arguments, `use` lines for functions and `fmt::Write`, and `#[derive]` for format arguments. `&mut (place)` borrows the place, and `println!("{}", S)` of a type without `Display` is E0277. (#2330)
