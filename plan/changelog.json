@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.4.54",
+      "date": "2026-11-20",
+      "entries": [
+        {"text":"Errors show rustc's code suggestions under their own `help:`, as the line the change makes, or beside the code for a short one. A slice pattern on a `Vec` suggests `v[..]`, and a `let`'s `&mut b` pattern on a `&` value gets \"to declare a mutable variable use: `mut b`\". Assigning twice to an immutable binding suggests `mut` where it is declared. A moved value suggests `.clone()`, a macro called as a function suggests its `!`, and a method read as a field suggests `()`. A value where a `Box<dyn Error>` is expected suggests `Box::new(..)` or `.into()`. `rawr mcp` diagnostics carry the first edit as `suggestion`.","issues":[2328]}
+      ]
+    },
+    {
       "version": "0.4.53",
       "date": "2026-11-20",
       "entries": [

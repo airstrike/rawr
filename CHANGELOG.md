@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.54 (2026-11-20)
+
+- Errors show rustc's code suggestions under their own `help:`, as the line the change makes, or beside the code for a short one. A slice pattern on a `Vec` suggests `v[..]`, and a `let`'s `&mut b` pattern on a `&` value gets "to declare a mutable variable use: `mut b`". Assigning twice to an immutable binding suggests `mut` where it is declared. A moved value suggests `.clone()`, a macro called as a function suggests its `!`, and a method read as a field suggests `()`. A value where a `Box<dyn Error>` is expected suggests `Box::new(..)` or `.into()`. `rawr mcp` diagnostics carry the first edit as `suggestion`. (#2328)
+
 ## 0.4.53 (2026-11-20)
 
 - A pattern of another type than its value reads as rustc's E0308 in full: the label beside the value, written type or `for` iterator that typed it, the "expected … found …" note, and the pattern named by its own type (`(_, _)`, `Option<_>`, `&_`). A slice pattern on a value that is no array or slice is rustc's E0529. (#2327)
