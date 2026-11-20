@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.53 (2026-11-20)
+
+- A pattern of another type than its value reads as rustc's E0308 in full: the label beside the value, written type or `for` iterator that typed it, the "expected … found …" note, and the pattern named by its own type (`(_, _)`, `Option<_>`, `&_`). A slice pattern on a value that is no array or slice is rustc's E0529. (#2327)
+
 ## 0.4.52 (2026-11-20)
 
 - Let and match patterns of the wrong shape get rustc's errors: E0527 and E0528 for an array pattern of another length, "expected a tuple with N elements, found one with M elements" for a tuple of another arity, and rustc's two labels for a second `..`. E0005 and other pattern errors mark the whole pattern, such as `Some(a)`. Destructuring assignments report the same. (#2325)

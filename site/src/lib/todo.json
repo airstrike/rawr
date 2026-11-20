@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-20",
-  "version": "0.4.52",
+  "version": "0.4.53",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.53",
+        "date": "2026-11-20",
+        "entries": [
+          {"text":"A pattern of another type than its value reads as rustc's E0308 in full: the label beside the value, written type or `for` iterator that typed it, the \"expected … found …\" note, and the pattern named by its own type (`(_, _)`, `Option<_>`, `&_`). A slice pattern on a value that is no array or slice is rustc's E0529.","issues":[2327]}
+        ]
+      },
       {
         "version": "0.4.52",
         "date": "2026-11-20",
@@ -5469,7 +5476,8 @@
     {"issue":2324,"title":"Find why /play's universe frame fails on iOS WebKit","state":"open","category":"Health"},
     {"issue":2325,"title":"Let-pattern diagnostics diverge from rustc: array length, tuple arity, a second `..`, a tuple-struct pattern's span","state":"closed","category":"Health","release":"0.4.52"},
     {"issue":2326,"title":"?play snippets can't use radio, tooltip, combo_box, text_editor, vertical_slider, mouse_area or stack","state":"open","category":"Platforms"},
-    {"issue":2327,"title":"Pattern type mismatches lack rustc's second label and note, and name the pattern in rawr's words","state":"open","category":"Health"}
+    {"issue":2327,"title":"Pattern type mismatches lack rustc's second label and note, and name the pattern in rawr's words","state":"closed","category":"Health","release":"0.4.53"},
+    {"issue":2328,"title":"Diagnostics render rustc's code suggestions: E0529's `v[..]` and the `mut b` help","state":"open","category":"Health"}
   ],
   "groups": [
     {
