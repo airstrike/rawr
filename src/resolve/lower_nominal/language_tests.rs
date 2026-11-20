@@ -15973,3 +15973,49 @@ fn language_a_trait_is_named_through_the_scope_of_the_module_naming_it() {
         );
     }
 }
+
+#[test]
+fn language_a_path_goes_on_through_a_module_an_import_binds() {
+    // A path's first segment is the module the scope binds, a glob's
+    // name too, and a segment after it that an import of the module
+    // before it binds goes on from the module that import names, in a
+    // type, a trait and an expression, as rustc resolves each segment
+    // (#2368).
+    let source = "
+        mod m {
+            pub trait Tr { fn one(&self) -> i64 { 1 } }
+            pub struct Q(pub i64);
+            pub fn two() -> i64 { 2 }
+        }
+        mod k {
+            use crate::m::{self, Tr};
+            pub mod inner {
+                use super::*;
+                impl m::Tr for super::K2 {}
+                pub fn q(q: m::Q) -> i64 { q.0 + m::two() + m::Q(3).0 }
+            }
+            pub struct K2;
+            pub mod j {
+                use crate::m;
+                pub mod deep {
+                    use super::m;
+                    pub fn d() -> i64 { m::two() + super::m::two() }
+                }
+            }
+        }
+        mod g {
+            use crate::*;
+            pub mod h {
+                use super::*;
+                pub fn f() -> i64 { m::two() }
+            }
+        }
+        pub fn run() -> i64 {
+            use m::Tr;
+            k::K2.one() + k::inner::q(m::Q(10)) * 10 + k::j::deep::d() * 1000
+                + g::h::f() * 10000
+        }
+        run()
+    ";
+    assert_eq!(run(source), 24_151);
+}

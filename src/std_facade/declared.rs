@@ -11,6 +11,7 @@ pub(super) static STEPS: &[Step] = &[
     Step::Module("char"),
     Step::Module("env"),
     Step::Module("ffi"),
+    Step::Module("fmt"),
     Step::Module("fs"),
     Step::Module("io"),
     Step::Module("num"),
@@ -141,6 +142,18 @@ pub(super) static STEPS: &[Step] = &[
     },
     Step::Held {
         std: "std::num::IntErrorKind",
+        capabilities: &[
+            capability::Kind::Debug,
+            capability::Kind::Clone,
+            capability::Kind::Copy,
+            capability::Kind::PartialEq,
+            capability::Kind::Eq,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    },
+    Step::Held {
+        std: "std::fmt::Alignment",
         capabilities: &[
             capability::Kind::Debug,
             capability::Kind::Clone,
@@ -2709,6 +2722,24 @@ pub(super) static STEPS: &[Step] = &[
         output: Ty::Registered("num::IntErrorKind"),
     },
     Step::Item {
+        path: "fmt::Alignment::Left",
+        kind: Kind::AssociatedValue,
+        inputs: &[],
+        output: Ty::Registered("fmt::Alignment"),
+    },
+    Step::Item {
+        path: "fmt::Alignment::Right",
+        kind: Kind::AssociatedValue,
+        inputs: &[],
+        output: Ty::Registered("fmt::Alignment"),
+    },
+    Step::Item {
+        path: "fmt::Alignment::Center",
+        kind: Kind::AssociatedValue,
+        inputs: &[],
+        output: Ty::Registered("fmt::Alignment"),
+    },
+    Step::Item {
         path: "panic::Location::file",
         kind: Kind::Method(Mode::Shared),
         inputs: &[],
@@ -3100,6 +3131,110 @@ pub(super) static STEPS: &[Step] = &[
     Step::StdAlias {
         path: "ffi::c_void",
         std: "std::ffi::c_void",
+    },
+    Step::StdAlias {
+        path: "fmt::Arguments",
+        std: "std::fmt::Arguments",
+    },
+    Step::StdAlias {
+        path: "fmt::Binary",
+        std: "std::fmt::Binary",
+    },
+    Step::StdAlias {
+        path: "fmt::Debug",
+        std: "std::fmt::Debug",
+    },
+    Step::StdAlias {
+        path: "fmt::DebugAsHex",
+        std: "std::fmt::DebugAsHex",
+    },
+    Step::StdAlias {
+        path: "fmt::DebugList",
+        std: "std::fmt::DebugList",
+    },
+    Step::StdAlias {
+        path: "fmt::DebugMap",
+        std: "std::fmt::DebugMap",
+    },
+    Step::StdAlias {
+        path: "fmt::DebugSet",
+        std: "std::fmt::DebugSet",
+    },
+    Step::StdAlias {
+        path: "fmt::DebugStruct",
+        std: "std::fmt::DebugStruct",
+    },
+    Step::StdAlias {
+        path: "fmt::DebugTuple",
+        std: "std::fmt::DebugTuple",
+    },
+    Step::StdAlias {
+        path: "fmt::Display",
+        std: "std::fmt::Display",
+    },
+    Step::StdAlias {
+        path: "fmt::Error",
+        std: "std::fmt::Error",
+    },
+    Step::StdAlias {
+        path: "fmt::Formatter",
+        std: "std::fmt::Formatter",
+    },
+    Step::StdAlias {
+        path: "fmt::FormattingOptions",
+        std: "std::fmt::FormattingOptions",
+    },
+    Step::StdAlias {
+        path: "fmt::FromFn",
+        std: "std::fmt::FromFn",
+    },
+    Step::StdAlias {
+        path: "fmt::LowerExp",
+        std: "std::fmt::LowerExp",
+    },
+    Step::StdAlias {
+        path: "fmt::LowerHex",
+        std: "std::fmt::LowerHex",
+    },
+    Step::StdAlias {
+        path: "fmt::Octal",
+        std: "std::fmt::Octal",
+    },
+    Step::StdAlias {
+        path: "fmt::Pointer",
+        std: "std::fmt::Pointer",
+    },
+    Step::StdAlias {
+        path: "fmt::Result",
+        std: "std::fmt::Result",
+    },
+    Step::StdAlias {
+        path: "fmt::Sign",
+        std: "std::fmt::Sign",
+    },
+    Step::StdAlias {
+        path: "fmt::UpperExp",
+        std: "std::fmt::UpperExp",
+    },
+    Step::StdAlias {
+        path: "fmt::UpperHex",
+        std: "std::fmt::UpperHex",
+    },
+    Step::StdAlias {
+        path: "fmt::Write",
+        std: "std::fmt::Write",
+    },
+    Step::StdAlias {
+        path: "fmt::format",
+        std: "std::fmt::format",
+    },
+    Step::StdAlias {
+        path: "fmt::from_fn",
+        std: "std::fmt::from_fn",
+    },
+    Step::StdAlias {
+        path: "fmt::write",
+        std: "std::fmt::write",
     },
     Step::StdAlias {
         path: "fs::Dir",

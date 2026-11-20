@@ -1303,7 +1303,7 @@ impl<'a> Resolver<'a> {
                     Ok(Target::Trait(_))
                 )
             })
-            .map(|binding| (binding.name.text.clone(), binding.qualified.clone()))
+            .map(|binding| (binding.name.text.clone(), std_module(&binding.qualified)))
             .collect::<BTreeMap<_, _>>();
         let aliases = super::source_aliases(
             program::source::Id::from_index(context.source.index()),
@@ -2651,24 +2651,77 @@ impl<'a> Resolver<'a> {
         })
     }
 
-    /// A `use` binding of a script module in `context` (`use super::config;`),
-    /// which a longer path may start with.
+    /// A `use` or glob binding of a script module in `context` (`use
+    /// super::config;`, or `use super::*;` reaching the parent's), which a
+    /// longer path may start with.
     fn module_alias(&self, context: &Context, name: &str) -> Option<&Export> {
         let address = context.address(name);
         let alias = self
             .through_alias(&address)
-            .or_else(|| self.tables.export(&address))?;
+            .or_else(|| self.tables.export(&address))
+            .or_else(|| self.tables.glob(&address))?;
         let module = self.is_direct_script_path(&alias.context, &alias.path)
-            && matches!(
-                self.resolve_path(
-                    &alias.context,
-                    &alias.path,
-                    alias.span,
-                    &mut BTreeSet::new()
-                ),
-                Ok(Target::Module)
-            );
+            && self.names_script_module(&alias.context, &alias.path, &mut BTreeSet::new());
         module.then_some(alias)
+    }
+
+    /// Whether `path`, written in `context`, names a module of this crate,
+    /// each segment through the declarations and the imports of the module
+    /// before it: a std or a library module a `use` there binds is none.
+    fn names_script_module(
+        &self,
+        context: &Context,
+        path: &[ImmutableString],
+        active: &mut BTreeSet<Address>,
+    ) -> bool {
+        let path = through_self(path);
+        let supers = path
+            .iter()
+            .take_while(|segment| *segment == "super")
+            .count();
+        let modules = context.namespace.modules.as_ref();
+        let (base, tail) = match path.first().map(ImmutableString::as_str) {
+            Some("super") => match modules.len().checked_sub(supers) {
+                Some(parent) => (&modules[..parent], &path[supers..]),
+                None => return false,
+            },
+            Some("crate") => (&[][..], &path[1..]),
+            Some("self") => (modules, &path[1..]),
+            _ => (modules, path),
+        };
+        let mut at = base.to_vec();
+        for (index, name) in tail.iter().enumerate() {
+            let address = Address {
+                package: context.namespace.package.clone(),
+                modules: at.as_slice().into(),
+                name: name.clone(),
+            };
+            if let Some(declaration) = self.tables.declaration(&address) {
+                if !matches!(declaration.target, Target::Module) {
+                    return false;
+                }
+                at.push(name.clone());
+                continue;
+            }
+            let Some(import) = self
+                .through_alias(&address)
+                .or_else(|| self.tables.export(&address))
+                .or_else(|| self.tables.glob(&address))
+            else {
+                return false;
+            };
+            if !active.insert(address) {
+                return false;
+            }
+            let expanded = import
+                .path
+                .iter()
+                .chain(&tail[index + 1..])
+                .cloned()
+                .collect::<Vec<_>>();
+            return self.names_script_module(&import.context, &expanded, active);
+        }
+        true
     }
 
     /// The `use` in `context` that binds the first name of the longer path
@@ -3304,7 +3357,63 @@ impl<'a> Resolver<'a> {
             active.remove(&address);
             return Ok(target);
         }
+        let from = base_modules.len();
+        if let Some(target) =
+            self.through_imported_module(context, &address, from, reference, active)
+        {
+            return target;
+        }
         Err(self.unknown_import(context, path, reference))
+    }
+
+    /// `address` when one of its modules past the first `from` is an
+    /// import of the module before it rather than a declaration there:
+    /// `super::m::two` where the parent's `use crate::m;` binds `m` goes on
+    /// from the module that import names, in the import's own module, as
+    /// rustc resolves each segment through the scope of the one before it.
+    /// `None` when every module is declared, or one is no import that
+    /// reaches `context`.
+    fn through_imported_module(
+        &self,
+        context: &Context,
+        address: &Address,
+        from: usize,
+        reference: Span,
+        active: &mut BTreeSet<Address>,
+    ) -> Option<Result<Target, Failure>> {
+        let modules = &address.modules;
+        for at in from..modules.len() {
+            let module = Address {
+                package: address.package.clone(),
+                modules: modules[..at].into(),
+                name: modules[at].clone(),
+            };
+            if let Some(declaration) = self.tables.declaration(&module) {
+                if matches!(declaration.target, Target::Module) {
+                    continue;
+                }
+                return None;
+            }
+            let import = self
+                .through_alias(&module)
+                .or_else(|| self.tables.export(&module))
+                .or_else(|| self.tables.glob(&module))
+                .filter(|import| import.reach.reaches(&context.namespace))?;
+            if !active.insert(module.clone()) {
+                return None;
+            }
+            let expanded = import
+                .path
+                .iter()
+                .chain(&modules[at + 1..])
+                .chain(std::iter::once(&address.name))
+                .cloned()
+                .collect::<Vec<_>>();
+            let target = self.resolve_any_path(&import.context, &expanded, reference, active);
+            active.remove(&module);
+            return Some(target);
+        }
+        None
     }
 
     fn validate_visibility(
@@ -4663,6 +4772,19 @@ pub(super) fn write_renamed_modules(
             .collect();
     };
     each_signature_path(item, &path);
+}
+
+/// The path a signature names the module `qualified` a `use` binds by:
+/// the std facade's module of a std module (`rawr_std::fmt`) is std's
+/// (`std::fmt`), whose traits and types are std's own through it, as a
+/// path written from std's root reaches them.
+fn std_module(qualified: &ImmutableString) -> ImmutableString {
+    qualified
+        .strip_prefix(crate::std_facade::ROOT)
+        .and_then(|rest| rest.strip_prefix("::"))
+        .map(|rest| format!("std::{rest}"))
+        .filter(|std| crate::std_table::is_module(std))
+        .map_or_else(|| qualified.clone(), ImmutableString::from)
 }
 
 /// Whether the prelude has a trait of `name`, which every module sees.
