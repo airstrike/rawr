@@ -1599,6 +1599,10 @@ static QUEUE: Mutex<VecDeque<Job>> = Mutex::new(VecDeque::new());
 /// What wakes that owner when a job arrives.
 #[cfg(feature = "sync")]
 static DRIVER: Mutex<Option<Waker>> = Mutex::new(None);
+/// Whether [`DRIVER`] was ever set: [`drive`] only ever sets it, so a
+/// thread asks this without the lock.
+#[cfg(feature = "sync")]
+static DRIVEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 thread_local! {
     /// Whether this thread is inside the runtime entry's poll (D527).
@@ -1611,6 +1615,7 @@ thread_local! {
 #[cfg(feature = "sync")]
 pub fn drive(waker: &Waker) {
     *lock(&DRIVER) = Some(waker.clone());
+    DRIVEN.store(true, std::sync::atomic::Ordering::Release);
 }
 
 /// Run every job queued for the owner, in order, on this, the owner thread.
@@ -1674,7 +1679,7 @@ pub fn on_owner(work: impl FnOnce() + MaybeSend + 'static) {
 /// runtime entry's poll drains them (D527), or a forward hands them on.
 fn served() -> bool {
     #[cfg(feature = "sync")]
-    if lock(&DRIVER).is_some() {
+    if DRIVEN.load(std::sync::atomic::Ordering::Acquire) {
         return true;
     }
     FORWARD.get().is_some()
