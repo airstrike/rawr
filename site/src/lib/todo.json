@@ -5612,7 +5612,8 @@
     {"issue":2353,"title":"Playground console eval: `x = 1` fails inside `format!`, and `x = 1;` runs outside the paused frame","state":"closed","category":"Health","release":"0.4.66"},
     {"issue":2354,"title":"The playground's bindings panel edits a value in place","state":"closed","category":"Health","release":"0.4.66"},
     {"issue":2355,"title":"Run's \"A native main\" opens with a native main.rs and a marked module, then a table of what each…","state":"open","category":"Health"},
-    {"issue":2356,"title":"An islands test for marked code calling a native trait's &self method on a Box<dyn Trait> it holds","state":"open","category":"Health"}
+    {"issue":2356,"title":"An islands test for marked code calling a native trait's &self method on a Box<dyn Trait> it holds","state":"open","category":"Health"},
+    {"issue":2357,"title":"A script Mutex read through a temporary guard takes no lock","state":"open","category":"Health"}
   ],
   "groups": [
     {
