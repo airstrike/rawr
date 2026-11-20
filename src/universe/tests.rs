@@ -953,3 +953,94 @@ fn a_held_program_waits_through_its_host_for_the_release() {
     assert_eq!(ask(json!({ "op": "continue" })), json!({ "paused": null }));
     assert_eq!(running.join().unwrap(), 0);
 }
+
+#[cfg(feature = "browser-debugger")]
+const UPDATED: &str = "// rawr
+struct Counter {
+    value: i64,
+}
+
+impl Counter {
+    fn update(&mut self, step: i64) {
+        match step {
+            1 => {
+                self.value += step;
+            }
+            _ => {}
+        }
+    }
+}
+
+macro_rules! reader {
+    () => {
+        impl Counter {
+            fn read(&self) -> i64 {
+                self.value
+            }
+        }
+    };
+}
+
+reader!();
+
+fn main() {
+    let mut counter = Counter { value: 0 };
+    counter.update(1);
+    println!(\"{}\", counter.read());
+}
+";
+
+/// Code a page evaluates where a universe's program is paused in a method
+/// (#2353): an assignment through `self`, with and without its `;`, runs
+/// in the paused frame, and a refused one points at the code as written.
+/// The file's macro call has its expansion laid out past the file's own
+/// lines, as a crate macro's is in a page's program.
+#[cfg(feature = "browser-debugger")]
+#[test]
+fn a_debugged_method_assigns_through_self_where_it_is_paused() {
+    use serde_json::json;
+    let host = std::sync::Arc::new(Suspending {
+        woken: std::sync::Mutex::new(false),
+        changed: std::sync::Condvar::new(),
+    });
+    let inspector = crate::inspect::Inspector::hosted(host, |_: &serde_json::Value| {});
+    let ask = |request: serde_json::Value| {
+        let (reply, answer) = std::sync::mpsc::channel();
+        inspector.ask(&request, move |value| {
+            let _ = reply.send(value);
+        });
+        answer.recv().unwrap()
+    };
+    let file = "/universe-updated/src/main.rs";
+    inspector.hold();
+    let attached = inspector.clone();
+    let (loaded, ready) = std::sync::mpsc::channel();
+    let running = std::thread::spawn(move || {
+        let mut universe = Universe::new(&Plain, Access::none()).unwrap();
+        assert!(universe.attach(attached));
+        let program = universe
+            .program(PathBuf::from(file), UPDATED, Vec::new())
+            .unwrap();
+        loaded.send(()).unwrap();
+        program.run()
+    });
+    ready.recv().unwrap();
+    let set = ask(json!({ "op": "break", "file": file, "line": 10 }));
+    assert_eq!(set["set"]["text"], "self.value += step;", "{set}");
+    ask(json!({ "op": "release" }));
+    let paused = ask(json!({ "name": "nothing" }));
+    assert_eq!(paused["paused"]["line"], 10, "{paused}");
+    let bare = ask(json!({ "op": "eval", "code": "self.value = 100" }));
+    assert_eq!(bare["value"], "()", "{bare}");
+    let read = ask(json!({ "op": "eval", "code": "self.value" }));
+    assert_eq!(read["value"], "100", "{read}");
+    let ended = ask(json!({ "op": "eval", "code": "self.value = 7;" }));
+    assert_eq!(ended["value"], "()", "{ended}");
+    let refused = ask(json!({ "op": "eval", "code": "self.value = \"a\";" }));
+    let error = refused["error"].as_str().unwrap_or_default();
+    assert!(error.starts_with("error[E0308]"), "{refused}");
+    assert!(error.contains("<eval>:1:14"), "{refused}");
+    ask(json!({ "op": "clear" }));
+    assert_eq!(ask(json!({ "op": "continue" })), json!({ "paused": null }));
+    assert_eq!(running.join().unwrap(), 0);
+}

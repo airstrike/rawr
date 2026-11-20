@@ -197,10 +197,14 @@ impl Spliced {
             start = Some(self.text.len());
             self.write(shown, tail_at, "{ ");
         }
+        // The tail is parenthesized: `format!` reads `name = value` as a
+        // named argument, and in Rust an assignment is an expression of
+        // type `()`. A parenthesized place is still a place, so the borrow
+        // `format!` takes doesn't move it.
         self.write(
             shown,
             tail_at,
-            &format!(" let {VALUE}: ::std::string::String = ::std::format!(\"{{:?}}\", "),
+            &format!(" let {VALUE}: ::std::string::String = ::std::format!(\"{{:?}}\", ("),
         );
         match code.tail {
             Some(tail) => self.copy(shown, tail_at, tail),
@@ -208,7 +212,7 @@ impl Spliced {
         }
         let end = from + code.tail_at + code.tail.map_or(0, str::len);
         // A statement, never the tail of what holds it.
-        self.write(shown, end, "); }; ");
+        self.write(shown, end, ")); }; ");
         start
     }
 
