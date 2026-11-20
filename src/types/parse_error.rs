@@ -552,7 +552,12 @@ impl fmt::Display for ParseErrorType {
                         rest: *rest,
                     }
                 ),
-                crate::resolve::Error::TupleArity { .. } => f.write_str("mismatched types"),
+                crate::resolve::Error::PatternMismatch { types, .. } => {
+                    write!(f, "mismatched types: {}", types.label())
+                }
+                crate::resolve::Error::SlicePattern { ty, .. } => {
+                    write!(f, "{}", crate::resolve::SlicePattern(ty))
+                }
                 crate::resolve::Error::RepeatedRest { slice, .. } => {
                     write!(f, "{}", crate::resolve::RepeatedRest(*slice))
                 }

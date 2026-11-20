@@ -2267,12 +2267,18 @@ fn a_tuple_pattern_of_another_arity_is_e0308() {
     assert_eq!(label("let (a, ..) = 5;"), "expected integer, found `(_,)`");
     let body = "let (a, b) = (1, 2, 3);";
     assert_eq!(
-        rendered_head(body, 5),
-        marked(
-            "error[E0308]: mismatched types",
+        rendered_head(body, 10),
+        pattern_mismatch(
             9,
             body,
-            "    ^^^^^^ expected a tuple with 3 elements, found one with 2 elements"
+            &[
+                "    ^^^^^^   --------- this expression has type `({integer}, {integer}, {integer})`",
+                "    |",
+                "    expected a tuple with 3 elements, found one with 2 elements",
+                "",
+                "  = note: expected tuple `({integer}, {integer}, {integer})`",
+                "             found tuple `(_, _)`",
+            ]
         )
     );
 }
@@ -2352,4 +2358,254 @@ fn a_refutable_pattern_is_marked_whole_e0005() {
         marker("let o: Option<i32> = None; let x; Some(x) = o;"),
         under(39, 7, "None")
     );
+}
+
+/// rustc's E0308 on a pattern under the source line `body` of `main`,
+/// which starts at column 5 of line 3: its arrow at `column`, then the
+/// lines under the source, each after the gutter's `  |     `, but a
+/// note and the lines after it, which are as they are.
+fn pattern_mismatch(column: usize, body: &str, under: &[&str]) -> String {
+    let mut lines = vec![
+        "error[E0308]: mismatched types".to_string(),
+        format!(" --> main.rs:3:{column}"),
+        "  |".to_string(),
+        format!("3 |     {body}"),
+    ];
+    let mut noted = false;
+    for line in under {
+        noted |= line.starts_with("  = ");
+        lines.push(match *line {
+            _ if noted => line.to_string(),
+            "" => "  |".to_string(),
+            line => format!("  |     {line}"),
+        });
+    }
+    lines.join("\n")
+}
+
+#[test]
+fn a_pattern_of_another_type_is_labelled_beside_what_typed_its_value_e0308() {
+    let check = |column: usize, body: &str, under: &[&str]| {
+        assert_eq!(
+            rendered_head(body, 4 + under.len()),
+            pattern_mismatch(column, body, under),
+            "{body}"
+        );
+    };
+    let tuple_note = [
+        "",
+        "  = note: expected type `{integer}`",
+        "            found tuple `(_, _)`",
+    ];
+    // A `match`'s scrutinee, before the pattern.
+    let mut under = vec![
+        "      -   ^^^^^^ expected integer, found `(_, _)`",
+        "      |",
+        "      this expression has type `{integer}`",
+    ];
+    under.extend(tuple_note);
+    check(15, "match 5 { (a, b) => {} }", &under);
+    // A `let`'s value, after it, or its written type.
+    let mut under = vec![
+        "    ^^^^^^   - this expression has type `{integer}`",
+        "    |",
+        "    expected integer, found `(_, _)`",
+    ];
+    under.extend(tuple_note);
+    check(9, "let (a, b) = 5;", &under);
+    check(12, "if let (a, b) = 5 {}", &{
+        let mut under = under.clone();
+        under[0] = "       ^^^^^^   - this expression has type `{integer}`";
+        under[1] = "       |";
+        under[2] = "       expected integer, found `(_, _)`";
+        under
+    });
+    let mut under = vec![
+        "    ^^^^^^  --- expected due to this",
+        "    |",
+        "    expected `i32`, found `(_, _)`",
+        "",
+        "  = note: expected type `i32`",
+        "            found tuple `(_, _)`",
+    ];
+    check(9, "let (a, b): i32 = 5;", &under);
+    under[0] = " ^^^^^^  --- expected due to this";
+    under[1] = " |";
+    under[2] = " expected `i32`, found `(_, _)`";
+    check(6, "|(a, b): i32| a;", &under);
+    // A pattern below another names the whole value.
+    let mut under = vec![
+        "         ^^^^^^    ------- this expression has type `Option<{integer}>`",
+        "         |",
+        "         expected integer, found `(_, _)`",
+    ];
+    under.extend(tuple_note);
+    check(14, "let Some((a, b)) = Some(5) else { return };", &under);
+    // A `for`'s iterator, of its items' type.
+    let mut under = vec![
+        "    ^^^^^^    ---- this is an iterator with items of type `{integer}`",
+        "    |",
+        "    expected integer, found `(_, _)`",
+    ];
+    under.extend(tuple_note);
+    check(9, "for (a, b) in 0..3 {}", &under);
+    // A tuple of another arity is noted as a tuple.
+    check(
+        26,
+        "let t = (1,2,3); let (a, b) = t;",
+        &[
+            "                     ^^^^^^   - this expression has type `({integer}, {integer}, {integer})`",
+            "                     |",
+            "                     expected a tuple with 3 elements, found one with 2 elements",
+            "",
+            "  = note: expected tuple `({integer}, {integer}, {integer})`",
+            "             found tuple `(_, _)`",
+        ],
+    );
+    // The note's shorter lead is padded, and a constructor's type has a
+    // `_` for each argument.
+    check(
+        20,
+        "let x = 5; let &a = x;",
+        &[
+            "               ^^   - this expression has type `{integer}`",
+            "               |",
+            "               expected integer, found `&_`",
+            "",
+            "  = note:   expected type `{integer}`",
+            "          found reference `&_`",
+        ],
+    );
+    check(
+        20,
+        "let x = 5; let &mut b = &x;",
+        &[
+            "               ^^^^^^   -- this expression has type `&{integer}`",
+            "               |",
+            "               types differ in mutability",
+            "",
+            "  = note:      expected reference `&{integer}`",
+            "          found mutable reference `&mut _`",
+        ],
+    );
+    check(
+        26,
+        "let x = 5; match x { Ok(a) | Err(a) => {} }",
+        &[
+            "                 -   ^^^^^ expected integer, found `Result<_, _>`",
+            "                 |",
+            "                 this expression has type `{integer}`",
+            "",
+            "  = note: expected type `{integer}`",
+            "             found enum `Result<_, _>`",
+        ],
+    );
+    // A parameter's written type.
+    assert_eq!(
+        rendered("fn g((a, b): i32) {}\nfn main() {}\n")
+            .lines()
+            .skip(3)
+            .take(4)
+            .collect::<Vec<_>>(),
+        [
+            "1 | fn g((a, b): i32) {}",
+            "  |      ^^^^^^  --- expected due to this",
+            "  |      |",
+            "  |      expected `i32`, found `(_, _)`",
+        ]
+    );
+}
+
+#[test]
+fn a_pattern_mismatch_of_two_simple_types_has_no_note_e0308() {
+    for (column, body, under) in [
+        (
+            15,
+            "match 5 { \"a\" => {} _ => {} }",
+            [
+                "      -   ^^^ expected integer, found `&str`",
+                "      |",
+                "      this expression has type `{integer}`",
+            ],
+        ),
+        // A `&str` matches as the `str` below it.
+        (
+            17,
+            "match \"a\" { 5 => {} _ => {} }",
+            [
+                "      ---   ^ expected `str`, found integer",
+                "      |",
+                "      this expression has type `&str`",
+            ],
+        ),
+        (
+            30,
+            "struct S(i32); match 5 { S(a) => {} }",
+            [
+                "                     -   ^^^^ expected integer, found `S`",
+                "                     |",
+                "                     this expression has type `{integer}`",
+            ],
+        ),
+        (
+            44,
+            "enum E { A(i32) } let y = 5; match y { E::A(z) => {} _ => {} }",
+            [
+                "                                   -   ^^^^^^^ expected integer, found `E`",
+                "                                   |",
+                "                                   this expression has type `{integer}`",
+            ],
+        ),
+    ] {
+        let rendered = rendered_main(body);
+        assert_eq!(
+            rendered.lines().take(7).collect::<Vec<_>>().join("\n"),
+            pattern_mismatch(column, body, &under),
+            "{body}"
+        );
+        assert!(!rendered.contains("note"), "{rendered}");
+    }
+}
+
+#[test]
+fn a_slice_pattern_on_no_array_or_slice_is_e0529() {
+    for (column, body, ty, marker) in [
+        (9, "let [a, ..] = 5;", "{integer}", "    ^^^^^^^"),
+        (
+            9,
+            "let [a, b] = (1, 2);",
+            "({integer}, {integer})",
+            "    ^^^^^^",
+        ),
+        (
+            20,
+            "match (1, 2) { [a, b] => {} }",
+            "({integer}, {integer})",
+            "               ^^^^^^",
+        ),
+        (
+            26,
+            "let x = 5; match x { [a, ..] => {} }",
+            "{integer}",
+            "                     ^^^^^^^",
+        ),
+    ] {
+        assert_eq!(
+            rendered_head(body, 5),
+            marked(
+                &format!("error[E0529]: expected an array or slice, found `{ty}`"),
+                column,
+                body,
+                &format!("{marker} pattern cannot match with input type `{ty}`")
+            ),
+            "{body}"
+        );
+    }
+    // A `Vec` is sliced to match one.
+    let rendered = rendered_main("let v = vec![1]; let [a, ..] = v;");
+    assert!(
+        rendered.starts_with("error[E0529]: expected an array or slice, found `Vec<{integer}>`"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("consider slicing here"), "{rendered}");
 }

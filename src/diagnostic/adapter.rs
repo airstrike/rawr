@@ -549,6 +549,10 @@ fn resolution_report_with_sources(
         resolve::Error::InvalidAssignee { .. } => "cannot assign to this expression".into(),
         resolve::Error::UnboundAlternative { .. } => "variable not in all patterns".into(),
         resolve::Error::RepeatedRest { .. } => "previously used here".into(),
+        resolve::Error::PatternMismatch {
+            origin: Some(origin),
+            ..
+        } => origin.label().into(),
         resolve::Error::ArgumentCount { callee, .. } => callee.defined_here().into(),
         resolve::Error::ImmutableBinding { binding, .. } => {
             format!("first assignment to `{binding}`").into()
@@ -699,14 +703,8 @@ fn primary_label(
             .label()
             .into(),
         ),
-        resolve::Error::TupleArity { arity, found, .. } => Some(
-            resolve::TupleArity {
-                arity: *arity,
-                found: *found,
-            }
-            .label()
-            .into(),
-        ),
+        resolve::Error::PatternMismatch { types, .. } => Some(types.label().into()),
+        resolve::Error::SlicePattern { ty, .. } => Some(resolve::SlicePattern(ty).label().into()),
         resolve::Error::RepeatedRest { slice, .. } => {
             Some(resolve::RepeatedRest(*slice).label().into())
         }
@@ -882,6 +880,7 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
             resolve::Error::ArrayPatternLength { rest: true, .. } => {
                 code::RESOLVE_ARRAY_LEAST_LENGTH
             }
+            resolve::Error::SlicePattern { .. } => code::RESOLVE_SLICE_PATTERN,
             _ => code::RESOLVE_MATCH,
         },
         resolve::Category::NonExhaustive => code::RESOLVE_NON_EXHAUSTIVE,
@@ -985,6 +984,13 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Error::PatternFields {
             help: Some(help), ..
         } => builder.help(help.clone()),
+        resolve::Error::PatternMismatch { types, .. } => match types.note() {
+            Some(note) => builder.note(note),
+            None => builder,
+        },
+        resolve::Error::SlicePattern {
+            sliceable: true, ..
+        } => builder.help("consider slicing here"),
         resolve::Error::UnknownFunction {
             import: Some(path), ..
         } => builder.help(format!("consider importing this function: `use {path};`")),
@@ -1405,7 +1411,8 @@ fn resolution_message(error: &resolve::Error) -> String {
             rest: *rest,
         }
         .to_string(),
-        resolve::Error::TupleArity { .. } => "mismatched types".to_string(),
+        resolve::Error::PatternMismatch { .. } => "mismatched types".to_string(),
+        resolve::Error::SlicePattern { ty, .. } => resolve::SlicePattern(ty).to_string(),
         resolve::Error::RepeatedRest { slice, .. } => resolve::RepeatedRest(*slice).to_string(),
         resolve::Error::NotYet { path, .. } => format!("rawr doesn't run `{path}` yet"),
         resolve::Error::TypeAnnotationsNeeded { parameter, .. } => {

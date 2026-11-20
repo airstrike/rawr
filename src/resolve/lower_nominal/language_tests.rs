@@ -7183,7 +7183,10 @@ fn language_slice_patterns_on_a_vec_value_are_e0529() {
     let error = rejected(
         "fn f(v: Vec<i64>) -> i64 { match v { [a, ..] => a, _ => 0 } } pub fn run() -> i64 { f(vec![1]) } run()",
     );
-    assert!(error.contains("E0529"), "{error}");
+    assert!(
+        error.contains("expected an array or slice, found `Vec<i64>`"),
+        "{error}"
+    );
     assert_eq!(
         run("fn f(v: Vec<i64>) -> i64 { match v.as_slice() { [a, ..] => *a, _ => 0 } } pub fn run() -> i64 { f(vec![4]) } run()"),
         4

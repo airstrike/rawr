@@ -141,7 +141,7 @@ use super::borrowck::{
 };
 use super::{
     intrinsic, item, type_ref, BindingSite, Callee, Cloning, Error, MoveCause, MovedPlace,
-    OwningParameter, Unresolved,
+    OwningParameter, PatternOrigin, Unresolved,
 };
 use crate::ast::{NominalPattern, NominalPayloadType, NOMINAL_MATCH_SENTINEL};
 use crate::func::{FnCallArgs, NativeCallContext};

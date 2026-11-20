@@ -824,6 +824,85 @@ impl Ty {
         matches!(self, Self::String | Self::Str)
     }
 
+    /// rustc's sort of this type in a mismatch's "expected .. found" note:
+    /// `type` for a scalar, else `tuple`, `struct`, `enum`, `reference`
+    /// and their kin.
+    pub(super) fn sort(&self, models: &Models) -> &'static str {
+        match self {
+            Self::Unit => "unit type",
+            Self::Tuple(_) => "tuple",
+            Self::Reference { mutable: true, .. } => "mutable reference",
+            Self::Str | Self::Reference { .. } => "reference",
+            Self::Array {
+                kind: sequence::Kind::Array(_),
+                ..
+            } => "array",
+            Self::Array {
+                kind: sequence::Kind::Slice,
+                ..
+            } => "slice",
+            Self::Option(_) | Self::Result(..) | Self::Ordering | Self::Cow(_) => "enum",
+            Self::Array { .. }
+            | Self::String
+            | Self::Boxed(_)
+            | Self::Counted(..)
+            | Self::Weak(..)
+            | Self::Keyed(..)
+            | Self::Reverse(_)
+            | Self::Range(_)
+            | Self::InclusiveRange(_)
+            | Self::FloatRange
+            | Self::InclusiveOf(_)
+            | Self::Time(_)
+            | Self::ParseError(_)
+            | Self::Arguments
+            | Self::Cell(..)
+            | Self::Thread(..) => "struct",
+            Self::Script(id, _) => match models.definition(*id) {
+                Nominal::Enum { .. } => "enum",
+                Nominal::Struct { .. } => "struct",
+            },
+            Self::Host { proof, .. } => match proof.definition.shape() {
+                crate::host::type_def::Shape::Enum { .. } => "enum",
+                _ => "struct",
+            },
+            Self::Fn { .. } | Self::FnChoice { .. } => "fn pointer",
+            Self::FnItem { .. } => "fn item",
+            Self::Dyn(..) => "trait object",
+            Self::Param(_) => "type parameter",
+            _ => "type",
+        }
+    }
+
+    /// Whether rustc names this type in a mismatch's label alone, with no
+    /// "expected .. found" note: a scalar, `str`, `()`, a struct or enum
+    /// of no type arguments, or a reference to one of these, or an array
+    /// or slice of scalars.
+    pub(super) fn is_simple(&self) -> bool {
+        let scalar = |ty: &Self| {
+            matches!(
+                ty,
+                Self::Bool | Self::Char | Self::Int(_) | Self::Float(_) | Self::Str
+            )
+        };
+        match self {
+            Self::Unit
+            | Self::UnsizedStr
+            | Self::String
+            | Self::Ordering
+            | Self::Time(_)
+            | Self::ParseError(_)
+            | Self::Arguments => true,
+            Self::Script(_, arguments) | Self::Host { arguments, .. } => arguments.is_empty(),
+            Self::Reference { target, .. } => target.is_simple(),
+            Self::Array {
+                element,
+                kind: sequence::Kind::Array(_) | sequence::Kind::Slice,
+            } => scalar(element),
+            ty => scalar(ty),
+        }
+    }
+
     #[cfg(feature = "rust-import")]
     pub(super) fn collect_dependencies(
         &self,
