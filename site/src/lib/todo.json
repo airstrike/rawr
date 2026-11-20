@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
+      "entries": [
+        {"text":"The reference and embedding docs describe destructuring assignment, trait scope for method calls, impls that name a trait by path, std trait objects, macro calls in items, types and patterns, `rawr tui`, the debugger window's panes, the call-level default and `Outcome::Uncovered`, and drop limits that no longer hold.","issues":[2342]}
+      ]
+    },
     "releases": [
       {
         "version": "0.4.61",
@@ -5549,7 +5554,11 @@
     {"issue":2338,"title":"An impl of a program trait named by its path (`impl m::T for S`) is refused in a single source","state":"closed","category":"Health","release":"0.4.61"},
     {"issue":2339,"title":"Comparing values of a type with no `PartialEq` or `PartialOrd` reads as rustc's E0369: each…","state":"closed","category":"Health","release":"0.4.60"},
     {"issue":2340,"title":"E0432's primary span over the whole path, and E0369 operand labels for arithmetic and bit operators","state":"closed","category":"Health","release":"0.4.61"},
-    {"issue":2341,"title":"E0432 spans: a nested group member and a std group prefix","state":"open","category":"Health"}
+    {"issue":2341,"title":"E0432 spans: a nested group member and a std group prefix","state":"open","category":"Health"},
+    {"issue":2342,"title":"The reference and embedding docs describe destructuring assignment, trait scope for method…","state":"open","category":"Health"},
+    {"issue":2343,"title":"`mk!();` among a file's items fails to parse","state":"open","category":"Health"},
+    {"issue":2344,"title":"A single file with an inline mod prints \"Rawr package snapshot contains a duplicate path\"","state":"open","category":"Health"},
+    {"issue":2345,"title":"`.into()` from a `&str` local into `Box<dyn Error>` is E0308","state":"open","category":"Health"}
   ],
   "groups": [
     {

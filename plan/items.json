@@ -2340,6 +2340,10 @@
     {"t":"T2338","issue":2338,"title":"T2338: An impl of a program trait named by its path (`impl m::T for S`) is refused in a single source","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"734ddec67","release":"0.4.61"},
     {"t":"T2339","issue":2339,"title":"T2339: Comparing values of a type with no `PartialEq` or `PartialOrd` reads as rustc's E0369: each…","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":"0.4.60"},
     {"t":"T2340","issue":2340,"title":"T2340: E0432's primary span over the whole path, and E0369 operand labels for arithmetic and bit operators","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"734ddec67","release":"0.4.61"},
-    {"t":"T2341","issue":2341,"title":"T2341: E0432 spans: a nested group member and a std group prefix","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T2341","issue":2341,"title":"T2341: E0432 spans: a nested group member and a std group prefix","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T2342","issue":2342,"title":"T2342: The reference and embedding docs describe destructuring assignment, trait scope for method…","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T2343","issue":2343,"title":"T2343: `mk!();` among a file's items fails to parse","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T2344","issue":2344,"title":"T2344: A single file with an inline mod prints \"Rawr package snapshot contains a duplicate path\"","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T2345","issue":2345,"title":"T2345: `.into()` from a `&str` local into `Box<dyn Error>` is E0308","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }
