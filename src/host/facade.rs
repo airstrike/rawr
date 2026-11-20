@@ -1002,15 +1002,17 @@ impl Builder {
         self.type_::<T>(path, parameters, capabilities)
     }
 
-    /// Give the declared type at `path`, a linked enum, its unit variants
-    /// `names` in declaration order, which a pattern's coverage lists. Each
-    /// is the type's associated value of its name, which a pattern tests by
-    /// the type's `==`. A `non_exhaustive` enum's patterns cover it only
-    /// with a wildcard.
-    pub(crate) fn unit_variants(
+    /// Give the declared type at `path`, a linked enum, its `variants` in
+    /// declaration order, each a name and its tuple fields' types, which a
+    /// pattern's coverage lists. A unit variant is the type's associated
+    /// value of its name, which a pattern tests by the type's `==`. A tuple
+    /// variant is the type's function of its name, beside the shared reader
+    /// of that name a pattern reads its field by. A `non_exhaustive` enum's
+    /// patterns cover it only with a wildcard.
+    pub(crate) fn linked_variants(
         &mut self,
         path: &str,
-        names: &[&str],
+        variants: &[(&str, Vec<host::type_ref::Type>)],
         non_exhaustive: bool,
     ) -> Result<&mut Self, host::Error> {
         let relative = host::path::Path::parse(path)?;
@@ -1021,9 +1023,18 @@ impl Builder {
                 ty: qualified.to_string().into(),
             });
         };
-        let variants = names
+        let variants = variants
             .iter()
-            .map(|name| host::type_def::Variant::linked_unit((*name).into()))
+            .map(|(name, fields)| {
+                let fields = fields
+                    .iter()
+                    .enumerate()
+                    .map(|(index, ty)| {
+                        host::type_def::Field::linked(index.to_string().into(), ty.clone())
+                    })
+                    .collect();
+                host::type_def::Variant::linked((*name).into(), fields)
+            })
             .collect();
         let definition = self
             .types

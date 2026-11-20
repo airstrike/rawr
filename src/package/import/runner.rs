@@ -701,7 +701,10 @@ fn structural_path<'facade>(
                 .chain(fields.iter().filter_map(|field| {
                     // A field's selector names its reader, its store and
                     // its lenders.
-                    (field.imported_identity().fingerprint() == row.selector).then_some(
+                    (field
+                        .imported_identity()
+                        .is_some_and(|selector| selector.fingerprint() == row.selector))
+                    .then_some(
                         if matches!(
                             row.kind,
                             StructuralKind::Store
@@ -1066,7 +1069,11 @@ fn retain_shape(
                 bytes
                     .checked_add(std::mem::size_of_val(field))?
                     .checked_add(field.name().len())?
-                    .checked_add(field.imported_identity().retained_bytes()?)?
+                    .checked_add(
+                        field
+                            .imported_identity()
+                            .map_or(Some(0), |selector| selector.retained_bytes())?,
+                    )?
                     .checked_add(
                         field
                             .ty()

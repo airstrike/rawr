@@ -4635,6 +4635,139 @@ fn a_match_on_a_held_std_enum_misses_what_rustcs_does() {
     );
 }
 
+/// A pattern on std's `io::SeekFrom` misses what rustc's does: a variant
+/// no arm names, with its field (`SeekFrom::Current(_)`), and the values of
+/// a field the arms name only in part. A variant is no method, and a name
+/// that is no variant is E0599 (#2370).
+#[test]
+fn a_pattern_on_std_seek_from_misses_what_rustcs_does() {
+    let program = |body: &str| {
+        rendered(&format!(
+            "use std::io::SeekFrom;\nfn main() {{\n    let s = SeekFrom::Current(1);\n{body}}}\n"
+        ))
+    };
+    let missed = program(
+        "    match s {\n        SeekFrom::Start(_) => {}\n        SeekFrom::End(_) => {}\n    }\n",
+    );
+    assert!(
+        missed.starts_with(
+            "error[E0004]: non-exhaustive patterns: `SeekFrom::Current(_)` not covered\n"
+        ) && missed.contains("= note: the matched value is of type `SeekFrom`\n")
+            && missed.contains("SeekFrom::Current(_) => todo!()"),
+        "{missed}"
+    );
+    let part = program(
+        "    match s {\n        SeekFrom::Start(0) => {}\n        SeekFrom::End(_) => {}\n        \
+         SeekFrom::Current(_) => {}\n    }\n",
+    );
+    assert!(
+        part.starts_with(
+            "error[E0004]: non-exhaustive patterns: `SeekFrom::Start(1_u64..=u64::MAX)` not \
+             covered\n"
+        ),
+        "{part}"
+    );
+    let nested = program(
+        "    match Some(s) {\n        Some(SeekFrom::End(_)) => {}\n        None => {}\n    }\n",
+    );
+    assert!(
+        nested.starts_with(
+            "error[E0004]: non-exhaustive patterns: `Some(SeekFrom::Start(_))` and \
+             `Some(SeekFrom::Current(_))` not covered\n"
+        ),
+        "{nested}"
+    );
+    let refutable = program("    let SeekFrom::Start(x) = s;\n");
+    assert!(
+        refutable.starts_with("error[E0005]: refutable pattern in local binding\n")
+            && refutable
+                .contains("patterns `SeekFrom::End(_)` and `SeekFrom::Current(_)` not covered\n"),
+        "{refutable}"
+    );
+    let method = program("    let _ = s.End();\n");
+    assert!(
+        method.starts_with(
+            "error[E0599]: no method named `End` found for enum `SeekFrom` in the current scope\n"
+        ) && method.contains("method not found in `SeekFrom`"),
+        "{method}"
+    );
+    let unknown = program("    let _ = SeekFrom::Middle(3);\n");
+    assert!(
+        unknown.starts_with(
+            "error[E0599]: no variant, associated function, or constant named `Middle` found \
+             for enum `SeekFrom` in the current scope\n"
+        ) && unknown.contains("variant, associated function, or constant not found in `SeekFrom`"),
+        "{unknown}"
+    );
+}
+
+/// A std type is named as rustc names it: by its name alone where no
+/// other type of std's or of the program has it (`PathBuf`), else by its
+/// path (`std::fmt::Alignment`, beside `std::mem::Alignment`). E0308's
+/// label names each by its name alone unless both would read alike
+/// (#2370).
+#[test]
+fn a_std_type_is_named_as_rustc_names_it() {
+    let mismatch = |ty: &str, value: &str| {
+        rendered(&format!(
+            "{ty}fn main() {{\n    let x: {} = {value};\n}}\n",
+            if ty.is_empty() { "i32" } else { "PathBuf" }
+        ))
+    };
+    for (value, found) in [
+        ("std::path::PathBuf::new()", "PathBuf"),
+        ("std::fmt::Alignment::Left", "Alignment"),
+        (
+            "\"\".parse::<u8>().unwrap_err().kind().clone()",
+            "IntErrorKind",
+        ),
+    ] {
+        let label = mismatch("", value);
+        assert!(
+            label.contains(&format!("expected `i32`, found `{found}`\n")),
+            "{label}"
+        );
+    }
+    let alike = mismatch("struct PathBuf;\n", "std::path::PathBuf::new()");
+    assert!(
+        alike.contains("expected `PathBuf`, found `std::path::PathBuf`\n"),
+        "{alike}"
+    );
+    let item = |source: &str| rendered(&format!("{source}\n"));
+    let alignment = item("use std::fmt::Alignment;\nfn main() {\n    Alignment::nope();\n}");
+    assert!(
+        alignment.starts_with(
+            "error[E0599]: no variant, associated function, or constant named `nope` found for \
+             enum `std::fmt::Alignment` in the current scope\n"
+        ),
+        "{alignment}"
+    );
+    let path = item("use std::path::PathBuf;\nfn main() {\n    PathBuf::nope();\n}");
+    assert!(
+        path.starts_with(
+            "error[E0599]: no associated function or constant named `nope` found for struct \
+             `PathBuf` in the current scope\n"
+        ),
+        "{path}"
+    );
+    let matched = |own: &str| {
+        item(&format!(
+            "{own}fn main() {{\n    let o = Some(std::path::PathBuf::new());\n    match o {{\n        \
+             None => {{}}\n    }}\n}}"
+        ))
+    };
+    let sole = matched("");
+    assert!(
+        sole.contains("= note: the matched value is of type `Option<PathBuf>`\n"),
+        "{sole}"
+    );
+    let shared = matched("mod m {\n    pub struct PathBuf;\n}\n");
+    assert!(
+        shared.contains("= note: the matched value is of type `Option<std::path::PathBuf>`\n"),
+        "{shared}"
+    );
+}
+
 /// A std thread type's bare name resolves through a `use` alone, as in
 /// rustc: unbound, it is E0425 with the imports rustc suggests, and a path
 /// through a module's `use` names it (#2346).

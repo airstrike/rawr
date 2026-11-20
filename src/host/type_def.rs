@@ -137,15 +137,19 @@ pub enum Form {
     Record,
 }
 
-/// One readable imported struct or enum field.
+/// One readable struct or enum field: an imported type's, or a linked
+/// enum's variant's, as std's `io::SeekFrom::End(i64)`.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub struct Field {
     name: ImmutableString,
     ty: host::type_ref::Type,
-    imported: ImportedSelector,
+    /// The bridge's selector of an imported type's field. A linked
+    /// variant's field has none: the facade's reader of the variant's
+    /// name gives it.
+    imported: Option<ImportedSelector>,
     #[cfg(feature = "rust-import")]
-    imported_fingerprint: [u8; 32],
+    imported_fingerprint: Option<[u8; 32]>,
 }
 
 /// One source-visible enum variant: an imported enum's, or a linked
@@ -1007,12 +1011,24 @@ impl Field {
         ty: host::type_ref::Type,
         imported: rawr_import::surface::identity::Selector,
     ) -> Self {
-        let imported_fingerprint = imported.fingerprint();
+        let imported_fingerprint = Some(imported.fingerprint());
         Self {
             name,
             ty,
-            imported,
+            imported: Some(imported),
             imported_fingerprint,
+        }
+    }
+
+    /// The field `name` of a linked enum's variant, of type `ty`.
+    #[must_use]
+    pub(crate) fn linked(name: ImmutableString, ty: host::type_ref::Type) -> Self {
+        Self {
+            name,
+            ty,
+            imported: None,
+            #[cfg(feature = "rust-import")]
+            imported_fingerprint: None,
         }
     }
 
@@ -1028,9 +1044,11 @@ impl Field {
         &self.ty
     }
 
+    /// The bridge's selector of an imported type's field; `None` for a
+    /// linked variant's.
     #[cfg(feature = "rust-import")]
-    pub(crate) const fn imported_identity(&self) -> &ImportedSelector {
-        &self.imported
+    pub(crate) const fn imported_identity(&self) -> Option<&ImportedSelector> {
+        self.imported.as_ref()
     }
 }
 
@@ -1053,13 +1071,15 @@ impl Variant {
         }
     }
 
-    /// A unit variant of a linked enum, whose value is the facade's
-    /// associated value `name` of the enum.
+    /// A variant of a linked enum. A unit variant is the facade's
+    /// associated value `name` of the enum. A tuple variant's constructor
+    /// is the facade's function `name`, beside the shared reader of that
+    /// name which gives its field when the value is that variant.
     #[must_use]
-    pub(crate) fn linked_unit(name: ImmutableString) -> Self {
+    pub(crate) fn linked(name: ImmutableString, fields: Box<[Field]>) -> Self {
         Self {
             name,
-            fields: Box::default(),
+            fields,
             constructible: true,
             imported: None,
             #[cfg(feature = "rust-import")]
@@ -1315,7 +1335,7 @@ mod selector_hash_tests {
     struct OriginalField<'a> {
         name: &'a crate::ImmutableString,
         ty: &'a Type,
-        imported: &'a Selector,
+        imported: Option<&'a Selector>,
     }
 
     #[derive(Hash)]
@@ -1372,7 +1392,7 @@ mod selector_hash_tests {
                 let expected = writes(&OriginalField {
                     name: &field.name,
                     ty: &field.ty,
-                    imported: &field.imported,
+                    imported: field.imported.as_ref(),
                 });
                 assert_eq!(writes(&field), expected);
                 assert_eq!(writes(&field.clone()), expected);

@@ -237,4 +237,45 @@ pub(super) fn bind(binds: &mut impl super::Bind) {
             Dynamic::UNIT
         }))
     });
+    // Each of `SeekFrom`'s variants: its constructor, and the reader a
+    // pattern reads its offset by.
+    bind("io::SeekFrom::Start", |args| {
+        let offset = args[0]
+            .as_int()
+            .ok()
+            .and_then(|offset| u64::try_from(offset).ok())
+            .ok_or_else(|| error("expected a `u64` offset"))?;
+        Ok(Dynamic::from(SeekFrom::Start(offset)))
+    });
+    bind("io::SeekFrom::End", |args| {
+        Ok(Dynamic::from(SeekFrom::End(offset(args[0])?)))
+    });
+    bind("io::SeekFrom::Current", |args| {
+        Ok(Dynamic::from(SeekFrom::Current(offset(args[0])?)))
+    });
+    binds.reader("io::SeekFrom::Start", |args| {
+        Ok(match seek_from(args[0])? {
+            SeekFrom::Start(offset) => crate::option::some(int(offset)),
+            _ => crate::option::none(),
+        })
+    });
+    binds.reader("io::SeekFrom::End", |args| {
+        Ok(match seek_from(args[0])? {
+            SeekFrom::End(offset) => crate::option::some(Dynamic::from_int(offset)),
+            _ => crate::option::none(),
+        })
+    });
+    binds.reader("io::SeekFrom::Current", |args| {
+        Ok(match seek_from(args[0])? {
+            SeekFrom::Current(offset) => crate::option::some(Dynamic::from_int(offset)),
+            _ => crate::option::none(),
+        })
+    });
+}
+
+/// The `i64` offset a program passes.
+fn offset(value: &Dynamic) -> Result<i64, Box<EvalAltResult>> {
+    value
+        .as_int()
+        .map_err(|_| error("expected an `i64` offset"))
 }

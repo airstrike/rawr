@@ -42,7 +42,7 @@ impl<'a> Parser<'a> {
                 Err(self
                     .std_not_yet(&path, reference)
                     .or_else(|| self.macro_without_bang(&path, expected, reference))
-                    .unwrap_or(error))
+                    .unwrap_or_else(|| self.std_no_item(error)))
             }
             parsed => parsed,
         }

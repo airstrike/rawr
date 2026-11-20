@@ -73,6 +73,8 @@ struct Table {
     impls: Lines,
     /// The stable functions of std's stable traits, by name.
     trait_functions: OnceLock<HashMap<&'static str, Vec<Item>>>,
+    /// Each type name, and whether one type alone has it (`sole_type`).
+    type_names: OnceLock<HashMap<&'static str, bool>>,
     /// The directory it was read from; `None` for the embedded table.
     directory: Option<PathBuf>,
 }
@@ -99,6 +101,7 @@ impl Table {
             items: Lines::new(items),
             impls: Lines::new(impls),
             trait_functions: OnceLock::new(),
+            type_names: OnceLock::new(),
             directory,
         }
     }
@@ -137,6 +140,33 @@ impl Table {
         });
         TABLE.get().unwrap_or_else(|| {
             EMBEDDED.get_or_init(|| Self::new(EMBEDDED_PATHS, EMBEDDED_ITEMS, EMBEDDED_IMPLS, None))
+        })
+    }
+
+    /// The name of each type of std's crates, stable or not, and whether
+    /// one type alone has it, gathered in one pass over the paths: a
+    /// module is no type.
+    fn type_names(&self) -> &HashMap<&'static str, bool> {
+        self.type_names.get_or_init(|| {
+            let mut definitions = HashMap::<&'static str, Option<&'static str>>::new();
+            for path in self.paths.0.iter().map(|line| path_line(line)) {
+                if path.namespace != Namespace::Type || path.kind == "mod" {
+                    continue;
+                }
+                let name = path.path.rsplit("::").next().unwrap_or(path.path);
+                definitions
+                    .entry(name)
+                    .and_modify(|sole| {
+                        if *sole != Some(path.definition) {
+                            *sole = None;
+                        }
+                    })
+                    .or_insert(Some(path.definition));
+            }
+            definitions
+                .into_iter()
+                .map(|(name, sole)| (name, sole.is_some()))
+                .collect()
         })
     }
 
@@ -578,19 +608,11 @@ pub(crate) fn public_path(definition: &str) -> Option<&'static str> {
 /// that rustc writes it by its name alone: `IntErrorKind`, where it writes
 /// `std::fmt::Alignment` beside `std::mem::Alignment`.
 pub(crate) fn sole_type(name: &str) -> bool {
-    let suffix = format!("::{name}\t{}\t", Namespace::Type.letter());
-    let mut definitions = Table::get()
-        .paths
-        .0
-        .iter()
-        .filter(|line| line.contains(&suffix))
-        .map(|line| path_line(line))
-        .filter(|path| path.kind != "mod")
-        .map(|path| path.definition);
-    let Some(first) = definitions.next() else {
-        return false;
-    };
-    definitions.all(|definition| definition == first)
+    Table::get()
+        .type_names()
+        .get(name)
+        .copied()
+        .unwrap_or(false)
 }
 
 /// The items through `std`, then through `core`, named `name` in

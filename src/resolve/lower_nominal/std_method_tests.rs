@@ -1419,6 +1419,44 @@ main();
     );
 }
 
+/// std's `io::SeekFrom` is built by its tuple variants and read by them in
+/// a pattern, as rustc's is: a variant is a constructor and a `fn`
+/// pointer, a `match` arm, an or-pattern whose alternatives each read
+/// their own field, an `if let` and a `let`-`else`, through `&` too. `cargo
+/// run` of the program prints the same (#2370).
+#[test]
+fn std_seek_from_is_built_and_matched_by_its_variants() {
+    let source = r#"
+use std::io::{Cursor, Seek, SeekFrom};
+
+fn offset(s: &SeekFrom) -> i64 {
+    match s {
+        SeekFrom::Start(n) => *n as i64,
+        SeekFrom::End(n) | SeekFrom::Current(n) => *n,
+    }
+}
+
+fn main() {
+    let mut cursor = Cursor::new(vec![1u8, 2, 3, 4]);
+    let end = cursor.seek(SeekFrom::End(-2)).unwrap();
+    let s = SeekFrom::Current(1);
+    if let SeekFrom::Current(k) = s {
+        println!("k {k}");
+    }
+    let start: fn(u64) -> SeekFrom = SeekFrom::Start;
+    let Some(t) = Some(SeekFrom::End(-4)) else { return };
+    let SeekFrom::Start(x) = start(7) else { return };
+    println!("{end} {} {} {x} {}", offset(&s), offset(&t), matches!(t, SeekFrom::End(-4)));
+    println!("{:?} {:?} {}", SeekFrom::Start(3), s, s == SeekFrom::Current(1));
+}
+main();
+"#;
+    assert_eq!(
+        printed(source),
+        "k 1\n2 1 -4 7 true\nStart(3) Current(1) true\n"
+    );
+}
+
 /// `text.into()` of a `&str` or a `String` where a `Box<dyn Error>` is
 /// expected, by a `let`'s type or a body's, is std's `From` for the box
 /// (#2345).

@@ -1219,24 +1219,38 @@ impl<'a> Parser<'a> {
             return self.parse_host_method(receiver, member, member_span);
         }
         // A tuple variant's constructor shares its path with the reader a
-        // pattern uses: a method call names the reader.
-        let items = self.models.host_items(&path).map(|items| {
-            let methods = items
-                .iter()
-                .filter(|item| {
-                    matches!(
-                        item.kind(),
-                        crate::host::item::Kind::Method | crate::host::item::Kind::IntrinsicMethod
-                    )
-                })
-                .cloned()
-                .collect::<Vec<_>>();
-            if methods.is_empty() {
-                items.to_vec()
-            } else {
-                methods
-            }
-        });
+        // pattern uses: a method call names the reader. A linked enum's
+        // variant, as std's `io::SeekFrom::End`, is no method at all: its
+        // reader is the pattern's alone (`host_read`).
+        let variant = !std::mem::take(&mut self.reading_variant)
+            && definition.identity().imported().is_none()
+            && matches!(
+                definition.shape(),
+                crate::host::type_def::Shape::Enum { variants, .. }
+                    if variants.iter().any(|variant| variant.name() == member.as_str())
+            );
+        let items = self
+            .models
+            .host_items(&path)
+            .filter(|_| !variant)
+            .map(|items| {
+                let methods = items
+                    .iter()
+                    .filter(|item| {
+                        matches!(
+                            item.kind(),
+                            crate::host::item::Kind::Method
+                                | crate::host::item::Kind::IntrinsicMethod
+                        )
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if methods.is_empty() {
+                    items.to_vec()
+                } else {
+                    methods
+                }
+            });
         let Some(items) = items else {
             let error = Error::UnknownMember {
                 owner: definition.path().into(),
@@ -2870,7 +2884,9 @@ impl<'a> Parser<'a> {
                 reference: member_span,
             });
         };
-        let selector = field.imported_identity().clone();
+        let Some(selector) = field.imported_identity().cloned() else {
+            unreachable!("a crate struct's field has the bridge's selector")
+        };
         // The receiver once, in a local the reads and stores share.
         let place = self.temporary("place");
         let mut prelude = origin::Fragment::plain(format!("let {place} = "));
@@ -3110,6 +3126,9 @@ impl<'a> Parser<'a> {
             };
             return Err(self.native_miss(definition.identity().imported().is_some(), error));
         };
+        let Some(selector) = field.imported_identity() else {
+            unreachable!("a crate struct's field has the bridge's selector")
+        };
         let field_type = field.ty().clone();
         // A value native code lends, as `&mut widget::Tree`, is read through
         // its reference, and its facade is the one that declares its type.
@@ -3162,8 +3181,7 @@ impl<'a> Parser<'a> {
                 output: ty.clone(),
                 receiver: Some(crate::receiver::Mode::Shared),
             };
-            let helper =
-                self.push_imported_op(&path, field.imported_identity(), Some(lend), operation)?;
+            let helper = self.push_imported_op(&path, selector, Some(lend), operation)?;
             let lent = ParsedExpr {
                 prelude: receiver.prelude,
                 source: origin::Fragment::call(&helper, [receiver.source]),
@@ -3225,8 +3243,7 @@ impl<'a> Parser<'a> {
                 crate::receiver::Mode::Owned
             }),
         };
-        let helper =
-            self.push_imported_op(&path, field.imported_identity(), Some(imported), operation)?;
+        let helper = self.push_imported_op(&path, selector, Some(imported), operation)?;
         // `item.name.push('!')`: a field Rawr holds as its own value, of a
         // place, is a place a method changes, read out and stored back as
         // `item.name = name` (#1139). So is an element of one, as

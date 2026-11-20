@@ -573,6 +573,16 @@ pub(super) struct Host {
     pub(super) steps: Vec<HostStep>,
 }
 
+/// What one alternative of an or-pattern on a library value reads
+/// (`Host::read_by_alternative`).
+pub(super) struct AlternativeReads {
+    /// The alternative's test; `None` where it matches every value.
+    pub(super) condition: Option<origin::Fragment>,
+    /// Each binding's name and the value it reads; `None` where the
+    /// alternative reads parts.
+    pub(super) values: Option<Vec<(ImmutableString, origin::Fragment)>>,
+}
+
 /// One binding or part of a `Host`, by its index.
 #[derive(Clone, Copy)]
 pub(super) enum HostStep {
@@ -703,6 +713,63 @@ impl Host {
     #[cfg(feature = "rust-import")]
     pub(super) fn lends_mutably(&self) -> bool {
         self.parts.iter().any(|part| part.mutable)
+    }
+
+    /// Each binding's name and the value it reads.
+    pub(super) fn read_values(&self) -> Vec<(ImmutableString, origin::Fragment)> {
+        self.binds
+            .iter()
+            .map(|binding| binding.name.clone())
+            .zip(self.values.iter().cloned())
+            .collect()
+    }
+
+    /// Read each binding of an or-pattern, whose first alternative this
+    /// is, from the alternative that matched, where the alternatives read
+    /// it differently: `SeekFrom::End(n) | SeekFrom::Current(n)` reads `n`
+    /// by each variant's own reader. Alternatives that read parts read the
+    /// bindings alike.
+    pub(super) fn read_by_alternative(&mut self, reads: &[AlternativeReads]) {
+        if reads.iter().any(|read| read.values.is_none()) {
+            return;
+        }
+        for (binding, value) in self.binds.iter().zip(self.values.iter_mut()) {
+            let alternatives = reads
+                .iter()
+                .filter_map(|read| {
+                    let values = read.values.as_ref()?;
+                    let (_, value) = values.iter().find(|(name, _)| *name == binding.name)?;
+                    Some((&read.condition, value))
+                })
+                .collect::<Vec<_>>();
+            if alternatives
+                .iter()
+                .all(|(_, read)| read.as_str() == value.as_str())
+            {
+                continue;
+            }
+            // `if a { x } else if b { y } else { z }`: the last alternative,
+            // or the first that matches every value, reads it otherwise.
+            let mut chosen = origin::Fragment::default();
+            for (index, (condition, read)) in alternatives.iter().enumerate() {
+                match condition {
+                    Some(condition) if index + 1 < alternatives.len() => {
+                        chosen.push_text("if ");
+                        chosen.push((*condition).clone());
+                        chosen.push_text(" { ");
+                        chosen.push((*read).clone());
+                        chosen.push_text(" } else ");
+                    }
+                    _ => {
+                        chosen.push_text("{ ");
+                        chosen.push((*read).clone());
+                        chosen.push_text(" }");
+                        break;
+                    }
+                }
+            }
+            *value = chosen;
+        }
     }
 
     /// Take `other`'s bindings and the parts they read.
@@ -3525,6 +3592,7 @@ impl<'a> Parser<'a> {
                 let mut tests = Vec::new();
                 let mut first: Option<(&Syntax, Host)> = None;
                 let mut irrefutable = false;
+                let mut reads = Vec::new();
                 for alternative in alternatives.iter() {
                     let mut compiled = Host::default();
                     self.host_pattern(alternative, value.clone(), &ty, &mut compiled)?;
@@ -3534,10 +3602,15 @@ impl<'a> Parser<'a> {
                             (alternative, &compiled.binds),
                         )?;
                     }
-                    match compiled.condition() {
-                        Some(test) => tests.push(test),
+                    let condition = compiled.condition();
+                    match &condition {
+                        Some(test) => tests.push(test.clone()),
                         None => irrefutable = true,
                     }
+                    reads.push(AlternativeReads {
+                        condition,
+                        values: compiled.parts.is_empty().then(|| compiled.read_values()),
+                    });
                     if first.is_none() {
                         first = Some((alternative, compiled));
                     }
@@ -3552,7 +3625,8 @@ impl<'a> Parser<'a> {
                     }
                     out.tests.push(joined);
                 }
-                let (_, first) = first.expect("an or-pattern has alternatives");
+                let (_, mut first) = first.expect("an or-pattern has alternatives");
+                first.read_by_alternative(&reads);
                 for binding in &first.binds {
                     self.require_new_host_binding(out, &binding.name, binding.span)?;
                 }
