@@ -1587,6 +1587,14 @@ impl Nominal {
         Ty::Script(self.definition().id(), Box::default())
     }
 
+    /// The type's name where it is declared.
+    pub(super) fn name_span(&self) -> Span {
+        match self {
+            Self::Struct { item, .. } => item.name.span,
+            Self::Enum { item, .. } => item.name.span,
+        }
+    }
+
     /// The type's generic parameters.
     pub(super) fn generics(&self) -> &[item::Generic] {
         match self {

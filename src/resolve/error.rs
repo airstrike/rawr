@@ -424,8 +424,13 @@ pub enum Cloning {
     /// `.clone()` after the moved local.
     Clone,
     /// The type is the crate's own and not `Clone`: "if `T` implemented
-    /// `Clone`, you could clone the value".
-    Derivable(ImmutableString),
+    /// `Clone`, you could clone the value", noted at its definition.
+    Derivable {
+        /// The type, as rustc writes it.
+        ty: ImmutableString,
+        /// The type's name where it is defined, in the move's source.
+        name: Span,
+    },
     /// Neither: rustc suggests nothing.
     None,
 }
@@ -1916,9 +1921,23 @@ pub struct PatternTypes {
     /// The tuple's arity and the tuple pattern's, which rustc's label
     /// names instead of the types.
     pub arity: Option<(usize, usize)>,
-    /// The binding a `let`'s whole pattern, a `&mut` of it, names on a
-    /// `&` value: rustc suggests declaring it `mut` instead.
-    pub binding: Option<ImmutableString>,
+    /// The binding a `let`'s or an arm's whole pattern, a `&mut` of it,
+    /// names on a `&` value: rustc suggests declaring it `mut` instead.
+    pub binding: Option<MutBinding>,
+}
+
+/// One binding under a `&mut` pattern on a `&` value, the whole pattern of
+/// what holds it: rustc suggests the binding `mut` instead.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct MutBinding {
+    /// The binding's name.
+    pub name: ImmutableString,
+    /// The binding, after the `&mut`.
+    pub span: Span,
+    /// Whether an arm holds the pattern, where rustc notes the `mut`
+    /// binding and suggests removing the `&mut`, rather than a `let`,
+    /// where it suggests the `mut` binding in place.
+    pub arm: bool,
 }
 
 impl PatternTypes {

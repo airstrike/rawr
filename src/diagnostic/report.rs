@@ -3,7 +3,7 @@
 use crate::{ImmutableString, Span};
 use std::fmt;
 
-use super::{code::Code, Source, Suggestion};
+use super::{code::Code, Section, Source, Suggestion};
 
 /// Stable high-level diagnostic family.
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
@@ -113,6 +113,7 @@ pub struct Report {
     external_labels: Vec<ExternalLabel>,
     help: Option<ImmutableString>,
     notes: Vec<ImmutableString>,
+    sections: Vec<Section>,
     suggestions: Vec<Suggestion>,
 }
 
@@ -221,6 +222,13 @@ impl Report {
         self.notes.iter().map(AsRef::as_ref)
     }
 
+    /// Return the notes and helps with places of their own, in the order
+    /// they were given.
+    #[must_use]
+    pub fn sections(&self) -> &[Section] {
+        &self.sections
+    }
+
     /// Return the code the report suggests, in the order it was suggested.
     #[must_use]
     pub fn suggestions(&self) -> &[Suggestion] {
@@ -237,7 +245,11 @@ impl Report {
     ) -> Self {
         let mut report = self.clone();
         let mut left = Vec::new();
-        for label in &mut report.labels {
+        let labels = report
+            .labels
+            .iter_mut()
+            .chain(report.sections.iter_mut().flat_map(Section::labels_mut));
+        for label in labels {
             if let Some((source, span)) = moved(&label.source, label.span) {
                 left.push(label.source.clone());
                 label.source = source;
@@ -255,13 +267,18 @@ impl Report {
             }
         }
         report.sources.retain(|source| !left.contains(source));
-        let placed = report.labels.iter().map(|label| &label.source).chain(
-            report
-                .suggestions
-                .iter()
-                .flat_map(Suggestion::edits)
-                .map(super::suggestion::Edit::source),
-        );
+        let placed = report
+            .labels
+            .iter()
+            .chain(report.sections.iter().flat_map(Section::labels))
+            .map(|label| &label.source)
+            .chain(
+                report
+                    .suggestions
+                    .iter()
+                    .flat_map(Suggestion::edits)
+                    .map(super::suggestion::Edit::source),
+            );
         for source in placed {
             if !report.sources.contains(source) {
                 report.sources.push(source.clone());
@@ -293,6 +310,7 @@ impl Builder {
                 external_labels: Vec::new(),
                 help: None,
                 notes: Vec::new(),
+                sections: Vec::new(),
                 suggestions: Vec::new(),
             },
             has_primary: false,
@@ -370,6 +388,26 @@ impl Builder {
         kind: LabelKind,
         message: Option<ImmutableString>,
     ) -> Result<Self, Error> {
+        let label = self.placed(Label::new(source, span, kind, message))?;
+        if kind == LabelKind::Primary {
+            if self.has_primary {
+                return Err(Error::MultiplePrimaryLabels);
+            }
+            self.has_primary = true;
+        }
+        self.report.labels.push(label);
+        Ok(self)
+    }
+
+    /// `label` where the report shows it, its source retained: a place a
+    /// macro wrote is shown where the macro is called or derived.
+    fn placed(&mut self, label: Label) -> Result<Label, Error> {
+        let Label {
+            source,
+            span,
+            kind,
+            message,
+        } = label;
         if span.is_none() {
             return Err(Error::MissingSpan);
         }
@@ -423,20 +461,15 @@ impl Builder {
                 span,
             });
         }
-        if kind == LabelKind::Primary {
-            if self.has_primary {
-                return Err(Error::MultiplePrimaryLabels);
-            }
-            self.has_primary = true;
+        if !self.report.sources.contains(&source) {
+            self.report.sources.push(source.clone());
         }
-        self = self.source(source.clone());
-        self.report.labels.push(Label {
+        Ok(Label {
             source,
             span,
             kind,
             message: message.map(written),
-        });
-        Ok(self)
+        })
     }
 
     /// Attach actionable help.
@@ -451,6 +484,19 @@ impl Builder {
     pub fn note(mut self, note: impl Into<ImmutableString>) -> Self {
         self.report.notes.push(written(note.into()));
         self
+    }
+
+    /// Attach a note or help with places of its own, which rustc shows as
+    /// its own section after the notes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a place with no position, a reversed one, or
+    /// one outside its source.
+    pub fn section(mut self, section: Section) -> Result<Self, Error> {
+        let section = section.written(written, |label| self.placed(label))?;
+        self.report.sections.push(section);
+        Ok(self)
     }
 
     /// Suggest code, as rustc does under a `help:`. A suggestion that edits
@@ -479,6 +525,20 @@ impl Builder {
 }
 
 impl Label {
+    pub(super) const fn new(
+        source: Source,
+        span: Span,
+        kind: LabelKind,
+        message: Option<ImmutableString>,
+    ) -> Self {
+        Self {
+            source,
+            span,
+            kind,
+            message,
+        }
+    }
+
     /// Return the label's owned source snapshot.
     #[must_use]
     pub const fn source(&self) -> &Source {

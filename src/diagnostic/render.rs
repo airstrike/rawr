@@ -2,15 +2,17 @@
 //! own: through `annotate-snippets`, the crate rustc renders with. Each
 //! label is a marker under its source line, the primary one under the
 //! `-->` arrow, and notes and help follow as `= note:` and `= help:`. A
-//! suggestion follows them under its own `help:`, as the source its edits
-//! make, or is a `help:` label beside the code it changes.
+//! note or help with places of its own follows them as its own section,
+//! the lines it marks under its `note:` or `help:`. A suggestion follows
+//! those under its own `help:`, as the source its edits make, or is a
+//! `help:` label beside the code it changes.
 
 use annotate_snippets::{
     Annotation, AnnotationKind, Group, Level, Origin, Patch, Renderer, Snippet,
 };
 
 use super::suggestion::Edit;
-use super::{ExternalLabel, Label, LabelKind, Report, Severity, Source, Suggestion};
+use super::{ExternalLabel, Label, LabelKind, Report, Section, Severity, Source, Suggestion};
 
 /// Whether a rendering carries a terminal's colours.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -54,7 +56,7 @@ pub fn render_with(report: &Report, color: Color) -> String {
     };
     let mut group = Group::with_title(title);
     let inline = Suggestion::inline(report.suggestions());
-    let mut snippets = labelled(report);
+    let mut snippets = labelled(report.labels());
     if let Some((edit, _)) = &inline
         && !snippets.contains(&edit.source())
     {
@@ -98,10 +100,17 @@ pub fn render_with(report: &Report, color: Color) -> String {
             }
         }
     }
+    // A source only a section marks is shown in the section.
+    let sectioned: Vec<&Source> = report
+        .sections()
+        .iter()
+        .flat_map(Section::labels)
+        .map(Label::source)
+        .collect();
     for source in report
         .sources()
         .iter()
-        .filter(|source| !snippets.contains(source))
+        .filter(|source| !snippets.contains(source) && !sectioned.contains(source))
     {
         group = group.element(Origin::path(shown(source.identity())));
     }
@@ -112,12 +121,33 @@ pub fn render_with(report: &Report, color: Color) -> String {
         group = group.element(Level::NOTE.message(note));
     }
     let mut groups = vec![group];
+    groups.extend(report.sections().iter().map(sectioned_group));
     if inline.is_none() {
         groups.extend(report.suggestions().iter().map(suggested));
     }
     let mut output = renderer.render(&groups);
     output.push('\n');
     output
+}
+
+/// A note's or help's own section: its `note:` or `help:` line, then the
+/// lines its labels mark, the primary label's source first.
+fn sectioned_group(section: &Section) -> Group<'_> {
+    let level = match section.level() {
+        super::section::Level::Note => Level::NOTE,
+        super::section::Level::Help => Level::HELP,
+    };
+    let snippets = labelled(section.labels()).into_iter().map(|source| {
+        let annotations = section
+            .labels()
+            .iter()
+            .filter(|label| label.source() == source)
+            .filter_map(annotation);
+        Snippet::source(source.text())
+            .path(shown(source.identity()))
+            .annotations(annotations)
+    });
+    Group::with_title(level.secondary_title(section.message())).elements(snippets)
 }
 
 /// A suggestion's own section: its `help:` line, then each source it edits
@@ -186,15 +216,13 @@ fn shown(file: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
-/// The sources the report's labels are in, the primary label's first, as
-/// rustc puts the `-->` arrow at the primary span.
-fn labelled(report: &Report) -> Vec<&Source> {
-    let primary = report
-        .labels()
+/// The sources `labels` are in, the primary label's first, as rustc puts
+/// the `-->` arrow at the primary span.
+fn labelled(labels: &[Label]) -> Vec<&Source> {
+    let primary = labels
         .iter()
         .filter(|label| label.kind() == LabelKind::Primary);
-    let secondary = report
-        .labels()
+    let secondary = labels
         .iter()
         .filter(|label| label.kind() == LabelKind::Secondary);
     let mut sources: Vec<&Source> = Vec::new();
@@ -261,7 +289,7 @@ fn external_snippet<'text>(
 mod tests {
     use super::{render, render_with, Color};
     use crate::diagnostic::suggestion::{Edit, Style};
-    use crate::diagnostic::{code, Builder, ExternalPosition, Report, Source, Suggestion};
+    use crate::diagnostic::{code, Builder, ExternalPosition, Report, Section, Source, Suggestion};
     use crate::{Position, Span};
 
     #[cfg(feature = "rust-import")]
@@ -469,6 +497,77 @@ mod tests {
             both.contains("help: use a box\n  |\n2 -     let b: Box<i32> = 1;\n2 +     let b: Box<i32> = Box::new(1);\n"),
             "{both}"
         );
+    }
+
+    /// A note or help with places of its own follows the notes as its own
+    /// section, its primary place under the `-->` arrow, and the
+    /// suggestions follow it.
+    #[test]
+    fn sections_render_after_the_notes_with_their_own_snippets() {
+        let source = Source::new(
+            "src/main.rs",
+            "fn take(s: String) {}\nfn main() {\n    let s = String::new();\n    take(s);\n    \
+             println!(\"{}\", s);\n}\n",
+        )
+        .unwrap();
+        let other = Source::new("src/other.rs", "fn helper() {}\n").unwrap();
+        let at = |line, start, end| Span::new(Position::new(line, start), Position::new(line, end));
+        let report = Report::error(code::RESOLVE_MOVED_VALUE, "borrow of moved value: `s`")
+            .primary(
+                source.clone(),
+                at(5, 20, 21),
+                Some("value borrowed here after move".into()),
+            )
+            .unwrap()
+            .note("a note")
+            .section(
+                Section::note("consider changing this parameter type")
+                    .secondary(source.clone(), at(1, 4, 8), Some("in this function".into()))
+                    .primary(
+                        source.clone(),
+                        at(1, 12, 18),
+                        Some("this parameter takes ownership of the value".into()),
+                    ),
+            )
+            .unwrap()
+            .section(Section::help("a helper").primary(other, at(1, 4, 10), None))
+            .unwrap()
+            .suggestion(Suggestion::new(
+                "consider cloning the value",
+                Style::Verbose,
+                Edit::new(source.clone(), at(4, 11, 11), ".clone()").unwrap(),
+            ))
+            .finish();
+        assert_eq!(
+            render(&report),
+            concat!(
+                "error[E0382]: borrow of moved value: `s`\n",
+                " --> src/main.rs:5:20\n",
+                "  |\n",
+                "5 |     println!(\"{}\", s);\n",
+                "  |                    ^ value borrowed here after move\n",
+                "  |\n",
+                "  = note: a note\n",
+                "note: consider changing this parameter type\n",
+                " --> src/main.rs:1:12\n",
+                "  |\n",
+                "1 | fn take(s: String) {}\n",
+                "  |    ----    ^^^^^^ this parameter takes ownership of the value\n",
+                "  |    |\n",
+                "  |    in this function\n",
+                "help: a helper\n",
+                " --> src/other.rs:1:4\n",
+                "  |\n",
+                "1 | fn helper() {}\n",
+                "  |    ^^^^^^\n",
+                "help: consider cloning the value\n",
+                "  |\n",
+                "4 |     take(s.clone());\n",
+                "  |           ++++++++\n",
+            )
+        );
+        // The section's places travel with the report.
+        assert_eq!(Report::decode(&report.encode()), Ok(report));
     }
 
     #[test]
