@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-20",
-  "version": "0.4.59",
+  "version": "0.4.60",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.60",
+        "date": "2026-11-20",
+        "entries": [
+          {"text":"Comparing values of a type with no `PartialEq` or `PartialOrd` reads as rustc's E0369: each operand is labelled with its type, a note at the type's declaration says the impl might be missing, and the `#[derive]` is suggested above it. A `use` through a function or a constant, as `use iced::Center::{x};`, says \"expected type, found constant `Center` in `iced`\".","issues":[2339]}
+        ]
+      },
       {
         "version": "0.4.59",
         "date": "2026-11-20",
@@ -5531,7 +5538,9 @@
     {"issue":2335,"title":"A program trait's methods resolve without the trait in scope","state":"closed","category":"Health","release":"0.4.59"},
     {"issue":2336,"title":"`let r = &mut c;` of a local not declared `mut` is accepted, or reported at a later use","state":"closed","category":"Health","release":"0.4.59"},
     {"issue":2337,"title":"Diagnostics left after #2330: E0599's type kind, several import candidates, E0277 format labels, E0004's enum note","state":"open","category":"Health"},
-    {"issue":2338,"title":"An impl of a program trait named by its path (`impl m::T for S`) is refused in a single source","state":"open","category":"Health"}
+    {"issue":2338,"title":"An impl of a program trait named by its path (`impl m::T for S`) is refused in a single source","state":"open","category":"Health"},
+    {"issue":2339,"title":"Comparing values of a type with no `PartialEq` or `PartialOrd` reads as rustc's E0369: each…","state":"closed","category":"Health","release":"0.4.60"},
+    {"issue":2340,"title":"E0432's primary span over the whole path, and E0369 operand labels for arithmetic and bit operators","state":"open","category":"Health"}
   ],
   "groups": [
     {

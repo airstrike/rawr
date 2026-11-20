@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.4.60",
+      "date": "2026-11-20",
+      "entries": [
+        {"text":"Comparing values of a type with no `PartialEq` or `PartialOrd` reads as rustc's E0369: each operand is labelled with its type, a note at the type's declaration says the impl might be missing, and the `#[derive]` is suggested above it. A `use` through a function or a constant, as `use iced::Center::{x};`, says \"expected type, found constant `Center` in `iced`\".","issues":[2339]}
+      ]
+    },
+    {
       "version": "0.4.59",
       "date": "2026-11-20",
       "entries": [

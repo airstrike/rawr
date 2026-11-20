@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.60 (2026-11-20)
+
+- Comparing values of a type with no `PartialEq` or `PartialOrd` reads as rustc's E0369: each operand is labelled with its type, a note at the type's declaration says the impl might be missing, and the `#[derive]` is suggested above it. A `use` through a function or a constant, as `use iced::Center::{x};`, says "expected type, found constant `Center` in `iced`". (#2339)
+
 ## 0.4.59 (2026-11-20)
 
 - A program trait's methods are called only where the trait is in scope: declared in the module or a block around the call, imported by `use`, a glob, a rename or `as _`, or the trait of the impl the call is in. Elsewhere the call is rustc's E0599, with its help and the `use` it suggests. (#2335)
