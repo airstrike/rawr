@@ -4,7 +4,8 @@
 // Before hydration the server-rendered controls show; the editor mounts
 // once the island runs. The debugger icon runs the program under the
 // debugger build of the universe, opens its panel right of the output and
-// its console under the code (debugger.ts, D1071). On a wide screen,
+// its console under the code (debugger.ts, D1071). A browser without JSPI
+// can't pause a program, so there the icon is greyed and says why. On a wide screen,
 // split bars between the panes and over the console set their sizes,
 // the viewer's own (panes.tsx).
 import type { EditorView } from "@codemirror/view";
@@ -14,7 +15,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSepa
 import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group.tsx";
 import { onTheme, theme as pageTheme, type Theme } from "../lib/theme.ts";
 import { DEBUGGER, universe } from "../scripts/universe.ts";
-import { Debugger, ROOT, type DebugState } from "./debugger.ts";
+import { canPause, Debugger, ROOT, type DebugState } from "./debugger.ts";
 import { createConsole, createEditor, setDebugging, setDoc, setMarks } from "./editor.ts";
 import { clamp, PartsOf, SplitBar, Twisty, useOpen, useStoredSize, ValueTable, type Row } from "./panes.tsx";
 import { Session, TURNSTILE_JS, WEB_MODULE, type Example, type Output, type PlayData, type State, type Web, type Where } from "./session.ts";
@@ -65,6 +66,7 @@ function browserDeps() {
         build: DEBUGGER,
       }),
       debugger: new Debugger(),
+      pausable: canPause(),
     },
     now: () => performance.now(),
     clipboard: (text: string) => navigator.clipboard.writeText(text),
@@ -246,18 +248,7 @@ export default function Playground() {
           <ToggleGroupItem className="flex-1 md:flex-none" value="server">Run on server</ToggleGroupItem>
           <ToggleGroupItem className="flex-1 md:flex-none" value="browser">Run in browser</ToggleGroupItem>
         </ToggleGroup>
-        <Button
-          id="debug"
-          className="order-3 px-2"
-          variant={state.debugging ? "primary" : "default"}
-          aria-pressed={state.debugging}
-          aria-label="Debugger"
-          title={state.debugging ? "Turn the debugger off" : "Run under the debugger"}
-          hidden={!session?.deps.debugging}
-          onClick={() => void session?.debug()}
-        >
-          <BugIcon />
-        </Button>
+        <DebugIcon session={session} on={state.debugging} />
         <Button id="share" className="order-3" onClick={() => void session?.share()}>Share</Button>
         <Button id="run" className="order-3" variant="primary" title="Ctrl/Cmd + Enter" disabled={state.busy} onClick={() => void session?.go()}>
           Run
@@ -295,6 +286,59 @@ export default function Playground() {
         <span>MIT or Apache-2.0 · <a href="https://airstrike.fyi">airstrike.fyi</a></span>
       </footer>
     </div>
+  );
+}
+
+/** Why the debugger icon is off in a browser that can't pause a program. */
+const NO_PAUSE = "The debugger needs WebAssembly JSPI, which this browser doesn't have yet. Chrome and Edge have it.";
+
+/**
+ * The debugger icon, which turns the debugger on and off. In a browser
+ * that can't pause a program it is greyed and `aria-disabled`, and a tap
+ * or a click shows why under it, until the next tap or click elsewhere or
+ * Escape.
+ */
+function DebugIcon({ session, on }: { session: Session | null; on: boolean }) {
+  const pausable = session?.deps.debugging?.pausable ?? false;
+  const [why, setWhy] = useState(false);
+  const self = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (!why) return;
+    const away = (event: PointerEvent) => {
+      if (!self.current?.contains(event.target as Node)) setWhy(false);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setWhy(false);
+    };
+    document.addEventListener("pointerdown", away);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("pointerdown", away);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [why]);
+  return (
+    <span ref={self} className="relative order-3 flex" hidden={!session?.deps.debugging}>
+      <Button
+        id="debug"
+        className="px-2"
+        variant={on ? "primary" : "default"}
+        aria-pressed={pausable ? on : undefined}
+        aria-label="Debugger"
+        aria-disabled={pausable ? undefined : true}
+        aria-describedby={pausable ? undefined : "debug-why"}
+        aria-expanded={pausable ? undefined : why}
+        title={pausable ? (on ? "Turn the debugger off" : "Run under the debugger") : undefined}
+        onClick={() => (pausable ? void session?.debug() : setWhy(!why))}
+      >
+        <BugIcon />
+      </Button>
+      {!pausable && (
+        <span id="debug-why" role="tooltip" className="debug-why" hidden={!why}>
+          {NO_PAUSE}
+        </span>
+      )}
+    </span>
   );
 }
 
