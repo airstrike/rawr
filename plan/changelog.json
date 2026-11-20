@@ -8,6 +8,17 @@
   },
   "releases": [
     {
+      "version": "0.4.63",
+      "date": "2026-11-20",
+      "entries": [
+        {"text":"A parenthesized macro call among a file's items (`mk!();`) expands, as rustc expands it.","issues":[2343]},
+        {"text":"Running a file with an inline `mod` no longer prints \"Rawr package snapshot contains a duplicate path\".","issues":[2344]},
+        {"text":"`text.into()` from a `&str` or `String` where a `let` or a function's return type expects a `Box<dyn Error>` is std's `From` for the box.","issues":[2345]},
+        {"text":"A std type's associated function that rawr doesn't run, named through a `use` (`File::create`, `RwLock::new`), gives \"rawr doesn't run `std::…` yet\" instead of an unknown member on the wrong type.","issues":[1254]},
+        {"text":"`Formatter::pad` runs in a Display impl, under the format's width, fill, alignment and precision.","issues":[1255]}
+      ]
+    },
+    {
       "version": "0.4.62",
       "date": "2026-11-20",
       "entries": [

@@ -6,6 +6,14 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.63 (2026-11-20)
+
+- A parenthesized macro call among a file's items (`mk!();`) expands, as rustc expands it. (#2343)
+- Running a file with an inline `mod` no longer prints "Rawr package snapshot contains a duplicate path". (#2344)
+- `text.into()` from a `&str` or `String` where a `let` or a function's return type expects a `Box<dyn Error>` is std's `From` for the box. (#2345)
+- A std type's associated function that rawr doesn't run, named through a `use` (`File::create`, `RwLock::new`), gives "rawr doesn't run `std::…` yet" instead of an unknown member on the wrong type. (#1254)
+- `Formatter::pad` runs in a Display impl, under the format's width, fill, alignment and precision. (#1255)
+
 ## 0.4.62 (2026-11-20)
 
 - The reference and embedding docs describe destructuring assignment, trait scope for method calls, impls that name a trait by path, std trait objects, macro calls in items, types and patterns, `rawr tui`, the debugger window's panes, the call-level default and `Outcome::Uncovered`, and drop limits that no longer hold. (#2342)

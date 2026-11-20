@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-20",
-  "version": "0.4.62",
+  "version": "0.4.63",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,17 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.63",
+        "date": "2026-11-20",
+        "entries": [
+          {"text":"A parenthesized macro call among a file's items (`mk!();`) expands, as rustc expands it.","issues":[2343]},
+          {"text":"Running a file with an inline `mod` no longer prints \"Rawr package snapshot contains a duplicate path\".","issues":[2344]},
+          {"text":"`text.into()` from a `&str` or `String` where a `let` or a function's return type expects a `Box<dyn Error>` is std's `From` for the box.","issues":[2345]},
+          {"text":"A std type's associated function that rawr doesn't run, named through a `use` (`File::create`, `RwLock::new`), gives \"rawr doesn't run `std::…` yet\" instead of an unknown member on the wrong type.","issues":[1254]},
+          {"text":"`Formatter::pad` runs in a Display impl, under the format's width, fill, alignment and precision.","issues":[1255]}
+        ]
+      },
       {
         "version": "0.4.62",
         "date": "2026-11-20",
@@ -4472,8 +4483,8 @@
     {"issue":1251,"title":"A program using Box<dyn Error> or another std trait object fails with E0425 unless it implements the trait itself","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":1252,"title":"print(\"hi\") says rawr doesn't run `print` yet instead of rustc's error","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":1253,"title":"std::rc::Rc::new by its full path says rawr doesn't run it, while Rc::new after a use runs","state":"open","category":"Divergences from rustc"},
-    {"issue":1254,"title":"std::fs::File and std::sync::RwLock fail with unknown-member errors that name the wrong type","state":"open","category":"Divergences from rustc"},
-    {"issue":1255,"title":"Formatter::pad in a Display impl is E0599 naming String","state":"open","category":"Divergences from rustc"},
+    {"issue":1254,"title":"std::fs::File and std::sync::RwLock fail with unknown-member errors that name the wrong type","state":"closed","category":"Divergences from rustc","release":"0.4.63"},
+    {"issue":1255,"title":"Formatter::pad in a Display impl is E0599 naming String","state":"closed","category":"Divergences from rustc","release":"0.4.63"},
     {"issue":1256,"title":"A non-exhaustive match is RAWR-RESOLVE-MATCH, not rustc's E0004","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":1257,"title":"let v = Vec::new() with no type settled is accepted where rustc gives E0282","state":"open","category":"Divergences from rustc"},
     {"issue":1258,"title":"rawr test in a package with several binaries stops where cargo test tests each one","state":"open","category":"Divergences from rustc"},
@@ -5560,11 +5571,12 @@
     {"issue":2340,"title":"E0432's primary span over the whole path, and E0369 operand labels for arithmetic and bit operators","state":"closed","category":"Health","release":"0.4.61"},
     {"issue":2341,"title":"E0432 spans: a nested group member and a std group prefix","state":"closed","category":"Health","release":"0.4.62"},
     {"issue":2342,"title":"The reference and embedding docs describe destructuring assignment, trait scope for method…","state":"closed","category":"Health","release":"0.4.62"},
-    {"issue":2343,"title":"`mk!();` among a file's items fails to parse","state":"open","category":"Health"},
-    {"issue":2344,"title":"A single file with an inline mod prints \"Rawr package snapshot contains a duplicate path\"","state":"open","category":"Health"},
-    {"issue":2345,"title":"`.into()` from a `&str` local into `Box<dyn Error>` is E0308","state":"open","category":"Health"},
+    {"issue":2343,"title":"`mk!();` among a file's items fails to parse","state":"closed","category":"Health","release":"0.4.63"},
+    {"issue":2344,"title":"A single file with an inline mod prints \"Rawr package snapshot contains a duplicate path\"","state":"closed","category":"Health","release":"0.4.63"},
+    {"issue":2345,"title":"`.into()` from a `&str` local into `Box<dyn Error>` is E0308","state":"closed","category":"Health","release":"0.4.63"},
     {"issue":2346,"title":"A bare `Mutex` or `Sender` type compiles without a `use`","state":"open","category":"Health"},
-    {"issue":2347,"title":"Diagnostics left after #2337: struct-variant witnesses, every unresolved member, similar names, lifetimes","state":"open","category":"Health"}
+    {"issue":2347,"title":"Diagnostics left after #2337: struct-variant witnesses, every unresolved member, similar names, lifetimes","state":"open","category":"Health"},
+    {"issue":2348,"title":"A format width pads a Display impl's whole output; rustc ignores it for write! and pads per `pad` call","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -7553,8 +7565,8 @@
             {"number":1105,"title":"a..b passed by value to a crate's plain T is an iterator, not Range<T>","state":"open"},
             {"number":1106,"title":"range.start and range.end as fields are rejected","state":"open"},
             {"number":1253,"title":"std::rc::Rc::new by its full path says rawr doesn't run it, while Rc::new after a use runs","state":"open"},
-            {"number":1254,"title":"std::fs::File and std::sync::RwLock fail with unknown-member errors that name the wrong type","state":"open"},
-            {"number":1255,"title":"Formatter::pad in a Display impl is E0599 naming String","state":"open"},
+            {"number":1254,"title":"std::fs::File and std::sync::RwLock fail with unknown-member errors that name the wrong type","state":"closed"},
+            {"number":1255,"title":"Formatter::pad in a Display impl is E0599 naming String","state":"closed"},
             {"number":1260,"title":"A range of floats that excludes its end has no contains, and float ranges have no Debug","state":"open"},
             {"number":1284,"title":"`dyn Any`: coercion and `downcast_ref`/`is`","state":"open"},
             {"number":1286,"title":"A declared std trait sends a std receiver's method through the program dispatcher","state":"open"},
