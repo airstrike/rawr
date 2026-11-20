@@ -147,30 +147,52 @@ fn sectioned_group(section: &Section) -> Group<'_> {
             .path(shown(source.identity()))
             .annotations(annotations)
     });
-    Group::with_title(level.secondary_title(section.message())).elements(snippets)
+    let notes = section
+        .notes()
+        .iter()
+        .map(|note| Level::NOTE.message(note.as_str()));
+    Group::with_title(level.secondary_title(section.message()))
+        .elements(snippets)
+        .elements(notes)
 }
 
-/// A suggestion's own section: its `help:` line, then each source it edits
-/// as its edits make it, rustc's `+` under what they add, `~` under what
-/// they replace and a `-` line for what they remove.
+/// The ways of one suggestion rustc shows, as its emitter's
+/// `MAX_SUGGESTIONS`; it counts the rest.
+const SHOWN_WAYS: usize = 4;
+
+/// A suggestion's own section: its `help:` line, then each source each of
+/// its ways edits as that way makes it, rustc's `+` under what they add,
+/// `~` under what they replace and a `-` line for what they remove. Past
+/// four ways, rustc counts the others.
 fn suggested(suggestion: &Suggestion) -> Group<'_> {
-    let mut sources: Vec<&Source> = Vec::new();
-    for edit in suggestion.edits() {
-        if !sources.contains(&edit.source()) {
-            sources.push(edit.source());
+    let snippets = suggestion.ways().take(SHOWN_WAYS).flat_map(|edits| {
+        let mut sources: Vec<&Source> = Vec::new();
+        for edit in edits {
+            if !sources.contains(&edit.source()) {
+                sources.push(edit.source());
+            }
         }
-    }
-    let snippets = sources.into_iter().map(|source| {
-        let patches = suggestion
-            .edits()
-            .iter()
-            .filter(|edit| edit.source() == source)
-            .map(|edit| Patch::new(range(edit), edit.replacement()));
-        Snippet::source(source.text())
-            .path(shown(source.identity()))
-            .patches(patches)
+        sources.into_iter().map(move |source| {
+            let patches = edits
+                .iter()
+                .filter(|edit| edit.source() == source)
+                .map(|edit| Patch::new(range(edit), edit.replacement()));
+            Snippet::source(source.text())
+                .path(shown(source.identity()))
+                .patches(patches)
+        })
     });
-    Group::with_title(Level::HELP.secondary_title(suggestion.message())).elements(snippets)
+    let group =
+        Group::with_title(Level::HELP.secondary_title(suggestion.message())).elements(snippets);
+    match suggestion.ways().count().saturating_sub(SHOWN_WAYS) {
+        0 => group,
+        1 => group.element(Level::NOTE.no_name().message("and 1 other candidate")),
+        others => group.element(
+            Level::NOTE
+                .no_name()
+                .message(format!("and {others} other candidates")),
+        ),
+    }
 }
 
 /// The byte range of `edit` in its source's text.
@@ -491,6 +513,27 @@ mod tests {
                 "  = note: a note\n",
             )
         );
+        // Each other way follows the first, and travels with the report.
+        let ways = report(vec![wrap().alternative(vec![Edit::new(
+            source.clone(),
+            value,
+            "Box::from(1)",
+        )
+        .unwrap()])]);
+        assert!(
+            render(&ways).ends_with(concat!(
+                "help: store this in the heap by calling `Box::new`\n",
+                "  |\n",
+                "2 |     let b: Box<i32> = Box::new(1);\n",
+                "  |                       +++++++++ +\n",
+                "2 -     let b: Box<i32> = 1;\n",
+                "2 +     let b: Box<i32> = Box::from(1);\n",
+                "  |\n",
+            )),
+            "{}",
+            render(&ways)
+        );
+        assert_eq!(Report::decode(&ways.encode()), Ok(ways));
         // Beside another suggestion, an inline one has its own section.
         let both = render(&report(vec![inline(), wrap()]));
         assert!(

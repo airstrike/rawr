@@ -1479,6 +1479,7 @@ impl<'a> Parser<'a> {
                         derive: false,
                         declared: None,
                         required_by: None,
+                        formatted: None,
                     });
                 }
                 let ty = self.inference.resolve(&ty);
@@ -1870,6 +1871,7 @@ impl<'a> Parser<'a> {
                     derive: false,
                     declared: None,
                     required_by: None,
+                    formatted: None,
                 });
             }
             self.capture_witnesses();

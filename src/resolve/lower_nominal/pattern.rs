@@ -2756,6 +2756,7 @@ impl<'a> Parser<'a> {
             name: owner.clone(),
             reference: syntax.owner_span,
             path: false,
+            imports: Box::default(),
         })?;
         let Nominal::Enum { definition, item } = model else {
             return Err(Error::InvalidMatch {
@@ -3197,6 +3198,7 @@ impl<'a> Parser<'a> {
                             name: last.text.clone(),
                             reference: *span,
                             path: false,
+                            imports: Box::default(),
                         });
                     };
                     return Ok(Syntax::Enum(EnumSyntax {

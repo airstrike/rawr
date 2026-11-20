@@ -3,6 +3,38 @@
 
 use super::*;
 
+impl Parser<'_> {
+    /// The program's enum `ty` is, behind any references, where this file
+    /// declares it, with the declarations of the variants `missed` names,
+    /// as rustc's E0004 notes them.
+    fn uncovered_enum<'m>(
+        &self,
+        ty: &Ty,
+        missed: impl Iterator<Item = &'m str>,
+    ) -> Option<Box<crate::resolve::Uncovered>> {
+        let mut ty = self.inference.resolve(ty);
+        while let Ty::Reference { target, .. } = ty {
+            ty = self.inference.resolve(&target);
+        }
+        let Ty::Script(id, _) = ty else {
+            return None;
+        };
+        let model = self.models.definition(id);
+        let Nominal::Enum { item, .. } = model else {
+            return None;
+        };
+        let name = self.models.name_declared_here(model)?;
+        let missed: Vec<&str> = missed.collect();
+        let variants = item
+            .variants
+            .iter()
+            .filter(|variant| missed.contains(&variant.name.text.as_str()))
+            .map(|variant| variant.name.span)
+            .collect();
+        Some(Box::new(crate::resolve::Uncovered { name, variants }))
+    }
+}
+
 impl<'a> Parser<'a> {
     /// `matches!(value, pattern)` or `matches!(value, pattern if guard)`:
     /// Rust's `match value { pattern if guard => true, _ => false }`.
@@ -549,6 +581,15 @@ impl<'a> Parser<'a> {
         if !wildcard {
             let witnesses = self.coverage_witnesses(&coverage_types, &coverage_rows, true);
             if !witnesses.is_empty() {
+                let missed = witnesses
+                    .iter()
+                    .filter_map(|witness| match witness.first() {
+                        Some(coverage::Witness::Constructor { name, .. }) => {
+                            name.rsplit("::").next()
+                        }
+                        _ => None,
+                    });
+                let uncovered = self.uncovered_enum(&binding_ty, missed);
                 let prefix = self.reference_prefix(&binding_ty);
                 let witnesses = witnesses
                     .iter()
@@ -564,6 +605,7 @@ impl<'a> Parser<'a> {
                     ty: self.matched_type(&binding_ty),
                     scrutinee: scrutinee_span,
                     arms: self.written_arms(written_arms, scrutinee_span, end),
+                    uncovered,
                 });
             }
         }
@@ -956,6 +998,7 @@ impl<'a> Parser<'a> {
                     ty: self.matched_type(&written),
                     scrutinee: self.scrutinee_span(&subject),
                     arms: self.written_arms(written_arms, self.scrutinee_span(&subject), end),
+                    uncovered: None,
                 });
             }
         }
@@ -1321,6 +1364,7 @@ impl<'a> Parser<'a> {
                 ty: self.matched_type(&written),
                 scrutinee: self.scrutinee_span(&subject),
                 arms: self.written_arms(written_arms, self.scrutinee_span(&subject), end),
+                uncovered: None,
             });
         }
         let output = self.coerce_branches(

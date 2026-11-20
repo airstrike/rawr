@@ -527,6 +527,7 @@ impl<'a> Parser<'a> {
                     name: path,
                     reference: name_span,
                     path: false,
+                    imports: Box::default(),
                 });
             };
             qualified = Some((definition, self.models.host.type_owner(&path).cloned()));
@@ -879,6 +880,7 @@ impl<'a> Parser<'a> {
                 name: name.clone(),
                 reference: span,
                 path: false,
+                imports: Box::default(),
             })?;
         Ok(Ty::from_resolved(&type_ref::Type::Path(type_ref::Path {
             name: path.as_str().into(),
@@ -1181,6 +1183,7 @@ impl<'a> Parser<'a> {
                 name: trait_name.into(),
                 reference: span,
                 path: false,
+                imports: Box::default(),
             });
         };
         let names = bindings
@@ -1330,6 +1333,7 @@ impl<'a> Parser<'a> {
                                 name: name.into(),
                                 reference: span,
                                 path: false,
+                                imports: self.imports(name, Wanted::Type),
                             }
                         }));
                     }
@@ -1488,6 +1492,7 @@ impl<'a> Parser<'a> {
                 name,
                 reference: name_span,
                 path: false,
+                imports: Box::default(),
             });
         };
         let substitution = alias.params.iter().cloned().zip(arguments).collect();

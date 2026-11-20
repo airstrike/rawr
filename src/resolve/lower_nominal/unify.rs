@@ -471,6 +471,7 @@ impl<'a> Parser<'a> {
             derive: true,
             declared: self.models.name_declared_here(model),
             required_by: None,
+            formatted: None,
         })
     }
 }

@@ -38,7 +38,10 @@ impl<'a> Parser<'a> {
             return Ok(());
         }
         match crate::resolve::std_path::unbound_type(name, head, reference) {
-            Some(error) => Err(error),
+            Some(error) => Err(error.unimported(
+                |name, wanted| self.own_candidates(name, wanted),
+                self.models.use_placement(),
+            )),
             None => Ok(()),
         }
     }
@@ -519,6 +522,7 @@ impl<'a> Parser<'a> {
                         derive: matches!(target, Ty::Script(..)),
                         declared: self.declared_name(&target),
                         required_by: None,
+                        formatted: None,
                     });
                 }
                 self.default_source(&target, call)?
@@ -585,6 +589,7 @@ impl<'a> Parser<'a> {
                         derive: matches!(target, Ty::Script(..)),
                         declared: self.declared_name(&target),
                         required_by: None,
+                        formatted: None,
                     });
                 }
                 let new = self.temporary("new");

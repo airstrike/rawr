@@ -1333,6 +1333,7 @@ impl<'a> Parser<'a> {
                 derive: matches!(owner_ty, Ty::Script(..)),
                 declared: self.declared_name(&owner_ty),
                 required_by: None,
+                formatted: None,
             });
         };
         let substitution = self.method_substitution(&definition, Some(&owner_ty), expression)?;

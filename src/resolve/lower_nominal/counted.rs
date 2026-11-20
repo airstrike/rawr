@@ -509,6 +509,7 @@ impl Parser<'_> {
                         derive: matches!(element, Ty::Script(..)),
                         declared: self.declared_name(&element),
                         required_by: None,
+                        formatted: None,
                     });
                 }
                 let source =

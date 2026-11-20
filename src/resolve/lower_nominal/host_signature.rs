@@ -159,6 +159,7 @@ impl<'a> Parser<'a> {
                     derive: false,
                     declared: None,
                     required_by: None,
+                    formatted: None,
                 });
             }
             Ty::Array { .. } | Ty::Keyed(..) | Ty::Reference { .. } => into_iter,

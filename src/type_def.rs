@@ -181,6 +181,11 @@ impl Declaration {
         }
     }
 
+    /// Whether it declares a struct or an enum.
+    pub(crate) const fn kind(&self) -> Kind {
+        self.kind
+    }
+
     pub(crate) const fn id(&self) -> Id {
         self.id
     }

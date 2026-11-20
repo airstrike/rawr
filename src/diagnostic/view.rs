@@ -31,6 +31,7 @@ pub struct SectionView<'a> {
     level: Level,
     message: &'a str,
     labels: Vec<LabelView<'a>>,
+    notes: Vec<&'a str>,
 }
 
 /// Serializable read-only projection of one suggestion.
@@ -40,6 +41,7 @@ pub struct SuggestionView<'a> {
     message: &'a str,
     style: Style,
     edits: Vec<EditView<'a>>,
+    alternatives: Vec<Vec<EditView<'a>>>,
 }
 
 /// Serializable read-only projection of one suggested edit.
@@ -129,6 +131,11 @@ impl Section {
             level: self.level(),
             message: self.message(),
             labels: self.labels().iter().map(Label::view).collect(),
+            notes: self
+                .notes()
+                .iter()
+                .map(crate::ImmutableString::as_str)
+                .collect(),
         }
     }
 }
@@ -139,6 +146,11 @@ impl Suggestion {
             message: self.message(),
             style: self.style(),
             edits: self.edits().iter().map(Edit::view).collect(),
+            alternatives: self
+                .alternatives()
+                .iter()
+                .map(|edits| edits.iter().map(Edit::view).collect())
+                .collect(),
         }
     }
 }
@@ -291,6 +303,12 @@ impl<'a> SectionView<'a> {
     pub fn labels(&self) -> &[LabelView<'a>] {
         &self.labels
     }
+
+    /// Return the notes after its places.
+    #[must_use]
+    pub fn notes(&self) -> &[&'a str] {
+        &self.notes
+    }
 }
 
 impl<'a> SuggestionView<'a> {
@@ -310,6 +328,12 @@ impl<'a> SuggestionView<'a> {
     #[must_use]
     pub fn edits(&self) -> &[EditView<'a>] {
         &self.edits
+    }
+
+    /// Return the edits of each other way to make it.
+    #[must_use]
+    pub fn alternatives(&self) -> &[Vec<EditView<'a>>] {
+        &self.alternatives
     }
 }
 

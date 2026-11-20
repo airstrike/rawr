@@ -14038,17 +14038,17 @@ fn language_bare_std_types_need_a_use() {
         let error = Engine::new()
             .compile(source)
             .expect_err("rustc refuses a std type's bare name with no `use`");
-        let crate::ParseErrorType::Resolution(crate::resolve::Error::StdPath {
-            code, message, ..
+        let crate::ParseErrorType::Resolution(crate::resolve::Error::UnknownType {
+            name: found,
+            path,
+            ..
         }) = error.err_type()
         else {
             panic!("{source}: {error}");
         };
-        assert_eq!(
-            (*code, message.as_str()),
-            (expected, format!("cannot find type `{name}` in this scope").as_str()),
-            "{source}"
-        );
+        // A path's first segment is rustc's E0433, a type's name its E0425.
+        let code = if *path { "E0433" } else { "E0425" };
+        assert_eq!((code, found.as_str()), (expected, name), "{source}");
     }
     // Through a `use`, a glob of its module, and std's prelude.
     let value = run(r#"

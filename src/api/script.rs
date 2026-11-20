@@ -485,8 +485,7 @@ fn check(
             &report,
             resolve::Error::UnknownFunction {
                 name: want.name.clone(),
-                import: None,
-                placement: None,
+                imports: Box::default(),
                 reference: crate::Span::NONE,
             },
             Position::NONE,

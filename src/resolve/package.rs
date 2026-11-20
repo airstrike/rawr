@@ -204,6 +204,60 @@ struct Resolver<'a> {
     natives: Vec<rawr_import::record::Instance>,
 }
 
+impl Resolver<'_> {
+    /// The program's own types and traits named `name`, where it is
+    /// `wanted` as a type, that another module of the package declares and
+    /// opens to `context`, each by its path from the crate's root. Its
+    /// values are the lowering's (`lower_nominal::names`).
+    fn own_candidates(
+        &self,
+        context: &Context,
+        name: &str,
+        wanted: super::imports::Wanted,
+    ) -> Vec<super::Candidate> {
+        if wanted != super::imports::Wanted::Type {
+            return Vec::new();
+        }
+        let namespace = &context.namespace;
+        self.tables
+            .addressed()
+            .filter(|(address, declaration)| {
+                address.name == name
+                    && address.package == namespace.package
+                    && address.modules != namespace.modules
+                    && declaration.reach.reaches(namespace)
+            })
+            .filter_map(|(address, declaration)| {
+                let noun = match &declaration.target {
+                    Target::Trait(_) => "trait",
+                    Target::Type(type_ref::Target::Script { definition, .. }) => {
+                        match self
+                            .type_declarations
+                            .iter()
+                            .find(|declared| declared.id() == *definition)?
+                            .kind()
+                        {
+                            type_def::Kind::Struct => "struct",
+                            type_def::Kind::Enum => "enum",
+                        }
+                    }
+                    Target::Type(type_ref::Target::Alias(_)) => "type alias",
+                    _ => return None,
+                };
+                let path = std::iter::once("crate")
+                    .chain(address.modules.iter().map(ImmutableString::as_str))
+                    .chain([name])
+                    .collect::<Vec<_>>()
+                    .join("::");
+                Some(super::Candidate {
+                    path: path.into(),
+                    noun,
+                })
+            })
+            .collect()
+    }
+}
+
 /// The variants of `std::cmp::Ordering`, which `use` may import by name.
 pub(crate) const ORDERING_VARIANTS: [&str; 3] = ["Less", "Equal", "Greater"];
 
@@ -1000,7 +1054,8 @@ impl<'a> Resolver<'a> {
                 program::source::Id::from_index(context.source.index()),
                 parsed.imports().to_vec().into_boxed_slice(),
             );
-            if let Some(at) = parsed.use_placement() {
+            let placement = parsed.use_placement();
+            if let Some(at) = placement {
                 placements.insert(program::source::Id::from_index(context.source.index()), at);
             }
             let (source_map, parsed_items, statements, statement_source) = parsed.into_parts();
@@ -1032,20 +1087,28 @@ impl<'a> Resolver<'a> {
                 .filter(|(_, (item, _))| *item == context.source)
                 .map(|(expansion, (_, derive))| (*expansion, *derive))
                 .collect::<Vec<_>>();
-            let resolved = self.reused(
-                context.source,
-                kept::Unit::resolved,
-                |kept| kept.entering == entering && kept.sites == sites,
-                || {
-                    self.resolve_unit(
-                        &context,
-                        parsed_items,
-                        (&slots, &blocks),
-                        entering.clone(),
-                        &sites,
-                    )
-                },
-            )?;
+            let resolved = self
+                .reused(
+                    context.source,
+                    kept::Unit::resolved,
+                    |kept| kept.entering == entering && kept.sites == sites,
+                    || {
+                        self.resolve_unit(
+                            &context,
+                            parsed_items,
+                            (&slots, &blocks),
+                            entering.clone(),
+                            &sites,
+                        )
+                    },
+                )
+                .map_err(|failure| Failure {
+                    error: failure.error.unimported(
+                        |name, wanted| self.own_candidates(&context, name, wanted),
+                        placement,
+                    ),
+                    ..failure
+                })?;
             around.extend(resolved.around);
             #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
             if resolved.root.is_some() {
@@ -1646,10 +1709,27 @@ impl<'a> Resolver<'a> {
                         missing: Unresolved::Unlinked,
                     }
                 }
-                _ => Error::UnknownImport {
-                    path: module,
-                    reference: *span,
-                    missing: Unresolved::Path,
+                // A std module std doesn't have is marked at the segment
+                // that misses, as rustc marks a group's prefix.
+                _ => match super::std_path::import(&module, prefix.span) {
+                    Err(Error::UnknownImport {
+                        path,
+                        missing: Unresolved::Item { module, .. } | Unresolved::Module(module),
+                        ..
+                    }) => Error::UnknownImport {
+                        reference: prefix
+                            .segments
+                            .get(path.split("::").count() - 1)
+                            .map_or(*span, |segment| segment.name.span),
+                        path,
+                        missing: Unresolved::Module(module),
+                    },
+                    Err(error) => error,
+                    Ok(_) => Error::UnknownImport {
+                        path: module,
+                        reference: *span,
+                        missing: Unresolved::Path,
+                    },
                 },
             };
             return Err(Failure {
@@ -3650,6 +3730,7 @@ impl<'a> Resolver<'a> {
                     name: root.clone(),
                     reference: span,
                     path: true,
+                    imports: Box::default(),
                 },
                 None => return failure,
             },
@@ -3724,6 +3805,7 @@ impl<'a> Resolver<'a> {
                         name: segments.join("::").into(),
                         reference: last.name.span,
                         path: false,
+                        imports: Box::default(),
                     },
                     ..failure
                 }
@@ -3750,6 +3832,7 @@ impl<'a> Resolver<'a> {
             name,
             reference,
             path: false,
+            imports,
         } = &error
         else {
             return error;
@@ -3764,6 +3847,7 @@ impl<'a> Resolver<'a> {
             name: qualified.into(),
             reference: *reference,
             path: false,
+            imports: imports.clone(),
         }
     }
 
@@ -3773,6 +3857,7 @@ impl<'a> Resolver<'a> {
             name,
             reference,
             path: false,
+            ..
         } = &error
         else {
             return error;
@@ -3792,6 +3877,7 @@ impl<'a> Resolver<'a> {
                 name: root.into(),
                 reference: Span::new(start, text_end(start, root)),
                 path: true,
+                imports: Box::default(),
             };
         }
         let last_start = text_end(start, &name[..name.len() - last.len()]);
@@ -3799,6 +3885,7 @@ impl<'a> Resolver<'a> {
             name: name.clone(),
             reference: Span::new(last_start, reference.end()),
             path: false,
+            imports: Box::default(),
         }
     }
 }
@@ -4253,6 +4340,7 @@ fn host_target(
                 name: qualified.clone(),
                 reference,
                 path: false,
+                imports: Box::default(),
             }),
         Some(host::Entry::Item(definitions)) => Ok(Target::HostItem {
             definitions: definitions.into(),

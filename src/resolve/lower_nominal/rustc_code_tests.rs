@@ -750,7 +750,17 @@ fn a_non_exhaustive_match_is_e0004() {
             "{source}"
         );
         let label = label.message().unwrap_or_default().to_string();
-        let notes = report.notes().map(str::to_string).collect::<Vec<_>>();
+        // The notes, and those after the enum's own note.
+        let notes = report
+            .notes()
+            .map(str::to_string)
+            .chain(
+                report
+                    .sections()
+                    .iter()
+                    .flat_map(|section| section.notes().iter().map(ToString::to_string)),
+            )
+            .collect::<Vec<_>>();
         // The suggestion's message, and the arm it adds.
         let suggestion = report.suggestions().first().expect("rustc suggests an arm");
         let arm = suggestion.edits()[0].replacement();
@@ -3808,13 +3818,17 @@ fn a_format_argument_lacking_a_trait_suggests_the_derive() {
             " --> main.rs:3:20\n",
             "  |\n",
             "3 |     println!(\"{}\", S);\n",
-            "  |                    ^\n",
+            "  |               --   ^ `S` cannot be formatted with the default formatter\n",
+            "  |               |\n",
+            "  |               required by this formatting parameter\n",
             "  |\n",
             "help: the trait `std::fmt::Display` is not implemented for `S`\n",
             " --> main.rs:1:1\n",
             "  |\n",
             "1 | struct S;\n",
             "  | ^^^^^^^^\n",
+            "  = note: in format strings you may be able to use `{:?}` (or {:#?} for pretty-print) \
+             instead\n",
         )
     );
 }
@@ -4199,6 +4213,44 @@ fn an_unresolved_import_marks_the_whole_import() {
             && through.contains("  |          ^^^^ could not find `nofs` in `std`\n"),
         "{through}"
     );
+    // A group's member path from the member, not the group's prefix
+    // (#2341).
+    let inner = "mod model {\n    pub mod inner {}\n}\n";
+    let nested = rendered(&format!(
+        "{inner}use crate::model::{{inner::gone}};\nfn main() {{}}\n"
+    ));
+    assert!(
+        nested.starts_with(
+            "error[E0432]: unresolved import `crate::model::inner::gone`\n --> main.rs:4:20\n"
+        ) && nested.contains("  |                    ^^^^^^^----\n"),
+        "{nested}"
+    );
+    let std_nested = shown("use std::collections::{hash_map::Nope};");
+    assert!(
+        std_nested.contains("  |                        ^^^^^^^^^^----\n"),
+        "{std_nested}"
+    );
+    // A std prefix's miss is at the missing segment: a glob's, or the
+    // module `self` imports.
+    for import in [
+        "use std::nope::*;",
+        "use std::nope::{self};",
+        "use std::nope::{a, b};",
+    ] {
+        let prefix = shown(import);
+        assert!(
+            prefix.contains("  |          ^^^^ could not find `nope` in `std`\n"),
+            "{prefix}"
+        );
+    }
+    // rustc names the module a segment is missing from by its own name.
+    let module = rendered(&format!(
+        "{inner}use crate::model::inner::deep::gone;\nfn main() {{}}\n"
+    ));
+    assert!(
+        module.contains("  |                          ^^^^ could not find `deep` in `inner`\n"),
+        "{module}"
+    );
 }
 
 #[test]
@@ -4236,4 +4288,293 @@ fn an_impl_of_a_path_that_names_no_trait_is_refused_as_rustc_does() {
         std.starts_with("error[E0405]: cannot find trait `Nope` in module `std::fmt`\n"),
         "{std}"
     );
+}
+
+/// A method or associated item the program's own struct or enum lacks:
+/// rustc's E0599 names the type's kind and marks its definition (#2337).
+#[test]
+fn a_program_types_missing_item_names_its_kind_and_definition() {
+    assert_eq!(
+        rendered("struct S;\nfn main() {\n    S.nope();\n}\n"),
+        concat!(
+            "error[E0599]: no method named `nope` found for struct `S` in the current scope\n",
+            " --> main.rs:3:7\n",
+            "  |\n",
+            "1 | struct S;\n",
+            "  | -------- method `nope` not found for this struct\n",
+            "2 | fn main() {\n",
+            "3 |     S.nope();\n",
+            "  |       ^^^^ method not found in `S`\n",
+        )
+    );
+    let shown = rendered("enum E { A }\nfn main() {\n    let e = E::A;\n    e.nope();\n}\n");
+    assert!(
+        shown.starts_with(
+            "error[E0599]: no method named `nope` found for enum `E` in the current \
+                           scope\n"
+        ) && shown.contains("1 | enum E { A }\n  | ------ method `nope` not found for this enum\n")
+            && shown.contains("  |       ^^^^ method not found in `E`\n"),
+        "{shown}"
+    );
+    // A generic type by its parameters, found by its arguments.
+    let shown = rendered(
+        "struct G<T: Copy, U>(T, U);\nfn main() {\n    let g: G<i32, bool> = G(1, true);\n    \
+         g.nope();\n}\n",
+    );
+    assert!(
+        shown.starts_with("error[E0599]: no method named `nope` found for struct `G<T, U>`")
+            && shown.contains("  | -------------------- method `nope` not found for this struct\n")
+            && shown.contains("  |       ^^^^ method not found in `G<i32, bool>`\n"),
+        "{shown}"
+    );
+    // A reference, which marks no definition.
+    let shown = rendered(
+        "struct S;\nfn main() {\n    let mut s = S;\n    let r = &mut s;\n    r.nope();\n}\n",
+    );
+    assert!(
+        shown.starts_with(
+            "error[E0599]: no method named `nope` found for mutable reference `&mut S` in the \
+             current scope\n"
+        ) && !shown.contains("not found for this"),
+        "{shown}"
+    );
+    // An associated item, a struct's or an enum's.
+    let shown = rendered("struct S;\nfn main() {\n    S::nope();\n}\n");
+    assert!(
+        shown.starts_with(
+            "error[E0599]: no associated function or constant named `nope` found for struct `S` \
+             in the current scope\n"
+        ) && shown.contains(
+            "  | -------- associated function or constant `nope` not found for this struct\n"
+        ) && shown.contains("  |        ^^^^ associated function or constant not found in `S`\n"),
+        "{shown}"
+    );
+    let shown = rendered("enum E { A }\nfn main() {\n    let _ = E::Nope;\n}\n");
+    assert!(
+        shown.starts_with(
+            "error[E0599]: no variant, associated function, or constant named `Nope` found for \
+             enum `E` in the current scope\n"
+        ),
+        "{shown}"
+    );
+    // A field called as a method marks the struct too.
+    let shown = rendered(
+        "struct S {\n    f: i32,\n}\nfn main() {\n    let s = S { f: 1 };\n    s.f();\n}\n",
+    );
+    assert!(
+        shown.starts_with(
+            "error[E0599]: no method named `f` found for struct `S` in the current \
+                           scope\n"
+        ) && shown.contains("1 | struct S {\n  | -------- method `f` not found for this struct\n"),
+        "{shown}"
+    );
+}
+
+/// The `help:` rustc gives a name no `use` brings into scope, from `help:`.
+fn import_help(source: &str) -> String {
+    let shown = rendered(source);
+    let help = shown.find("help: ").unwrap_or_else(|| panic!("{shown}"));
+    shown[help..].to_string()
+}
+
+/// Several items a `use` could import are rustc's alternatives, each its
+/// own `use` (#2337).
+#[test]
+fn an_import_with_several_candidates_offers_each() {
+    assert_eq!(
+        import_help(
+            "mod a {\n    pub fn f() {}\n}\nmod b {\n    pub fn f() {}\n}\nfn main() {\n    f();\n}\n"
+        ),
+        concat!(
+            "help: consider importing one of these functions\n",
+            "  |\n",
+            "1 + use crate::a::f;\n",
+            "  |\n",
+            "1 + use crate::b::f;\n",
+            "  |\n",
+        )
+    );
+    // The program's and std's, by path; of several kinds, items.
+    assert_eq!(
+        import_help("mod m {\n    pub fn max() {}\n}\nfn main() {\n    max();\n}\n"),
+        concat!(
+            "help: consider importing one of these functions\n",
+            "  |\n",
+            "1 + use crate::m::max;\n",
+            "  |\n",
+            "1 + use std::cmp::max;\n",
+            "  |\n",
+        )
+    );
+    assert!(import_help("fn f(_x: Error) {}\nfn main() {}\n")
+        .starts_with("help: consider importing one of these items\n"),);
+    // Past four, rustc counts the others.
+    let iter = import_help("fn f(_x: Iter) {}\nfn main() {}\n");
+    assert!(
+        iter.starts_with("help: consider importing one of these structs\n")
+            && iter.matches(" + use ").count() == 4
+            && iter.contains("  |\n  = and ")
+            && iter.ends_with(" other candidates\n"),
+        "{iter}"
+    );
+}
+
+/// A unit struct used as a value, a type and a std type such as `HashMap`
+/// suggest their imports (#2337).
+#[test]
+fn a_value_or_type_another_module_or_std_declares_suggests_its_import() {
+    let help = |noun: &str, line: &str| {
+        format!("help: consider importing this {noun}\n  |\n{line}\n  |\n")
+    };
+    assert_eq!(
+        import_help("mod m {\n    pub struct U;\n}\nfn main() {\n    let _u = U;\n}\n"),
+        help("unit struct", "1 + use crate::m::U;")
+    );
+    assert_eq!(
+        import_help("mod m {\n    pub struct T;\n}\nfn f(_t: T) {}\nfn main() {}\n"),
+        help("struct", "1 + use crate::m::T;")
+    );
+    assert_eq!(
+        import_help("mod m {\n    pub enum E { A }\n}\nfn main() {\n    let _ = E::A;\n}\n"),
+        help("enum", "1 + use crate::m::E;")
+    );
+    assert_eq!(
+        rendered("fn main() {\n    let _m = HashMap::<i32, i32>::new();\n}\n"),
+        concat!(
+            "error[E0433]: cannot find type `HashMap` in this scope\n",
+            " --> main.rs:2:14\n",
+            "  |\n",
+            "2 |     let _m = HashMap::<i32, i32>::new();\n",
+            "  |              ^^^^^^^ use of undeclared type `HashMap`\n",
+            "  |\n",
+            "help: consider importing this struct\n",
+            "  |\n",
+            "1 + use std::collections::HashMap;\n",
+            "  |\n",
+        )
+    );
+    let typed = rendered("fn main() {\n    let _m: HashMap<i32, i32> = HashMap::new();\n}\n");
+    assert!(
+        typed.starts_with("error[E0425]: cannot find type `HashMap` in this scope\n")
+            && typed.contains("  |             ^^^^^^^ not found in this scope\n")
+            && typed.ends_with(&help("struct", "1 + use std::collections::HashMap;")),
+        "{typed}"
+    );
+    assert_eq!(
+        import_help("fn f(_x: Ordering) {}\nfn main() {}\n"),
+        concat!(
+            "help: consider importing one of these enums\n",
+            "  |\n",
+            "1 + use std::cmp::Ordering;\n",
+            "  |\n",
+            "1 + use std::sync::atomic::Ordering;\n",
+            "  |\n",
+        )
+    );
+    // A call of a capitalized name reads as a tuple struct's.
+    let shown =
+        rendered("mod a {\n    pub struct T(pub i32);\n}\nfn main() {\n    let _t = T(1);\n}\n");
+    assert!(
+        shown.starts_with(
+            "error[E0425]: cannot find function, tuple struct or tuple variant `T` in this scope\n"
+        ) && shown.ends_with(&help("tuple struct", "1 + use crate::a::T;")),
+        "{shown}"
+    );
+}
+
+/// A format argument whose type lacks the trait its placeholder formats
+/// with: rustc labels the placeholder and the argument (#2337).
+#[test]
+fn a_format_argument_lacking_a_trait_labels_its_placeholder() {
+    let shown = rendered("struct S;\nfn main() {\n    println!(\"{:?}\", S);\n}\n");
+    assert!(
+        shown.starts_with(concat!(
+            "error[E0277]: `S` doesn't implement `Debug`\n",
+            " --> main.rs:3:22\n",
+            "  |\n",
+            "3 |     println!(\"{:?}\", S);\n",
+            "  |               ----   ^ `S` cannot be formatted using `{:?}` because it doesn't \
+             implement `Debug`\n",
+            "  |               |\n",
+            "  |               required by this formatting parameter\n",
+            "  |\n",
+            "  = help: the trait `Debug` is not implemented for `S`\n",
+            "help: consider annotating `S` with `#[derive(Debug)]`\n",
+        )),
+        "{shown}"
+    );
+    // A placeholder that names its value is marked alone.
+    let inline = rendered("struct S;\nfn main() {\n    let s = S;\n    println!(\"{s:?}\");\n}\n");
+    assert!(
+        inline.contains(
+            "4 |     println!(\"{s:?}\");\n  |               ^^^^^ `S` cannot be formatted using \
+             `{:?}` because it doesn't implement `Debug`\n  |\n"
+        ),
+        "{inline}"
+    );
+    let pretty =
+        rendered("struct S;\nfn main() {\n    let _x = format!(\"{} and {:#?}\", 1, S);\n}\n");
+    assert!(
+        pretty.contains(
+            "  |                              -----      ^ `S` cannot be formatted using"
+        ),
+        "{pretty}"
+    );
+    // A type declared elsewhere has its help and note after the snippet.
+    assert!(
+        rendered("fn main() {\n    let v = vec![1];\n    println!(\"{}\", v);\n}\n").ends_with(
+            concat!(
+                "  = help: the trait `std::fmt::Display` is not implemented for `Vec<{integer}>`\n",
+                "  = note: in format strings you may be able to use `{:?}` (or {:#?} for \
+                 pretty-print) instead\n",
+            )
+        ),
+    );
+}
+
+/// A `match` that misses variants of the program's enum: rustc notes the
+/// enum with each variant no arm covers (#2337).
+#[test]
+fn a_non_exhaustive_match_notes_the_enum_at_its_definition() {
+    assert_eq!(
+        rendered(
+            "enum E { A, B, C }\nfn main() {\n    let e = E::A;\n    match e {\n        E::A => \
+             {}\n    }\n}\n"
+        ),
+        concat!(
+            "error[E0004]: non-exhaustive patterns: `E::B` and `E::C` not covered\n",
+            " --> main.rs:4:11\n",
+            "  |\n",
+            "4 |     match e {\n",
+            "  |           ^ patterns `E::B` and `E::C` not covered\n",
+            "  |\n",
+            "note: `E` defined here\n",
+            " --> main.rs:1:6\n",
+            "  |\n",
+            "1 | enum E { A, B, C }\n",
+            "  |      ^      -  - not covered\n",
+            "  |             |\n",
+            "  |             not covered\n",
+            "  = note: the matched value is of type `E`\n",
+            "help: ensure that all possible cases are being handled by adding a match arm with a \
+             wildcard pattern, a match arm with multiple or-patterns as shown, or multiple match \
+             arms\n",
+            "  |\n",
+            "5 ~         E::A => {},\n",
+            "6 +         E::B | E::C => todo!()\n",
+            "  |\n",
+        )
+    );
+    // Each variant no arm covers, past the three the message names.
+    let many = rendered(
+        "enum E { A, B(i32), C { x: i32 }, D, F }\nfn main() {\n    let e = E::A;\n    match e \
+         {\n        E::A => {}\n    }\n}\n",
+    );
+    assert!(many.matches("not covered\n").count() == 5, "{many}");
+    // std's enums are noted in std's source, which rawr doesn't show.
+    let option = rendered(
+        "fn main() {\n    let o: Option<i32> = None;\n    match o {\n        Some(_) => {}\n    \
+         }\n}\n",
+    );
+    assert!(!option.contains("defined here"), "{option}");
 }

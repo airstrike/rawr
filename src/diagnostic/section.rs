@@ -1,6 +1,6 @@
 //! A note or help with places of its own, which rustc shows as its own
-//! section after the report's snippet: its `note:` or `help:` line, then
-//! the source lines its labels mark.
+//! section after the report's snippet: its `note:` or `help:` line, the
+//! source lines its labels mark, then any `= note:` that follows them.
 
 use crate::{ImmutableString, Span};
 
@@ -18,12 +18,14 @@ pub enum Level {
 }
 
 /// A note or help and the places it marks: one primary, `^` under it, and
-/// any related ones, `-` under them, each with its own label or none.
+/// any related ones, `-` under them, each with its own label or none; and
+/// the notes without places rustc writes after them.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Section {
     level: Level,
     message: ImmutableString,
     labels: Vec<Label>,
+    notes: Vec<ImmutableString>,
 }
 
 impl Section {
@@ -46,7 +48,15 @@ impl Section {
             level,
             message,
             labels: Vec::new(),
+            notes: Vec::new(),
         }
+    }
+
+    /// The section with the `= note:` `message` after its places.
+    #[must_use]
+    pub fn followed(mut self, message: impl Into<ImmutableString>) -> Self {
+        self.notes.push(message.into());
+        self
     }
 
     /// The section with `span` of `source` as the place it is about. A
@@ -102,6 +112,12 @@ impl Section {
         &self.labels
     }
 
+    /// Return the notes after its places, in the order they were given.
+    #[must_use]
+    pub fn notes(&self) -> &[ImmutableString] {
+        &self.notes
+    }
+
     pub(super) fn labels_mut(&mut self) -> &mut [Label] {
         &mut self.labels
     }
@@ -114,6 +130,7 @@ impl Section {
         placed: impl FnMut(Label) -> Result<Label, super::Error>,
     ) -> Result<Self, super::Error> {
         self.message = written(self.message);
+        self.notes = self.notes.into_iter().map(&written).collect();
         self.labels = self
             .labels
             .into_iter()

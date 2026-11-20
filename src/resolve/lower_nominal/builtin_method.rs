@@ -1048,6 +1048,7 @@ impl<'a> Parser<'a> {
                         derive: matches!(target.as_ref(), Ty::Script(..)),
                         declared: self.declared_name(target.as_ref()),
                         required_by: None,
+                        formatted: None,
                     });
                 }
                 source.push_text(o.as_str());
@@ -1331,6 +1332,7 @@ impl<'a> Parser<'a> {
                     derive: matches!(this.inference.resolve(ty), Ty::Script(..)),
                     declared: this.declared_name(&this.inference.resolve(ty)),
                     required_by: None,
+                    formatted: None,
                 })
             }
         };
@@ -1731,6 +1733,7 @@ impl<'a> Parser<'a> {
                             derive: true,
                             declared: None,
                             required_by: None,
+                            formatted: None,
                         }
                     })?;
                 let helper = self.push_op(Op::Default {
@@ -1778,6 +1781,7 @@ impl<'a> Parser<'a> {
                             derive: matches!(ty, Ty::Script(..)),
                             declared: self.declared_name(&ty),
                             required_by: None,
+                            formatted: None,
                         });
                     }
                     // An imported type's `default` comes from its crate's
@@ -1803,6 +1807,7 @@ impl<'a> Parser<'a> {
                     derive: matches!(ty, Ty::Script(..)),
                     declared: self.declared_name(&ty),
                     required_by: None,
+                    formatted: None,
                 })
             }
         })

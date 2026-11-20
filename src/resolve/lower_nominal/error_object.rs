@@ -130,6 +130,7 @@ impl Parser<'_> {
                         derive: matches!(from, Ty::Script(..)),
                         declared: self.declared_name(&from),
                         required_by: None,
+                        formatted: None,
                     });
                 };
                 (display, self.debug_source(&from, local, span)?)

@@ -94,6 +94,7 @@ impl Parser<'_> {
                         derive: false,
                         declared: None,
                         required_by: None,
+                        formatted: None,
                     });
                 }
                 let source = value.rendered_source();

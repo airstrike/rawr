@@ -32,47 +32,80 @@ impl<'a> Parser<'a> {
         }
         Some(Error::UnknownFunction {
             name: written.as_ref().into(),
-            import: self.function_import(name),
-            placement: self.models.use_placement(),
+            imports: self.imports(name, Wanted::Call),
             reference: Span::new(at.start(), text_end(at.start(), &written)),
         })
     }
 
-    /// The path of a function named `name` a `use` could bring into scope,
-    /// as rustc suggests one: the program's own function another module
-    /// declares where this module sees it, else a library's.
-    fn function_import(&self, name: &str) -> Option<ImmutableString> {
-        let here = self.models.namespaces.get(&self.models.context)?;
-        let own = self
+    /// The items named `name` a `use` could bring into scope where the
+    /// name is `wanted`, as rustc offers them: the program's own that
+    /// another module declares and this one sees, and std's, by path; a
+    /// library's function where neither has one.
+    pub(super) fn imports(&self, name: &str, wanted: Wanted) -> Box<Imports> {
+        let mut candidates = self.own_candidates(name, wanted);
+        candidates.extend(crate::resolve::imports::std(name, wanted));
+        if candidates.is_empty() && wanted != Wanted::Type {
+            let mut library = self.models.host.functions_named(name).collect::<Vec<_>>();
+            library.sort_by_key(|path| (path.len(), path.clone()));
+            candidates.extend(library.into_iter().next().map(|path| Candidate {
+                path: path.into(),
+                noun: "function",
+            }));
+        }
+        Imports::new(candidates, self.models.use_placement())
+    }
+
+    /// The program's own items named `name` where it is `wanted` that
+    /// another module of this package declares at its top and opens to
+    /// this one, each by its path from the crate's root.
+    pub(super) fn own_candidates(&self, name: &str, wanted: Wanted) -> Vec<Candidate> {
+        let Some(here) = self.models.namespaces.get(&self.models.context) else {
+            return Vec::new();
+        };
+        let path = |source: &crate::program::source::Id, header: &crate::item::Header| {
+            let namespace = self.models.namespaces.get(source)?;
+            (*source != self.models.context
+                && namespace.package == here.package
+                && header.scope.is_none()
+                && namespace.opens_to(header.visibility.as_ref(), here))
+            .then(|| {
+                let modules = namespace.modules.iter().map(ImmutableString::as_str);
+                std::iter::once("crate")
+                    .chain(modules)
+                    .chain([name])
+                    .collect::<Vec<_>>()
+                    .join("::")
+            })
+        };
+        let functions = self
             .models
             .functions
             .iter()
-            .filter_map(|((source, named), function)| {
-                let namespace = self.models.namespaces.get(source)?;
-                (named == name
-                    && *source != self.models.context
-                    && namespace.package == here.package
-                    && function.definition.header.scope.is_none()
-                    && namespace.opens_to(function.definition.header.visibility.as_ref(), here))
-                .then(|| {
-                    let modules = namespace.modules.iter().map(ImmutableString::as_str);
-                    std::iter::once("crate")
-                        .chain(modules)
-                        .chain([name])
-                        .collect::<Vec<_>>()
-                        .join("::")
+            .filter(|((_, named), _)| wanted != Wanted::Type && named == name)
+            .filter_map(|((source, _), function)| {
+                Some(Candidate {
+                    path: path(source, &function.definition.header)?.into(),
+                    noun: "function",
                 })
             });
-        // rustc offers several as alternatives, which one suggestion's
-        // edits can't be: only one alone is offered.
-        match own.collect::<Vec<_>>().as_slice() {
-            [path] => return Some(path.as_str().into()),
-            [] => {}
-            _ => return None,
-        }
-        let mut imports = self.models.host.functions_named(name).collect::<Vec<_>>();
-        imports.sort_by_key(|path| (path.len(), path.clone()));
-        imports.into_iter().next().map(Into::into)
+        let types = self
+            .models
+            .by_definition
+            .iter()
+            .filter(|(_, nominal)| nominal.name() == name)
+            .filter_map(|(id, nominal)| {
+                let (header, noun) = match nominal {
+                    Nominal::Struct { item, .. } => (&item.header, wanted.struct_noun(item.form)?),
+                    Nominal::Enum { item, .. } => {
+                        (&item.header, (wanted == Wanted::Type).then_some("enum")?)
+                    }
+                };
+                Some(Candidate {
+                    path: path(self.models.declared_in.get(id)?, header)?.into(),
+                    noun,
+                })
+            });
+        functions.chain(types).collect()
     }
 
     /// rustc's E0423 for a macro's name used without `!` where a function
@@ -145,16 +178,9 @@ impl<'a> Parser<'a> {
                 reference,
             };
         }
-        let Some(import) = self.function_import(name) else {
-            return Error::UnknownVariable {
-                name: written.as_ref().into(),
-                reference,
-            };
-        };
-        Error::UnknownFunction {
+        Error::UnknownVariable {
             name: written.as_ref().into(),
-            import: Some(import),
-            placement: self.models.use_placement(),
+            imports: self.imports(name, Wanted::Value),
             reference,
         }
     }

@@ -127,6 +127,7 @@ impl<'a> Parser<'a> {
                 derive: false,
                 declared: None,
                 required_by: None,
+                formatted: None,
             }),
         }
     }

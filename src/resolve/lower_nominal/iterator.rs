@@ -988,6 +988,7 @@ impl Parser<'_> {
             derive: false,
             declared: None,
             required_by: None,
+            formatted: None,
         }
     }
 
@@ -1304,6 +1305,7 @@ impl Parser<'_> {
                         derive: false,
                         declared: None,
                         required_by: None,
+                        formatted: None,
                     });
                 }
                 return Ok(self.adapted(pipeline, item, expression));

@@ -391,6 +391,7 @@ impl<'a> Parser<'a> {
                 return Err(error);
             }
             return Err(Error::UnknownVariable {
+                imports: self.imports(&member, Wanted::Value),
                 name: member,
                 reference: member_span,
             });
@@ -622,6 +623,7 @@ impl<'a> Parser<'a> {
                             derive: false,
                             declared: None,
                             required_by: None,
+                            formatted: None,
                         });
                     };
                     self.coerce_expr(&from, argument)?;
@@ -1166,12 +1168,19 @@ impl<'a> Parser<'a> {
                     name: root.clone(),
                     reference: span(root_span.start(), text_end(root_span.start(), root)),
                     path: true,
+                    imports: Box::default(),
                 }
             } else {
+                let imports = if owner.contains("::") {
+                    Box::default()
+                } else {
+                    self.imports(&owner, Wanted::Type)
+                };
                 Error::UnknownType {
                     name: owner,
                     reference: owner_span,
                     path: true,
+                    imports,
                 }
             };
             // A crate's module path no binding names, as a macro's
@@ -1252,6 +1261,7 @@ impl<'a> Parser<'a> {
                     derive: true,
                     declared: None,
                     required_by: None,
+                    formatted: None,
                 });
             };
             self.coerce_expr(&from, argument)?;
@@ -1393,14 +1403,16 @@ impl<'a> Parser<'a> {
         }
 
         let owner_id = model.definition().id();
+        let missing = |this: &Self, owner, member| Error::NoItem {
+            owner,
+            member,
+            reference: member_span,
+            receiver: Box::new(this.receiver(owner_id, &Ty::Script(owner_id, Box::default()))),
+        };
         let Nominal::Enum { definition, item } = model else {
             return Err(self
                 .private_member(owner_id, &member, member_span)
-                .unwrap_or(Error::UnknownMember {
-                    owner,
-                    member,
-                    reference: member_span,
-                }));
+                .unwrap_or_else(|| missing(self, owner, member)));
         };
         let Some((variant, declaration)) = item
             .variants
@@ -1410,11 +1422,7 @@ impl<'a> Parser<'a> {
         else {
             return Err(self
                 .private_member(owner_id, &member, member_span)
-                .unwrap_or_else(|| Error::UnknownMember {
-                    owner: definition.name().into(),
-                    member,
-                    reference: member_span,
-                }));
+                .unwrap_or_else(|| missing(self, definition.name().into(), member)));
         };
         // `E::V { x, y: 1 }` of a struct variant.
         if let Some(fields) = &declaration.fields {
@@ -2301,6 +2309,7 @@ impl<'a> Parser<'a> {
                 derive: false,
                 declared: None,
                 required_by: None,
+                formatted: None,
             });
         }
         // A crate trait's function without `self` for this type.

@@ -6117,17 +6117,17 @@ fn parse_use_alias(input: &mut TokenStream) -> ParseResult<Option<crate::item::N
 
 /// The rest of an import tree inside a group after its member path
 /// `prefix`: `::name`, `::{..}` or `::*` again, then an optional `as`.
-/// Each complete path, group or glob joins `trees`.
+/// Each complete path, group or glob joins `trees`, its segments the whole
+/// path's and its span the member's own, from `start`, as the source
+/// writes it inside the group.
 fn parse_use_subtree(
     input: &mut TokenStream,
     mut segments: Vec<type_ref::Segment>,
+    start: Position,
     trees: &mut Vec<crate::item::UseTree>,
 ) -> ParseResult<()> {
     let path_of = |segments: &[type_ref::Segment]| {
-        let span = Span::new(
-            segments.first().expect("a path segment").span.start(),
-            segments.last().expect("a path segment").span.end(),
-        );
+        let span = Span::new(start, segments.last().expect("a path segment").span.end());
         type_ref::Path {
             segments: segments.to_vec().into_boxed_slice(),
             span,
@@ -6225,13 +6225,14 @@ fn parse_use_members(
             _ => parse_use_segment(input, "inside an import group")?,
         };
         if matches!(input.peek(), Some((Token::DoubleColon, _))) {
+            let start = name.span.start();
             let mut segments = prefix.to_vec();
             segments.push(type_ref::Segment {
                 span: name.span,
                 name,
                 arguments: Box::default(),
             });
-            parse_use_subtree(input, segments, trees)?;
+            parse_use_subtree(input, segments, start, trees)?;
         } else {
             let alias = parse_use_alias(input)?;
             members.push(crate::item::UseMember { name, alias });

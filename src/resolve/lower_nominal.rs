@@ -142,8 +142,8 @@ use super::borrowck::{
     record::{Matched, ScopeEnd},
 };
 use super::{
-    intrinsic, item, type_ref, BindingSite, Callee, Cloning, Error, MoveCause, MovedPlace,
-    OwningParameter, PatternOrigin, Unresolved,
+    imports::Wanted, intrinsic, item, type_ref, BindingSite, Callee, Candidate, Cloning, Error,
+    Imports, MoveCause, MovedPlace, OwningParameter, PatternOrigin, Unresolved,
 };
 use crate::ast::{NominalPattern, NominalPayloadType, NOMINAL_MATCH_SENTINEL};
 use crate::func::{FnCallArgs, NativeCallContext};
