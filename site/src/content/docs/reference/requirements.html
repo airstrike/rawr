@@ -1,7 +1,7 @@
-<meta name="description" content="What each part of rawr needs: Rust 1.95 for the crate and to build the command, 64-bit macOS or Linux and a nightly from nightly-2026-07-11 through nightly-2026-11-02 for rawr-import. Which platforms work, and what is planned.">
+<meta name="description" content="What each part of rawr needs: Rust 1.95 for the crate and to build the command, 64-bit macOS or Linux and a nightly from nightly-2026-07-11 through nightly-2026-11-02 for rawr-import. Which platforms work.">
 <article>
 <h1>Requirements</h1>
-<p class="lede">What each part of rawr needs, which platforms work and what is planned.</p>
+<p class="lede">What each part of rawr needs and which platforms work.</p>
 <h2 id="status">Status</h2>
 <p>rawr is pre-alpha. Its API, commands and error codes may change.</p>
 <p>rawr supports part of Rust. The <a href="/docs/reference/overview">Overview</a> lists what works today. If rawr runs code with a different result than Rust, or rejects Rust it says it supports, report it on <a href="https://github.com/airstrike/rawr/issues">GitHub</a> with a small reproduction.</p>
@@ -28,9 +28,4 @@
 <p>Windows is best effort. The <code>rawr</code> command builds for it, and <code>irm https://rawr.airstrike.fyi/install.ps1 | iex</code> installs it. rawr-import isn&rsquo;t built for Windows yet, so a program with dependencies doesn&rsquo;t run there. No one has tried rawr on Windows yet. If it fails, report it on <a href="https://github.com/airstrike/rawr/issues">GitHub</a>.</p>
 <p>Other systems, such as FreeBSD, aren&rsquo;t supported.</p>
 <p>The MCP server&rsquo;s window screenshot and its input tools need macOS. They need no Screen Recording or Accessibility permission.</p>
-
-<h2 id="planned">Planned</h2>
-<ul>
-  <li>A marked module declared by a native module other than the crate root.</li>
-</ul>
 </article>
