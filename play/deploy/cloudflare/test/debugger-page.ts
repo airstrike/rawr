@@ -251,10 +251,11 @@ try {
   await on("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
   await on("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "dark" }] });
   await on("Page.navigate", { url: live ?? `http://127.0.0.1:${port}/play` });
-  await until("the island", `document.readyState === "complete" && !!document.querySelector("#playground .cm-content") && !${icon}.hidden`);
+  await until("the island", `document.readyState === "complete" && !!document.querySelector("#playground .cm-content") && !${icon}.closest("[hidden]")`);
   // A deployed page has its own snippet: the looping one goes in its place.
   if (live) await evaluate(`${editor}.dispatch({ changes: { from: 0, to: ${editor}.state.doc.length, insert: ${JSON.stringify(LOOPING)} } })`);
   check(debuggerFetches() === 0, "the page loads without the debugger build");
+  check(await evaluate(`!${icon}.hasAttribute("aria-disabled")`), "Chrome has JSPI, so the icon is enabled");
   check(await evaluate(`!document.querySelector("#playground .cm-lineNumbers")`), "the editor shows no line numbers while the debugger is off");
 
   // The icon: the debugger build runs the program, and the panel opens.
@@ -392,7 +393,7 @@ try {
   await shot("debugger-resized.png");
   // The page again, and the debugger on again: the sizes are the ones dragged.
   await on("Page.reload");
-  await until("the island again", `document.readyState === "complete" && !!document.querySelector("#playground .cm-content") && !${icon}.hidden`);
+  await until("the island again", `document.readyState === "complete" && !!document.querySelector("#playground .cm-content") && !${icon}.closest("[hidden]")`);
   await clickOn(icon);
   await until("the panel after the reload", `!!${panel} && !!${consolePane}`, 15000);
   check(Math.abs((await width(code)) - codeSet) <= 1, "a reload keeps the code's width", [codeSet, await width(code)]);

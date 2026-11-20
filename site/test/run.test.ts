@@ -53,6 +53,17 @@ test("a universe frame imports the glue, hides WebKit's WebGPU and takes the mod
   assert.match(html, /<div id="iced"><\/div>/, "iced's web shell puts its canvas in place of #iced");
 });
 
+test("a frame drew nothing while it holds only its scripts and an empty #iced", async () => {
+  const { drewNothing } = await import("../src/scripts/universe.ts");
+  const script = { tagName: "SCRIPT", id: "", hasChildNodes: () => true };
+  const iced = (drawn: boolean) => ({ tagName: "DIV", id: "iced", hasChildNodes: () => drawn });
+  const body = (...children: object[]) => ({ children }) as unknown as Element;
+  assert.equal(drewNothing(body(iced(false), script)), true, "a program that only printed");
+  assert.equal(drewNothing(body(iced(true), script)), false, "something in #iced");
+  assert.equal(drewNothing(body({ tagName: "CANVAS", id: "" }, script)), false, "iced's canvas in place of #iced");
+  assert.equal(drewNothing(body(iced(false), script, { tagName: "PRE", id: "" })), false, "a terminal");
+});
+
 test("a key the focused program reads doesn't scroll the frame or the page", async () => {
   const { frameDocument } = await import("../src/scripts/universe.ts");
   const script = frameDocument("https://example.org/web/universe.js").match(/const scrolls[\s\S]*?\n\}\);/)![0];

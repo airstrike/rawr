@@ -217,6 +217,33 @@ function settled(element: HTMLIFrameElement): Promise<void> {
   return new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
 }
 
+/**
+ * Whether `body`, a frame's, shows nothing: no element but its scripts and
+ * the empty place iced draws in.
+ */
+export function drewNothing(body: Element): boolean {
+  return [...body.children].every((child) => child.tagName === "SCRIPT" || (child.id === "iced" && !child.hasChildNodes()));
+}
+
+/**
+ * Mark `frame`, whose program has ended, `data-blank` when it drew
+ * nothing, until something shows in it. A phone's layout folds a blank
+ * frame away, so what the program printed sits at the top of the output
+ * (play.css). A program that is still running is never marked: a frame
+ * that appears later resizes under it.
+ */
+function markBlank(frame: Frame): void {
+  const page = frame.element.contentDocument;
+  if (!page?.body || !drewNothing(page.body)) return;
+  frame.element.dataset.blank = "";
+  const watch = new MutationObserver(() => {
+    if (drewNothing(page.body)) return;
+    delete frame.element.dataset.blank;
+    watch.disconnect();
+  });
+  watch.observe(page.body, { childList: true, subtree: true });
+}
+
 /** An empty terminal in `frame`. */
 function terminalIn(frame: Frame): HTMLPreElement {
   const page = frame.element.contentWindow!.document;
@@ -318,7 +345,9 @@ export function universe({ document, fetch, compile, build = PLAIN }: UniverseEn
         answer.catch(() => {});
         return { kind: "text", status: 0, output: [] };
       }
-      return JSON.parse(await answer);
+      const done = JSON.parse(await answer);
+      markBlank(frame);
+      return done;
     } catch (error) {
       const message = frame.instance.panic_message?.() ?? String(error);
       // A browser that can't suspend the program says so in its frame.
@@ -327,6 +356,7 @@ export function universe({ document, fetch, compile, build = PLAIN }: UniverseEn
         return { kind: "text", status: 101, output: [] };
       }
       debugged?.ended(101);
+      markBlank(frame);
       return { kind: "text", status: 101, output: [{ stream: "stderr", text: message + "\n" }] };
     }
   };
@@ -345,6 +375,7 @@ export function universe({ document, fetch, compile, build = PLAIN }: UniverseEn
     const done = await Promise.race([answer.then((text) => JSON.parse(text)), next]);
     if (done) {
       if (done.kind !== "error") debugged.ended(done.status);
+      markBlank(frame);
       return done;
     }
     terminal(frame);

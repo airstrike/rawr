@@ -18,6 +18,18 @@
 // `"children": true`, so each value comes with its parts for the panel's
 // and the console's trees.
 
+/**
+ * Whether this browser can pause a program: its `WebAssembly.Suspending`
+ * (JSPI) is the browser's own. The debugger's `hello` makes the same test
+ * in the frame, where a page without one has a stand-in
+ * (scripts/universe.ts). The page asks it before it fetches the debugger
+ * build.
+ */
+export function canPause(assembly: object | null = globalThis.WebAssembly ?? null): boolean {
+  const suspending = assembly && Reflect.get(assembly, "Suspending");
+  return typeof suspending === "function" && Function.prototype.toString.call(suspending).includes("[native code]");
+}
+
 /** Where the universe puts a snippet's crate root. */
 export const ROOT = "/universe/src/main.rs";
 

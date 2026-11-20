@@ -34,7 +34,8 @@
 // debugger build of the universe instead (Deps.debugging), fetched the first
 // time it is turned on: the program in the output starts again from its
 // start, under the debugger (debugger.ts), and the panel opens. Turned off,
-// the program runs again as before, on the plain module or rawr-web.
+// the program runs again as before, on the plain module or rawr-web. A
+// browser without JSPI can't pause a program, so there it stays off.
 
 import { crates, usesCrate, type Debugged, type Frame } from "../scripts/universe.ts";
 import type { Debugger } from "./debugger.ts";
@@ -145,8 +146,12 @@ export interface Deps {
   universe?: Universe;
   /** Where a universe frame goes: the output pane's host for it. */
   frameHost?(): Element | null;
-  /** The debugger build of the universe, and the page's side of its debugger. */
-  debugging?: { universe: Universe; debugger: Debugger };
+  /**
+   * The debugger build of the universe, the page's side of its debugger,
+   * and whether this browser can pause a program (debugger.ts's
+   * `canPause`). Where it can't, the debugger stays off.
+   */
+  debugging?: { universe: Universe; debugger: Debugger; pausable: boolean };
   now(): number;
   clipboard(text: string): Promise<void>;
   turnstile(): Widget | undefined;
@@ -298,10 +303,11 @@ export class Session {
 
   /**
    * The debugger icon: run the program again from its start under the
-   * debugger, or, turned off, as it ran before.
+   * debugger, or, turned off, as it ran before. A browser that can't
+   * pause a program never turns it on, nor fetches its build.
    */
   debug(on = !this.state.debugging): Promise<void> {
-    if (on === this.state.debugging || (on && !this.deps.debugging)) return Promise.resolve();
+    if (on === this.state.debugging || (on && !this.deps.debugging?.pausable)) return Promise.resolve();
     // The frame made ahead is the other module's.
     const next = this.next;
     this.next = null;

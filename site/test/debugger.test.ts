@@ -2,10 +2,11 @@
 // The playground's debugger (src/play/debugger.ts) against a stand-in for
 // the debugger build's instance, and the session's debugger icon against
 // stand-in universes: the held start, the capabilities said up front, the
-// breakpoints a click sets, and a pause's frames and bindings.
+// breakpoints a click sets, a pause's frames and bindings, and the icon's
+// gate on the browser's own JSPI.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Debugger, ROOT } from "../src/play/debugger.ts";
+import { canPause, Debugger, ROOT } from "../src/play/debugger.ts";
 import { Session, type State, type Universe } from "../src/play/session.ts";
 import type { Frame } from "../src/scripts/universe.ts";
 
@@ -156,7 +157,8 @@ function universe(name: string, debuggee: object = {}) {
   return { stand, runs, removed };
 }
 
-test("the debugger icon runs the program again on the debugger build, held at its start, and back", async () => {
+/** A session whose debugger icon has stand-in universes, in a browser that can pause or can't. */
+function debuggable(pausable: boolean) {
   const plain = universe("plain");
   const page = instance(answers(true));
   const debugged = universe("debugger", page.debuggee);
@@ -180,10 +182,15 @@ test("the debugger icon runs the program again on the debugger build, held at it
       clearTimeout: () => {},
       universe: plain.stand,
       frameHost: () => ({}) as Element,
-      debugging: { universe: debugged.stand, debugger: debug },
+      debugging: { universe: debugged.stand, debugger: debug, pausable },
     },
     "dark",
   );
+  return { session, plain, debugged, page, debug };
+}
+
+test("the debugger icon runs the program again on the debugger build, held at its start, and back", async () => {
+  const { session, plain, debugged, page, debug } = debuggable(true);
   await session.go();
   assert.equal(session.state.output.kind, "term", "a plain program runs in rawr-web");
   await session.debug();
@@ -199,4 +206,22 @@ test("the debugger icon runs the program again on the debugger build, held at it
   assert.ok(debugged.removed.includes("debugger"), "the debugger's frame goes");
   assert.equal((session.state as State).output.kind, "term", "and the program runs as before");
   assert.equal(debug.state.phase, "idle");
+});
+
+test("a browser can pause only with its own WebAssembly.Suspending", () => {
+  // A browser's own function prints as native code; the frame's stand-in prints its source.
+  assert.equal(canPause({ Suspending: Math.max }), true);
+  assert.equal(canPause({ Suspending: function () {} }), false, "a stand-in, as a page without JSPI has in its frame");
+  assert.equal(canPause({}), false, "no JSPI");
+  assert.equal(canPause(null), false, "no WebAssembly");
+});
+
+test("a browser that can't pause never turns the debugger on, nor runs its build", async () => {
+  const { session, debugged, page } = debuggable(false);
+  await session.go();
+  await session.debug();
+  assert.equal(session.state.debugging, false);
+  assert.deepEqual(debugged.runs, [], "the debugger build never runs");
+  assert.deepEqual(page.asked, []);
+  assert.equal(session.state.output.kind, "term", "the program's output stays");
 });
