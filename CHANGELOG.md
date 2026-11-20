@@ -6,6 +6,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.72 (2026-11-20)
+
+- A path goes on through a module that a `use` or a glob binds, as rustc resolves it: `impl m::Tr for ..` after `use super::*;` reaches the parent's `use crate::m`, and `super::m::two()` reaches the parent's `use crate::m;`, in types, traits and expressions. (#2368)
+- `f.align()` in a `fmt` body gives std's `fmt::Alignment` (Left, Right, Center) of the caller's spec. (#2349)
+
 ## 0.4.71 (2026-11-20)
 
 - Under `rawr dap`, rawr's own progress and status lines reach the editor as console output; only the program's stderr shows as stderr. (#2367)

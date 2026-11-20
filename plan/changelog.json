@@ -8,6 +8,14 @@
   },
   "releases": [
     {
+      "version": "0.4.72",
+      "date": "2026-11-20",
+      "entries": [
+        {"text":"A path goes on through a module that a `use` or a glob binds, as rustc resolves it: `impl m::Tr for ..` after `use super::*;` reaches the parent's `use crate::m`, and `super::m::two()` reaches the parent's `use crate::m;`, in types, traits and expressions.","issues":[2368]},
+        {"text":"`f.align()` in a `fmt` body gives std's `fmt::Alignment` (Left, Right, Center) of the caller's spec.","issues":[2349]}
+      ]
+    },
+    {
       "version": "0.4.71",
       "date": "2026-11-20",
       "entries": [
