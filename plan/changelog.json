@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.4.51",
+      "date": "2026-11-19",
+      "entries": [
+        {"text":"?play's universe binds iced's `text_input`, so a snippet can take typed text. It also holds iced's `styling` example, so snippets can use `checkbox`, `toggler`, `progress_bar`, `scrollable`, `container` and `rule`.","issues":[2312]}
+      ]
+    },
+    {
       "version": "0.4.50",
       "date": "2026-11-19",
       "entries": [

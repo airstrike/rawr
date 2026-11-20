@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-19",
-  "version": "0.4.50",
+  "version": "0.4.51",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.51",
+        "date": "2026-11-19",
+        "entries": [
+          {"text":"?play's universe binds iced's `text_input`, so a snippet can take typed text. It also holds iced's `styling` example, so snippets can use `checkbox`, `toggler`, `progress_bar`, `scrollable`, `container` and `rule`.","issues":[2312]}
+        ]
+      },
       {
         "version": "0.4.50",
         "date": "2026-11-19",
@@ -5440,7 +5447,7 @@
     {"issue":2309,"title":"The debugger evaluates only in the innermost frame, even with another frame selected","state":"closed","category":"Health","release":"0.4.40"},
     {"issue":2310,"title":"`rawr gui`'s debugger window splits into panes you resize by dragging (source, console, frame…","state":"closed","category":"Health","release":"0.4.42"},
     {"issue":2311,"title":"The playground's Crates group has iced examples that run in the browser: a counter, a to-do…","state":"closed","category":"Platforms","release":"0.4.43"},
-    {"issue":2312,"title":"The browser universe binds no iced text_input, so a playground snippet can't take typed input","state":"open","category":"Platforms"},
+    {"issue":2312,"title":"The browser universe binds no iced text_input, so a playground snippet can't take typed input","state":"closed","category":"Platforms","release":"0.4.51"},
     {"issue":2313,"title":"The debugger reads a map, set or sequence holding a program's own structs or enums as Rust's…","state":"closed","category":"Divergences from rustc","release":"0.4.44"},
     {"issue":2314,"title":"Superseded builds of rawr's own crates pile up in target/debug despite #1732's prune","state":"closed","category":"Health"},
     {"issue":2315,"title":"A debugger attached to a running program names the function it pauses in and reads that…","state":"closed","category":"Health","release":"0.4.45"},
@@ -5453,7 +5460,8 @@
     {"issue":2322,"title":"/play says why the browser universe did not load when it falls back to the server, skips the…","state":"closed","category":"Health","release":"0.4.50"},
     {"issue":2323,"title":"The home page shows the debugger's four shells with the same tabs as the libraries above them","state":"closed","category":"Health","release":"0.4.50"},
     {"issue":2324,"title":"Find why /play's universe frame fails on iOS WebKit","state":"open","category":"Health"},
-    {"issue":2325,"title":"Let-pattern diagnostics diverge from rustc: array length, tuple arity, a second `..`, a tuple-struct pattern's span","state":"open","category":"Health"}
+    {"issue":2325,"title":"Let-pattern diagnostics diverge from rustc: array length, tuple arity, a second `..`, a tuple-struct pattern's span","state":"open","category":"Health"},
+    {"issue":2326,"title":"?play snippets can't use radio, tooltip, combo_box, text_editor, vertical_slider, mouse_area or stack","state":"open","category":"Platforms"}
   ],
   "groups": [
     {
@@ -8064,7 +8072,7 @@
             {"number":464,"title":"Universe runs lack operation limits, interleaved output and rendered errors","state":"open"},
             {"number":879,"title":"Find why the ?play universe runner accepted std::io::Error::other at 0.3.119 but not at 0.3.122","state":"open"},
             {"number":2230,"title":"A panic in a call the page makes into a running program aborts the instance with no message in its frame","state":"open"},
-            {"number":2312,"title":"The browser universe binds no iced text_input, so a playground snippet can't take typed input","state":"open"}
+            {"number":2312,"title":"The browser universe binds no iced text_input, so a playground snippet can't take typed input","state":"closed"}
           ]
         },
         {

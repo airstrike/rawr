@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.51 (2026-11-19)
+
+- ?play's universe binds iced's `text_input`, so a snippet can take typed text. It also holds iced's `styling` example, so snippets can use `checkbox`, `toggler`, `progress_bar`, `scrollable`, `container` and `rule`. (#2312)
+
 ## 0.4.50 (2026-11-19)
 
 - The home page shows the debugger in every shell (VS Code, `rawr gui`, `rawr tui`, the playground), and the debugging docs explain the window pane by pane and list the terminal shell's keys. (#2321)
