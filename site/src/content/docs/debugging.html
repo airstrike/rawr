@@ -1,10 +1,48 @@
-<meta name="description" content="Debug a rawr program from VS Code, Helix, Neovim or Zed with rawr dap: breakpoints, steps, the call stack, values field by field and evaluation, while a save still reloads the program.">
+<meta name="description" content="Debug a rawr program in a window with rawr gui, in a terminal with rawr tui, or from VS Code, Helix, Neovim or Zed with rawr dap: breakpoints, steps, the call stack, values field by field and evaluation, while a save still reloads the program.">
 <article>
 <h1>Debugging</h1>
-<p class="lede">Debug a rawr program from your editor: set breakpoints, step, read the call stack and expand values field by field, while each save still reloads the program.</p>
-<p><code>rawr dap</code> is a Debug Adapter Protocol server on stdio. It comes with <code>rawr</code> itself. Like <a href="/docs/agents"><code>rawr mcp</code></a>, it is one shell of the run&rsquo;s debugger session, so an editor and an agent can work on the same run at once.</p>
+<p class="lede">Debug a rawr program in a window, in a terminal or from your editor: set breakpoints, step, read the call stack and expand values field by field, while each save still reloads the program.</p>
+<p>A run has one debugger session. Each shell is a view of it: <code>rawr gui</code> in a window of its own, <code>rawr tui</code> in a terminal, your editor through <code>rawr dap</code>, and an agent through <a href="/docs/agents"><code>rawr mcp</code></a>. Every shell shows the same breakpoints and values, so several can work on one run at once, as <a href="#with-agents">With an agent on the same run</a> explains.</p>
 
-<h2 id="what">What it does</h2>
+<h2 id="window">The debugger window</h2>
+<p><code>rawr gui [path]</code> opens a window on the program&rsquo;s run. It attaches to a <code>rawr run</code> already going for the program, else it starts one and ends it when the window closes. The window draws in a process of its own, so it keeps drawing while the program is paused. <a href="#window-panes">Figure 1</a> shows it paused at a breakpoint.</p>
+<figure class="shot panes" id="window-panes">
+  <div class="pins">
+    <img src="/img/debugger-gui-720.webp" srcset="/img/debugger-gui-720.webp 720w, /img/debugger-gui-1440.webp 1440w" sizes="(max-width: 900px) 100vw, 736px" width="720" height="511" loading="lazy" decoding="async" alt="The rawr gui window paused at line 18, with its toolbar, source, call stack, bindings, console and output">
+    <i style="left: 49%; top: 5.4%">1</i>
+    <i style="left: 30%; top: 58%">2</i>
+    <i style="left: 80%; top: 22%">3</i>
+    <i style="left: 80%; top: 62.5%">4</i>
+    <i style="left: 30%; top: 74.5%">5</i>
+    <i style="left: 57.5%; top: 93%">6</i>
+  </div>
+  <figcaption>Figure 1. <code>rawr gui</code> paused at line 18, with <code>players</code> opened to one row per key.</figcaption>
+</figure>
+<ol>
+  <li><strong>The toolbar</strong> continues and pauses (F8), and steps over (F10), into (F11) and out (Shift+F11), as in DevTools. Beside it is where the program is: running, or paused and why.</li>
+  <li><strong>The source</strong> shows the file around the paused line, which is highlighted. Click in the gutter left of a line number to set a breakpoint there, drawn as a red dot, and click it again to clear it.</li>
+  <li><strong>The call stack</strong> lists the frames, each by its Rust path. Pick one to see its bindings.</li>
+  <li><strong>The bindings</strong> are the picked frame&rsquo;s, each as Rust&rsquo;s <code>{:?}</code> prints it. A struct, a list or a map opens into its fields or items. Here the map <code>players</code> is open to a row per key.</li>
+  <li><strong>The console</strong> evaluates Rust where the program is paused, in the picked frame.</li>
+  <li><strong>The output</strong> is what the program printed. A program with a window also shows its latest frame in the debugger window.</li>
+</ol>
+
+<h2 id="terminal">In a terminal</h2>
+<p><code>rawr tui [path]</code> is the same debugger in a terminal, with the same panes: the source, the frames, the bindings and the breakpoints, the program&rsquo;s output under them, and the keys along the bottom. It attaches to a run or starts one, as the window does. Tab moves between the source, the frames and the bindings, and the arrow keys or <code>j</code> and <code>k</code> move within one.</p>
+<table>
+  <tr><th>Key</th><th>Does</th></tr>
+  <tr><td><code>b</code></td><td>Sets or clears a breakpoint on the source line under the cursor.</td></tr>
+  <tr><td><code>B</code></td><td>Asks where to break: <code>file:line</code>, a line, or a function.</td></tr>
+  <tr><td><code>p</code></td><td>Pauses the running program.</td></tr>
+  <tr><td><code>s</code>, <code>i</code>, <code>o</code></td><td>Steps over, into and out.</td></tr>
+  <tr><td><code>c</code></td><td>Continues.</td></tr>
+  <tr><td><code>e</code></td><td>Asks for Rust to evaluate where the program is paused.</td></tr>
+  <tr><td>Enter, &rarr;, &larr;</td><td>Open and close a binding, in the bindings pane.</td></tr>
+  <tr><td><code>q</code></td><td>Quits the debugger. The run goes on if the debugger didn&rsquo;t start it.</td></tr>
+</table>
+
+<h2 id="what">In your editor</h2>
+<p><code>rawr dap</code> is a Debug Adapter Protocol server on stdio. It comes with <code>rawr</code> itself. An editor that speaks the protocol launches a program under it, or attaches to one running in a terminal.</p>
 <ul>
   <li><strong>Launch</strong> starts <code>rawr run</code> on <code>program</code>, a crate&rsquo;s directory or <code>Cargo.toml</code>, or one <code>.rs</code> file, with <code>args</code>. Relative paths start at <code>cwd</code>. The program waits at its first statement until the editor has set its breakpoints and sent <code>configurationDone</code>, so a breakpoint in code that runs at startup is hit.</li>
   <li><strong>Attach</strong> reaches a <code>rawr run</code> started in a terminal for <code>program</code>. A run started in a terminal has no debugger until a shell asks. The program then takes one at its next step, keeping its state and its process, with or without Rust dependencies. Its stack leaves out the calls that were under way when the debugger arrived, except the one the program is in, which shows without its name.</li>
