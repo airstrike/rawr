@@ -38,6 +38,7 @@ export const GROUPS: [string, Item[]][] = [
       ["/docs/reference/macros", "Macros"],
       ["/docs/reference/std", "std"],
     ]],
+    ["/docs/reference/native-boundary", "Native boundary"],
     ["/docs/reference/commands", "Commands"],
     ["/docs/reference/requirements", "Requirements"],
     ["/docs/reference/play", "Play sandbox"],

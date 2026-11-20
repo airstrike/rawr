@@ -1,4 +1,4 @@
-<meta name="description" content="How rawr runs Rust without compiling it, how it checks borrows and generics, and why it does not interpret rustc&#x27;s MIR.">
+<meta name="description" content="How rawr runs Rust without compiling it, how it checks borrows and generics, how native code calls marked code, and why it does not interpret rustc&#x27;s MIR.">
 <article>
 <h1>How it works</h1>
 <p class="lede">How rawr runs Rust without compiling it, and why it is built this way.</p>
@@ -90,6 +90,13 @@ fn main() {
 <p>Such a function&rsquo;s type parameter can be fixed by a later use of the call&rsquo;s value, as in rustc. In iced&rsquo;s tour, <code>padded_button("Back").on_press(Message::BackPressed)</code> calls <code>fn padded_button&lt;Message: Clone&gt;(label: &amp;str) -&gt; Button&lt;'_, Message, &amp;str&gt;</code>, and <code>.on_press(..)</code> fixes <code>Message</code>. The call runs the copy for the type the end of the calling function resolves.</p>
 <p>Generic code in an imported crate is compiled natively for the concrete types your program uses.</p>
 <p>Code that relies on a separate copy of a function for each type is not supported. <code>std::mem::size_of::&lt;T&gt;()</code> is an example.</p>
+
+<h2 id="native-calls">How does native code call marked code?</h2>
+<p>Under <code>rawr run</code>, each function of a marked module that native code can call gets a generated trampoline with the same signature. The trampoline hands its arguments to the interpreter. The interpreter runs the marked function. The trampoline returns the result to native code. <a href="/docs/reference/native-boundary">Native boundary</a> says which values cross and how.</p>
+<p>The trampolines live in rawr&rsquo;s own copy of the crate, under <code>target/rawr/crate</code>. For a workspace member, the copy is under <code>target/rawr/members/&lt;path&gt;/crate</code> in the workspace&rsquo;s <code>target/</code>. A package that <a href="/docs/run#library">runs from its library</a> also gets a copy of its binary under <code>target/rawr/bin</code>. rawr runs the binary from there. Your crate never depends on rawr.</p>
+<p>The copy reads your package&rsquo;s other files where <code>cargo build</code> reads them. In the copy, <code>env!("CARGO_MANIFEST_DIR")</code> names your package&rsquo;s directory. Paths relative to a source file reach your files, so <code>include_bytes!</code> and <code>include_str!</code> read them. That holds for a file outside the package too.</p>
+<p>Your build script runs in your package&rsquo;s directory. <code>CARGO_MANIFEST_DIR</code> names that directory for it. Cargo watches the files that its <code>rerun-if-changed</code> lines name there. It runs the script again when it would under <code>cargo build</code>. A save that swaps in place never runs the build script. The modules your build script declares with <code>mod</code> resolve beside it, wherever the <code>build</code> key of <code>Cargo.toml</code> puts it.</p>
+<p>The copy has your package&rsquo;s <code>[features]</code>. It builds with the features that Cargo enables for your package under the command&rsquo;s feature flags, as <a href="/docs/run#features">Features</a> says. Code under <code>#[cfg(feature = "&hellip;")]</code> builds as it does under <code>cargo run</code>. An optional dependency is there when an enabled feature turns it on.</p>
 
 <h2 id="miri">Why not use Miri or interpret rustc&rsquo;s MIR?</h2>
 <p>Miri cannot call native code, so it cannot drive iced, wgpu or the window system. Miri is also slow on purpose, because it checks each operation for undefined behaviour.</p>
