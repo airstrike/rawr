@@ -28,10 +28,10 @@ pub(crate) use error::{
     Unsatisfied, Unsupported, ASYNC_MAIN, IF_WITHOUT_ELSE, INVALID_ASSIGNEE, RETURN_WITHOUT_VALUE,
 };
 pub use error::{
-    Annotation, Arguments, Arms, Assignment, Beyond, BindingSite, Bound, Boxing, Callee, Category,
-    Cloning, Detail, Error, Expansion, Fields, Import, Imported, Instead, Lint, MacroScope,
-    Missing, MoveCause, MovedPlace, MutBinding, OwningParameter, PatternOrigin, PatternTypes,
-    Private, Referent, Required, Unexpected, Unresolved,
+    Annotation, Arguments, Arms, Assignment, Beyond, BinaryOperation, BindingSite, Bound, Boxing,
+    Callee, Category, Cloning, Detail, Error, Expansion, Fields, Import, Imported, Instead, Lint,
+    MacroScope, Missing, MissingImpl, MoveCause, MovedPlace, MutBinding, OwningParameter,
+    PatternOrigin, PatternTypes, Private, Referent, Required, Unexpected, Unresolved,
 };
 use std::collections::BTreeMap;
 

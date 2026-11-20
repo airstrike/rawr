@@ -3460,10 +3460,10 @@ impl<'a> Resolver<'a> {
             && !self.tables.reaches(root)
     }
 
-    /// Whether `path` in `context` names a module of this crate or of
-    /// another. A probe: a crate's miss it finds isn't recorded.
-    fn names_module(&self, context: &Context, path: &[ImmutableString]) -> bool {
-        let target = if self.is_script_path(context, path) {
+    /// What `path` in `context` names in this crate or another. A probe: a
+    /// crate's miss it finds isn't recorded.
+    fn probe(&self, context: &Context, path: &[ImmutableString]) -> Option<Target> {
+        if self.is_script_path(context, path) {
             self.resolve_path(context, path, Span::NONE, &mut BTreeSet::new())
                 .ok()
         } else {
@@ -3475,8 +3475,33 @@ impl<'a> Resolver<'a> {
                 None,
             )
             .ok()
-        };
-        matches!(target, Some(Target::Module | Target::HostModuleItem { .. }))
+        }
+    }
+
+    /// Whether `path` in `context` names a module of this crate or of
+    /// another.
+    fn names_module(&self, context: &Context, path: &[ImmutableString]) -> bool {
+        matches!(
+            self.probe(context, path),
+            Some(Target::Module | Target::HostModuleItem { .. })
+        )
+    }
+
+    /// The kind of value `path` in `context` names, as rustc's E0432 names
+    /// a value where the path needs a module or a type: `function` or
+    /// `constant`.
+    fn value_noun(&self, context: &Context, path: &[ImmutableString]) -> Option<&'static str> {
+        match self.probe(context, path)? {
+            Target::Item(key) if key.kind() == crate::item::Kind::Function => Some("function"),
+            Target::HostItem { definitions, .. } => match definitions.first()?.kind() {
+                host::item::Kind::Value => Some("constant"),
+                host::item::Kind::Function | host::item::Kind::IntrinsicFunction => {
+                    Some("function")
+                }
+                _ => None,
+            },
+            _ => None,
+        }
     }
 
     /// The longest proper prefix of `path` in `context` that names a module,
@@ -3567,11 +3592,17 @@ impl<'a> Resolver<'a> {
                     reference,
                     missing: Unresolved::Item(self.rustc_module(context, &path[..end])),
                 },
-                Some(end) if let Some(span) = segment(end) => Error::UnknownImport {
-                    path: path[..=end].join("::").into(),
-                    reference: span,
-                    missing: Unresolved::Module(self.rustc_module(context, &path[..end])),
-                },
+                Some(end) if let Some(span) = segment(end) => {
+                    let module = self.rustc_module(context, &path[..end]);
+                    Error::UnknownImport {
+                        path: path[..=end].join("::").into(),
+                        reference: span,
+                        missing: match self.value_noun(context, &path[..=end]) {
+                            Some(noun) => Unresolved::Value { noun, module },
+                            None => Unresolved::Module(module),
+                        },
+                    }
+                }
                 _ => return failure,
             },
         };

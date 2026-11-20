@@ -591,6 +591,9 @@ impl fmt::Display for ParseErrorType {
                 crate::resolve::Error::CannotCompare { lhs, rhs, .. } => {
                     crate::resolve::CannotCompare(lhs, rhs).fmt(f)
                 }
+                crate::resolve::Error::BinaryOperation { operation, .. } => {
+                    f.write_str(&operation.message)
+                }
                 crate::resolve::Error::ArgumentSignature {
                     closure,
                     expected,

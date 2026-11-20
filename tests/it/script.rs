@@ -77,7 +77,12 @@ fn load_reports_the_script_s_compile_error_at_its_path() {
     let path = rules("typo", "use bank::Transaction;\nfn category(tx: Transaction) -> Option<String> { Some(tx.payeee) }\n");
     let error = failure(engine().load(&path));
     assert!(error.starts_with("error[E0609]: no field `payeee` on type `Transaction`"), "{error}");
-    assert!(error.contains(&format!(" --> {}:2:", path.display())), "{error}");
+    // rustc shows a path under the current directory from there.
+    let shown = std::env::current_dir()
+        .ok()
+        .and_then(|current| path.strip_prefix(current).ok().map(PathBuf::from))
+        .unwrap_or_else(|| path.clone());
+    assert!(error.contains(&format!(" --> {}:2:", shown.display())), "{error}");
 }
 
 #[test]

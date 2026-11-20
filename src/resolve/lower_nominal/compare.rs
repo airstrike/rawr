@@ -5,6 +5,7 @@
 //! `u64` or `usize` sits, whose bits order as an unsigned number (D425).
 
 use super::*;
+use crate::resolve::{BinaryOperation, MissingImpl};
 
 /// Where a value's static type reads integers as unsigned: a `u64` or a
 /// `usize` is its bits in the runtime's `i64`.
@@ -551,18 +552,7 @@ impl<'a> Parser<'a> {
                 || self.std_declared(&peeled)
                     && !matches!(peeled, Ty::Bool | Ty::Char | Ty::Int(_) | Ty::Float(_))
             {
-                return Err(Error::StdPath {
-                    code: "E0369",
-                    message: format!(
-                        "binary operation `{symbol}` cannot be applied to type `{}`",
-                        self.inference.resolve(&lhs.ty).name(&self.models)
-                    )
-                    .into(),
-                    label: None,
-                    note: None,
-                    reference: operator_at
-                        .unwrap_or_else(|| span(lhs.span.start(), rhs.span.end())),
-                });
+                return Err(self.binary_operation(symbol, "PartialOrd", operator_at, lhs, rhs));
             }
             return Ok(None);
         };
@@ -701,17 +691,42 @@ impl<'a> Parser<'a> {
         lhs: &ParsedExpr,
         rhs: &ParsedExpr,
     ) -> Error {
-        Error::StdPath {
-            code: "E0369",
-            message: format!(
-                "binary operation `{}` cannot be applied to type `{}`",
-                if negate { "!=" } else { "==" },
-                self.compared_name(&lhs.ty)
-            )
-            .into(),
-            label: None,
-            note: None,
-            reference: operator_at.unwrap_or_else(|| span(lhs.span.start(), rhs.span.end())),
+        let symbol = if negate { "!=" } else { "==" };
+        self.binary_operation(symbol, "PartialEq", operator_at, lhs, rhs)
+    }
+
+    /// rustc's E0369 for `lhs symbol rhs` whose left operand's type has no
+    /// impl of `capability`, at the operator: each operand labeled with its
+    /// type, and the program's own type noted where it is declared.
+    fn binary_operation(
+        &self,
+        symbol: &str,
+        capability: &str,
+        operator_at: Option<Span>,
+        lhs: &ParsedExpr,
+        rhs: &ParsedExpr,
+    ) -> Error {
+        let left = self.compared_name(&lhs.ty);
+        let mut owner = self.inference.resolve(&lhs.ty);
+        while let Ty::Reference { target, .. } | Ty::Boxed(target) = owner {
+            owner = self.inference.resolve(&target);
+        }
+        let missing = self.declared_name(&owner).map(|declared| MissingImpl {
+            capability: capability.into(),
+            owner: owner.name(&self.models),
+            declared,
+        });
+        Error::BinaryOperation {
+            operation: Box::new(BinaryOperation {
+                message: format!("binary operation `{symbol}` cannot be applied to type `{left}`")
+                    .into(),
+                operands: [
+                    (self.expression_span(lhs.span), left),
+                    (self.expression_span(rhs.span), self.compared_name(&rhs.ty)),
+                ],
+                missing,
+            }),
+            at: operator_at.unwrap_or_else(|| span(lhs.span.start(), rhs.span.end())),
         }
     }
 

@@ -658,7 +658,8 @@ pub fn finish() -> Value { builder().finish() }
         ParseErrorType::Resolution(resolve::Error::UnknownType { name, .. })
             if name == "hidden::Builder"
     ));
-    assert_eq!(error.primary_span().start(), position_of(named, "hidden::Builder"));
+    // rustc points at the segment that fails, as E0603 and E0425 do.
+    assert_eq!(error.primary_span().start(), position_of(named, "Builder"));
 
     let imported = "use hidden::Builder;";
     let error = engine.compile_executable(imported).unwrap_err();

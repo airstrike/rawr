@@ -1285,6 +1285,7 @@ fn diagnostic_path(error: &crate::resolve::Error) -> Option<(String, ImportedNam
         | R::NotYet { .. }
         | R::TypeAnnotationsNeeded { .. }
         | R::CannotCompare { .. }
+        | R::BinaryOperation { .. }
         | R::ArgumentSignature { .. }
         | R::MemberKind { .. }
         | R::OverflowingLiteral { .. }

@@ -149,9 +149,10 @@ fn test_match_ranges() {
             .unwrap(),
         'a'
     );
+    // rustc's E0308 at the pattern: "expected `i64`, found floating-point number".
     assert!(matches!(
         engine.compile_with_scope(&scope, "match x { 10..20 => 'q', 42.0 => 'x', _ => '-' }").unwrap_err().err_type(),
-        ParseErrorType::Resolution(rawr::resolve::Error::TypeMismatch { .. })
+        ParseErrorType::Resolution(rawr::resolve::Error::PatternMismatch { .. })
     ));
     assert_eq!(
         engine

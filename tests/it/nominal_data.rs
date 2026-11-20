@@ -336,12 +336,37 @@ fn capability_operations_require_the_corresponding_derive() {
         ("struct Value { inner: i64 } Value::default()", "Default"),
         ("struct Value { inner: i64 } Value { inner: 1 }.clone()", "Clone"),
         ("struct Value { inner: i64 } format!(\"{:?}\", Value { inner: 1 })", "Debug"),
-        ("struct Value { inner: i64 } Value { inner: 1 } == Value { inner: 1 }", "PartialEq"),
     ];
 
     for (source, capability) in cases {
         assert_resolution(&Engine::new(), source, Category::MissingCapability, capability);
     }
+
+    // An operator is rustc's E0369, which notes the missing impl at the type.
+    let error = resolution_error(&Engine::new(), "struct Value { inner: i64 } Value { inner: 1 } == Value { inner: 1 }", Category::BinaryOperation, "binary operation `==` cannot be applied to type `Value`");
+    let shown = error.to_string();
+    assert!(
+        shown.starts_with(
+            "error[E0369]: binary operation `==` cannot be applied to type `Value`
+ --> <script>:1:48
+  |
+1 | struct Value { inner: i64 } Value { inner: 1 } == Value { inner: 1 }
+  |                             ------------------ ^^ ------------------ Value
+  |                             |
+  |                             Value
+  |
+note: an implementation of `PartialEq` might be missing for `Value`
+ --> <script>:1:1
+  |
+1 | struct Value { inner: i64 } Value { inner: 1 } == Value { inner: 1 }
+  | ^^^^^^^^^^^^ must implement `PartialEq`
+help: consider annotating `Value` with `#[derive(PartialEq)]`
+  |
+1 + #[derive(PartialEq)]
+"
+        ),
+        "{shown}"
+    );
 }
 
 #[test]

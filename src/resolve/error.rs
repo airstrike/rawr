@@ -122,6 +122,9 @@ pub enum Category {
     /// An `==` or `!=` whose left operand's type has no `PartialEq` impl
     /// for the right operand's, as rustc's E0277.
     CannotCompare,
+    /// A binary operator whose left operand's type has no impl of the
+    /// operator's trait, as rustc's E0369.
+    BinaryOperation,
     /// A closure or function whose parameters differ from the ones its
     /// callable's signature gives, as rustc's E0631.
     ArgumentSignature,
@@ -195,6 +198,7 @@ impl fmt::Display for Category {
             Self::TypeAnnotationsNeeded => formatter.write_str("type annotations needed"),
             Self::ArgumentCount => formatter.write_str("wrong number of arguments"),
             Self::CannotCompare => formatter.write_str("can't compare"),
+            Self::BinaryOperation => formatter.write_str("binary operation"),
             Self::ArgumentSignature => formatter.write_str("type mismatch in arguments"),
             Self::PrivateItem => formatter.write_str("private item"),
             Self::OverflowingLiteral => formatter.write_str("literal out of range"),
@@ -1481,6 +1485,14 @@ pub enum Error {
         /// The operator.
         at: Span,
     },
+    /// A binary operator whose left operand's type has no impl of the
+    /// operator's trait, which rustc refuses (E0369).
+    BinaryOperation {
+        /// rustc's message and what its labels and note name.
+        operation: Box<BinaryOperation>,
+        /// The operator.
+        at: Span,
+    },
     /// A closure or function passed where a callable of the same arity is
     /// expected whose parameters differ, which rustc refuses (E0631).
     ArgumentSignature {
@@ -1718,6 +1730,7 @@ impl Error {
             Self::TypeAnnotationsNeeded { .. } => Category::TypeAnnotationsNeeded,
             Self::ArgumentCount { .. } => Category::ArgumentCount,
             Self::CannotCompare { .. } => Category::CannotCompare,
+            Self::BinaryOperation { .. } => Category::BinaryOperation,
             Self::ArgumentSignature { .. } => Category::ArgumentSignature,
             Self::PrivateItem { .. } => Category::PrivateItem,
             Self::OverflowingLiteral { .. } => Category::OverflowingLiteral,
@@ -1793,6 +1806,7 @@ impl Error {
             Self::TypeAnnotationsNeeded { parameter, .. } => parameter.as_str(),
             Self::ArgumentCount { name, .. } => name.as_str(),
             Self::CannotCompare { lhs, .. } => lhs.as_str(),
+            Self::BinaryOperation { operation, .. } => operation.message.as_str(),
             Self::ArgumentSignature { expected, .. } => expected.as_str(),
         }
     }
@@ -1864,6 +1878,7 @@ impl Error {
             | Self::Unimplemented { at, .. }
             | Self::UnlabeledJumpInWhileCondition { at, .. }
             | Self::CannotCompare { at, .. }
+            | Self::BinaryOperation { at, .. }
             | Self::ArgumentSignature { at, .. } => *at,
         }
     }
@@ -1951,6 +1966,7 @@ impl Error {
             | Self::NotYet { .. }
             | Self::TypeAnnotationsNeeded { .. }
             | Self::CannotCompare { .. }
+            | Self::BinaryOperation { .. }
             | Self::ArgumentSignature { .. }
             | Self::OverflowingLiteral { .. }
             | Self::KnownPanic { .. } => None,
@@ -2080,6 +2096,15 @@ pub enum Unresolved {
     /// The module before the last segment, as rustc names it, has no
     /// module of that name: "could not find `nothing` in `lib`".
     Module(ImmutableString),
+    /// The segment names a value of the module before it, such as a
+    /// function or a constant, where the path needs a module or a type:
+    /// "expected type, found constant `Center` in `iced`".
+    Value {
+        /// The value's kind as rustc names it: `function` or `constant`.
+        noun: &'static str,
+        /// The module, as rustc names it.
+        module: ImmutableString,
+    },
 }
 
 impl Unresolved {
@@ -2092,6 +2117,9 @@ impl Unresolved {
             Self::Unlinked => Some(NotFound::Module(path).undeclared()),
             Self::Item(module) => Some(format!("no `{last}` in `{module}`")),
             Self::Module(module) => Some(format!("could not find `{last}` in `{module}`")),
+            Self::Value { noun, module } => Some(format!(
+                "expected type, found {noun} `{last}` in `{module}`"
+            )),
         }
     }
 }
@@ -2286,6 +2314,33 @@ impl fmt::Display for ArrayLength {
             self.length
         )
     }
+}
+
+/// rustc's E0369 for a binary operator whose left operand's type has no
+/// impl of the operator's trait: its message, and what its labels and
+/// note name.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct BinaryOperation {
+    /// rustc's message: "binary operation `==` cannot be applied to type
+    /// `Value`".
+    pub(crate) message: ImmutableString,
+    /// Each operand's span and type, which rustc labels it with.
+    pub(crate) operands: [(Span, ImmutableString); 2],
+    /// The program's own type the left operand is, where the program
+    /// declares it in the error's file.
+    pub(crate) missing: Option<MissingImpl>,
+}
+
+/// A trait the program's own type has no impl of, where rustc notes the
+/// impl might be missing and suggests deriving it.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct MissingImpl {
+    /// The trait.
+    pub(crate) capability: ImmutableString,
+    /// The type, as the program names it.
+    pub(crate) owner: ImmutableString,
+    /// The type's name in its declaration.
+    pub(crate) declared: Span,
 }
 
 /// The type a pattern matches and the pattern's own, as rustc's E0308
@@ -3120,6 +3175,9 @@ impl fmt::Display for Written<'_> {
                 },
                 callee.code()
             ),
+            Error::BinaryOperation { operation, at } => {
+                write!(formatter, "{} at {at} (E0369)", operation.message)
+            }
             Error::CannotCompare { lhs, rhs, at, .. } => write!(
                 formatter,
                 "{} at {at} (E0277)",

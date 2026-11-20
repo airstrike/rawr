@@ -145,7 +145,8 @@ fn a_path_into_a_rust_module_names_the_app_crate() {
 
     project.write("src/view.rs", "// rawr\nuse crate::model::missing;\n\npub fn total() -> i64 {\n    missing()\n}\n");
     let error = engine.compile_package_executable(&target).unwrap_err().to_string();
-    assert!(error.contains("poly_app::model::missing"), "{error}");
+    // rustc's E0432 names the path as the `use` writes it.
+    assert!(error.contains("unresolved import `crate::model::missing`"), "{error}");
 }
 
 /// A fully qualified expression path into a `.rs` module
