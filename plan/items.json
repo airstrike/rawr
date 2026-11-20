@@ -2348,6 +2348,9 @@
     {"t":"T2346","issue":2346,"title":"T2346: A bare `Mutex` or `Sender` type compiles without a `use`","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"7c6f66ec2","release":"0.4.64"},
     {"t":"T2347","issue":2347,"title":"T2347: Diagnostics left after #2337: struct-variant witnesses, every unresolved member, similar names, lifetimes","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T2348","issue":2348,"title":"T2348: A format width pads a Display impl's whole output; rustc ignores it for write! and pads per `pad` call","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"7c6f66ec2","release":"0.4.64"},
-    {"t":"T2349","issue":2349,"title":"T2349: `f.align()` needs `fmt::Alignment`, and unbound `Reverse(1)` or `PhantomData` lack rustc's import help","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T2349","issue":2349,"title":"T2349: `f.align()` needs `fmt::Alignment`, and unbound `Reverse(1)` or `PhantomData` lack rustc's import help","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T2350","issue":2350,"title":"T2350: The VS Code debugger can't set a variable: `rawr dap` has no setVariable","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":["D1076"],"commit":null,"release":null},
+    {"t":"T2351","issue":2351,"title":"T2351: Every iced project rebuilds its bindings: build scripts differ under rawr's nightly, and the run prints why in red","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":["D608"],"commit":null,"release":null},
+    {"t":"T2352","issue":2352,"title":"T2352: A script Mutex guard passed to drop() never releases the lock","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }
