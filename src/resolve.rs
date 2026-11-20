@@ -24,12 +24,12 @@ use crate::{host, method, parse, program, type_def, ImmutableString, Span};
 pub(crate) use error::{
     derivable, ArgumentCount, ArgumentSignature, ArrayLength, AssignTwice, CannotCompare,
     Described, NonExhaustive, NotFound, PatternFields, Qualified, Refutable, RepeatedRest,
-    SelfOutside, TupleArity, TypeNeeded, UnboundAlternative, Uninitialized, Unsatisfied,
+    SelfOutside, SlicePattern, TypeNeeded, UnboundAlternative, Uninitialized, Unsatisfied,
     Unsupported, ASYNC_MAIN, IF_WITHOUT_ELSE, INVALID_ASSIGNEE, RETURN_WITHOUT_VALUE,
 };
 pub use error::{
     BindingSite, Boxing, Callee, Category, Cloning, Error, Expansion, Lint, MacroScope, MoveCause,
-    MovedPlace, OwningParameter, Private, Unresolved,
+    MovedPlace, OwningParameter, PatternOrigin, PatternTypes, Private, Unresolved,
 };
 use std::collections::BTreeMap;
 

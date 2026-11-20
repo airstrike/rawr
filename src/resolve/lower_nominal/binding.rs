@@ -39,6 +39,9 @@ impl<'a> Parser<'a> {
                 continue;
             }
             let syntax = self.parameter_pattern_syntax(pattern)?;
+            // A pattern of another type is refused beside the written type.
+            let annotated = parameter.ty.span();
+            let origin = || PatternOrigin::Annotation(annotated);
             // `E::A(x): E` of a one-variant enum, or `Some(x): Option<T>`:
             // matched as `let` matches it, `let pattern = parameter;`, after
             // the coverage check finds it irrefutable, or refused as rustc's
@@ -68,10 +71,13 @@ impl<'a> Parser<'a> {
                         at.end(),
                         pending,
                     )
-                })?;
+                })
+                .map_err(|error| error.matched(origin))?;
                 continue;
             }
-            let statements = self.destructure(&syntax, &parameter.name.text, &ty)?;
+            let statements = self
+                .destructure(&syntax, &parameter.name.text, &ty)
+                .map_err(|error| error.matched(origin))?;
             self.write_written(statements, body);
             // The parameter's value keeps what the pattern does not move out.
             if self.drops() {
@@ -911,6 +917,7 @@ impl<'a> Parser<'a> {
         }
         let end = otherwise.syntax.end();
         self.consume_terminator(start)?;
+        let origin = self.subject_origin(&subject);
         self.bind_let_pattern(
             pattern::Site::Let,
             start,
@@ -921,6 +928,7 @@ impl<'a> Parser<'a> {
             end,
             pending,
         )
+        .map_err(|error| error.matched(|| origin))
     }
 
     /// Whether a slice pattern in `syntax` matches a slice of unknown
@@ -1162,7 +1170,7 @@ impl<'a> Parser<'a> {
                 let traced = self.trace_length();
                 let (target, mode) = self.enter_reference(ty);
                 let discard = pattern::Syntax::Discard { span: *span };
-                let shape = pattern::Syntax::tuple_shape(members);
+                let elements = pattern::Syntax::tuple_elements(members);
                 let arity = match &target {
                     Ty::Tuple(types) => Some(types.len()),
                     _ => None,
@@ -1170,12 +1178,9 @@ impl<'a> Parser<'a> {
                 let members = tuple_members(members, arity.unwrap_or(members.len()), &discard)
                     .and_then(|members| match arity {
                         // rustc's E0308 for a tuple of another arity.
-                        Some(arity) if arity != members.len() => Err(Error::TupleArity {
-                            expected: target.name(&self.models),
-                            arity,
-                            found: members.len(),
-                            pattern: *span,
-                        }),
+                        Some(arity) if arity != members.len() => {
+                            Err(self.tuple_arity(&target, arity, members.len(), *span))
+                        }
                         _ => Ok(members),
                     });
                 let members = match members {
@@ -1191,14 +1196,14 @@ impl<'a> Parser<'a> {
                 let types = (0..members.len())
                     .map(|_| self.inference.fresh())
                     .collect::<Box<[_]>>();
-                let destructure = || {
+                let mut destructure = || {
                     // rustc's E0308 names the pattern by its shape, `(_, _)`.
                     if !self.unify_type(&target, &Ty::Tuple(types.clone())) {
-                        return Err(Error::TypeMismatch {
-                            expected: self.inference.resolve(&target).name(&self.models),
-                            actual: shape.into(),
-                            expression: *span,
-                        });
+                        return Err(self.pattern_mismatch(
+                            &self.inference.resolve(&target),
+                            pattern::Found::Tuple(elements),
+                            *span,
+                        ));
                     }
                     for (index, (member, ty)) in members.iter().zip(types.iter()).enumerate() {
                         let step = self.trace_enter_at(
@@ -1257,11 +1262,11 @@ impl<'a> Parser<'a> {
                     Ty::Reference {
                         mutable: actual, ..
                     } if *mutable && !actual => {
-                        return Err(Error::TypeMismatch {
-                            expected: resolved.name(&self.models),
-                            actual: "&mut _".into(),
-                            expression: *span,
-                        })
+                        return Err(self.pattern_mismatch(
+                            &resolved,
+                            pattern::Found::Reference(true),
+                            *span,
+                        ))
                     }
                     Ty::Reference { target: inner, .. } => {
                         // `&pat` matches the reference and binds by move.
@@ -1274,7 +1279,13 @@ impl<'a> Parser<'a> {
                     }
                     _ => {}
                 }
-                self.require_type(&expected, ty, *span)?;
+                if !self.unify_type(&expected, ty) {
+                    return Err(self.pattern_mismatch(
+                        &self.inference.resolve(ty),
+                        pattern::Found::Reference(*mutable),
+                        *span,
+                    ));
+                }
                 // References are the referenced value at runtime.
                 let mode = self.binding_mode.replace(None);
                 let step = self.trace_enter(borrowck::Projection::Deref);
@@ -1349,13 +1360,7 @@ impl<'a> Parser<'a> {
                     source: pattern,
                 })
             }
-            other => {
-                return Err(Error::TypeMismatch {
-                    expected: other.name(&self.models),
-                    actual: "an array or slice".into(),
-                    expression: pattern,
-                })
-            }
+            other => return Err(self.slice_pattern(other, pattern)),
         };
         let fixed = before.len() + after.len();
         if rest.is_none() && fixed != length || fixed > length {

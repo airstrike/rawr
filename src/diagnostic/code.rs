@@ -150,6 +150,7 @@ codes!(Resolve in RESOLVE;
     (RESOLVE_REFUTABLE, "E0005", "A `let`, `for` or parameter pattern that misses some values, as rustc reports it."),
     (RESOLVE_ARRAY_LENGTH, "E0527", "An array pattern of more or fewer elements than its array has, as rustc reports it."),
     (RESOLVE_ARRAY_LEAST_LENGTH, "E0528", "An array pattern with `..` of more elements than its array has, as rustc reports it."),
+    (RESOLVE_SLICE_PATTERN, "E0529", "A slice pattern on a value that is no array or slice, as rustc reports it."),
     (RESOLVE_PATTERN_FIELDS, "E0023", "A tuple struct or tuple variant pattern with more or fewer fields than its type declares, as rustc reports it."),
     (RESOLVE_UNBOUND_ALTERNATIVE, "E0408", "A name one alternative of an or-pattern binds and another does not, as rustc reports it."),
     (RESOLVE_UNSUPPORTED_SYNTAX, "RAWR-RESOLVE-UNSUPPORTED-SYNTAX", "A construct that isn't supported yet."),

@@ -21,7 +21,7 @@ use crate::ast::{NominalEnumPattern, NominalPattern, NominalPayloadType};
 use crate::capability;
 use crate::resolve::borrowck;
 use crate::resolve::borrowck::record::Matched;
-use crate::resolve::{type_ref, BindingSite, Error};
+use crate::resolve::{type_ref, BindingSite, Error, PatternOrigin, PatternTypes};
 use crate::tokenizer::Token;
 use crate::types::nominal;
 use crate::{ast, receiver, type_def, ImmutableString, Position, Span};
@@ -176,6 +176,40 @@ impl Prelude {
             Self::Ready | Self::Pending => "Poll",
         }
     }
+
+    /// The owning enum as rustc names a pattern's type: `Option<_>`.
+    const fn shape(self) -> &'static str {
+        match self {
+            Self::Some | Self::None => "Option<_>",
+            Self::Ok | Self::Err => "Result<_, _>",
+            Self::Ready | Self::Pending => "Poll<_>",
+        }
+    }
+}
+
+/// A pattern's own type, as rustc's E0308 on the pattern names it.
+pub(super) enum Found<'t> {
+    /// A literal's or a struct pattern's type.
+    Ty(&'t Ty),
+    /// A tuple pattern of this many elements besides `..`: `(_, _)`.
+    Tuple(usize),
+    /// A generic enum a constructor names, a `_` for each argument:
+    /// `Option<_>`, `Cow<'_, _>`.
+    Generic(&'static str),
+    /// `&_`, or `&mut _` (`true`).
+    Reference(bool),
+    /// A script struct or enum, by the name the pattern writes, of no
+    /// type arguments, and its sort (`struct` or `enum`).
+    Named(ImmutableString, &'static str),
+}
+
+/// The type rustc names a tuple pattern of `count` elements by: a `_` for
+/// each, as `(_, _)` or `(_,)`.
+fn tuple_type(count: usize) -> String {
+    match count {
+        1 => "(_,)".to_string(),
+        count => format!("({})", vec!["_"; count].join(", ")),
+    }
 }
 
 /// The span of a pattern from `start` through its closing `)`, `]` or
@@ -208,17 +242,47 @@ impl Syntax {
         }
     }
 
-    /// The type rustc names a tuple pattern of `members` by: a `_` for each
-    /// member but `..`, as `(_, _)` or `(_,)`.
-    pub(super) fn tuple_shape(members: &[Self]) -> String {
-        let count = members
+    /// This pattern's own type, as rustc's E0308 names it where the value
+    /// matched has another: `(_, _)`, `Option<_>`, `&_`, a literal's type.
+    pub(super) fn found(&self) -> Found<'_> {
+        match self {
+            Self::Tuple { members, .. } => Found::Tuple(Self::tuple_elements(members)),
+            Self::Prelude { variant, .. } => Found::Generic(variant.shape()),
+            Self::Cow { .. } => Found::Generic("Cow<'_, _>"),
+            Self::Reference { mutable, .. } => Found::Reference(*mutable),
+            Self::UnitStruct { ty, .. } | Self::TupleStruct { ty, .. } => Found::Ty(ty),
+            Self::Literal { ty, .. } => Found::Ty(ty),
+            Self::Range {
+                low: Some((_, ty)), ..
+            }
+            | Self::Range {
+                high: Some((_, ty)),
+                ..
+            } => Found::Ty(ty),
+            Self::Enum(pattern) => {
+                let name = pattern.owner.last().map_or("_", |(name, _)| name.as_str());
+                Found::Named(
+                    name.into(),
+                    if pattern.host_struct {
+                        "struct"
+                    } else {
+                        "enum"
+                    },
+                )
+            }
+            Self::Or { alternatives, .. } if !alternatives.is_empty() => alternatives[0].found(),
+            Self::At { pattern, .. } => pattern.found(),
+            _ => Found::Generic("_"),
+        }
+    }
+
+    /// How many members of a tuple pattern's `members` are elements, not
+    /// `..`.
+    pub(super) fn tuple_elements(members: &[Self]) -> usize {
+        members
             .iter()
             .filter(|member| !matches!(member, Self::Rest { .. }))
-            .count();
-        match count {
-            1 => "(_,)".to_string(),
-            count => format!("({})", vec!["_"; count].join(", ")),
-        }
+            .count()
     }
 
     /// The pattern of a value `witness` matches at the part written at
@@ -816,11 +880,15 @@ impl<'a> Parser<'a> {
     pub(super) fn parse_pattern_binding(&mut self, start: Position) -> Result<(), Error> {
         let pending = self.field_entries.len();
         let syntax = self.parse_pattern_no_alt()?;
-        let annotation = if matches!(self.peek(), Token::Colon) {
+        // The written type, and where it is written.
+        let (annotation, annotated) = if matches!(self.peek(), Token::Colon) {
             self.next();
-            Some(self.parse_local_type()?)
+            let written = self.position();
+            let annotation = self.parse_local_type()?;
+            let end = self.position();
+            (Some(annotation), Some(self.written_span(written, end)))
         } else {
-            None
+            (None, None)
         };
         self.expect(Token::Equals, "'=' after a `let` pattern")?;
         let borrowing =
@@ -855,16 +923,19 @@ impl<'a> Parser<'a> {
         {
             let end = self.position();
             self.terminate(start, Continuation::Let)?;
-            return self.bind_let_pattern(
-                Site::Let,
-                start,
-                &syntax,
-                value,
-                Some(matched),
-                None,
-                end,
-                pending,
-            );
+            let origin = self.let_origin(annotated, &value);
+            return self
+                .bind_let_pattern(
+                    Site::Let,
+                    start,
+                    &syntax,
+                    value,
+                    Some(matched),
+                    None,
+                    end,
+                    pending,
+                )
+                .map_err(|error| error.matched(|| origin));
         }
         self.reject_invocation(&value.ty, value.span, "kept in a `let` binding")?;
         if let Some(expected) = &annotation {
@@ -876,16 +947,19 @@ impl<'a> Parser<'a> {
         if syntax.may_refute() || self.matches_unsized_slice(&syntax, &value.ty) {
             let end = self.position();
             self.terminate(start, Continuation::Let)?;
-            return self.bind_let_pattern(
-                Site::Let,
-                start,
-                &syntax,
-                value,
-                Some(matched),
-                None,
-                end,
-                pending,
-            );
+            let origin = self.let_origin(annotated, &value);
+            return self
+                .bind_let_pattern(
+                    Site::Let,
+                    start,
+                    &syntax,
+                    value,
+                    Some(matched),
+                    None,
+                    end,
+                    pending,
+                )
+                .map_err(|error| error.matched(|| origin));
         }
         let ty = annotation.unwrap_or_else(|| value.ty.clone());
         // `ref mut` bindings are the subject's places: it is not copied.
@@ -930,7 +1004,9 @@ impl<'a> Parser<'a> {
             String::new()
         };
         let traced = self.begin_trace();
-        let destructured = self.destructure(&syntax, &whole, &ty);
+        let destructured = self
+            .destructure(&syntax, &whole, &ty)
+            .map_err(|error| error.matched(|| self.let_origin(annotated, &value)));
         let trace = self.end_trace(traced);
         self.pattern_facts(trace, &matched, value.span, &[])?;
         self.place_root = None;
@@ -1134,7 +1210,15 @@ impl<'a> Parser<'a> {
                 self.next();
             }
             let pattern = self.parse_pattern_no_alt()?;
-            let span = Span::new(start, pattern.span().end());
+            // Through the inner pattern's last token: a binding's span is
+            // the point where its name starts.
+            let inner = pattern.span();
+            let end = if inner.start() == inner.end() {
+                self.expression_span(inner).end()
+            } else {
+                inner.end()
+            };
+            let span = Span::new(start, end);
             let inner = Syntax::Reference {
                 mutable,
                 pattern: Box::new(pattern),
@@ -1848,18 +1932,10 @@ impl<'a> Parser<'a> {
                 let (Ty::Script(id, arguments), Nominal::Struct { item, .. }) =
                     (&expected, self.models.definition(definition.id()))
                 else {
-                    return Err(Error::TypeMismatch {
-                        expected: expected.name(&self.models),
-                        actual: definition.name().into(),
-                        expression: *span,
-                    });
+                    return Err(self.pattern_mismatch(&expected, syntax.found(), *span));
                 };
                 if *id != definition.id() {
-                    return Err(Error::TypeMismatch {
-                        expected: expected.name(&self.models),
-                        actual: definition.name().into(),
-                        expression: *span,
-                    });
+                    return Err(self.pattern_mismatch(&expected, syntax.found(), *span));
                 }
                 let substitution = self.nominal_substitution(*id, arguments);
                 let fields = item
@@ -1902,21 +1978,12 @@ impl<'a> Parser<'a> {
             }
             Syntax::Tuple { members, span } => {
                 let Ty::Tuple(types) = &expected else {
-                    return Err(Error::TypeMismatch {
-                        expected: expected.name(&self.models),
-                        actual: Syntax::tuple_shape(members).into(),
-                        expression: *span,
-                    });
+                    return Err(self.pattern_mismatch(&expected, syntax.found(), *span));
                 };
                 let discard = Syntax::Discard { span: *span };
                 let members = tuple_members(members, types.len(), &discard)?;
                 if types.len() != members.len() {
-                    return Err(Error::TupleArity {
-                        expected: expected.name(&self.models),
-                        arity: types.len(),
-                        found: members.len(),
-                        pattern: *span,
-                    });
+                    return Err(self.tuple_arity(&expected, types.len(), members.len(), *span));
                 }
                 let mut proofs = Vec::with_capacity(members.len());
                 let mut coverage = Vec::with_capacity(members.len());
@@ -1958,18 +2025,10 @@ impl<'a> Parser<'a> {
                     target,
                 } = &expected
                 else {
-                    return Err(Error::TypeMismatch {
-                        expected: expected.name(&self.models),
-                        actual: if *mutable { "&mut _" } else { "&_" }.into(),
-                        expression: *span,
-                    });
+                    return Err(self.pattern_mismatch(&expected, syntax.found(), *span));
                 };
                 if *mutable && !actual {
-                    return Err(Error::TypeMismatch {
-                        expected: expected.name(&self.models),
-                        actual: "&mut _".into(),
-                        expression: *span,
-                    });
+                    return Err(self.pattern_mismatch(&expected, syntax.found(), *span));
                 }
                 // References are the referenced value at runtime; an explicit
                 // `&` pattern binds by value below it.
@@ -2038,29 +2097,12 @@ impl<'a> Parser<'a> {
                 after,
                 span,
             } => {
-                let Ty::Array { element, kind } = &expected else {
-                    return Err(Error::InvalidMatch {
-                        owner: owner.into(),
-                        reason: format!(
-                            "expected an array or slice, found `{}`",
-                            expected.name(&self.models)
-                        )
-                        .into(),
-                        pattern: *span,
-                    });
-                };
                 // A `Vec` or a `VecDeque` is no slice (rustc's E0529).
+                let Ty::Array { element, kind } = &expected else {
+                    return Err(self.slice_pattern(&expected, *span));
+                };
                 if matches!(kind, sequence::Kind::Vec | sequence::Kind::Deque) {
-                    return Err(Error::InvalidMatch {
-                        owner: owner.into(),
-                        reason: format!(
-                            "expected an array or slice, found `{}` (E0529; match `v.as_slice()` \
-                             or `&v[..]`)",
-                            expected.name(&self.models)
-                        )
-                        .into(),
-                        pattern: *span,
-                    });
+                    return Err(self.slice_pattern(&expected, *span));
                 }
                 let length = kind.length();
                 let fixed = before.len() + after.len();
@@ -2263,11 +2305,92 @@ impl<'a> Parser<'a> {
         if same {
             Ok(())
         } else {
-            Err(Error::TypeMismatch {
+            // A `&str` matched by a pattern of no reference matches the
+            // `str` below it, as rustc's default binding mode reads it.
+            let expected = match expected {
+                Ty::Str => Ty::UnsizedStr,
+                expected => expected,
+            };
+            Err(self.pattern_mismatch(&expected, Found::Ty(actual), span))
+        }
+    }
+
+    /// rustc's E0308 on `pattern`, of type `found`, where a value of type
+    /// `expected` is matched.
+    pub(super) fn pattern_mismatch(&self, expected: &Ty, found: Found<'_>, pattern: Span) -> Error {
+        let (name, sort, simple) = match found {
+            Found::Ty(ty) => (ty.name(&self.models), ty.sort(&self.models), ty.is_simple()),
+            Found::Tuple(count) => (tuple_type(count).into(), "tuple", false),
+            Found::Generic(name) => (name.into(), "enum", false),
+            Found::Reference(true) => ("&mut _".into(), "mutable reference", false),
+            Found::Reference(false) => ("&_".into(), "reference", false),
+            Found::Named(name, sort) => (name, sort, true),
+        };
+        let sorts =
+            (!(simple && expected.is_simple())).then(|| (expected.sort(&self.models), sort));
+        Error::PatternMismatch {
+            types: Box::new(PatternTypes {
                 expected: expected.name(&self.models),
-                actual: actual.name(&self.models),
-                expression: span,
-            })
+                found: name,
+                sorts,
+                arity: None,
+            }),
+            pattern,
+            origin: None,
+        }
+    }
+
+    /// What gave a `let`'s pattern its matched value's type: its written
+    /// type where `annotated` names one, else its value.
+    fn let_origin(&self, annotated: Option<Span>, value: &ParsedExpr) -> PatternOrigin {
+        match annotated {
+            Some(annotated) => PatternOrigin::Annotation(annotated),
+            None => self.subject_origin(value),
+        }
+    }
+
+    /// `subject`, whole, as what gave a pattern's matched value its type.
+    pub(super) fn subject_origin(&self, subject: &ParsedExpr) -> PatternOrigin {
+        PatternOrigin::Expression {
+            span: self.expression_span(subject.span),
+            ty: self.inference.resolve(&subject.ty).name(&self.models),
+        }
+    }
+
+    /// rustc's E0529 on `pattern`, a slice pattern, where a value of type
+    /// `expected`, no array or slice, is matched.
+    pub(super) fn slice_pattern(&self, expected: &Ty, pattern: Span) -> Error {
+        Error::SlicePattern {
+            ty: expected.name(&self.models),
+            sliceable: matches!(
+                expected,
+                Ty::Array {
+                    kind: sequence::Kind::Vec,
+                    ..
+                }
+            ),
+            pattern,
+        }
+    }
+
+    /// rustc's E0308 on `pattern`, a tuple pattern of `found` elements,
+    /// where a tuple of type `expected` and `arity` elements is matched.
+    pub(super) fn tuple_arity(
+        &self,
+        expected: &Ty,
+        arity: usize,
+        found: usize,
+        pattern: Span,
+    ) -> Error {
+        Error::PatternMismatch {
+            types: Box::new(PatternTypes {
+                expected: expected.name(&self.models),
+                found: tuple_type(found).into(),
+                sorts: Some(("tuple", "tuple")),
+                arity: Some((arity, found)),
+            }),
+            pattern,
+            origin: None,
         }
     }
 
@@ -2295,13 +2418,7 @@ impl<'a> Parser<'a> {
             (Ty::Result(_, err), Prelude::Err) => Some(&**err),
             (_, Prelude::Ready) if let Some(output) = &polled => Some(output),
             (_, Prelude::Pending) if polled.is_some() => None,
-            _ => {
-                return Err(Error::TypeMismatch {
-                    expected: expected.name(&self.models),
-                    actual: format!("{}<_>", variant.owner()).into(),
-                    expression: syntax.span(),
-                })
-            }
+            _ => return Err(self.pattern_mismatch(&expected, syntax.found(), syntax.span())),
         };
         // The pattern tests the discriminant; its payload is below it.
         self.trace_test(borrowck::Access::Read, None);
@@ -2542,19 +2659,12 @@ impl<'a> Parser<'a> {
             });
         };
         let expected = self.inference.resolve(expected);
+        let found = Found::Named(definition.name().into(), "enum");
         let Some(expected_id) = expected.script() else {
-            return Err(Error::TypeMismatch {
-                expected: expected.name(&self.models),
-                actual: definition.name().into(),
-                expression: syntax.owner_span,
-            });
+            return Err(self.pattern_mismatch(&expected, found, syntax.span));
         };
         if definition.id() != expected_id {
-            return Err(Error::TypeMismatch {
-                expected: self.models.definition(expected_id).name().into(),
-                actual: definition.name().into(),
-                expression: syntax.owner_span,
-            });
+            return Err(self.pattern_mismatch(&expected, found, syntax.span));
         }
         let Some(variant) = item
             .variants
@@ -3335,13 +3445,7 @@ impl<'a> Parser<'a> {
                         };
                         (output, variant)
                     }
-                    _ => {
-                        return Err(Error::TypeMismatch {
-                            expected: ty.name(&self.models),
-                            actual: variant.name().into(),
-                            expression: *span,
-                        });
-                    }
+                    _ => return Err(self.pattern_mismatch(&ty, syntax.found(), *span)),
                 };
                 let test = self.prelude_op(PreludeOp::IsSome, [value.clone()]);
                 match (variant, payload) {

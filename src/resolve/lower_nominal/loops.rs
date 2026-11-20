@@ -619,6 +619,9 @@ impl<'a> Parser<'a> {
             return Ok(looped);
         }
         let mut lhs = self.parse_head(|parser| parser.parse_binary(0))?;
+        // What the loop iterates, as written, which rustc labels beside a
+        // pattern of another type than its items.
+        let mut head = self.expression_span(lhs.span);
         // `for x in bag` of a program's type that implements `IntoIterator`
         // loops over `bag.into_iter()`, as Rust's `for` desugars it, as
         // does one of a crate's type that is no iterator, as iced's
@@ -713,6 +716,7 @@ impl<'a> Parser<'a> {
                         item,
                         header,
                         start,
+                        head,
                         label,
                         pattern.as_ref(),
                         Some((entry, exit)),
@@ -767,6 +771,7 @@ impl<'a> Parser<'a> {
                             ty,
                             lhs,
                             start,
+                            head,
                             label,
                             pattern.as_ref(),
                         );
@@ -781,6 +786,7 @@ impl<'a> Parser<'a> {
                     ty,
                     source,
                     start,
+                    head,
                     label,
                     pattern.as_ref(),
                     None,
@@ -789,6 +795,7 @@ impl<'a> Parser<'a> {
         };
         self.next();
         let rhs = self.parse_head(|parser| parser.parse_binary(0))?;
+        head = span(head.start(), self.expression_span(rhs.span).end());
         // `for c in 'a'..='e'`: the chars between, as a chain of one loop.
         if matches!(self.inference.resolve(&lhs.ty), Ty::Char) {
             self.require_type(&lhs.ty, &rhs.ty, rhs.span)?;
@@ -804,6 +811,7 @@ impl<'a> Parser<'a> {
                 item,
                 header,
                 start,
+                head,
                 label,
                 pattern.as_ref(),
                 Some((entry, exit)),
@@ -827,6 +835,7 @@ impl<'a> Parser<'a> {
             item,
             source,
             start,
+            head,
             label,
             pattern.as_ref(),
             None,
@@ -842,6 +851,7 @@ impl<'a> Parser<'a> {
         ty: Ty,
         source: origin::Fragment,
         start: Span,
+        head: Span,
         label: Option<ImmutableString>,
         pattern: Option<&pattern::Syntax>,
         fused: Option<(origin::Fragment, origin::Fragment)>,
@@ -875,7 +885,14 @@ impl<'a> Parser<'a> {
         let wrap = match pattern {
             Some(pattern) => match self
                 .refuse_refutable(pattern, &ty, BindingSite::ForLoop)
-                .and_then(|()| self.destructure(pattern, &name, &ty))
+                .and_then(|()| {
+                    self.destructure(pattern, &name, &ty).map_err(|error| {
+                        error.matched(|| PatternOrigin::Iterator {
+                            span: head,
+                            item: self.inference.resolve(&ty).name(&self.models),
+                        })
+                    })
+                })
                 .inspect(|_| {
                     // The pattern's bindings, given a value each iteration.
                     let bound: Vec<_> = self
@@ -959,6 +976,7 @@ impl<'a> Parser<'a> {
         ty: Ty,
         lhs: ParsedExpr,
         start: Span,
+        head: Span,
         label: Option<ImmutableString>,
         pattern: Option<&pattern::Syntax>,
     ) -> Result<ParsedExpr, Error> {
@@ -977,6 +995,7 @@ impl<'a> Parser<'a> {
             ty,
             source,
             start,
+            head,
             label,
             pattern,
             Some((entry, origin::Fragment::default())),

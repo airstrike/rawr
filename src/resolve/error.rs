@@ -950,15 +950,26 @@ pub enum Error {
         /// The pattern.
         pattern: Span,
     },
-    /// A tuple pattern of more or fewer elements than the tuple it
-    /// matches has, which rustc refuses (E0308).
-    TupleArity {
-        /// The matched tuple's type name.
-        expected: ImmutableString,
-        /// How many elements the tuple has.
-        arity: usize,
-        /// How many elements the pattern has, besides `..`.
-        found: usize,
+    /// A pattern of another type than the value it matches, or a tuple
+    /// pattern of more or fewer elements than its tuple has, which rustc
+    /// refuses (E0308).
+    PatternMismatch {
+        /// The matched type and the pattern's.
+        types: Box<PatternTypes>,
+        /// The pattern.
+        pattern: Span,
+        /// What gave the matched value its type, which the statement or
+        /// arm the pattern heads adds.
+        origin: Option<PatternOrigin>,
+    },
+    /// A slice pattern on a value that is no array or slice, which rustc
+    /// refuses (E0529).
+    SlicePattern {
+        /// The matched type's name.
+        ty: ImmutableString,
+        /// Whether the value is a `Vec`, which a slicing `[..]` makes a
+        /// slice.
+        sliceable: bool,
         /// The pattern.
         pattern: Span,
     },
@@ -1319,7 +1330,8 @@ impl Error {
             Self::PatternFields { .. } => Category::PatternFields,
             Self::UnboundAlternative { .. } => Category::UnboundAlternative,
             Self::ArrayPatternLength { .. } => Category::InvalidMatch,
-            Self::TupleArity { .. } => Category::TypeMismatch,
+            Self::PatternMismatch { .. } => Category::TypeMismatch,
+            Self::SlicePattern { .. } => Category::InvalidMatch,
             Self::RepeatedRest { .. } => Category::Syntax,
             Self::UnsupportedNominalSyntax { .. } => Category::UnsupportedNominalSyntax,
             Self::Syntax { .. } => Category::Syntax,
@@ -1375,7 +1387,8 @@ impl Error {
             | Self::InvalidMatch { owner, .. }
             | Self::PatternFields { owner, .. }
             | Self::ArrayPatternLength { owner, .. } => owner.as_str(),
-            Self::TupleArity { expected, .. } => expected.as_str(),
+            Self::PatternMismatch { types, .. } => types.expected.as_str(),
+            Self::SlicePattern { ty, .. } => ty.as_str(),
             Self::RepeatedRest { .. } => "..",
             Self::NonExhaustive { ty, .. } | Self::Refutable { ty, .. } => ty.as_str(),
             Self::TypeMismatch { expected, .. }
@@ -1460,7 +1473,8 @@ impl Error {
             | Self::PatternFields { pattern, .. }
             | Self::UnboundAlternative { pattern, .. }
             | Self::ArrayPatternLength { pattern, .. }
-            | Self::TupleArity { pattern, .. } => *pattern,
+            | Self::PatternMismatch { pattern, .. }
+            | Self::SlicePattern { pattern, .. } => *pattern,
             Self::RepeatedRest { rest, .. } => *rest,
             Self::UnsupportedNominalSyntax { source, .. } => *source,
             Self::AsyncMain { at } | Self::UnscopedWrite { at, .. } => *at,
@@ -1511,6 +1525,10 @@ impl Error {
             Self::InvalidAssignee { assignee, .. } => Some(*assignee),
             Self::UnboundAlternative { binding, .. } => Some(*binding),
             Self::RepeatedRest { previous, .. } => Some(*previous),
+            Self::PatternMismatch {
+                origin: Some(origin),
+                ..
+            } => Some(origin.span()),
             Self::InvalidImport { declaration, .. } | Self::PrivateItem { declaration, .. } => {
                 *declaration
             }
@@ -1543,7 +1561,8 @@ impl Error {
             | Self::Refutable { .. }
             | Self::PatternFields { .. }
             | Self::ArrayPatternLength { .. }
-            | Self::TupleArity { .. }
+            | Self::PatternMismatch { origin: None, .. }
+            | Self::SlicePattern { .. }
             | Self::UnsupportedNominalSyntax { .. }
             | Self::Syntax { .. }
             | Self::AsyncMain { .. }
@@ -1875,21 +1894,137 @@ impl fmt::Display for ArrayLength {
     }
 }
 
-/// rustc's E0308 label for a tuple pattern of `found` elements on a tuple
-/// of `arity`.
-pub(crate) struct TupleArity {
-    pub(crate) arity: usize,
-    pub(crate) found: usize,
+/// The type a pattern matches and the pattern's own, as rustc's E0308
+/// on the pattern names them.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct PatternTypes {
+    /// The matched type's name.
+    pub expected: ImmutableString,
+    /// The pattern's type, a `_` for each part it leaves open: `(_, _)`,
+    /// `Option<_>`.
+    pub found: ImmutableString,
+    /// rustc's sorts of the two types in its "expected .. found" note
+    /// (`type`, `tuple`, `enum`), or `None` where both types are simple
+    /// and rustc writes no note.
+    pub sorts: Option<(&'static str, &'static str)>,
+    /// The tuple's arity and the tuple pattern's, which rustc's label
+    /// names instead of the types.
+    pub arity: Option<(usize, usize)>,
 }
 
-impl TupleArity {
-    /// "expected a tuple with 3 elements, found one with 2 elements".
+impl PatternTypes {
+    /// rustc's label on the pattern: "expected integer, found `(_, _)`",
+    /// "expected a tuple with 3 elements, found one with 2 elements", or
+    /// for references of the other mutability "types differ in
+    /// mutability".
     pub(crate) fn label(&self) -> String {
-        format!(
-            "expected a tuple with {}, found one with {}",
-            elements(self.arity),
-            elements(self.found)
-        )
+        if let Some(("reference", "mutable reference") | ("mutable reference", "reference")) =
+            self.sorts
+        {
+            return "types differ in mutability".to_string();
+        }
+        match self.arity {
+            Some((arity, found)) => format!(
+                "expected a tuple with {}, found one with {}",
+                elements(arity),
+                elements(found)
+            ),
+            None => format!(
+                "expected {}, found {}",
+                Described(&self.expected),
+                Described(&self.found)
+            ),
+        }
+    }
+
+    /// rustc's note: "expected type `{integer}`" over "found tuple
+    /// `(_, _)`", the shorter lead padded so the types line up.
+    pub(crate) fn note(&self) -> Option<String> {
+        let (expected, found) = self.sorts?;
+        let expected = format!("expected {expected}");
+        let found = format!("found {found}");
+        let width = expected.len().max(found.len());
+        Some(format!(
+            "{expected:>width$} `{}`\n{found:>width$} `{}`",
+            self.expected, self.found
+        ))
+    }
+}
+
+/// What gave the value a pattern matches its type, which rustc labels
+/// beside a pattern of another type.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub enum PatternOrigin {
+    /// The matched expression, of type `ty`.
+    Expression {
+        /// The expression.
+        span: Span,
+        /// Its type's name.
+        ty: ImmutableString,
+    },
+    /// A `let`'s or a parameter's written type.
+    Annotation(Span),
+    /// A `for` loop's iterator, of items of type `item`.
+    Iterator {
+        /// The iterator expression.
+        span: Span,
+        /// Its items' type name.
+        item: ImmutableString,
+    },
+}
+
+impl PatternOrigin {
+    /// Where rustc's label goes.
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        match self {
+            Self::Expression { span, .. } | Self::Iterator { span, .. } => *span,
+            Self::Annotation(span) => *span,
+        }
+    }
+
+    /// rustc's label: "this expression has type `T`".
+    pub(crate) fn label(&self) -> String {
+        match self {
+            Self::Expression { ty, .. } => format!("this expression has type `{ty}`"),
+            Self::Annotation(_) => "expected due to this".to_string(),
+            Self::Iterator { item, .. } => {
+                format!("this is an iterator with items of type `{item}`")
+            }
+        }
+    }
+}
+
+impl Error {
+    /// This error, with `origin` as what gave the matched value its type
+    /// when it is a pattern's mismatch that names none yet: the innermost
+    /// statement or arm a pattern heads names it.
+    #[must_use]
+    pub(crate) fn matched(mut self, origin: impl FnOnce() -> PatternOrigin) -> Self {
+        if let Self::PatternMismatch {
+            origin: unnamed @ None,
+            ..
+        } = &mut self
+        {
+            *unnamed = Some(origin());
+        }
+        self
+    }
+}
+
+/// rustc's E0529 for a slice pattern on a value of type `0`.
+pub(crate) struct SlicePattern<'a>(pub(crate) &'a str);
+
+impl SlicePattern<'_> {
+    /// rustc's label on the pattern.
+    pub(crate) fn label(&self) -> String {
+        format!("pattern cannot match with input type `{}`", self.0)
+    }
+}
+
+impl fmt::Display for SlicePattern<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "expected an array or slice, found `{}`", self.0)
     }
 }
 
@@ -2451,20 +2586,14 @@ impl fmt::Display for Written<'_> {
                 };
                 write!(formatter, "{array} at {pattern} ({})", array.code())
             }
-            Error::TupleArity {
-                arity,
-                found,
-                pattern,
-                ..
-            } => write!(
+            Error::PatternMismatch { types, pattern, .. } => write!(
                 formatter,
                 "mismatched types: {} at {pattern} (E0308)",
-                TupleArity {
-                    arity: *arity,
-                    found: *found
-                }
-                .label()
+                types.label()
             ),
+            Error::SlicePattern { ty, pattern, .. } => {
+                write!(formatter, "{} at {pattern} (E0529)", SlicePattern(ty))
+            }
             Error::RepeatedRest { slice, rest, .. } => {
                 write!(formatter, "{} at {rest}", RepeatedRest(*slice))
             }

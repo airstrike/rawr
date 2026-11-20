@@ -347,7 +347,9 @@ impl<'a> Parser<'a> {
                 }
             } else {
                 let syntax = self.parse_pattern_syntax()?;
-                let mut resolved = self.resolve_root_pattern(&syntax, &binding_ty)?;
+                let mut resolved = self
+                    .resolve_root_pattern(&syntax, &binding_ty)
+                    .map_err(|error| error.matched(|| self.subject_origin(&place)))?;
                 let trace = std::mem::take(&mut resolved.trace);
                 self.pattern_tests(&trace, &matched, subject_span);
                 self.flow().arm(tested);
@@ -669,7 +671,9 @@ impl<'a> Parser<'a> {
         // Matching through `&T` binds references, Rust's default binding mode.
         let written_ty = self.inference.resolve(&subject.ty);
         let subject_ty = self.referenced(&written_ty);
-        let mut resolved = self.resolve_root_pattern(&syntax, &written_ty)?;
+        let mut resolved = self
+            .resolve_root_pattern(&syntax, &written_ty)
+            .map_err(|error| error.matched(|| self.subject_origin(&subject)))?;
         let trace = std::mem::take(&mut resolved.trace);
         self.pattern_facts(trace, &matched, subject.span, &resolved.bindings)?;
         let place = self.pattern_place(&subject, &mut resolved.proof, &resolved.bindings)?;
@@ -814,7 +818,9 @@ impl<'a> Parser<'a> {
             let unreachable = exhaustive;
             let syntax = self.parse_pattern_syntax()?;
             let mut binding = None;
-            let test = self.scalar_condition(&syntax, &subject_ty, &temporary, &mut binding)?;
+            let test = self
+                .scalar_condition(&syntax, &subject_ty, &temporary, &mut binding)
+                .map_err(|error| error.matched(|| self.subject_origin(&subject)))?;
             let trace = self.scalar_trace(
                 test.is_some(),
                 binding
@@ -1471,13 +1477,8 @@ impl<'a> Parser<'a> {
                 }
                 Some(format!("({})", tests.join(" || ")))
             }
-            other => {
-                return Err(Error::TypeMismatch {
-                    expected: ty.name(&self.models),
-                    actual: "a constructor or tuple pattern".into(),
-                    expression: other.span(),
-                })
-            }
+            pattern::Syntax::Slice { span, .. } => return Err(self.slice_pattern(ty, *span)),
+            other => return Err(self.pattern_mismatch(ty, other.found(), other.span())),
         })
     }
 

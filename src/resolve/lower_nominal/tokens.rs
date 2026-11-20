@@ -37,6 +37,24 @@ impl<'a> Parser<'a> {
         span(at.start(), end)
     }
 
+    /// What is written from `start` to `end`, where the next token starts,
+    /// less the blanks before that token: a type's span once the type is
+    /// read.
+    pub(super) fn written_span(&self, start: Position, end: Position) -> Span {
+        if start.is_none() || end.is_none() {
+            return Span::new(start, end);
+        }
+        let written = Span::new(start, end).text(self.text);
+        let mut at = start;
+        for character in written.trim_end().chars() {
+            if character == '\n' {
+                at.new_line();
+            }
+            at.advance();
+        }
+        span(start, at)
+    }
+
     /// Whether the next token is a name that no field, method, index,
     /// call, path or macro goes on from: a local used whole.
     pub(super) fn lone_name_ahead(&self) -> bool {

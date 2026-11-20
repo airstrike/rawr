@@ -10,6 +10,7 @@ use super::{
 use crate::engine::HELD_STEPS;
 use crate::resolve::borrowck::record;
 use crate::resolve::borrowck::record::ScopeEnd;
+use crate::resolve::PatternOrigin;
 use crate::resolve::{borrowck, BindingSite, Error};
 use crate::tokenizer::Token;
 use crate::{ImmutableString, Position, Span};
@@ -530,11 +531,13 @@ impl<'a> Parser<'a> {
         let output_hint = self.closure_output.take();
         let outer_changed = self.self_changed.replace(false);
         let mut parameters = Vec::<(ImmutableString, Ty, Span)>::new();
-        let mut patterns = Vec::<(usize, pattern::Syntax)>::new();
+        // Each pattern parameter's index, pattern and written type's span.
+        let mut patterns = Vec::<(usize, pattern::Syntax, Option<Span>)>::new();
         // `|a, b|` as rustc's note on a call of it shows it.
         let mut header = start;
         if token == Token::Pipe {
             while !matches!(self.peek(), Token::Pipe) {
+                let mut pattern = None;
                 let (name, declaration) = if matches!(self.peek(), Token::Underscore) {
                     let position = self.next().1;
                     (self.temporary("discard").into(), point_span(position))
@@ -550,22 +553,30 @@ impl<'a> Parser<'a> {
                 {
                     // `|(a, b)|`, `|&x|`, `|mut x|`: the parameter is
                     // destructured at the top of the body.
-                    let pattern = self.parse_pattern_no_alt()?;
-                    let declaration = pattern.span();
-                    patterns.push((parameters.len(), pattern));
+                    let syntax = self.parse_pattern_no_alt()?;
+                    let declaration = syntax.span();
+                    pattern = Some(syntax);
                     (self.temporary("parameter").into(), declaration)
                 } else {
                     self.expect_name("closure parameter")?
                 };
+                let mut annotated = None;
                 let ty = if matches!(self.peek(), Token::Colon) {
                     self.next();
-                    self.parse_local_type()?
+                    let written = self.position();
+                    let ty = self.parse_local_type()?;
+                    let end = self.position();
+                    annotated = Some(self.written_span(written, end));
+                    ty
                 } else if let Some(ty) = hint.as_ref().and_then(|hint| hint.get(parameters.len())) {
                     // The host callable's parameter type, as Rust infers it.
                     ty.clone()
                 } else {
                     self.inference.fresh()
                 };
+                if let Some(pattern) = pattern {
+                    patterns.push((parameters.len(), pattern, annotated));
+                }
                 parameters.push((name, ty, declaration));
                 if matches!(self.peek(), Token::Comma) {
                     self.next();
@@ -646,12 +657,20 @@ impl<'a> Parser<'a> {
             }
         }
         let mut destructured = String::new();
-        for (index, pattern) in &patterns {
+        for (index, pattern, annotated) in &patterns {
             let (name, ty, _) = &parameters[*index];
             let (name, ty) = (name.clone(), ty.clone());
             let destructure = self
                 .refuse_refutable(pattern, &ty, BindingSite::Argument)
-                .and_then(|()| self.destructure(pattern, &name, &ty))
+                .and_then(|()| {
+                    self.destructure(pattern, &name, &ty)
+                        .map_err(|error| match annotated {
+                            Some(annotated) => {
+                                error.matched(|| PatternOrigin::Annotation(*annotated))
+                            }
+                            None => error,
+                        })
+                })
                 .and_then(|statements| {
                     if !self.drops() {
                         return Ok(statements);
@@ -882,7 +901,7 @@ impl<'a> Parser<'a> {
             // The patterns' bindings are the compiler's, at the parameters:
             // a step into the closure passes them for its body.
             let mut bindings = origin::Fragment::plain(destructured);
-            if let (Some((_, first)), Some((_, last))) = (patterns.first(), patterns.last()) {
+            if let (Some((_, first, _)), Some((_, last, _))) = (patterns.first(), patterns.last()) {
                 bindings.cover_written(span(first.span().start(), last.span().end()));
             }
             let mut block = origin::Fragment::plain("{");
