@@ -5008,3 +5008,52 @@ fn std_and_core_import_candidates_match_rustcs() {
         help("tuple struct", "1 + use std::num::Wrapping;")
     );
 }
+
+/// A crate trait is named through the scope of the module naming it: in an
+/// impl's header, a bound, a `where` clause, an `impl Trait` and a `dyn`,
+/// a trait another module declares and nothing imports is rustc's E0405,
+/// with the `use` that imports it (#2364).
+#[test]
+fn a_trait_another_module_declares_is_e0405_without_a_use() {
+    let declared = "mod m {\n    pub trait Tr {}\n}\nstruct S;\n";
+    for (place, column) in [
+        ("impl Tr for S {}", 6),
+        ("fn f<T: Tr>(_t: T) {}", 9),
+        ("fn g(_t: impl Tr) {}", 15),
+        ("fn h(_t: &dyn Tr) {}", 15),
+        ("fn w<T>(_t: T) where T: Tr {}", 25),
+    ] {
+        let shown = rendered(&format!("{declared}{place}\nfn main() {{}}\n"));
+        let expected = [
+            "error[E0405]: cannot find trait `Tr` in this scope".to_string(),
+            format!(" --> main.rs:5:{column}"),
+            "  |".to_string(),
+            format!("5 | {place}"),
+            format!("  | {}^^ not found in this scope", " ".repeat(column - 1)),
+            "  |".to_string(),
+            "help: consider importing this trait".to_string(),
+            "  |".to_string(),
+            "1 + use crate::m::Tr;".to_string(),
+            "  |".to_string(),
+        ]
+        .join("\n");
+        assert_eq!(shown.trim_end(), expected, "{place}");
+    }
+    // A child module names its parent's trait through `super` or a `use`.
+    let child = rendered(concat!(
+        "trait Tr {}\n",
+        "mod m {\n",
+        "    pub struct S;\n",
+        "    impl Tr for S {}\n",
+        "}\n",
+        "fn main() {}\n"
+    ));
+    assert!(
+        child
+            .starts_with("error[E0405]: cannot find trait `Tr` in this scope\n --> main.rs:4:10\n")
+            && child.ends_with(
+                "help: consider importing this trait\n  |\n3 +     use crate::Tr;\n  |\n"
+            ),
+        "{child}"
+    );
+}

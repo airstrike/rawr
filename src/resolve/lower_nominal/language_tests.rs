@@ -15892,3 +15892,84 @@ fn language_an_impl_names_a_trait_by_its_path() {
     ";
     assert_eq!(run(source), 34_561);
 }
+
+#[test]
+fn language_a_modules_trait_of_a_std_traits_name_is_not_the_prelude_trait() {
+    // A module's trait that a std trait shares a name with is known by its
+    // path, as rustc names it: the bare name a scope without it writes is
+    // the prelude's trait, and the module's own scope names its own
+    // (#2364).
+    let source = "
+        mod m {
+            pub trait Default { fn made() -> Self; }
+            pub struct P(pub i64);
+            impl Default for P { fn made() -> Self { P(30) } }
+        }
+        struct S(i64);
+        impl Default for S { fn default() -> Self { S(7) } }
+        fn made<D: m::Default>() -> D { D::made() }
+        pub fn run() -> i64 {
+            let s: S = Default::default();
+            let p: m::P = made();
+            s.0 + p.0
+        }
+        run()
+    ";
+    assert_eq!(run(source), 37);
+}
+
+#[test]
+fn language_a_trait_is_named_through_the_scope_of_the_module_naming_it() {
+    // A bare trait name is the one the module's scope binds: its own item,
+    // a `use`, a glob, a `use` or a trait of a block around the item, or
+    // the prelude's; a crate trait nothing there binds is rustc's E0405
+    // (#2364).
+    let source = "
+        mod m {
+            pub trait Tr { fn one(&self) -> i64 { 1 } }
+        }
+        mod n {
+            use super::m::*;
+            pub struct S;
+            impl Tr for S {}
+            pub fn twice<T: Tr>(t: &T) -> i64 { t.one() * 2 }
+        }
+        mod k {
+            use crate::m::{self, Tr};
+            pub struct K;
+            impl Tr for K {}
+            pub mod inner {
+                use super::*;
+                pub struct I;
+                impl Tr for I {}
+            }
+        }
+        struct T;
+        #[derive(Clone)]
+        struct U;
+        fn cloned<C: Clone>(c: &C) -> C { c.clone() }
+        pub fn run() -> i64 {
+            use m::Tr;
+            impl Tr for T {}
+            trait Local { fn ten(&self) -> i64 { 10 } }
+            impl Local for T {}
+            let _u = cloned(&U);
+            n::S.one() * 100 + n::twice(&n::S) * 10 + T.one() + T.ten()
+                + (k::K.one() + k::inner::I.one()) * 1000
+        }
+        run()
+    ";
+    assert_eq!(run(source), 2131);
+    for written in [
+        "mod m { pub trait Tr {} } struct S; impl Tr for S {}",
+        "mod m { pub trait Tr {} } fn f<T: Tr>(_t: T) {}",
+        "trait Tr {} mod m { pub struct S; impl Tr for S {} }",
+        "mod m { pub trait Tr {} } trait Big: Tr {}",
+    ] {
+        let error = rejected(&format!("{written} pub fn run() -> i64 {{ 0 }} run()"));
+        assert!(
+            error.contains("cannot find trait `Tr` in this scope"),
+            "{written}: {error}"
+        );
+    }
+}
