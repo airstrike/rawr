@@ -14,7 +14,7 @@ println!("{b:?} {c} {d}");</code></pre>
 </div>
 <p>An <code>i128</code> or a <code>u128</code> holds its full range. A literal past <code>i64</code> takes its type from a suffix or from the code that uses it. They don&rsquo;t cross to Rust dependencies yet.</p>
 <div class="block">
-  <pre><code data-lang="rust" data-run="wide.rs" id="src-wide" data-where="server">let big: u128 = u64::MAX as u128 * 3;
+  <pre><code data-lang="rust" data-run="wide.rs" id="src-wide">let big: u128 = u64::MAX as u128 * 3;
 let low = i128::MIN;
 println!("{big} {low} {:?}", big.checked_mul(big));</code></pre>
   <div class="run"><button type="button" class="runbtn" data-source="src-wide" data-out="out-wide" aria-label="Run wide.rs" hidden></button><b>rawr run wide.rs</b><span id="out-wide" aria-live="polite"></span></div>

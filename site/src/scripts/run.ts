@@ -4,35 +4,25 @@
 // stays read-only, the buttons stay hidden and the strips keep their static
 // output.
 //
-// A snippet runs in the browser, through rawr-web, the playground's module,
-// which loads at the page's first run. A block marked `data-where="server"`
-// runs on rawr's server instead, for what a page's one thread can't do yet,
-// such as spawning a thread. The server also runs a snippet when rawr-web
-// doesn't load or stops.
+// Every snippet runs in the browser, and only there. A plain snippet runs in
+// rawr-web, the playground's module, which loads at the page's first run. A
+// run that rawr-web can't start says why and stops. A run that traps rawr-web
+// says so too, and the next run loads a fresh copy.
 //
 // A block marked `data-where="universe"` uses crates (iced, ratatui): it
 // runs in the browser's universe (universe.ts), in a frame of its own in
 // place of its output, and stays interactive there. Its output before Run
-// is the frame the server drew, as the build wrote it. The server runs it
-// when the universe doesn't load. A block marked `data-where="browser"`
-// runs in the universe too, but only there: it draws into the page through
-// crates the server's universe doesn't have, so its output before Run says
-// where it runs, and it never goes to the server. Once its program runs, an edit reloads it
-// in its frame with its state kept (#1455): a compile error shows after the
-// frame while the program runs its last good code, and an edit that can't
-// reload there runs in a fresh frame.
-//
-// On the server, the site's own text goes to POST /play/run, which accepts
-// only the exact sources on the site's pages and caches their results. Edited
-// text goes to POST /play/render, the playground's endpoint, with the
-// playground's checks: its pass cookie or a Turnstile token, and its per-IP
-// limits.
+// is what the build wrote (docs.ts's runOutputs). Once its program runs, an
+// edit reloads it in its frame with its state kept (#1455): a compile error
+// shows after the frame while the program runs its last good code, and an
+// edit that can't reload there runs in a fresh frame. A universe that
+// doesn't load says so in place of the output.
 //
 // A page that asks for it (`warm`) warms its snippets once it has loaded, so
-// Run answers at once: rawr-web is fetched and instantiated, and each
-// snippet runs unseen, in rawr-web or through /play/run. The first Run of an
-// unedited snippet shows that run; a later Run, or one after an edit, runs
-// it again.
+// Run answers at once: rawr-web is fetched and instantiated, each plain
+// snippet runs unseen, and each universe block gets its frame. The first Run
+// of an unedited snippet shows that run; a later Run, or one after an edit,
+// runs it again.
 //
 // After a run the play icon becomes an ×, which clears the output. A Reset
 // button at the code's top-right shows while the code differs from the
@@ -57,11 +47,10 @@ export interface Universe {
 /** What the script touches, so a test can hand it a stand-in DOM. */
 export interface Env {
   document: Document;
-  window: Window & { turnstile?: any };
-  fetch: typeof fetch;
-  /** Imports rawr-web and initializes it. Without it every run goes to the server. */
-  web?: () => Promise<Web>;
-  /** The browser's universe. Without it a universe block runs on the server. */
+  window: Window;
+  /** Imports rawr-web and initializes it: a fresh copy on each call. */
+  web: () => Promise<Web>;
+  /** The browser's universe. Without it a universe block says it can't run here. */
   universe?: Universe;
   /** Warm the snippets once the page has loaded, so Run answers at once. */
   warm?: boolean;
@@ -70,12 +59,10 @@ export interface Env {
 /** The fewest pixels a universe block's frame is tall: iced's counter, or fourteen rows of text. */
 const FRAME_HEIGHT = 400;
 
-const TURNSTILE_JS = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
-
 /**
  * A run started ahead of its Run button: `warm` starts it, and the next
  * `take` answers with it. Each later `take` runs again, and so does one
- * whose warmed run gave nothing or failed.
+ * whose warmed run gave nothing or threw.
  */
 export function ahead(run: () => Promise<any>): { warm(): Promise<any>; take(): Promise<any> } {
   let early: Promise<any> | null = null;
@@ -84,12 +71,15 @@ export function ahead(run: () => Promise<any>): { warm(): Promise<any>; take(): 
     take: async () => {
       const warmed = await early?.catch(() => null);
       early = null;
-      return warmed && warmed.failed === undefined ? warmed : run();
+      return warmed ?? run();
     },
   };
 }
 
-export function setup({ document, window, fetch, web, universe, warm = false }: Env): void {
+/** An error's message. */
+const why = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+export function setup({ document, window, web, universe, warm = false }: Env): void {
   const SVG = "http://www.w3.org/2000/svg";
   const icon = (cls: string, d: string) => {
     const svg = document.createElementNS(SVG, "svg");
@@ -104,95 +94,27 @@ export function setup({ document, window, fetch, web, universe, warm = false }: 
     return svg;
   };
 
-  // The playground's browser check, loaded only for an edited run.
-  type Gate = { sitekey: string | null; pass: boolean };
-  let gate: Promise<Gate> | null = null;
-  const gateInfo = () =>
-    (gate ??= fetch("/play/gate", { cache: "no-store" })
-      .then((r) => (r.ok ? r.json() : { sitekey: null, pass: false }))
-      .catch(() => ({ sitekey: null, pass: false })));
-  let script: Promise<unknown> | null = null;
-  const loadTurnstile = () =>
-    (script ??= new Promise((resolve, reject) => {
-      const js = document.createElement("script");
-      js.src = TURNSTILE_JS;
-      js.async = true;
-      js.onload = resolve;
-      js.onerror = () => reject(new Error("the browser check could not load"));
-      document.head.append(js);
-    }));
-  // A Turnstile token, or null when no check is needed. The widget stays
-  // invisible unless Cloudflare asks for an interaction, shown under `strip`.
-  const token = async (strip: Element): Promise<string | null> => {
-    const info = await gateInfo();
-    if (!info.sitekey || info.pass) return null;
-    await loadTurnstile();
-    const box = document.createElement("div");
-    box.className = "runcheck";
-    strip.after(box);
-    try {
-      return await new Promise<string>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error("the browser check timed out")), 60000);
-        window.turnstile.render(box, {
-          sitekey: info.sitekey,
-          appearance: "interaction-only",
-          theme: document.documentElement?.dataset.theme === "light" ? "light" : "dark",
-          callback: (t: string) => (clearTimeout(timer), resolve(t)),
-          "error-callback": () => (clearTimeout(timer), reject(new Error("the browser check failed"))),
-        });
-      });
-    } finally {
-      box.remove();
-    }
-  };
-  // POST an edited source to the playground's endpoint. A refused pass falls
-  // back to Turnstile once.
-  const render = async (code: string, strip: Element) => {
-    const send = async () =>
-      fetch("/play/render", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ code, turnstile: await token(strip) }),
-      });
-    let response = await send();
-    const info = await gateInfo();
-    if (response.status === 403 && info.pass && info.sitekey) {
-      info.pass = false;
-      response = await send();
-    }
-    if (response.headers.get("x-play-pass") === "set") info.pass = true;
-    return response;
-  };
-
-  // rawr-web, loaded once for the page. A load that fails, or a run that
-  // traps, sends this run and later ones to the server.
+  // rawr-web, loaded once for the page. A load that fails is tried again at
+  // the next run. A run that traps it may have left its state half-written,
+  // so the next run loads a fresh copy.
   let module: Promise<Web> | null = null;
-  let broken = !web;
   const browser = async (code: string): Promise<any> => {
-    if (broken) return null;
+    let m: Web;
     try {
-      const m = await (module ??= web!());
-      return JSON.parse(m.run_text(code));
-    } catch {
-      broken = true;
-      return null;
+      m = await (module ??= web());
+    } catch (error) {
+      module = null;
+      throw new Error("rawr did not load in this browser: " + why(error));
     }
+    let text: string;
+    try {
+      text = m.run_text(code);
+    } catch (error) {
+      module = null;
+      throw new Error("rawr stopped in the browser: " + why(error) + ". The next run loads it again.");
+    }
+    return JSON.parse(text);
   };
-
-  // A run of the site's own text on the server. 422 is a program that
-  // doesn't compile, and its text is rawr's report.
-  const answer = async (response: Response): Promise<any> => {
-    const type = response.headers.get("content-type") || "";
-    if (response.ok && type.startsWith("application/json")) return response.json();
-    if (response.status === 422) return { kind: "error", text: await response.text() };
-    return { failed: (await response.text()).trim().slice(0, 2000) };
-  };
-  const siteRun = (code: string) =>
-    fetch("/play/run", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ code }),
-    }).then(answer);
 
   // What warming does, once the page has loaded: one task per snippet.
   const warmups: (() => Promise<unknown>)[] = [];
@@ -209,11 +131,7 @@ export function setup({ document, window, fetch, web, universe, warm = false }: 
     if (!out || !source) continue;
     const strip = out.closest(".run")!;
     const name = source.dataset.run || "this snippet";
-    const onServer = source.dataset.where === "server";
-    // A browser block runs only in the universe: the server has no page to
-    // draw into.
-    const browserOnly = source.dataset.where === "browser";
-    const inUniverse = source.dataset.where === "universe" || browserOnly;
+    const inUniverse = source.dataset.where === "universe";
     const label = button.getAttribute("aria-label") || `Run ${name}`;
     const original = source.textContent ?? "";
     const originalHtml = source.innerHTML;
@@ -406,50 +324,38 @@ export function setup({ document, window, fetch, web, universe, warm = false }: 
       // In a compare slider the output is on the right-hand file, so show it.
       button.closest(".compare")?.querySelector<HTMLButtonElement>('.tabs button[data-to="0"]')?.click();
       const code = text();
-      if (inUniverse && universe) {
-        try {
-          await runFrame(code);
-          setState("done");
-          return;
-        } catch (error) {
-          // The universe didn't load: the server runs it.
-          console.warn("rawr: the browser's prebuilt runner could not run this snippet;", error);
-          clear();
-          if (browserOnly) {
-            fail("The browser's prebuilt runner could not load, and this program runs only there. " + (error instanceof Error ? error.message : String(error)));
-            setState("done");
-            return;
+      if (inUniverse) {
+        if (!universe) {
+          fail("This program runs on the browser's prebuilt runner, which this page doesn't load.");
+        } else {
+          try {
+            await runFrame(code);
+          } catch (error) {
+            console.warn("rawr: the browser's prebuilt runner could not run this snippet;", error);
+            clear();
+            fail("The browser's prebuilt runner did not load: " + why(error));
           }
         }
-      } else if (browserOnly) {
-        fail("This program runs only on the browser's prebuilt runner, which this page doesn't load.");
         setState("done");
         return;
       }
       try {
-        let result = edited() ? (onServer || inUniverse ? null : await browser(code)) : await early.take();
-        if (!result) result = edited() ? await answer(await render(code, strip)) : await siteRun(code);
-        if (result.failed !== undefined) {
-          fail("The code could not run. " + result.failed);
-        } else {
-          // The build draws each snippet's static output with the same function.
-          show(outputHtml(result));
-        }
+        // The build draws each snippet's static output with the same function.
+        show(outputHtml(edited() ? await browser(code) : await early.take()));
       } catch (error) {
-        // fetch throws a TypeError when the network fails.
-        const message = error instanceof Error ? error.message : String(error);
-        fail(error instanceof TypeError ? "rawr's server could not be reached. " + message : "The code could not run. " + message);
+        fail(why(error));
       }
       setState("done");
     };
 
     // The unedited snippet's run, which warming starts ahead of its Run.
-    const early = ahead(() => (onServer || inUniverse ? siteRun(original) : browser(original)));
+    const early = ahead(() => browser(original));
     // A universe block warms its frame: the module compiled and an
     // instance made, with its bindings installed.
     warmups.push(async () => {
-      if (inUniverse && universe) await nextFrame();
-      else if (!edited() && !browserOnly) await early.warm();
+      if (inUniverse) {
+        if (universe) await nextFrame();
+      } else if (!edited()) await early.warm();
     });
 
     button.addEventListener("click", () => {

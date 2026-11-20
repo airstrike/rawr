@@ -355,7 +355,7 @@ export function universe({ document, fetch, compile, build = PLAIN, wasm = globa
   };
 
   /**
-   * Show `frame` and run `code` in it: the server's text result, or a
+   * Show `frame` and run `code` in it: a text result as rawr-web gives one, or a
    * compile error. A panic aborts the instance; its message is the error.
    * A `main` that sleeps runs on in the frame and prints to its terminal:
    * the answer is then a status of 0 with no output. Without JSPI it stops

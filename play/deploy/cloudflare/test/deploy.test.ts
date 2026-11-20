@@ -70,7 +70,7 @@ test("temporary application discovery failure retries within the rollout wait", 
 
 // The wait for the bot: its image, answered by the Durable Object on the
 // Worker version the deploy made (#1066).
-const bot = script.slice(script.indexOf("# The Worker version the deploy made"), script.indexOf("# Smoke test"));
+const bot = script.slice(script.indexOf("# The Worker version the deploy made"));
 const status = { versions: [{ version_id: "new-version", percentage: 100 }] };
 
 function wait(healths: object[], deployment: object = status) {

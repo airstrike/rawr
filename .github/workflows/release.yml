@@ -13,15 +13,15 @@
 #      image. Built, about 10-15 minutes with its cache (see bot.yml).
 #   4. site (site.yml): one deploy of the Worker and site with this run's
 #      rawr-web and the new image (or the running one), then the wait for the
-#      bot and the site's snippets against the server that has just gone
-#      live. About 3 minutes, plus up to 5 for a new image's rollout.
+#      bot to report it. About 3 minutes, plus up to 5 for a new image's
+#      rollout.
 #
 # Stages 2 and 3 publish only (an artifact, a registry image); the site
 # stage makes the one deploy, so the site never goes live ahead of its bot,
 # and a failed stage leaves the live site as it was. A Worker settings or
 # code change needs none of this: site.yml deploys it on its own on push.
 #
-# It needs the CLOUDFLARE_API_TOKEN and PLAY_SMOKE_TOKEN secrets and the
+# It needs the CLOUDFLARE_API_TOKEN secret and the
 # CLOUDFLARE_ACCOUNT_ID variable (see "Release from GitHub Actions" in
 # play/README.md).
 name: Release

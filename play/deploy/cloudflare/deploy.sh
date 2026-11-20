@@ -5,10 +5,9 @@
 # deploys the container in one step (--containers-rollout=immediate),
 # retries the deploy when Cloudflare answers 100146 (wrangler only waits 2 s
 # for a new image version), a 500 or 10013 (an assets upload session's
-# "unknown error", which passed on a re-run each time), waits for the bot to report the image
-# named by PLAY_VERSION, and runs the landing page's own snippets and the
-# docs' through /play/run. Logs go to target/logs. The site needs its
-# packages: `npm ci` in site/.
+# "unknown error", which passed on a re-run each time), and waits for the bot
+# to report the image named by PLAY_VERSION. Logs go to target/logs. The
+# site needs its packages: `npm ci` in site/.
 set -eu
 here="$(cd "$(dirname "$0")" && pwd)"
 repo="$(git -C "$here" rev-parse --show-toplevel)"
@@ -60,7 +59,7 @@ fi
 
 # Query the application itself: the account-wide list can retain an old image
 # after the application and its running instance have advanced. A rollout that never places a
-# healthy instance fails here with Cloudflare's own view, not in the snippets.
+# healthy instance fails here with Cloudflare's own view.
 app="rawr-play-playbot"
 application_id() {
   npx wrangler containers list --json 2>/dev/null |
@@ -95,7 +94,7 @@ version="$(npx wrangler deployments status --json 2>/dev/null |
 # A deploy resets the Durable Object a while after it lands (about five
 # minutes in the runs of 2026-11-06), and the reset fails the request it was
 # answering with a 503, so /bot/health must also come from the Durable
-# Object on the version just deployed before any snippet runs.
+# Object on the version just deployed.
 i=0
 until curl -fsS "$site/bot/health" 2>/dev/null |
   node -e 'let s="";process.stdin.on("data",(d)=>(s+=d)).on("end",()=>{const h=JSON.parse(s);process.exit(h.running&&h.image===process.argv[1]&&h.version===process.argv[2]?0:1)})' "$want" "$version"; do
@@ -104,128 +103,3 @@ until curl -fsS "$site/bot/health" 2>/dev/null |
   sleep 5
 done
 echo "The bot reports image $want on Worker version $version after $((i * 5)) s."
-
-# Smoke test: the runnable snippets on the landing page and in the docs must still run.
-# /play/run limits each IP, so the test sends x-play-admin to skip the limit:
-# PLAY_SMOKE_TOKEN (the Worker's secret of that name, which GitHub Actions has
-# too), or else the admin HMAC of ~/.config/rawr-play/log-key.
-node --input-type=module -e '
-  import { readdirSync, readFileSync } from "node:fs";
-  import { join, relative } from "node:path";
-  import { homedir } from "node:os";
-  import { createHmac } from "node:crypto";
-  const admin = process.env.PLAY_SMOKE_TOKEN || (() => {
-    try {
-      const key = readFileSync(join(homedir(), ".config/rawr-play/log-key"), "utf8").trim();
-      return createHmac("sha256", key).update("rawr-play admin").digest("hex");
-    } catch {
-      return "";
-    }
-  })();
-  const headers = { "content-type": "application/json", ...(admin ? { "x-play-admin": admin } : {}) };
-  // Every page of the site that holds a runnable block, read from the files
-  // (index.html is its directory'"'"'s path, other pages drop .html).
-  const root = process.argv[2];
-  const pages = readdirSync(root, { recursive: true })
-    .filter((file) => file.endsWith(".html") && /<code[^>]*data-run/.test(readFileSync(join(root, file), "utf8")))
-    .map((file) => "/" + relative(root, join(root, file)).replace(/index\.html$/, "").replace(/\.html$/, ""))
-    .map((path) => (path.length > 1 ? path.replace(/\/$/, "") : path));
-  const text = (h) => h.replace(/<[^>]+>/g, "").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, "\"").replace(/&#39;/g, "\x27").replace(/&amp;/g, "&");
-  const sources = new Set();
-  const failing = new Set();
-  // The build ran each data-where="server" block on the server that was live
-  // then. Its output must also be what the server just deployed answers.
-  const { outputHtml } = await import(process.argv[3] + "/site/src/lib/output.ts");
-  const shown = new Map();
-  // A block whose page says it waits for the next image (class="next",
-  // docs.ts'"'"'s NEXT_IMAGE) was built while the live server lacked a crate
-  // it needs. The image just deployed must run it; the page shows its output
-  // from the site'"'"'s next build.
-  const waiting = new Set();
-  for (const path of pages) {
-    const page = await (await fetch(process.argv[1] + path)).text();
-    const found = [...page.matchAll(/<code([^>]*data-run[^>]*)>([\s\S]*?)<\/code>/g)];
-    if (!found.length) throw new Error("no runnable snippets on " + path);
-    // A block whose shown output is an error (class="err") is expected to
-    // fail to compile, so its 422 is its right answer.
-    for (const match of found) {
-      const [whole, attributes, html] = match;
-      // A data-where="browser" block runs in the universe of the page, and
-      // its Run never reaches /play/run.
-      if (attributes.includes("data-where=\"browser\"")) continue;
-      const after = page.slice(match.index + whole.length);
-      const strip = after.slice(0, after.indexOf("</div>", after.indexOf("<div class=\"run\"")));
-      const body = JSON.stringify({ code: text(html) });
-      if (strip.includes("class=\"next\"")) waiting.add(body);
-      else if (strip.includes("class=\"err\"")) failing.add(body);
-      if (attributes.includes("data-where=\"server\"") && !waiting.has(body)) shown.set(body, strip.slice(strip.indexOf("aria-live=\"polite\">") + 19, strip.lastIndexOf("</span>")));
-      sources.add(body);
-    }
-  }
-  // Each distinct source once. Without the header, landing runs are rate
-  // limited per IP, so a 429 waits as long as it asks and tries again.
-  for (const body of sources) {
-    // A fresh image can reset a connection or run out of render time on its
-    // first iced snippets while it starts, so those two get a few retries.
-    const start = Date.now();
-    const seconds = () => ((Date.now() - start) / 1000).toFixed(1);
-    for (let cold = 0; ; ) {
-      let response;
-      try {
-        response = await fetch(process.argv[1] + "/play/run", { method: "POST", headers, body });
-      } catch (error) {
-        if (++cold > 3) throw error;
-        console.log("the bot dropped the connection; retrying in 10 s");
-        await new Promise((resolve) => setTimeout(resolve, 10000));
-        continue;
-      }
-      if (response.status === 429) {
-        const wait = Number(/(\d+) s/.exec(await response.text())?.[1] ?? 30);
-        console.log("rate limited; waiting " + wait + " s");
-        await new Promise((resolve) => setTimeout(resolve, (wait + 1) * 1000));
-        continue;
-      }
-      const same = (result) => {
-        if (!shown.has(body) || outputHtml(result) === shown.get(body)) return;
-        const first = JSON.parse(body).code.split("\n").find((line) => line.trim()) ?? "";
-        throw new Error("the page shows another output than the server gives for the server snippet starting " + JSON.stringify(first) + "; the site was built against the server before this deploy, so deploy the site again");
-      };
-      if (response.status === 422 && failing.has(body)) {
-        same({ kind: "error", text: await response.text() });
-        console.log("ran a site snippet: its compile error, as the page shows");
-        break;
-      }
-      if (!response.ok) {
-        const message = (await response.text()).slice(0, 200);
-        if (response.status === 422 && message.includes("render time limit") && ++cold <= 3) {
-          console.log("the bot ran out of render time; retrying in 10 s");
-          await new Promise((resolve) => setTimeout(resolve, 10000));
-          continue;
-        }
-        const first = JSON.parse(body).code.split("\n").find((line) => line.trim()) ?? "";
-        throw new Error("run failed: " + response.status + " " + message + " on the snippet starting " + JSON.stringify(first));
-      }
-      // A limit means the snippet did not run as its page shows.
-      const ran = await response.text();
-      if (/^\s*\{/.test(ran) && JSON.parse(ran).limit === true) {
-        const first = JSON.parse(body).code.split("\n").find((line) => line.trim()) ?? "";
-        throw new Error("run failed: a limit stopped it after " + seconds() + " s on the snippet starting " + JSON.stringify(first));
-      }
-      if (shown.has(body)) same(JSON.parse(ran));
-      if (waiting.has(body)) console.log("ran a snippet its page shows as waiting for this image; build and deploy the site again to show its output");
-      console.log("ran a site snippet in " + seconds() + " s (" + (response.headers.get("x-run") ?? "?") + "):", response.headers.get("content-type"));
-      break;
-    }
-  }
-  console.log("ran " + sources.size + " distinct site snippets from " + pages.length + " pages");
-' "$site" "$repo/site/dist" "$repo"
-
-# Port readiness must not erase the boot report accepted before the snippets.
-curl -fsS "$site/bot/health" | node -e '
-  const health = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
-  if (!health.running || health.image !== process.argv[1]) {
-    console.error("the bot lost its running-image evidence after site snippets:", health);
-    process.exit(1);
-  }
-  console.log("The bot still reports image " + health.image + " after site snippets.");
-' "$want"

@@ -1,7 +1,7 @@
 ---
 // The Run buttons' stylesheet and script, on a page with runnable snippets.
 // The inline script swaps each snippet's highlighted copy in before the first
-// paint; the HTML itself keeps the plain text /play/run's allow-list reads.
+// paint; the HTML itself keeps the plain text the Run button reads.
 // `warm` warms the page's snippets once it has loaded (scripts/run.ts).
 import "../styles/run.css";
 const { warm = false } = Astro.props;
@@ -14,10 +14,10 @@ for (const t of document.querySelectorAll("code[data-run] + template[data-hl]"))
   import { setup } from "../scripts/run.ts";
   import { universe } from "../scripts/universe.ts";
   import { WEB_MODULE } from "../play/session.ts";
+  let copies = 0;
   setup({
     document,
     window,
-    fetch: fetch.bind(window),
     warm: document.querySelector("template[data-run-warm]") !== null,
     // The browser's universe, for blocks that use crates.
     universe: universe({
@@ -25,9 +25,11 @@ for (const t of document.querySelectorAll("code[data-run] + template[data-hl]"))
       fetch: fetch.bind(window),
       compile: (response) => WebAssembly.compileStreaming(response),
     }),
-    // rawr-web, as the playground loads it.
+    // rawr-web, as the playground loads it. A module is imported once per
+    // address, so a copy after the first has its own query: its own
+    // instance, from the same cached files.
     web: async () => {
-      const m = await import(/* @vite-ignore */ WEB_MODULE);
+      const m = await import(/* @vite-ignore */ WEB_MODULE + (copies++ ? "?" + copies : ""));
       await m.default();
       return m;
     },
