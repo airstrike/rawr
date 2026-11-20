@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-20",
-  "version": "0.4.72",
+  "version": "0.4.73",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.73",
+        "date": "2026-11-20",
+        "entries": [
+          {"text":"A `match` on `fmt::Alignment`, `mpsc::TryRecvError` or `mpsc::RecvTimeoutError` with an arm for each variant is accepted, as rustc accepts it, and E0004 names the variants it misses as rustc does. A `#[non_exhaustive]` enum such as `IntErrorKind` or `io::ErrorKind` still needs `_`, and E0004 reports only `_` with rustc's note. Every stable `io::ErrorKind` variant can now be named.","issues":[2369]}
+        ]
+      },
       {
         "version": "0.4.72",
         "date": "2026-11-20",
@@ -5668,7 +5675,8 @@
     {"issue":2366,"title":"A shared table refused for build-script output ends the run with 'run again' instead of preparing again by itself","state":"closed","category":"Health","release":"0.4.71"},
     {"issue":2367,"title":"Under rawr dap, rawr's own progress lines go to stderr and show red in VS Code","state":"closed","category":"Health","release":"0.4.71"},
     {"issue":2368,"title":"A module that a glob of the parent's `use` imports is not followed in an impl's trait path","state":"closed","category":"Health","release":"0.4.72"},
-    {"issue":2369,"title":"A match on a std enum rawr's std holds as a value needs a `_` arm that rustc doesn't","state":"open","category":"Health"}
+    {"issue":2369,"title":"A match on a std enum rawr's std holds as a value needs a `_` arm that rustc doesn't","state":"closed","category":"Health","release":"0.4.73"},
+    {"issue":2370,"title":"std's `io::SeekFrom` variants are unbound, and notes write std types by full path where rustc writes the name","state":"open","category":"Health"}
   ],
   "groups": [
     {

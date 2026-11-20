@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.4.73",
+      "date": "2026-11-20",
+      "entries": [
+        {"text":"A `match` on `fmt::Alignment`, `mpsc::TryRecvError` or `mpsc::RecvTimeoutError` with an arm for each variant is accepted, as rustc accepts it, and E0004 names the variants it misses as rustc does. A `#[non_exhaustive]` enum such as `IntErrorKind` or `io::ErrorKind` still needs `_`, and E0004 reports only `_` with rustc's note. Every stable `io::ErrorKind` variant can now be named.","issues":[2369]}
+      ]
+    },
+    {
       "version": "0.4.72",
       "date": "2026-11-20",
       "entries": [

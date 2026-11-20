@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.73 (2026-11-20)
+
+- A `match` on `fmt::Alignment`, `mpsc::TryRecvError` or `mpsc::RecvTimeoutError` with an arm for each variant is accepted, as rustc accepts it, and E0004 names the variants it misses as rustc does. A `#[non_exhaustive]` enum such as `IntErrorKind` or `io::ErrorKind` still needs `_`, and E0004 reports only `_` with rustc's note. Every stable `io::ErrorKind` variant can now be named. (#2369)
+
 ## 0.4.72 (2026-11-20)
 
 - A path goes on through a module that a `use` or a glob binds, as rustc resolves it: `impl m::Tr for ..` after `use super::*;` reaches the parent's `use crate::m`, and `super::m::two()` reaches the parent's `use crate::m;`, in types, traits and expressions. (#2368)

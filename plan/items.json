@@ -2368,6 +2368,7 @@
     {"t":"T2366","issue":2366,"title":"T2366: A shared table refused for build-script output ends the run with 'run again' instead of preparing again by itself","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"08513b980","release":"0.4.71"},
     {"t":"T2367","issue":2367,"title":"T2367: Under rawr dap, rawr's own progress lines go to stderr and show red in VS Code","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"08513b980","release":"0.4.71"},
     {"t":"T2368","issue":2368,"title":"T2368: A module that a glob of the parent's `use` imports is not followed in an impl's trait path","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"e4f3ef07f","release":"0.4.72"},
-    {"t":"T2369","issue":2369,"title":"T2369: A match on a std enum rawr's std holds as a value needs a `_` arm that rustc doesn't","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T2369","issue":2369,"title":"T2369: A match on a std enum rawr's std holds as a value needs a `_` arm that rustc doesn't","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"b05fd689c","release":"0.4.73"},
+    {"t":"T2370","issue":2370,"title":"T2370: std's `io::SeekFrom` variants are unbound, and notes write std types by full path where rustc writes the name","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }
