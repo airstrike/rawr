@@ -794,12 +794,15 @@ impl<'a> Resolver<'a> {
 
                 if path.len() >= 3 {
                     let mut active = BTreeSet::new();
-                    match self.resolve_path(
-                        &unit.context,
-                        &path[..path.len() - 1],
-                        call.owner_span,
-                        &mut active,
-                    )? {
+                    match self
+                        .resolve_path(
+                            &unit.context,
+                            &path[..path.len() - 1],
+                            call.owner_span,
+                            &mut active,
+                        )
+                        .map_err(|failure| self.through_private(&unit.context, &call, failure))?
+                    {
                         Target::Type(type_ref::Target::Script { identity, .. }) => {
                             resolved.owners.insert((source, call.owner_span), identity);
                             continue;
@@ -826,7 +829,9 @@ impl<'a> Resolver<'a> {
                 let mut active = BTreeSet::new();
                 match self
                     .resolve_path(&unit.context, path, call.path_span, &mut active)
-                    .map_err(|failure| self.not_in_module(&unit.context, &call, failure))?
+                    .map_err(|failure| self.not_in_module(&unit.context, &call, failure))
+                    .map_err(|failure| self.through_private(&unit.context, &call, failure))
+                    .map_err(|failure| self.private_value(&unit.context, &call, failure))?
                 {
                     Target::Item(key) => {
                         resolved.functions.insert((source, call.path_span), key);
@@ -3058,7 +3063,7 @@ impl<'a> Resolver<'a> {
                 name: address.name.clone(),
                 reference: last_segment(reference, &address.name),
                 declaration: Some(declaration.span),
-                referent: None,
+                detail: None,
             },
         }
     }
@@ -3090,26 +3095,216 @@ impl<'a> Resolver<'a> {
                 name: address.name.clone(),
                 reference: last_segment(reference, &address.name),
                 declaration: Some(import.written),
-                referent: self.referent(context, import).map(Box::new),
+                detail: self
+                    .referent(context, import, &address.name, reference)
+                    .map(|referent| Box::new(super::Detail::Import(referent))),
             },
         }
     }
 
-    /// The crate item `import` binds, when it is declared in the import's
-    /// file, with whether `context` sees it.
-    fn referent(&self, context: &Context, import: &Export) -> Option<super::Referent> {
+    /// The crate item `import` binds as `bound`, when it is declared in
+    /// the import's file, with whether `context` sees it, and the path
+    /// rustc suggests in place of `written`, the path naming the import.
+    fn referent(
+        &self,
+        context: &Context,
+        import: &Export,
+        bound: &ImmutableString,
+        written: Span,
+    ) -> Option<super::Referent> {
         let (origin, path) = self.origin(&import.context, &import.path);
         let (address, declaration) = self.declared_at(&origin, &path)?;
         let file = |source: source::Id| self.evidence[source.index()].identity();
+        // rustc names the item by its own path when the use reaches it
+        // by the import's name, and by the import's path otherwise.
+        let instead = if *bound == address.name && self.sees(context, &address, &declaration.reach)
+        {
+            Some(super::Instead::Item(rustc_path(context, &address)))
+        } else {
+            let modules = import.path.split_last().map(|(_, modules)| modules);
+            modules
+                .filter(|modules| !modules.is_empty())
+                .map(|modules| {
+                    let segments = modules.iter().chain(std::iter::once(bound));
+                    let path = segments.map(ImmutableString::as_str).collect::<Vec<_>>();
+                    super::Instead::Import(path.join("::").into())
+                })
+        };
         (file(declaration.source) == file(import.source)).then(|| super::Referent {
             item: self.private_kind(&declaration.target),
             name: address.name.clone(),
             declaration: declaration.span,
-            visible: declaration.reach.reaches(&context.namespace)
-                && self
-                    .validate_module_hops(context, &address, declaration.span)
-                    .is_ok(),
+            visible: declaration.reach.reaches(&context.namespace),
+            instead,
+            written,
         })
+    }
+
+    /// Whether `context` sees the item at `address`, which is visible
+    /// where `reach` says: each module on its path, and the item itself.
+    fn sees(&self, context: &Context, address: &Address, reach: &super::Reach) -> bool {
+        reach.reaches(&context.namespace)
+            && self
+                .validate_module_hops(context, address, Span::NONE)
+                .is_ok()
+    }
+
+    /// `failure`, a private module on the path `call` names from
+    /// `context`, with the item the path goes on to, as rustc labels it:
+    /// "function `f` is not publicly re-exported", or a public re-export
+    /// of it the use could name.
+    fn through_private(
+        &self,
+        context: &Context,
+        call: &QualifiedCall,
+        mut failure: Failure,
+    ) -> Failure {
+        let Error::PrivateItem {
+            item: Private::Module,
+            name,
+            detail: detail @ None,
+            ..
+        } = &mut failure.error
+        else {
+            return failure;
+        };
+        let Some(outer) = call.path.last().filter(|outer| *outer != name) else {
+            return failure;
+        };
+        let (origin, path) = self.origin(context, &call.path);
+        let Some((address, declaration)) = self.declared_at(&origin, &path) else {
+            return failure;
+        };
+        let item = self.used_kind(context, declaration, call).0;
+        // A public `use` of the item the use sees, of the item's name.
+        let reexport = self
+            .tables
+            .exports()
+            .filter(|(at, export)| {
+                at.name == *outer
+                    && at.package == address.package
+                    && self.sees(context, at, &export.reach)
+            })
+            .find(|(_, export)| {
+                let mut active = BTreeSet::new();
+                self.resolve_any_path(&export.context, &export.path, export.span, &mut active)
+                    .is_ok_and(|target| target == declaration.target)
+            })
+            .map(|(at, _)| rustc_path(context, at));
+        *detail = Some(Box::new(super::Detail::Through(super::Beyond {
+            item,
+            name: outer.clone(),
+            reference: call.name_span,
+            reexport,
+            written: call.path_span,
+        })));
+        failure
+    }
+
+    /// What `declaration`, the item `call` names, is as rustc names it at
+    /// that use: a struct named as a value is its constructor, a unit
+    /// struct's or a tuple struct's, which comes with its fields.
+    fn used_kind(
+        &self,
+        context: &Context,
+        declaration: &Declaration,
+        call: &QualifiedCall,
+    ) -> (Private, Option<super::Fields>) {
+        let item = self.private_kind(&declaration.target);
+        let text = self.evidence[context.source.index()].text();
+        if item != Private::Struct || !value_use(text, call.path_span) {
+            return (item, None);
+        }
+        let declared = self
+            .units
+            .iter()
+            .filter(|unit| unit.context.source == declaration.source)
+            .find_map(|unit| {
+                unit.parsed.items().iter().find_map(|parsed| match parsed {
+                    crate::item::Parsed::Struct(declared)
+                        if declared.name.span == declaration.span =>
+                    {
+                        Some((&unit.context, declared))
+                    }
+                    _ => None,
+                })
+            });
+        let Some((declaring, declared)) = declared else {
+            return (item, None);
+        };
+        match declared.form {
+            crate::item::StructForm::Unit => (Private::UnitStruct, None),
+            crate::item::StructForm::Tuple => {
+                let opens = |field: &crate::item::Field| {
+                    declaring
+                        .namespace
+                        .opens_to(field.visibility.as_ref(), &context.namespace)
+                };
+                let fields = declared
+                    .fields
+                    .first()
+                    .zip(declared.fields.last())
+                    .filter(|_| !declared.fields.iter().all(opens))
+                    .map(|(first, last)| {
+                        let start = first
+                            .visibility
+                            .as_ref()
+                            .map_or(first.span, |visibility| visibility.span);
+                        Span::new(start.start(), last.span.end())
+                    });
+                let private = declared
+                    .fields
+                    .iter()
+                    .filter(|field| field.visibility.is_none() && !opens(field))
+                    .map(|field| field.span.start())
+                    .collect();
+                let count = declared.fields.len();
+                (
+                    Private::TupleStructConstructor,
+                    Some(super::Fields {
+                        fields,
+                        private,
+                        count,
+                    }),
+                )
+            }
+            _ => (item, None),
+        }
+    }
+
+    /// `failure`, a private struct `call` names from `context`, as rustc
+    /// names it where the use is a value: a unit struct, or a tuple
+    /// struct's constructor.
+    fn private_value(
+        &self,
+        context: &Context,
+        call: &QualifiedCall,
+        mut failure: Failure,
+    ) -> Failure {
+        let Error::PrivateItem {
+            item: item @ Private::Struct,
+            name,
+            declaration: Some(declared),
+            detail: detail @ None,
+            ..
+        } = &mut failure.error
+        else {
+            return failure;
+        };
+        if call.path.last() != Some(name) {
+            return failure;
+        }
+        let (origin, path) = self.origin(context, &call.path);
+        let Some((_, declaration)) = self
+            .declared_at(&origin, &path)
+            .filter(|(_, declaration)| declaration.span == *declared)
+        else {
+            return failure;
+        };
+        let (used, fields) = self.used_kind(context, declaration, call);
+        *item = used;
+        *detail = fields.map(|fields| Box::new(super::Detail::Constructor(fields)));
+        failure
     }
 
     /// What `target` is, as rustc names it in E0603.
@@ -3682,6 +3877,56 @@ fn qualified_pattern_owners(parsed: &crate::item::Parsed) -> Vec<(Box<[Immutable
         | crate::item::Parsed::TypeAlias(_) => {}
     }
     output
+}
+
+/// The path rustc suggests naming the item at `address` by from
+/// `context`: its modules and name, through `crate::` outside the crate's
+/// root.
+fn rustc_path(context: &Context, address: &Address) -> ImmutableString {
+    let root = context.namespace.modules.is_empty();
+    let mut segments: Vec<&str> = Vec::with_capacity(address.modules.len() + 2);
+    if !root {
+        segments.push("crate");
+    }
+    segments.extend(address.modules.iter().map(ImmutableString::as_str));
+    segments.push(&address.name);
+    segments.join("::").into()
+}
+
+/// Whether the path at `path` in `text` names a value, as a call, an
+/// operand or an argument does, and not a type, which follows a `:`, a
+/// `->`, a `<` or an `as`, or comes before a struct literal's `{`.
+fn value_use(text: &str, path: Span) -> bool {
+    let line = |position: crate::Position| {
+        let line = text.split('\n').nth(position.line()?.checked_sub(1)?)?;
+        Some(line.chars().collect::<Vec<_>>())
+    };
+    let (Some(first), Some(last)) = (line(path.start()), line(path.end())) else {
+        return true;
+    };
+    let start = path.start().position().unwrap_or(1).saturating_sub(1);
+    let end = path.end().position().unwrap_or(1).saturating_sub(1);
+    let after: String = last.iter().skip(end).collect();
+    let after = after.trim_start();
+    if after.starts_with('{') || after.starts_with('<') {
+        return false;
+    }
+    let before: String = first.iter().take(start).collect();
+    let mut before = before.trim_end();
+    // A borrow of a type is a type too.
+    while let Some(stripped) = before
+        .strip_suffix("&mut")
+        .or_else(|| before.strip_suffix('&'))
+    {
+        before = stripped.trim_end();
+    }
+    let typed = before.ends_with("->")
+        || before.ends_with('<')
+        || (before.ends_with(':') && !before.ends_with("::"))
+        || before.ends_with(" as")
+        || before.ends_with("impl")
+        || before.ends_with("dyn");
+    !typed
 }
 
 /// The end of `reference` that names `name`, where rustc's E0603 points:

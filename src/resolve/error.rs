@@ -303,6 +303,8 @@ pub enum Private {
     Function,
     /// A struct.
     Struct,
+    /// A unit struct named as a value, its constructor.
+    UnitStruct,
     /// An enum.
     Enum,
     /// A module.
@@ -331,9 +333,69 @@ pub struct Referent {
     pub name: ImmutableString,
     /// The item's name where it is declared.
     pub declaration: Span,
-    /// Whether the use sees the item itself, which rustc says it could
-    /// import directly.
+    /// Whether the item's own marker opens it to the use, which rustc
+    /// says it could import directly.
     pub visible: bool,
+    /// The path rustc suggests the use names instead.
+    pub instead: Option<Instead>,
+    /// The path as the use writes it, through the import's name.
+    pub written: Span,
+}
+
+/// The path rustc's E0603 suggests for a private import.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub enum Instead {
+    /// The item's own path, when the use reaches the item by the import's
+    /// name: `m::inner::f`, or `crate::m::inner::f` outside the crate's
+    /// root.
+    Item(ImmutableString),
+    /// The import's own path with the import's name, otherwise:
+    /// `self::inner::f` of `use self::inner::f;`.
+    Import(ImmutableString),
+}
+
+/// What rustc's E0603 shows beside the private item.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub enum Detail {
+    /// A private import, and the item it binds, when that item is declared
+    /// in the import's file.
+    Import(Referent),
+    /// A tuple struct's constructor, and its fields.
+    Constructor(Fields),
+    /// A private module on a path to an item past it.
+    Through(Beyond),
+}
+
+/// A tuple struct's fields, where rustc's E0603 marks its private
+/// constructor.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct Fields {
+    /// From the first field through the last, when one of them is
+    /// private to the use: rustc's "a constructor is private if any of the
+    /// fields is private".
+    pub fields: Option<Span>,
+    /// Where each field private to the use and with no `pub` marker
+    /// starts, where rustc suggests writing `pub `.
+    pub private: Box<[crate::Position]>,
+    /// How many fields the struct declares, which rustc's help counts.
+    pub count: usize,
+}
+
+/// The item a path names past a private module, which rustc's E0603
+/// labels.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct Beyond {
+    /// What the item is.
+    pub item: Private,
+    /// The item's name.
+    pub name: ImmutableString,
+    /// The item's name where the path writes it.
+    pub reference: Span,
+    /// The path of a public re-export of the item the use sees, as rustc
+    /// suggests it.
+    pub reexport: Option<ImmutableString>,
+    /// The path as the use writes it, through the item's name.
+    pub written: Span,
 }
 
 /// What a private import binds, as rustc names it: "function import".
@@ -371,6 +433,7 @@ impl Private {
         match self {
             Self::Function => "private function defined here",
             Self::Struct => "private struct defined here",
+            Self::UnitStruct => "private unit struct defined here",
             Self::Enum => "private enum defined here",
             Self::Module => "private module defined here",
             Self::Trait => "private trait defined here",
@@ -390,6 +453,7 @@ impl Private {
         match self {
             Self::Function => "function",
             Self::Struct => "struct",
+            Self::UnitStruct => "unit struct",
             Self::Enum => "enum",
             Self::Module => "module",
             Self::Trait => "trait",
@@ -412,7 +476,7 @@ impl Private {
     pub const fn imported(self) -> Option<Self> {
         let imported = match self {
             Self::Function => Imported::Function,
-            Self::Struct => Imported::Struct,
+            Self::Struct | Self::UnitStruct => Imported::Struct,
             Self::Enum => Imported::Enum,
             Self::Module => Imported::Module,
             Self::Trait => Imported::Trait,
@@ -424,6 +488,81 @@ impl Private {
         };
         Some(Self::Import(imported))
     }
+}
+
+/// The item whose bound requires a trait, which rustc's E0277 notes:
+/// "required by a bound in `f`".
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct Required {
+    /// The item, as rustc names it: `show`, `std::thread::spawn`.
+    pub item: ImmutableString,
+    /// Where the program writes the bound, and the call that needs it.
+    pub place: Option<Box<Bound>>,
+}
+
+impl Required {
+    /// A bound of `item`, which the program doesn't write.
+    pub(crate) fn by(item: impl Into<ImmutableString>) -> Self {
+        Self {
+            item: item.into(),
+            place: None,
+        }
+    }
+}
+
+/// A bound the program writes on a function's generic parameter, and the
+/// call whose argument doesn't meet it, as rustc's E0277 marks them.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct Bound {
+    /// The bound: `Display` of `T: Display`.
+    pub bound: Span,
+    /// The callee as the call names it.
+    pub callee: Span,
+    /// The argument whose type the parameter is.
+    pub argument: Span,
+    /// The argument's type's name where the program declares it, when
+    /// that is in the call's file.
+    pub declared: Option<Span>,
+}
+
+/// A call's arguments and its callee's parameters where rustc's E0061
+/// labels and suggests them: the arguments the callee doesn't take, and
+/// the parameters the call gives nothing.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct Arguments {
+    /// The callee as the call names it: its path, or a method's name.
+    pub callee: Span,
+    /// Each argument the call gives, in order.
+    pub given: Box<[Span]>,
+    /// The arguments past what the callee takes.
+    pub unexpected: Box<[Unexpected]>,
+    /// The parameters the call gives nothing, in order.
+    pub missing: Box<[Missing]>,
+}
+
+/// An argument past what a call's callee takes, as rustc's E0061 labels
+/// it.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct Unexpected {
+    /// Its index among the call's arguments.
+    pub index: usize,
+    /// Its type as rustc names it.
+    pub ty: ImmutableString,
+}
+
+/// A parameter a call gives no argument, as rustc's E0061 names it.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct Missing {
+    /// Its index among the callee's parameters, its receiver left out.
+    pub index: usize,
+    /// Its type as rustc names it: `None` for one inference leaves open.
+    pub ty: Option<ImmutableString>,
+    /// What rustc's suggestion writes in its place: `/* i32 */`, `()` for
+    /// a unit, or `/* b */`, the parameter's name, for a type it can't
+    /// write.
+    pub placeholder: ImmutableString,
+    /// The parameter where the program declares it, in the call's file.
+    pub declared: Option<Span>,
 }
 
 /// rustc's E0061 and E0057 message: "this function takes 2 arguments but 1
@@ -767,10 +906,10 @@ pub enum Error {
         reference: Span,
         /// The item's declaration, when it is in the same source.
         declaration: Option<Span>,
-        /// What a private import binds, when its declaration is in the
-        /// import's source: rustc's "...and refers to the function `f`
-        /// which is defined here".
-        referent: Option<Box<Referent>>,
+        /// What rustc shows beside it: the item a private import binds,
+        /// a constructor's fields, or the item a private module's path
+        /// goes on to.
+        detail: Option<Box<Detail>>,
     },
     /// A member used as the other kind: a field called like a method
     /// (rustc's E0599), or a method read like a field (rustc's E0615).
@@ -945,7 +1084,7 @@ pub enum Error {
         derive: bool,
         /// The item whose bound requires the trait, as rustc's "required by
         /// a bound in" note names it.
-        required_by: Option<ImmutableString>,
+        required_by: Option<Required>,
     },
     /// A statically-known nominal enum match has an invalid pattern set.
     InvalidMatch {
@@ -1220,6 +1359,9 @@ pub enum Error {
         /// The callee's name or header where the program defines it, when
         /// that is in the call's file.
         definition: Option<Span>,
+        /// The arguments and parameters rustc labels, where the call
+        /// knows them.
+        arguments: Option<Box<Arguments>>,
     },
     /// `lhs == rhs` (or `!=`) where no `PartialEq<rhs>` impl holds for
     /// `lhs`, which rustc refuses (E0277).
@@ -1338,6 +1480,7 @@ impl Error {
             found,
             call,
             definition: None,
+            arguments: None,
         }
     }
 
@@ -2893,6 +3036,7 @@ impl fmt::Display for Unsatisfied<'_> {
                 "`{}` doesn't implement `std::fmt::Display`",
                 self.0
             ),
+            "PartialEq" => write!(formatter, "can't compare `{0}` with `{0}`", self.0),
             "Send" => write!(
                 formatter,
                 "`{}` cannot be sent between threads safely",

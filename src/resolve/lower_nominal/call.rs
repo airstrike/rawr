@@ -782,7 +782,8 @@ impl<'a> Parser<'a> {
             Ty::FnItem { key, .. } => match self.models.functions_by_key.get(&**key) {
                 Some(function) => (
                     Callee::Function,
-                    (function.source == self.models.context)
+                    self.models
+                        .in_this_file(function.source)
                         .then_some(function.definition.name.span),
                 ),
                 None => (
@@ -824,6 +825,16 @@ impl<'a> Parser<'a> {
         };
         let call = span(name_span.start(), end);
         if arguments.len() != inputs.len() {
+            let parameters = function
+                .as_ref()
+                .map_or(&[][..], |function| &function.parameters[..]);
+            let places = self.argument_places(
+                name_span,
+                &inputs,
+                parameters,
+                definition.is_some(),
+                &arguments,
+            );
             return Err(Error::ArgumentCount {
                 callee: callee_kind,
                 name,
@@ -831,6 +842,7 @@ impl<'a> Parser<'a> {
                 found: arguments.len(),
                 call,
                 definition,
+                arguments: Some(places),
             });
         }
         for (expected, argument) in inputs.iter().zip(arguments.iter_mut()) {
@@ -1388,20 +1400,43 @@ impl<'a> Parser<'a> {
         let mut witnesses = Vec::new();
         let output = if let Some(function) = function {
             if arguments.len() != function.definition.parameters.len() {
+                let declared = self.models.in_this_file(function.source);
+                let inputs: Vec<Ty> = function
+                    .definition
+                    .parameters
+                    .iter()
+                    .map(|parameter| Ty::from_resolved(&parameter.ty))
+                    .collect();
+                let places = self.argument_places(
+                    name_span,
+                    &inputs,
+                    &function.definition.parameters,
+                    declared,
+                    &arguments,
+                );
                 return Err(Error::ArgumentCount {
                     callee: Callee::Function,
                     expected: function.definition.parameters.len(),
                     found: arguments.len(),
                     call: span(name_span.start(), end),
-                    definition: (function.source == self.models.context)
-                        .then_some(function.definition.name.span),
+                    definition: declared.then_some(function.definition.name.span),
                     name: function.definition.name.text,
+                    arguments: Some(places),
                 });
             }
             // A generic function's parameters are fresh at each call, as
             // Rust infers them, and its bounds are checked once they are known.
             let call = span(name_span.start(), end);
+            let pending = (self.pending_bounds.len(), self.pending_traits.len());
             let substitution = self.instantiate_generics(&function.definition.generics, call)?;
+            let callee = self.callee_path(call, &function.definition.name.text);
+            self.place_bounds(
+                pending,
+                &function.definition,
+                callee,
+                &arguments,
+                &substitution,
+            );
             // A function's `&mut fmt::Formatter` takes the formatter of the
             // `fmt` body that calls it, whose text the call gives back.
             let formatter = function
@@ -1726,6 +1761,20 @@ impl<'a> Parser<'a> {
         substitution: &BTreeMap<ImmutableString, Ty>,
     ) -> Result<(), Error> {
         if arguments.len() != definition.parameters().len() {
+            let declared = self.models.in_this_file(definition.source());
+            let inputs: Vec<Ty> = definition
+                .parameters()
+                .iter()
+                .map(|parameter| instantiate(&Ty::from_resolved(&parameter.ty), substitution))
+                .collect();
+            let callee = self.callee_path(call, definition.name());
+            let places = self.argument_places(
+                callee,
+                &inputs,
+                definition.parameters(),
+                declared,
+                arguments,
+            );
             return Err(Error::ArgumentCount {
                 callee: if definition.receiver().is_some() {
                     Callee::Method
@@ -1738,8 +1787,8 @@ impl<'a> Parser<'a> {
                 expected: definition.parameters().len(),
                 found: arguments.len(),
                 call,
-                definition: (definition.source() == self.models.context)
-                    .then_some(definition.name_span()),
+                definition: declared.then_some(definition.name_span()),
+                arguments: Some(places),
             });
         }
         for (argument, parameter) in arguments.iter_mut().zip(definition.parameters()) {
@@ -1761,6 +1810,153 @@ impl<'a> Parser<'a> {
             }
         }
         Ok(())
+    }
+
+    /// The places rustc's E0061 labels at a call, written `callee`, of a
+    /// callee taking `inputs` with `arguments`: the arguments past the
+    /// inputs, or the inputs the call gives nothing. Each argument fills
+    /// the next input whose type it fits, as rustc matches them; where
+    /// that leaves another count, the arguments past the inputs are the
+    /// extra ones, or the inputs past the arguments the missing ones.
+    /// `parameters` names the inputs, and gives each one's place where
+    /// the program declares it in this file (`declared`).
+    pub(super) fn argument_places(
+        &mut self,
+        callee: Span,
+        inputs: &[Ty],
+        parameters: &[item::Parameter],
+        declared: bool,
+        arguments: &[ParsedExpr],
+    ) -> Box<crate::resolve::Arguments> {
+        let (expected, found) = (inputs.len(), arguments.len());
+        let mut unexpected = Vec::new();
+        let mut missing = Vec::new();
+        if found > expected {
+            let mut next = 0;
+            for (index, argument) in arguments.iter().enumerate() {
+                if next < expected && self.unifies(&inputs[next], &argument.ty) {
+                    next += 1;
+                } else {
+                    unexpected.push(index);
+                }
+            }
+            if unexpected.len() != found - expected {
+                unexpected = (expected..found).collect();
+            }
+        } else {
+            let mut next = 0;
+            for (index, input) in inputs.iter().enumerate() {
+                if next < found && self.unifies(input, &arguments[next].ty) {
+                    next += 1;
+                } else {
+                    missing.push(index);
+                }
+            }
+            if missing.len() != expected - found {
+                missing = (found..expected).collect();
+            }
+        }
+        let unexpected = unexpected
+            .into_iter()
+            .map(|index| crate::resolve::Unexpected {
+                index,
+                ty: self.argument_type(&arguments[index]),
+            })
+            .collect();
+        let missing = missing
+            .into_iter()
+            .map(|index| {
+                let parameter = parameters.get(index);
+                let ty = self.inference.resolve(&inputs[index]);
+                let open = matches!(ty, Ty::Infer(_) | Ty::Param(_) | Ty::Unknown);
+                // rustc writes a type it knows whole, and the parameter's
+                // name for one it doesn't.
+                let placeholder = if ty == Ty::Unit {
+                    "()".into()
+                } else if open || contains_inference(&ty) || contains_open_literal(&ty) {
+                    let name = parameter
+                        .filter(|parameter| parameter.pattern.is_none())
+                        .map_or("value", |parameter| parameter.name.text.as_str());
+                    format!("/* {name} */")
+                } else {
+                    format!("/* {} */", ty.name(&self.models))
+                };
+                crate::resolve::Missing {
+                    index,
+                    ty: (!open).then(|| ty.name(&self.models)),
+                    placeholder: placeholder.into(),
+                    declared: parameter
+                        .filter(|_| declared)
+                        .map(|parameter| parameter.span),
+                }
+            })
+            .collect();
+        Box::new(crate::resolve::Arguments {
+            callee,
+            given: arguments
+                .iter()
+                .map(|argument| self.whole_expression(argument.span))
+                .collect(),
+            unexpected,
+            missing,
+        })
+    }
+
+    /// The callee of `call`, a call from the callee's path to its `)`, as
+    /// rustc's E0061 marks it: the path up to its `(` or turbofish, or
+    /// the name `name` from the call's start where the call spans lines.
+    pub(super) fn callee_path(&self, call: Span, name: &str) -> Span {
+        let path = self.written(call).map(|text| {
+            let end = text.find("::<").into_iter().chain(text.find('(')).min();
+            text[..end.unwrap_or(text.len())].trim_end().to_owned()
+        });
+        let path = path.as_deref().unwrap_or(name);
+        Span::new(call.start(), text_end(call.start(), path))
+    }
+
+    /// The whole of the expression `at`, which ends where its last token
+    /// starts or already past it: through that token, short of any `,` or
+    /// closing bracket it doesn't open.
+    pub(super) fn whole_expression(&self, at: Span) -> Span {
+        let whole = self.expression_span(at);
+        let Some(text) = self.written(whole) else {
+            return whole;
+        };
+        let mut depth = 0_i32;
+        let mut kept = 0;
+        for (count, character) in text.chars().enumerate() {
+            match character {
+                '(' | '[' | '{' => depth += 1,
+                ')' | ']' | '}' => depth -= 1,
+                _ => {}
+            }
+            if depth < 0 || (depth == 0 && character == ',') {
+                break;
+            }
+            if !character.is_whitespace() {
+                kept = count + 1;
+            }
+        }
+        Span::new(
+            whole.start(),
+            text_end(whole.start(), &text.chars().take(kept).collect::<String>()),
+        )
+    }
+
+    /// The type of `argument` as rustc's E0061 names it: a string
+    /// literal's is `&'static str`, as rustc gives a literal before it
+    /// erases its lifetime.
+    fn argument_type(&self, argument: &ParsedExpr) -> ImmutableString {
+        let ty = self.inference.resolve(&argument.ty);
+        let literal = self
+            .written(self.whole_expression(argument.span))
+            .is_some_and(|text| {
+                text.starts_with('"') || text.starts_with("r\"") || text.starts_with("r#")
+            });
+        if ty == Ty::Str && literal {
+            return "&'static str".into();
+        }
+        ty.name(&self.models)
     }
 
     /// Each argument of a script method's `&` parameter lent where it is

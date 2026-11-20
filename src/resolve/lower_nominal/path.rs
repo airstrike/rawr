@@ -1509,13 +1509,36 @@ impl<'a> Parser<'a> {
             member_span.end()
         };
         if args.len() != declaration.payload.len() {
-            return Err(Error::argument_count(
-                Callee::Variant,
-                crate::resolve::Qualified(definition.name(), &declaration.name.text).to_string(),
-                declaration.payload.len(),
-                args.len(),
-                span(owner_span.start(), end),
-            ));
+            let call = span(owner_span.start(), end);
+            let (_, substitution) = self.fresh_nominal(
+                &Nominal::Enum {
+                    definition: definition.clone(),
+                    item: item.clone(),
+                },
+                call,
+            );
+            let inputs: Vec<Ty> = declaration
+                .payload
+                .iter()
+                .map(|ty| instantiate(&Ty::from_resolved(ty), &substitution))
+                .collect();
+            let callee = self.callee_path(call, &declaration.name.text);
+            // rustc marks no field at a tuple variant's definition.
+            let places = self.argument_places(callee, &inputs, &[], false, &args);
+            return Err(Error::ArgumentCount {
+                callee: Callee::Variant,
+                name: crate::resolve::Qualified(definition.name(), &declaration.name.text)
+                    .to_string()
+                    .into(),
+                expected: declaration.payload.len(),
+                found: args.len(),
+                call,
+                definition: self
+                    .models
+                    .type_in_this_file(&item.key)
+                    .then_some(declaration.name.span),
+                arguments: Some(places),
+            });
         }
         let (enum_ty, substitution) = self.fresh_nominal(
             &Nominal::Enum {

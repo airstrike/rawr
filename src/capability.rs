@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 
 /// A capability that can be derived by a Rawr nominal type.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub enum Kind {
     /// A value can be produced without arguments.
     Default,

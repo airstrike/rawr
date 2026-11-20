@@ -56,6 +56,7 @@ impl<'a> Parser<'a> {
                 trait_name.clone(),
                 trait_arguments.clone().into_boxed_slice(),
                 call,
+                None,
             ));
         }
         for (parameter, argument) in parameters.iter().zip(&trait_arguments) {
@@ -1218,6 +1219,7 @@ impl<'a> Parser<'a> {
                 trait_name.clone(),
                 arguments.clone().into_boxed_slice(),
                 call,
+                None,
             ));
             arguments
         };

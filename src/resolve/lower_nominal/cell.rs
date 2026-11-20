@@ -370,7 +370,7 @@ impl Parser<'_> {
                 let inner = self.inference.fresh();
                 let ty = Ty::Cell(kind, Box::new(inner.clone()));
                 self.pending_bounds
-                    .push((inner, capability::Kind::Default, member_span));
+                    .push((inner, capability::Kind::Default, member_span, None));
                 let source = self.default_source(&ty, member_span)?;
                 Ok(self.operator_expr(source, ty, call))
             }

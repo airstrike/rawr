@@ -45,7 +45,7 @@ impl<'a> Parser<'a> {
         for generic in generics {
             let fresh = self.inference.fresh();
             for kind in bound_kinds(generic.bounds) {
-                self.pending_bounds.push((fresh.clone(), kind, span));
+                self.pending_bounds.push((fresh.clone(), kind, span, None));
             }
             substitution.insert(generic.name.text.clone(), fresh);
         }
@@ -78,6 +78,7 @@ impl<'a> Parser<'a> {
                         trait_name.text.clone(),
                         arguments,
                         span,
+                        None,
                     ));
                 }
             }
@@ -129,6 +130,89 @@ impl<'a> Parser<'a> {
             .collect()
     }
 
+    /// The bounds `generics` write, from the `pending` ones on, as the
+    /// call of `function` written `callee` needs its `arguments` to meet
+    /// them: each at the argument whose parameter's type is the bounded
+    /// generic.
+    pub(super) fn place_bounds(
+        &mut self,
+        (bounds, traits): (usize, usize),
+        function: &item::Function,
+        callee: Span,
+        arguments: &[ParsedExpr],
+        substitution: &BTreeMap<ImmutableString, Ty>,
+    ) {
+        // The bound on the generic whose fresh type is `ty`, where
+        // `written` finds it, at the first argument whose parameter's type
+        // names that generic.
+        let place = |this: &Self, ty: &Ty, written: &dyn Fn(&item::Generic) -> Option<Span>| {
+            let generic = function
+                .generics
+                .iter()
+                .find(|generic| substitution.get(&generic.name.text) == Some(ty))?;
+            let bound = written(generic)?;
+            let parameter = Ty::Param(generic.name.text.clone());
+            let (_, argument) =
+                function
+                    .parameters
+                    .iter()
+                    .zip(arguments)
+                    .find(|(declared, _)| {
+                        contains(&Ty::from_resolved(&declared.ty), &|ty| *ty == parameter)
+                    })?;
+            let place = crate::resolve::Bound {
+                bound,
+                callee,
+                argument: this.whole_expression(argument.span),
+                declared: None,
+            };
+            Some(crate::resolve::Required {
+                item: function.name.text.clone(),
+                place: Some(Box::new(place)),
+            })
+        };
+        for index in bounds..self.pending_bounds.len() {
+            let (ty, kind, ..) = &self.pending_bounds[index];
+            let site = place(self, ty, &|generic| {
+                let (_, bound) = generic
+                    .written
+                    .iter()
+                    .find(|(written, _)| written == kind)?;
+                Some(*bound)
+            });
+            self.pending_bounds[index].3 = site;
+        }
+        for index in traits..self.pending_traits.len() {
+            let (ty, trait_name, ..) = &self.pending_traits[index];
+            let site = place(self, ty, &|generic| {
+                let name = generic
+                    .traits
+                    .iter()
+                    .find(|name| name.text == *trait_name)?;
+                Some(name.span)
+            });
+            self.pending_traits[index].4 = site;
+        }
+    }
+
+    /// The name of the program's type `ty` where it is declared, when that
+    /// is in the file being lowered.
+    fn declared_name(&self, ty: &Ty) -> Option<Span> {
+        let Ty::Script(id, _) = ty else {
+            return None;
+        };
+        match self.models.definition(*id) {
+            Nominal::Struct { item, .. } => self
+                .models
+                .type_in_this_file(&item.key)
+                .then_some(item.name.span),
+            Nominal::Enum { item, .. } => self
+                .models
+                .type_in_this_file(&item.key)
+                .then_some(item.name.span),
+        }
+    }
+
     /// `::<A, B>` after a generic function's name, or fresh types.
     pub(super) fn instantiate_generics(
         &mut self,
@@ -156,7 +240,7 @@ impl<'a> Parser<'a> {
 
     /// Check each pending generic bound against its now-known type.
     pub(super) fn finish_bounds(&mut self) -> Result<(), Error> {
-        for (ty, kind, span) in std::mem::take(&mut self.pending_bounds) {
+        for (ty, kind, span, site) in std::mem::take(&mut self.pending_bounds) {
             let ty = self.inference.resolve(&ty);
             if matches!(ty, Ty::Infer(_) | Ty::Unknown) {
                 continue;
@@ -168,16 +252,20 @@ impl<'a> Parser<'a> {
                 _ => self.type_provides(&ty, kind),
             };
             if !provided {
+                let mut required_by = site;
+                if let Some(place) = required_by.as_mut().and_then(|site| site.place.as_mut()) {
+                    place.declared = self.declared_name(&ty);
+                }
                 return Err(Error::MissingCapability {
                     owner: ty.name(&self.models),
                     capability: kind.name().into(),
                     operation: span,
                     derive: matches!(ty, Ty::Script(..)),
-                    required_by: None,
+                    required_by,
                 });
             }
         }
-        for (ty, trait_name, arguments, span) in std::mem::take(&mut self.pending_traits) {
+        for (ty, trait_name, arguments, span, site) in std::mem::take(&mut self.pending_traits) {
             let ty = self.inference.resolve(&ty);
             if matches!(ty, Ty::Infer(_) | Ty::Unknown) {
                 continue;
@@ -238,12 +326,16 @@ impl<'a> Parser<'a> {
                         .join(", ");
                     format!("{trait_name}<{written}>").into()
                 };
+                let mut required_by = site;
+                if let Some(place) = required_by.as_mut().and_then(|site| site.place.as_mut()) {
+                    place.declared = self.declared_name(&ty);
+                }
                 return Err(Error::MissingCapability {
                     owner: ty.name(&self.models),
                     capability,
                     operation: span,
                     derive: matches!(ty, Ty::Script(..)),
-                    required_by: None,
+                    required_by,
                 });
             }
         }
@@ -688,7 +780,7 @@ impl<'a> Parser<'a> {
         let open = self
             .pending_traits
             .iter()
-            .filter(|(ty, _, arguments, _)| {
+            .filter(|(ty, _, arguments, ..)| {
                 let ty = self.inference.resolve(ty);
                 contains_open_literal(&ty)
                     || !is_unsettled(&ty)
@@ -698,7 +790,7 @@ impl<'a> Parser<'a> {
             })
             .cloned()
             .collect::<Vec<_>>();
-        for (ty, trait_name, arguments, _) in open {
+        for (ty, trait_name, arguments, ..) in open {
             let resolved = self.inference.resolve(&ty);
             if contains_open_literal(&resolved) {
                 self.type_implements_with(&ty, &trait_name, &arguments);

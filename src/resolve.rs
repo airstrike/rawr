@@ -28,9 +28,10 @@ pub(crate) use error::{
     Unsupported, ASYNC_MAIN, IF_WITHOUT_ELSE, INVALID_ASSIGNEE, RETURN_WITHOUT_VALUE,
 };
 pub use error::{
-    BindingSite, Boxing, Callee, Category, Cloning, Error, Expansion, Imported, Lint, MacroScope,
-    MoveCause, MovedPlace, MutBinding, OwningParameter, PatternOrigin, PatternTypes, Private,
-    Referent, Unresolved,
+    Arguments, Beyond, BindingSite, Bound, Boxing, Callee, Category, Cloning, Detail, Error,
+    Expansion, Fields, Imported, Instead, Lint, MacroScope, Missing, MoveCause, MovedPlace,
+    MutBinding, OwningParameter, PatternOrigin, PatternTypes, Private, Referent, Required,
+    Unexpected, Unresolved,
 };
 use std::collections::BTreeMap;
 
@@ -5076,6 +5077,14 @@ fn generic_scope(
             });
         }
         let (bounds, traits, trait_arguments) = resolve_bounds_with_arguments(&parameter.bounds)?;
+        let written = parameter
+            .bounds
+            .iter()
+            .filter_map(|bound| {
+                let name = &bound.segments.last()?.name.text;
+                Some((crate::capability::Kind::from_name(name)?, bound.span))
+            })
+            .collect();
         arguments.push(trait_arguments);
         scope.insert(parameter.name.text.clone(), type_ref::Target::Parameter);
         let constant = parameter
@@ -5094,6 +5103,7 @@ fn generic_scope(
             constant,
             name: parameter.name,
             bounds,
+            written,
             traits,
             projections: Box::default(),
             trait_arguments: Box::default(),

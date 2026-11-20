@@ -190,6 +190,9 @@ impl Binding {
 pub(crate) struct Generic {
     pub name: crate::item::Name,
     pub bounds: crate::capability::Set,
+    /// Where each of `bounds` is written, as rustc's "required by this
+    /// bound" marks it: `Display` of `T: Display`.
+    pub written: Box<[(crate::capability::Kind, crate::Span)]>,
     pub traits: Box<[crate::item::Name]>,
     /// Associated type equalities of the bounds: `Output = i64` of
     /// `T: Shape<Output = i64>`.

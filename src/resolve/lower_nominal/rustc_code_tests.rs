@@ -3025,3 +3025,480 @@ fn a_type_through_modules_takes_its_generic_arguments() {
         )
     );
 }
+
+/// A call with arguments its callee doesn't take: rustc's E0061 is at the
+/// callee, labels each extra argument with its type and number (none for
+/// a call's only argument), and suggests the call without them. An
+/// argument fills the next parameter its type fits.
+#[test]
+fn an_extra_argument_is_labelled_and_its_removal_suggested() {
+    let shown = rendered("fn f(a: i32) {}\nfn main() {\n    f(1, 2);\n}\n");
+    assert_eq!(
+        shown,
+        concat!(
+            "error[E0061]: this function takes 1 argument but 2 arguments were supplied\n",
+            " --> main.rs:3:5\n",
+            "  |\n",
+            "3 |     f(1, 2);\n",
+            "  |     ^    - unexpected argument #2 of type `{integer}`\n",
+            "  |\n",
+            "note: function defined here\n",
+            " --> main.rs:1:4\n",
+            "  |\n",
+            "1 | fn f(a: i32) {}\n",
+            "  |    ^\n",
+            "help: remove the extra argument\n",
+            "  |\n",
+            "3 -     f(1, 2);\n",
+            "3 +     f(1);\n",
+            "  |\n",
+        )
+    );
+    let shown = rendered("fn f(a: i32) {}\nfn main() {\n    f(1, \"x\", 3);\n}\n");
+    assert_eq!(
+        shown,
+        concat!(
+            "error[E0061]: this function takes 1 argument but 3 arguments were supplied\n",
+            " --> main.rs:3:5\n",
+            "  |\n",
+            "3 |     f(1, \"x\", 3);\n",
+            "  |     ^    ---  - unexpected argument #3 of type `{integer}`\n",
+            "  |          |\n",
+            "  |          unexpected argument #2 of type `&'static str`\n",
+            "  |\n",
+            "note: function defined here\n",
+            " --> main.rs:1:4\n",
+            "  |\n",
+            "1 | fn f(a: i32) {}\n",
+            "  |    ^\n",
+            "help: remove the extra arguments\n",
+            "  |\n",
+            "3 -     f(1, \"x\", 3);\n",
+            "3 +     f(1);\n",
+            "  |\n",
+        )
+    );
+    let shown = rendered("fn w() {}\nfn main() {\n    w(1);\n}\n");
+    assert_eq!(
+        shown,
+        concat!(
+            "error[E0061]: this function takes 0 arguments but 1 argument was supplied\n",
+            " --> main.rs:3:5\n",
+            "  |\n",
+            "3 |     w(1);\n",
+            "  |     ^ - unexpected argument of type `{integer}`\n",
+            "  |\n",
+            "note: function defined here\n",
+            " --> main.rs:1:4\n",
+            "  |\n",
+            "1 | fn w() {}\n",
+            "  |    ^\n",
+            "help: remove the extra argument\n",
+            "  |\n",
+            "3 -     w(1);\n",
+            "3 +     w();\n",
+            "  |\n",
+        )
+    );
+    let shown = rendered("fn s(a: &str) {}\nfn main() {\n    s(1, \"x\");\n}\n");
+    assert_eq!(
+        shown,
+        concat!(
+            "error[E0061]: this function takes 1 argument but 2 arguments were supplied\n",
+            " --> main.rs:3:5\n",
+            "  |\n",
+            "3 |     s(1, \"x\");\n",
+            "  |     ^ - unexpected argument #1 of type `{integer}`\n",
+            "  |\n",
+            "note: function defined here\n",
+            " --> main.rs:1:4\n",
+            "  |\n",
+            "1 | fn s(a: &str) {}\n",
+            "  |    ^\n",
+            "help: remove the extra argument\n",
+            "  |\n",
+            "3 -     s(1, \"x\");\n",
+            "3 +     s(\"x\");\n",
+            "  |\n",
+        )
+    );
+}
+
+/// A call that gives a parameter nothing: rustc labels each run of
+/// missing parameters at the parentheses, or at the argument in its place,
+/// marks them where the callee is defined, and suggests a placeholder of
+/// each one's type.
+#[test]
+fn a_missing_argument_is_labelled_marked_and_provided() {
+    let shown = rendered("fn f(a: i32) {}\nfn main() {\n    f();\n}\n");
+    assert_eq!(
+        shown,
+        concat!(
+            "error[E0061]: this function takes 1 argument but 0 arguments were supplied\n",
+            " --> main.rs:3:5\n",
+            "  |\n",
+            "3 |     f();\n",
+            "  |     ^-- argument #1 of type `i32` is missing\n",
+            "  |\n",
+            "note: function defined here\n",
+            " --> main.rs:1:4\n",
+            "  |\n",
+            "1 | fn f(a: i32) {}\n",
+            "  |    ^ ------\n",
+            "help: provide the argument\n",
+            "  |\n",
+            "3 |     f(/* i32 */);\n",
+            "  |       +++++++++\n",
+        )
+    );
+    let shown = rendered("fn g(a: i32, b: &str) {}\nfn main() {\n    g();\n}\n");
+    assert_eq!(
+        shown,
+        concat!(
+            "error[E0061]: this function takes 2 arguments but 0 arguments were supplied\n",
+            " --> main.rs:3:5\n",
+            "  |\n",
+            "3 |     g();\n",
+            "  |     ^-- two arguments of type `i32` and `&str` are missing\n",
+            "  |\n",
+            "note: function defined here\n",
+            " --> main.rs:1:4\n",
+            "  |\n",
+            "1 | fn g(a: i32, b: &str) {}\n",
+            "  |    ^ ------  -------\n",
+            "help: provide the arguments\n",
+            "  |\n",
+            "3 |     g(/* i32 */, /* &str */);\n",
+            "  |       +++++++++++++++++++++\n",
+        )
+    );
+    let shown = rendered("fn k(a: i32, b: i32, c: i32, d: i32) {}\nfn main() {\n    k(1);\n}\n");
+    assert_eq!(
+        shown,
+        concat!(
+            "error[E0061]: this function takes 4 arguments but 1 argument was supplied\n",
+            " --> main.rs:3:5\n",
+            "  |\n",
+            "3 |     k(1);\n",
+            "  |     ^--- three arguments of type `i32`, `i32`, and `i32` are missing\n",
+            "  |\n",
+            "note: function defined here\n",
+            " --> main.rs:1:4\n",
+            "  |\n",
+            "1 | fn k(a: i32, b: i32, c: i32, d: i32) {}\n",
+            "  |    ^         ------  ------  ------\n",
+            "help: provide the arguments\n",
+            "  |\n",
+            "3 |     k(1, /* i32 */, /* i32 */, /* i32 */);\n",
+            "  |        +++++++++++++++++++++++++++++++++\n",
+        )
+    );
+    let shown = rendered("fn k(a: i32, b: i32, c: i32, d: i32) {}\nfn main() {\n    k();\n}\n");
+    assert_eq!(
+        shown,
+        concat!(
+            "error[E0061]: this function takes 4 arguments but 0 arguments were supplied\n",
+            " --> main.rs:3:5\n",
+            "  |\n",
+            "3 |     k();\n",
+            "  |     ^-- multiple arguments are missing\n",
+            "  |\n",
+            "note: function defined here\n",
+            " --> main.rs:1:4\n",
+            "  |\n",
+            "1 | fn k(a: i32, b: i32, c: i32, d: i32) {}\n",
+            "  |    ^ ------  ------  ------  ------\n",
+            "help: provide the arguments\n",
+            "  |\n",
+            "3 |     k(/* i32 */, /* i32 */, /* i32 */, /* i32 */);\n",
+            "  |       ++++++++++++++++++++++++++++++++++++++++++\n",
+        )
+    );
+    let shown = rendered("fn u(a: ()) {}\nfn main() {\n    u();\n}\n");
+    assert_eq!(
+        shown,
+        concat!(
+            "error[E0061]: this function takes 1 argument but 0 arguments were supplied\n",
+            " --> main.rs:3:5\n",
+            "  |\n",
+            "3 |     u();\n",
+            "  |     ^-- argument #1 of type `()` is missing\n",
+            "  |\n",
+            "note: function defined here\n",
+            " --> main.rs:1:4\n",
+            "  |\n",
+            "1 | fn u(a: ()) {}\n",
+            "  |    ^ -----\n",
+            "help: provide the argument\n",
+            "  |\n",
+            "3 |     u(());\n",
+            "  |       ++\n",
+        )
+    );
+    let shown = rendered("fn g(a: i32, b: &str) {}\nfn main() {\n    g(\"x\");\n}\n");
+    assert_eq!(
+        shown,
+        concat!(
+            "error[E0061]: this function takes 2 arguments but 1 argument was supplied\n",
+            " --> main.rs:3:5\n",
+            "  |\n",
+            "3 |     g(\"x\");\n",
+            "  |     ^ --- argument #1 of type `i32` is missing\n",
+            "  |\n",
+            "note: function defined here\n",
+            " --> main.rs:1:4\n",
+            "  |\n",
+            "1 | fn g(a: i32, b: &str) {}\n",
+            "  |    ^ ------\n",
+            "help: provide the argument\n",
+            "  |\n",
+            "3 |     g(/* i32 */, \"x\");\n",
+            "  |       ++++++++++\n",
+        )
+    );
+}
+
+/// rustc's E0061 for a tuple struct's or variant's constructor, a method
+/// and an associated function: at the path or the method's name, with the
+/// constructor's definition noted.
+#[test]
+fn a_constructors_or_methods_argument_count_is_at_its_callee() {
+    let shown = rendered("struct P(i32, u8);\nfn main() {\n    let _ = P(1);\n}\n");
+    assert_eq!(
+        shown,
+        concat!(
+            "error[E0061]: this struct takes 2 arguments but 1 argument was supplied\n",
+            " --> main.rs:3:13\n",
+            "  |\n",
+            "3 |     let _ = P(1);\n",
+            "  |             ^--- argument #2 of type `u8` is missing\n",
+            "  |\n",
+            "note: tuple struct defined here\n",
+            " --> main.rs:1:8\n",
+            "  |\n",
+            "1 | struct P(i32, u8);\n",
+            "  |        ^\n",
+            "help: provide the argument\n",
+            "  |\n",
+            "3 |     let _ = P(1, /* u8 */);\n",
+            "  |                ++++++++++\n",
+        )
+    );
+    let shown = rendered("enum E { V(i32) }\nfn main() {\n    let _ = E::V(1, 2);\n}\n");
+    assert_eq!(
+        shown,
+        concat!(
+            "error[E0061]: this enum variant takes 1 argument but 2 arguments were supplied\n",
+            " --> main.rs:3:13\n",
+            "  |\n",
+            "3 |     let _ = E::V(1, 2);\n",
+            "  |             ^^^^    - unexpected argument #2 of type `{integer}`\n",
+            "  |\n",
+            "note: tuple variant defined here\n",
+            " --> main.rs:1:10\n",
+            "  |\n",
+            "1 | enum E { V(i32) }\n",
+            "  |          ^\n",
+            "help: remove the extra argument\n",
+            "  |\n",
+            "3 -     let _ = E::V(1, 2);\n",
+            "3 +     let _ = E::V(1);\n",
+            "  |\n",
+        )
+    );
+    let shown =
+        rendered("struct S;\nimpl S { fn m(&self, a: i32) {} }\nfn main() {\n    S.m();\n}\n");
+    assert_eq!(
+        shown,
+        concat!(
+            "error[E0061]: this method takes 1 argument but 0 arguments were supplied\n",
+            " --> main.rs:4:7\n",
+            "  |\n",
+            "4 |     S.m();\n",
+            "  |       ^-- argument #1 of type `i32` is missing\n",
+            "  |\n",
+            "note: method defined here\n",
+            " --> main.rs:2:13\n",
+            "  |\n",
+            "2 | impl S { fn m(&self, a: i32) {} }\n",
+            "  |             ^        ------\n",
+            "help: provide the argument\n",
+            "  |\n",
+            "4 |     S.m(/* i32 */);\n",
+            "  |         +++++++++\n",
+        )
+    );
+    let shown =
+        rendered("struct S;\nimpl S { fn n(a: i32) {} }\nfn main() {\n    S::n(1, 2);\n}\n");
+    assert_eq!(
+        shown,
+        concat!(
+            "error[E0061]: this function takes 1 argument but 2 arguments were supplied\n",
+            " --> main.rs:4:5\n",
+            "  |\n",
+            "4 |     S::n(1, 2);\n",
+            "  |     ^^^^    - unexpected argument #2 of type `{integer}`\n",
+            "  |\n",
+            "note: associated function defined here\n",
+            " --> main.rs:2:13\n",
+            "  |\n",
+            "2 | impl S { fn n(a: i32) {} }\n",
+            "  |             ^\n",
+            "help: remove the extra argument\n",
+            "  |\n",
+            "4 -     S::n(1, 2);\n",
+            "4 +     S::n(1);\n",
+            "  |\n",
+        )
+    );
+    let shown = rendered("mod m {\n    pub fn f(a: i32) {}\n}\nfn main() {\n    m::f(1, 2);\n}\n");
+    assert_eq!(
+        shown,
+        concat!(
+            "error[E0061]: this function takes 1 argument but 2 arguments were supplied\n",
+            " --> main.rs:5:5\n",
+            "  |\n",
+            "5 |     m::f(1, 2);\n",
+            "  |     ^^^^    - unexpected argument #2 of type `{integer}`\n",
+            "  |\n",
+            "note: function defined here\n",
+            " --> main.rs:2:12\n",
+            "  |\n",
+            "2 |     pub fn f(a: i32) {}\n",
+            "  |            ^\n",
+            "help: remove the extra argument\n",
+            "  |\n",
+            "5 -     m::f(1, 2);\n",
+            "5 +     m::f(1);\n",
+            "  |\n",
+        )
+    );
+    let shown = rendered("fn main() {\n    let f = |x: i64, y: i64| x;\n    f(1);\n}\n");
+    assert_eq!(
+        shown,
+        concat!(
+            "error[E0057]: this function takes 2 arguments but 1 argument was supplied\n",
+            " --> main.rs:3:5\n",
+            "  |\n",
+            "3 |     f(1);\n",
+            "  |     ^--- argument #2 of type `i64` is missing\n",
+            "  |\n",
+            "note: closure defined here\n",
+            " --> main.rs:2:13\n",
+            "  |\n",
+            "2 |     let f = |x: i64, y: i64| x;\n",
+            "  |             ^^^^^^^^^^^^^^^^\n",
+            "help: provide the argument\n",
+            "  |\n",
+            "3 |     f(1, /* i64 */);\n",
+            "  |        +++++++++++\n",
+        )
+    );
+}
+
+/// A program's bound a call's argument doesn't meet: rustc's E0277 is at
+/// the argument, labels the callee, notes the bound where the function
+/// writes it, and shows `Display`'s help at the type's definition.
+#[test]
+fn an_unmet_bound_is_at_the_argument_with_the_bound_noted() {
+    let shown = rendered("use std::fmt::Display;\nstruct Q;\nfn show<T: Display>(t: T) {}\nfn main() {\n    show(Q);\n}\n");
+    assert_eq!(
+        shown,
+        concat!(
+            "error[E0277]: `Q` doesn't implement `std::fmt::Display`\n",
+            " --> main.rs:5:10\n",
+            "  |\n",
+            "5 |     show(Q);\n",
+            "  |     ---- ^ unsatisfied trait bound\n",
+            "  |     |\n",
+            "  |     required by a bound introduced by this call\n",
+            "  |\n",
+            "help: the trait `std::fmt::Display` is not implemented for `Q`\n",
+            " --> main.rs:2:1\n",
+            "  |\n",
+            "2 | struct Q;\n",
+            "  | ^^^^^^^^\n",
+            "note: required by a bound in `show`\n",
+            " --> main.rs:3:12\n",
+            "  |\n",
+            "3 | fn show<T: Display>(t: T) {}\n",
+            "  |            ^^^^^^^ required by this bound in `show`\n",
+        )
+    );
+}
+
+/// A derivable bound a program's type doesn't meet: rustc suggests the
+/// `#[derive]` on its own line above the type, as indented. rustc shows
+/// the type's line after the added one, which annotate-snippets doesn't.
+#[test]
+fn an_unmet_derivable_bound_suggests_the_derive() {
+    let shown = rendered(
+        "struct Q;\nfn clone_it<T>(t: T) where T: Clone {}\nfn main() {\n    clone_it(Q);\n}\n",
+    );
+    assert!(
+        shown.starts_with(concat!(
+            "error[E0277]: the trait bound `Q: Clone` is not satisfied\n",
+            " --> main.rs:4:14\n",
+            "  |\n",
+            "4 |     clone_it(Q);\n",
+            "  |     -------- ^ the trait `Clone` is not implemented for `Q`\n",
+            "  |     |\n",
+            "  |     required by a bound introduced by this call\n",
+            "  |\n",
+            "note: required by a bound in `clone_it`\n",
+            " --> main.rs:2:31\n",
+            "  |\n",
+            "2 | fn clone_it<T>(t: T) where T: Clone {}\n",
+            "  |                               ^^^^^ required by this bound in `clone_it`\n",
+            "help: consider annotating `Q` with `#[derive(Clone)]`\n",
+            "  |\n",
+            "1 + #[derive(Clone)]\n",
+        )),
+        "{shown}"
+    );
+    let shown = rendered("use std::fmt::Debug;\nmod m {\n    pub struct Q;\n}\nfn dbg<T: Debug>(t: T) {}\nfn main() {\n    dbg(m::Q);\n}\n");
+    assert!(
+        shown.starts_with(concat!(
+            "error[E0277]: `Q` doesn't implement `Debug`\n",
+            " --> main.rs:7:9\n",
+            "  |\n",
+            "7 |     dbg(m::Q);\n",
+            "  |     --- ^^^^ the trait `Debug` is not implemented for `Q`\n",
+            "  |     |\n",
+            "  |     required by a bound introduced by this call\n",
+            "  |\n",
+            "note: required by a bound in `dbg`\n",
+            " --> main.rs:5:11\n",
+            "  |\n",
+            "5 | fn dbg<T: Debug>(t: T) {}\n",
+            "  |           ^^^^^ required by this bound in `dbg`\n",
+            "help: consider annotating `Q` with `#[derive(Debug)]`\n",
+            "  |\n",
+            "3 +     #[derive(Debug)]\n",
+        )),
+        "{shown}"
+    );
+    let shown = rendered("mod m {\n    pub struct Q;\n}\nfn eq<T: PartialEq>(a: i32, t: T) {}\nfn main() {\n    eq(1, m::Q);\n}\n");
+    assert!(
+        shown.starts_with(concat!(
+            "error[E0277]: can't compare `Q` with `Q`\n",
+            " --> main.rs:6:11\n",
+            "  |\n",
+            "6 |     eq(1, m::Q);\n",
+            "  |     --    ^^^^ no implementation for `Q == Q`\n",
+            "  |     |\n",
+            "  |     required by a bound introduced by this call\n",
+            "  |\n",
+            "  = help: the trait `PartialEq` is not implemented for `Q`\n",
+            "note: required by a bound in `eq`\n",
+            " --> main.rs:4:10\n",
+            "  |\n",
+            "4 | fn eq<T: PartialEq>(a: i32, t: T) {}\n",
+            "  |          ^^^^^^^^^ required by this bound in `eq`\n",
+            "help: consider annotating `Q` with `#[derive(PartialEq)]`\n",
+            "  |\n",
+            "2 +     #[derive(PartialEq)]\n",
+        )),
+        "{shown}"
+    );
+}
