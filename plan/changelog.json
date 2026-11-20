@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.4.58",
+      "date": "2026-11-20",
+      "entries": [
+        {"text":"rustc's suggestions print as code: a value for `return;` and for an uninitialized `let`, `let...else` or `if let` for a refutable `let`, the missing `match` arm, an `as` rename for a duplicate import, the explicit type for E0282, `ref mut` for a destructured binding, removing a called field's arguments, `use` lines for functions and `fmt::Write`, and `#[derive]` for format arguments. `&mut (place)` borrows the place, and `println!(\"{}\", S)` of a type without `Display` is E0277.","issues":[2330]}
+      ]
+    },
+    {
       "version": "0.4.57",
       "date": "2026-11-20",
       "entries": [

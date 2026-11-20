@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.58 (2026-11-20)
+
+- rustc's suggestions print as code: a value for `return;` and for an uninitialized `let`, `let...else` or `if let` for a refutable `let`, the missing `match` arm, an `as` rename for a duplicate import, the explicit type for E0282, `ref mut` for a destructured binding, removing a called field's arguments, `use` lines for functions and `fmt::Write`, and `#[derive]` for format arguments. `&mut (place)` borrows the place, and `println!("{}", S)` of a type without `Display` is E0277. (#2330)
+
 ## 0.4.57 (2026-11-20)
 
 - Wrong argument counts read as rustc's: the error is at the callee, each extra argument and missing parameter is labelled with its type, the missing parameters are marked where the callee is defined, and the fix is suggested. An unmet bound that a program's function writes points at the argument and at the bound. Private items read as rustc's: unit structs and tuple struct constructors by name, items past a private module as not publicly re-exported, the path to import instead, and `pub` for a constructor's private fields. `..base` giving private fields is E0451. (#2331)
