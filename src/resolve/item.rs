@@ -311,6 +311,8 @@ pub(crate) struct Field {
     pub shared_str: bool,
     /// The field's attributes as written, as `#[serde(default)]`.
     pub attributes: Box<[crate::item::Attribute]>,
+    /// The field's `pub` marker, when it has one.
+    pub visibility: Option<crate::item::Visibility>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

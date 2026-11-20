@@ -176,6 +176,10 @@ codes!(Resolve in RESOLVE;
     (RESOLVE_DUPLICATE_GENERIC, "E0403", "A generic parameter name used twice in one item's generics, as rustc reports it."),
     (RESOLVE_PRIVATE_ITEM, "E0603", "A path to an item private to a module it is outside of, as rustc reports it."),
     (RESOLVE_PRIVATE_FUNCTION, "E0624", "A method or associated function private to a module the call is outside of, as rustc reports it."),
+    (RESOLVE_PRIVATE_FIELD, "E0616", "A field read from outside the module it is private to, as rustc reports it."),
+    (RESOLVE_PRIVATE_FIELD_NAMED, "E0451", "A struct literal or pattern that names a field from outside the module it is private to, as rustc reports it."),
+    (RESOLVE_PRIVATE_REEXPORT, "E0364", "A `use` that re-exports an item further than the item is visible, as rustc reports it."),
+    (RESOLVE_VISIBILITY_ANCESTOR, "E0742", "A `pub(in path)` whose path names a module that is not an ancestor, as rustc reports it."),
     (RESOLVE_ARGUMENT_COUNT, "E0061", "A call with more or fewer arguments than its function, method or constructor takes, as rustc reports it."),
     (RESOLVE_ARGUMENT_SIGNATURE, "E0631", "A closure or function whose parameters differ from those of the callable it is passed as, as rustc reports it."),
     (RESOLVE_CANNOT_COMPARE, "E0277", "An `==` or `!=` whose left operand's type has no `PartialEq` impl for the right operand's, as rustc reports it."),
@@ -300,6 +304,12 @@ pub(crate) fn std_path(rustc: &str) -> Code {
         "E0107" => RESOLVE_GENERIC_ARGUMENT_COUNT,
         "E0596" => BORROW_NOT_MUTABLE,
         "E0594" => BORROW_ASSIGN_IMMUTABLE,
+        "E0423" => RESOLVE_WRONG_KIND,
+        "E0603" => RESOLVE_PRIVATE_ITEM,
+        "E0616" => RESOLVE_PRIVATE_FIELD,
+        "E0451" => RESOLVE_PRIVATE_FIELD_NAMED,
+        "E0364" => RESOLVE_PRIVATE_REEXPORT,
+        "E0742" => RESOLVE_VISIBILITY_ANCESTOR,
         _ => RESOLVE_UNSTABLE,
     }
 }

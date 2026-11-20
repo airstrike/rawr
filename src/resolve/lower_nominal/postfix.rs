@@ -1537,6 +1537,13 @@ impl<'a> Parser<'a> {
                     reference: member_span,
                 });
             };
+            if !self.models.sees_field(&item.key, field) {
+                return Err(Error::private_field_read(
+                    definition.name(),
+                    &member,
+                    member_span,
+                ));
+            }
             // A generic struct's field has the type its arguments give it.
             let arguments = match self.inference.resolve(&value.ty) {
                 Ty::Script(_, arguments) => arguments,
@@ -1643,8 +1650,11 @@ impl<'a> Parser<'a> {
             },
             name: definition.name().into(),
             reference,
-            declaration: (definition.source() == self.models.context)
+            declaration: self
+                .models
+                .in_this_file(definition.source())
                 .then_some(definition.name_span()),
+            referent: None,
         })
     }
 

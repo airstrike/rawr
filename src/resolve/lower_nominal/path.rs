@@ -511,7 +511,10 @@ impl<'a> Parser<'a> {
         if !matches!(self.peek(), Token::DoubleColon)
             && (self.no_struct || !matches!(self.peek(), Token::LeftBrace))
             && let Some(model) = self.models.qualified_owner(path_span).cloned()
-            && let Some(value) = self.parse_struct_value(model, path_span)?
+            && let Some(value) = {
+                self.private_constructor(&model, super::construct::Constructor::Path, member_span)?;
+                self.parse_struct_value(model, path_span)?
+            }
         {
             return Ok(value);
         }

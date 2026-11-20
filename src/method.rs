@@ -44,7 +44,8 @@ pub(crate) struct Definition {
     owner_schema: program::schema::Fingerprint,
     owner_name: ImmutableString,
     source: program::source::Id,
-    public: bool,
+    /// The function's `pub` marker, which says where it is visible.
+    visibility: Option<item::Visibility>,
     name: crate::item::Name,
     receiver: Option<receiver::Mode>,
     receiver_span: Option<Span>,
@@ -130,7 +131,7 @@ impl Definition {
             owner_schema: owner.schema().clone(),
             owner_name: owner.name().into(),
             source,
-            public: function.header.visibility.is_some(),
+            visibility: function.header.visibility.clone(),
             name: function.name.clone(),
             receiver,
             receiver_span,
@@ -317,8 +318,8 @@ impl Definition {
         self.source
     }
 
-    pub(crate) const fn is_public(&self) -> bool {
-        self.public
+    pub(crate) const fn visibility(&self) -> Option<&item::Visibility> {
+        self.visibility.as_ref()
     }
 
     pub(crate) fn name(&self) -> &str {

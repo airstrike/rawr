@@ -425,14 +425,79 @@ pub struct Name {
     pub span: Span,
 }
 
+/// A `pub` marker: a bare `pub`, or one restricted to a module, as
+/// `pub(crate)`, `pub(super)`, `pub(self)` and `pub(in path)` write it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
+pub struct Visibility {
+    /// The `pub` keyword's span.
+    pub span: Span,
+    /// The restriction's path, its `crate`, `super` and `self` segments
+    /// among the rest: `pub(super)` is `super`, `pub(in crate::a)` is
+    /// `crate`, `a`. `None` for a bare `pub`.
+    pub restriction: Option<Box<[Name]>>,
+}
+
+/// Where a restricted visibility's path leads from the module an item is
+/// declared in.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Restricted<'v> {
+    /// The module, as its path from the crate root.
+    Module(Box<[ImmutableString]>),
+    /// A `super` that would go above the crate root.
+    AboveRoot(&'v Name),
+}
+
+impl Visibility {
+    /// Where the restriction's path leads from `module`, the declaring
+    /// module's path from the crate root; `None` for a bare `pub`. The
+    /// module may be no ancestor of `module`, which the resolver refuses
+    /// as rustc's E0742.
+    #[must_use]
+    pub fn restricted(&self, module: &[ImmutableString]) -> Option<Restricted<'_>> {
+        let path = self.restriction.as_deref()?;
+        let mut scope = Vec::with_capacity(module.len());
+        let mut rest = path;
+        match path.first().map(|segment| segment.text.as_str()) {
+            Some("crate") => rest = &path[1..],
+            Some("self") => {
+                scope.extend_from_slice(module);
+                rest = &path[1..];
+            }
+            _ => scope.extend_from_slice(module),
+        }
+        for segment in rest {
+            if segment.text == "super" {
+                if scope.pop().is_none() {
+                    return Some(Restricted::AboveRoot(segment));
+                }
+            } else {
+                scope.push(segment.text.clone());
+            }
+        }
+        Some(Restricted::Module(scope.into_boxed_slice()))
+    }
+
+    /// The module the marker opens an item declared in `module` to, as its
+    /// path from the crate root: `None` for a bare `pub`, which opens it
+    /// everywhere. A path the resolver refuses opens it to `module` alone.
+    #[must_use]
+    pub fn scope(&self, module: &[ImmutableString]) -> Option<Box<[ImmutableString]>> {
+        match self.restricted(module)? {
+            Restricted::Module(scope) if module.starts_with(&scope) => Some(scope),
+            _ => Some(module.into()),
+        }
+    }
+}
+
 /// Common metadata for an item or associated-function header.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub struct Header {
     /// Attributes preceding the item.
     pub attributes: Box<[Attribute]>,
-    /// Span of a `pub` visibility marker, when present.
-    pub visibility: Option<Span>,
+    /// The item's `pub` marker, when present.
+    pub visibility: Option<Visibility>,
     /// Span from the first header token through its terminating delimiter.
     pub span: Span,
     /// The block the item is declared in, braces included, or `None` for
@@ -841,6 +906,30 @@ impl Use {
         }
     }
 
+    /// Where the binding `name` (one of [`Self::bindings`]) is written, as
+    /// rustc shows it: its path and its `as` name, `b::f` of `use b::f;`,
+    /// or its group member, `f as g` of `use b::{f as g};`.
+    #[must_use]
+    pub fn written(&self, name: &Name) -> Span {
+        let to = |start: crate::Position, alias: Option<&Name>, end: Span| {
+            Span::new(start, alias.map_or(end, |alias| alias.span).end())
+        };
+        match &self.tree {
+            UseTree::Path(path, alias) => to(path.span.start(), alias.as_ref(), path.span),
+            UseTree::Group { members, .. } => members
+                .iter()
+                .find(|member| member.alias.as_ref().unwrap_or(&member.name).span == name.span)
+                .map_or(name.span, |member| {
+                    to(
+                        member.name.span.start(),
+                        member.alias.as_ref(),
+                        member.name.span,
+                    )
+                }),
+            UseTree::Glob { span, .. } => *span,
+        }
+    }
+
     /// What the import binds, apart from where it is written: each name
     /// with its path, and a glob's module under `*`. One import written in
     /// several bodies has one key, and is hoisted once.
@@ -952,6 +1041,8 @@ pub struct Field {
     pub span: Span,
     /// The field's attributes, as `#[serde(default)]`, in source order.
     pub attributes: Box<[Attribute]>,
+    /// The field's `pub` marker, when it has one.
+    pub visibility: Option<Visibility>,
 }
 
 /// A nominal enum declaration shell.

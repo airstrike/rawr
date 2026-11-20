@@ -2922,3 +2922,106 @@ fn an_assignment_to_an_immutable_binding_suggests_declaring_it_mut() {
         "{parameter}"
     );
 }
+
+/// A restricted visibility's refusals carry rustc's codes, messages and
+/// labels: an item, a method, a field, a constructor or an import used
+/// outside the module its `pub(..)` opens it to, a re-export beyond it,
+/// and a restriction to no ancestor (#2332).
+#[test]
+fn a_restricted_visibility_is_refused_with_rustcs_codes() {
+    let module = "mod m {\n    pub mod q {\n        pub(super) fn h() {}\n        pub struct \
+                  S(pub i32);\n        impl S {\n            pub(in crate::m) fn n(&self) {}\n        \
+                  }\n        pub struct P { pub(super) y: i32 }\n        pub struct T(pub(crate) \
+                  i32, pub(self) i32);\n        pub fn p() -> P { P { y: 1 } }\n    }\n    \
+                  pub(in crate::m) use q::S as Shown;\n}\n";
+    for (body, expected) in [
+        (
+            "m::q::h();",
+            ("E0603", "function `h` is private", "private function"),
+        ),
+        (
+            "m::q::S(1).n();",
+            ("E0624", "method `n` is private", "private method"),
+        ),
+        (
+            "let _ = m::q::p().y;",
+            (
+                "E0616",
+                "field `y` of struct `P` is private",
+                "private field",
+            ),
+        ),
+        (
+            "let _ = m::q::P { y: 1 };",
+            (
+                "E0451",
+                "field `y` of struct `P` is private",
+                "private field",
+            ),
+        ),
+        (
+            "let _ = m::q::T(1, 2);",
+            (
+                "E0603",
+                "tuple struct constructor `T` is private",
+                "private tuple struct constructor",
+            ),
+        ),
+        (
+            "let _: m::Shown;",
+            (
+                "E0603",
+                "struct import `Shown` is private",
+                "private struct import",
+            ),
+        ),
+    ] {
+        let (code, message, label) = refused(&format!("{module}fn main() {{\n    {body}\n}}\n"));
+        assert_eq!(
+            (code.as_str(), message.as_str(), label.as_deref()),
+            (expected.0, expected.1, Some(expected.2)),
+            "{body}"
+        );
+    }
+    let (code, message, _) = refused(
+        "mod m {\n    pub mod q {\n        pub(super) fn h() {}\n    }\n    pub(crate) use q::h \
+         as hh;\n}\nfn main() {}\n",
+    );
+    assert_eq!(
+        (code.as_str(), message.as_str()),
+        ("E0364", "`h` is private, and cannot be re-exported")
+    );
+    assert_eq!(
+        refused(
+            "mod a {\n    pub mod b {\n        pub(in crate::x) fn f() {}\n    }\n}\nmod x {}\nfn \
+             main() {}\n"
+        ),
+        (
+            "E0742".into(),
+            "visibilities can only be restricted to ancestor modules".into(),
+            None
+        )
+    );
+}
+
+/// A script type through two modules takes its generic arguments in a
+/// local type, as `let _: m::E<i32>;` does through one, and too many of
+/// them are rustc's E0107 (#2333).
+#[test]
+fn a_type_through_modules_takes_its_generic_arguments() {
+    let program = "mod m {\n    pub mod q {\n        pub struct S<T>(pub T);\n    }\n    pub \
+                   struct E<T>(pub T);\n}\nfn main() {\n    let _: m::E<i32>;\n    let _: \
+                   m::q::S<i32>;\n    let _x: m::q::S<i32> = m::q::S(1);\n}\n";
+    assert!(Engine::new().compile(program).is_ok());
+    assert_eq!(
+        refused(
+            "mod m {\n    pub mod q {\n        pub struct S<T>(pub T);\n    }\n}\nfn main() {\n    \
+             let _: m::q::S<i32, i32>;\n}\n"
+        ),
+        (
+            "E0107".into(),
+            "struct takes 1 generic argument but 2 generic arguments were supplied".into(),
+            label("expected 1 generic argument")
+        )
+    );
+}

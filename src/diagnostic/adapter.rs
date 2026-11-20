@@ -625,7 +625,16 @@ fn resolution_report_with_sources(
     let secondary_source = secondary_source.unwrap_or_else(|| source.clone());
     if let Some(secondary) = error.secondary_span().filter(|span| !span.is_none()) {
         builder = match sectioned(error, &secondary_source, secondary) {
-            Some(section) => builder.section(section)?,
+            Some(section) => {
+                let builder = builder.section(section)?;
+                match error {
+                    resolve::Error::PrivateItem {
+                        referent: Some(referent),
+                        ..
+                    } => builder.section(referent_section(referent, &secondary_source))?,
+                    _ => builder,
+                }
+            }
             None => {
                 // E0624 labels the private function whole.
                 let secondary = match error {
@@ -655,11 +664,23 @@ fn sectioned(error: &resolve::Error, source: &Source, at: Span) -> Option<Sectio
         resolve::Error::ArgumentCount { callee, .. } => {
             return Some(Section::note(callee.defined_here()).primary(source.clone(), at, None));
         }
+        // An import's note shows its path as written.
+        resolve::Error::PrivateItem {
+            item: item @ resolve::Private::Import(_),
+            name,
+            ..
+        } => {
+            let note = format!("the {} `{name}` is defined here...", item.noun());
+            return Some(Section::note(note).primary(source.clone(), at, None));
+        }
         // E0603's note shows the item whole; E0624 labels the function
         // beside the call.
-        resolve::Error::PrivateItem { item, name, .. }
-            if item.code() == "E0603" && *item != resolve::Private::Import =>
-        {
+        // A constructor's label is at its fields, beside the use.
+        resolve::Error::PrivateItem {
+            item: resolve::Private::TupleStructConstructor,
+            ..
+        } => return None,
+        resolve::Error::PrivateItem { item, name, .. } if item.code() == "E0603" => {
             format!("the {} `{name}` is defined here", item.noun())
         }
         _ => return None,
@@ -667,9 +688,35 @@ fn sectioned(error: &resolve::Error, source: &Source, at: Span) -> Option<Sectio
     Some(Section::note(note).primary(source.clone(), super::definition::span(source, at), None))
 }
 
+/// rustc's note on the item a private import binds, in `source`, the
+/// import's: the item whole, which the use could import directly when it
+/// sees it.
+fn referent_section(referent: &resolve::Referent, source: &Source) -> Section {
+    let note = format!(
+        "...and refers to the {} `{}` which is defined here",
+        referent.item.noun(),
+        referent.name
+    );
+    let label = referent
+        .visible
+        .then(|| crate::ImmutableString::from("you could import this directly"));
+    Section::note(note).primary(
+        source.clone(),
+        super::definition::span(source, referent.declaration),
+        label,
+    )
+}
+
 /// The notes rustc gives `error` with places of their own, in `source`.
 fn sections(error: &resolve::Error, source: &Source) -> Vec<Section> {
     match error {
+        // E0364 notes the re-export it refuses at that re-export.
+        resolve::Error::StdPath {
+            code: "E0364",
+            note: Some(note),
+            reference,
+            ..
+        } => vec![Section::note(note.clone()).primary(source.clone(), *reference, None)],
         // The parameter that takes the value, which rustc suggests making
         // a borrow; the type of a value that isn't `Clone`, which rustc
         // notes could derive it, with the move a clone would keep the
@@ -1149,8 +1196,10 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
             ..
         } => builder.help(unlinked_crate_help(path)),
         resolve::Error::StdPath {
-            note: Some(note), ..
-        } => builder.note(note.clone()),
+            code,
+            note: Some(note),
+            ..
+        } if *code != "E0364" => builder.note(note.clone()),
         resolve::Error::NonExhaustive { witnesses, ty, .. } => builder
             .note(format!("the matched value is of type `{ty}`"))
             .help(resolve::NonExhaustive(witnesses).help()),

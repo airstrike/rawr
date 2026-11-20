@@ -1155,7 +1155,7 @@ fn parse_item_after_attribute_marker(
         attributes.extend(parse_attribute(input)?);
     }
 
-    let visibility = parse_item_visibility(input);
+    let visibility = parse_item_visibility(input)?;
 
     parse_item_with_leading(
         input,
@@ -1170,7 +1170,7 @@ fn parse_item_with_leading(
     input: &mut TokenStream,
     tokenizer_control: &TokenizerControl,
     attributes: Box<[crate::item::Attribute]>,
-    visibility: Option<Span>,
+    visibility: Option<crate::item::Visibility>,
     start: Position,
 ) -> ParseResult<Option<crate::item::Parsed>> {
     if cfg_disabled(&attributes) {
@@ -1218,7 +1218,7 @@ fn parse_unsafe_item(
     input: &mut TokenStream,
     tokenizer_control: &TokenizerControl,
     attributes: Box<[crate::item::Attribute]>,
-    visibility: Option<Span>,
+    visibility: Option<crate::item::Visibility>,
     start: Position,
 ) -> ParseResult<Option<crate::item::Parsed>> {
     let (_, position) = input.next().expect("peeked unsafe");
@@ -1310,7 +1310,7 @@ fn parse_enabled_item(
     input: &mut TokenStream,
     tokenizer_control: &TokenizerControl,
     attributes: Box<[crate::item::Attribute]>,
-    visibility: Option<Span>,
+    visibility: Option<crate::item::Visibility>,
     start: Position,
 ) -> ParseResult<crate::item::Parsed> {
     match input.peek().expect("token streams always end with EOF") {
@@ -1369,7 +1369,7 @@ fn parse_enabled_item(
 fn parse_macro_rules(
     input: &mut TokenStream,
     attributes: Box<[crate::item::Attribute]>,
-    visibility: Option<Span>,
+    visibility: Option<crate::item::Visibility>,
     start: Position,
 ) -> ParseResult<crate::item::MacroRules> {
     let keyword = input.next().expect("peeked `macro_rules`");
@@ -1455,7 +1455,7 @@ fn parse_macro_rules(
 fn parse_type_alias(
     input: &mut TokenStream,
     attributes: Box<[crate::item::Attribute]>,
-    visibility: Option<Span>,
+    visibility: Option<crate::item::Visibility>,
     start: Position,
 ) -> ParseResult<crate::item::TypeAlias> {
     input.next();
@@ -1485,7 +1485,7 @@ fn parse_type_alias(
 fn parse_static(
     input: &mut TokenStream,
     attributes: Box<[crate::item::Attribute]>,
-    visibility: Option<Span>,
+    visibility: Option<crate::item::Visibility>,
     start: Position,
 ) -> ParseResult<crate::item::Parsed> {
     input.next();
@@ -1523,7 +1523,7 @@ fn parse_const_item(
     input: &mut TokenStream,
     tokenizer_control: &TokenizerControl,
     attributes: Box<[crate::item::Attribute]>,
-    visibility: Option<Span>,
+    visibility: Option<crate::item::Visibility>,
     start: Position,
 ) -> ParseResult<crate::item::Parsed> {
     if matches!(input.peek(), Some((Token::Fn, _))) {
@@ -1563,7 +1563,7 @@ fn is_word(token: &Token, word: &str) -> bool {
 fn parse_extern_crate(
     input: &mut TokenStream,
     attributes: Box<[crate::item::Attribute]>,
-    visibility: Option<Span>,
+    visibility: Option<crate::item::Visibility>,
     start: Position,
 ) -> ParseResult<crate::item::Use> {
     let (token, position) = input.next().expect("token streams always end with EOF");
@@ -1638,7 +1638,7 @@ fn parse_anonymous_const(
 fn parse_module(
     input: &mut TokenStream,
     attributes: Box<[crate::item::Attribute]>,
-    visibility: Option<Span>,
+    visibility: Option<crate::item::Visibility>,
     start: Position,
 ) -> ParseResult<crate::item::Module> {
     expect(input, Token::Mod, "to start a file module")?;
@@ -1688,7 +1688,11 @@ fn parse_module(
 
 fn parse_leading(
     input: &mut TokenStream,
-) -> ParseResult<(Box<[crate::item::Attribute]>, Option<Span>, Position)> {
+) -> ParseResult<(
+    Box<[crate::item::Attribute]>,
+    Option<crate::item::Visibility>,
+    Position,
+)> {
     let start = input.peek().expect("token streams always end with EOF").1;
     let mut attributes = Vec::new();
 
@@ -1699,27 +1703,119 @@ fn parse_leading(
         attributes.extend(parse_attribute(input)?);
     }
 
-    let visibility = parse_item_visibility(input);
+    let visibility = parse_item_visibility(input)?;
 
     Ok((attributes.into_boxed_slice(), visibility, start))
 }
 
 /// An item's `pub`, `pub(crate)`, `pub(super)`, `pub(self)` or `pub(in path)`.
-/// Rawr reads a restricted visibility as `pub`. Rust's own check of the
-/// restriction is left to rustc.
-fn parse_item_visibility(input: &mut TokenStream) -> Option<Span> {
+fn parse_item_visibility(input: &mut TokenStream) -> ParseResult<Option<crate::item::Visibility>> {
+    match parse_visibility(input)? {
+        Some((_, Some(open))) => Err(PERR::MissingToken(
+            "`crate`, `super`, `self` or `in`".into(),
+            "in a `pub(..)`".into(),
+        )
+        .into_err(open)),
+        Some((visibility, None)) => Ok(Some(visibility)),
+        None => Ok(None),
+    }
+}
+
+/// A `pub` marker, with where its `(` is when that `(` opens no
+/// restriction: a tuple field's type starts there (`pub (A, B)`), and the
+/// marker is a bare `pub`.
+fn parse_visibility(
+    input: &mut TokenStream,
+) -> ParseResult<Option<(crate::item::Visibility, Option<Position>)>> {
     if !matches!(input.peek(), Some((Token::Pub, _))) {
-        return None;
+        return Ok(None);
     }
     let (_, position) = input.next().expect("peeked visibility must exist");
-    if matches!(input.peek(), Some((Token::LeftParen, _))) {
-        input.next();
-        while !matches!(
-            input.next(),
-            Some((Token::RightParen | Token::EOF, _)) | None
-        ) {}
+    let span = token_span(position, "pub");
+    if !matches!(input.peek(), Some((Token::LeftParen, _))) {
+        return Ok(Some((
+            crate::item::Visibility {
+                span,
+                restriction: None,
+            },
+            None,
+        )));
     }
-    Some(token_span(position, "pub"))
+    let (_, open) = input.next().expect("peeked `(` must exist");
+    // `pub(in path)` names its module by a path from `crate`, `self` or
+    // `super`; `pub(crate)`, `pub(super)` and `pub(self)` are that path.
+    let path_follows = matches!(input.peek(), Some((Token::In, _)));
+    if path_follows {
+        input.next();
+    } else if !matches!(
+        input
+            .peek()
+            .and_then(|(token, _)| visibility_segment(token)),
+        Some("crate" | "super" | "self")
+    ) {
+        return Ok(Some((
+            crate::item::Visibility {
+                span,
+                restriction: None,
+            },
+            Some(open),
+        )));
+    }
+    let mut path = Vec::new();
+    loop {
+        let (token, position) = input.next().expect("token streams always end with EOF");
+        let Some(text) = visibility_segment(&token) else {
+            return Err(
+                PERR::MissingToken("identifier".into(), "in a `pub(in ..)` path".into())
+                    .into_err(position),
+            );
+        };
+        path.push(crate::item::Name {
+            span: token_span(position, text),
+            text: text.into(),
+        });
+        if !path_follows || !matches!(input.peek(), Some((Token::DoubleColon, _))) {
+            break;
+        }
+        input.next();
+    }
+    if let [first, ..] = path.as_slice()
+        && !matches!(first.text.as_str(), "crate" | "self" | "super")
+    {
+        let last = path.last().expect("a path has a segment");
+        let written = path
+            .iter()
+            .map(|segment| segment.text.as_str())
+            .collect::<Vec<_>>()
+            .join("::");
+        return Err(PERR::Unexpected {
+            message: "relative paths are not supported in visibilities in 2018 edition or later"
+                .into(),
+            label: format!("help: try: `crate::{written}`"),
+            help: None,
+            span: Span::new(first.span.start(), last.span.end()),
+        }
+        .into_err(first.span.start()));
+    }
+    expect(input, Token::RightParen, "to close a `pub(..)`")?;
+    Ok(Some((
+        crate::item::Visibility {
+            span,
+            restriction: Some(path.into_boxed_slice()),
+        },
+        None,
+    )))
+}
+
+/// The text of a `pub(in ..)` path's segment `token`: a name, `crate`,
+/// `super` or `self`.
+fn visibility_segment(token: &Token) -> Option<&str> {
+    match token {
+        Token::Identifier(name) => Some(name.as_str()),
+        Token::Reserved(keyword) if keyword.as_str() == "super" => Some("super"),
+        Token::SelfValue => Some("self"),
+        _ => None,
+    }
 }
 
 /// The attribute path a `#[cfg(..)]` that does not hold is read as.
@@ -2159,7 +2255,7 @@ fn skip_to_close_paren(input: &mut TokenStream) -> ParseResult<()> {
 fn parse_use(
     input: &mut TokenStream,
     attributes: Box<[crate::item::Attribute]>,
-    visibility: Option<Span>,
+    visibility: Option<crate::item::Visibility>,
     start: Position,
 ) -> ParseResult<crate::item::Use> {
     expect(input, Token::Use, "to start an import")?;
@@ -2295,7 +2391,7 @@ fn parse_use(
 fn parse_struct(
     input: &mut TokenStream,
     attributes: Box<[crate::item::Attribute]>,
-    visibility: Option<Span>,
+    visibility: Option<crate::item::Visibility>,
     start: Position,
 ) -> ParseResult<crate::item::Struct> {
     expect(input, Token::Struct, "to start a struct")?;
@@ -2328,9 +2424,14 @@ fn parse_struct(
         if matches!(input.next(), Some((Token::LeftParen, _))) {
             while !matches!(input.peek(), Some((Token::RightParen, _))) {
                 let field_attributes = parse_member_attributes(input)?;
-                let ty = match skip_field_visibility(input)? {
-                    Some(open) => parse_parenthesized_type(input, open)?,
-                    None => parse_type(input)?,
+                let (visibility, ty) = match parse_visibility(input)? {
+                    Some((visibility, Some(open))) => {
+                        (Some(visibility), parse_parenthesized_type(input, open)?)
+                    }
+                    visibility => (
+                        visibility.map(|(visibility, _)| visibility),
+                        parse_type(input)?,
+                    ),
                 };
                 let span = ty.span();
                 fields.push(crate::item::Field {
@@ -2341,6 +2442,7 @@ fn parse_struct(
                     ty,
                     span,
                     attributes: field_attributes.attributes.into_boxed_slice(),
+                    visibility,
                 });
                 consume_comma_or_end(input, Token::RightParen, "between tuple struct fields")?;
             }
@@ -2371,13 +2473,7 @@ fn parse_struct(
 
     while !matches!(input.peek(), Some((Token::RightBrace, _))) {
         let field_attributes = parse_member_attributes(input)?;
-        if let Some(open) = skip_field_visibility(input)? {
-            return Err(PERR::MissingToken(
-                "`crate`, `super`, `self` or `in`".into(),
-                "in a field's `pub(..)`".into(),
-            )
-            .into_err(open));
-        }
+        let visibility = parse_item_visibility(input)?;
         let field_name = parse_name(input, "as a struct field")?;
         expect(input, Token::Colon, "after a struct field name")?;
         let ty = parse_type(input)?;
@@ -2388,6 +2484,7 @@ fn parse_struct(
                 ty,
                 span,
                 attributes: field_attributes.attributes.into_boxed_slice(),
+                visibility,
             });
         }
 
@@ -2442,34 +2539,10 @@ fn parse_parenthesized_type(
     }
 }
 
-/// A field's `pub`, `pub(crate)`, `pub(super)` or `pub(in path)`: Rawr
-/// keeps no field privacy, so it is read and dropped. After `pub (` that is
-/// no restriction, the `(` opening the field's tuple type (`pub (A, B)`).
-fn skip_field_visibility(input: &mut TokenStream) -> ParseResult<Option<Position>> {
-    if !matches!(input.peek(), Some((Token::Pub, _))) {
-        return Ok(None);
-    }
-    input.next();
-    if matches!(input.peek(), Some((Token::LeftParen, _))) {
-        let (_, position) = input.next().expect("peeked `(` must exist");
-        match input.peek() {
-            Some((Token::SelfValue | Token::In, _)) => {}
-            Some((Token::Identifier(name) | Token::Reserved(name), _))
-                if matches!(name.as_str(), "crate" | "super") => {}
-            _ => return Ok(Some(position)),
-        }
-        while !matches!(
-            input.next(),
-            Some((Token::RightParen | Token::EOF, _)) | None
-        ) {}
-    }
-    Ok(None)
-}
-
 fn parse_enum(
     input: &mut TokenStream,
     attributes: Box<[crate::item::Attribute]>,
-    visibility: Option<Span>,
+    visibility: Option<crate::item::Visibility>,
     start: Position,
 ) -> ParseResult<crate::item::Enum> {
     expect(input, Token::Enum, "to start an enum")?;
@@ -2597,7 +2670,7 @@ fn parse_impl(
     input: &mut TokenStream,
     tokenizer_control: &TokenizerControl,
     attributes: Box<[crate::item::Attribute]>,
-    visibility: Option<Span>,
+    visibility: Option<crate::item::Visibility>,
     start: Position,
 ) -> ParseResult<crate::item::Impl> {
     expect(input, Token::Impl, "to start an impl block")?;
@@ -2839,7 +2912,7 @@ fn parse_trait(
     input: &mut TokenStream,
     tokenizer_control: &TokenizerControl,
     attributes: Box<[crate::item::Attribute]>,
-    visibility: Option<Span>,
+    visibility: Option<crate::item::Visibility>,
     start: Position,
 ) -> ParseResult<crate::item::Trait> {
     input.next();
@@ -2965,7 +3038,7 @@ fn parse_function(
     input: &mut TokenStream,
     tokenizer_control: &TokenizerControl,
     attributes: Box<[crate::item::Attribute]>,
-    visibility: Option<Span>,
+    visibility: Option<crate::item::Visibility>,
     start: Position,
     declaration: bool,
 ) -> ParseResult<crate::item::Function> {
@@ -3002,7 +3075,7 @@ fn parse_async_function(
     input: &mut TokenStream,
     tokenizer_control: &TokenizerControl,
     attributes: Box<[crate::item::Attribute]>,
-    visibility: Option<Span>,
+    visibility: Option<crate::item::Visibility>,
     start: Position,
 ) -> ParseResult<crate::item::Function> {
     let (_, at) = input.next().expect("the caller peeked `async`");
@@ -3822,7 +3895,7 @@ fn parse_associated_const(
     input: &mut TokenStream,
     tokenizer_control: &TokenizerControl,
     attributes: Box<[crate::item::Attribute]>,
-    visibility: Option<Span>,
+    visibility: Option<crate::item::Visibility>,
     start: Position,
     declaration: bool,
 ) -> ParseResult<crate::item::Function> {
@@ -5389,7 +5462,7 @@ fn parse_body_syntax(
             {
                 attributes.extend(parse_attribute(input)?);
             }
-            let visibility = parse_item_visibility(input);
+            let visibility = parse_item_visibility(input)?;
             if visibility.is_some()
                 || input
                     .peek()

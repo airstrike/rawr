@@ -1702,7 +1702,10 @@ impl<'a> Parser<'a> {
                 || matches!(self.peek_second(), Token::LessThan)
                     && matches!(&model, Nominal::Struct { item, .. }
                         if item.form == crate::item::StructForm::Unit))
-            && let Some(value) = self.parse_struct_value(model, name_span)?
+            && let Some(value) = {
+                self.private_constructor(&model, super::construct::Constructor::Call, name_span)?;
+                self.parse_struct_value(model, name_span)?
+            }
         {
             return Ok(value);
         }
