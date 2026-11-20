@@ -579,6 +579,8 @@ impl Shared {
             send: send.clone(),
             told: false,
         });
+        drop(inner);
+        self.changed.notify_all();
     }
 
     /// Connection `connection` closed: it hears nothing more, and an
@@ -752,6 +754,7 @@ mod tests {
     use std::os::unix::net::{UnixListener, UnixStream};
     use std::path::Path;
     use std::sync::mpsc;
+    use std::thread::JoinHandle;
 
     use serde_json::{json, Value};
 
@@ -1078,6 +1081,42 @@ mod tests {
         drop((plain, handed));
     }
 
+    /// The program's connection that tells its output, once the session
+    /// read its `tell`. Each connection is read on a thread of its own, so
+    /// a shell that connects later may still be read first.
+    fn teller(host: &Host, place: &Place) -> UnixStream {
+        let teller = UnixStream::connect(place.socket()).unwrap();
+        writeln!(&teller, "{}", json!({ "jsonrpc": "2.0", "method": "tell" })).unwrap();
+        let mut inner = host.0.inner();
+        while inner.teller.is_none() {
+            inner = host.0.changed.wait(inner).unwrap();
+        }
+        teller
+    }
+
+    fn piece(text: &str) -> Value {
+        json!({
+            "jsonrpc": "2.0", "method": "output",
+            "params": { "stream": "stdout", "text": text },
+        })
+    }
+
+    /// The program on `teller`: it reads `listen`, then tells `kept` and
+    /// `told`.
+    fn listened(teller: UnixStream, kept: &'static str) -> JoinHandle<UnixStream> {
+        std::thread::spawn(move || {
+            let mut asked = String::new();
+            BufReader::new(teller.try_clone().unwrap())
+                .read_line(&mut asked)
+                .unwrap();
+            let asked: Value = serde_json::from_str(&asked).unwrap();
+            assert_eq!(asked["method"], "listen", "{asked}");
+            writeln!(&teller, "{}", piece(kept)).unwrap();
+            writeln!(&teller, "{}", json!({ "jsonrpc": "2.0", "method": "told" })).unwrap();
+            teller
+        })
+    }
+
     /// A program whose run no shell started keeps its output until the
     /// first `hello`, which waits for it: the session asks with `listen`,
     /// the program tells what it kept and `told`, then each piece as it
@@ -1085,25 +1124,7 @@ mod tests {
     #[test]
     fn the_first_hello_has_the_output_the_program_kept() {
         let (host, place) = host("teller", false);
-        let teller = UnixStream::connect(place.socket()).unwrap();
-        writeln!(&teller, "{}", json!({ "jsonrpc": "2.0", "method": "tell" })).unwrap();
-        let piece = |text: &str| {
-            json!({
-                "jsonrpc": "2.0", "method": "output",
-                "params": { "stream": "stdout", "text": text },
-            })
-        };
-        let program = std::thread::spawn(move || {
-            let mut asked = String::new();
-            BufReader::new(teller.try_clone().unwrap())
-                .read_line(&mut asked)
-                .unwrap();
-            let asked: Value = serde_json::from_str(&asked).unwrap();
-            assert_eq!(asked["method"], "listen", "{asked}");
-            writeln!(&teller, "{}", piece("kept\n")).unwrap();
-            writeln!(&teller, "{}", json!({ "jsonrpc": "2.0", "method": "told" })).unwrap();
-            teller
-        });
+        let program = listened(teller(&host, &place), "kept\n");
         let shell = Shell::connect(&place.socket());
         let hello = greeted(&shell);
         assert!(says_output(&hello), "{hello}");
@@ -1117,6 +1138,18 @@ mod tests {
         writeln!(&teller, "{}", piece("live\n")).unwrap();
         assert_eq!(shell.next()["params"]["text"], "live\n");
         drop(host);
+    }
+
+    /// A program that says `tell` after the first `hello` is asked at once,
+    /// and what it kept reaches that shell as output after the answer.
+    #[test]
+    fn a_program_that_tells_after_the_first_hello_tells_what_it_kept_next() {
+        let (host, place) = host("teller-late", false);
+        let shell = Shell::connect(&place.socket());
+        greeted(&shell);
+        let program = listened(teller(&host, &place), "kept\n");
+        assert_eq!(shell.next()["params"]["text"], "kept\n");
+        drop((program.join().unwrap(), host));
     }
 
     #[test]
