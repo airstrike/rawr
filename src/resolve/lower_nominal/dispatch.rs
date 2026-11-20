@@ -189,12 +189,15 @@ pub(super) fn write_trait_dispatchers(
                 (true, "Clone") => "return self;".to_string(),
                 // An `Rc` or `Arc` writes what it points to, as std's
                 // `impl<T: Display> Display for Rc<T>` does.
+                // A builtin writes itself under the formatter's spec.
                 (true, "Display") => {
                     let get = format!("{SENTINEL}{}", ops.len());
                     ops.push(ExecutableOp::Prelude(PreludeOp::CountedGet));
+                    let display = format!("{SENTINEL}{}", ops.len());
+                    ops.push(ExecutableOp::Prelude(PreludeOp::FormatSpecDisplay));
                     format!(
                         "if __rawr_type == {COUNTED_KEY} {{ return {get}(self).{}({parameters}); }}\n\
-                         return \"\" + self;",
+                         return {display}(self, __rawr_parameter_0, 0);",
                         trait_dispatcher_name(trait_name, &function.name.text)
                     )
                 }

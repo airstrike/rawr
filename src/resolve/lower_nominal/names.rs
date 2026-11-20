@@ -108,6 +108,68 @@ impl<'a> Parser<'a> {
         functions.chain(types).collect()
     }
 
+    /// The std path `path` names in this scope, as rustc resolves it:
+    /// through the `use` that binds its first segment, from std's root, or
+    /// through the edition's prelude. `None` for a path whose first
+    /// segment the program declares (a type, a generic parameter, an alias)
+    /// or nothing in scope makes std's. A module the std facade holds
+    /// (`rawr_std::sync`) is its std path, and a std type Rawr represents
+    /// its canonical path (`std_path::canonical`).
+    pub(super) fn std_scoped(&self, path: &str) -> Option<String> {
+        let first = path.split("::").next().unwrap_or(path);
+        if self.generics.contains_key(first)
+            || self.models.get(first).is_some()
+            || self.models.alias(first).is_some()
+        {
+            return None;
+        }
+        let binding = self.models.import(first);
+        let qualified = crate::resolve::std_path::qualified(
+            path,
+            binding.map(|binding| binding.qualified.as_str()),
+        )?;
+        let qualified = match qualified
+            .strip_prefix(crate::std_facade::ROOT)
+            .and_then(|rest| rest.strip_prefix("::"))
+        {
+            Some(rest) => format!("std::{rest}"),
+            None => qualified,
+        };
+        // A std type written through another of std's modules reads as the
+        // path the spelling helpers know.
+        Some(crate::resolve::std_path::canonical(&qualified).map_or(qualified, String::from))
+    }
+
+    /// The std path the shortest body path starting with `name` (already
+    /// read) names through the scope (`std_scoped`) that `accepts` takes,
+    /// with the number of tokens after `name` it spans and the token after
+    /// them: `HashMap` after `use std::collections::HashMap;`,
+    /// `collections::HashMap` after `use std::collections;`.
+    pub(super) fn std_path_ahead(
+        &self,
+        name: &str,
+        accepts: impl Fn(&str) -> bool,
+    ) -> Option<(String, usize, Token)> {
+        let mut ahead = self.input.clone();
+        let mut written = name.to_owned();
+        let mut consumed = 0;
+        loop {
+            let next = ahead.next().map_or(Token::EOF, |(token, _)| token);
+            if let Some(path) = self.std_scoped(&written).filter(|path| accepts(path)) {
+                return Some((path, consumed, next));
+            }
+            if next != Token::DoubleColon {
+                return None;
+            }
+            let Some((Token::Identifier(segment), _)) = ahead.next() else {
+                return None;
+            };
+            written.push_str("::");
+            written.push_str(&segment);
+            consumed += 2;
+        }
+    }
+
     /// rustc's E0423 for a macro's name used without `!` where a function
     /// or a value is `expected`: the program's own macro, or std's, as
     /// `print` or `std::print`.

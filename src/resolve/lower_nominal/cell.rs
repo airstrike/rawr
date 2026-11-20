@@ -292,32 +292,17 @@ pub(super) fn update(context: Option<&NativeCallContext<'_>>, args: &mut FnCallA
 }
 
 impl Parser<'_> {
-    /// Which cell the path `path` names in a body: `RefCell` by any of its
-    /// spellings, and `Cell` by its module path or as imported from
-    /// `std::cell`, unless the program names a type so.
+    /// Which cell the path `path` names in a body, through the scope
+    /// (`std_scoped`): std's `RefCell`, `Cell` or `Mutex`.
     pub(super) fn cell_named(&self, path: &str) -> Option<CellKind> {
-        if crate::resolve::std_cell(path) && self.models.get("RefCell").is_none() {
-            return Some(CellKind::RefCell);
+        let qualified = self.std_scoped(path)?;
+        if crate::resolve::std_cell(&qualified) {
+            Some(CellKind::RefCell)
+        } else if crate::resolve::std_thread_type(&qualified) == Some("Mutex") {
+            Some(CellKind::Mutex)
+        } else {
+            crate::resolve::std_plain_cell(&qualified).then_some(CellKind::Cell)
         }
-        // `std::sync::Mutex`, written with its module or imported.
-        let mutex = |path: &str| crate::resolve::std_thread_type(path) == Some("Mutex");
-        if self.models.get("Mutex").is_none()
-            && (path.contains("::") && mutex(path)
-                || self
-                    .models
-                    .import(path)
-                    .is_some_and(|binding| mutex(&binding.qualified)))
-        {
-            return Some(CellKind::Mutex);
-        }
-        let imported = || {
-            self.models
-                .import(path)
-                .is_some_and(|binding| crate::resolve::std_plain_cell(&binding.qualified))
-        };
-        (self.models.get("Cell").is_none()
-            && (crate::resolve::std_plain_cell(path) || path == "Cell" && imported()))
-        .then_some(CellKind::Cell)
     }
 
     /// How many tokens after `name` spell the path to `RefCell` or `Cell`

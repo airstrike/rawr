@@ -260,26 +260,18 @@ pub(super) fn invoke(op: PreludeOp, args: &mut FnCallArgs) -> RawrResult {
 /// module: rawr's name for it, `Weak` or `SyncWeak`.
 pub(crate) fn std_weak(path: &str) -> Option<&'static str> {
     match path {
-        "rc::Weak" | "std::rc::Weak" | "alloc::rc::Weak" => Some("Weak"),
-        "sync::Weak" | "std::sync::Weak" | "alloc::sync::Weak" => Some("SyncWeak"),
+        "std::rc::Weak" | "alloc::rc::Weak" => Some("Weak"),
+        "std::sync::Weak" | "alloc::sync::Weak" => Some("SyncWeak"),
         _ => None,
     }
 }
 
 impl Parser<'_> {
-    /// The `Weak` `name` names in a path: as imported from `std::rc` or
-    /// `std::sync`, or written with its module, unless the program names
-    /// something so.
+    /// The `Weak` the path `name` names through the scope (`std_scoped`):
+    /// `std::rc`'s or `std::sync`'s.
     pub(super) fn weak_named(&self, name: &str) -> Option<Counter> {
-        if self.models.get(name).is_some() {
-            return None;
-        }
-        let imported = || {
-            self.models
-                .import(name)
-                .and_then(|binding| std_weak(&binding.qualified))
-        };
-        std_weak(name).or_else(imported).map(Counter::weak_named)
+        let path = self.std_scoped(name)?;
+        std_weak(&path).map(Counter::weak_named)
     }
 
     /// `value`, an `Rc` or `Arc` (or a reference to one), as the value it

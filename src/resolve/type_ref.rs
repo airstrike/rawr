@@ -275,7 +275,7 @@ pub(super) fn resolve(
                 .collect::<Vec<_>>()
                 .join("::");
             // `PhantomData<T>` holds nothing: the unit type.
-            if super::std_phantom(&written) && declared(types, "PhantomData").is_none() {
+            if super::std_phantom(&written) {
                 return Ok(Type::Unit(path.span));
             }
             // A bare `str`, as `AsRef<str>` writes it, is the text a `&str`
@@ -627,7 +627,14 @@ fn resolve_path(
         }
         _ => None,
     };
-    let written = name.clone();
+    // The path whole, which the std types below are read from: a name a
+    // `use` binds is its std path by now (`through_scope`), and a name
+    // nothing binds is no std type. A std path Rawr represents reads as
+    // the path the helpers know (`std_canonical`).
+    let written = std
+        .and_then(super::std_path::spelling)
+        .and_then(super::std_canonical)
+        .map_or_else(|| name.clone(), ImmutableString::from);
     // A std type Rawr represents reads as its own name: `alloc::vec::Vec`
     // is `Vec`, and `std::sync::Weak` is `SyncWeak`.
     let name = match std.and_then(super::std_path::spelling) {
@@ -672,10 +679,8 @@ fn resolve_path(
         }
     }
 
-    // `std::num::ParseIntError` and kin, unless the crate names the type.
-    if let Some(error) = super::std_parse_error(&name)
-        && declared(types, error).is_none()
-    {
+    // `std::num::ParseIntError` and kin.
+    if let Some(error) = super::std_parse_error(&written) {
         return Ok(Path {
             name: error.into(),
             target: Target::Builtin,
@@ -686,10 +691,7 @@ fn resolve_path(
     // `std::time::Duration` names iced's where iced's `time` re-exports it,
     // and else Rawr's `Duration`, unless the crate names one.
     let name: ImmutableString = super::std_reexport(&name, host);
-    if let Some(time) = super::std_time(&name)
-        && declared(types, name.as_str()).is_none()
-        && declared(types, time).is_none()
-    {
+    if let Some(time) = super::std_time(&written) {
         return Ok(Path {
             name: time.into(),
             target: Target::Builtin,
@@ -697,8 +699,8 @@ fn resolve_path(
             span,
         });
     }
-    // `std::cmp::Ordering`, unless the crate names a type `Ordering`.
-    if declared(types, name.as_str()).is_none() && super::std_ordering(&name) {
+    // `std::cmp::Ordering`.
+    if super::std_ordering(&written) {
         return Ok(Path {
             name: "Ordering".into(),
             target: Target::Builtin,
@@ -706,68 +708,29 @@ fn resolve_path(
             span,
         });
     }
-    // `std::collections::HashMap` and its kin, and `std::cmp::Reverse`,
-    // unless the crate names one.
-    let name = match super::std_collection(&name) {
-        Some(collection) if declared(types, name.as_str()).is_none() => collection.into(),
-        None if super::std_reverse(&name) && declared(types, "Reverse").is_none() => {
-            "Reverse".into()
-        }
-        None if super::std_cell(&name) && declared(types, "RefCell").is_none() => "RefCell".into(),
-        None if declared(types, "VecDeque").is_none()
-            && (super::std_vec_deque(&name) || name.as_str() == "VecDeque") =>
-        {
-            "VecDeque".into()
-        }
-        // `std::cell::Cell`, or a bare `Cell` that names no crate or host
-        // type.
-        None if declared(types, "Cell").is_none()
-            && (super::std_plain_cell(&name)
-                || name.as_str() == "Cell" && host.source_type("Cell").is_none()) =>
-        {
-            "Cell".into()
-        }
-        None if let Some(pointer) = super::std_pointer(&name)
-            && declared(types, pointer).is_none() =>
-        {
-            pointer.into()
-        }
-        // `std::thread::JoinHandle` and `std::sync::mpsc`'s `Sender` and
-        // `Receiver`, unless the crate or a host names the type.
-        None if let Some(thread) = super::std_thread_type(&name)
-            && declared(types, name.as_str()).is_none()
-            && host.source_type(name.as_str()).is_none() =>
-        {
-            thread.into()
-        }
-        None if declared(types, name.as_str()).is_none()
-            && super::std_range(&name).is_some_and(|range| declared(types, range).is_none()) =>
-        {
-            super::std_range(&name).expect("checked").into()
-        }
-        _ => name,
-    };
-    let target = if let Some(target) = declared(types, name.as_str()) {
+    // `std::collections::HashMap` and its kin, `std::cmp::Reverse`, the
+    // cells, the pointers, the thread types and the ranges: Rawr's builtin
+    // of that name.
+    let builtin = super::std_collection(&written)
+        .or_else(|| super::std_reverse(&written).then_some("Reverse"))
+        .or_else(|| super::std_cell(&written).then_some("RefCell"))
+        .or_else(|| super::std_vec_deque(&written).then_some("VecDeque"))
+        .or_else(|| super::std_plain_cell(&written).then_some("Cell"))
+        .or_else(|| super::std_pointer(&written))
+        .or_else(|| super::std_thread_type(&written))
+        .or_else(|| super::std_range(&written));
+    let name = builtin.map_or(name, ImmutableString::from);
+    // A std path to `Option`, `Result`, `Box`, `Vec` or `Cow` is that
+    // type, by Rawr's name for it.
+    let target = if builtin.is_some()
+        || std.is_some() && matches!(name.as_str(), "Option" | "Result" | "Box" | "Cow" | "Vec")
+    {
+        Target::Builtin
+    } else if let Some(target) = declared(types, name.as_str()) {
         target.clone()
     } else if host.is_builtin(name.as_str())
         || prelude_arity(&parsed).is_some()
-        // `std::result::Result`, `core::option::Option`: the prelude's.
-        || std.is_some() && matches!(name.as_str(), "Option" | "Result" | "Box")
-        || super::std_collection(&name).is_some()
-        || name.as_str() == "Reverse"
-        || name.as_str() == "Cow"
-        || name.as_str() == "RefCell"
-        || name.as_str() == "Cell" && host.source_type("Cell").is_none()
-        || name.as_str() == "Vec"
-        || name.as_str() == "VecDeque"
-        || name.as_str() == "Rc"
-        || name.as_str() == "Arc"
-        || matches!(
-            name.as_str(),
-            "JoinHandle" | super::MPSC_SENDER | super::MPSC_RECEIVER | "Mutex"
-        )
         || super::lower_nominal::counted::std_weak(&written).is_some()
-        || name.as_str() == "RangeInclusive"
         || name.as_str() == item::type_ref::ITER_TYPE
     {
         Target::Builtin
@@ -787,9 +750,20 @@ fn resolve_path(
         #[cfg(feature = "rust-import")]
         let missing =
             native.filter(|site| parsed.segments.len() > 1 && site.missing_binding(host, &name));
+        // rustc marks a one-segment path's name, not its arguments.
+        let reference = match &parsed.segments[..] {
+            [only] => {
+                let mut end = only.name.span.start();
+                for _ in only.name.text.chars() {
+                    end.advance();
+                }
+                Span::new(only.name.span.start(), end.max(only.name.span.end()))
+            }
+            _ => span,
+        };
         let error = Error::UnknownType {
             name,
-            reference: span,
+            reference,
             path: false,
             imports: Box::default(),
         };
@@ -1193,15 +1167,7 @@ fn through_scope(
                 global: false,
             })
         }
-        Some(_) => Ok(path),
-        None => match super::std_path::unbound_type(
-            &first.name.text,
-            path.segments.len() > 1,
-            first.name.span,
-        ) {
-            Some(error) => Err(error),
-            None => Ok(path),
-        },
+        _ => Ok(path),
     }
 }
 
@@ -1826,7 +1792,12 @@ impl Type {
         let Type::Path(path) = self else {
             return None;
         };
-        if path.target != Target::Builtin || super::std_collection(&path.name).is_none() {
+        if path.target != Target::Builtin
+            || !matches!(
+                path.name.as_str(),
+                "HashMap" | "HashSet" | "BTreeMap" | "BTreeSet"
+            )
+        {
             return None;
         }
         let arguments = path

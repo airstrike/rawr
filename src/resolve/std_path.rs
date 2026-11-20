@@ -92,6 +92,16 @@ pub(crate) fn spelling(resolved: Resolved) -> Option<&'static str> {
     })
 }
 
+/// The path the std spelling helpers read (`crate::resolve::std_canonical`)
+/// for the std path `path` to a type Rawr represents, written through any
+/// of std's modules: `std::collections::HashMap` for
+/// `std::collections::hash_map::HashMap`.
+pub(crate) fn canonical(path: &str) -> Option<&'static str> {
+    let segments = std_segments(path)?;
+    let resolved = std_table::resolve(&segments, Namespace::Type).ok()?;
+    spelling(resolved).and_then(crate::resolve::std_canonical)
+}
+
 /// The type arity a path to rawr's builtin `name` may write, from std's
 /// declaration: its parameters with no default, and every one stable Rust
 /// may name. `HashMap` is `(2, 3)`: `K`, `V` and `S = RandomState`.
@@ -359,39 +369,27 @@ pub(crate) fn glob(module: &str) -> Option<Vec<ImmutableString>> {
     Some(names)
 }
 
-/// The std type a `use` that binds `qualified` brings in: the path, which a
-/// path through the name stands for.
+/// The std type or module a `use` that binds `qualified` brings in: the
+/// path, which a path through the name stands for (`mpsc::Sender` after
+/// `use std::sync::mpsc;` is `std::sync::mpsc::Sender`).
 pub(crate) fn bound_type(qualified: &str) -> Option<ImmutableString> {
+    // A std module the std facade holds (`rawr_std::sync::mpsc`) stands
+    // for its std path.
+    if let Some(rest) = qualified
+        .strip_prefix(crate::std_facade::ROOT)
+        .and_then(|rest| rest.strip_prefix("::"))
+    {
+        let module = format!("std::{rest}");
+        return std_table::is_module(&module).then(|| module.into());
+    }
     let segments = std_segments(qualified)?;
+    if std_table::is_module(qualified) {
+        return Some(qualified.into());
+    }
     match std_table::resolve(&segments, Namespace::Type).ok()? {
         Resolved::Path(path) if path.is_type() => Some(qualified.into()),
         _ => None,
     }
-}
-
-/// rustc's error for the bare `name` of a std type rawr represents, which
-/// nothing in scope binds: no declaration, no `use` and not std's prelude.
-/// E0425 where it names a type; E0433 where it heads a path (`head`), as
-/// `HashMap::new()`. `None` for any other name. The caller has looked
-/// `name` up in its scope, and offers the imports.
-pub(crate) fn unbound_type(name: &str, head: bool, reference: Span) -> Option<Error> {
-    let represented = TYPES.iter().any(|(definition, _)| {
-        !definition.starts_with("core::fmt::") && definition.rsplit("::").next() == Some(name)
-    });
-    if !represented || qualified(name, None).is_some() {
-        return None;
-    }
-    // The name whole, where the reference is the point it starts at.
-    let mut end = reference.start();
-    for _ in name.chars() {
-        end.advance();
-    }
-    Some(Error::UnknownType {
-        name: name.into(),
-        reference: Span::new(reference.start(), end.max(reference.end())),
-        path: head,
-        imports: Box::default(),
-    })
 }
 
 /// rawr's error for a use of the std path `path`, which it resolves but

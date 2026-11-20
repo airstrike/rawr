@@ -247,11 +247,12 @@ impl Parser<'_> {
     /// The growable sequence a type's name `name` is: `Vec`, or std's
     /// `VecDeque` unless the program names a type so.
     pub(super) fn growable_named(&self, name: &str) -> Option<Kind> {
-        match name {
-            "Vec" => Some(Kind::Vec),
-            "VecDeque" if self.models.get(name).is_none() => Some(Kind::Deque),
-            _ => None,
+        if name == "Vec" {
+            return Some(Kind::Vec);
         }
+        self.std_scoped(name)
+            .filter(|path| crate::resolve::std_vec_deque(path))
+            .map(|_| Kind::Deque)
     }
 
     /// `Vec<T>` or `VecDeque<T>` after its name `name`, at `<`.
@@ -268,37 +269,26 @@ impl Parser<'_> {
         Ok(Ty::sequence(kind, element))
     }
 
-    /// The growable sequence `Vec` or std's `VecDeque` named by `name` and
-    /// the path before the next `::` (`VecDeque`, `collections::VecDeque`,
-    /// `std::collections::VecDeque`), unless the program names a type
-    /// so. Consumes the path, leaving the `::` before the member.
+    /// The growable sequence the prelude's `Vec` or std's `VecDeque`, which
+    /// the body path starting with `name` names before the next `::`,
+    /// through the scope (`std_path_ahead`): `VecDeque` after `use
+    /// std::collections::VecDeque;`, or `std::collections::VecDeque`.
+    /// Consumes the path, leaving the `::` before the member.
     pub(super) fn growable_path(&mut self, name: &str) -> Option<Kind> {
-        let mut ahead = self.input.clone();
-        let tokens: Vec<Token> = (0..5)
-            .map(|_| ahead.next().map_or(Token::EOF, |(token, _)| token))
-            .collect();
-        let identifier = |token: &Token, text: &str| matches!(token, Token::Identifier(name) if name.as_str() == text);
-        let (kind, consumed) = match name {
-            "Vec" if self.models.get(name).is_none() && self.models.import(name).is_none() => {
-                (Kind::Vec, 0)
-            }
-            "VecDeque" if self.models.get(name).is_none() => (Kind::Deque, 0),
-            "collections"
-                if tokens[0] == Token::DoubleColon && identifier(&tokens[1], "VecDeque") =>
-            {
-                (Kind::Deque, 2)
-            }
-            "std" | "alloc"
-                if tokens[0] == Token::DoubleColon
-                    && identifier(&tokens[1], "collections")
-                    && tokens[2] == Token::DoubleColon
-                    && identifier(&tokens[3], "VecDeque") =>
-            {
-                (Kind::Deque, 4)
-            }
-            _ => return None,
+        let (kind, consumed, next) = if name == "Vec"
+            && self.models.get(name).is_none()
+            && self.models.import(name).is_none()
+        {
+            let next = self
+                .input
+                .peek()
+                .map_or(Token::EOF, |(token, _)| token.clone());
+            (Kind::Vec, 0, next)
+        } else {
+            let (_, consumed, next) = self.std_path_ahead(name, crate::resolve::std_vec_deque)?;
+            (Kind::Deque, consumed, next)
         };
-        if tokens[consumed] != Token::DoubleColon {
+        if next != Token::DoubleColon {
             return None;
         }
         for _ in 0..consumed {

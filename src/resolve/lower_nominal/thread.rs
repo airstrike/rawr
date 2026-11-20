@@ -635,20 +635,15 @@ impl Parser<'_> {
     }
 
     /// Which of std's thread and channel types the path `path` names in a
-    /// body, by its module path or as imported, unless the program names a
-    /// type so: `thread::JoinHandle`, `mpsc::Receiver`.
+    /// body, through the scope (`std_scoped`), unless the program names a
+    /// type so: `thread::JoinHandle` after `use std::thread;`.
     pub(super) fn thread_named(&self, path: &str) -> Option<Kind> {
-        let named = |path: &str| crate::resolve::std_thread_type(path).and_then(Kind::named);
         let last = path.rsplit("::").next().unwrap_or(path);
         if self.models.get(last).is_some() {
             return None;
         }
-        if path.contains("::") {
-            return named(path);
-        }
-        self.models
-            .import(path)
-            .and_then(|binding| named(&binding.qualified))
+        let qualified = self.std_scoped(path)?;
+        crate::resolve::std_thread_type(&qualified).and_then(Kind::named)
     }
 
     /// `JoinHandle<T>`, `Sender<T>` or another of std's thread and channel

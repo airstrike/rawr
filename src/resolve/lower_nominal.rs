@@ -465,6 +465,10 @@ struct Parser<'a> {
     /// The local holding a `{:?}` spec (`DebugSpec`) that `debug_source`
     /// passes down to each leaf, as Rust's `Formatter` does.
     debug_spec: Option<String>,
+    /// The next `format!` is a `fmt` body's `value.fmt(f)`, which formats
+    /// its one value with the body's own spec (`FORMAT_SPEC`), as std's
+    /// call passes its `Formatter` on.
+    forward_spec: bool,
     closure_hint: Option<Box<[Ty]>>,
     /// The lifetimes the `for<'a>` binders around the body type being
     /// read bind, which are elided ones (`for<'a> fn(&'a T)`).
@@ -1000,6 +1004,7 @@ impl<'a> Parser<'a> {
             lifted: Vec::new(),
             closure_hints: Vec::new(),
             debug_spec: None,
+            forward_spec: false,
             closure_hint: None,
             bound_lifetimes: Vec::new(),
             expansions: 0,

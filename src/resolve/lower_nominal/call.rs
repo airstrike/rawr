@@ -392,7 +392,23 @@ impl<'a> Parser<'a> {
         written.extend((0..arguments).map(|_| self.next()));
         written.extend(path);
         self.splice_tokens(written);
-        self.parse_local_type().map(Some)
+        // A head nothing in scope names heads the path: rustc's E0433 over
+        // the name, as without the turbofish.
+        self.parse_local_type()
+            .map(Some)
+            .map_err(|error| match error {
+                Error::UnknownType {
+                    name: missing,
+                    imports,
+                    ..
+                } if segments == 0 && missing == *name => Error::UnknownType {
+                    reference: Span::new(name_span.start(), text_end(name_span.start(), name)),
+                    name: missing,
+                    path: true,
+                    imports,
+                },
+                error => error,
+            })
     }
 
     pub(super) fn splice_tokens(&mut self, tokens: Vec<(Token, Position)>) {
@@ -1598,15 +1614,24 @@ impl<'a> Parser<'a> {
                 let source = self.copied_call(source, &places)?;
                 return Ok(self.operator_expr(source, output, call));
             }
-            if let Some(formatter) = formatter.and_then(|index| arguments.get(index)) {
+            // A function's formatter takes the body's spec, as std passes
+            // its `Formatter` on, and what it writes is the body's.
+            if let Some(index) = formatter.filter(|index| *index < arguments.len()) {
                 let mut source = origin::Fragment::plain("{ ");
-                source.push(formatter.rendered_source());
-                source.push_text(" = ");
+                source.push(arguments[index].rendered_source());
+                source.push_text(" += ");
                 source.push(origin::Fragment::call(
                     name.as_str(),
                     arguments
                         .iter()
-                        .map(ParsedExpr::rendered_source)
+                        .enumerate()
+                        .map(|(at, argument)| {
+                            if at == index {
+                                format::FORMAT_SPEC.into()
+                            } else {
+                                argument.rendered_source()
+                            }
+                        })
                         .chain(witnesses),
                 ));
                 source.push_text("; ");

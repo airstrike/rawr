@@ -1685,7 +1685,7 @@ impl<'a> Resolver<'a> {
             .unwrap_or(segments);
         let module: ImmutableString = segments.join("::").into();
         let local = self.enum_glob(context, &segments)
-            || super::std_ordering(&module)
+            || super::std_ordering(&self.through_use(context, &segments))
             || self.local_glob_module(context, &segments).is_some();
         if parsed.header.visibility.is_some() && !local {
             return Err(Failure {
@@ -1777,7 +1777,7 @@ impl<'a> Resolver<'a> {
                 .variants(&definition)
                 .map(<[ImmutableString]>::to_vec);
         }
-        if super::std_ordering(&module) {
+        if super::std_ordering(&self.through_use(context, segments)) {
             return Some(
                 ORDERING_VARIANTS
                     .iter()
@@ -1907,7 +1907,8 @@ impl<'a> Resolver<'a> {
     fn variant(&self, context: &Context, path: &[ImmutableString]) -> Option<item::Import> {
         let (last, prefix) = path.split_last()?;
         let Some((definition, identity)) = self.script_enum(context, prefix) else {
-            if super::std_ordering(&prefix.join("::")) && ORDERING_VARIANTS.contains(&last.as_str())
+            if super::std_ordering(&self.through_use(context, prefix))
+                && ORDERING_VARIANTS.contains(&last.as_str())
             {
                 return Some(item::Import::OrderingVariant);
             }
@@ -2620,6 +2621,26 @@ impl<'a> Resolver<'a> {
     /// `use`s of one name in Rust's two namespaces, the one that names a
     /// module, as `badge::Secondary` goes through the module of `use
     /// badge::{self, badge};` and `badge(..)` calls the function.
+    /// The path `segments` spells through the `use` that binds its first
+    /// segment in `context`, as rustc resolves a path: `Ordering` after
+    /// `use std::cmp::Ordering;` is `std::cmp::Ordering`.
+    fn through_use(&self, context: &Context, segments: &[ImmutableString]) -> String {
+        let alias = segments
+            .first()
+            .and_then(|first| self.through_alias(&context.address(first)))
+            .filter(|alias| alias.path.first() != segments.first());
+        match alias {
+            Some(alias) => alias
+                .path
+                .iter()
+                .chain(&segments[1..])
+                .map(ImmutableString::as_str)
+                .collect::<Vec<_>>()
+                .join("::"),
+            None => segments.join("::"),
+        }
+    }
+
     fn through_alias(&self, address: &Address) -> Option<&Export> {
         let first = self.tables.alias(address)?;
         let Some(other) = self.tables.other_alias(address) else {

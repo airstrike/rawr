@@ -97,7 +97,8 @@ impl Parser<'_> {
     /// Whether `name`, written in a type, names std's `Cow`: its own
     /// spelling, unless the crate names a type `Cow`.
     pub(super) fn cow_named(&self, name: &str) -> bool {
-        name == "Cow" && self.models.get(name).is_none()
+        self.std_scoped(name)
+            .is_some_and(|path| matches!(path.as_str(), "std::borrow::Cow" | "alloc::borrow::Cow"))
     }
 
     /// `Cow<'a, B>` in a body, after the name.

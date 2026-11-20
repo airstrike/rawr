@@ -4,7 +4,9 @@
 #[cfg(feature = "rust-import")]
 use super::callable_object;
 use super::compare::{Comparison, Shape};
-use super::format::{debug_value, debug_value_spec, pretty_debug, DebugLeaf, DebugSpec};
+use super::format::{
+    debug_value, debug_value_spec, pretty_debug, DebugLeaf, DebugSpec, FormatPart,
+};
 use super::inference::Inference;
 use super::ty::{numeric_type, Int, Ty};
 use super::wide::{integer_text, wide_value, Wide};
@@ -168,6 +170,14 @@ pub(super) enum PreludeOp {
     /// A derived `Debug` under a `{:?}` spec, which it passes to each
     /// field: `debug(value, spec)`.
     FormatSpecDebug,
+    /// A value's `Display` under a `fmt` body's spec (`DebugSpec`, or no
+    /// spec), as `Formatter::pad` and `pad_integral` write it:
+    /// `display(value, spec, code)`, the leaf by `DebugLeaf::from_code`:
+    /// 0 for a value whose type the caller doesn't know, by its own text.
+    FormatSpecDisplay,
+    /// What a `fmt` body's formatter says of its spec:
+    /// `part(spec, code)` (`FormatPart::from_code`).
+    FormatPart,
     /// `a.partial_cmp(&b)` by the runtime values (`compare_value`): an
     /// `Option` of `Ordering`'s discriminant.
     Compare,
@@ -449,6 +459,8 @@ impl PreludeOp {
             Self::SequenceContains => "sequence.contains",
             Self::FormatDebugLeaf => "format.debug-leaf",
             Self::FormatSpecDebug => "format.spec-debug",
+            Self::FormatSpecDisplay => "format.spec-display",
+            Self::FormatPart => "format.part",
             Self::Compare => "generic.partial-cmp",
             Self::TypeIndex => "generic.type-index",
             Self::Discriminant => "enum.discriminant",
@@ -685,6 +697,12 @@ impl PreludeOp {
                 TypeId::of::<crate::INT>(),
             ],
             Self::FormatSpecDebug => vec![TypeId::of::<Dynamic>(), TypeId::of::<crate::Array>()],
+            Self::FormatSpecDisplay => vec![
+                TypeId::of::<Dynamic>(),
+                TypeId::of::<Dynamic>(),
+                TypeId::of::<crate::INT>(),
+            ],
+            Self::FormatPart => vec![TypeId::of::<Dynamic>(), TypeId::of::<crate::INT>()],
             Self::FormatBits => vec![
                 TypeId::of::<Dynamic>(),
                 TypeId::of::<crate::INT>(),
@@ -904,6 +922,15 @@ impl PreludeOp {
                 let spec = DebugSpec::read(args[1]);
                 let leaf = DebugLeaf::from_code(args[2].as_int().unwrap_or_default());
                 return Ok(ImmutableString::from(spec.leaf(args[0], leaf)).into());
+            }
+            Self::FormatSpecDisplay => {
+                let spec = DebugSpec::read(args[1]);
+                let leaf = DebugLeaf::from_code(args[2].as_int().unwrap_or_default());
+                return Ok(ImmutableString::from(spec.display(args[0], leaf)).into());
+            }
+            Self::FormatPart => {
+                let part = FormatPart::from_code(args[1].as_int().unwrap_or_default());
+                return Ok(DebugSpec::read(args[0]).part(part));
             }
             Self::FormatSpecDebug => {
                 let spec = DebugSpec::read(args[1]);

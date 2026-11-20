@@ -7,35 +7,19 @@ use super::*;
 
 impl Parser<'_> {
     /// Whether a body path starting with `name` (already read) is the
-    /// constructor `Reverse(..)`: `Reverse` unless the crate declares a type
-    /// or function of that name, `cmp::Reverse`, `std::cmp::Reverse`. Reads
-    /// the rest of the path.
+    /// constructor `Reverse(..)`, through the scope (`std_path_ahead`):
+    /// `Reverse` after `use std::cmp::Reverse;`, or `std::cmp::Reverse`,
+    /// unless a function or a local of the name shadows it. Reads the rest
+    /// of the path.
     pub(super) fn reverse_path(&mut self, name: &str) -> bool {
-        let mut ahead = self.input.clone();
-        let tokens: Vec<Token> = (0..5)
-            .map(|_| ahead.next().map_or(Token::EOF, |(token, _)| token))
-            .collect();
-        let identifier = |token: &Token, text: &str| matches!(token, Token::Identifier(name) if name.as_str() == text);
-        let consumed = match name {
-            "std" | "core"
-                if tokens[0] == Token::DoubleColon
-                    && identifier(&tokens[1], "cmp")
-                    && tokens[2] == Token::DoubleColon
-                    && identifier(&tokens[3], "Reverse") =>
-            {
-                4
-            }
-            "cmp" if tokens[0] == Token::DoubleColon && identifier(&tokens[1], "Reverse") => 2,
-            "Reverse"
-                if self.models.get(name).is_none()
-                    && self.models.function(name).is_none()
-                    && !self.bindings.contains_key(name) =>
-            {
-                0
-            }
-            _ => return false,
+        if self.models.function(name).is_some() || self.bindings.contains_key(name) {
+            return false;
+        }
+        let Some((_, consumed, next)) = self.std_path_ahead(name, crate::resolve::std_reverse)
+        else {
+            return false;
         };
-        if tokens[consumed] != Token::LeftParen {
+        if next != Token::LeftParen {
             return false;
         }
         for _ in 0..consumed {
