@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.4.65",
+      "date": "2026-11-20",
+      "entries": [
+        {"text":"Editors can set a value while the program is paused. The VS Code Variables pane and watch expressions assign the new value through eval in that value's frame, for fields, list items and map entries. A write Rust doesn't allow, such as to an immutable binding or a field behind `&self`, fails with rustc's error.","issues":[2350]}
+      ]
+    },
+    {
       "version": "0.4.64",
       "date": "2026-11-20",
       "entries": [

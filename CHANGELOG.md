@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.65 (2026-11-20)
+
+- Editors can set a value while the program is paused. The VS Code Variables pane and watch expressions assign the new value through eval in that value's frame, for fields, list items and map entries. A write Rust doesn't allow, such as to an immutable binding or a field behind `&self`, fails with rustc's error. (#2350)
+
 ## 0.4.64 (2026-11-20)
 
 - A std type's name resolves only as rustc resolves it: through a `use` of the type or its module (`mpsc::Sender` after `use std::sync::mpsc;`, `collections::HashMap` after `use std::collections;`), its std path, or the prelude. A bare `Mutex`, `HashMap`, `Rc`, `Ordering` or `Duration`, or a path through a module nothing binds, is rustc's E0425 or E0433 with its import suggestions. (#2346)

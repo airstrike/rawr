@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-20",
-  "version": "0.4.64",
+  "version": "0.4.65",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.65",
+        "date": "2026-11-20",
+        "entries": [
+          {"text":"Editors can set a value while the program is paused. The VS Code Variables pane and watch expressions assign the new value through eval in that value's frame, for fields, list items and map entries. A write Rust doesn't allow, such as to an immutable binding or a field behind `&self`, fails with rustc's error.","issues":[2350]}
+        ]
+      },
       {
         "version": "0.4.64",
         "date": "2026-11-20",
@@ -5586,7 +5593,7 @@
     {"issue":2347,"title":"Diagnostics left after #2337: struct-variant witnesses, every unresolved member, similar names, lifetimes","state":"open","category":"Health"},
     {"issue":2348,"title":"A format width pads a Display impl's whole output; rustc ignores it for write! and pads per `pad` call","state":"closed","category":"Health","release":"0.4.64"},
     {"issue":2349,"title":"`f.align()` needs `fmt::Alignment`, and unbound `Reverse(1)` or `PhantomData` lack rustc's import help","state":"open","category":"Health"},
-    {"issue":2350,"title":"The VS Code debugger can't set a variable: `rawr dap` has no setVariable","state":"open","category":"Health"},
+    {"issue":2350,"title":"The VS Code debugger can't set a variable: `rawr dap` has no setVariable","state":"closed","category":"Health","release":"0.4.65"},
     {"issue":2351,"title":"Every iced project rebuilds its bindings: build scripts differ under rawr's nightly, and the run prints why in red","state":"open","category":"Health"},
     {"issue":2352,"title":"A script Mutex guard passed to drop() never releases the lock","state":"open","category":"Health"}
   ],
