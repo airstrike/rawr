@@ -872,21 +872,35 @@ pub(super) enum FormatPart {
     SignPlus,
     SignMinus,
     ZeroPad,
+    /// `f.align()`: std's `fmt::Alignment` of the spec's `<`, `>` or `^`.
+    Align,
 }
 
 impl FormatPart {
-    /// The part the formatter's method `name` reads, with its type.
-    pub(super) fn of_method(name: &str) -> Option<(Self, Ty)> {
-        let count = || Ty::Option(Box::new(Ty::Int(Int::Usize)));
+    /// The part the formatter's method `name` reads.
+    pub(super) fn of_method(name: &str) -> Option<Self> {
         Some(match name {
-            "width" => (Self::Width, count()),
-            "precision" => (Self::Precision, count()),
-            "fill" => (Self::Fill, Ty::Char),
-            "alternate" => (Self::Alternate, Ty::Bool),
-            "sign_plus" => (Self::SignPlus, Ty::Bool),
-            "sign_minus" => (Self::SignMinus, Ty::Bool),
-            "sign_aware_zero_pad" => (Self::ZeroPad, Ty::Bool),
+            "width" => Self::Width,
+            "precision" => Self::Precision,
+            "fill" => Self::Fill,
+            "alternate" => Self::Alternate,
+            "sign_plus" => Self::SignPlus,
+            "sign_minus" => Self::SignMinus,
+            "sign_aware_zero_pad" => Self::ZeroPad,
+            "align" => Self::Align,
             _ => return None,
+        })
+    }
+
+    /// The type the part's method gives, `alignment` std's
+    /// `fmt::Alignment` as Rawr's std holds it.
+    pub(super) fn ty(self, alignment: impl FnOnce() -> Option<Ty>) -> Option<Ty> {
+        let count = || Ty::Option(Box::new(Ty::Int(Int::Usize)));
+        Some(match self {
+            Self::Width | Self::Precision => count(),
+            Self::Fill => Ty::Char,
+            Self::Alternate | Self::SignPlus | Self::SignMinus | Self::ZeroPad => Ty::Bool,
+            Self::Align => Ty::Option(Box::new(alignment()?)),
         })
     }
 
@@ -902,7 +916,8 @@ impl FormatPart {
             3 => Self::Alternate,
             4 => Self::SignPlus,
             5 => Self::SignMinus,
-            _ => Self::ZeroPad,
+            6 => Self::ZeroPad,
+            _ => Self::Align,
         }
     }
 }
@@ -1061,6 +1076,12 @@ impl DebugSpec {
             FormatPart::SignPlus => self.sign.into(),
             FormatPart::SignMinus => self.minus.into(),
             FormatPart::ZeroPad => self.zero.into(),
+            FormatPart::Align => self
+                .align
+                .and_then(crate::std_facade::alignment)
+                .map_or_else(crate::option::none, |align| {
+                    crate::option::some(Dynamic::from(align))
+                }),
         }
     }
 

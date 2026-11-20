@@ -596,7 +596,8 @@ impl<'a> Parser<'a> {
             }
             // `f.width()`, `f.fill()` and kin of a `fmt` body's formatter:
             // the spec its caller formats with (`FORMAT_SPEC`).
-            if let Some((part, ty)) = format::FormatPart::of_method(&member)
+            if let Some(part) = format::FormatPart::of_method(&member)
+                && let Some(ty) = part.ty(|| self.std_held("fmt::Alignment"))
                 && matches!(self.peek(), Token::Unit)
                 && self
                     .formatter

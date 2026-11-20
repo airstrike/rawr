@@ -3384,6 +3384,7 @@ impl<'a> Parser<'a> {
             ),
             None => written,
         };
+        let qualified = crate::resolve::std_reexport(&qualified, &self.models.host);
         self.models.host.canonical_str(&qualified).to_string()
     }
 

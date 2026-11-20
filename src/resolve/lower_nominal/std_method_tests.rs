@@ -1294,11 +1294,48 @@ main();
 #[test]
 fn a_formatter_method_rawr_doesnt_run_is_not_yet() {
     let report = refused(
-        "use std::fmt;\nstruct A;\nimpl fmt::Display for A {\n    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {\n        write!(f, \"{}\", f.align().is_some())\n    }\n}\nfn main() { println!(\"{}\", A); }\nmain();\n",
+        "use std::fmt;\nstruct A;\nimpl fmt::Display for A {\n    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {\n        write!(f, \"{}\", f.flags())\n    }\n}\nfn main() { println!(\"{}\", A); }\nmain();\n",
     );
     assert!(
-        report.contains("rawr doesn't run `std::fmt::Formatter::align` yet"),
+        report.contains("rawr doesn't run `std::fmt::Formatter::flags` yet"),
         "{report}"
+    );
+}
+
+/// `f.align()` of a `fmt` body is std's `fmt::Alignment` of the spec its
+/// caller formats with, which Rawr's std holds as std's own value
+/// (#2349).
+#[test]
+fn a_formatters_align_is_stds_alignment_of_its_spec() {
+    let source = r#"
+use std::fmt::{self, Alignment};
+
+struct A;
+
+impl fmt::Display for A {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let side = match f.align() {
+            Some(Alignment::Left) => "left",
+            Some(fmt::Alignment::Right) => "right",
+            Some(_) => "center",
+            None => "none",
+        };
+        write!(f, "{side} {:?} {}", f.align(), f.align() == Some(Alignment::Left))
+    }
+}
+
+fn main() {
+    println!("[{}] [{:<4}] [{:*>6}] [{:^}]", A, A, A, A);
+    let a = Alignment::Center;
+    let b = a;
+    println!("{:?} {}", b, a == std::fmt::Alignment::Center);
+}
+main();
+"#;
+    assert_eq!(
+        printed(source),
+        "[none None false] [left Some(Left) true] [right Some(Right) false] \
+         [center Some(Center) false]\nCenter true\n"
     );
 }
 

@@ -1,5 +1,5 @@
-//! std's `path`, `ffi`, `io`, `env`, `fs`, `process`, `num`, `char`,
-//! `panic`, `sync::mpsc`, `thread` and `time` items for every program
+//! std's `path`, `ffi`, `io`, `env`, `fs`, `process`, `num`, `fmt`,
+//! `char`, `panic`, `sync::mpsc`, `thread` and `time` items for every program
 //! (D528.4). Every [`Engine`](crate::Engine) made by `Engine::new` declares
 //! them, and every runtime registry binds them, so a plain program, an
 //! embedding and an iced app all name `std::path::PathBuf`
@@ -20,6 +20,7 @@ mod cursor;
 mod declare;
 mod declared;
 mod env;
+mod fmt;
 mod fs;
 mod held;
 mod io;
@@ -33,6 +34,7 @@ pub(crate) mod thread;
 mod time;
 
 pub(crate) use case::mapped as case_mapped;
+pub(crate) use fmt::alignment;
 pub(crate) use num::int_error_kind;
 
 use crate::func::SendSync;
@@ -169,6 +171,7 @@ fn build() -> Result<facade::Definition, host::Error> {
     io::register_debug();
     cursor::register_debug();
     num::register_debug();
+    fmt::register_debug();
     panic::register_debug();
     case::register_debug();
     sync::register_debug();
@@ -187,6 +190,7 @@ fn held() -> Vec<held::Held> {
         cursor::HELD.as_slice(),
         case::HELD.as_slice(),
         num::HELD.as_slice(),
+        fmt::HELD.as_slice(),
         panic::HELD.as_slice(),
         sync::HELD.as_slice(),
         thread::HELD.as_slice(),
@@ -204,6 +208,7 @@ fn bind(binds: &mut impl Bind) {
     fs::bind(binds);
     process::bind(binds);
     num::bind(binds);
+    fmt::bind(binds);
     panic::bind(binds);
     case::bind(binds);
     sync::bind(binds);

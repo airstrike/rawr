@@ -822,7 +822,8 @@ impl<'a> Parser<'a> {
                 }
                 // A path through a crate, as `serde::de::Error`, names the
                 // crate's trait, never std's of the same name.
-                // `fmt::Display` after `use std::fmt;` is std's.
+                // `fmt::Display` after `use std::fmt;` is std's, as is a
+                // path through the std facade's module that `use` binds.
                 let root = self.models.import(&root).map_or_else(
                     || root.to_string(),
                     |binding| {
@@ -834,7 +835,9 @@ impl<'a> Parser<'a> {
                             .to_owned()
                     },
                 );
-                let through_crate = segments > 1 && !crate::std_table::is_root(&root);
+                let through_crate = segments > 1
+                    && !crate::std_table::is_root(&root)
+                    && root != crate::std_facade::ROOT;
                 let explicit = if matches!(self.peek(), Token::LessThan) {
                     Some(self.parse_trait_path_arguments()?)
                 } else {
