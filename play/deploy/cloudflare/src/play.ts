@@ -1,5 +1,6 @@
 // The web playground's pure parts: share ids, share validation and the
-// per-IP rate limiter the PlayBot Durable Object keeps in memory.
+// per-IP rate limiter the PlayBot Durable Object keeps in memory, and the
+// signed passes /todo keeps in a cookie.
 
 /** Longest snippet, in bytes (the bot checks it again). */
 export const MAX_CODE = 16 * 1024;
@@ -55,14 +56,12 @@ export async function hmac(key: string, text: string): Promise<string> {
   return [...mac].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-/** The cookie that lets a browser past Turnstile after one Siteverify. */
-export const PASS_COOKIE = "rawr_play_pass";
 /** How long a pass lasts: 30 days, in seconds. */
 export const PASS_SECONDS = 30 * 24 * 60 * 60;
 
 /**
  * A pass: its expiry in Unix seconds, a dot, and the HMAC of the expiry.
- * It names no one; the key is derived from the Turnstile secret.
+ * It names no one. /todo (todo.ts) derives its key from its password.
  */
 export async function makePass(key: string, nowMs: number): Promise<string> {
   const expires = Math.floor(nowMs / 1000) + PASS_SECONDS;
@@ -95,11 +94,6 @@ export function cookie(header: string | null, name: string): string | null {
     if (at > 0 && part.slice(0, at).trim() === name) return part.slice(at + 1).trim();
   }
   return null;
-}
-
-/** The Set-Cookie header that stores a pass for /play. */
-export function passCookie(value: string): string {
-  return `${PASS_COOKIE}=${value}; Max-Age=${PASS_SECONDS}; Path=/play; HttpOnly; Secure; SameSite=Lax`;
 }
 
 /** Equal strings, compared in time that depends only on the length. */
@@ -152,11 +146,6 @@ export class Limiter {
   }
 }
 
-/** Playground renders: 6 a minute and 60 an hour per IP. */
-export const RENDER_LIMITS: Window[] = [
-  { max: 6, ms: 60_000 },
-  { max: 60, ms: 3_600_000 },
-];
 /** Shares: 10 a minute and 100 an hour per IP. */
 export const SHARE_LIMITS: Window[] = [
   { max: 10, ms: 60_000 },
@@ -230,64 +219,6 @@ export function ogTags(og: Og, escape: (text: string) => string): string {
     meta("name", "description", og.description),
   ].join("\n");
 }
-
-/** Landing-page runs: 20 a minute and 120 an hour per IP (cached results are free). */
-export const LANDING_LIMITS: Window[] = [
-  { max: 20, ms: 60_000 },
-  { max: 120, ms: 3_600_000 },
-];
-
-/** Hex SHA-256 of `text` as UTF-8. */
-export async function sha256(text: string): Promise<string> {
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)));
-  return [...digest].map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", rsquo: "’", lsquo: "‘", rdquo: "”", ldquo: "“" };
-
-/** Text with HTML character references decoded, as a browser's `textContent` reads it. */
-export function decodeHtml(html: string): string {
-  return html.replace(/&(#x[0-9a-fA-F]+|#\d+|[A-Za-z]+);/g, (whole, name: string) => {
-    if (name.startsWith("#x")) return String.fromCodePoint(parseInt(name.slice(2), 16));
-    if (name.startsWith("#")) return String.fromCodePoint(parseInt(name.slice(1), 10));
-    return ENTITIES[name] ?? whole;
-  });
-}
-
-/** One `<code data-run>` element: its `data-run` name (may be empty) and its text. */
-export interface RunBlock {
-  name: string;
-  code: string;
-  /** The element's inner HTML, to catch markup inside it. */
-  html: string;
-}
-
-/**
- * The `<code data-run>` elements in a page's HTML. Their text is what the
- * page's Run buttons send (`textContent`), so these are the only snippets
- * /play/run accepts without Turnstile.
- */
-export function runBlocks(html: string): RunBlock[] {
-  const blocks: RunBlock[] = [];
-  for (const match of html.matchAll(/<code\b([^>]*\bdata-run\b(?:="([^"]*)")?[^>]*)>([\s\S]*?)<\/code>/g)) {
-    // A block marked data-where="browser" runs in the page's own universe,
-    // and its Run never reaches /play/run.
-    if (/\bdata-where="browser"/.test(match[1])) continue;
-    blocks.push({ name: match[2] ?? "", code: decodeHtml(match[3]), html: match[3] });
-  }
-  return blocks;
-}
-
-/** The snippet a run block's Run button sends to /play/run, or an error. */
-export function runSnippet(block: { code: string }): Snippet | string {
-  return parseSnippet({ code: block.code });
-}
-
-/** The sources a page runs: the text of each `<code data-run>` element. */
-export function runnable(html: string): string[] {
-  return runBlocks(html).map((block) => block.code);
-}
-
 /** One stream's run of a plain program's output. */
 export interface Chunk {
   stream: "stdout" | "stderr";

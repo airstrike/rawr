@@ -26,18 +26,14 @@ test("a Run before warming finishes waits for it; one with no warming runs", asy
   assert.deepEqual(await cold.take(), { run: "cold" });
 });
 
-test("a warmed run that gave nothing, failed or threw is run again at Run", async () => {
+test("a warmed run that gave nothing or threw is run again at Run", async () => {
   const given: any[] = [null, { kind: "text" }];
   const nothing = ahead(async () => given.shift());
   await nothing.warm();
-  assert.deepEqual(await nothing.take(), { kind: "text" }, "rawr-web that did not load gives nothing");
-  const answers: any[] = [{ failed: "too many runs; try again in 3 s" }, { kind: "text" }];
-  const failed = ahead(async () => answers.shift());
-  await failed.warm();
-  assert.deepEqual(await failed.take(), { kind: "text" });
+  assert.deepEqual(await nothing.take(), { kind: "text" });
   let calls = 0;
   const thrown = ahead(async () => {
-    if (++calls === 1) throw new TypeError("network");
+    if (++calls === 1) throw new Error("rawr did not load in this browser");
     return { kind: "text" };
   });
   await thrown.warm().catch(() => {});

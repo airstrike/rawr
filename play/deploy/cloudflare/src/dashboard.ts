@@ -181,7 +181,6 @@ ${cell("Images", n(day.web_ok))}
 ${cell("Code errors", n(day.web_code))}
 ${cell("Limits", n(day.web_limit))}
 ${cell("Shares", d.purge ? n(d.purge.stored) : "—", d.purge ? `${n(d.purge.purged)} purged last pass` : "")}
-${cell("Rate-limited", n(day.web_rate_limited))}
 </div></div>
 </section>
 <section>

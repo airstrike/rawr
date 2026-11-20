@@ -3,11 +3,9 @@
 // the one assets directory the Worker serves. Wrangler runs it before every
 // deploy and dev (`build` in wrangler.jsonc). A path in both fails, and so
 // does a file over Cloudflare's 25 MiB limit on an asset (limits.mjs).
-// It also writes src/runnable.gen.ts, the hashes of the sources /play/run
-// accepts: every <code data-run> block in the built pages (allowlist.mjs),
-// src/cards.gen.ts, each link card's URL with its content hash (below),
-// and src/site.gen.ts, the site's frame as its built pages have it: the
-// stylesheets every page loads, the site bar and the footer. The bot's pages
+// It also writes src/cards.gen.ts, each link card's URL with its content
+// hash (below), and src/site.gen.ts, the site's frame as its built pages
+// have it: the stylesheets every page loads, the site bar and the footer. The bot's pages
 // take it (src/look.ts): the status page the Worker draws, and /bot/invite,
 // whose marked places it fills in here.
 //   node build.mjs              build the site, then merge
@@ -17,7 +15,6 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { cpSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
-import { allowList, module, sitePages } from "./allowlist.mjs";
 import { ASSET_LIMIT, mib, oversized } from "./limits.mjs";
 
 const here = import.meta.dirname;
@@ -57,16 +54,6 @@ for (const source of sources) {
     seen.set(file, source);
   }
 }
-
-let runnable;
-try {
-  runnable = await allowList(sitePages(sources[0]));
-} catch (error) {
-  console.error(`build: ${error.message}`);
-  process.exit(1);
-}
-writeFileSync(join(here, "src/runnable.gen.ts"), module(runnable.hashes));
-console.log(`build: ${runnable.blocks.length} run blocks, ${runnable.hashes.length} distinct sources`);
 
 // The site's frame, from its built pages: the stylesheets both the landing
 // page and the playground load (global.css compiled: the tokens, the reset,

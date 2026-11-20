@@ -17,7 +17,7 @@ Every page of the site is also Markdown at its address plus `.md`: https://rawr.
 
 ## Playground
 
-- [The playground](https://rawr.airstrike.fyi/play.md): what https://rawr.airstrike.fyi/play is, how to run and share a snippet, its limits, and how a run in the browser (rawr compiled to WebAssembly) differs from a run on rawr's server.
+- [The playground](https://rawr.airstrike.fyi/play.md): what https://rawr.airstrike.fyi/play is, how to run and share a snippet, its limits, and how a run in the browser (rawr compiled to WebAssembly) differs from a run by the ?play bot.
 {{play}}
 - [Invite the ?play bot](https://rawr.airstrike.fyi/bot/invite): add the Discord bot to a server you manage; moderators turn it on per channel with `/play-channel`.
 

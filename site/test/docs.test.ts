@@ -3,8 +3,7 @@
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
-import { BROWSER_ONLY, NEXT_IMAGE, PAGES, anchors, breadcrumbs, decode, headingIds, highlightBlocks, pager, parse, runOutputs, sidebar, source, toc, type Runs } from "../src/lib/docs.ts";
-import type { Result } from "../src/lib/output.ts";
+import { PAGES, UNIVERSE_NOTE, anchors, breadcrumbs, decode, headingIds, highlightBlocks, pager, parse, runOutputs, sidebar, source, toc, type Runs } from "../src/lib/docs.ts";
 import { highlightRust, highlightToml } from "../src/lib/highlight.ts";
 
 test("Rust gets the site's syntax classes", () => {
@@ -41,7 +40,7 @@ test("TOML: tables are keywords, strings literals, numbers and booleans numbers"
   assert.equal(highlightToml('[dependencies]\ntokio = { version = "1", n = 2 } # x'), '<span class="k">[dependencies]</span>\ntokio = { version = <span class="s">"1"</span>, n = <span class="n">2</span> } <span class="c"># x</span>');
 });
 
-test("a run block keeps its plain text for /play/run, with its highlighted copy beside it", () => {
+test("a run block keeps its plain text for the Run button, with its highlighted copy beside it", () => {
   const html = highlightBlocks('<pre><code data-lang="rust" data-run="x.rs" id="src-x">let a = &amp;1;</code></pre><pre><code data-lang="rust">fn f() {}</code></pre>');
   assert.ok(html.startsWith('<pre><code data-lang="rust" data-run="x.rs" id="src-x">let a = &amp;1;</code><template data-hl><span class="k">let</span> a = &amp;<span class="n">1</span>;</template></pre>'));
   assert.ok(html.endsWith('<pre><code data-lang="rust"><span class="k">fn</span> <span class="f">f</span>() {}</code></pre>'));
@@ -55,92 +54,61 @@ const block = (id: string, code: string, where = "") =>
   `<pre><code data-lang="rust" data-run="${id}.rs" id="src-${id}"${where}>${code}</code></pre>` +
   `<div class="run"><button type="button" class="runbtn" data-source="src-${id}" data-out="out-${id}" hidden></button><b>rawr run ${id}.rs</b><span id="out-${id}" aria-live="polite"></span></div>`;
 
-/** A stand-in rawr-web that answers each source from `results`, and the server likewise. */
+/** A stand-in rawr-web that answers each source from `results`. */
 function standIn(results: Record<string, unknown>) {
   const ran: string[] = [];
   const runs: Runs = {
     web: async () => ({
       run_text(code: string) {
-        ran.push(`web ${code}`);
+        ran.push(code);
         if (!(code in results)) throw new Error("unreachable");
         return JSON.stringify(results[code]);
       },
     }),
-    server: async (code) => (ran.push(`server ${code}`), results[code] as Result),
   };
   return { runs, ran };
 }
 
-test("the build runs each snippet and writes its output as a Run shows it", async () => {
+test("the build runs each snippet in rawr-web and writes its output as a Run shows it", async () => {
   const { runs, ran } = standIn({
     'println!("a<b");': { kind: "text", status: 0, output: [{ stream: "stdout", text: "a<b\n" }] },
     "bad": { kind: "error", text: "error[E0382]: borrow of moved value: `a`\n" },
     "fails": { kind: "text", status: 1, output: [{ stream: "stdout", text: "n = 42\n" }, { stream: "stderr", text: "Error: x\n" }] },
-    "thread": { kind: "text", status: 0, output: [{ stream: "stdout", text: "4\n" }] },
     "draw": { kind: "text", status: 0, output: [], frame: { type: "image/png", data: "AAAA" } },
   });
   const html = await runOutputs(
-    block("a", "println!(&quot;a&lt;b&quot;);") + block("b", "bad") + block("c", "fails") + block("d", "thread", ' data-where="server"') + block("e", "draw") + block("f", "println!(&quot;a&lt;b&quot;);"),
+    block("a", "println!(&quot;a&lt;b&quot;);") + block("b", "bad") + block("c", "fails") + block("e", "draw") + block("f", "println!(&quot;a&lt;b&quot;);"),
     runs,
   );
   const out = (id: string) => new RegExp(`<span id="out-${id}" aria-live="polite">(.*?)</span></div>`, "s").exec(html)?.[1];
   assert.equal(out("a"), "<span>a&lt;b</span>", "the text is escaped and loses its last newline");
-  assert.equal(out("b"), '<span class="err">error[E0382]: borrow of moved value: `a`</span>', "a compile error carries the smoke test's class=\"err\"");
+  assert.equal(out("b"), '<span class="err">error[E0382]: borrow of moved value: `a`</span>', "a compile error is red");
   assert.equal(out("c"), '<span>n = 42\n</span><span class="err">Error: x</span><span class="exit">\nexit status 1</span>');
-  assert.equal(out("d"), "<span>4</span>", "a server block's output comes from the server");
   assert.equal(out("e"), '<img src="data:image/png;base64,AAAA" alt="What the program drew" style="display: block; max-width: 100%;">', "what an iced program drew");
   assert.equal(out("f"), out("a"));
-  assert.deepEqual(ran, ['web println!("a<b");', "web bad", "web fails", "server thread", "web draw"], "each source runs once, and only a server block on the server");
+  assert.deepEqual(ran, ['println!("a<b");', "bad", "fails", "draw"], "each source runs once");
 });
 
-test("a universe block's output before Run is the frame the server drew", async () => {
-  const { runs, ran } = standIn({ "counter": { kind: "text", status: 0, output: [], frame: { type: "image/png", data: "AAAA" } } });
-  const html = await runOutputs(block("a", "counter", ' data-where="universe"'), runs);
-  assert.match(html, /<span id="out-a" aria-live="polite"><img src="data:image\/png;base64,AAAA"/);
-  assert.deepEqual(ran, ["server counter"]);
-});
-
-test("a browser block isn't run at build: its output before Run says where it runs", async () => {
+test("a universe block isn't run at build: its output before Run is its picture, its note or where it runs", async () => {
   const { runs, ran } = standIn({});
-  const html = await runOutputs(block("a", "todo", ' data-where="browser"'), runs);
-  assert.match(html, new RegExp(`<span id="out-a" aria-live="polite">${BROWSER_ONLY}</span>`));
-  assert.deepEqual(ran, []);
-  const noted = await runOutputs(block("b", "loop", ' data-where="browser" data-note="Run it, then edit it."'), runs);
+  const html = await runOutputs(block("a", "todo", ' data-where="universe"'), runs);
+  assert.match(html, new RegExp(`<span id="out-a" aria-live="polite">${UNIVERSE_NOTE}</span>`));
+  const noted = await runOutputs(block("b", "loop", ' data-where="universe" data-note="Run it, then edit it."'), runs);
   assert.match(noted, /<span id="out-b" aria-live="polite"><span class="next">Run it, then edit it\.<\/span><\/span>/, "its data-note says it instead");
+  const framed = await runOutputs(block("c", "counter", ' data-where="universe" data-frame="/img/counter.png"'), runs);
+  assert.match(framed, /<span id="out-c" aria-live="polite"><img src="\/img\/counter\.png" alt="What the program drew"/, "its data-frame is the picture");
+  assert.deepEqual(ran, []);
 });
 
-test("a server block that waits for the next image says so while the live server can't compile it, then shows its run", async () => {
-  const { runs } = standIn({
-    "ratatui": { kind: "error", text: "error[E0432]: unresolved import `ratatui::buffer`\n" },
-    "iced": { kind: "text", status: 0, output: [{ stream: "stdout", text: "drawn\n" }] },
-  });
-  const next = ' data-where="server" data-image="next"';
-  const warnings: string[] = [];
-  const warn = console.warn;
-  console.warn = (message: string) => warnings.push(message);
-  let html: string;
-  try {
-    html = await runOutputs(block("a", "ratatui", next) + block("b", "iced", next), runs);
-  } finally {
-    console.warn = warn;
-  }
-  const out = (id: string) => new RegExp(`<span id="out-${id}" aria-live="polite">(.*?)</span></div>`, "s").exec(html)?.[1];
-  assert.equal(out("a"), NEXT_IMAGE, "no compile error, so the smoke test doesn't expect one");
-  assert.match(out("a")!, /class="next"/);
-  assert.equal(out("b"), "<span>drawn</span>", "once the live server runs it, its output is the run's");
-  assert.equal(warnings.length, 2);
-  assert.match(warnings[0], /a\.rs needs the server's next image/);
-  assert.match(warnings[1], /b\.rs runs on the live server/);
-  await assert.rejects(runOutputs(block("c", "iced", ' data-image="next"'), runs), /c\.rs waits for the server's next image, so it is marked data-where="server"/);
-});
-
-test("the build refuses an output written by hand, a snippet rawr-web can't run and a run a limit stopped", async () => {
+test("the build refuses an output written by hand, a snippet rawr-web can't run, a run a limit stopped and a block marked for elsewhere", async () => {
   const { runs } = standIn({ ok: { kind: "text", status: 0, output: [] }, slow: { kind: "text", status: 0, output: [], limit: true } });
   await assert.rejects(runOutputs(block("a", "ok").replace("></span></div>", ">42</span></div>"), runs), /written by hand/);
-  await assert.rejects(runOutputs(block("b", "spawn"), runs), /stopped rawr-web.*data-where="server"/);
+  await assert.rejects(runOutputs(block("b", "spawn"), runs), /stopped rawr-web.*fixed transcript/);
   await assert.rejects(runOutputs(block("c", "slow"), runs), /a limit stopped its run/);
   await assert.rejects(runOutputs('<pre><code data-lang="rust" data-run="x.rs" id="src-x">ok</code></pre>', runs), /has no Run button/);
+  await assert.rejects(runOutputs(block("d", "ok", ' data-where="server"'), runs), /d\.rs is marked data-where="server"/);
 });
+
 
 test("each heading links to itself, and a long page gets On this page after its lede", () => {
   const article = '<h1>T</h1>\n<p class="lede">L</p>\n<h2 id="a">A <code>x</code></h2><h2 id="b">B</h2><h3 id="c">C</h3><h2 id="d">D</h2>';

@@ -6,7 +6,6 @@ import {
   KEEP_DAYS,
   Limiter,
   MAX_CODE,
-  RENDER_LIMITS,
   canonical,
   day,
   firstLine,
@@ -15,9 +14,7 @@ import {
   hmac,
   makePass,
   ogTags,
-  PASS_COOKIE,
   PASS_SECONDS,
-  passCookie,
   purgeSelection,
   parseSnippet,
   renderRequest,
@@ -63,8 +60,14 @@ test("snippets are validated", () => {
   assert.equal(typeof parseSnippet({ code: "é".repeat(MAX_CODE / 2 + 1) }), "string", "the cap is in bytes");
 });
 
+/** 6 a minute and 60 an hour. */
+const LIMITS = [
+  { max: 6, ms: 60_000 },
+  { max: 60, ms: 3_600_000 },
+];
+
 test("the limiter allows 6 a minute and 60 an hour per key", () => {
-  const limiter = new Limiter(RENDER_LIMITS);
+  const limiter = new Limiter(LIMITS);
   let now = 1_000_000;
   for (let i = 0; i < 6; i++) assert.equal(limiter.take("ip", now + i), 0);
   const wait = limiter.take("ip", now + 10);
@@ -73,7 +76,7 @@ test("the limiter allows 6 a minute and 60 an hour per key", () => {
   // A minute later the minute window has room again.
   assert.equal(limiter.take("ip", now + 60_001), 0);
   // Hour: spread 60 runs over the hour, then the 61st waits.
-  const hourly = new Limiter(RENDER_LIMITS);
+  const hourly = new Limiter(LIMITS);
   now = 5_000_000;
   for (let i = 0; i < 60; i++) assert.equal(hourly.take("ip", now + i * 59_000), 0, `run ${i}`);
   assert.ok(hourly.take("ip", now + 60 * 59_000) > 0);
@@ -105,7 +108,7 @@ test("a pass verifies for 30 days under its key only", async () => {
   assert.match(pass, /^\d+\.[0-9a-f]{64}$/);
   assert.ok(await checkPass("key", pass, now));
   assert.ok(await checkPass("key", pass, now + (PASS_SECONDS - 1) * 1000));
-  assert.ok(!(await checkPass("key", pass, now + PASS_SECONDS * 1000)), "an expired pass falls back to Turnstile");
+  assert.ok(!(await checkPass("key", pass, now + PASS_SECONDS * 1000)), "an expired pass is refused");
   assert.ok(!(await checkPass("other", pass, now)), "another key's pass is refused");
   const [expires, mac] = pass.split(".");
   assert.ok(!(await checkPass("key", `${Number(expires) + 60}.${mac}`, now)), "a moved expiry is refused");
@@ -116,15 +119,10 @@ test("a pass verifies for 30 days under its key only", async () => {
   }
 });
 
-test("the pass cookie is HttpOnly, Secure and SameSite=Lax for 30 days", () => {
-  const header = passCookie("123.abc");
-  assert.ok(header.startsWith(`${PASS_COOKIE}=123.abc;`));
-  for (const part of ["Max-Age=2592000", "Path=/play", "HttpOnly", "Secure", "SameSite=Lax"]) {
-    assert.ok(header.split("; ").includes(part), part);
-  }
-  assert.equal(cookie(`a=1; ${PASS_COOKIE}=123.abc; b=2`, PASS_COOKIE), "123.abc");
-  assert.equal(cookie(`x${PASS_COOKIE}=1`, PASS_COOKIE), null);
-  assert.equal(cookie(null, PASS_COOKIE), null);
+test("a cookie is read by its exact name", () => {
+  assert.equal(cookie("a=1; rawr_todo=123.abc; b=2", "rawr_todo"), "123.abc");
+  assert.equal(cookie("xrawr_todo=1", "rawr_todo"), null);
+  assert.equal(cookie(null, "rawr_todo"), null);
 });
 
 /** The site's build, which build.mjs merges into the Worker's assets. */
@@ -229,79 +227,43 @@ test("days and the purge selection", () => {
   assert.deepEqual(stamp, ["unstamped"], "untimestamped shares are stamped, not removed");
 });
 
-test("the landing page's runnable sources are its files, exactly", async () => {
+/** Every .html file under `dir`, as a map from its relative path to its text. */
+async function sitePages(dir: string): Promise<Map<string, string>> {
+  const { readdirSync, readFileSync } = await import("node:fs");
+  const { join, relative } = await import("node:path");
+  const pages = new Map<string, string>();
+  for (const entry of readdirSync(dir, { recursive: true, withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith(".html")) continue;
+    const path = join(entry.parentPath, entry.name);
+    pages.set(relative(dir, path), readFileSync(path, "utf8"));
+  }
+  return pages;
+}
+
+test("the landing page's rawr-web snippets are its files, exactly", async () => {
   const { readFileSync } = await import("node:fs");
-  const { decodeHtml, runBlocks, runnable, sha256 } = await import("../src/play.ts");
+  const { decode } = await import("../../../../site/src/lib/docs.ts");
   const root = new URL("../../../../", import.meta.url);
   const html = readFileSync(new URL("site/dist/index.html", root), "utf8");
-  const blocks = runBlocks(html);
-  const sources = runnable(html);
+  // A universe block (data-where="universe") is iced's counter or a program
+  // of its own, so only the blocks rawr-web runs are checked here.
+  const blocks = [...html.matchAll(/<code\b([^>]*\bdata-run="([^"]*)"[^>]*)>([\s\S]*?)<\/code>/g)]
+    .filter(([, attributes]) => !/\bdata-where="universe"/.test(attributes))
+    .map(([, , name, text]) => ({ name, code: decode(text) }));
   assert.ok(blocks.length > 0, "the landing page has a run block");
-  assert.equal(sources.length, blocks.length);
-  // What the page shows (and its Run button sends) is the examples/scripts
-  // file its block names, marked as a program. A library's snippet is one of
-  // the server universe's programs instead (play/universe), so the server
-  // runs it as that program: the iced tab is iced's counter, which
-  // examples.txt names. The ratatui tab runs in the browser, so it isn't here.
-  const universe = (path: string) => readFileSync(new URL(`play/universe/${path}`, root), "utf8");
-  const icedExamples = universe("examples.txt").replace(/#.*/g, "").split(/\s+/);
+  // What the page shows (and its Run button runs) is the examples/scripts
+  // file its block names, marked as a program.
   for (const [i, block] of blocks.entries()) {
     assert.ok(block.name, `landing block ${i} names its file`);
-    if (block.name === "main.rs") {
-      assert.ok(icedExamples.includes("counter"), "the universe holds iced's counter");
-      assert.match(sources[i], /^\/\/ rawr\n[\s\S]*iced::run\(Counter::update, Counter::view\)/);
-      continue;
-    }
-    const path = block.name === "ui.rs" ? `play/universe/programs/${block.name}` : `examples/scripts/${block.name}`;
-    const file = readFileSync(new URL(path, root), "utf8").trimEnd();
-    assert.equal(sources[i], "// rawr\n" + file, block.name);
+    const file = readFileSync(new URL(`examples/scripts/${block.name}`, root), "utf8").trimEnd();
+    assert.equal(block.code, "// rawr\n" + file, block.name);
   }
-  assert.equal(decodeHtml("&amp;self &lt;T&gt; &rsquo; &#39; &#x41;"), "&self <T> ’ ' A");
-  // The allow-list is the set of their hashes; anything else is refused.
-  const allowed = new Set(await Promise.all(sources.map(sha256)));
-  assert.ok(allowed.has(await sha256(sources[0])));
-  assert.ok(!allowed.has(await sha256(sources[0] + " ")));
-  assert.equal(await sha256("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
-});
-
-// Which blocks each page holds is the docs' to change, so this checks what
-// holds for any set of them rather than listing today's.
-test("the allow-list covers every page's run blocks, the docs included", async () => {
-  const { allowList, sitePages } = await import("../allowlist.mjs");
-  const { runSnippet, sha256 } = await import("../src/play.ts");
-  const pages = sitePages(new URL("../../../../site/dist", import.meta.url).pathname);
-  const { hashes, blocks } = await allowList(pages);
-  const all = blocks as { page: string; name: string; code: string; hash: string }[];
-  const at = (page: string) => all.filter((block) => block.page === page).map((block) => block.name);
-  assert.ok(at("index.html").length > 0, "the landing page has run blocks");
-  assert.ok(all.some((block) => block.page.startsWith("docs/reference/")), "the reference has run blocks");
-  assert.deepEqual(at("docs/apps.html"), [], "an app needs a Cargo project: ?play runs plain programs only");
-  assert.deepEqual(at("docs/embedding.html"), [], "host code needs the rawr crate");
-  assert.deepEqual(at("docs/imports.html"), [], "a dependency needs a Cargo project");
-  // Every name is one source wherever it appears, so the docs' copy of a
-  // landing block is the same entry.
-  const byName = new Map<string, string>();
-  for (const block of all.filter((block) => block.name !== "")) {
-    const first = byName.get(block.name);
-    if (first === undefined) byName.set(block.name, block.hash);
-    else assert.equal(block.hash, first, `${block.page}: ${block.name}`);
-  }
-  // The allow-list is exactly the blocks' distinct hashes, and each block's
-  // entry is the hash of what its Run button sends.
-  assert.deepEqual(hashes, [...new Set(all.map((block) => block.hash))].sort());
-  for (const block of all) {
-    const sent = runSnippet(block);
-    assert.ok(typeof sent !== "string", `${block.page}: ${block.name}: ${sent}`);
-    assert.ok(hashes.includes(await sha256(canonical(sent))), `${block.page}: ${block.name}`);
-  }
-  assert.ok(!hashes.includes(await sha256(canonical(snippet({ code: "println!(\"hi\");" })))));
 });
 
 test("every link between the site's pages lands on a page and an anchor", async () => {
   const { existsSync, readFileSync } = await import("node:fs");
-  const { sitePages } = await import("../allowlist.mjs");
   const root = new URL("../../../../site/dist/", import.meta.url).pathname;
-  const pages: Map<string, string> = sitePages(root);
+  const pages = await sitePages(root);
   // The assets binding serves /a from a.html or a/index.html, and other files as they are.
   const file = (path: string) =>
     [path.slice(1), `${path.slice(1)}.html`, `${path.slice(1)}/index.html`.replace(/^\//, "")]
@@ -328,34 +290,17 @@ test("every link between the site's pages lands on a page and an anchor", async 
   assert.deepEqual(broken, []);
 });
 
-test("the allow-list build fails on empty, marked-up or disagreeing blocks", async () => {
-  const { allowList } = await import("../allowlist.mjs");
-  const fails = (pages: Record<string, string>, message: RegExp) =>
-    assert.rejects(allowList(new Map(Object.entries(pages))), message);
-  await fails({ "a.html": "<p>no snippets</p>" }, /no <code data-run> blocks/);
-  await fails({ "a.html": '<code data-run="x.rs">  \n</code>' }, /a\.html \(data-run="x\.rs"\) is empty/);
-  await fails({ "a.html": '<code data-run><span class="k">fn</span> main() {}</code>' }, /holds markup/);
-  await fails(
-    { "a.html": '<code data-run="x.rs">fn main() {}</code>', "b.html": '<code data-run="x.rs">fn main() { }</code>' },
-    /b\.html \(data-run="x\.rs"\) differs from the block of the same name in a\.html/,
-  );
-  const ok = await allowList(new Map([["a.html", '<code data-run="x.rs">1 &lt; 2</code>'], ["b.html", '<code data-run="x.rs">1 &lt; 2</code>']]));
-  assert.equal(ok.hashes.length, 1);
-  assert.equal(ok.blocks[0].code, "1 < 2");
-});
-
 /**
  * Run the site's run.ts over a stand-in DOM that holds one run block, click
- * its Run button, and return the request it sends. With `edit`, the code is
- * edited first, so the request goes to /play/render. With `web`, the page
- * has rawr-web, and a run in it comes back as the url "browser"; `web` is
- * "fails" for a rawr-web that doesn't load. `where` is the block's data-where.
+ * its Run button, and return the sources rawr-web ran and what the strip
+ * shows. With `edit`, the code is edited first. `web` is "fails" for a
+ * rawr-web that doesn't load. `where` is the block's data-where.
  */
 async function runJs(
   block: { name: string; code: string },
   edit = "",
-  { web, where }: { web?: "loads" | "fails"; where?: string } = {},
-): Promise<{ url: string; body: any }> {
+  { web = "loads", where }: { web?: "loads" | "fails"; where?: string } = {},
+): Promise<{ ran: string[]; shown: string }> {
   const { setup } = await import("../../../../site/src/scripts/run.ts");
   const element = (props: Record<string, unknown> = {}): any => {
     const listeners: Record<string, ((event: unknown) => void)[]> = {};
@@ -365,6 +310,7 @@ async function runJs(
       classList: { add() {}, remove() {} },
       childNodes: [],
       lastChild: null,
+      innerHTML: "",
       setAttribute: (key: string, value: string) => (attributes[key] = value),
       getAttribute: (key: string) => attributes[key] ?? null,
       removeAttribute: (key: string) => delete attributes[key],
@@ -382,8 +328,9 @@ async function runJs(
       ...props,
     };
   };
+  let shown = "";
   const strip = element();
-  const out = element({ closest: () => strip });
+  const out = element({ closest: () => strip, replaceChildren: (child?: { innerHTML: string }) => (shown = child?.innerHTML ?? "") });
   const source = element({ textContent: block.code, innerHTML: block.code, innerText: block.code });
   source.dataset = where ? { run: block.name, where } : { run: block.name };
   const button = element();
@@ -397,56 +344,38 @@ async function runJs(
     getElementById: (id: string) => ({ src: source, out })[id] ?? null,
     execCommand() {},
   };
-  let sent!: (request: { url: string; body: any }) => void;
-  const request = new Promise<{ url: string; body: any }>((resolve) => (sent = resolve));
-  const fetch = async (url: string, init?: { body?: string }) => {
-    if (url === "/play/gate") return Response.json({ sitekey: null, pass: false });
-    sent({ url, body: JSON.parse(init?.body ?? "null") });
-    return Response.json({ kind: "text", status: 0, output: [] });
-  };
-  const loader = web && (async () => {
+  const ran: string[] = [];
+  const loader = async () => {
     if (web === "fails") throw new Error("no module");
     return {
       run_text: (code: string) => {
-        sent({ url: "browser", body: { code } });
-        return JSON.stringify({ kind: "text", status: 0, output: [] });
+        ran.push(code);
+        return JSON.stringify({ kind: "text", status: 0, output: [{ stream: "stdout", text: "ran\n" }] });
       },
     };
-  });
-  setup({ document, window: {}, fetch, web: loader } as any);
+  };
+  setup({ document, window: {}, web: loader } as any);
   if (edit) {
     source.innerText = block.code + edit;
     source.fire("input");
   }
   button.fire("click");
-  return request;
+  // The run settles in microtasks, all of which run before this timer.
+  await new Promise((done) => setTimeout(done, 0));
+  return { ran, shown };
 }
 
-test("run.ts sends a docs block's code to /play/run, and an edit to /play/render", async () => {
-  const { readFileSync } = await import("node:fs");
-  const { allowList, sitePages } = await import("../allowlist.mjs");
-  const { runBlocks, sha256 } = await import("../src/play.ts");
-  const root = new URL("../../../../site/dist/", import.meta.url);
-  const html = readFileSync(new URL("docs/play/index.html", root), "utf8");
-  const sum = runBlocks(html).find((block) => block.name === "")!;
-  // A block sends its code alone, and that code is on the allow-list.
-  const run = await runJs(sum);
-  assert.equal(run.url, "/play/run");
-  assert.deepEqual(run.body, { code: sum.code });
-  const { hashes } = await allowList(sitePages(root.pathname));
-  assert.ok(hashes.includes(await sha256(canonical(parseSnippet(run.body) as Snippet))));
-  // An edit is the visitor's own code: it goes to /play/render.
-  const edited = await runJs(sum, "\n// edited");
-  assert.equal(edited.url, "/play/render");
-});
-
-test("run.ts runs a block in the browser when rawr-web loads, and on the server when it doesn't or the block says so", async () => {
+test("run.ts runs a block and an edit of it in rawr-web, and nowhere else", async () => {
   const block = { name: "x.rs", code: "println!(\"x\");" };
-  assert.deepEqual(await runJs(block, "", { web: "loads" }), { url: "browser", body: { code: block.code } });
-  // An edit runs in the browser too, with no browser check.
-  assert.equal((await runJs(block, "\n// edited", { web: "loads" })).url, "browser");
-  assert.equal((await runJs(block, "", { web: "fails" })).url, "/play/run");
-  assert.equal((await runJs(block, "", { web: "loads", where: "server" })).url, "/play/run");
+  assert.deepEqual(await runJs(block), { ran: [block.code], shown: "<span>ran</span>" });
+  assert.deepEqual((await runJs(block, "\n// edited")).ran, [block.code + "\n// edited"]);
+  const failed = await runJs(block, "", { web: "fails" });
+  assert.deepEqual(failed.ran, []);
+  assert.match(failed.shown, /class="err">rawr did not load in this browser: no module/);
+  // A universe block on a page without the universe says so.
+  const universe = await runJs(block, "", { where: "universe" });
+  assert.deepEqual(universe.ran, []);
+  assert.match(universe.shown, /runs on the browser's prebuilt runner, which this page doesn't load/);
 });
 
 test("text results are read back, and give a preview line", async () => {
@@ -462,14 +391,6 @@ test("text results are read back, and give a preview line", async () => {
   assert.equal(noted?.note, "messages are ignored for programs without iced");
   assert.equal(parseTextResult("\x89PNG"), null);
   assert.equal(parseTextResult('{"kind":"image"}'), null);
-});
-
-test("landing runs are limited lightly per IP", async () => {
-  const { LANDING_LIMITS } = await import("../src/play.ts");
-  const limiter = new Limiter(LANDING_LIMITS);
-  for (let i = 0; i < 20; i++) assert.equal(limiter.take("ip", 1_000 + i), 0);
-  assert.ok(limiter.take("ip", 2_000) > 0);
-  assert.equal(limiter.take("other", 2_000), 0);
 });
 
 test("a render request posts the snippet to the bot", async () => {

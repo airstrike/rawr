@@ -21,27 +21,10 @@
 //
 // /play is a web playground: the Worker serves the site's static page with
 // each request's data written in (playpage.ts) and keeps shares in this
-// Durable Object (content-addressed). The page runs every snippet in the
-// browser. The Worker runs a share once, on the bot, for its link preview.
-//
-// The docs' Run buttons (site/src/scripts/run.ts) still send a few blocks
-// to the bot through the Worker. It limits each IP (by HMAC, never in
-// clear), checks Turnstile, and forwards renders to the bot's HTTP port,
-// which only this Durable Object can reach. A render is a plain program's
-// output, or an iced or async snippet's message (JSON). The Turnstile widget stays
-// invisible unless Cloudflare needs an interaction. After one successful
-// Siteverify the Worker sets a 30-day pass cookie (HttpOnly, Secure,
-// SameSite=Lax), signed with a key derived from TURNSTILE_SECRET. While
-// the pass verifies, /play/render skips Turnstile.
-//
-// POST /play/run runs the site's own snippets without Turnstile: only
-// snippets whose SHA-256 is one of the `<code data-run>` texts in the site's
-// pages, in canonical form.
-// build.mjs collects those hashes into src/runnable.gen.ts, so the
-// list is the deployed pages'. Results are cached per image version. A
-// snippet edited on the site is the visitor's own code: run.ts sends it to
-// POST /play/render with the playground's Turnstile, pass and limits, and
-// learns the site key and whether it holds a pass from GET /play/gate.
+// Durable Object (content-addressed), with a per-IP limit (by HMAC, never in
+// clear). The page and the docs' Run buttons run every snippet in the
+// browser. The Worker runs a share once, on the bot's HTTP port, which only
+// this Durable Object can reach, for the share's link preview.
 
 import { Container, ContainerProxy, getContainer, type OutboundHandlerContext } from "@cloudflare/containers";
 import { CARDS } from "./cards.gen.ts";
@@ -51,7 +34,6 @@ import { secured } from "./https.ts";
 import {
   ID_PATTERN,
   KEEP_DAYS,
-  LANDING_LIMITS,
   Limiter,
   MAX_PREVIEW,
   MAX_SHARE,
@@ -61,29 +43,19 @@ import {
   firstOutputLine,
   parseTextResult,
   purgeSelection,
-  RENDER_LIMITS,
   SHARE_LIMITS,
   canonical,
-  sha256,
   hmac,
-  checkPass,
-  cookie,
   renderRequest,
-  makePass,
-  PASS_COOKIE,
-  passCookie,
   parseSnippet,
-  same,
   shareId,
   webAsset,
   type Og,
   type Snippet,
 } from "./play.ts";
 import { inject } from "./playpage.ts";
-import { RUNNABLE } from "./runnable.gen.ts";
 import { UNLOCK_LIMITS, UNLOCK_TOTAL_LIMITS, todoRoute } from "./todo.ts";
 import {
-  addWebRateLimited,
   emptyStats,
   merge,
   parseEvent,
@@ -152,19 +124,9 @@ interface Env {
   CF_VERSION_METADATA: WorkerVersionMetadata;
   /**
    * Secret: the key the bot makes server tokens with. The Worker only
-   * derives keys from it (HMAC) for hashing IPs and the admin header.
+   * derives a key from it (HMAC) for hashing IPs.
    */
   PLAY_LOG_KEY?: string;
-  /**
-   * Secret: the release's smoke test sends it as `x-play-admin`, so the
-   * site's snippets run without the landing page's per-IP limit. The site's
-   * build sends it to /play/render, which then skips Turnstile, for the
-   * output of each snippet that runs on the server.
-   */
-  PLAY_SMOKE_TOKEN?: string;
-  /** Turnstile: the public site key (a var) and the secret. */
-  TURNSTILE_SITEKEY?: string;
-  TURNSTILE_SECRET?: string;
   /** Secret: the password of /todo's private tabs (todo.ts). */
   TODO_PASSWORD?: string;
   /** KV: the private tabs' rendered documents, uploaded by plan/private.mjs. */
@@ -175,9 +137,7 @@ export class PlayBot extends Container<Env> {
   sleepAfter = "1h";
   // The playground's render port (PLAY_HTTP_PORT); a start waits for it.
   defaultPort = HTTP_PORT;
-  private renders = new Limiter(RENDER_LIMITS);
   private shares = new Limiter(SHARE_LIMITS);
-  private landing = new Limiter(LANDING_LIMITS);
   private unlocks = new Limiter(UNLOCK_LIMITS);
   private unlocksTotal = new Limiter(UNLOCK_TOTAL_LIMITS, 1);
   /** Renders in flight by share id, so concurrent first requests render once. */
@@ -236,19 +196,11 @@ export class PlayBot extends Container<Env> {
   }
 
   /** Count a playground request from `ip` (a hash); seconds to wait, or 0. */
-  async allow(kind: "render" | "share" | "landing" | "unlock", ip: string): Promise<number> {
-    if (kind === "unlock") {
-      // /todo's password: per IP, then everyone's tries together.
-      const now = Date.now();
-      return this.unlocks.take(ip, now) || this.unlocksTotal.take("all", now);
-    }
-    const limiter = kind === "render" ? this.renders : kind === "share" ? this.shares : this.landing;
-    const wait = limiter.take(ip, Date.now());
-    if (wait > 0 && kind === "render") {
-      const stats = (await this.ctx.storage.get<Stats>(STATS_KEY)) ?? emptyStats();
-      await this.ctx.storage.put(STATS_KEY, addWebRateLimited(stats, Date.now()));
-    }
-    return wait;
+  async allow(kind: "share" | "unlock", ip: string): Promise<number> {
+    const now = Date.now();
+    if (kind === "share") return this.shares.take(ip, now);
+    // /todo's password: per IP, then everyone's tries together.
+    return this.unlocks.take(ip, now) || this.unlocksTotal.take("all", now);
   }
 
   /** Store a share under its id (the same snippet always lands on the same key). */
@@ -612,57 +564,6 @@ async function ipHash(request: Request, env: Env): Promise<string> {
   return (await hmac(key, ip)).slice(0, 32);
 }
 
-/** A caller holding the log key (header `x-play-admin`). */
-async function admin(request: Request, env: Env): Promise<boolean> {
-  const header = request.headers.get("x-play-admin");
-  if (!header || !env.PLAY_LOG_KEY) return false;
-  return same(header, await hmac(env.PLAY_LOG_KEY, "rawr-play admin"));
-}
-
-/**
- * The release's smoke test or the site's build (`x-play-admin` is
- * PLAY_SMOKE_TOKEN), or an admin. /play/render skips Turnstile for them, and
- * /play/run skips the landing page's limit. /play's limits still count.
- */
-async function trusted(request: Request, env: Env): Promise<boolean> {
-  const header = request.headers.get("x-play-admin");
-  if (header && env.PLAY_SMOKE_TOKEN && same(header, env.PLAY_SMOKE_TOKEN)) return true;
-  return admin(request, env);
-}
-
-async function human(token: unknown, request: Request, env: Env): Promise<boolean> {
-  if (!env.TURNSTILE_SECRET) return true;
-  if (typeof token !== "string" || token === "" || token.length > 2048) return false;
-  const form = new FormData();
-  form.append("secret", env.TURNSTILE_SECRET);
-  form.append("response", token);
-  const ip = request.headers.get("cf-connecting-ip");
-  if (ip) form.append("remoteip", ip);
-  const result = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", { method: "POST", body: form });
-  const outcome = (await result.json()) as { success?: boolean };
-  return outcome.success === true;
-}
-
-/** The key passes are signed with, derived from the Turnstile secret. */
-const passKey = (secret: string) => hmac(secret, "rawr-play pass");
-
-/** True when the request carries an unexpired pass signed by this Worker. */
-async function hasPass(request: Request, env: Env): Promise<boolean> {
-  if (!env.TURNSTILE_SECRET) return false;
-  const value = cookie(request.headers.get("cookie"), PASS_COOKIE);
-  return checkPass(await passKey(env.TURNSTILE_SECRET), value, Date.now());
-}
-
-/** The response with a new pass cookie, when there is one to set. */
-function withPass(response: Response, pass: string | null): Response {
-  if (pass) {
-    response.headers.append("set-cookie", passCookie(pass));
-    // The cookie is HttpOnly, so the page learns of it from this header.
-    response.headers.set("x-play-pass", "set");
-  }
-  return response;
-}
-
 async function readJson(request: Request, max: number): Promise<unknown> {
   const text = await request.text();
   if (text.length > max) return null;
@@ -673,92 +574,8 @@ async function readJson(request: Request, max: number): Promise<unknown> {
   }
 }
 
-/** The SHA-256 of each snippet the site's Run buttons send. */
-const SITE_SOURCES: ReadonlySet<string> = new Set(RUNNABLE);
-
-/**
- * POST /play/run: one of the site's own snippets, by its exact source,
- * without Turnstile. Any other source is refused. Each result
- * is cached for the deployed image. Uncached runs are limited per IP, except
- * the release's smoke test's and an admin's.
- */
-async function landingRun(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-  const snippet = parseSnippet(await readJson(request, 48 * 1024));
-  if (typeof snippet === "string") return plain(snippet, 400);
-  const hash = await sha256(canonical(snippet));
-  if (!SITE_SOURCES.has(hash)) {
-    return plain("only the site's own snippets run here; use /play for your own code", 403);
-  }
-  const cache = caches.default;
-  const key = new Request(`${SITE}/play/run/${hash}/${env.PLAY_VERSION}`);
-  const hit = await cache.match(key);
-  if (hit) {
-    const response = new Response(hit.body, hit);
-    response.headers.set("x-run", "cache");
-    return response;
-  }
-  const bot = getContainer(env.PLAY_BOT);
-  const wait = (await trusted(request, env)) ? 0 : await bot.allow("landing", await ipHash(request, env));
-  if (wait > 0) return plain(`too many runs; try again in ${wait} s`, 429, { "retry-after": String(wait) });
-  let response: Response;
-  try {
-    response = await bot.fetch(renderRequest(canonical(snippet)));
-  } catch (error) {
-    return plain(`the runner is not reachable right now (${String(error).slice(0, 200)})`, 503);
-  }
-  const bytes = await response.arrayBuffer();
-  const type = response.headers.get("content-type") ?? "text/plain";
-  if (!response.ok) return new Response(bytes, { status: response.status, headers: { "content-type": type, "cache-control": "no-store" } });
-  // A run a limit stopped says how busy the bot was, not what the source
-  // does: it is answered, never cached.
-  if (parseTextResult(new TextDecoder().decode(bytes))?.limit) return new Response(bytes, { headers: { "content-type": type, "cache-control": "no-store", "x-run": "ran" } });
-  const result = new Response(bytes, { headers: { "content-type": type, "cache-control": "public, max-age=86400" } });
-  ctx.waitUntil(cache.put(key, result.clone()));
-  result.headers.set("x-run", "ran");
-  return result;
-}
-
 async function play(request: Request, env: Env, ctx: ExecutionContext, path: string): Promise<Response> {
   const bot = getContainer(env.PLAY_BOT);
-  if (path === "/play/render" && request.method === "POST") {
-    const body = (await readJson(request, 48 * 1024)) as Record<string, unknown> | null;
-    const snippet = parseSnippet(body);
-    if (typeof snippet === "string") return plain(snippet, 400);
-    // A pass from an earlier Siteverify skips Turnstile for 30 days. A
-    // missing, forged or expired one falls back to Turnstile, and a
-    // successful Siteverify sets a new one.
-    let pass: string | null = null;
-    if (!(await hasPass(request, env)) && !(await trusted(request, env))) {
-      if (!(await human(body?.turnstile, request, env))) {
-        return plain("the browser check did not pass; reload the page and try again", 403);
-      }
-      if (env.TURNSTILE_SECRET) pass = await makePass(await passKey(env.TURNSTILE_SECRET), Date.now());
-    }
-    const wait = await bot.allow("render", await ipHash(request, env));
-    if (wait > 0) return withPass(plain(`too many runs; try again in ${wait} s`, 429, { "retry-after": String(wait) }), pass);
-    try {
-      const response = await bot.fetch(renderRequest(canonical(snippet)));
-      const headers: Record<string, string> = { "content-type": response.headers.get("content-type") ?? "text/plain", "cache-control": "no-store" };
-      return withPass(
-        new Response(response.body, { status: response.status, headers }),
-        pass,
-      );
-    } catch (error) {
-      return withPass(plain(`the renderer is not reachable right now (${String(error).slice(0, 200)})`, 503), pass);
-    }
-  }
-  if (path === "/play/run" && request.method === "POST") {
-    return landingRun(request, env, ctx);
-  }
-  if (path === "/play/gate" && request.method === "GET") {
-    // What the site's run.ts needs to send an edited snippet to
-    // /play/render: the Turnstile site key, and whether this browser holds a
-    // pass (the cookie is HttpOnly, so the page can't read it).
-    return Response.json(
-      { sitekey: env.TURNSTILE_SITEKEY ?? null, pass: await hasPass(request, env) },
-      { headers: { "cache-control": "no-store" } },
-    );
-  }
   if (path === "/play/share" && request.method === "POST") {
     const snippet = parseSnippet(await readJson(request, 2 * MAX_SHARE));
     if (typeof snippet === "string") return plain(snippet, 400);

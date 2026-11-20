@@ -2,8 +2,7 @@
 # calls when it runs alone: deploy the Worker and site, then check them.
 # deploy.sh builds the site, runs the Worker's and the site's tests, deploys
 # (`wrangler deploy`), waits for Cloudflare and then the bot to report the
-# pinned image, and runs every snippet on the site's pages through /play/run,
-# so the docs are checked against the server that has just gone live.
+# pinned image.
 #
 # What it deploys:
 # - the image: `image` when a caller built one (the bot stage), else the one
@@ -22,7 +21,7 @@
 #   image (src/index.ts compares them);
 # - by hand (Run workflow), the same;
 # - workflow_call, from release.yml, playground.yml and bot.yml.
-# It needs the CLOUDFLARE_API_TOKEN and PLAY_SMOKE_TOKEN secrets and the
+# It needs the CLOUDFLARE_API_TOKEN secret and the
 # CLOUDFLARE_ACCOUNT_ID variable ("Release from GitHub Actions" in
 # play/README.md). The job's copy of wrangler.jsonc is rewritten, never pushed.
 name: Deploy the site
@@ -131,8 +130,6 @@ jobs:
         run: ./live-web.sh
 
       - name: Test, deploy and check the site
-        env:
-          PLAY_SMOKE_TOKEN: ${{ secrets.PLAY_SMOKE_TOKEN }}
         run: ./deploy.sh
 
       - name: Show the logs

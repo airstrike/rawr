@@ -144,9 +144,9 @@ export function decode(html: string): string {
 
 /**
  * Highlights each <code data-lang> block. A runnable block (data-run) keeps
- * its plain text, which is what /play/run's allow-list and the Run button
- * read; its highlighted copy follows it in a <template>, which the page swaps
- * in before the first paint. A block that already holds markup is left as is.
+ * its plain text, which is what the Run button reads; its highlighted copy
+ * follows it in a <template>, which the page swaps in before the first
+ * paint. A block that already holds markup is left as is.
  */
 export function highlightBlocks(html: string): string {
   return html.replace(/<code([^>]*\bdata-lang="([a-z]+)"[^>]*)>([^<]*)<\/code>/g, (whole, attributes: string, lang: string, text: string) => {
@@ -165,89 +165,64 @@ export interface Web {
 export interface Runs {
   /** A fresh rawr-web, so no run sees another's state. */
   web(): Promise<Web>;
-  /** A `data-where="server"` or `"universe"` block's run on rawr's server. */
-  server(code: string): Promise<Result>;
 }
 
 /** Each source's run, once per Runs: a snippet on two pages, or a page built twice, runs once. */
 const ran = new WeakMap<Runs, Map<string, Promise<Result>>>();
 
-function run(runs: Runs, block: { name: string; code: string; server: boolean }): Promise<Result> {
+function run(runs: Runs, block: { name: string; code: string }): Promise<Result> {
   let results = ran.get(runs);
   if (!results) ran.set(runs, (results = new Map()));
-  const key = `${block.server ? "server" : "web"}:${block.code}`;
-  let result = results.get(key);
+  let result = results.get(block.code);
   if (result) return result;
-  result = block.server
-    ? runs.server(block.code)
-    : runs.web().then((web) => {
-        try {
-          return JSON.parse(web.run_text(block.code)) as Result;
-        } catch (error) {
-          throw new Error(`${block.name} stopped rawr-web (${error}). A snippet that needs rawr's server is marked data-where="server".`);
-        }
-      });
-  results.set(key, result);
+  result = runs.web().then((web) => {
+    try {
+      return JSON.parse(web.run_text(block.code)) as Result;
+    } catch (error) {
+      throw new Error(`${block.name} stopped rawr-web (${error}). A snippet the browser can't run is a fixed transcript with no Run button.`);
+    }
+  });
+  results.set(block.code, result);
   return result;
 }
 
-/** The output of a block that waits for the server's next image. */
-export const NEXT_IMAGE = '<span class="next">This runs once rawr&rsquo;s server has its next image.</span>';
-
-/** The output before Run of a block that runs only in the browser's universe. */
-export const BROWSER_ONLY = '<span class="next">This program runs in your browser. Run it, then click it or press Tab and type.</span>';
+/** The output before Run of a block that runs in the browser's universe. */
+export const UNIVERSE_NOTE = '<span class="next">This program runs in your browser. Run it, then click it or press Tab and type.</span>';
 
 /**
  * Fills each run strip's output with what its snippet prints. A snippet runs
- * in rawr-web, or on the server when it is marked `data-where="server"`, as
- * its Run button runs it. A block marked `data-where="universe"` runs on the
- * server too: its Run runs it in the browser's universe, interactively, and
- * its output before Run is the frame the server drew. The source leaves each output empty: an output
- * written by hand, a button with no snippet, a run that rawr-web can't finish
- * and a run a limit stopped all fail the build.
+ * in rawr-web, as its Run button runs it. The source leaves each output
+ * empty: an output written by hand, a button with no snippet, a run that
+ * rawr-web can't finish and a run a limit stopped all fail the build.
  *
- * A server block marked `data-image="next"` needs a crate that only the
- * server's next image has; the Bot workflow builds that image on the push that changes the universe. While
- * the live server answers it with a compile error, its output says so
- * (`class="next"`, which the deploy's smoke test reads) and the build warns
- * instead of failing. Once the live server runs it, its output is the run's.
- *
- * A block marked `data-where="browser"` draws into the page, through crates
- * only the browser's universe has, or loops on in a frame of its own, so
- * the build doesn't run it: its output before Run says where it runs
- * (BROWSER_ONLY), or is its `data-note`, HTML as written.
+ * A block marked `data-where="universe"` uses crates that only the browser's
+ * universe has, so the build doesn't run it. Its output before Run is the
+ * picture its `data-frame` names, else its `data-note`, HTML as written,
+ * else UNIVERSE_NOTE.
  */
 export async function runOutputs(html: string, runs: Runs): Promise<string> {
-  const blocks = new Map<string, { name: string; code: string; server: boolean; next: boolean; browser: boolean; note?: string }>();
+  const blocks = new Map<string, { name: string; code: string; universe: boolean; frame?: string; note?: string }>();
   for (const [, attributes, text] of html.matchAll(/<code([^>]*\bdata-run\b[^>]*)>([^<]*)<\/code>/g)) {
     const id = /\bid="([^"]+)"/.exec(attributes)?.[1];
     const name = /\bdata-run="([^"]*)"/.exec(attributes)?.[1] || "this snippet";
     if (!id) throw new Error(`the run block ${name} has no id`);
-    // A universe block runs in the browser's universe at Run; its output
-    // before Run is the frame the server's universe drew.
-    const server = /\bdata-where="(server|universe)"/.test(attributes);
-    const next = /\bdata-image="next"/.test(attributes);
-    if (next && !server) throw new Error(`${name} waits for the server's next image, so it is marked data-where="server" or "universe"`);
-    const browser = /\bdata-where="browser"/.test(attributes);
+    const where = /\bdata-where="([^"]*)"/.exec(attributes)?.[1];
+    if (where !== undefined && where !== "universe") throw new Error(`${name} is marked data-where="${where}"; a block runs in rawr-web, or in the browser's universe with data-where="universe"`);
+    const frame = /\bdata-frame="([^"]*)"/.exec(attributes)?.[1];
     const note = /\bdata-note="([^"]*)"/.exec(attributes)?.[1];
-    blocks.set(id, { name, code: decode(text), server, next, browser, note });
+    blocks.set(id, { name, code: decode(text), universe: where === "universe", frame, note });
   }
   const filled = new Map<string, string>();
   for (const [, source, out] of html.matchAll(/<button[^>]*\bdata-source="([^"]+)"[^>]*\bdata-out="([^"]+)"/g)) {
     const block = blocks.get(source);
     if (!block) throw new Error(`the Run button for ${out} names ${source}, which is no run block`);
-    if (block.browser) {
-      filled.set(out, block.note === undefined ? BROWSER_ONLY : `<span class="next">${block.note}</span>`);
+    if (block.universe) {
+      if (block.frame !== undefined) filled.set(out, `<img src="${block.frame}" alt="What the program drew" style="display: block; max-width: 100%;">`);
+      else filled.set(out, block.note === undefined ? UNIVERSE_NOTE : `<span class="next">${block.note}</span>`);
       continue;
     }
     const result = await run(runs, block);
     if (result.limit) throw new Error(`${block.name}: a limit stopped its run, so it has no output to show`);
-    if (block.next && result.kind === "error") {
-      console.warn(`${block.name} needs the server's next image: the live server answers it with a compile error, so its output waits for the Bot workflow's image and the site's next build`);
-      filled.set(out, NEXT_IMAGE);
-      continue;
-    }
-    if (block.next) console.warn(`${block.name} runs on the live server, so its data-image="next" can go`);
     filled.set(out, outputHtml(result));
   }
   for (const [id, block] of blocks) {

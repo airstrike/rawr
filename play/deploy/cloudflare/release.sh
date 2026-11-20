@@ -7,11 +7,11 @@
 #                           the live rawr-web)
 # It refuses to run while the Worker or site sources have uncommitted changes,
 # since `wrangler deploy` ships the working tree. deploy.sh then tests,
-# deploys, waits for the bot and runs the site's snippets. Last, this script
-# commits the image bump and pushes main.
-# The playground's "Run in browser" ships when public/web holds rawr-web:
-# run web/build.sh play/deploy/cloudflare/public/web first. Without it the
-# page runs every snippet on the server.
+# deploys and waits for the bot. Last, this script commits the image bump
+# and pushes main.
+# The site runs every snippet in rawr-web, so public/web must hold it: run
+# web/build.sh play/deploy/cloudflare/public/web, or live-web.sh, first.
+# Without it the site's build fails.
 set -eu
 here="$(cd "$(dirname "$0")" && pwd)"
 repo="$(git -C "$here" rev-parse --show-toplevel)"

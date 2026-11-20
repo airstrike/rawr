@@ -297,7 +297,7 @@ pub fn draw(frame: &amp;mut Frame, state: &amp;mut ListState) {
 <p>A browser tab has one thread, so a loop can&rsquo;t block in <code>event::read()</code>. The program hands its loop to the page instead, as ratzilla&rsquo;s own examples do. <code>draw_web</code> calls the program&rsquo;s closure on every animation frame, and the closure draws the to-dos. ratzilla&rsquo;s key callback changes them between frames. Both closures share the state through an <code>Rc&lt;RefCell&lt;Todos&gt;&gt;</code>, and <code>main</code> returns once it has set them up.</p>
 <div class="block">
   <div class="file"><b>todo.rs</b><span>ratatui on ratzilla&rsquo;s backend</span></div>
-  <pre><code data-lang="rust" data-run="todo.rs" id="src-todo" data-where="browser">// rawr
+  <pre><code data-lang="rust" data-run="todo.rs" id="src-todo" data-where="universe">// rawr
 use std::cell::RefCell;
 use std::rc::Rc;
 

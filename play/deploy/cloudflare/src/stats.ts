@@ -106,14 +106,6 @@ function hourOf(stats: Stats, now: number): Hour {
   return current;
 }
 
-/** A playground render refused by the per-IP limit. */
-export function addWebRateLimited(stats: Stats, now: number): Stats {
-  const current = hourOf(stats, now);
-  current.web_rate_limited = (current.web_rate_limited ?? 0) + 1;
-  stats.totals.web_rate_limited = (stats.totals.web_rate_limited ?? 0) + 1;
-  return stats;
-}
-
 const count = (x: unknown): x is number => Number.isSafeInteger(x) && (x as number) >= 0;
 
 /** The report in `body`, or null when it is not one. */

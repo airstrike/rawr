@@ -26,7 +26,7 @@
   },
   // The Worker version the code runs as. /bot/health reports the Durable
   // Object's: a deploy resets it, and deploy.sh waits until it runs the
-  // version just deployed before the site's snippets.
+  // version just deployed.
   "version_metadata": { "binding": "CF_VERSION_METADATA" },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["PlayBot"] }],
   // /todo's private tabs, rendered by plan/private.mjs from the local
@@ -48,8 +48,6 @@
     "PLAY_MAX_MS": "600000",
     // The image's commit (pin-image.sh writes it): a running bot started
     // from another image is restarted by the next cron or /health.
-    // Turnstile's public site key for /play (the secret is TURNSTILE_SECRET).
-    "TURNSTILE_SITEKEY": "0x4AAAAAAFfQTZDPbRvs2kSG",
     "PLAY_VERSION": "487c21f0a678"
   },
   // /play's examples (play/tests/fixtures/**/*.rs), as text.
@@ -57,7 +55,6 @@
   // dist/ is site/dist (the Astro build: the landing page, the docs, /play's page) and public/
   // (/bot/invite, the redirect with its link preview; /og/invite.png, drawn
   // from og/card.rs by ?play's headless shell), merged by build.mjs. It also writes
-  // src/runnable.gen.ts, the hashes of the sources /play/run accepts, and
   // src/cards.gen.ts, each link card's URL with its content hash.
   "build": { "command": "node build.mjs" },
   // The Worker runs first so it can redirect the old host; for the new host

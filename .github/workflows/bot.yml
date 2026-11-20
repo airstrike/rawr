@@ -21,9 +21,8 @@
 #
 # Each night at 3am Eastern (08:00 UTC) it builds and deploys the image by
 # itself, `auto`: when the night's main changed what the server can run (the
-# universe, the bot's own code, the Dockerfile), a site snippet that needs a
-# crate the universe gained waits at most a day, and pushes never rebuild the
-# image one by one. site.yml deploys everything else on push.
+# universe, the bot's own code, the Dockerfile), the bot gets it within a
+# day, and pushes never rebuild the image one by one. site.yml deploys everything else on push.
 name: Bot
 
 on:

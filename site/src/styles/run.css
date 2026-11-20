@@ -21,7 +21,7 @@
 .run .live span, .run span span { display: inline; }
 .run span.err { color: var(--red); }
 .run span.exit { color: var(--quiet); }
-/* A snippet that waits for the server's next image (docs.ts's NEXT_IMAGE). */
+/* A universe block's note before Run (docs.ts's UNIVERSE_NOTE). */
 .run span.next { color: var(--quiet); }
 
 /* The code of a runnable snippet is editable (run.ts). */
@@ -38,8 +38,6 @@ pre:has(> code[data-run][contenteditable]:focus) { box-shadow: inset 0 0 0 1px v
 .resetbtn[hidden] { display: none; }
 .resetbtn:hover { color: var(--ink); border-color: var(--quiet); }
 .resetbtn:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
-/* The playground's browser check, when Cloudflare asks for an interaction. */
-.runcheck:not(:empty) { margin: 8px 16px; }
 /* A universe block's frame, in place of its output (universe.ts): the */
 /* program draws in it and takes keys while it has focus. */
 .run .framed { display: block; margin-top: 6px; }

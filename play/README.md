@@ -409,8 +409,8 @@ docs and the playground's page come from the site's Astro build
 `build.mjs` builds the site and merges the two into `dist/`, and the build
 fails if a path is in both. Wrangler runs it before every deploy. For
 `/play` and `/play/<id>` the Worker takes the site's static `play.html` and
-writes in the request's link preview, a share's snippet and theme, the
-examples and Turnstile's key (`src/playpage.ts`). The Worker runs before the assets so it can answer the old
+writes in the request's link preview, a share's snippet and the examples
+(`src/playpage.ts`). The Worker runs before the assets so it can answer the old
 host. Every request to `rawr-bot.airstrike.fyi` gets a 301 to the same path
 on `rawr.airstrike.fyi`. `/` there goes to `/bot` and `/invite` goes to
 `/bot/invite`.
@@ -451,37 +451,19 @@ The editor keeps the latest snippet in the browser (`localStorage`): bare
 `/play` restores it; a share shows the share until it is edited; Examples →
 Reset brings back the first example.
 
-The docs' few server blocks (`data-where="server"`, `site/src/scripts/run.ts`)
-and a share's link preview still run on the bot. Those runs go Worker →
+The docs' Run buttons (`site/src/scripts/run.ts`) run every snippet in the
+browser too. A snippet the browser can't run, such as one that spawns a
+thread, is a fixed transcript with no Run button.
+
+A share's link preview is the one run left on the bot. It goes Worker →
 Durable Object → the bot's HTTP port
 (`PLAY_HTTP_PORT`, 8080, reachable only through the Durable Object) → the
 same child process as `?play`, with the same limits. The bot's `POST
 /render` reads `{"code": ..}` and answers with `application/json`: a
-program's output. Playground runs
-share the pool but run one at a time and never ahead of a waiting Discord
-run. Each IP
-(kept only as an HMAC) gets 6 runs a minute and 60 an hour, and 10 shares a
-minute; code is capped at 16 KiB; Cloudflare Turnstile (site key in
-`vars.TURNSTILE_SITEKEY`, secret `TURNSTILE_SECRET`) checks browsers. A
-request carrying `x-play-admin: <hex HMAC-SHA256 of "rawr-play admin">`
-skips Turnstile but not /play's limits, and so does one carrying the
-`PLAY_SMOKE_TOKEN` secret, which the site's build sends when it runs the
-three server-run snippets. The HMAC key is the log key's 64 hex
-digits as text, not the 32 bytes they spell:
-`printf 'rawr-play admin' | openssl dgst -sha256 -hmac "$(cat ~/.config/rawr-play/log-key)" -r`. The dashboard counts
-playground runs apart from Discord's.
-
-The landing page has Run buttons for its own files. They call `POST
-/play/run` with a file's exact text. That route needs no Turnstile. It
-accepts only the text of a `<code data-run>` element in the site's built
-pages, checked by SHA-256. `build.mjs` collects them when it builds, so the
-list is always the deployed pages'. A result is
-cached for each image version, unless a limit stopped the run: that says
-how busy the bot was, not what the file does. Uncached runs are limited per IP (20 a
-minute, 120 an hour). A request whose `x-play-admin` is the admin HMAC
-or the Worker's secret `PLAY_SMOKE_TOKEN` skips that limit. `deploy.sh`
-sends `PLAY_SMOKE_TOKEN` from its environment, or else the admin HMAC of
-the local log key, so its smoke test never waits on the limit.
+program's output. These runs share the pool but run one at a time and never
+ahead of a waiting Discord run. Each IP (kept only as an HMAC) gets 10
+shares a minute and 100 an hour, and code is capped at 16 KiB. The
+dashboard counts these runs apart from Discord's.
 
 A deploy does not replace a Durable Object's running container, which keeps
 the image it started from. `push-image.sh` writes the image's commit into
@@ -514,20 +496,19 @@ curl https://rawr.airstrike.fyi/bot/health   # restarts the bot onto the new ima
 After the first setup, one command releases the committed HEAD:
 
 ```sh
-npm run release            # image, tests, deploy, wait for the bot, smoke test, commit the bump, push main
+npm run release            # image, tests, deploy, wait for the bot, commit the bump, push main
 npm run release:worker     # Worker and site only, no new image
 ```
 
 It refuses to run while the Worker or site sources have uncommitted changes.
-`deploy.sh` does the part after the image: the tests, the deploy, the wait
-for the bot and the smoke test. It retries the deploy when Cloudflare
+`deploy.sh` does the part after the image: the tests, the deploy and the
+wait for the bot. It retries the deploy when Cloudflare
 answers 100146 or a 500. A deploy resets the Durable Object a while after
 it lands, and the reset fails the request it was serving with a 503. So
 the wait for the bot also waits for `/bot/health` to report, as
 `version`, the Worker version Cloudflare serves (`wrangler deployments
 status`). That answer comes from the Durable Object itself, through the
-`CF_VERSION_METADATA` binding. The smoke test then runs each snippet once,
-prints its time, and fails on a run that a limit stopped.
+`CF_VERSION_METADATA` binding.
 
 ### Release from GitHub Actions
 
@@ -542,7 +523,7 @@ before it succeeded or was skipped. A failure stops every stage after it.
 | 1. binaries | `binaries.yml` | Builds the prebuilt archives for the GitHub release of the version. | Only when the `binaries` input is ticked. Patch releases have no tags yet. |
 | 2. playground | `playground.yml` | Builds rawr-web into the run's `web` artifact. | Every release. |
 | 3. bot | `bot.yml` | Builds the ?play image and pushes it as `rawr-play:<commit>`. | When the image's inputs changed since the image Cloudflare runs (`bot: auto`). `always` builds anyway and `skip` never builds. |
-| 4. site | `site.yml` | Deploys the Worker and site with the new rawr-web and the new image, or the running image when stage 3 built none. Then it waits for the bot and runs the site's snippets. | Every release. |
+| 4. site | `site.yml` | Deploys the Worker and site with the new rawr-web and the new image, or the running image when stage 3 built none. Then it waits for the bot to report it. | Every release. |
 
 Stages 2 and 3 only publish: an artifact and a registry image. The site
 stage makes the one deploy, so the site never goes live ahead of its bot,
@@ -628,17 +609,13 @@ site-only deploy stops at `live-web.sh` with a message that says so. Run
 **Release** with `bot: always` the first time. It rebuilds the image with
 the new Dockerfile and saves the cold caches. In the run, watch the `bot /
 image` job's "Build the image" step for the cold time, and the `site /
-site` job for the rollout and the snippets. Then run **Release** again with
+site` job for the rollout. Then run **Release** again with
 `bot: always` to measure a warm build. After that, `auto` is the default.
 
-The repository needs two secrets and one variable, under Settings → Secrets
+The repository needs one secret and one variable, under Settings → Secrets
 and variables → Actions:
 
 - The secret `CLOUDFLARE_API_TOKEN` holds a Cloudflare API token.
-- The secret `PLAY_SMOKE_TOKEN` holds the same random value as the
-  Worker's secret of that name. Make one and set both from stdin, so it is
-  never shown:
-  `t="$(openssl rand -hex 32)"; printf '%s' "$t" | npx wrangler secret put PLAY_SMOKE_TOKEN; printf '%s' "$t" | gh secret set PLAY_SMOKE_TOKEN; unset t`.
 - The variable `CLOUDFLARE_ACCOUNT_ID` is `fce80b8101fbb2f85548560babc6c7bc`.
   It is not a secret.
 

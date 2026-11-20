@@ -9,7 +9,7 @@ export interface Chunk {
 }
 
 /**
- * What rawr-web's run_text gives and what the server answers: a program's
+ * What rawr-web's run_text gives and what the ?play bot answers: a program's
  * output and status, with what an iced program drew, or a compile error.
  */
 export interface Result {

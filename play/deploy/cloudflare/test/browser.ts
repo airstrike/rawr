@@ -8,14 +8,15 @@
 // edits it and sees the output follow, checks that an iced snippet and an
 // async one each show their message, restores an example from its address,
 // picks one from the menu, checks that the page offers no server, and checks
-// the phone layout. Then it opens the docs' Play page and runs its snippet.
+// the phone layout. Then it runs the docs' snippets and the landing page's,
+// each in the browser with no request to a server.
 // It saves window screenshots in SHOTS_DIR (default target/web-check).
 // CHROME names the browser when it is not in the usual place.
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { extname, join, resolve } from "node:path";
-import { parseSnippet, webAsset } from "../src/play.ts";
+import { webAsset } from "../src/play.ts";
 import { inject } from "../src/playpage.ts";
 
 const repo = resolve(import.meta.dirname, "../../../..");
@@ -38,7 +39,8 @@ const page = inject(readFileSync(join(site, "play.html"), "utf8"), {
   snippet: { code: histogram }, examples, shared: null, og,
 });
 const brotli: string[] = [];
-const siteRuns: unknown[] = [];
+/** Every POST the pages send: a Run sends none. */
+const posts: string[] = [];
 const types: Record<string, string> = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".svg": "image/svg+xml" };
 const body = (request: import("node:http").IncomingMessage) =>
   new Promise<string>((done) => {
@@ -49,9 +51,10 @@ const body = (request: import("node:http").IncomingMessage) =>
 const server = createServer(async (request, response) => {
   const path = new URL(request.url ?? "/", "http://localhost").pathname;
   if (path === "/play") return response.writeHead(200, { "content-type": types[".html"] }).end(page);
-  if (path === "/play/run" && request.method === "POST") {
-    siteRuns.push(JSON.parse(await body(request)));
-    return response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ kind: "text", status: 0, output: [{ stream: "stdout", text: "6\n" }] }));
+  if (request.method === "POST") {
+    posts.push(path);
+    await body(request);
+    return response.writeHead(404).end(`no ${path}`);
   }
   if (path.startsWith("/web/")) {
     // The Worker's own /web handler, over the files in WEB_DIR.
@@ -219,22 +222,20 @@ try {
   await on("Page.navigate", { url: `http://127.0.0.1:${port}/docs/play#shapes` });
   await until("the docs' Run button", `!!document.querySelector('.runbtn[data-source="src-sum"]:not([hidden])')`, 10000);
   check(await evaluate(`document.querySelectorAll("#src-sum .k").length > 0`), "the docs' runnable code shows highlighted");
-  const runsBefore = siteRuns.length;
   await evaluate(`document.querySelector('.runbtn[data-source="src-sum"]').click()`);
   await until("the docs' output", `!!document.querySelector("#out-sum .live")`, 30000);
   await shot("docs-sum.png");
   check(await evaluate(`document.getElementById("out-sum").textContent === "6"`), "the docs' snippet prints what rawr-web prints");
-  check(siteRuns.length === runsBefore, "and runs in the browser, with no request to the server");
+  check(posts.length === 0, "and runs in the browser, with no request to a server");
   check(await evaluate(`document.documentElement.dataset.theme === "dark"`), "the docs open in the theme chosen on the playground");
 
-  // A block marked data-where="server" posts its code to /play/run.
+  // Wide integers run in the browser too.
   await on("Page.navigate", { url: `http://127.0.0.1:${port}/docs/reference/types#integers` });
-  await until("the server block's Run button", `!!document.querySelector('.runbtn[data-source="src-wide"]:not([hidden])')`, 10000);
+  await until("the wide integers' Run button", `!!document.querySelector('.runbtn[data-source="src-wide"]:not([hidden])')`, 10000);
   await evaluate(`document.querySelector('.runbtn[data-source="src-wide"]').click()`);
-  for (const start = Date.now(); siteRuns.length === runsBefore && Date.now() - start < 10000; ) await sleep(100);
-  const sent = siteRuns.at(-1) as { code: string };
-  check(sent?.code.includes("u128") === true, "a server block posts its code");
-  check(typeof parseSnippet(sent) !== "string", "and the Worker reads it");
+  await until("the wide integers' output", `!!document.querySelector("#out-wide .live")`, 30000);
+  check(await evaluate(`document.getElementById("out-wide").textContent.startsWith("55340232221128654845 ")`), "u128 and i128 run in rawr-web");
+  check(posts.length === 0, "with no request to a server");
 
   // The landing page: the hello program runs in the browser.
   await on("Page.navigate", { url: `http://127.0.0.1:${port}/` });

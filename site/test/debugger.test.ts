@@ -168,7 +168,7 @@ function debuggable(pausable: boolean) {
   const web = { run_text: () => JSON.stringify({ kind: "text", status: 0, output: [{ stream: "stdout", text: "plain\n" }] }) };
   const timers: (() => void)[] = [];
   const session = new Session(
-    { snippet: { code: 'fn main() { println!("hi"); }' }, examples: [], sitekey: null, pass: false, shared: null },
+    { snippet: { code: 'fn main() { println!("hi"); }' }, examples: [], shared: null },
     {
       fetch: (async () => Response.json({})) as typeof fetch,
       location: { pathname: "/play", search: "", hash: "", origin: "http://localhost" },
@@ -177,8 +177,6 @@ function debuggable(pausable: boolean) {
       loadWeb: async () => web,
       now: () => 0,
       clipboard: async () => {},
-      turnstile: () => undefined,
-      loadTurnstile: () => {},
       hasContainer: () => true,
       setTimeout: (f) => (timers.push(f), timers.length),
       clearTimeout: () => {},
