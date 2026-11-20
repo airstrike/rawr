@@ -20,32 +20,6 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// rustc's error for a std type's bare `name` that nothing in scope
-    /// binds: no generic parameter, declaration, alias or `use`, and not
-    /// std's prelude (`std_path::unbound_type`). `head` when it heads a
-    /// path, as `HashMap::new()`.
-    pub(super) fn unbound_std_type(
-        &self,
-        name: &str,
-        head: bool,
-        reference: Span,
-    ) -> Result<(), Error> {
-        if self.generics.contains_key(name)
-            || self.models.get(name).is_some()
-            || self.models.alias(name).is_some()
-            || self.models.import(name).is_some()
-        {
-            return Ok(());
-        }
-        match crate::resolve::std_path::unbound_type(name, head, reference) {
-            Some(error) => Err(error.unimported(
-                |name, wanted| self.own_candidates(name, wanted),
-                self.models.use_placement(),
-            )),
-            None => Ok(()),
-        }
-    }
-
     /// A path into std written in an expression, from its first segment
     /// `name`, as rustc resolves it (D711): `core::thread::sleep` is
     /// rustc's E0433, since core has no `thread`, and an unstable item is

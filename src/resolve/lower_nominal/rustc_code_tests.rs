@@ -4649,6 +4649,63 @@ fn a_bare_std_thread_type_nothing_binds_is_e0425() {
     }
 }
 
+/// Every std type Rawr represents resolves only through rustc's scopes,
+/// as the thread types do: a bare name or a path through a module nothing
+/// binds is rustc's error, with the import a bare name could have, and a
+/// `use` of the type or of its module names it (#2346).
+#[test]
+fn a_std_type_resolves_only_through_a_use_or_its_std_path() {
+    for (source, code, message) in [
+        ("fn f(_x: Rc<i32>) {}\nfn main() {}\n", "E0425", "cannot find type `Rc` in this scope"),
+        ("fn main() {\n    let _m: HashMap<i32, i32> = std::collections::HashMap::new();\n}\n", "E0425", "cannot find type `HashMap` in this scope"),
+        ("fn main() {\n    let _c: Cell<i32> = std::cell::Cell::new(1);\n}\n", "E0425", "cannot find type `Cell` in this scope"),
+        ("fn main() {\n    let _o: Ordering = 1.cmp(&2);\n}\n", "E0425", "cannot find type `Ordering` in this scope"),
+        ("fn main() {\n    let _r: Vec<Reverse<i32>> = Vec::new();\n}\n", "E0425", "cannot find type `Reverse` in this scope"),
+        ("fn main() {\n    let _p: PhantomData<i32> = std::marker::PhantomData;\n}\n", "E0425", "cannot find type `PhantomData` in this scope"),
+        ("fn f() -> Result<i32, ParseIntError> {\n    \"1\".parse::<i32>()\n}\nfn main() {}\n", "E0425", "cannot find type `ParseIntError` in this scope"),
+        ("fn main() {\n    let _r: RangeInclusive<i32> = 1..=2;\n}\n", "E0425", "cannot find type `RangeInclusive` in this scope"),
+        ("fn main() {\n    let _c: Cow<str> = std::borrow::Cow::Borrowed(\"a\");\n}\n", "E0425", "cannot find type `Cow` in this scope"),
+        ("fn main() {\n    let _r = RefCell::new(1);\n}\n", "E0433", "cannot find type `RefCell` in this scope"),
+        ("fn main() {\n    let _d = VecDeque::<i32>::new();\n}\n", "E0433", "cannot find type `VecDeque` in this scope"),
+        ("fn main() {\n    let _d = Duration::from_secs(1);\n}\n", "E0433", "cannot find type `Duration` in this scope"),
+        ("fn main() {\n    let _i = Instant::now();\n}\n", "E0433", "cannot find type `Instant` in this scope"),
+        ("fn main() {\n    let _r = Rc::new(1);\n}\n", "E0433", "cannot find type `Rc` in this scope"),
+        ("fn main() {\n    match 1.cmp(&2) {\n        Ordering::Less => {}\n        _ => {}\n    }\n}\n", "E0433", "cannot find type `Ordering` in this scope"),
+        ("fn main() {\n    let _r = Reverse(1);\n}\n", "E0425", "cannot find function, tuple struct or tuple variant `Reverse` in this scope"),
+        ("fn f(_x: cmp::Ordering) {}\nfn main() {}\n", "E0433", "cannot find module or crate `cmp` in this scope"),
+        ("fn main() {\n    let _m = collections::HashMap::<i32, i32>::new();\n}\n", "E0433", "cannot find module or crate `collections` in this scope"),
+        ("fn main() {\n    let _w: rc::Weak<i32> = std::rc::Weak::new();\n}\n", "E0433", "cannot find module or crate `rc` in this scope"),
+        ("fn main() {\n    let _t = time::Duration::from_secs(1);\n}\n", "E0433", "cannot find module or crate `time` in this scope"),
+    ] {
+        let (found, said, _) = refused(source);
+        assert_eq!((found.as_str(), said.as_str()), (code, message), "{source}");
+    }
+    assert!(
+        rendered("fn main() {\n    let _m = BTreeMap::<i32, i32>::new();\n}\n").ends_with(
+            "help: consider importing this struct\n  |\n1 + use std::collections::BTreeMap;\n  |\n"
+        )
+    );
+    for source in [
+        "use std::collections;\nfn f(m: &collections::BTreeMap<i32, i32>) -> usize {\n    m.len()\n}\nfn main() {\n    let mut m = collections::BTreeMap::new();\n    m.insert(1, 2);\n    let s: collections::HashSet<i32> = collections::HashSet::new();\n    println!(\"{} {}\", f(&m), s.len());\n}\n",
+        "use std::cmp;\nfn main() {\n    match 1.cmp(&2) {\n        cmp::Ordering::Less => {}\n        _ => {}\n    }\n    let _r = cmp::Reverse(3);\n}\n",
+        "use std::cmp::Ordering;\nuse Ordering::*;\nfn main() {\n    match 1.cmp(&2) {\n        Less => {}\n        _ => {}\n    }\n}\n",
+        "use std::rc;\nfn main() {\n    let r: rc::Rc<i32> = rc::Rc::new(1);\n    let _w: rc::Weak<i32> = rc::Rc::downgrade(&r);\n    let _a = std::sync::Arc::new(2);\n}\n",
+        "use std::cell;\nfn main() {\n    let _r: cell::RefCell<i32> = cell::RefCell::new(1);\n    let _c = cell::Cell::new(2);\n}\n",
+        "use std::time;\nfn main() {\n    let _d: time::Duration = time::Duration::from_secs(2);\n}\n",
+        "use std::collections::hash_map::HashMap;\nfn main() {\n    let mut m: HashMap<i32, i32> = HashMap::new();\n    m.insert(1, 2);\n}\n",
+        "use std::marker::PhantomData;\nstruct S<T> {\n    _p: PhantomData<T>,\n}\nfn main() {\n    let _s: S<i32> = S { _p: PhantomData };\n}\n",
+        "use std::num::ParseIntError;\nfn f(t: &str) -> Result<i32, ParseIntError> {\n    t.parse::<i32>()\n}\nfn main() {\n    let _ = f(\"1\");\n}\n",
+        "use std::ops::RangeInclusive;\nfn main() {\n    let _r: RangeInclusive<i32> = 1..=3;\n    let _s: std::ops::Range<i32> = 0..2;\n}\n",
+        "use std::borrow::Cow;\nfn main() {\n    let _c: Cow<str> = Cow::Borrowed(\"ab\");\n}\n",
+        "struct HashMap {\n    n: i32,\n}\nfn main() {\n    let m = HashMap { n: 1 };\n    let _ = m.n;\n}\n",
+        "struct Ordering;\nfn main() {\n    let _o = Ordering;\n}\n",
+    ] {
+        Engine::new()
+            .compile(source)
+            .unwrap_or_else(|error| panic!("{error}\n{source}"));
+    }
+}
+
 /// A call of a turbofish name nothing binds is a function rustc can't
 /// find, marked over the name (#2346).
 #[test]

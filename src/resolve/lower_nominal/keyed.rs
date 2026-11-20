@@ -62,34 +62,27 @@ impl Parser<'_> {
     }
 
     /// The collection a body path starting with `name` (already read)
-    /// names before its `::function`: `HashMap`, unless the crate declares
-    /// a type of that name, `collections::HashMap` or
-    /// `std::collections::HashMap`. Reads the rest of the path.
+    /// names before its `::function`, through the scope
+    /// (`std_path_ahead`): `HashMap` after `use std::collections::HashMap;`,
+    /// or `std::collections::HashMap`; a crate's alias of one
+    /// (`hasher_alias`) by its name. Reads the rest of the path.
     pub(super) fn keyed_path(&mut self, name: &str) -> Option<Keyed> {
-        let mut ahead = self.input.clone();
-        let tokens: Vec<Token> = (0..5)
-            .map(|_| ahead.next().map_or(Token::EOF, |(token, _)| token))
-            .collect();
-        let identifier = |token: &Token| match token {
-            Token::Identifier(text) => Some(text.as_str().to_string()),
-            _ => None,
-        };
-        let (collection, consumed) = match name {
-            "std"
-                if tokens[0] == Token::DoubleColon
-                    && identifier(&tokens[1]).as_deref() == Some("collections")
-                    && tokens[2] == Token::DoubleColon =>
-            {
-                (identifier(&tokens[3])?, 4)
+        let alias = crate::resolve::hasher_alias(name).filter(|_| self.models.get(name).is_none());
+        let (collection, consumed) = match alias {
+            Some(collection) => {
+                let next = self.input.peek().map(|(token, _)| token.clone());
+                (next == Some(Token::DoubleColon)).then_some((collection, 0))?
             }
-            "collections" if tokens[0] == Token::DoubleColon => (identifier(&tokens[1])?, 2),
-            _ if self.models.get(name).is_some() => return None,
-            name => (name.to_string(), 0),
+            None => {
+                let (path, consumed, next) = self
+                    .std_path_ahead(name, |path| crate::resolve::std_collection(path).is_some())?;
+                if next != Token::DoubleColon {
+                    return None;
+                }
+                (crate::resolve::std_collection(&path)?, consumed)
+            }
         };
-        let kind = Keyed::from_name(crate::resolve::std_collection(&collection)?)?;
-        if tokens[consumed] != Token::DoubleColon {
-            return None;
-        }
+        let kind = Keyed::from_name(collection)?;
         for _ in 0..consumed {
             self.next();
         }
@@ -182,9 +175,7 @@ impl Parser<'_> {
 
     /// `HashMap<K, V>` and its kin in a body, after the name.
     pub(super) fn parse_keyed_type(&mut self, name: &str, name_span: Span) -> Result<Ty, Error> {
-        let kind = crate::resolve::std_collection(name)
-            .and_then(Keyed::from_name)
-            .expect("a std collection's name");
+        let kind = Keyed::from_name(name).expect("a std collection's name");
         // std's arity (D711): `HashMap<K, V, S = RandomState>`.
         let fallback = if kind.is_map() { 2 } else { 1 };
         let (required, stable) =

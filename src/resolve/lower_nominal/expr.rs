@@ -1156,10 +1156,6 @@ impl<'a> Parser<'a> {
             };
             return self.opaque_function_call(&owner, &member, member_span);
         }
-        if matches!(self.peek(), Token::DoubleColon) && !self.bindings.contains_key(name.as_str()) {
-            self.unbound_std_type(&name, true, name_span)?;
-        }
-
         // `Type::<A>::member`: the path without its arguments, its value
         // of the type `Type<A>` when it is one (a constructor).
         if matches!(self.peek(), Token::DoubleColon)
@@ -1519,14 +1515,21 @@ impl<'a> Parser<'a> {
         }
         // `Rc::strong_count(&rc)`, `Arc::new(value)`, `Weak::new()`: an
         // `Rc`'s, `Arc`'s or `Weak`'s associated function (`counted.rs`).
-        if matches!(self.peek(), Token::DoubleColon)
-            && let Some((counter, weak)) = self
-                .pointer_named(&name)
-                .and_then(Pointer::counter)
+        // The path is read through the scope (`std_path_ahead`): `Rc`
+        // after `use std::rc::Rc;`, `rc::Weak` after `use std::rc;`, or
+        // `std::sync::Arc`.
+        if !self.bindings.contains_key(name.as_str())
+            && let Some((path, consumed, Token::DoubleColon)) = self.std_path_ahead(&name, |path| {
+                crate::resolve::std_pointer(path).is_some() || counted::std_weak(path).is_some()
+            })
+            && let Some((counter, weak)) = crate::resolve::std_pointer(&path)
+                .and_then(|pointer| Pointer::named(pointer).counter())
                 .map(|counter| (counter, false))
-                .or_else(|| self.weak_named(&name).map(|counter| (counter, true)))
+                .or_else(|| counted::std_weak(&path).map(|weak| (Counter::weak_named(weak), true)))
         {
-            self.next();
+            for _ in 0..=consumed {
+                self.next();
+            }
             let (member, member_span) = self.expect_member_name()?;
             return self.parse_counted_path(counter, weak, member, name_span, member_span);
         }

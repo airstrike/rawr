@@ -25,12 +25,12 @@ impl<'a> Parser<'a> {
     /// How many `::name` segments follow `name` to spell `PhantomData`:
     /// `PhantomData`, `marker::PhantomData` or `std::marker::PhantomData`.
     pub(super) fn phantom_path(&mut self, name: &str) -> Option<usize> {
-        if self.models.get("PhantomData").is_some() {
-            return None;
-        }
         let names = self.lookahead_path(name);
         (1..=names.len())
-            .find(|count| crate::resolve::std_phantom(&names[..*count].join("::")))
+            .find(|count| {
+                self.std_scoped(&names[..*count].join("::"))
+                    .is_some_and(|path| crate::resolve::std_phantom(&path))
+            })
             .map(|count| (count - 1) * 2)
     }
 
@@ -249,8 +249,6 @@ impl<'a> Parser<'a> {
         {
             return Ok(Ty::UnsizedStr);
         }
-        let head = matches!(self.peek(), Token::DoubleColon);
-        self.unbound_std_type(&name, head, name_span)?;
         // `dyn Fn(A) -> B` and `dyn Trait`.
         if name.as_str() == "dyn" && !self.models.get(&name).is_some() {
             // `dyn for<'a> Fn(&'a T)`.
@@ -395,9 +393,10 @@ impl<'a> Parser<'a> {
             if let Some(alias) = self.models.qualified_alias(name_span).cloned() {
                 return self.parse_alias_type(name, name_span, &alias);
             }
-            // `std::rc::Weak<T>` or `sync::Weak<T>`.
-            if self.models.get(&first).is_none()
-                && let Some(weak) = counted::std_weak(&name)
+            // `std::rc::Weak<T>`, or `sync::Weak<T>` after `use std::sync;`.
+            if let Some(weak) = self
+                .std_scoped(&name)
+                .and_then(|path| counted::std_weak(&path))
                 && matches!(self.peek(), Token::LessThan)
             {
                 self.next();
@@ -405,6 +404,11 @@ impl<'a> Parser<'a> {
                 self.expect_close_angle("'>' after `Weak<T`")?;
                 return Ok(Ty::Weak(Counter::weak_named(weak), element));
             }
+            // The std path the path names in this scope, which the std
+            // types below are read from: through the `use` that binds its
+            // first segment, or from std's root.
+            let written = name.clone();
+            let mut std_path = self.std_scoped(&written);
             // A path into std is std's, as rustc resolves it (D711); one
             // to a type Rawr represents reads as that type's own name.
             if self.models.get(&first).is_none() && self.models.import(&first).is_none() {
@@ -433,37 +437,55 @@ impl<'a> Parser<'a> {
                         )]);
                         return self.parse_local_type();
                     }
+                    // A std path written through another module, as
+                    // `std::collections::hash_map::HashMap`, reads as the
+                    // path the helpers know.
+                    if let Some(canonical) = crate::resolve::std_canonical(spelling) {
+                        std_path = Some(canonical.into());
+                    }
                     name = spelling.into();
                 }
             }
-            if let Some(collection) = crate::resolve::std_collection(&name) {
+            let path = std_path.as_deref().unwrap_or(&written);
+            if let Some(collection) = crate::resolve::std_collection(path) {
                 return self.parse_keyed_type(collection, name_span);
             }
-            if crate::resolve::std_reverse(&name) && self.models.get("Reverse").is_none() {
+            if crate::resolve::std_reverse(path) {
                 return self.parse_reverse_type();
             }
-            if self.pin_named(&name) && matches!(self.peek(), Token::LessThan) {
+            if self.pin_named(path) && matches!(self.peek(), Token::LessThan) {
                 return self.parse_pin_type();
             }
-            if crate::resolve::std_phantom(&name) && self.models.get("PhantomData").is_none() {
+            if crate::resolve::std_phantom(path) {
                 return self.parse_phantom_type();
             }
-            if let Some(kind) = self.cell_named(&name) {
+            if let Some(kind) = self.cell_named(path) {
                 return self.parse_cell_type(kind);
             }
-            if let Some(kind) = self.thread_named(&name) {
+            if let Some(kind) = self.thread_named(path) {
                 return self.parse_thread_type(kind);
             }
-            if let Some(range) = crate::resolve::std_range(&name)
-                && self.models.get(range).is_none()
-            {
+            if let Some(range) = crate::resolve::std_range(path) {
                 return self.parse_range_type(range);
             }
-            if let Some(kind) = self.growable_named(&name)
+            if let Some(pointer) = self.pointer_named(path)
+                && matches!(self.peek(), Token::LessThan)
+            {
+                self.next();
+                let element = Box::new(self.parse_local_type()?);
+                self.unstable_argument(pointer.name(), 1, name_span)?;
+                self.expect_close_angle(&format!("'>' after `{}<T`", pointer.name()))?;
+                return Ok(pointer.ty(*element));
+            }
+            if let Some(kind) = self.growable_named(path)
                 && matches!(self.peek(), Token::LessThan)
             {
                 return self.parse_growable_type(kind, &name, name_span);
             }
+            let std_time = std_path.as_deref().and_then(crate::resolve::std_time);
+            let std_error = std_path
+                .as_deref()
+                .and_then(crate::resolve::std_parse_error);
             // A host type named through an imported module or in full; a
             // path into a `.rs` module through the app crate.
             let rust = self
@@ -485,14 +507,14 @@ impl<'a> Parser<'a> {
             // std's `Duration` and `Instant`, in full or through a crate's
             // re-export of them, as `time::Duration` after `use iced::time`.
             let path = crate::resolve::std_reexport(&path, &self.models.host);
-            if let Some(time) = crate::resolve::std_time(&path) {
+            if let Some(time) = crate::resolve::std_time(&path).or(std_time) {
                 return Ok(Ty::Time(match time {
                     "Duration" => Time::Duration,
                     _ => Time::Instant,
                 }));
             }
             // `std::num::ParseIntError` and kin, the errors of `str::parse`.
-            if let Some(error) = crate::resolve::std_parse_error(&path) {
+            if let Some(error) = crate::resolve::std_parse_error(&path).or(std_error) {
                 return Ok(Ty::ParseError(
                     ParseError::named(error).expect("a std parse error"),
                 ));
@@ -519,6 +541,18 @@ impl<'a> Parser<'a> {
                     name_span,
                 ) {
                     return Err(error);
+                }
+                // rustc stops at a first segment nothing in scope names.
+                if self.unresolved_root(&first) {
+                    return Err(Error::UnknownType {
+                        name: first.clone(),
+                        reference: Span::new(
+                            name_span.start(),
+                            text_end(name_span.start(), &first),
+                        ),
+                        path: true,
+                        imports: Box::default(),
+                    });
                 }
                 // The path through the module a `use` binds, as rustc
                 // resolves it, which a miss demands from the crate; the
@@ -576,16 +610,19 @@ impl<'a> Parser<'a> {
             return Ok(Ty::Weak(counter, element));
         }
 
-        if crate::resolve::std_collection(&name).is_some()
-            && qualified.is_none()
-            && self.models.get(&name).is_none()
+        // A bare name of a std type, through the `use` that binds it.
+        let scoped = qualified
+            .is_none()
+            .then(|| self.std_scoped(&name))
+            .flatten();
+        if let Some(collection) = crate::resolve::hasher_alias(&name)
+            .filter(|_| qualified.is_none() && self.models.get(&name).is_none())
+            .or_else(|| scoped.as_deref().and_then(crate::resolve::std_collection))
         {
-            return self.parse_keyed_type(&name, name_span);
+            return self.parse_keyed_type(collection, name_span);
         }
-        if name.as_str() == "Reverse"
+        if scoped.as_deref().is_some_and(crate::resolve::std_reverse)
             && matches!(self.peek(), Token::LessThan)
-            && qualified.is_none()
-            && self.models.get(&name).is_none()
         {
             return self.parse_reverse_type();
         }
@@ -595,8 +632,7 @@ impl<'a> Parser<'a> {
         if qualified.is_none() && matches!(self.peek(), Token::LessThan) && self.pin_named(&name) {
             return self.parse_pin_type();
         }
-        if name.as_str() == "PhantomData" && qualified.is_none() && self.models.get(&name).is_none()
-        {
+        if scoped.as_deref().is_some_and(crate::resolve::std_phantom) {
             return self.parse_phantom_type();
         }
         if matches!(self.peek(), Token::LessThan)
@@ -611,10 +647,8 @@ impl<'a> Parser<'a> {
         {
             return self.parse_thread_type(kind);
         }
-        if let Some(range) = crate::resolve::std_range(&name)
+        if let Some(range) = scoped.as_deref().and_then(crate::resolve::std_range)
             && matches!(self.peek(), Token::LessThan)
-            && qualified.is_none()
-            && self.models.get(&name).is_none()
         {
             return self.parse_range_type(range);
         }
@@ -624,6 +658,8 @@ impl<'a> Parser<'a> {
         {
             return self.parse_growable_type(kind, &name, name_span);
         }
+        // The name whole, which an error marks.
+        let named = Span::new(name_span.start(), text_end(name_span.start(), &name));
         let generic = matches!(self.peek(), Token::LessThan);
         let mut arguments = if generic {
             self.parse_local_arguments()?
@@ -672,7 +708,7 @@ impl<'a> Parser<'a> {
             // A name nothing in scope binds is rustc's error for it, its
             // arguments or not.
             _ if generic => Err(self
-                .resolve_type(&name, name_span)
+                .resolve_type(&name, named)
                 .err()
                 .unwrap_or_else(|| self.unsupported("generic arguments on a non-generic type"))),
             Some((definition, owner)) if qualified.is_some() => {
@@ -696,7 +732,7 @@ impl<'a> Parser<'a> {
                     arguments: Box::default(),
                 })
             }
-            _ => self.resolve_type(&name, name_span),
+            _ => self.resolve_type(&name, named),
         }
     }
 
@@ -1291,10 +1327,10 @@ impl<'a> Parser<'a> {
                 ty
             }
             // `use std::time::Duration;`: std's `Duration` and `Instant`.
-            name if self.models.get(name).is_none()
-                && let Some(binding) = self.models.import(name)
-                && let Some(time) = crate::resolve::std_time(&binding.qualified)
-                && binding.qualified.contains("::") =>
+            name if let Some(time) = self
+                .std_scoped(name)
+                .as_deref()
+                .and_then(crate::resolve::std_time) =>
             {
                 Ty::Time(match time {
                     "Duration" => Time::Duration,
@@ -1320,12 +1356,11 @@ impl<'a> Parser<'a> {
                         arguments: Box::default(),
                     });
                 }
-                if crate::resolve::std_ordering(name) && self.models.get("Ordering").is_none() {
+                let scoped = self.std_scoped(name);
+                if scoped.as_deref().is_some_and(crate::resolve::std_ordering) {
                     return Ok(Ty::Ordering);
                 }
-                if let Some(error) = crate::resolve::std_parse_error(name)
-                    && self.models.get(error).is_none()
-                {
+                if let Some(error) = scoped.as_deref().and_then(crate::resolve::std_parse_error) {
                     return Ok(Ty::ParseError(
                         ParseError::named(error).expect("a std parse error"),
                     ));

@@ -95,16 +95,8 @@ impl Parser<'_> {
     /// Whether the type path `name` names `std::pin::Pin`: in full, by a
     /// `use` of it or of `std::pin`, unless the program declares a `Pin`.
     pub(super) fn pin_named(&self, name: &str) -> bool {
-        let first = name.split("::").next().unwrap_or_default();
-        if self.models.get(first).is_some() {
-            return false;
-        }
-        match self.models.import(first) {
-            Some(binding) => {
-                crate::resolve::std_pin(&format!("{}{}", binding.qualified, &name[first.len()..]))
-            }
-            None => crate::resolve::std_pin(name),
-        }
+        self.std_scoped(name)
+            .is_some_and(|path| crate::resolve::std_pin(&path))
     }
 
     /// `Pin<P>` in a body, after its path: `P`, which a `Pin` is at

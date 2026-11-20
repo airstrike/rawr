@@ -1575,11 +1575,15 @@ fn resolve_imports(
                 .or_insert_with(|| binding.qualified.clone());
         }
     }
+    // What each of this file's `use`s binds, which a later `use` may start
+    // at: `use Ordering::*;` after `use std::cmp::Ordering;`.
+    let mut used = BTreeMap::<ImmutableString, String>::new();
     for parsed in parsed_items {
         let crate::item::Parsed::Use(parsed) = parsed else {
             continue;
         };
         for (name, path) in parsed.bindings() {
+            used.insert(name.text.clone(), path.join("::"));
             let qualified = host.canonical_str(&std_reexport(&path.join("::"), host));
             if matches!(host.entry(&qualified), Some(host::Entry::Module)) {
                 modules.insert(name.text, qualified);
@@ -1624,7 +1628,16 @@ fn resolve_imports(
         {
             return Some(variants.clone());
         }
-        std_ordering(&prefix.join("::")).then(|| {
+        let prefix = match prefix {
+            [first, rest @ ..] if let Some(path) = used.get(first) => {
+                std::iter::once(path.as_str())
+                    .chain(rest.iter().map(ImmutableString::as_str))
+                    .collect::<Vec<_>>()
+                    .join("::")
+            }
+            _ => prefix.join("::"),
+        };
+        std_ordering(&prefix).then(|| {
             package::ORDERING_VARIANTS
                 .iter()
                 .map(|name| ImmutableString::from(*name))
@@ -2095,16 +2108,18 @@ pub(crate) fn core_futures(host: &host::Registry) -> bool {
     host.type_(crate::future::facade::FUTURE).is_some()
 }
 
-/// `std::ops::RangeInclusive` and `std::ops::Range` as a type path is
-/// written: the name, or one of its `ops::`, `std::ops::` or `core::ops::`
-/// spellings. A `Range` is an iterator in Rawr; a `RangeInclusive` of
-/// numbers is its own type.
+/// The std spelling helpers below each read a whole std path, as the scope
+/// makes it: a name a `use` binds is its std path by then
+/// (`type_ref::through_scope` in item headers, `Parser::std_named` in
+/// bodies), and a bare or partial path nothing binds names no std item, as
+/// in rustc.
+///
+/// `std::ops::RangeInclusive` and `std::ops::Range`. A `Range` is an
+/// iterator in Rawr; a `RangeInclusive` of numbers is its own type.
 pub(crate) fn std_range(path: &str) -> Option<&'static str> {
     let name = path
         .strip_prefix("std::ops::")
-        .or_else(|| path.strip_prefix("core::ops::"))
-        .or_else(|| path.strip_prefix("ops::"))
-        .unwrap_or(path);
+        .or_else(|| path.strip_prefix("core::ops::"))?;
     match name {
         "RangeInclusive" => Some("RangeInclusive"),
         "Range" => Some(crate::item::type_ref::ITER_TYPE),
@@ -2153,28 +2168,20 @@ pub(crate) fn float_constant(path: &str) -> Option<(f64, bool)> {
     )
 }
 
-/// `std::cmp::Reverse` as a type path is written: `Reverse` (imported, or
-/// Rawr's when the crate has no type of that name), `cmp::Reverse`,
-/// `std::cmp::Reverse`, `core::cmp::Reverse`.
+/// `std::cmp::Reverse` (`std_range` says how the path is whole).
 pub(crate) fn std_reverse(path: &str) -> bool {
-    matches!(
-        path,
-        "Reverse" | "cmp::Reverse" | "std::cmp::Reverse" | "core::cmp::Reverse"
-    )
+    matches!(path, "std::cmp::Reverse" | "core::cmp::Reverse")
 }
 
-/// `std::collections::HashMap` and its kin as a type path is written:
-/// `HashMap` (which a `use` binds: a bare name nothing binds is refused
-/// before, by `std_path::unbound_type`), `collections::HashMap`,
-/// `std::collections::HashMap`; the collection's name.
+/// `std::collections::HashMap` and its kin, or a crate's alias of one
+/// (`hasher_alias`): the collection's name.
 pub(crate) fn std_collection(path: &str) -> Option<&'static str> {
     if let Some(collection) = hasher_alias(path) {
         return Some(collection);
     }
     let name = path
         .strip_prefix("std::collections::")
-        .or_else(|| path.strip_prefix("collections::"))
-        .unwrap_or(path);
+        .or_else(|| path.strip_prefix("alloc::collections::"))?;
     ["HashMap", "HashSet", "BTreeMap", "BTreeSet"]
         .into_iter()
         .find(|collection| *collection == name)
@@ -2196,18 +2203,14 @@ pub(crate) fn hasher_alias(path: &str) -> Option<&'static str> {
         .find_map(|(alias, collection)| (alias == name).then_some(collection))
 }
 
-/// `std::cmp::Ordering` as a type path is written: `Ordering` (imported,
-/// or Rawr's when the crate has no type of that name), `cmp::Ordering`,
-/// `std::cmp::Ordering`, `core::cmp::Ordering`.
-/// `std::num::ParseIntError` and the other errors of `str::parse` as a
-/// type path is written: bare (imported, or Rawr's when the crate has no
-/// type of that name) or by its module; the error's name.
+/// `std::num::ParseIntError` and the other errors of `str::parse`, by
+/// their std paths: the error's name.
 pub(crate) fn std_parse_error(path: &str) -> Option<&'static str> {
     let name = path
         .strip_prefix("std::")
         .or_else(|| path.strip_prefix("core::"))
-        .unwrap_or(path);
-    let (module, name) = name.rsplit_once("::").unwrap_or(("", name));
+        .or_else(|| path.strip_prefix("alloc::"))?;
+    let (module, name) = name.rsplit_once("::")?;
     let (expected, error) = match name {
         "ParseIntError" => ("num", "ParseIntError"),
         "ParseFloatError" => ("num", "ParseFloatError"),
@@ -2218,7 +2221,40 @@ pub(crate) fn std_parse_error(path: &str) -> Option<&'static str> {
         "TryFromIntError" => ("num", "TryFromIntError"),
         _ => return None,
     };
-    (module.is_empty() || module == expected).then_some(error)
+    (module == expected).then_some(error)
+}
+
+/// The std path the spelling helpers read (`std_range` and kin) for the
+/// std type Rawr's name `spelling` stands for (`std_path::spelling`), as
+/// `std::collections::HashMap` for `HashMap`: a std path written through
+/// another module, as `std::collections::hash_map::HashMap`, reads as it.
+pub(crate) fn std_canonical(spelling: &str) -> Option<&'static str> {
+    Some(match spelling {
+        "HashMap" => "std::collections::HashMap",
+        "HashSet" => "std::collections::HashSet",
+        "BTreeMap" => "std::collections::BTreeMap",
+        "BTreeSet" => "std::collections::BTreeSet",
+        "VecDeque" => "std::collections::VecDeque",
+        "Reverse" => "std::cmp::Reverse",
+        "Ordering" => "std::cmp::Ordering",
+        "RefCell" => "std::cell::RefCell",
+        "Cell" => "std::cell::Cell",
+        "Rc" => "std::rc::Rc",
+        "Arc" => "std::sync::Arc",
+        "RangeInclusive" => "std::ops::RangeInclusive",
+        "Range" => "std::ops::Range",
+        "PhantomData" => "std::marker::PhantomData",
+        "Duration" => "std::time::Duration",
+        "Instant" => "std::time::Instant",
+        "ParseIntError" => "std::num::ParseIntError",
+        "ParseFloatError" => "std::num::ParseFloatError",
+        "TryFromIntError" => "std::num::TryFromIntError",
+        "ParseBoolError" => "std::str::ParseBoolError",
+        "ParseCharError" => "std::char::ParseCharError",
+        "Infallible" => "std::convert::Infallible",
+        "FromUtf8Error" => "std::string::FromUtf8Error",
+        _ => return None,
+    })
 }
 
 /// The Rawr type the std type path `qualified` names when a `use` binds
@@ -2232,49 +2268,39 @@ pub(crate) fn renamed_std_type(qualified: &str, name: &str) -> Option<&'static s
     (path.contains("::") && ty != name).then_some(ty)
 }
 
-/// `std::time::Duration` and `Instant` as a type path is written: bare
-/// (which a `use` binds: a bare name nothing binds is refused before, by
-/// `std_path::unbound_type`), or by `time::`, `std::time::` or
-/// `core::time::`; the type's name.
+/// `std::time::Duration` and `Instant`: the type's name.
 pub(crate) fn std_time(path: &str) -> Option<&'static str> {
     let name = path
         .strip_prefix("std::time::")
-        .or_else(|| path.strip_prefix("core::time::"))
-        .or_else(|| path.strip_prefix("time::"))
-        .unwrap_or(path);
+        .or_else(|| path.strip_prefix("core::time::"))?;
     ["Duration", "Instant"]
         .into_iter()
         .find(|time| *time == name)
 }
 
-/// `std::collections::VecDeque` as a path is written with its module.
+/// `std::collections::VecDeque`.
 pub(crate) fn std_vec_deque(path: &str) -> bool {
     matches!(
         path,
-        "collections::VecDeque" | "std::collections::VecDeque" | "alloc::collections::VecDeque"
+        "std::collections::VecDeque" | "alloc::collections::VecDeque"
     )
 }
 
-/// `std::cell::Cell` as a path is written with its module.
+/// `std::cell::Cell`.
 pub(crate) fn std_plain_cell(path: &str) -> bool {
-    matches!(path, "cell::Cell" | "std::cell::Cell" | "core::cell::Cell")
+    matches!(path, "std::cell::Cell" | "core::cell::Cell")
 }
 
-/// `std::cell::RefCell` as a path is written. A bare `RefCell` nothing
-/// binds is refused before, by `std_path::unbound_type`.
+/// `std::cell::RefCell`.
 pub(crate) fn std_cell(path: &str) -> bool {
-    matches!(
-        path,
-        "RefCell" | "cell::RefCell" | "std::cell::RefCell" | "core::cell::RefCell"
-    )
+    matches!(path, "std::cell::RefCell" | "core::cell::RefCell")
 }
 
-/// `std::rc::Rc` or `std::sync::Arc` as a path is written: the pointer's
-/// name.
+/// `std::rc::Rc` or `std::sync::Arc`: the pointer's name.
 pub(crate) fn std_pointer(path: &str) -> Option<&'static str> {
     match path {
-        "Rc" | "rc::Rc" | "std::rc::Rc" | "alloc::rc::Rc" => Some("Rc"),
-        "Arc" | "sync::Arc" | "std::sync::Arc" | "alloc::sync::Arc" => Some("Arc"),
+        "std::rc::Rc" | "alloc::rc::Rc" => Some("Rc"),
+        "std::sync::Arc" | "alloc::sync::Arc" => Some("Arc"),
         _ => None,
     }
 }
@@ -2289,10 +2315,7 @@ pub(crate) const MPSC_SYNC_SENDER: &str = "MpscSyncSender";
 
 /// Rawr's builtin name for the std thread type the std path `path` names:
 /// `Mutex`, `JoinHandle`, `ScopedJoinHandle`, `PoisonError`, or a `Sender`,
-/// `SyncSender` or `Receiver` of `std::sync::mpsc`. The path is whole, as
-/// the scope makes it: a name a `use` binds is its std path by then
-/// (`type_ref::through_scope`, `std_path::qualified`), and a bare one
-/// nothing binds names no std type, as in rustc.
+/// `SyncSender` or `Receiver` of `std::sync::mpsc`.
 pub(crate) fn std_thread_type(path: &str) -> Option<&'static str> {
     match path {
         "std::sync::Mutex" => Some("Mutex"),
@@ -2306,22 +2329,17 @@ pub(crate) fn std_thread_type(path: &str) -> Option<&'static str> {
     }
 }
 
-/// `std::marker::PhantomData` as a path is written.
+/// `std::marker::PhantomData`.
 pub(crate) fn std_phantom(path: &str) -> bool {
     matches!(
         path,
-        "PhantomData"
-            | "marker::PhantomData"
-            | "std::marker::PhantomData"
-            | "core::marker::PhantomData"
+        "std::marker::PhantomData" | "core::marker::PhantomData"
     )
 }
 
+/// `std::cmp::Ordering`.
 pub(crate) fn std_ordering(path: &str) -> bool {
-    matches!(
-        path,
-        "Ordering" | "cmp::Ordering" | "std::cmp::Ordering" | "core::cmp::Ordering"
-    )
+    matches!(path, "std::cmp::Ordering" | "core::cmp::Ordering")
 }
 
 /// A path that starts with `::` names an outside crate, as in Rust (E0433):

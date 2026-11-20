@@ -1456,9 +1456,6 @@ impl<'a> Parser<'a> {
             self.next();
             segments.push(self.expect_qualified_name()?);
         }
-        if let [(head, head_span), _, ..] = segments.as_slice() {
-            self.unbound_std_type(head, true, *head_span)?;
-        }
         // A path into a `.rs` module, `echo::Event::Connected`, is spelled
         // through the app crate, as the same path is in an expression.
         if segments.len() >= 2 {
@@ -2752,11 +2749,27 @@ impl<'a> Parser<'a> {
                 .qualified_pattern_owner(syntax.owner_span)
                 .cloned()
         }
-        .ok_or_else(|| Error::UnknownType {
-            name: owner.clone(),
-            reference: syntax.owner_span,
-            path: false,
-            imports: Box::default(),
+        // A path's head nothing in scope names is rustc's E0433, with the
+        // imports a one-segment head could have.
+        .ok_or_else(|| match &syntax.owner[..] {
+            [(head, _)] => Error::UnknownType {
+                name: owner.clone(),
+                reference: syntax.owner_span,
+                path: true,
+                imports: self.imports(head, super::Wanted::Type),
+            },
+            [(head, head_span), ..] if self.unresolved_root(head) => Error::UnknownType {
+                name: head.clone(),
+                reference: Span::new(head_span.start(), text_end(head_span.start(), head)),
+                path: true,
+                imports: Box::default(),
+            },
+            _ => Error::UnknownType {
+                name: owner.clone(),
+                reference: syntax.owner_span,
+                path: false,
+                imports: Box::default(),
+            },
         })?;
         let Nominal::Enum { definition, item } = model else {
             return Err(Error::InvalidMatch {

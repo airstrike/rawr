@@ -2091,12 +2091,15 @@ impl<'a> Parser<'a> {
     /// The pointer `name` names in a path: `Box`, unless the program names
     /// something `Box`, and `Rc` or `Arc` as imported from std.
     pub(super) fn pointer_named(&self, name: &str) -> Option<Pointer> {
-        if self.models.get(name).is_some() {
-            return None;
+        // The prelude's `Box`, unless the program names a type so.
+        if name == "Box" && self.models.get(name).is_none() && self.models.import(name).is_none() {
+            return Some(Pointer::Box);
         }
-        match self.models.import(name) {
-            Some(binding) => crate::resolve::std_pointer(&binding.qualified).map(Pointer::named),
-            None => (name == "Box").then_some(Pointer::Box),
+        let path = self.std_scoped(name)?;
+        match crate::resolve::std_pointer(&path) {
+            Some(pointer) => Some(Pointer::named(pointer)),
+            None => matches!(path.as_str(), "std::boxed::Box" | "alloc::boxed::Box")
+                .then_some(Pointer::Box),
         }
     }
 

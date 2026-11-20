@@ -392,7 +392,23 @@ impl<'a> Parser<'a> {
         written.extend((0..arguments).map(|_| self.next()));
         written.extend(path);
         self.splice_tokens(written);
-        self.parse_local_type().map(Some)
+        // A head nothing in scope names heads the path: rustc's E0433 over
+        // the name, as without the turbofish.
+        self.parse_local_type()
+            .map(Some)
+            .map_err(|error| match error {
+                Error::UnknownType {
+                    name: missing,
+                    imports,
+                    ..
+                } if segments == 0 && missing == *name => Error::UnknownType {
+                    reference: Span::new(name_span.start(), text_end(name_span.start(), name)),
+                    name: missing,
+                    path: true,
+                    imports,
+                },
+                error => error,
+            })
     }
 
     pub(super) fn splice_tokens(&mut self, tokens: Vec<(Token, Position)>) {

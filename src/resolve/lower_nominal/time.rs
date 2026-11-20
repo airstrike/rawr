@@ -33,23 +33,14 @@ impl<'a> Parser<'a> {
             .map(ImmutableString::as_str)
             .collect::<Vec<_>>()
             .join("::");
-        let time = match crate::resolve::std_time(&path)? {
+        // Through the scope (`std_scoped`): `Duration` after `use
+        // std::time::Duration;`, `time::Instant` after `use std::time;`.
+        let time = match crate::resolve::std_time(&self.std_scoped(&path)?)? {
             "Duration" => Time::Duration,
             _ => Time::Instant,
         };
         let std = format!("std::time::{}", time.name());
         if crate::resolve::std_reexport(&std, &self.models.host) != std {
-            return None;
-        }
-        // A bare `Duration` is std's unless the crate declares or imports
-        // another.
-        if !path.contains("::")
-            && (self.models.get(&path).is_some()
-                || self
-                    .models
-                    .import(&path)
-                    .is_some_and(|binding| !matches!(binding.target, item::Import::Module)))
-        {
             return None;
         }
         Some((time, member.clone(), 2 * segments.len() - 2, end))

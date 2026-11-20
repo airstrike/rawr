@@ -1173,12 +1173,12 @@ impl<'a> Parser<'a> {
         Ok(self.operator_expr(source.surrounded("(", ")"), ty, call))
     }
 
-    /// Whether `path` names `std::cmp::Ordering`: `Ordering` only when the
-    /// crate declares no type of that name.
+    /// Whether `path` names `std::cmp::Ordering` through the scope
+    /// (`std_scoped`): `Ordering` after `use std::cmp::Ordering;`.
     pub(super) fn ordering_path<'p>(&self, path: impl Iterator<Item = &'p str>) -> bool {
         let path = path.collect::<Vec<_>>().join("::");
-        crate::resolve::std_ordering(&path)
-            && (path != "Ordering" || self.models.get("Ordering").is_none())
+        self.std_scoped(&path)
+            .is_some_and(|path| crate::resolve::std_ordering(&path))
     }
 
     /// `Ordering::Less` after its first segment `first`: the variant's
