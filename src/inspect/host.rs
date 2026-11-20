@@ -12,11 +12,8 @@
 //! from.
 
 use std::path::Path;
-use std::sync::{Mutex, PoisonError};
 
 use serde_json::Value;
-
-use crate::package::snapshot::Snapshot;
 
 /// How a hosted inspector's paused program waits: the host suspends the
 /// stack the program runs on until [`Host::wake`], while the host goes on
@@ -71,29 +68,24 @@ pub(super) enum Files {
     #[cfg_attr(not(unix), allow(dead_code))]
     Disk,
     /// The files the program that runs next compiled from, once it did.
-    Compiled(Mutex<Option<Snapshot>>),
+    Compiled,
 }
 
 impl Files {
-    /// The text of `file`, or why it has none.
-    pub(super) fn read(&self, file: &str) -> Result<String, String> {
+    /// The text of `file`, or why it has none, in `placed` when it is the
+    /// generation that runs next.
+    pub(super) fn read(
+        &self,
+        file: &str,
+        placed: Option<&super::Placed>,
+    ) -> Result<String, String> {
         match self {
             Self::Disk => std::fs::read_to_string(file).map_err(|error| error.to_string()),
-            Self::Compiled(compiled) => compiled
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .as_ref()
+            Self::Compiled => placed
+                .and_then(|placed| placed.snapshot.as_ref())
                 .and_then(|snapshot| snapshot.read(Path::new(file)))
                 .map(str::to_owned)
                 .ok_or_else(|| "it isn't one of the program's files".to_owned()),
-        }
-    }
-
-    /// Read from `snapshot` from now on, when these are the compiled files.
-    #[cfg(feature = "sync")]
-    pub(super) fn compiled_from(&self, snapshot: Option<&Snapshot>) {
-        if let Self::Compiled(compiled) = self {
-            *compiled.lock().unwrap_or_else(PoisonError::into_inner) = snapshot.cloned();
         }
     }
 }

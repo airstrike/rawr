@@ -202,14 +202,14 @@ pub fn run(loaded: Loaded) -> Result<Option<String>, Failed> {
         if let Some(entry) = source(target) {
             let inspector = &served.inspector;
             let positions = std::sync::Arc::clone(&positions);
-            if let Some(snapshot) = snapshot {
-                inspector.evaluate_in(rawr::inspect::Program::new(
+            let program = snapshot.map(|snapshot| {
+                rawr::inspect::Program::new(
                     snapshot,
                     entry.clone(),
                     std::sync::Arc::clone(&positions),
-                ));
-            }
-            inspector.locate_with(move |position| {
+                )
+            });
+            inspector.place(program, move |position| {
                 let (file, span) = positions.locate_statement(&entry, position)?;
                 Some((file.identity().to_owned(), span.start().line()?))
             });

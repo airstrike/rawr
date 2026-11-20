@@ -5684,9 +5684,8 @@ fn place(
 ) {
     // One compiled on an engine with the debugger kept its files.
     let evaluated = located.program().unwrap_or_else(|| located.program_from(source.snapshot.clone()));
-    inspector.evaluate_in(evaluated);
     let located = std::sync::Arc::clone(located);
-    inspector.locate_with(move |position| located.line(position));
+    inspector.place(Some(evaluated), move |position| located.line(position));
     inspector.compiled(ast);
 }
 
