@@ -4,11 +4,18 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
-    "entries": [
-      {"text":"The reference and embedding docs describe destructuring assignment, trait scope for method calls, impls that name a trait by path, std trait objects, macro calls in items, types and patterns, `rawr tui`, the debugger window's panes, the call-level default and `Outcome::Uncovered`, and drop limits that no longer hold.","issues":[2342]}
-    ]
+    "entries": []
   },
   "releases": [
+    {
+      "version": "0.4.62",
+      "date": "2026-11-20",
+      "entries": [
+        {"text":"The reference and embedding docs describe destructuring assignment, trait scope for method calls, impls that name a trait by path, std trait objects, macro calls in items, types and patterns, `rawr tui`, the debugger window's panes, the call-level default and `Outcome::Uncovered`, and drop limits that no longer hold.","issues":[2342]},
+        {"text":"E0599 for a program's own struct or enum names its kind and declared parameters and marks its definition, as rustc does. A name no `use` brings in suggests every item a `use` could import, the program's and std's (such as `HashMap`), as rustc's alternatives. A format argument lacking `Display` or `Debug` is labelled at its placeholder, and E0004 notes the program's enum with each uncovered variant.","issues":[2337]},
+        {"text":"E0432 marks a nested group member from the member and a std glob or `self` prefix at the missing segment, and names a missing module's parent as rustc does.","issues":[2341]}
+      ]
+    },
     {
       "version": "0.4.61",
       "date": "2026-11-20",

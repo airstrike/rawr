@@ -5,7 +5,12 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
+
+## 0.4.62 (2026-11-20)
+
 - The reference and embedding docs describe destructuring assignment, trait scope for method calls, impls that name a trait by path, std trait objects, macro calls in items, types and patterns, `rawr tui`, the debugger window's panes, the call-level default and `Outcome::Uncovered`, and drop limits that no longer hold. (#2342)
+- E0599 for a program's own struct or enum names its kind and declared parameters and marks its definition, as rustc does. A name no `use` brings in suggests every item a `use` could import, the program's and std's (such as `HashMap`), as rustc's alternatives. A format argument lacking `Display` or `Debug` is labelled at its placeholder, and E0004 notes the program's enum with each uncovered variant. (#2337)
+- E0432 marks a nested group member from the member and a std glob or `self` prefix at the missing segment, and names a missing module's parent as rustc does. (#2341)
 
 ## 0.4.61 (2026-11-20)
 

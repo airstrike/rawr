@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-20",
-  "version": "0.4.61",
+  "version": "0.4.62",
   "examples": {
     "running": 56,
     "total": 56,
@@ -9,13 +9,17 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
-      "entries": [
-        {"text":"The reference and embedding docs describe destructuring assignment, trait scope for method calls, impls that name a trait by path, std trait objects, macro calls in items, types and patterns, `rawr tui`, the debugger window's panes, the call-level default and `Outcome::Uncovered`, and drop limits that no longer hold.","issues":[2342]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.62",
+        "date": "2026-11-20",
+        "entries": [
+          {"text":"The reference and embedding docs describe destructuring assignment, trait scope for method calls, impls that name a trait by path, std trait objects, macro calls in items, types and patterns, `rawr tui`, the debugger window's panes, the call-level default and `Outcome::Uncovered`, and drop limits that no longer hold.","issues":[2342]},
+          {"text":"E0599 for a program's own struct or enum names its kind and declared parameters and marks its definition, as rustc does. A name no `use` brings in suggests every item a `use` could import, the program's and std's (such as `HashMap`), as rustc's alternatives. A format argument lacking `Display` or `Debug` is labelled at its placeholder, and E0004 notes the program's enum with each uncovered variant.","issues":[2337]},
+          {"text":"E0432 marks a nested group member from the member and a std glob or `self` prefix at the missing segment, and names a missing module's parent as rustc does.","issues":[2341]}
+        ]
+      },
       {
         "version": "0.4.61",
         "date": "2026-11-20",
@@ -5550,15 +5554,17 @@
     {"issue":2334,"title":"Argument-count and bound errors for std, crate and generic callees, and the derive context line","state":"open","category":"Health"},
     {"issue":2335,"title":"A program trait's methods resolve without the trait in scope","state":"closed","category":"Health","release":"0.4.59"},
     {"issue":2336,"title":"`let r = &mut c;` of a local not declared `mut` is accepted, or reported at a later use","state":"closed","category":"Health","release":"0.4.59"},
-    {"issue":2337,"title":"Diagnostics left after #2330: E0599's type kind, several import candidates, E0277 format labels, E0004's enum note","state":"open","category":"Health"},
+    {"issue":2337,"title":"Diagnostics left after #2330: E0599's type kind, several import candidates, E0277 format labels, E0004's enum note","state":"closed","category":"Health","release":"0.4.62"},
     {"issue":2338,"title":"An impl of a program trait named by its path (`impl m::T for S`) is refused in a single source","state":"closed","category":"Health","release":"0.4.61"},
     {"issue":2339,"title":"Comparing values of a type with no `PartialEq` or `PartialOrd` reads as rustc's E0369: each…","state":"closed","category":"Health","release":"0.4.60"},
     {"issue":2340,"title":"E0432's primary span over the whole path, and E0369 operand labels for arithmetic and bit operators","state":"closed","category":"Health","release":"0.4.61"},
-    {"issue":2341,"title":"E0432 spans: a nested group member and a std group prefix","state":"open","category":"Health"},
-    {"issue":2342,"title":"The reference and embedding docs describe destructuring assignment, trait scope for method…","state":"open","category":"Health"},
+    {"issue":2341,"title":"E0432 spans: a nested group member and a std group prefix","state":"closed","category":"Health","release":"0.4.62"},
+    {"issue":2342,"title":"The reference and embedding docs describe destructuring assignment, trait scope for method…","state":"closed","category":"Health","release":"0.4.62"},
     {"issue":2343,"title":"`mk!();` among a file's items fails to parse","state":"open","category":"Health"},
     {"issue":2344,"title":"A single file with an inline mod prints \"Rawr package snapshot contains a duplicate path\"","state":"open","category":"Health"},
-    {"issue":2345,"title":"`.into()` from a `&str` local into `Box<dyn Error>` is E0308","state":"open","category":"Health"}
+    {"issue":2345,"title":"`.into()` from a `&str` local into `Box<dyn Error>` is E0308","state":"open","category":"Health"},
+    {"issue":2346,"title":"A bare `Mutex` or `Sender` type compiles without a `use`","state":"open","category":"Health"},
+    {"issue":2347,"title":"Diagnostics left after #2337: struct-variant witnesses, every unresolved member, similar names, lifetimes","state":"open","category":"Health"}
   ],
   "groups": [
     {
