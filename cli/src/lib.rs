@@ -22,6 +22,7 @@ pub mod gui;
 pub mod harness;
 pub mod init;
 pub mod layer;
+pub mod lsp;
 pub mod mcp;
 pub mod new;
 pub mod supervise;
@@ -78,6 +79,7 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
         }
         Ok(Request::Mcp { path }) => serve(path),
         Ok(Request::Dap { path }) => debug(path),
+        Ok(Request::Lsp { path }) => language(path),
         #[cfg(unix)]
         Ok(Request::Tui { path, pid }) => tui::run(path, pid),
         #[cfg(not(unix))]
@@ -260,6 +262,12 @@ enum Request {
     /// `rawr dap [path]`: serve an editor's debugger, with relative paths
     /// from `path`.
     Dap {
+        path: Option<PathBuf>,
+    },
+    /// `rawr lsp [path]`: serve an editor's values and rawr's diagnostics
+    /// beside rust-analyzer, for the program at `path` and those of the
+    /// files the editor opens.
+    Lsp {
         path: Option<PathBuf>,
     },
     /// `rawr tui [--pid <pid>] [path]`: the terminal debugger on the
@@ -481,7 +489,9 @@ fn parse_command(arguments: &[OsString]) -> Result<Request, String> {
         }),
         Some("-h" | "--help" | "help") => Ok(Request::Help),
         Some("-V" | "--version") => Ok(Request::Version),
-        Some("run" | "check" | "doctor" | "mcp" | "dap" | "tui" | "gui" | "init") if asks_help => {
+        Some("run" | "check" | "doctor" | "mcp" | "dap" | "lsp" | "tui" | "gui" | "init")
+            if asks_help =>
+        {
             Ok(Request::Help)
         }
         Some("run") => path(&arguments[1..]).map(|path| Request::Program {
@@ -507,6 +517,7 @@ fn parse_command(arguments: &[OsString]) -> Result<Request, String> {
         Some("new") => parse_new(&arguments[1..]).map(Request::New),
         Some("mcp") => path(&arguments[1..]).map(|path| Request::Mcp { path }),
         Some("dap") => path(&arguments[1..]).map(|path| Request::Dap { path }),
+        Some("lsp") => path(&arguments[1..]).map(|path| Request::Lsp { path }),
         Some("tui") => parse_shell(&arguments[1..]).map(|(path, pid)| Request::Tui { path, pid }),
         Some("gui") => parse_shell(&arguments[1..]).map(|(path, pid)| Request::Gui { path, pid }),
         Some("init") => parse_init(&arguments[1..]),
@@ -556,6 +567,8 @@ fn help(installed: &[layer::Installed]) -> String {
          rawr doctor [path]            Report on the environment and the project\n  \
          rawr mcp [path]               Serve coding agents over MCP on stdio\n  \
          rawr dap [path]               Serve an editor's debugger over DAP on stdio\n  \
+         rawr lsp [path]               Serve live values and rawr's diagnostics to an editor\n                                \
+         over LSP on stdio, beside rust-analyzer\n  \
          rawr tui [path]               Debug the program's run in the terminal, attached to\n                                \
          its run or starting one\n  \
          rawr gui [path]               Open a debugger window on the program's run,\n                                \
@@ -1027,6 +1040,18 @@ fn debug(path: Option<PathBuf>) -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("{}: rawr dap: {error}", color::label(color::Level::Error));
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// `rawr lsp [path]`.
+fn language(path: Option<PathBuf>) -> ExitCode {
+    let given = path.map(|path| std::fs::canonicalize(&path).unwrap_or(path));
+    match lsp::serve(given) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("{}: rawr lsp: {error}", color::label(color::Level::Error));
             ExitCode::FAILURE
         }
     }
