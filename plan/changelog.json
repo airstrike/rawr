@@ -4,7 +4,9 @@
   "tracked_from": "0.3.12",
   "unreleased": {
     "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
-    "entries": []
+    "entries": [
+      {"text":"/play clears the debugger's breakpoints when you pick a different snippet, keeps an example's #anchor while you edit it, and shows a program that only prints without an empty frame above its text.","issues":[2376]}
+    ]
   },
   "releases": [
     {
