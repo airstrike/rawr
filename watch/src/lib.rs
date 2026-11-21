@@ -8,7 +8,7 @@
 
 mod adapter;
 #[cfg(unix)]
-mod exit;
+pub mod exit;
 mod input;
 pub mod native;
 

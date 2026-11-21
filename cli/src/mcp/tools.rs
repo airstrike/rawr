@@ -7,7 +7,7 @@ use std::process::Command;
 use serde_json::{json, Value};
 
 use super::process::{self, Cancel};
-use super::{content, extension, session, Progress, Server};
+use super::{check, content, extension, session, Progress, Server};
 use crate::layer;
 
 /// Core's tool names: an extension's tool by one of these names is not
@@ -411,7 +411,7 @@ pub struct Place {
 
 impl Place {
     /// Where the server keeps its own files for this root.
-    fn directory(&self) -> PathBuf {
+    pub(super) fn directory(&self) -> PathBuf {
         let project = if self.root.is_dir() {
             &self.root
         } else {
@@ -503,11 +503,9 @@ pub fn call(server: &Server, params: &Value, cancel: &Cancel) -> Value {
         .unwrap_or_default();
     let outcome = match name {
         "new" => new(server, text("path"), text("template"), cancel),
-        "check" => place(&server.root, text("path")).map(|place| {
-            server
-                .checks
-                .check(&place.path, &place.root, &place.directory(), cancel)
-        }),
+        "check" => {
+            place(&server.root, text("path")).map(|place| check::check(server, &place, cancel))
+        }
         "run" => place(&server.root, text("path"))
             .map(|place| run(&place, &strings(&arguments, "args"), text("stdin"), cancel)),
         "start" => place(&server.root, text("path")).and_then(|place| {

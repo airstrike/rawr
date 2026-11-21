@@ -5,7 +5,7 @@
 use std::io::Write as _;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{mpsc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 /// How long a group gets between SIGTERM and SIGKILL.
@@ -15,12 +15,11 @@ pub const GRACE: Duration = Duration::from_secs(2);
 pub const KEPT: usize = 256 * 1024;
 
 /// A call's cancellation: the client's `notifications/cancelled`, or the
-/// server shutting down. It ends the groups the call started, and wakes
-/// what the call waits on.
+/// server shutting down. It wakes what the call waits on, and the call
+/// ends what it started.
 #[derive(Default)]
 pub struct Cancel {
     cancelled: AtomicBool,
-    groups: Mutex<Vec<u32>>,
     wakes: Mutex<Vec<Box<dyn FnOnce() + Send>>>,
 }
 
@@ -34,17 +33,13 @@ impl std::fmt::Debug for Cancel {
 }
 
 impl Cancel {
-    /// End every group the call started, and any it starts later, and wake
-    /// each wait of the call.
+    /// Wake each wait of the call, and any it starts later.
     pub fn cancel(&self) {
         let wakes = {
             let mut wakes = self.wakes.lock().unwrap_or_else(PoisonError::into_inner);
             self.cancelled.store(true, Ordering::SeqCst);
             std::mem::take(&mut *wakes)
         };
-        for group in self.lock().drain(..) {
-            end_group(group);
-        }
         for wake in wakes {
             wake();
         }
@@ -65,21 +60,6 @@ impl Cancel {
         } else {
             wakes.push(Box::new(wake));
         }
-    }
-
-    fn lock(&self) -> std::sync::MutexGuard<'_, Vec<u32>> {
-        self.groups.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    fn adopt(&self, group: u32) {
-        self.lock().push(group);
-        if self.is_cancelled() {
-            self.cancel();
-        }
-    }
-
-    fn release(&self, group: u32) {
-        self.lock().retain(|owned| *owned != group);
     }
 }
 
@@ -264,8 +244,21 @@ pub struct Finished {
     pub elapsed: Duration,
 }
 
-/// Run `command` in a group of its own with `stdin` as its input, until it
-/// exits or `cancel` fires; then its group is ended.
+/// What a running child's call hears first.
+enum Heard {
+    /// The child exited. It stays a zombie for the call to reap, so its
+    /// group can't pass to another process before the call ends it.
+    Exited,
+    /// The call was cancelled.
+    Cancelled,
+}
+
+/// Run `command` in a group of its own with `stdin` as its input, to its
+/// exit or `cancel`; then its group is ended.
+///
+/// A thread waits in the kernel for the child's exit without reaping it,
+/// and the cancel sends on the same channel, so the call blocks on
+/// whichever comes first.
 pub fn run(
     command: &mut Command,
     stdin: Option<&str>,
@@ -282,7 +275,22 @@ pub fn run(
         .stderr(Stdio::piped());
     let mut child = spawn(command)?;
     let group = child.id();
-    cancel.adopt(group);
+    let (told, heard) = mpsc::channel::<Heard>();
+    let exited = told.clone();
+    let waiting = std::thread::Builder::new()
+        .name("rawr-mcp-exit".into())
+        .spawn(move || {
+            rawr_watch::exit::wait(group);
+            let _ = exited.send(Heard::Exited);
+        });
+    if let Err(error) = waiting {
+        kill_group(group);
+        let _ = child.wait();
+        return Err(error);
+    }
+    cancel.on_cancel(move || {
+        let _ = told.send(Heard::Cancelled);
+    });
     if let (Some(text), Some(mut pipe)) = (stdin, child.stdin.take()) {
         let text = text.to_owned();
         let _ = std::thread::Builder::new()
@@ -293,24 +301,20 @@ pub fn run(
     }
     let stdout = child.stdout.take().map(Tail::read).unwrap_or_default();
     let stderr = child.stderr.take().map(Tail::read).unwrap_or_default();
-    let status = loop {
-        if let Some(status) = child.try_wait()? {
-            break Some(status);
+    // The exit thread holds a sender until it sends, so the channel never
+    // closes first.
+    let status = match heard.recv() {
+        Ok(Heard::Cancelled) => {
+            end_group(group);
+            let _ = child.wait();
+            None
         }
-        if cancel.is_cancelled() {
-            break None;
+        Ok(Heard::Exited) | Err(mpsc::RecvError) => {
+            // Whatever the leader left running in its group goes with it.
+            kill_group(group);
+            Some(child.wait()?)
         }
-        std::thread::sleep(Duration::from_millis(10));
     };
-    let ended = status.is_none();
-    if ended {
-        end_group(group);
-        let _ = child.wait();
-    } else {
-        // Whatever the leader left running in its group goes with it.
-        kill_group(group);
-    }
-    cancel.release(group);
     Ok(Finished {
         status,
         stdout,
@@ -338,8 +342,28 @@ pub fn code(status: ExitStatus) -> i32 {
 #[cfg(test)]
 mod tests {
     use std::io::Write as _;
+    use std::process::Command;
 
-    use super::Tail;
+    use super::{Cancel, Tail};
+
+    /// A child's exit answers the call with its status and output, and a
+    /// cancel ends a child that would run on.
+    #[cfg(unix)]
+    #[test]
+    fn a_run_ends_at_the_childs_exit_or_at_its_cancel() {
+        let mut exiting = Command::new("sh");
+        exiting.args(["-c", "echo said; exit 3"]);
+        let finished = super::run(&mut exiting, None, &Cancel::default()).unwrap();
+        assert_eq!(finished.status.map(super::code), Some(3));
+        assert_eq!(finished.stdout.finish().0, "said\n");
+
+        let cancel = Cancel::default();
+        cancel.cancel();
+        let mut lasting = Command::new("sleep");
+        lasting.arg("1000");
+        let finished = super::run(&mut lasting, None, &cancel).unwrap();
+        assert!(finished.status.is_none(), "a cancelled run has no status");
+    }
 
     /// A writer that outlives the child, as a process that left its group
     /// keeps the pipe open, holds up no `finish`: it gets what the pipe
