@@ -10,7 +10,7 @@ pub enum Phase {
     /// Spawned; nothing reported yet.
     #[default]
     Starting,
-    /// A cold start builds: its stage and percent.
+    /// A cold start builds: its stage and status.
     Building,
     /// The program runs.
     Running,
@@ -73,8 +73,8 @@ impl Phase {
 pub struct State {
     phase: Phase,
     events: Vec<(u64, Value)>,
-    /// The latest building stage and percent.
-    building: Option<(String, u64)>,
+    /// What the latest building event's status line said.
+    building: Option<String>,
     /// The latest failure while a program kept running, cleared by the
     /// next good reload.
     failure: Option<Value>,
@@ -95,12 +95,10 @@ impl State {
         self.paused.as_ref()
     }
 
-    /// The latest building stage and percent.
+    /// What the latest building event's status line said.
     #[must_use]
-    pub fn building(&self) -> Option<(&str, u64)> {
-        self.building
-            .as_ref()
-            .map(|(stage, percent)| (stage.as_str(), *percent))
+    pub fn building(&self) -> Option<&str> {
+        self.building.as_deref()
     }
 
     /// The failure the running program carries, if a save failed.
@@ -153,10 +151,7 @@ impl State {
         match name {
             "building" => {
                 self.phase = Phase::Building;
-                self.building = Some((
-                    event["stage"].as_str().unwrap_or_default().to_owned(),
-                    event["percent"].as_u64().unwrap_or(0),
-                ));
+                self.building = Some(event["status"].as_str().unwrap_or_default().to_owned());
             }
             "running" | "queued" | "swapped" => {
                 self.phase = Phase::Running;
@@ -207,9 +202,16 @@ mod tests {
         let mut state = State::default();
         recorded(
             &mut state,
-            json!({ "event": "building", "stage": "building API", "percent": 40 }),
+            json!({
+                "event": "building", "stage": "building API",
+                "status": "building API · 12 of 340 crates · serde",
+            }),
         );
         assert_eq!(state.phase, Phase::Building);
+        assert_eq!(
+            state.building(),
+            Some("building API · 12 of 340 crates · serde")
+        );
         recorded(&mut state, json!({ "event": "running" }));
         assert_eq!(state.phase, Phase::Running);
         recorded(&mut state, json!({ "event": "failed", "diagnostics": [] }));

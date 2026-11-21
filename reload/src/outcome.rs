@@ -145,7 +145,7 @@ mod tests {
     fn rawrs_own_events_and_broken_lines_are_no_outcome() {
         for line in [
             r#"{"event":"running"}"#,
-            r#"{"event":"building","stage":"build","percent":40}"#,
+            r#"{"event":"building","stage":"building API","status":"building API"}"#,
             r#"{"event":"ended","status":0}"#,
             r#"{"event":"restarting"}"#,
             r#"{"event":"swapped""#,

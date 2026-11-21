@@ -770,11 +770,7 @@ impl App {
     fn status(&self) -> Element<'_, Message> {
         let (tone, word, detail) = match &self.phase {
             Phase::Starting => (theme::Tone::Quiet, "Starting", String::new()),
-            Phase::Building { stage, percent } => (
-                theme::Tone::Quiet,
-                "Building",
-                format!("{stage} {percent}%"),
-            ),
+            Phase::Building(status) => (theme::Tone::Quiet, "Building", status.clone()),
             Phase::Running => (theme::Tone::Good, "Running", String::new()),
             Phase::Paused(stop) => {
                 let place = match (&stop.line, &stop.function) {

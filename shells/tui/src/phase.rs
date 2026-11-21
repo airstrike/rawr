@@ -10,11 +10,8 @@ pub enum Phase {
     /// Nothing reported yet.
     #[default]
     Starting,
-    /// A cold start builds: its stage and percent.
-    Building {
-        stage: String,
-        percent: u64,
-    },
+    /// A cold start builds: what its status line says.
+    Building(String),
     Running,
     /// Paused at a breakpoint or a step.
     Paused(Stop),
@@ -83,10 +80,7 @@ impl Phase {
     #[must_use]
     pub fn after(&self, event: &Value) -> Self {
         match event["event"].as_str().unwrap_or_default() {
-            "building" => Self::Building {
-                stage: event["stage"].as_str().unwrap_or_default().to_owned(),
-                percent: event["percent"].as_u64().unwrap_or(0),
-            },
+            "building" => Self::Building(event["status"].as_str().unwrap_or_default().to_owned()),
             "running" | "queued" | "swapped" | "resumed" => Self::Running,
             "paused" => Stop::from_json(event).map_or_else(|| self.clone(), Self::Paused),
             "restarting" => Self::Restarting,
@@ -118,7 +112,7 @@ impl fmt::Display for Phase {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Starting => formatter.write_str("starting"),
-            Self::Building { stage, percent } => write!(formatter, "building: {stage} {percent}%"),
+            Self::Building(status) => write!(formatter, "building: {status}"),
             Self::Running => formatter.write_str("running"),
             Self::Paused(stop) => write!(formatter, "paused {stop}"),
             Self::Restarting => formatter.write_str("restarting"),

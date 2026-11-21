@@ -2,7 +2,7 @@
 //! D1053.2).
 //!
 //! The owners that know what happened emit one JSON object per event:
-//! `building` (a stage and a percent), `running`, `queued`, `swapped`,
+//! `building` (a stage and what the status line says), `running`, `queued`, `swapped`,
 //! `restarting` (a reason), `failed` (structured diagnostics) and `ended`
 //! (the exit status). The run's [`session`] numbers each and tells every
 //! shell attached to it. A file named in [`EVENTS`] gets each as a line
@@ -111,9 +111,10 @@ pub fn emit(event: &Value) {
     }
 }
 
-/// A cold start is building: the stage it is in and the percent done.
-pub fn building(stage: &str, percent: u8) {
-    emit(&json!({ "event": "building", "stage": stage, "percent": percent }));
+/// A cold start is building: the stage it is in, and what its status line
+/// says of it, such as `building runner · 212 of 340 crates · iced_wgpu · 3m`.
+pub fn building(stage: &str, status: &str) {
+    emit(&json!({ "event": "building", "stage": stage, "status": status }));
 }
 
 /// The program is running its first generation, or again after a restart.

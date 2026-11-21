@@ -12,6 +12,12 @@
 //! A holder that builds for a project writes the project after its pid,
 //! and a wait names both, so a user sees which build blocks them.
 //!
+//! A wait is also said on the status line, to its end, for what it is:
+//! "rawr's runtime, used by process 4242". The nightly's extraction
+//! directory, which every project on the machine shares (D700), is no
+//! Cargo build directory of the user's, so its wait says so above the line
+//! too, in rawr's own words ([`Exclusive::extracting`]).
+//!
 //! A lock whose file's bytes are fixed, such as a store's leases, records
 //! nothing: a [`Fixed`] hold says the wait naming what the lock covers.
 //!
@@ -44,6 +50,25 @@ impl Exclusive {
         Ok(Self(file))
     }
 
+    /// [`building`](Self::building) for rawr's shared extraction
+    /// directory, `what`, whose wait says, in rawr's own words, the process
+    /// that uses it and the project it extracts for.
+    pub(crate) fn extracting(
+        file: File,
+        path: &Path,
+        what: &str,
+        project: &Path,
+    ) -> io::Result<Self> {
+        take(
+            &file,
+            path,
+            Wording::Rawr(what),
+            Mode::Exclusive,
+            crate::progress::say,
+        )?;
+        Self::record(file, project)
+    }
+
     /// [`new`](Self::new) for a build of `project`, which a wait for this
     /// hold names after the pid.
     pub(crate) fn building(
@@ -53,6 +78,12 @@ impl Exclusive {
         project: &Path,
     ) -> io::Result<Self> {
         wait(&file, path, what, Mode::Exclusive, crate::progress::say)?;
+        Self::record(file, project)
+    }
+
+    /// Hold `file`, taken, writing the `project` it builds for after its
+    /// pid.
+    fn record(file: File, project: &Path) -> io::Result<Self> {
         let pid = std::process::id().to_string();
         let project = format!(" {}", project.display());
         file.write_all_at(project.as_bytes(), pid.len() as u64)?;
@@ -91,8 +122,11 @@ impl Fixed {
         match file.try_lock() {
             Ok(()) => {}
             Err(TryLockError::WouldBlock) => {
-                say(&message(what, None));
-                file.lock()?;
+                say(&Wording::Cargo(what).message(None));
+                crate::progress::waiting(what.to_owned());
+                let locked = file.lock();
+                crate::progress::waited();
+                locked?;
             }
             Err(TryLockError::Error(error)) => return Err(error),
         }
@@ -121,6 +155,17 @@ pub(crate) fn wait(
     mode: Mode,
     say: impl FnOnce(&str),
 ) -> io::Result<()> {
+    take(file, path, Wording::Cargo(what), mode, say)
+}
+
+/// [`wait`], saying the wait in `wording`.
+fn take(
+    file: &File,
+    path: &Path,
+    wording: Wording<'_>,
+    mode: Mode,
+    say: impl FnOnce(&str),
+) -> io::Result<()> {
     let tried = match mode {
         Mode::Shared => file.try_lock_shared(),
         Mode::Exclusive => file.try_lock(),
@@ -128,11 +173,15 @@ pub(crate) fn wait(
     match tried {
         Ok(()) => {}
         Err(TryLockError::WouldBlock) => {
-            say(&message(what, builder(file, path, mode)?));
-            match mode {
-                Mode::Shared => file.lock_shared()?,
-                Mode::Exclusive => file.lock()?,
-            }
+            let builder = builder(file, path, mode)?;
+            say(&wording.message(builder.as_ref()));
+            crate::progress::waiting(wording.waiting(builder.as_ref()));
+            let locked = match mode {
+                Mode::Shared => file.lock_shared(),
+                Mode::Exclusive => file.lock(),
+            };
+            crate::progress::waited();
+            locked?;
         }
         Err(TryLockError::Error(error)) => return Err(error),
     }
@@ -184,16 +233,44 @@ struct Builder {
     project: String,
 }
 
-/// What a wait for the lock on `what` says.
-fn message(what: &str, builder: Option<Builder>) -> String {
-    match builder {
-        Some(Builder { pid, project }) if project.is_empty() => {
-            format!("    Blocking waiting for file lock on {what}, held by process {pid}")
+/// How a wait names the lock on what it covers.
+#[derive(Clone, Copy, Debug)]
+enum Wording<'a> {
+    /// As Cargo names its own locks, for a lock on what Cargo would lock.
+    Cargo(&'a str),
+    /// In rawr's own words, for a lock Cargo has no word for.
+    Rawr(&'a str),
+}
+
+impl Wording<'_> {
+    /// What a wait for the lock that `builder` holds says above the line.
+    fn message(self, builder: Option<&Builder>) -> String {
+        match self {
+            Self::Cargo(what) => match builder {
+                Some(Builder { pid, project }) if project.is_empty() => {
+                    format!("    Blocking waiting for file lock on {what}, held by process {pid}")
+                }
+                Some(Builder { pid, project }) => format!(
+                    "    Blocking waiting for file lock on {what}, held by process {pid} building {project}"
+                ),
+                None => format!("    Blocking waiting for file lock on {what}"),
+            },
+            Self::Rawr(_) => format!("    Waiting for {}", self.waiting(builder)),
         }
-        Some(Builder { pid, project }) => format!(
-            "    Blocking waiting for file lock on {what}, held by process {pid} building {project}"
-        ),
-        None => format!("    Blocking waiting for file lock on {what}"),
+    }
+
+    /// What the status line says the wait is for.
+    fn waiting(self, builder: Option<&Builder>) -> String {
+        let (Self::Cargo(what) | Self::Rawr(what)) = self;
+        match builder {
+            Some(Builder { pid, project }) if project.is_empty() => {
+                format!("{what}, used by process {pid}")
+            }
+            Some(Builder { pid, project }) => {
+                format!("{what}, used by process {pid} for {project}")
+            }
+            None => what.to_owned(),
+        }
     }
 }
 
@@ -327,5 +404,32 @@ mod tests {
         super::release(&lease, Mode::Shared).unwrap();
         waiter.join().unwrap();
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// A wait for rawr's shared extraction directory names it as rawr's,
+    /// above the line and on it, with the process that uses it and the
+    /// project it extracts for; a wait for a lock Cargo would take keeps
+    /// Cargo's words above the line.
+    #[test]
+    fn a_wait_names_rawrs_own_directory_in_rawrs_words() {
+        let builder = super::Builder {
+            pid: 4242,
+            project: "/work/app".into(),
+        };
+        let shared = super::Wording::Rawr("rawr's shared extraction directory");
+        assert_eq!(
+            shared.message(Some(&builder)),
+            "    Waiting for rawr's shared extraction directory, used by process 4242 for /work/app"
+        );
+        assert_eq!(
+            shared.waiting(Some(&builder)),
+            "rawr's shared extraction directory, used by process 4242 for /work/app"
+        );
+        let cargo = super::Wording::Cargo("build directory");
+        assert_eq!(
+            cargo.message(Some(&builder)),
+            "    Blocking waiting for file lock on build directory, held by process 4242 building /work/app"
+        );
+        assert_eq!(cargo.waiting(None), "build directory");
     }
 }

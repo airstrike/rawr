@@ -297,10 +297,12 @@ impl Build {
         });
         let mut messages = Vec::new();
         if let Some(stdout) = child.stdout.take() {
+            let mut watch = crate::progress::Watch::stdout();
             for line in BufReader::new(stdout).split(b'\n').map_while(Result::ok) {
-                crate::progress::observe(true, b"\n");
+                let start = messages.len();
                 messages.extend_from_slice(&line);
                 messages.push(b'\n');
+                watch.feed(&messages[start..]);
             }
         }
         let status = child.wait().map_err(io(

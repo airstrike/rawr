@@ -606,7 +606,7 @@ pub fn call(server: &Server, params: &Value, call: &Call) -> Value {
                 arguments.get("cursor").and_then(Value::as_u64),
                 output_cursor,
                 call,
-                |stage, percent| progress.send(percent as f64, Some(100.0), stage),
+                progress.building(),
             );
             // A cancelled call gets no answer, so it gives no events: the
             // next call without a cursor still returns them. One a later
@@ -806,9 +806,7 @@ fn start(
         call,
     )
     .map_err(|error| format!("cannot start rawr run: {error}"))?;
-    session.settle(call, |stage, percent| {
-        progress.send(percent as f64, Some(100.0), stage);
-    });
+    session.settle(call, progress.building());
     let answer = session.answer(None, None);
     let mut summary = answer.summary;
     if !session.is_started() {

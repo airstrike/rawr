@@ -1,35 +1,39 @@
 //! One status line on stderr while a cold launch builds its Rust dependencies.
 //!
-//! The line carries one overall bar for the whole launch. Each stage owns a
-//! weight: the previous cold launch's stage durations for this project (kept in
-//! `<project>/target/rawr/cache/progress`), else [`DEFAULT_WEIGHTS`]. Within a stage,
-//! progress is 90% of the crate fraction (finished crates over the unit-graph
-//! total, else over the previous launch's count for that stage), with the gap
-//! to the stage end closed by a time fraction (elapsed over the previous
-//! launch's stage duration, else an easing toward [`DEFAULT_SECONDS`]). It never
-//! reaches the stage end on time alone, and a slow tail of large crates still
-//! advances. Counts come from Cargo's own output: one stdout
-//! JSON line per finished unit (`--message-format json`), or one `Compiling`
-//! stderr line per crate. The shown percent never goes backwards. A launch whose
-//! first stage settles within [`QUIET`] prints nothing, so warm launches stay
-//! silent; once shown, the line stays up until the window appears or the launch
-//! fails.
+//! The line says what the launch does, as Cargo reports it: the stage, or
+//! the step of it the launch named last, such as the check's "reading API"
+//! (#1763); the units Cargo has finished of the total; the crate that has
+//! compiled longest of those still compiling; and the time since the launch
+//! began. The total is the unit graph's count, else the previous cold
+//! launch's count for that stage (kept in `<project>/target/rawr/cache/progress`),
+//! said as "about". Counts come from Cargo's own output, read line by line:
+//! one stdout JSON line per finished unit (`--message-format json`), and one
+//! `Compiling` stderr line per package it starts. While nothing moves, only
+//! the clock does.
 //!
-//! A stage begins where its work does: a Cargo child of its kind, the
-//! runner's generation (building runner) and the runner's build, a hit
-//! included (starting). The line names the stage, or the step of it the
-//! launch named last, such as the check's "reading API" (#1763).
+//! A Cargo child that waits for a lock another Cargo holds says so on its
+//! stderr. The line then says that it waits, for which directory, and for
+//! how long, until Cargo says anything else. The wait's own line is also
+//! printed above the status line, marked as Cargo's.
+//!
+//! A launch whose first stage settles within [`QUIET`] prints nothing, so
+//! warm launches stay silent; once shown, the line stays up until the
+//! window appears or the launch fails. A stage begins where its work does:
+//! a Cargo child of its kind, the runner's generation (building runner) and
+//! the runner's build, a hit included (starting).
 //!
 //! A check shows its phase on the same line instead: the phase's name, and
 //! for extraction the units Cargo has finished of the planned total. It has
-//! no bar and no clock, and is redrawn only when the phase or its count moves.
+//! no clock, and is redrawn only when the phase or its count moves.
 //!
 //! One printer thread owns the line, the lines printed above it and the
 //! lines held while a program has the terminal raw, with each round's
 //! counts. Every other thread sends it events. A line, a launch's end, a
 //! restore and a [`flush`] wait for its answer, so what they print is on
 //! stderr when they return and keeps its order against the caller's own
-//! writes. A count or a move of the line is sent without waiting.
+//! writes. A count or a move of the line is sent without waiting. The
+//! observer a command names, such as a supervising `rawr mcp`, hears the
+//! same text whenever it changes, with the clock in whole minutes.
 
 use std::io::{IsTerminal as _, Write};
 use std::path::{Path, PathBuf};
@@ -43,58 +47,78 @@ const STAGES: [&str; 4] = [
     "building runner",
     "starting",
 ];
-/// First-launch stage weights: resolve, build API, build runner, start.
-const DEFAULT_WEIGHTS: [f64; 4] = [0.10, 0.45, 0.40, 0.05];
-/// First-launch stage time estimates, in seconds, when no record exists.
-const DEFAULT_SECONDS: [f64; 4] = [20.0, 150.0, 120.0, 10.0];
-/// Crates alone carry a stage this far; time closes the rest.
-const CRATE_SHARE: f64 = 0.9;
-/// Time alone never carries a stage past this.
-const TIME_CAP: f64 = 0.98;
 const QUIET: Duration = Duration::from_secs(1);
 const TICK: Duration = Duration::from_millis(250);
 
-/// One stage as a launch saw it: crates finished and how long it took.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct Record {
-    crates: usize,
-    millis: u64,
+/// One package Cargo builds, as its `Compiling` line and its artifacts name
+/// it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Package {
+    name: String,
+    version: String,
+}
+
+/// A wait for a lock another process holds: what the line says it waits
+/// for, and since when the wait was heard.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Wait {
+    what: String,
+    since: Instant,
+}
+
+/// One line a Cargo child wrote, or a wait of rawr's own, that moves the
+/// status line.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Said {
+    /// A unit finished: an artifact, fresh or built, or a build script's
+    /// run. It names the package when its library or binary is done.
+    Finished(Option<Package>),
+    /// Cargo started compiling a package.
+    Compiling(Package),
+    /// The launch waits for `what` another process holds, such as
+    /// "another cargo to release target-textfix".
+    Waits { what: String },
+    /// Any other line on Cargo's stderr, or a wait of rawr's own that
+    /// ended: the launch is past any wait.
+    Moved,
+    /// The child ended, so nothing it started is still compiling.
+    Ended,
 }
 
 struct State {
     launch: Option<Instant>,
     stage: usize,
     since: Option<Instant>,
-    lines: usize,
+    /// Units Cargo finished in this stage.
+    finished: usize,
+    /// Packages Cargo started compiling in this stage.
     compiling: usize,
+    /// The packages still compiling, oldest first.
+    building: Vec<Package>,
+    waiting: Option<Wait>,
     units: Option<usize>,
     tick: usize,
     drawn: bool,
-    announced: usize,
+    /// What a plain line last said: the stage, and whether Cargo waited.
+    announced: Option<(usize, bool)>,
     notes: Vec<String>,
     file: Option<PathBuf>,
-    previous: Option<[Record; 4]>,
-    current: [Record; 4],
+    /// The previous cold launch's finished units per stage.
+    previous: Option<[usize; 4]>,
+    current: [usize; 4],
     compiled: bool,
-    shown: f64,
     /// Whether this process shows a check's phases.
     phases: bool,
     phase: Option<&'static str>,
     /// The step of its stage a launch named last, which its line says in
     /// place of the stage's name (#1763).
     step: Option<&'static str>,
-    /// What the observer heard last of this launch: the stage and the 5%
-    /// step.
-    observed: Option<(usize, u8)>,
+    /// What the observer heard last of this launch.
+    observed: Option<String>,
 }
 
 /// The phase whose line counts Cargo's finished units.
 const EXTRACTING: &str = "extracting";
-
-const RECORD: Record = Record {
-    crates: 0,
-    millis: 0,
-};
 
 /// The printer thread's inbox ([`printer`]).
 static PRINTER: OnceLock<mpsc::Sender<Event>> = OnceLock::new();
@@ -106,12 +130,12 @@ thread_local! {
     static PRINTING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// Who hears each stage and each 5% step of a launch beside the status
-/// line, such as a supervising `rawr mcp` (set once by the command).
+/// Who hears each change to a launch's line beside the status line, such
+/// as a supervising `rawr mcp` (set once by the command).
 static OBSERVER: OnceLock<Observer> = OnceLock::new();
 
-/// Hears a stage's name and the launch's percent.
-type Observer = fn(&str, u8);
+/// Hears a stage's name and what the launch's line says.
+type Observer = fn(&str, &str);
 
 /// What the printer thread hears: a change to the status line, a line to
 /// print above it, a count toward a round, or a question with the sender
@@ -121,7 +145,7 @@ enum Event {
     Begin {
         at: Instant,
         file: PathBuf,
-        previous: Option<[Record; 4]>,
+        previous: Option<[usize; 4]>,
     },
     Finish {
         success: bool,
@@ -139,10 +163,10 @@ enum Event {
         mark: Option<Instant>,
     },
     Plan(usize),
-    /// Cargo's finished units on stdout and `Compiling` lines on stderr.
-    Observe {
-        lines: usize,
-        compiling: usize,
+    /// A line of a Cargo child's, or a wait of rawr's own, heard `at`.
+    Said {
+        said: Said,
+        at: Instant,
     },
     Line {
         line: String,
@@ -183,9 +207,9 @@ struct Printer {
     terminal: bool,
 }
 
-/// Tell `observer` each launch's stage and percent as they move. The first
-/// observer a process names is the one it keeps.
-pub fn listen(observer: fn(&str, u8)) {
+/// Tell `observer` each launch's stage and what its line says, whenever
+/// that changes. The first observer a process names is the one it keeps.
+pub fn listen(observer: fn(&str, &str)) {
     let _ = OBSERVER.set(observer);
 }
 
@@ -193,11 +217,10 @@ fn report(state: &mut State) {
     let Some(observer) = OBSERVER.get() else {
         return;
     };
-    let percent = (state.percent(Instant::now()) * 100.0).floor() as u8;
-    let step = (state.stage, percent / 5);
-    if state.observed != Some(step) {
-        state.observed = Some(step);
-        observer(STAGES[state.stage.clamp(1, STAGES.len()) - 1], percent);
+    let text = state.status(Instant::now(), Clock::Minutes).plain(" · ");
+    if state.observed.as_ref() != Some(&text) {
+        observer(STAGES[state.stage.clamp(1, STAGES.len()) - 1], &text);
+        state.observed = Some(text);
     }
 }
 
@@ -975,39 +998,217 @@ pub(crate) fn plan(unit_graph: &[u8]) {
     }
 }
 
-/// Observe one chunk of a building Cargo child's stdout or stderr.
-pub(crate) fn observe(stdout: bool, chunk: &[u8]) {
-    let (lines, compiling) = if stdout {
-        (count(chunk, b"\n"), 0)
-    } else {
-        (0, count(chunk, b"Compiling "))
+/// Where a Cargo child keeps what its locks cover: its build directory
+/// and its artifact directory.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Directories {
+    build: PathBuf,
+    artifacts: PathBuf,
+}
+
+impl Directories {
+    pub(crate) const fn new(build: PathBuf, artifacts: PathBuf) -> Self {
+        Self { build, artifacts }
+    }
+
+    /// What a wait for the lock on `what`, as Cargo names it, waits for:
+    /// the directory's own name, or Cargo's name for anything else.
+    fn place(&self, what: &str) -> String {
+        let directory = match what {
+            "build directory" => &self.build,
+            "artifact directory" => &self.artifacts,
+            "package cache" => return "Cargo's package cache".to_owned(),
+            _ => return what.to_owned(),
+        };
+        directory.file_name().map_or_else(
+            || directory.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        )
+    }
+}
+
+/// Reads one stream of a building Cargo child, line by line, and tells the
+/// status line what each says. When the stderr watch goes, the child has
+/// ended.
+pub(crate) struct Watch {
+    stream: Stream,
+    /// The start of a line whose end has not come yet.
+    partial: Vec<u8>,
+}
+
+/// Which of a Cargo child's streams a [`Watch`] reads.
+enum Stream {
+    /// Cargo's JSON messages.
+    Stdout,
+    /// Cargo's status lines and rustc's rendered diagnostics, from a child
+    /// that keeps its locks in these directories.
+    Stderr(Directories),
+}
+
+impl Watch {
+    pub(crate) const fn stdout() -> Self {
+        Self {
+            stream: Stream::Stdout,
+            partial: Vec::new(),
+        }
+    }
+
+    pub(crate) const fn stderr(directories: Directories) -> Self {
+        Self {
+            stream: Stream::Stderr(directories),
+            partial: Vec::new(),
+        }
+    }
+
+    /// Hear the next `chunk` of the stream: each line it ends.
+    pub(crate) fn feed(&mut self, chunk: &[u8]) {
+        self.partial.extend_from_slice(chunk);
+        let Some(end) = self.partial.iter().rposition(|byte| *byte == b'\n') else {
+            return;
+        };
+        let lines = self.partial.drain(..=end).collect::<Vec<_>>();
+        for line in lines.split(|byte| *byte == b'\n') {
+            self.hear(line);
+        }
+    }
+
+    fn hear(&self, line: &[u8]) {
+        let said = match &self.stream {
+            Stream::Stdout => stdout_said(line),
+            Stream::Stderr(directories) => {
+                let text = String::from_utf8_lossy(line);
+                let said = stderr_said(&text, directories);
+                // rawr keeps Cargo's stderr, so its wait is said above
+                // the line too, where a log keeps it.
+                if matches!(said, Some(Said::Waits { .. })) {
+                    say(&cargos_own(&text));
+                }
+                said
+            }
+        };
+        if let Some(said) = said {
+            let _ = send(Event::Said {
+                said,
+                at: Instant::now(),
+            });
+        }
+    }
+}
+
+impl Drop for Watch {
+    fn drop(&mut self) {
+        let rest = std::mem::take(&mut self.partial);
+        if !rest.is_empty() {
+            self.hear(&rest);
+        }
+        if matches!(self.stream, Stream::Stderr(_)) {
+            let _ = send(Event::Said {
+                said: Said::Ended,
+                at: Instant::now(),
+            });
+        }
+    }
+}
+
+/// What one of Cargo's JSON messages on stdout says of its progress.
+fn stdout_said(line: &[u8]) -> Option<Said> {
+    if contains(line, br#""reason":"build-script-executed""#) {
+        return Some(Said::Finished(None));
+    }
+    if !contains(line, br#""reason":"compiler-artifact""#) {
+        return None;
+    }
+    let message = serde_json::from_slice::<serde_json::Value>(line).ok();
+    let package = message.as_ref().and_then(|message| {
+        let kinds = message["target"]["kind"].as_array()?;
+        // A build script's compile leaves its package compiling.
+        if kinds.iter().any(|kind| kind == "custom-build") {
+            return None;
+        }
+        package(message["package_id"].as_str()?)
+    });
+    Some(Said::Finished(package))
+}
+
+/// The package a Cargo package id names: `kind+url#name@version`, or
+/// `kind+url#version` when the name is the url's last segment, or the older
+/// `name version (source)`.
+fn package(id: &str) -> Option<Package> {
+    let (name, version) = match id.split_once('#') {
+        Some((source, fragment)) => match fragment.split_once('@') {
+            Some((name, version)) => (name, version),
+            None => {
+                let path = source.split('?').next()?.trim_end_matches('/');
+                (path.rsplit('/').next()?, fragment)
+            }
+        },
+        None => {
+            let mut fields = id.split_whitespace();
+            (fields.next()?, fields.next()?)
+        }
     };
-    if lines > 0 || compiling > 0 {
-        let _ = send(Event::Observe { lines, compiling });
-    }
+    Some(Package {
+        name: name.to_owned(),
+        version: version.to_owned(),
+    })
 }
 
-/// Say each of Cargo's own waits for a file lock in one chunk of a Cargo
-/// child's stderr. rawr keeps that stderr, so without this a Cargo that
-/// waits for another Cargo on a shared build directory waits unseen.
-pub(crate) fn cargo_waits(chunk: &[u8]) {
-    for line in cargo_wait_lines(chunk) {
-        say(&line);
+/// What one line of a Cargo child's stderr says of its progress: a wait
+/// for a lock, in `directories`, a package it starts, or that it moved.
+fn stderr_said(line: &str, directories: &Directories) -> Option<Said> {
+    let line = line.trim();
+    if line.is_empty() {
+        return None;
     }
+    if let Some(what) = line.strip_prefix(CARGO_WAIT) {
+        let what = what.trim_start().strip_prefix("on ").unwrap_or(what).trim();
+        return Some(Said::Waits {
+            what: format!("another cargo to release {}", directories.place(what)),
+        });
+    }
+    if let Some(rest) = line.strip_prefix("Compiling ") {
+        let mut fields = rest.split_whitespace();
+        if let (Some(name), Some(version)) = (fields.next(), fields.next()) {
+            return Some(Said::Compiling(Package {
+                name: name.to_owned(),
+                version: version.trim_start_matches('v').to_owned(),
+            }));
+        }
+    }
+    Some(Said::Moved)
 }
 
-/// The lines of `chunk` that say Cargo waits for a file lock, each marked
-/// as Cargo's own.
-fn cargo_wait_lines(chunk: &[u8]) -> impl Iterator<Item = String> + '_ {
-    chunk
-        .split(|byte| *byte == b'\n')
-        .map(String::from_utf8_lossy)
-        .filter(|line| line.contains(CARGO_WAIT))
-        .map(|line| format!("{} (Cargo's own lock)", line.trim_end()))
+/// Say on the status line that the launch waits for `what`, a lock of
+/// rawr's own another process holds, such as "rawr's runtime, used by
+/// process 4242", to its [`waited`].
+pub(crate) fn waiting(what: String) {
+    let _ = send(Event::Said {
+        said: Said::Waits { what },
+        at: Instant::now(),
+    });
+}
+
+/// The wait [`waiting`] said is over.
+pub(crate) fn waited() {
+    let _ = send(Event::Said {
+        said: Said::Moved,
+        at: Instant::now(),
+    });
+}
+
+/// Cargo's `line` that it waits for a lock, marked as Cargo's own.
+fn cargos_own(line: &str) -> String {
+    format!("{} (Cargo's own lock)", line.trim_end())
 }
 
 /// What Cargo says when it finds a lock it needs held.
 const CARGO_WAIT: &str = "Blocking waiting for file lock";
+
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack
+        .windows(needle.len())
+        .any(|window| window == needle)
+}
 
 fn count(haystack: &[u8], needle: &[u8]) -> usize {
     haystack
@@ -1022,18 +1223,19 @@ impl State {
             launch: None,
             stage: 0,
             since: None,
-            lines: 0,
+            finished: 0,
             compiling: 0,
+            building: Vec::new(),
+            waiting: None,
             units: None,
             tick: 0,
             drawn: false,
-            announced: 0,
+            announced: None,
             notes: Vec::new(),
             file: None,
             previous: None,
-            current: [RECORD; 4],
+            current: [0; 4],
             compiled: false,
-            shown: 0.0,
             phases: false,
             phase: None,
             step: None,
@@ -1048,7 +1250,7 @@ impl State {
             .unwrap_or(STAGES[self.stage.clamp(1, STAGES.len()) - 1])
     }
 
-    fn start(&mut self, now: Instant, file: Option<PathBuf>, previous: Option<[Record; 4]>) {
+    fn start(&mut self, now: Instant, file: Option<PathBuf>, previous: Option<[usize; 4]>) {
         self.launch = Some(now);
         self.stage = 1;
         self.since = Some(now);
@@ -1056,97 +1258,153 @@ impl State {
         self.previous = previous;
     }
 
-    /// Close the current stage's record at `now`.
-    fn close(&mut self, now: Instant) {
-        let Some(since) = self.since else { return };
+    /// Close the current stage's record.
+    fn close(&mut self) {
         let index = self.stage.clamp(1, STAGES.len()) - 1;
-        self.current[index] = Record {
-            crates: self.lines.max(self.compiling),
-            millis: u64::try_from(now.saturating_duration_since(since).as_millis())
-                .unwrap_or(u64::MAX),
-        };
+        self.current[index] = self.finished.max(self.compiling);
         self.compiled |= self.compiling > 0;
     }
 
     fn advance(&mut self, stage: usize, now: Instant) {
         if self.launch.is_some() && stage > self.stage && stage <= STAGES.len() {
-            self.close(now);
+            self.close();
             self.stage = stage;
             self.since = Some(now);
-            self.lines = 0;
+            self.finished = 0;
             self.compiling = 0;
+            self.building.clear();
+            self.waiting = None;
             self.step = None;
         }
     }
 
-    /// Fraction of the current stage done at `now`, in `[0, 1)`.
-    fn fraction(&self, now: Instant) -> f64 {
-        let index = self.stage.clamp(1, STAGES.len()) - 1;
-        let previous = self.previous.map(|records| records[index]);
-        let total = (self.stage == 2)
-            .then_some(self.units)
-            .flatten()
-            .or(previous.map(|record| record.crates))
-            .filter(|total| *total > 0);
-        // Cargo may report more finished units than the plan listed; cap rather
-        // than dropping the bar.
-        let crates = total.map_or(0.0, |total| {
-            (self.lines.max(self.compiling) as f64 / total as f64).min(1.0) * CRATE_SHARE
-        });
-        let elapsed = self.since.map_or(0.0, |since| {
-            now.saturating_duration_since(since).as_secs_f64()
-        });
-        let time = match previous.filter(|record| record.millis > 0) {
-            Some(record) => (elapsed / (record.millis as f64 / 1000.0)).min(1.0),
-            None => 1.0 - (-elapsed / DEFAULT_SECONDS[index]).exp(),
+    /// Take what a Cargo child said `at`.
+    fn hear(&mut self, said: Said, at: Instant) {
+        match said {
+            Said::Finished(package) => {
+                self.finished += 1;
+                self.waiting = None;
+                if let Some(package) = package {
+                    self.building.retain(|building| *building != package);
+                }
+            }
+            Said::Compiling(package) => {
+                self.compiling += 1;
+                self.waiting = None;
+                self.building.push(package);
+            }
+            Said::Waits { what } => {
+                if self.waiting.as_ref().is_none_or(|wait| wait.what != what) {
+                    self.waiting = Some(Wait { what, since: at });
+                }
+            }
+            Said::Moved => self.waiting = None,
+            Said::Ended => {
+                self.building.clear();
+                self.waiting = None;
+            }
+        }
+    }
+
+    /// What the line says at `now`, its clock read as `clock` reads it.
+    fn status(&self, now: Instant, clock: Clock) -> Status {
+        let mut parts = vec![(self.label().to_owned(), Tone::Label)];
+        let since = match &self.waiting {
+            Some(wait) => {
+                parts.push((format!("waiting for {}", wait.what), Tone::Label));
+                Some(wait.since)
+            }
+            None => {
+                if self.finished > 0 || !self.building.is_empty() {
+                    parts.push((self.crates(), Tone::Count));
+                }
+                if let Some(package) = self.building.first() {
+                    parts.push((package.name.clone(), Tone::Label));
+                }
+                self.launch
+            }
         };
-        // At least max(crates, time × cap), and moving whenever time passes.
-        crates + (TIME_CAP - crates).max(0.0) * time
+        let elapsed = since.map_or(Duration::ZERO, |since| now.saturating_duration_since(since));
+        if let Some(time) = clock.read(elapsed) {
+            parts.push((time, Tone::Quiet));
+        }
+        Status(parts)
     }
 
-    /// Overall launch fraction at `now`, never lower than any shown before.
-    fn percent(&mut self, now: Instant) -> f64 {
-        let overall = overall(self.stage, self.fraction(now), &weights(self.previous));
-        self.shown = self.shown.max(overall).min(1.0);
-        self.shown
+    /// The units finished of the stage's total: the unit graph's count,
+    /// else about the previous launch's.
+    fn crates(&self) -> String {
+        let index = self.stage.clamp(1, STAGES.len()) - 1;
+        let planned = (self.stage == 2).then_some(self.units).flatten();
+        let previous = self.previous.map(|crates| crates[index]);
+        let finished = self.finished;
+        match (planned, previous) {
+            // Cargo may report more finished units than the plan listed.
+            (Some(total), _) if total > 0 => format!("{} of {total} crates", finished.min(total)),
+            (_, Some(total)) if total >= finished && total > 0 => {
+                format!("{finished} of about {total} crates")
+            }
+            _ => format!("{finished} crates"),
+        }
     }
 }
 
-/// Stage weights from the previous launch's durations, else the defaults.
-fn weights(previous: Option<[Record; 4]>) -> [f64; 4] {
-    let Some(records) = previous else {
-        return DEFAULT_WEIGHTS;
-    };
-    let sum: u64 = records.iter().map(|record| record.millis).sum();
-    if sum == 0 {
-        return DEFAULT_WEIGHTS;
+/// How a line reads its clock.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Clock {
+    /// To the second, for the line a person watches.
+    Seconds,
+    /// In whole minutes and silent for the first, for an observer, which
+    /// hears every change.
+    Minutes,
+}
+
+impl Clock {
+    fn read(self, elapsed: Duration) -> Option<String> {
+        let secs = elapsed.as_secs();
+        match self {
+            Self::Seconds if secs >= 60 => Some(format!("{}m{:02}s", secs / 60, secs % 60)),
+            Self::Seconds => Some(format!("{secs}s")),
+            Self::Minutes if secs >= 60 => Some(format!("{}m", secs / 60)),
+            Self::Minutes => None,
+        }
     }
-    records.map(|record| record.millis as f64 / sum as f64)
 }
 
-/// Completed stage weights plus the current stage's weight times `fraction`.
-fn overall(stage: usize, fraction: f64, weights: &[f64; 4]) -> f64 {
-    let index = stage.clamp(1, STAGES.len()) - 1;
-    let before: f64 = weights[..index].iter().sum();
-    (before + weights[index] * fraction.clamp(0.0, 1.0)).clamp(0.0, 1.0)
+/// How one part of a launch's line is painted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Tone {
+    Label,
+    Count,
+    Quiet,
 }
 
-fn format(records: &[Record; 4]) -> String {
-    records
-        .iter()
-        .map(|record| format!("{} {}\n", record.crates, record.millis))
-        .collect()
+/// What a launch's line says, part by part.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Status(Vec<(String, Tone)>);
+
+impl Status {
+    /// The parts joined by `separator`, unpainted.
+    fn plain(&self, separator: &str) -> String {
+        self.0
+            .iter()
+            .map(|(part, _)| part.as_str())
+            .collect::<Vec<_>>()
+            .join(separator)
+    }
 }
 
-fn parse(text: &str) -> Option<[Record; 4]> {
-    let mut records = [RECORD; 4];
+fn format(records: &[usize; 4]) -> String {
+    records.iter().map(|crates| format!("{crates}\n")).collect()
+}
+
+/// The previous launch's finished units per stage: the first field of
+/// each of four lines.
+fn parse(text: &str) -> Option<[usize; 4]> {
+    let mut records = [0; 4];
     let mut lines = text.lines();
     for record in &mut records {
-        let mut fields = lines.next()?.split_whitespace();
-        *record = Record {
-            crates: fields.next()?.parse().ok()?,
-            millis: fields.next()?.parse().ok()?,
-        };
+        *record = lines.next()?.split_whitespace().next()?.parse().ok()?;
     }
     Some(records)
 }
@@ -1215,10 +1473,10 @@ impl Printer {
                 }
             }
             Event::Plan(units) => self.line.units = Some(units),
-            Event::Observe { lines, compiling } => {
-                self.line.lines += lines;
-                self.line.compiling += compiling;
-                if lines > 0 && self.line.phase == Some(EXTRACTING) {
+            Event::Said { said, at } => {
+                let finished = matches!(said, Said::Finished(_));
+                self.line.hear(said, at);
+                if finished && self.line.phase == Some(EXTRACTING) {
                     self.draw();
                 }
             }
@@ -1264,7 +1522,7 @@ impl Printer {
     fn finish(&mut self, success: bool) {
         let state = &mut self.line;
         if state.launch.is_some() {
-            state.close(Instant::now());
+            state.close();
             if let Some(file) = state.file.as_ref().filter(|_| success && state.compiled) {
                 if let Some(parent) = file.parent() {
                     let _ = std::fs::create_dir_all(parent);
@@ -1295,7 +1553,7 @@ impl Printer {
         }
         self.line.phase = Some(phase);
         if phase == EXTRACTING {
-            self.line.lines = 0;
+            self.line.finished = 0;
         }
         self.draw();
     }
@@ -1363,7 +1621,7 @@ impl Printer {
     }
 
     fn draw(&mut self) {
-        let (Some(launch), Some(since)) = (self.line.launch, self.line.since) else {
+        let (Some(_), Some(since)) = (self.line.launch, self.line.since) else {
             self.draw_phase();
             return;
         };
@@ -1374,29 +1632,20 @@ impl Printer {
         if crate::process::terminal::raw() {
             return;
         }
-        let percent = self.line.percent(Instant::now());
+        let status = self.line.status(Instant::now(), Clock::Seconds);
         if self.terminal {
             let style = Style::terminal();
             self.line.tick = self.line.tick.wrapping_add(1);
-            let line = render(
-                self.line.label(),
-                percent,
-                launch.elapsed(),
-                self.line.tick,
-                &style,
-            );
+            let line = render(&status, self.line.tick, &style);
             self.write(&format!("\r\x1b[2K{line}"));
             self.line.drawn = true;
-        } else if self.line.announced < self.line.stage {
-            let style = Style {
-                width: None,
-                unicode: false,
-                color: false,
-                truecolor: false,
-            };
-            let line = render(self.line.label(), percent, launch.elapsed(), 0, &style);
-            self.write(&format!("{line}\n"));
-            self.line.announced = self.line.stage;
+        } else {
+            let announced = Some((self.line.stage, self.line.waiting.is_some()));
+            if self.line.announced != announced {
+                let line = render(&status, 0, &Style::PLAIN);
+                self.write(&format!("{line}\n"));
+                self.line.announced = announced;
+            }
         }
     }
 
@@ -1409,7 +1658,7 @@ impl Printer {
         if !self.terminal || crate::process::terminal::raw() {
             return;
         }
-        let count = (phase == EXTRACTING).then_some((self.line.lines, self.line.units));
+        let count = (phase == EXTRACTING).then_some((self.line.finished, self.line.units));
         let line = render_phase(phase, count, &Style::terminal());
         self.write(&format!("\r\x1b[2K{line}"));
         self.line.drawn = true;
@@ -1441,6 +1690,14 @@ struct Style {
 }
 
 impl Style {
+    /// A plain line, for a log.
+    const PLAIN: Self = Self {
+        width: None,
+        unicode: false,
+        color: false,
+        truecolor: false,
+    };
+
     /// The style of the terminal stderr is.
     fn terminal() -> Self {
         let width = rustix::termios::tcgetwinsize(std::io::stderr()).map_or(80, |size| size.ws_col);
@@ -1467,12 +1724,12 @@ pub mod palette {
         pub ansi256: u8,
     }
 
-    /// #E4002B: the one colored swatch (spinner, bar fill).
+    /// #E4002B: the one colored swatch (the spinner).
     pub const RED: Color = Color {
         rgb: (228, 0, 43),
         ansi256: 160,
     };
-    /// #F87171: the `rawr` mark and percentages.
+    /// #F87171: the `rawr` mark and counts.
     pub const LIGHT_RED: Color = Color {
         rgb: (248, 113, 113),
         ansi256: 203,
@@ -1487,7 +1744,7 @@ pub mod palette {
         rgb: (138, 138, 138),
         ansi256: 245,
     };
-    /// #4A4A4A: tracks and empty space.
+    /// #4A4A4A: separators and empty space.
     pub const DARK_GRAY: Color = Color {
         rgb: (74, 74, 74),
         ansi256: 239,
@@ -1515,60 +1772,47 @@ pub mod palette {
     }
 }
 
-fn render(name: &str, percent: f64, elapsed: Duration, tick: usize, style: &Style) -> String {
+/// A launch's line: the `rawr` mark, a spinner at `tick`, and what the
+/// line says, cut to the terminal's width. A line with no width is a plain
+/// line for a log.
+fn render(status: &Status, tick: usize, style: &Style) -> String {
     use palette::{DARK_GRAY, LIGHT_GRAY, LIGHT_RED, MID_GRAY, RED};
     const SPIN: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-    let percent = percent.clamp(0.0, 1.0);
-    let secs = elapsed.as_secs();
-    let time = if secs >= 60 {
-        format!("{}m{:02}s", secs / 60, secs % 60)
-    } else {
-        format!("{secs}s")
-    };
-    let share = format!("{:.0}%", (percent * 100.0).floor());
+    let separator = if style.unicode { " · " } else { " - " };
     let Some(width) = style.width else {
-        return format!("rawr > {name}  {share}  {time}");
+        return format!("rawr > {}", status.plain(separator));
     };
     let spin = if style.unicode {
         SPIN[tick % SPIN.len()]
     } else {
         ['|', '/', '-', '\\'][tick % 4]
-    };
-    let spin = spin.to_string();
-    // "rawr S name  " + bar + "  " + "P%  T"
-    let used = 5 + 2 + name.chars().count() + 2 + share.chars().count() + 2 + time.chars().count();
-    let cells = width.saturating_sub(used + 3).min(24);
-    let filled = ((percent * cells as f64) as usize).min(cells);
-    let (fill, empty) = if style.unicode {
-        ('━', '─')
-    } else {
-        ('=', '-')
-    };
-    let bar: String = std::iter::repeat_n(fill, filled).collect();
-    let rest: String = std::iter::repeat_n(empty, cells - filled).collect();
-    if cells < 8 || !style.color {
-        let middle = if cells < 8 {
-            String::new()
-        } else {
-            format!("{bar}{rest}  ")
-        };
-        let line = format!("rawr {spin} {name}  {middle}{share}  {time}");
-        return if line.chars().count() >= width {
-            line.chars().take(width.saturating_sub(1)).collect()
-        } else {
-            line
-        };
+    }
+    .to_string();
+    let line = format!("rawr {spin} {}", status.plain(separator));
+    if line.chars().count() >= width {
+        return line.chars().take(width.saturating_sub(1)).collect();
+    }
+    if !style.color {
+        return line;
     }
     let tc = style.truecolor;
+    let parts = status
+        .0
+        .iter()
+        .map(|(part, tone)| {
+            let color = match tone {
+                Tone::Label => LIGHT_GRAY,
+                Tone::Count => LIGHT_RED,
+                Tone::Quiet => MID_GRAY,
+            };
+            color.paint(part, false, tc)
+        })
+        .collect::<Vec<_>>();
     format!(
-        "{} {} {}  {}{}  {}  {}",
+        "{} {} {}",
         LIGHT_RED.paint("rawr", true, tc),
         RED.paint(&spin, false, tc),
-        LIGHT_GRAY.paint(name, false, tc),
-        RED.paint(&bar, false, tc),
-        DARK_GRAY.paint(&rest, false, tc),
-        LIGHT_RED.paint(&share, false, tc),
-        MID_GRAY.paint(&time, false, tc),
+        parts.join(&DARK_GRAY.paint(separator, false, tc)),
     )
 }
 
@@ -1610,18 +1854,6 @@ fn render_phase(phase: &str, count: Option<(usize, Option<usize>)>, style: &Styl
 
 #[cfg(test)]
 mod tests {
-    /// A Cargo child's own wait for a lock is said, marked as Cargo's, and
-    /// nothing else it wrote is.
-    #[test]
-    fn cargo_waits_for_a_lock_are_said_as_cargos() {
-        let chunk =
-            b"   Compiling a v0.1.0\n    Blocking waiting for file lock on build directory\n";
-        assert_eq!(
-            super::cargo_wait_lines(chunk).collect::<Vec<_>>(),
-            ["    Blocking waiting for file lock on build directory (Cargo's own lock)"]
-        );
-    }
-
     use super::*;
 
     /// A printer's output as a test reads it: each write, sent on.
@@ -1767,21 +1999,236 @@ mod tests {
         truecolor: false,
     };
 
-    fn launch(previous: Option<[Record; 4]>) -> (State, Instant) {
+    // Cargo's own lines, as `cargo build --message-format=json-render-diagnostics`
+    // wrote them, with their paths shortened.
+    const BUILD_SCRIPT: &[u8] = br#"{"reason":"compiler-artifact","package_id":"path+file:///w/dep-one#0.2.0","manifest_path":"/w/dep-one/Cargo.toml","target":{"kind":["custom-build"],"crate_types":["bin"],"name":"build-script-build","src_path":"/w/dep-one/build.rs","edition":"2021","doc":false,"doctest":false,"test":false},"profile":{"opt_level":"0","debuginfo":0,"debug_assertions":true,"overflow_checks":true,"test":false},"features":[],"filenames":["/t/debug/build/dep-one-2bd1384c031aee2f/build-script-build"],"executable":null,"fresh":false}"#;
+    const BUILD_SCRIPT_RAN: &[u8] = br#"{"reason":"build-script-executed","package_id":"path+file:///w/dep-one#0.2.0","linked_libs":[],"linked_paths":[],"cfgs":[],"env":[],"out_dir":"/t/debug/build/dep-one-1283f485e2d1bc32/out"}"#;
+    const DEP_ONE: &[u8] = br#"{"reason":"compiler-artifact","package_id":"path+file:///w/dep-one#0.2.0","manifest_path":"/w/dep-one/Cargo.toml","target":{"kind":["lib"],"crate_types":["lib"],"name":"dep_one","src_path":"/w/dep-one/src/lib.rs","edition":"2021","doc":true,"doctest":true,"test":true},"profile":{"opt_level":"0","debuginfo":2,"debug_assertions":true,"overflow_checks":true,"test":false},"features":[],"filenames":["/t/debug/deps/libdep_one-7cdabcd64dd5618a.rlib","/t/debug/deps/libdep_one-7cdabcd64dd5618a.rmeta"],"executable":null,"fresh":false}"#;
+    const SERDE: &[u8] = br#"{"reason":"compiler-artifact","package_id":"registry+https://github.com/rust-lang/crates.io-index#serde@1.0.219","manifest_path":"/c/serde-1.0.219/Cargo.toml","target":{"kind":["lib"],"crate_types":["lib"],"name":"serde","src_path":"/c/serde-1.0.219/src/lib.rs","edition":"2018","doc":true,"doctest":true,"test":true},"profile":{"opt_level":"0","debuginfo":2,"debug_assertions":true,"overflow_checks":true,"test":false},"features":["default","std"],"filenames":["/t/debug/deps/libserde-0c1f.rlib"],"executable":null,"fresh":true}"#;
+    const FINISHED_BUILD: &[u8] = br#"{"reason":"build-finished","success":true}"#;
+    const COMPILING_DEP_ONE: &str = "   Compiling dep-one v0.2.0 (/w/dep-one)";
+    const COMPILING_SERDE: &str = "   Compiling serde v1.0.219";
+    const COMPILING_WGPU: &str = "   Compiling iced_wgpu v0.13.5";
+    const BLOCKING: &str = "    Blocking waiting for file lock on build directory";
+    const FINISHED: &str =
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.45s";
+
+    fn directories() -> Directories {
+        Directories::new(
+            PathBuf::from("/Users/a/target-textfix"),
+            PathBuf::from("/p/target/rawr/runner/target"),
+        )
+    }
+
+    fn package(name: &str, version: &str) -> Package {
+        Package {
+            name: name.into(),
+            version: version.into(),
+        }
+    }
+
+    fn launch(previous: Option<[usize; 4]>) -> (State, Instant) {
         let now = Instant::now();
         let mut state = State::new();
         state.start(now, None, previous);
         (state, now)
     }
 
+    /// A state that hears Cargo's `stderr` and `stdout` lines at `at`.
+    fn hear(state: &mut State, stderr: &[&str], stdout: &[&[u8]], at: Instant) {
+        for line in stderr {
+            if let Some(said) = stderr_said(line, &directories()) {
+                state.hear(said, at);
+            }
+        }
+        for line in stdout {
+            if let Some(said) = stdout_said(line) {
+                state.hear(said, at);
+            }
+        }
+    }
+
     #[test]
-    fn renders_spinner_bar_and_plain_lines() {
-        assert_eq!(count(b"{\"pkg_id\":1}{\"pkg_id\":2}", b"\"pkg_id\""), 2);
-        assert_eq!(count(b"   Compiling a\n   Compiling b\n", b"Compiling "), 2);
+    fn cargo_lines_say_what_moves_the_line() {
+        assert_eq!(stdout_said(BUILD_SCRIPT), Some(Said::Finished(None)));
+        assert_eq!(stdout_said(BUILD_SCRIPT_RAN), Some(Said::Finished(None)));
         assert_eq!(
-            render(STAGES[2], 0.67, Duration::from_secs(108), 2, &WIDE),
-            "rawr ⠹ building runner  ━━━━━━━━━━━━━━━━────────  67%  1m48s"
+            stdout_said(DEP_ONE),
+            Some(Said::Finished(Some(package("dep-one", "0.2.0"))))
         );
+        assert_eq!(
+            stdout_said(SERDE),
+            Some(Said::Finished(Some(package("serde", "1.0.219"))))
+        );
+        assert_eq!(stdout_said(FINISHED_BUILD), None);
+        assert_eq!(
+            super::package("serde 1.0.219 (registry+https://github.com/rust-lang/crates.io-index)"),
+            Some(package("serde", "1.0.219"))
+        );
+        let directories = directories();
+        assert_eq!(
+            stderr_said(COMPILING_DEP_ONE, &directories),
+            Some(Said::Compiling(package("dep-one", "0.2.0")))
+        );
+        assert_eq!(
+            stderr_said(BLOCKING, &directories),
+            Some(Said::Waits {
+                what: "another cargo to release target-textfix".into()
+            })
+        );
+        assert_eq!(
+            stderr_said(
+                "    Blocking waiting for file lock on package cache",
+                &directories
+            ),
+            Some(Said::Waits {
+                what: "another cargo to release Cargo's package cache".into()
+            })
+        );
+        assert_eq!(stderr_said(FINISHED, &directories), Some(Said::Moved));
+        assert_eq!(stderr_said("", &directories), None);
+        assert_eq!(
+            cargos_own(BLOCKING),
+            "    Blocking waiting for file lock on build directory (Cargo's own lock)"
+        );
+    }
+
+    #[test]
+    fn a_moving_build_says_its_count_the_crate_compiling_longest_and_the_clock() {
+        let (mut state, now) = launch(Some([0, 0, 340, 0]));
+        state.advance(3, now);
+        let at = now + Duration::from_secs(190);
+        hear(
+            &mut state,
+            &[COMPILING_SERDE, COMPILING_WGPU, COMPILING_DEP_ONE],
+            &[SERDE, BUILD_SCRIPT, BUILD_SCRIPT_RAN],
+            at,
+        );
+        let line = |state: &State| {
+            render(
+                &state.status(now + Duration::from_secs(192), Clock::Seconds),
+                2,
+                &WIDE,
+            )
+        };
+        // serde is done and dep-one's build script ran, so iced_wgpu has
+        // compiled longest of the rest.
+        assert_eq!(
+            line(&state),
+            "rawr ⠹ building runner · 3 of about 340 crates · iced_wgpu · 3m12s"
+        );
+        hear(&mut state, &[], &[DEP_ONE], at);
+        assert_eq!(
+            line(&state),
+            "rawr ⠹ building runner · 4 of about 340 crates · iced_wgpu · 3m12s"
+        );
+
+        // The unit graph's count is the total, said as it is.
+        let (mut state, now) = launch(None);
+        state.advance(2, now);
+        state.units = Some(340);
+        state.finished = 211;
+        hear(&mut state, &[COMPILING_WGPU], &[SERDE], now);
+        assert_eq!(
+            state
+                .status(now + Duration::from_secs(9), Clock::Seconds)
+                .plain(" · "),
+            "building API · 212 of 340 crates · iced_wgpu · 9s"
+        );
+        let plain = render(&state.status(now, Clock::Seconds), 0, &Style::PLAIN);
+        assert_eq!(
+            plain,
+            "rawr > building API - 212 of 340 crates - iced_wgpu - 0s"
+        );
+    }
+
+    #[test]
+    fn a_stalled_build_moves_only_its_clock() {
+        let (mut state, now) = launch(Some([0, 0, 340, 0]));
+        state.advance(3, now);
+        hear(
+            &mut state,
+            &[COMPILING_SERDE, COMPILING_WGPU],
+            &[SERDE],
+            now + Duration::from_secs(60),
+        );
+        let at = |minutes: u64, clock| {
+            state
+                .status(now + Duration::from_secs(minutes * 60 + 30), clock)
+                .plain(" · ")
+        };
+        assert_eq!(
+            at(2, Clock::Seconds),
+            "building runner · 1 of about 340 crates · iced_wgpu · 2m30s"
+        );
+        assert_eq!(
+            at(22, Clock::Seconds),
+            "building runner · 1 of about 340 crates · iced_wgpu · 22m30s"
+        );
+        // An observer hears the same text, once a minute while it stalls.
+        assert_eq!(
+            at(22, Clock::Minutes),
+            "building runner · 1 of about 340 crates · iced_wgpu · 22m"
+        );
+        assert_eq!(
+            state
+                .status(now + Duration::from_secs(22 * 60 + 59), Clock::Minutes)
+                .plain(" · "),
+            at(22, Clock::Minutes)
+        );
+        assert_eq!(
+            state
+                .status(now + Duration::from_secs(20), Clock::Minutes)
+                .plain(" · "),
+            "building runner · 1 of about 340 crates · iced_wgpu"
+        );
+    }
+
+    #[test]
+    fn a_build_blocked_on_a_lock_says_it_waits_on_which_directory_and_since_when() {
+        let (mut state, now) = launch(Some([0, 0, 340, 0]));
+        state.advance(3, now);
+        let blocked = now + Duration::from_secs(30);
+        hear(&mut state, &[BLOCKING], &[], blocked);
+        // Cargo says it again for the same lock: the wait began when first
+        // heard.
+        hear(
+            &mut state,
+            &[BLOCKING],
+            &[],
+            blocked + Duration::from_secs(5),
+        );
+        let later = blocked + Duration::from_secs(240);
+        assert_eq!(
+            render(&state.status(later, Clock::Seconds), 0, &WIDE),
+            "rawr ⠋ building runner · waiting for another cargo to release target-textfix · 4m00s"
+        );
+        assert_eq!(
+            state.status(later, Clock::Minutes).plain(" · "),
+            "building runner · waiting for another cargo to release target-textfix · 4m"
+        );
+        // Once Cargo has the lock, it compiles, and the line says so.
+        hear(&mut state, &[COMPILING_WGPU], &[], later);
+        assert_eq!(
+            state.status(later, Clock::Seconds).plain(" · "),
+            "building runner · 0 of about 340 crates · iced_wgpu · 4m30s"
+        );
+        // A wait that ends with the child, every unit fresh, is over too.
+        hear(&mut state, &[BLOCKING], &[], later);
+        state.hear(Said::Ended, later);
+        assert_eq!(
+            state.status(later, Clock::Seconds).plain(" · "),
+            "building runner · 4m30s"
+        );
+    }
+
+    #[test]
+    fn a_launch_line_is_painted_and_cut_to_the_terminal() {
+        let status = Status(vec![
+            ("building runner".into(), Tone::Label),
+            ("3 crates".into(), Tone::Count),
+            ("9s".into(), Tone::Quiet),
+        ]);
         let colored = Style {
             width: Some(120),
             unicode: true,
@@ -1789,49 +2236,29 @@ mod tests {
             truecolor: true,
         };
         assert_eq!(
-            render(STAGES[2], 0.5, Duration::from_secs(9), 3, &colored),
+            render(&status, 3, &colored),
             "\x1b[1;38;2;248;113;113mrawr\x1b[0m \x1b[38;2;228;0;43m⠸\x1b[0m \
-             \x1b[38;2;200;200;200mbuilding runner\x1b[0m  \
-             \x1b[38;2;228;0;43m━━━━━━━━━━━━\x1b[0m\x1b[38;2;74;74;74m────────────\x1b[0m  \
-             \x1b[38;2;248;113;113m50%\x1b[0m  \x1b[38;2;138;138;138m9s\x1b[0m"
+             \x1b[38;2;200;200;200mbuilding runner\x1b[0m\x1b[38;2;74;74;74m · \x1b[0m\
+             \x1b[38;2;248;113;113m3 crates\x1b[0m\x1b[38;2;74;74;74m · \x1b[0m\
+             \x1b[38;2;138;138;138m9s\x1b[0m"
         );
-        let colored = Style {
+        let ascii = Style {
+            width: Some(120),
+            unicode: false,
+            color: false,
             truecolor: false,
+        };
+        assert_eq!(
+            render(&status, 1, &ascii),
+            "rawr / building runner - 3 crates - 9s"
+        );
+        // A line wider than the terminal is cut, unpainted, short of its
+        // last column.
+        let narrow = Style {
+            width: Some(20),
             ..colored
         };
-        assert!(render(STAGES[2], 0.5, Duration::ZERO, 0, &colored).contains("\x1b[38;5;160m━"));
-        let narrow = Style {
-            width: Some(42),
-            unicode: false,
-            color: false,
-            truecolor: false,
-        };
-        assert_eq!(
-            render(STAGES[1], 0.52, Duration::from_secs(72), 1, &narrow),
-            "rawr / building API  ====----  52%  1m12s"
-        );
-        let tiny = Style {
-            width: Some(20),
-            unicode: false,
-            color: false,
-            truecolor: false,
-        };
-        assert_eq!(
-            render(STAGES[2], 0.1, Duration::ZERO, 0, &tiny)
-                .chars()
-                .count(),
-            19
-        );
-        let plain = Style {
-            width: None,
-            unicode: false,
-            color: false,
-            truecolor: false,
-        };
-        assert_eq!(
-            render(STAGES[0], 0.04, Duration::from_secs(4), 0, &plain),
-            "rawr > resolving dependencies  4%  4s"
-        );
+        assert_eq!(render(&status, 0, &narrow), "rawr ⠋ building run");
     }
 
     #[test]
@@ -1847,155 +2274,21 @@ mod tests {
     }
 
     #[test]
-    fn overall_percent_sums_finished_stages_and_the_current_fraction() {
-        assert!((overall(1, 0.5, &DEFAULT_WEIGHTS) - 0.05).abs() < 1e-9);
-        assert!((overall(2, 0.5, &DEFAULT_WEIGHTS) - 0.325).abs() < 1e-9);
-        assert!((overall(3, 0.0, &DEFAULT_WEIGHTS) - 0.55).abs() < 1e-9);
-        assert!((overall(4, 1.0, &DEFAULT_WEIGHTS) - 1.0).abs() < 1e-9);
-        assert!((overall(2, 7.0, &DEFAULT_WEIGHTS) - 0.55).abs() < 1e-9);
-
+    fn each_stage_records_its_count_for_the_next_launch() {
+        assert_eq!(count(b"{\"pkg_id\":1}{\"pkg_id\":2}", b"\"pkg_id\""), 2);
         let (mut state, now) = launch(None);
         state.advance(2, now);
-        state.units = Some(200);
-        state.lines = 100;
-        assert!((state.percent(now) - (0.10 + 0.45 * 0.45)).abs() < 1e-9);
-        // More finished units than the plan listed caps the crate share.
-        state.lines = 284;
-        assert!((state.percent(now) - (0.10 + 0.45 * 0.9)).abs() < 1e-9);
-        let line = render(STAGES[1], state.percent(now), Duration::ZERO, 0, &WIDE);
-        assert!(line.contains('━') && line.contains("  50%"), "{line}");
-    }
-
-    #[test]
-    fn unknown_totals_use_the_previous_count_else_ease_short_of_the_end() {
-        let mut previous = [RECORD; 4];
-        previous[2] = Record {
-            crates: 100,
-            millis: 100_000,
-        };
-        let (mut state, now) = launch(Some(previous));
+        hear(&mut state, &[COMPILING_SERDE], &[SERDE, DEP_ONE], now);
         state.advance(3, now);
-        state.compiling = 50;
-        assert!((state.fraction(now) - 0.45).abs() < 1e-9);
-        // Time over the previous duration closes the gap to the cap.
-        let expected = 0.45 + (TIME_CAP - 0.45) * 0.6;
-        assert!((state.fraction(now + Duration::from_secs(60)) - expected).abs() < 1e-9);
-        assert_eq!(state.fraction(now + Duration::from_secs(600)), TIME_CAP);
-
-        let (mut state, now) = launch(None);
-        state.advance(3, now);
-        let late = state.fraction(now + Duration::from_secs(6_000));
-        assert_eq!(late, TIME_CAP);
-        assert!(state.fraction(now + Duration::from_secs(30)) < late);
-    }
-
-    #[test]
-    fn many_fast_crates_then_a_slow_tail_keeps_advancing() {
-        let api = Record {
-            crates: 283,
-            millis: 264_000,
-        };
-        for previous in [None, Some([RECORD, api, RECORD, RECORD])] {
-            let (mut state, now) = launch(previous);
-            state.advance(2, now);
-            state.units = Some(283);
-            // Nearly every crate lands in the first 25 s...
-            state.lines = 280;
-            let mut last = state.percent(now + Duration::from_secs(25));
-            // ...then a few large crates compile for minutes.
-            for secs in (60..=240).step_by(30) {
-                let shown = state.percent(now + Duration::from_secs(secs));
-                assert!(
-                    shown > last,
-                    "stalled at {shown} after {secs}s ({previous:?})"
-                );
-                last = shown;
-            }
-            let end = overall(3, 0.0, &weights(previous));
-            assert!(last < end, "time alone never reaches the stage end");
-        }
-    }
-
-    #[test]
-    fn shown_percent_never_goes_backwards() {
-        let (mut state, now) = launch(None);
-        state.advance(2, now);
-        state.units = Some(100);
-        state.lines = 80;
-        let high = state.percent(now);
-        // A larger plan arriving later would lower the raw fraction.
-        state.units = Some(400);
-        assert_eq!(state.percent(now), high);
-        state.lines = 0;
-        state.advance(1, now);
-        assert_eq!(state.percent(now), high);
-    }
-
-    #[test]
-    fn stage_transition_keeps_the_bar_and_records_the_stage() {
-        let (mut state, now) = launch(None);
-        state.drawn = true;
-        state.advance(2, now);
-        state.units = Some(10);
-        state.compiling = 10;
-        let end = state.percent(now);
-        let later = now + Duration::from_secs(5);
-        state.advance(3, later);
-        assert!(state.drawn, "a stage change never clears the line");
-        let next = state.percent(later);
-        assert!(next >= end);
-        assert!(render(STAGES[2], next, Duration::ZERO, 0, &WIDE).contains('━'));
-        assert_eq!(
-            state.current[1],
-            Record {
-                crates: 10,
-                millis: 5_000
-            }
-        );
         assert!(state.compiled);
-    }
-
-    #[test]
-    fn learned_weights_round_trip() {
-        let records = [
-            Record {
-                crates: 0,
-                millis: 2_000,
-            },
-            Record {
-                crates: 284,
-                millis: 10_000,
-            },
-            Record {
-                crates: 120,
-                millis: 7_000,
-            },
-            Record {
-                crates: 0,
-                millis: 1_000,
-            },
-        ];
+        assert_eq!(state.current, [0, 2, 0, 0]);
+        let records = [0, 284, 120, 0];
         assert_eq!(parse(&format(&records)), Some(records));
-        assert_eq!(parse("1 2\n3 4\n"), None);
-        assert_eq!(weights(None), DEFAULT_WEIGHTS);
-        assert_eq!(weights(Some([RECORD; 4])), DEFAULT_WEIGHTS);
-        assert_eq!(weights(Some(records)), [0.1, 0.5, 0.35, 0.05]);
-
-        let (mut state, now) = launch(None);
-        state.advance(2, now);
-        state.compiling = 3;
-        state.advance(3, now + Duration::from_millis(1_500));
-        state.close(now + Duration::from_millis(2_000));
-        let read = parse(&format(&state.current)).unwrap();
+        // A record written with each stage's time still reads.
         assert_eq!(
-            read[1],
-            Record {
-                crates: 3,
-                millis: 1_500
-            }
+            parse("0 2000\n284 10000\n120 7000\n0 1000\n"),
+            Some(records)
         );
-        assert_eq!(read[2].millis, 500);
-        let next = weights(Some(read));
-        assert!((next[1] - 0.75).abs() < 1e-9);
+        assert_eq!(parse("1\n3\n"), None);
     }
 }

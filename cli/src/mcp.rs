@@ -346,6 +346,16 @@ impl Progress<'_> {
             json!({ "jsonrpc": "2.0", "method": "notifications/progress", "params": params }),
         );
     }
+
+    /// Relay what a build's status line says each time it changes. A build
+    /// has no total, so each update is numbered, as progress must grow.
+    fn building(&self) -> impl FnMut(&str) + '_ {
+        let mut told = 0_u32;
+        move |status| {
+            told += 1;
+            self.send(f64::from(told), None, status);
+        }
+    }
 }
 
 #[cfg(test)]
