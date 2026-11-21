@@ -6,6 +6,12 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.5.0 (2026-11-21)
+
+This milestone is the debugger: one session any number of shells attach to, so rawr tui, rawr gui, VS Code through rawr dap, rawr lsp beside rust-analyzer, the playground and rawr mcp break, step, read values and evaluate Rust in the same paused program. A hover reads a value without running the program's code, every pane re-reads the paused program and keeps no copy, and rawr waits for another rawr's locks as Cargo does.
+
+- The home page and Debugging show one program paused at the same line in rawr tui, rawr gui, the playground and VS Code, with values read in each and answers in their consoles. (#2454)
+
 ## 0.4.108 (2026-11-21)
 
 - `rawr lsp` is a small language server beside rust-analyzer: while the program is paused, hovers and inlay hints show its values, read without running any of its code, and a save that doesn't reload shows rawr's errors under the code until one does. It attaches to the newest run of each program you open a file of, waits for one to start, and holds a hover asked before the run greets it. (#2440)

@@ -8,6 +8,14 @@
   },
   "releases": [
     {
+      "version": "0.5.0",
+      "date": "2026-11-21",
+      "lede": "This milestone is the debugger: one session any number of shells attach to, so rawr tui, rawr gui, VS Code through rawr dap, rawr lsp beside rust-analyzer, the playground and rawr mcp break, step, read values and evaluate Rust in the same paused program. A hover reads a value without running the program's code, every pane re-reads the paused program and keeps no copy, and rawr waits for another rawr's locks as Cargo does.",
+      "entries": [
+        {"text":"The home page and Debugging show one program paused at the same line in rawr tui, rawr gui, the playground and VS Code, with values read in each and answers in their consoles.","issues":[2454]}
+      ]
+    },
+    {
       "version": "0.4.108",
       "date": "2026-11-21",
       "entries": [

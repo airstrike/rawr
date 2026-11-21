@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-21",
-  "version": "0.4.108",
+  "version": "0.5.0",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,14 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.5.0",
+        "date": "2026-11-21",
+        "lede": "This milestone is the debugger: one session any number of shells attach to, so rawr tui, rawr gui, VS Code through rawr dap, rawr lsp beside rust-analyzer, the playground and rawr mcp break, step, read values and evaluate Rust in the same paused program. A hover reads a value without running the program's code, every pane re-reads the paused program and keeps no copy, and rawr waits for another rawr's locks as Cargo does.",
+        "entries": [
+          {"text":"The home page and Debugging show one program paused at the same line in rawr tui, rawr gui, the playground and VS Code, with values read in each and answers in their consoles.","issues":[2454]}
+        ]
+      },
       {
         "version": "0.4.108",
         "date": "2026-11-21",
@@ -6023,7 +6031,8 @@
     {"issue":2450,"title":"The reload's live lists, the owner's inbox and the program's statics each share one lock, the…","state":"closed","category":"Health","release":"0.4.107"},
     {"issue":2451,"title":"rawr gui shows no hover over a call, a macro or anything else the hover read doesn't run, as…","state":"closed","category":"Health","release":"0.4.107"},
     {"issue":2452,"title":"A marked module's `impl page::Page for …` resolves `page::Page` as a module, not the trait","state":"open","category":"Health"},
-    {"issue":2453,"title":"The VS Code extension starts rawr lsp beside rust-analyzer","state":"open","category":"Health"}
+    {"issue":2453,"title":"The VS Code extension starts rawr lsp beside rust-analyzer","state":"open","category":"Health"},
+    {"issue":2454,"title":"The home page and Debugging show one program paused at the same line in rawr tui, rawr gui, the…","state":"closed","category":"Health","release":"0.5.0"}
   ],
   "groups": [
     {
@@ -8714,8 +8723,8 @@
           "name": "Read a running program's values",
           "start": 53,
           "size": 3,
-          "state": "now",
-          "note": "Frames, types, maps and hover values read in every shell (#2009, #2017, #2256, #2257, #2272). Left: locked and 2x capture checks (#1993). After 0.5: other platforms (#1995, #1996).",
+          "state": "done",
+          "note": "0.5.0. Frames, types, maps and hover values read in every shell, and rawr mcp's screenshot is drawn by the program itself (#1989, #2009, #2017, #2256, #2257, #2272).",
           "issues": [
             {"number":488,"title":"Read a running program's values from rawr mcp and the editor","state":"closed"},
             {"number":510,"title":"inspect answers for programs with Rust dependencies","state":"closed"},
@@ -8724,9 +8733,6 @@
             {"number":513,"title":"A registered debugger copies every call's arguments into its call-stack frame","state":"closed"},
             {"number":1989,"title":"rawr mcp screenshot captures through the OS, so a locked, covered or occluded window gives a blank or stale picture","state":"closed"},
             {"number":1990,"title":"A program run under rawr gets rawr's menu bar items (restart, screenshot, about, exit) and keeps its own title","state":"closed"},
-            {"number":1993,"title":"rawr mcp screenshot: check a locked session, an off-screen window and a 2x display","state":"open"},
-            {"number":1995,"title":"A program rawr runs on Linux gets rawr's menu items (restart, screenshot, about, exit) and keeps its own name","state":"open"},
-            {"number":1996,"title":"A program rawr runs on Windows gets rawr's menu items (restart, screenshot, about, exit)","state":"open"},
             {"number":2009,"title":"rawr mcp screenshot takes a region in points and renders at a chosen scale, 2x by default whatever the display","state":"closed"},
             {"number":2017,"title":"Typing into a freshly focused text_input under rawr doubled the first character (todos' 'buy milk' became 'bbuy milk')","state":"closed"},
             {"number":532,"title":"inspect on a real iced app's state in update and view","state":"closed"},
@@ -8819,11 +8825,10 @@
           "name": "Editor debugging",
           "start": 63,
           "size": 2,
-          "state": "now",
-          "note": "`rawr dap` on the shared session and a VS Code debugger that holds a launched program for its breakpoints (#514, #2274, #2275); `rawr lsp` beside rust-analyzer shows paused values as hovers and inlay hints (#2440). After 0.5: a Zed extension (#2273).",
+          "state": "done",
+          "note": "0.5.0. `rawr dap` on the shared session and a VS Code debugger that holds a launched program for its breakpoints (#514, #2274, #2275); `rawr lsp` beside rust-analyzer shows paused values as hovers and inlay hints (#2440).",
           "issues": [
             {"number":514,"title":"Debug adapter: an editor reads a running program's values","state":"closed"},
-            {"number":2273,"title":"A Zed extension that registers `rawr dap` as a debug adapter","state":"open"},
             {"number":2274,"title":"DAP launch holds the program until configurationDone","state":"closed"},
             {"number":2275,"title":"The VS Code debugger's F5 without a launch.json runs the workspace's root crate, not the active file's","state":"closed"},
             {"number":2440,"title":"rawr lsp: value hover, inlay hints and rawr's diagnostics beside rust-analyzer","state":"closed"}
@@ -8859,6 +8864,20 @@
             {"number":2295,"title":"rawr gui shows the previous stop's frames and bindings at a new pause","state":"closed"}
           ],
           "milestone": "0.5"
+        },
+        {
+          "id": "debug-platforms",
+          "name": "After 0.5: more platforms and editors",
+          "start": 70,
+          "size": 2,
+          "state": "next",
+          "note": "Capture on a locked screen and a 2x display (#1993), the debugger on Linux and Windows (#1995, #1996), and a Zed extension (#2273).",
+          "issues": [
+            {"number":1993,"title":"rawr mcp screenshot: check a locked session, an off-screen window and a 2x display","state":"open"},
+            {"number":1995,"title":"A program rawr runs on Linux gets rawr's menu items (restart, screenshot, about, exit) and keeps its own name","state":"open"},
+            {"number":1996,"title":"A program rawr runs on Windows gets rawr's menu items (restart, screenshot, about, exit)","state":"open"},
+            {"number":2273,"title":"A Zed extension that registers `rawr dap` as a debug adapter","state":"open"}
+          ]
         }
       ]
     },
