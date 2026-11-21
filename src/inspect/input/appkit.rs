@@ -683,27 +683,53 @@ fn resting(runtime: &Runtime, title: Option<&str>) -> Option<(Option<Point>, Siz
     found
 }
 
-/// The window titled `title`, or the front one: a visible window with a
-/// view.
+/// The window titled `title`, or the front one: a window with a view, on
+/// screen or minimized (see [`windows`]).
 pub(in crate::inspect) fn window(runtime: &Runtime, title: Option<&str>) -> Option<Id> {
     windows(runtime).into_iter().find(|&window| {
         title.is_none_or(|title| runtime.text(msg!(runtime, Id; window, "title")) == title)
     })
 }
 
-/// The program's visible windows with a view, front first.
+/// The program's windows with a view that input and captures reach, front
+/// first. AppKit counts a minimized window as not visible, though its
+/// view still takes the events handed to it and draws when asked, so the
+/// minimized ones come after those on screen (#2255).
 fn windows(runtime: &Runtime) -> Vec<Id> {
     let application = runtime.application();
     if application.is_null() {
         return Vec::new();
     }
-    let windows = msg!(runtime, Id; application, "orderedWindows");
-    let count = msg!(runtime, usize; windows, "count");
-    (0..count)
-        .map(|index| msg!(runtime, Id; windows, "objectAtIndex:", index => usize))
-        .filter(|&window| msg!(runtime, u8; window, "isVisible") != 0)
+    let listed = |windows: Id| {
+        let count = msg!(runtime, usize; windows, "count");
+        (0..count)
+            .map(|index| msg!(runtime, Id; windows, "objectAtIndex:", index => usize))
+            .collect::<Vec<Id>>()
+    };
+    let ordered = listed(msg!(runtime, Id; application, "orderedWindows"));
+    let all = listed(msg!(runtime, Id; application, "windows"));
+    let shown = |window: Id| msg!(runtime, u8; window, "isVisible") != 0;
+    let minimized = |window: Id| msg!(runtime, u8; window, "isMiniaturized") != 0;
+    reachable(&ordered, &all, shown, minimized)
+        .into_iter()
         .filter(|&window| !msg!(runtime, Id; window, "contentView").is_null())
         .collect()
+}
+
+/// The windows input reaches: the `shown` ones of `ordered`, in its order,
+/// then the `minimized` ones of `all` that aren't shown.
+fn reachable<W: Copy>(
+    ordered: &[W],
+    all: &[W],
+    shown: impl Fn(W) -> bool,
+    minimized: impl Fn(W) -> bool,
+) -> Vec<W> {
+    let on_screen = ordered.iter().copied().filter(|&window| shown(window));
+    let docked = all
+        .iter()
+        .copied()
+        .filter(|&window| minimized(window) && !shown(window));
+    on_screen.chain(docked).collect()
 }
 
 /// The view a pointer event at `base` goes to: the deepest under it, as the
@@ -1633,6 +1659,19 @@ mod tests {
                 ("flags 56".to_owned(), 0),
             ]
         );
+    }
+
+    /// A minimized window is reached after those on screen, and alone when
+    /// it is the program's only window (#2255); a hidden one isn't.
+    #[test]
+    fn a_minimized_window_is_reached_after_those_on_screen() {
+        let shown = |window: char| window.is_ascii_uppercase();
+        let minimized = |window: char| window == 'm';
+        assert_eq!(
+            reachable(&['B', 'A'], &['A', 'm', 'h', 'B'], shown, minimized),
+            ['B', 'A', 'm']
+        );
+        assert_eq!(reachable(&[], &['h', 'm'], shown, minimized), ['m']);
     }
 
     /// Input sent before the program's first window waits for it instead
