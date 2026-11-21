@@ -308,7 +308,9 @@ pub fn open(root: &Path, handed: Option<handover::Handed>) -> Option<Host> {
     match opened {
         Ok(Some(host)) => {
             // A second session in one process hears only its connections.
-            let _ = OPEN.set(host.0.clone());
+            if OPEN.set(host.0.clone()).is_ok() {
+                super::retire::on_termination(&host.0.place);
+            }
             Some(host)
         }
         Ok(None) => None,
@@ -316,6 +318,15 @@ pub fn open(root: &Path, handed: Option<handover::Handed>) -> Option<Host> {
             eprintln!("rawr: shells can't attach to this run: {error}");
             None
         }
+    }
+}
+
+/// Remove the place of the session this process hosts, as a process that
+/// waits for its terminating signals does before it exits: the host's drop
+/// never runs then.
+pub fn retire() {
+    if let Some(inbox) = OPEN.get() {
+        inbox.place.remove();
     }
 }
 

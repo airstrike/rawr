@@ -38,11 +38,11 @@ fn ask(socket: &Path, request: &Value) -> Value {
     serde_json::from_str(&line).unwrap()
 }
 
-/// The inspector socket of the program at `root`: its run's owner hosts
-/// the run's session and names this socket to the program, in place of
-/// one the run's environment names.
-fn inspector(root: &Path) -> PathBuf {
-    rawr_cli::events::session::Place::new(root)
+/// The inspector socket of the run `run` of the program at `root`: its
+/// owner hosts the run's session and names this socket to the program, in
+/// place of one the run's environment names.
+fn inspector(root: &Path, run: &crate::support::Run) -> PathBuf {
+    rawr_cli::events::session::Place::of(root, run.child.id())
         .unwrap()
         .inspector()
 }
@@ -71,8 +71,8 @@ fn inspect_reads_a_callbacks_bindings_in_a_runner_with_crate_values() {
     let stop = root.join("stop");
     let _ = fs::remove_file(&stop);
     copy(Path::new(FIXTURE), &root);
-    let socket = inspector(&root);
     let mut run = start(&root, &[("PUMP_STOP", stop.clone())]);
+    let socket = inspector(&root, &run);
     // The first run builds the runner.
     run.until(|line| line.starts_with("running"));
     let main = fs::canonicalize(root.join("src/main.rs")).unwrap();
@@ -169,8 +169,8 @@ fn a_read_registers_the_debugger_in_a_marked_main_that_never_returns_to_native_c
     crate::support::driver();
     let root = crate::support::fresh("inspect-loop");
     copy(Path::new(LOOP_FIXTURE), &root);
-    let socket = inspector(&root);
     let mut run = start(&root, &[]);
+    let socket = inspector(&root, &run);
     let pid: i32 = run
         .until(|line| line.starts_with("pid "))
         .trim_start_matches("pid ")

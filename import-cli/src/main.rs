@@ -53,6 +53,7 @@ fn retire_on_termination() -> std::io::Result<()> {
             };
             let _owned = rawr_import::process::retire_owned();
             rawr_import::process::settle();
+            rawr_cli::events::session::retire();
             std::process::exit(128 + signal as i32);
         })
         .map(drop)

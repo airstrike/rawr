@@ -65,10 +65,11 @@
 mod handover;
 mod host;
 mod place;
+mod retire;
 mod state;
 
 pub use handover::{adopt, handed, Handed, LISTENER};
-pub use host::{open, output, prepare, record, takes_stderr, Host, CANCELLED, NOT_RUNNING};
+pub use host::{open, output, prepare, record, retire, takes_stderr, Host, CANCELLED, NOT_RUNNING};
 pub use place::{root, Place, Reached, Runs};
 pub use state::{Phase, State};
 
