@@ -441,6 +441,58 @@ mod tests {
         thread.join().unwrap();
     }
 
+    /// A hover's `evaluate` asks the inspector's hover read, which refuses
+    /// a call, and never its `eval`; the console's still asks `eval`.
+    #[test]
+    fn a_hover_reads_and_never_evaluates_a_call() {
+        let (session, other) = Session::running_at(Phase::Running);
+        let (heard, mut told, thread) = serving(session, false);
+        let mut lines = BufReader::new(other.try_clone().unwrap()).lines();
+        assert_eq!(next(&mut lines)["method"], "hello");
+        let paused = json!({
+            "event": "paused", "seq": 2, "file": "/p/src/main.rs", "line": 4,
+            "reason": "breakpoint", "pauses": 1,
+        });
+        let event = json!({ "jsonrpc": "2.0", "method": "event", "params": paused });
+        writeln!(&other, "{event}").unwrap();
+        while wire::read(&mut told).unwrap().unwrap()["event"] != "stopped" {}
+        let mut evaluate = |seq: u64, expression: &str, context: &str, result: Value| {
+            let arguments = json!({ "expression": expression, "context": context, "frameId": 1 });
+            heard.send(request(seq, "evaluate", arguments)).unwrap();
+            let asked = next(&mut lines);
+            let answer = json!({ "jsonrpc": "2.0", "id": asked["id"], "result": result });
+            writeln!(&other, "{answer}").unwrap();
+            (asked["params"].clone(), response(&mut told, seq))
+        };
+        let refusal = "a hover doesn't run calls: evaluate it in the console";
+        let (asked, answered) = evaluate(
+            1,
+            "player.reset()",
+            "hover",
+            json!({ "expression": "player.reset()", "refused": refusal }),
+        );
+        assert_eq!(
+            asked,
+            json!({ "op": "hover", "code": "player.reset()", "frame": 0, "children": true })
+        );
+        assert_eq!(answered["success"], false, "{answered}");
+        assert_eq!(answered["message"], refusal, "{answered}");
+        let (asked, answered) = evaluate(
+            2,
+            "player.score",
+            "hover",
+            json!({ "expression": "player.score", "value": "3" }),
+        );
+        assert_eq!(asked["op"], "hover");
+        assert_eq!(answered["body"]["result"], "3", "{answered}");
+        let (asked, answered) = evaluate(3, "player.reset()", "repl", json!({ "value": "0" }));
+        assert_eq!(asked["op"], "eval", "the console runs what it is given");
+        assert_eq!(answered["body"]["result"], "0", "{answered}");
+        other.shutdown(std::net::Shutdown::Both).unwrap();
+        heard.send(Heard::Ended).unwrap();
+        thread.join().unwrap();
+    }
+
     /// A `disconnect` while a request waits on the program is answered,
     /// and the adapter ends, without the program's answer.
     #[test]

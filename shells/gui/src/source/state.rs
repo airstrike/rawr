@@ -7,6 +7,8 @@ use iced::{keyboard, Task};
 use serde_json::Value;
 
 use super::buffer::Buffer;
+use super::hover::Hover;
+use super::inline;
 use super::reload::Failure;
 use super::view::{self, LINE};
 use super::{Instruction, Message, Reload, State};
@@ -33,6 +35,7 @@ impl State {
             self.file = Some(file.to_owned());
             self.unread = None;
             self.pointer = None;
+            self.hover = None;
             self.viewport = None;
         }
         Task::batch([self.reveal(), self.read()])
@@ -105,6 +108,7 @@ impl State {
             Message::Edit(action) => {
                 if action.is_edit() {
                     self.pointer = None;
+                    self.hover = None;
                 }
                 if let Some(buffer) = self.buffer_mut() {
                     buffer.perform(action);
@@ -117,10 +121,11 @@ impl State {
             }
             Message::Point(point) => {
                 self.pointer = view::under(point);
-                Action::none()
+                self.point()
             }
             Message::Leave => {
                 self.pointer = None;
+                self.hover = None;
                 Action::none()
             }
             Message::Scrolled(viewport) => {
@@ -128,6 +133,54 @@ impl State {
                 Action::none()
             }
         }
+    }
+
+    /// The pointer moved: ask what the place under it reads as, unless the
+    /// hover shown covers it already. Nothing shows where no place is.
+    fn point(&mut self) -> Action<Instruction, Message> {
+        let Some((line, column)) = self.pointer else {
+            self.hover = None;
+            return Action::none();
+        };
+        if self
+            .hover
+            .as_ref()
+            .is_some_and(|hover| hover.covers(line, column))
+        {
+            return Action::none();
+        }
+        let text = self.buffer().and_then(|buffer| buffer.line(line));
+        let (Some(file), Some(text)) = (self.file.clone(), text) else {
+            self.hover = None;
+            return Action::none();
+        };
+        if inline::place_at(&text, column).is_none() {
+            self.hover = None;
+            return Action::none();
+        }
+        let text = text.into_owned();
+        self.hovers += 1;
+        self.hover = Some(Hover::asked(line, column, self.hovers));
+        Action::instruction(Instruction::Hover {
+            file,
+            line: line + 1,
+            column: column + 1,
+            text,
+            asked: self.hovers,
+        })
+    }
+
+    /// The program answered the hover asked as `asked` with `answer`.
+    pub fn hovered(&mut self, asked: u64, answer: &Value) {
+        if let Some(hover) = &mut self.hover {
+            hover.answered(asked, answer);
+        }
+    }
+
+    /// The program went on or paused anew: what the hover read is gone,
+    /// and the pointer's next move asks again.
+    pub fn unhover(&mut self) {
+        self.hover = None;
     }
 
     /// Write the file shown, when it holds edits: rawr's run sees the

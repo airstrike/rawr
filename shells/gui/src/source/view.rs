@@ -15,6 +15,7 @@ use iced::widget::{
 };
 use iced::{Color, Element, Fill, Font, Pixels, Point, Size, Widget};
 
+use super::hover::{Hover, Said};
 use super::inline;
 use super::{Message, Reload, State};
 use crate::theme;
@@ -195,7 +196,7 @@ impl State {
         let pointed = mouse_area(editor)
             .on_move(Message::Point)
             .on_exit(Message::Leave);
-        let hovered = tooltip(pointed, self.hover(values), tooltip::Position::FollowCursor)
+        let hovered = tooltip(pointed, self.hover(), tooltip::Position::FollowCursor)
             .gap(6)
             .style(|_| container::Style::default());
         let code = stack![hovered].push_under(self.inline(values, failed));
@@ -264,7 +265,7 @@ impl State {
             ends.push((line, message.to_owned(), theme::error));
         }
         ends.sort_by_key(|(line, _, _)| *line);
-        let mut layer = column![].padding([0.0, PAD]);
+        let mut layer = column![].padding([0.0, PAD]).width(Fill);
         let mut next = 0;
         for (line, said, style) in ends {
             let written = buffer.line(line).unwrap_or_default().into_owned();
@@ -273,8 +274,14 @@ impl State {
                 .push(
                     row![
                         code_text(written).color(Color::TRANSPARENT),
-                        code_text(format!("    {said}")).style(style),
+                        // The value fits what is left of the line in the
+                        // pane, cut with `…`; the hover shows it whole.
+                        code_text(format!("    {said}"))
+                            .style(style)
+                            .width(Fill)
+                            .ellipsis(Ellipsis::End),
                     ]
+                    .width(Fill)
                     .boxed(),
                 );
             next = line + 1;
@@ -282,27 +289,26 @@ impl State {
         layer.boxed()
     }
 
-    /// The value of the name under the pointer, when it names one.
-    fn hover<'a>(&self, values: &[(&'a str, &'a str)]) -> Element<'a, Message> {
-        let found = self.pointer.and_then(|(line, column)| {
-            let written = self.buffer()?.line(line)?;
-            let name = inline::word_at(&written, column)?;
-            values.iter().find(|(named, _)| *named == name).copied()
-        });
-        match found {
-            Some((name, value)) => container(
-                row![
-                    code_text(name).style(theme::name),
-                    code_text(" = "),
-                    code_text(value).style(move |theme| theme::value(theme, Ok(value))),
-                ]
-                .wrap(),
-            )
+    /// What the paused program's hover read said of the expression under
+    /// the pointer: its value, or why a hover doesn't run it.
+    fn hover(&self) -> Element<'_, Message> {
+        let shown = match self.hover.as_ref().map(Hover::said) {
+            Some(Said::Value { expression, value }) => row![
+                code_text(expression.as_str()).style(theme::name),
+                code_text(" = "),
+                code_text(value.as_str()).style(move |theme| theme::value(theme, Ok(value))),
+            ],
+            Some(Said::Refused { expression, why }) => row![
+                code_text(expression.as_str()).style(theme::name),
+                code_text("  "),
+                code_text(why.as_str()).style(theme::faint),
+            ],
+            Some(Said::Waiting | Said::Nothing) | None => return space().boxed(),
+        };
+        container(shown.wrap())
             .padding([3, 8])
             .style(theme::tip)
-            .boxed(),
-            None => space().boxed(),
-        }
+            .boxed()
     }
 }
 

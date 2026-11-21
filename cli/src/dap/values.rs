@@ -162,7 +162,9 @@ impl Adapter {
 
     /// `evaluate`: the inspector's `eval`, as a block written before the
     /// statement the program is paused at (D1054), in the frame `frameId`
-    /// names: a caller's at the statement making its call (#2309).
+    /// names: a caller's at the statement making its call (#2309). A
+    /// hover's is the inspector's hover read instead, which never runs a
+    /// call the client sends, such as a selected `tick()`.
     pub(super) fn evaluate(&mut self, request: Value) {
         let arguments = &request["arguments"];
         let Some(code) = arguments["expression"].as_str() else {
@@ -172,6 +174,9 @@ impl Adapter {
         let frame = arguments["frameId"].as_u64().unwrap_or(1).saturating_sub(1);
         let place = Place::expression(code);
         let code = code.to_owned();
+        if arguments["context"] == "hover" {
+            return self.hover(request, frame, &code, place);
+        }
         self.eval(frame, &code, place, move |adapter, variable| {
             let answer = variable.map(|variable| {
                 // A console entry may write any place, so the client reads
@@ -201,13 +206,7 @@ impl Adapter {
         place: Place,
         then: impl FnOnce(&mut Self, Result<Value, String>) + 'static,
     ) {
-        let paused = match &self.session {
-            None => Err(super::NO_PROGRAM.to_owned()),
-            Some(session) => session.paused().map(|_| ()).ok_or_else(|| {
-                "the program isn't paused: code is evaluated where it is paused".to_owned()
-            }),
-        };
-        if let Err(message) = paused {
+        if let Err(message) = self.paused() {
             return then(self, Err(message));
         }
         let eval = json!({
@@ -225,5 +224,44 @@ impl Adapter {
             });
             then(adapter, variable);
         });
+    }
+
+    /// `evaluate` for a hover over `code` in frame `frame`: the inspector's
+    /// hover read, which reads a place, or std's arithmetic, casts,
+    /// indexing and lengths on places, and refuses every other call, so a
+    /// hover never changes the program. A refusal is the response's error,
+    /// which says to evaluate the code in the console.
+    fn hover(&mut self, request: Value, frame: u64, code: &str, place: Place) {
+        if let Err(message) = self.paused() {
+            return self.out.respond(&request, Err(message));
+        }
+        let hover = json!({ "op": "hover", "code": code, "frame": frame, "children": true });
+        self.ask(hover, move |adapter, answer| {
+            let answer = answer.and_then(|mut answer| {
+                let Some(value) = answer["value"].as_str().map(str::to_owned) else {
+                    let why = answer["refused"].as_str().or(answer["unread"].as_str());
+                    return Err(why.unwrap_or("nothing to read here").to_owned());
+                };
+                let variable =
+                    adapter
+                        .handles
+                        .variable(frame, place, "", &value, answer["children"].take());
+                Ok(json!({
+                    "result": variable["value"],
+                    "variablesReference": variable["variablesReference"],
+                }))
+            });
+            adapter.out.respond(&request, answer);
+        });
+    }
+
+    /// Whether code can be read or evaluated now: `Err` says why not.
+    fn paused(&self) -> Result<(), String> {
+        match &self.session {
+            None => Err(super::NO_PROGRAM.to_owned()),
+            Some(session) => session.paused().map(|_| ()).ok_or_else(|| {
+                "the program isn't paused: code is evaluated where it is paused".to_owned()
+            }),
+        }
     }
 }

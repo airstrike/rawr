@@ -771,7 +771,7 @@ pub(super) fn text_end(mut position: Position, text: &str) -> Position {
 /// The length in bytes of the Rust token `text` starts with: a string,
 /// byte string or raw string literal to its closing quote, a char literal,
 /// a word or number, or else one character.
-fn token_length(text: &str) -> usize {
+pub(crate) fn token_length(text: &str) -> usize {
     let word = |character: char| character == '_' || character.is_alphanumeric();
     let prefix = text
         .char_indices()

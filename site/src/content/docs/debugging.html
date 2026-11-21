@@ -31,7 +31,7 @@
 </figure>
 <ol>
   <li><strong>The toolbar</strong> continues or pauses the program on F8. It steps over on F10, into on F11 and out on Shift+F11. To the right of the buttons is the program&rsquo;s state, such as <code>paused (breakpoint) at line 18</code>.</li>
-  <li><strong>The source</strong> shows the file the program is paused in and highlights the paused line. Before the first pause it shows <code>src/main.rs</code>, or the file you ran. Click left of a line number to set a breakpoint, and click its red dot to clear it. The window can&rsquo;t open a file on its own. To set a breakpoint in a file the program isn&rsquo;t paused in, use another shell.</li>
+  <li><strong>The source</strong> shows the file the program is paused in and highlights the paused line. Point at a place such as <code>player.score</code> to see its value, as <a href="#hovers">Hovers</a> describes. Before the first pause it shows <code>src/main.rs</code>, or the file you ran. Click left of a line number to set a breakpoint, and click its red dot to clear it. The window can&rsquo;t open a file on its own. To set a breakpoint in a file the program isn&rsquo;t paused in, use another shell.</li>
   <li><strong>The call stack</strong> lists the calls the program is in, with the innermost at the top. Each row has the function&rsquo;s Rust path and its file and line. Click a row to show that call&rsquo;s bindings and to evaluate code in it.</li>
   <li><strong>The bindings</strong> are the selected call&rsquo;s. A value with fields or items opens to one row for each. In Figure 1, the map <code>players</code> is open to one row per key.</li>
   <li><strong>The console</strong> evaluates Rust in the selected call while the program is paused. Type code and press Enter.</li>
@@ -62,7 +62,8 @@
   <li>Disconnecting ends a run the editor launched. A run started elsewhere keeps going.</li>
   <li>The call stack names each frame by its Rust path, such as <code>counter::App::update</code>.</li>
   <li>The Debug Console shows what the program prints. It also says when a save reloads or restarts the program. A save that fails the check shows its errors there.</li>
-  <li>The Debug Console, watch expressions and hovers evaluate code as <a href="#values">Values and evaluation</a> describes.</li>
+  <li>The Debug Console and watch expressions evaluate code as <a href="#values">Values and evaluation</a> describes.</li>
+  <li>A hover reads a value and runs no code, as <a href="#hovers">Hovers</a> describes. In VS Code, a hover over <code>names[turn]</code> reads the whole index.</li>
   <li>A value in the Variables pane, or a watch expression, can be given a new value. It is assigned with <code>eval</code> in that value&rsquo;s frame, so Rust decides whether the write is allowed. Writing to an immutable binding, or to a field behind <code>&amp;self</code>, fails with rustc&rsquo;s error.</li>
   <li>Launch refuses a program that draws a terminal UI, such as one that uses ratatui or crossterm. Run it with <code>rawr run</code> in a terminal and attach to it.</li>
 </ul>
@@ -150,6 +151,16 @@ args = { program = "{0}" }</code></pre></div>
 <p>Evaluated code runs where the program is paused. rawr compiles it as a block written just before the paused statement, so the bindings in scope there are in scope for it. rustc&rsquo;s rules for that line apply. Changing a binding that isn&rsquo;t <code>mut</code> fails with rustc&rsquo;s error. So does a borrow that conflicts with one the program still holds.</p>
 <p>The answer is the value of the code&rsquo;s last expression. An assignment such as <code>self.value = 100</code> answers <code>()</code>, with or without its <code>;</code>. rawr reads it through a borrow, so evaluating a binding doesn&rsquo;t move it. A change the code makes stays, and the program goes on with it. Bindings the code declares end with it.</p>
 <p>With a caller&rsquo;s frame selected, the code runs in that caller, just before the statement that made the call. A change it makes stays in that caller. A binding the running call borrows, such as one passed to it as <code>&amp;mut</code>, is refused until the call returns. <code>rawr mcp</code>&rsquo;s <a href="/docs/agents#break"><code>eval</code></a> follows the same rules.</p>
+
+<h2 id="hovers">Hovers</h2>
+<p>A hover shows a value while the program is paused. It never runs the program&rsquo;s code, so a hover can&rsquo;t change the program.</p>
+<ul>
+  <li>A hover reads a binding, a field such as <code>player.score</code>, a tuple item such as <code>pair.0</code>, a deref such as <code>*count</code>, and an index such as <code>names[2]</code> or <code>names[turn]</code>. It reads these from the binding&rsquo;s <code>{:?}</code> text and compiles nothing.</li>
+  <li>A hover also reads casts, arithmetic and comparisons on numbers, an index into a <code>Vec</code>, an array or a map, and <code>len()</code> and <code>is_empty()</code>. So <code>names[turn as usize % names.len()]</code> shows one value. rawr evaluates these as the console does.</li>
+  <li>A hover refuses any other call, a macro, <code>?</code> and <code>.await</code>. It also refuses a <code>Deref</code> or an <code>Index</code> your program implements. The hover says to evaluate the code in the console instead.</li>
+  <li>The hover reads the call the code under the pointer belongs to. A name in a caller reads that caller&rsquo;s binding. A name in a function that isn&rsquo;t on the stack shows nothing.</li>
+  <li>A line you edited and haven&rsquo;t saved shows nothing, since the running program has another line there.</li>
+</ul>
 
 <h2 id="attach">Attaching to a running program</h2>
 <p>A shell finds a run by the program&rsquo;s path. It attaches to a <code>rawr run</code> of that program wherever the run was started. If none is going, <code>rawr gui</code>, <code>rawr tui</code> and an editor&rsquo;s launch start one. A run that a shell started has the debugger from its start.</p>

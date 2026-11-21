@@ -940,6 +940,7 @@ impl Session {
             "events",
             "inspect",
             "eval",
+            "hover",
             "break",
             "clear",
             "step",

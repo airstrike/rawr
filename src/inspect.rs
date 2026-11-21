@@ -84,6 +84,9 @@
 //! (#490, see [`evaluate`]); `{"error": "not paused"}` on a program that
 //! isn't. `frame` picks the call it runs in, as a read's does (#2309).
 //!
+//! A paused program reads the expression under a hover without running
+//! the program's code, with `{"op": "hover", ..}` (see [`hover`]).
+//!
 //! A request asked while the program is paused belongs to that pause. A
 //! resume that ends the pause before the pause answered it answers it at
 //! once, with `"resumed": true`: an eval as `{"error": .., "resumed":
@@ -137,6 +140,7 @@
 mod evaluate;
 mod framing;
 mod host;
+mod hover;
 mod input;
 mod interrupt;
 pub mod menu;
@@ -796,6 +800,8 @@ struct Request {
     frame: usize,
     /// Code to evaluate where the program is paused (#490).
     code: Option<String>,
+    /// An expression to read where the program is paused, for a hover.
+    hover: Option<hover::Ask>,
     /// The pause it was asked in, by its count, when the program was
     /// paused: only that pause answers it, and its end retires it
     /// (D1097.4).
@@ -809,7 +815,7 @@ impl Request {
     /// the program went on, and its next pause is at another place. It
     /// names the pause it was asked in by its count (D1097.4).
     fn retired(&self) -> Value {
-        if self.code.is_some() {
+        if self.code.is_some() || self.hover.is_some() {
             json!({
                 "error": "the program went on before this was evaluated",
                 "resumed": true,
@@ -1774,7 +1780,8 @@ impl Shared {
         // Code waits only in a pause, which answers every request it finds
         // before it goes on: one asked of a running program would wait for
         // the next.
-        if request.get("code").is_some() && state.paused.is_none() {
+        let hover = hover::Ask::of(request);
+        if (request.get("code").is_some() || hover.is_some()) && state.paused.is_none() {
             drop(state);
             reply.send(json!({ "error": "not paused" }));
             return None;
@@ -1789,7 +1796,8 @@ impl Shared {
                 .and_then(Value::as_u64)
                 .and_then(|frame| usize::try_from(frame).ok())
                 .unwrap_or(0),
-            code: text("code"),
+            code: text("code").filter(|_| hover.is_none()),
+            hover,
             asked,
             shape: Shape::of(request),
             reply,
@@ -2191,6 +2199,8 @@ impl Shared {
                         request.retired()
                     } else if let Some(code) = &request.code {
                         self.evaluated(context, &request, code, position, placed.as_deref())
+                    } else if let Some(ask) = &request.hover {
+                        self.hovered(context, &request, ask, position, placed.as_deref())
                     } else if self.matches(context, &request, position, placed.as_deref()) {
                         self.read_at(context, &request, position, placed.as_deref())
                     } else {
@@ -2284,8 +2294,10 @@ impl Shared {
         position: Position,
         placed: Option<&Placed>,
     ) -> bool {
-        // Code is evaluated only where the program is paused.
+        // Code is evaluated, and a hover read, only where the program is
+        // paused.
         request.code.is_none()
+            && request.hover.is_none()
             && request.frame < depth_of(context)
             && request
                 .name

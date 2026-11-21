@@ -296,6 +296,9 @@ use tokens::{
     text_end, without_borrow, without_reference, without_references, Continuation,
 };
 pub(crate) use tokens::{lex_rust, token_text};
+// A hover reads where each token of a line ends.
+#[cfg(feature = "debugging")]
+pub(crate) use tokens::token_length;
 #[cfg(feature = "rust-import")]
 use ty::uninstantiated_call;
 use ty::{
