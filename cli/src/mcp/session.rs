@@ -159,8 +159,9 @@ pub enum Told {
     /// The answer to a request, and how far the events had come when it
     /// was sent.
     Answer(Result<(Value, Seen), Refusal>),
-    /// A build's stage and percent, while a wait for the program waits.
-    Building { stage: String, percent: u64 },
+    /// What a build's status line says, while a wait for the program
+    /// waits.
+    Building(String),
     /// What the wait waited for came, or the session is over.
     Done,
     /// A [`Wait::Next`] ended: the cursor it goes on from, or `None` once a
@@ -299,7 +300,7 @@ struct Parked {
     until: Until,
     ear: Ear,
     /// The build update last told.
-    heard: Option<(String, u64)>,
+    heard: Option<String>,
 }
 
 /// A [`Wait`] as the owner holds it.
@@ -741,10 +742,10 @@ impl Session {
 
     /// Wait until the program runs or fails, or `call` is cancelled;
     /// `building` hears each build update.
-    pub fn settle(&self, call: &Call, mut building: impl FnMut(&str, u64)) {
+    pub fn settle(&self, call: &Call, mut building: impl FnMut(&str)) {
         self.wait_for(call, Wait::Settled, |told| match told {
-            Told::Building { stage, percent } => {
-                building(&stage, percent);
+            Told::Building(status) => {
+                building(&status);
                 None
             }
             Told::Done => Some(()),
@@ -761,11 +762,11 @@ impl Session {
         cursor: Option<u64>,
         output: Option<u64>,
         call: &Call,
-        mut building: impl FnMut(&str, u64),
+        mut building: impl FnMut(&str),
     ) -> Option<u64> {
         self.wait_for(call, Wait::Next { cursor, output }, |told| match told {
-            Told::Building { stage, percent } => {
-                building(&stage, percent);
+            Told::Building(status) => {
+                building(&status);
                 None
             }
             Told::Next(after) => Some(after),
@@ -1035,20 +1036,16 @@ impl Owner {
         let started = self.started.is_some();
         self.parked.retain_mut(|parked| {
             if matches!(parked.until, Until::Settled | Until::Next { .. })
-                && let Some((stage, percent)) = mirror.session.building()
-                && parked
-                    .heard
-                    .as_ref()
-                    .is_none_or(|(said, then)| said != stage || *then != percent)
+                && let Some(status) = mirror.session.building()
+                && parked.heard.as_deref() != Some(status)
             {
-                let told = Told::Building {
-                    stage: stage.to_owned(),
-                    percent,
-                };
-                if !parked.ear.tell(parked.id, told) {
+                if !parked
+                    .ear
+                    .tell(parked.id, Told::Building(status.to_owned()))
+                {
                     return false;
                 }
-                parked.heard = Some((stage.to_owned(), percent));
+                parked.heard = Some(status.to_owned());
             }
             match mirror.ended(&parked.until, started) {
                 Some(told) => {
@@ -1207,7 +1204,7 @@ impl Mirror {
             .session
             .building()
             .filter(|_| phase == Phase::Building)
-            .map(|(stage, percent)| json!({ "stage": stage, "percent": percent }));
+            .map(|status| json!({ "status": status }));
         json!({
             "root": Value::Null,
             "pid": self.pid,
@@ -1242,9 +1239,8 @@ fn summary(structured: &Value) -> String {
     }
     if let Some(building) = structured["building"].as_object() {
         text.push_str(&format!(
-            ", {} {}%",
-            building["stage"].as_str().unwrap_or_default(),
-            building["percent"]
+            ", {}",
+            building["status"].as_str().unwrap_or_default()
         ));
     }
     text.push_str(&format!(
@@ -1443,7 +1439,7 @@ mod tests {
             Order::PauseFirst => write!(&other, "{paused}\n{answer}\n").unwrap(),
         }
         asked.join().unwrap();
-        let after = session.next(Some(1), None, &Call::default(), |_, _| {});
+        let after = session.next(Some(1), None, &Call::default(), |_| {});
         assert_eq!(after, Some(1));
         let now = session.answer(after, None).structured;
         assert_eq!(now["state"], "paused", "{now}");
@@ -1476,7 +1472,7 @@ mod tests {
         let asked =
             std::thread::spawn(move || asking.ask(&json!({ "op": "pause" }), &Call::default()));
         let waiting = std::sync::Arc::clone(&session);
-        let settled = std::thread::spawn(move || waiting.settle(&Call::default(), |_, _| {}));
+        let settled = std::thread::spawn(move || waiting.settle(&Call::default(), |_| {}));
         assert_eq!(next(&mut lines)["method"], "program");
         other.shutdown(std::net::Shutdown::Both).unwrap();
         assert!(matches!(asked.join().unwrap(), Err(Refusal::NotRunning)));

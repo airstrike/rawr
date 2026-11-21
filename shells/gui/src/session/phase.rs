@@ -8,8 +8,8 @@ pub enum Phase {
     /// Nothing reported yet.
     #[default]
     Starting,
-    /// A cold start builds: its stage and percent.
-    Building { stage: String, percent: u64 },
+    /// A cold start builds: what its status line says.
+    Building(String),
     /// The program runs.
     Running,
     /// The program is paused at a breakpoint or a step.
@@ -58,7 +58,7 @@ impl Phase {
     pub const fn name(&self) -> &'static str {
         match self {
             Self::Starting => "starting",
-            Self::Building { .. } => "building",
+            Self::Building(_) => "building",
             Self::Running => "running",
             Self::Paused(_) => "paused",
             Self::Restarting => "restarting",
@@ -84,10 +84,7 @@ impl Phase {
             return Self::Closed;
         }
         match event["event"].as_str().unwrap_or_default() {
-            "building" => Self::Building {
-                stage: event["stage"].as_str().unwrap_or_default().to_owned(),
-                percent: event["percent"].as_u64().unwrap_or(0),
-            },
+            "building" => Self::Building(event["status"].as_str().unwrap_or_default().to_owned()),
             "running" | "queued" | "swapped" | "resumed" => Self::Running,
             "paused" => Stop::from_json(event).map_or(Self::Running, Self::Paused),
             "restarting" => Self::Restarting,
@@ -122,7 +119,7 @@ mod tests {
     fn events_move_the_phase_and_a_failed_save_keeps_a_pause() {
         let mut phase = Phase::default();
         for event in [
-            json!({ "event": "building", "stage": "API", "percent": 40 }),
+            json!({ "event": "building", "stage": "building API", "status": "building API" }),
             json!({ "event": "running" }),
             json!({ "event": "paused", "file": "/p/main.rs", "line": 3, "reason": "breakpoint" }),
             json!({ "event": "failed" }),

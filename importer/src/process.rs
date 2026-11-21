@@ -307,6 +307,46 @@ impl Command {
         self.environment
     }
 
+    /// Where this Cargo command keeps what its locks cover: the build
+    /// directory a `build.build-dir` config or the environment names, else
+    /// its artifact directory, which `--target-dir` or the environment
+    /// names, else `target` in the directory it runs in.
+    fn cargo_directories(&self) -> crate::progress::Directories {
+        let variable = |name: &str| {
+            self.environment
+                .iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| PathBuf::from(value))
+        };
+        let mut build = None;
+        let mut artifacts = None;
+        let mut arguments = self.arguments.iter();
+        while let Some(argument) = arguments.next() {
+            let argument = argument.to_string_lossy();
+            if let Some(directory) = argument.strip_prefix("--target-dir=") {
+                artifacts = Some(PathBuf::from(directory));
+            } else if argument == "--target-dir" {
+                artifacts = arguments.next().map(PathBuf::from);
+            } else if argument == "--config" {
+                let value = arguments.next().map(|value| value.to_string_lossy());
+                build = value
+                    .as_deref()
+                    .and_then(|value| value.strip_prefix("build.build-dir="))
+                    .and_then(|value| value.parse::<toml_edit::Value>().ok())
+                    .and_then(|value| value.as_str().map(PathBuf::from))
+                    .or(build);
+            }
+        }
+        let artifacts = artifacts
+            .or_else(|| variable("CARGO_TARGET_DIR"))
+            .or_else(|| variable("CARGO_BUILD_TARGET_DIR"))
+            .unwrap_or_else(|| self.current_dir.join("target"));
+        let build = build
+            .or_else(|| variable("CARGO_BUILD_BUILD_DIR"))
+            .unwrap_or_else(|| artifacts.clone());
+        crate::progress::Directories::new(build, artifacts)
+    }
+
     pub(crate) fn cargo_arguments(
         mut prefix: Vec<OsString>,
         action: CargoAction,
@@ -1165,18 +1205,21 @@ fn execute<O: Observation>(
     if let Some(stage) = building {
         crate::progress::stage(stage);
     }
-    let watch = building.is_some_and(|stage| stage > 1);
+    // A resolution's stdout is one large document that says nothing of
+    // progress; its stderr can still say Cargo waits for a lock.
+    let mut stdout_watch = building
+        .filter(|stage| *stage > 1)
+        .map(|_| crate::progress::Watch::stdout());
+    let mut stderr_watch =
+        building.map(|_| crate::progress::Watch::stderr(command.cargo_directories()));
     let stdout_reader = Reader::spawn(stdout, stdout_limit, move |chunk| {
-        if watch {
-            crate::progress::observe(true, chunk);
+        if let Some(watch) = &mut stdout_watch {
+            watch.feed(chunk);
         }
     })?;
     let stderr_reader = Reader::spawn(stderr, stderr_limit, move |chunk| {
-        if watch {
-            crate::progress::observe(false, chunk);
-        }
-        if building.is_some() {
-            crate::progress::cargo_waits(chunk);
+        if let Some(watch) = &mut stderr_watch {
+            watch.feed(chunk);
         }
     })?;
     let status = child.finish();

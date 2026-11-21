@@ -377,7 +377,7 @@ mod tests {
     #[test]
     fn rawr_lines_are_console_and_the_programs_stderr_is_stderr() {
         let (session, other) = Session::running_at(Phase::Running);
-        session.read_rawr(b"rawr > building runner  55%\n");
+        session.read_rawr(b"rawr > building runner - 12 crates - 1m02s\n");
         let output = json!({
             "jsonrpc": "2.0",
             "method": "output",
@@ -401,7 +401,7 @@ mod tests {
             [
                 (
                     "console".to_owned(),
-                    "rawr > building runner  55%\n".to_owned()
+                    "rawr > building runner - 12 crates - 1m02s\n".to_owned()
                 ),
                 ("stderr".to_owned(), "the program's own\n".to_owned()),
             ]

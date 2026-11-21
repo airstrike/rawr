@@ -57,10 +57,14 @@ const NIGHTLY: &str = "nightly";
 /// for file lock on build directory" does, with the holder's pid (D664).
 const BUILD_DIRECTORY: &str = "build directory";
 
+/// What a wait for the nightly's directory names: it is rawr's, shared by
+/// every project on the machine, and no build directory of the user's.
+const NIGHTLY_DIRECTORY: &str = "rawr's shared extraction directory";
+
 /// Lock the nightly `directory` for one Cargo run and the copy of what it
 /// wrote, so no other project's build rewrites those files in between and
-/// cleanup skips the directory. A wait says what Cargo says of its own,
-/// naming the process that holds it and the project it builds. Records the
+/// cleanup skips the directory. A wait names the directory as rawr's, with
+/// the process that uses it and the project it extracts for. Records the
 /// directory's last use, which cleanup orders by.
 #[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
 pub(crate) fn nightly_lock(
@@ -73,7 +77,7 @@ pub(crate) fn nightly_lock(
         fs::create_dir_all(directory)?;
         let file = open_lock(&path)?;
         let opened = file.metadata()?.ino();
-        let held = crate::blocking::Exclusive::building(file, &path, BUILD_DIRECTORY, project)?;
+        let held = crate::blocking::Exclusive::extracting(file, &path, NIGHTLY_DIRECTORY, project)?;
         // Cleanup renames an unlocked directory aside before removing it; a
         // lock taken on the retired one is retaken on a new directory.
         if fs::metadata(&path).is_ok_and(|on_disk| on_disk.ino() == opened) {

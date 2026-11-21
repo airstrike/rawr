@@ -85,9 +85,7 @@ impl Shell {
         let palette = &self.palette;
         let (tone, word, detail) = match &self.phase {
             Phase::Starting => (Tone::Quiet, "Starting", String::new()),
-            Phase::Building { stage, percent } => {
-                (Tone::Quiet, "Building", format!("{stage} {percent}%"))
-            }
+            Phase::Building(status) => (Tone::Quiet, "Building", status.clone()),
             Phase::Running => (Tone::Good, "Running", String::new()),
             Phase::Paused(stop) => {
                 let mut place = format!("{}:{}", file_name(stop.file()), stop.line());

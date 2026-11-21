@@ -169,7 +169,7 @@ impl Server {
                     Told::Answer(
                         Ok(_) | Err(Refusal::NotRunning | Refusal::Error(_) | Refusal::Cancelled),
                     )
-                    | Told::Building { .. }
+                    | Told::Building(_)
                     | Told::Done
                     | Told::Next(_) => None,
                 };
