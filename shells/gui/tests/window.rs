@@ -344,7 +344,10 @@ fn the_console_evaluates_where_the_program_is_paused_and_a_step_moves_the_stop()
     let eval = script.request("eval");
     assert_eq!(eval["params"]["code"], "count + 1");
     reply(&mut app, &eval, json!({ "value": "3" }));
-    assert!(shows(&app, "> count + 1"));
+    assert!(
+        shows(&app, "count + 1"),
+        "the console shows the code evaluated"
+    );
     assert!(shows(&app, "3"), "the console shows the answer");
     snapshot(&app, "eval.png");
 

@@ -14,7 +14,7 @@ use std::path::Path;
 use iced::highlighter::{self, Parser};
 use iced::widget::text::Span;
 use iced::widget::{button, column, container, rich_text, row, scrollable, span, text};
-use iced::{Code, Color, Element, Fill, Font, Task, Theme, Widget};
+use iced::{Code, Color, Element, Fill, Font, Task, Widget};
 
 use crate::action::Action;
 use crate::theme;
@@ -180,11 +180,7 @@ impl State {
             .and_then(|extension| extension.to_str())
             .unwrap_or("txt")
             .to_owned();
-        let theme = if self.light {
-            Theme::Light
-        } else {
-            Theme::Dark
-        };
+        let theme = theme::window(self.light);
         let parser = self
             .colours
             .parser
@@ -193,7 +189,7 @@ impl State {
             let pieces = parser
                 .parse_line(&self.text[bytes.clone()])
                 .map(|(bytes, code): (Range<usize>, Code)| {
-                    let style = code.highlight(&theme);
+                    let style = theme::code(code, &theme);
                     Piece {
                         bytes,
                         color: style.color,
@@ -252,11 +248,11 @@ impl State {
                     text(if set { "●" } else { " " })
                         .font(Font::MONOSPACE)
                         .size(theme::SIZE)
-                        .style(text::danger),
+                        .style(theme::breakpoint),
                     text(format!("{number:>4}"))
                         .font(Font::MONOSPACE)
                         .size(theme::SIZE)
-                        .style(text::secondary),
+                        .style(theme::faint),
                 ]
                 .spacing(2),
             )

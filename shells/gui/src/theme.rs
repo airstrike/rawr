@@ -2,17 +2,51 @@
 //! size for every row, section bars over the panes, the split lines between
 //! them, and the colours a value, a selected row and the marked line take.
 //! Each colour comes from the window's theme, so light and dark both hold.
+//! The window is dark in Oxocarbon and light in iced's light theme.
 
+use iced::font;
 use iced::widget::text::{Ellipsis, Wrapping};
-use iced::widget::{button, container, row, text, tooltip};
+use iced::widget::{button, container, row, space, text, text_input, tooltip};
 use iced::{border, Background, Code, Color, Element, Fill, Font, Theme, Widget};
-use iced_split::{Style, StyleSheet};
+use iced_split::{Split, Style, StyleSheet};
 
 /// The size of every row's text.
 pub const SIZE: f32 = 12.0;
 
 /// The size of a section bar's caption.
 const CAPTION: f32 = 11.0;
+
+/// The room a split's line takes between its panes.
+const LINE: f32 = 1.0;
+
+/// How far a split's grip reaches past its line into each pane.
+const GRIP: f32 = 4.0;
+
+/// The window's theme, light or dark as the system is.
+#[must_use]
+pub fn window(light: bool) -> Theme {
+    if light {
+        Theme::Light
+    } else {
+        Theme::Oxocarbon
+    }
+}
+
+/// A split whose panes meet at its line: the line takes one pixel, and its
+/// grip, unseen, reaches a few pixels into each pane.
+pub fn split<'a, Message, Start, End>(
+    split: Split<'a, Message, Start, End, Theme>,
+) -> Split<'a, Message, Start, End, Theme>
+where
+    Message: 'a,
+    Start: Widget<Message, Theme, iced::Renderer> + 'a,
+    End: Widget<Message, Theme, iced::Renderer> + 'a,
+{
+    split
+        .handle_width(LINE + 2.0 * GRIP)
+        .spacing(-GRIP)
+        .style(divider)
+}
 
 /// A pane's section bar: its caption, upper case, on a band of its own,
 /// and what the pane shows, such as its file, when it says.
@@ -53,21 +87,116 @@ pub fn pane(theme: &Theme) -> container::Style {
 
 /// The line a split draws between its panes: a hairline at rest, the accent
 /// while it is hovered or dragged.
-pub fn divider(theme: &Theme) -> Style {
-    let palette = theme.palette();
+fn divider(theme: &Theme) -> Style {
     Style {
         unfocused: StyleSheet {
-            color: palette.background.strong.color,
-            width: 1.0,
+            color: rule(theme),
+            width: LINE,
             radius: 0.0.into(),
         },
         focused: StyleSheet {
-            color: palette.primary.base.color,
+            color: theme.palette().primary.base.color,
             width: 3.0,
             radius: 1.5.into(),
         },
         snap: true,
     }
+}
+
+/// The colour of a hairline: a split's line and the rule between the
+/// console's entries.
+pub fn rule(theme: &Theme) -> Color {
+    theme.palette().background.strong.color
+}
+
+/// A hairline across its pane.
+pub fn hairline<'a, Message: 'a>() -> Element<'a, Message> {
+    container(space())
+        .width(Fill)
+        .height(1)
+        .style(|theme| container::Style::default().background(rule(theme)))
+        .boxed()
+}
+
+/// A text input with no box: its text alone, on the pane's background.
+pub fn bare(theme: &Theme, _status: text_input::Status) -> text_input::Style {
+    let palette = theme.palette();
+    text_input::Style {
+        background: Background::Color(Color::TRANSPARENT),
+        border: border::width(0),
+        placeholder: quiet(theme),
+        value: palette.background.base.text,
+        selection: palette.primary.weak.color,
+    }
+}
+
+/// The colour of quiet text: a console's marks, an answer and a gutter's
+/// numbers.
+pub fn quiet(theme: &Theme) -> Color {
+    theme.palette().secondary.base.color
+}
+
+/// Quiet text.
+pub fn faint(theme: &Theme) -> text::Style {
+    text::Style {
+        color: Some(quiet(theme)),
+        ..text::Style::default()
+    }
+}
+
+/// The console's prompt mark, in the accent: it says where typing goes.
+pub fn mark(theme: &Theme) -> text::Style {
+    text::Style {
+        color: Some(theme.palette().primary.base.color),
+        ..text::Style::default()
+    }
+}
+
+/// The breakpoint dot in the gutter.
+pub fn breakpoint(theme: &Theme) -> text::Style {
+    text::Style {
+        color: Some(calm(theme.palette().danger.base.color, theme)),
+        ..text::Style::default()
+    }
+}
+
+/// How code is drawn: each kind in a hue of the theme's palette, softened
+/// toward its text so no hue shouts. Names and anything plain take the
+/// text's own colour.
+#[must_use]
+pub fn code(code: Code, theme: &Theme) -> text::highlighter::Style {
+    let palette = theme.palette();
+    let color = match code {
+        Code::Keyword | Code::Support => Some(calm(palette.warning.base.color, theme)),
+        Code::Function => Some(calm(palette.primary.base.color, theme)),
+        Code::Type | Code::Path => Some(
+            palette
+                .primary
+                .base
+                .color
+                .mix(palette.background.base.text, 0.5),
+        ),
+        Code::String => Some(calm(palette.success.base.color, theme)),
+        Code::Constant => Some(
+            palette
+                .danger
+                .base
+                .color
+                .mix(palette.background.base.text, 0.45),
+        ),
+        Code::Punctuation | Code::Comment => Some(quiet(theme)),
+        Code::Invalid => Some(palette.danger.base.color),
+        Code::Variable | Code::Other => None,
+    };
+    text::highlighter::Style {
+        color,
+        style: (code == Code::Comment).then_some(font::Style::Italic),
+    }
+}
+
+/// `color` a quarter of the way to the theme's text, so it reads calm.
+fn calm(color: Color, theme: &Theme) -> Color {
+    color.mix(theme.palette().background.base.text, 0.25)
 }
 
 /// The source line where the program is.
@@ -169,7 +298,7 @@ pub fn value(value: Result<&str, &str>) -> impl Fn(&Theme) -> text::Style {
         Ok(_) => None,
     };
     move |theme| text::Style {
-        color: code.and_then(|code| code.highlight(theme).color),
+        color: code.and_then(|code| self::code(code, theme).color),
         ..text::Style::default()
     }
 }

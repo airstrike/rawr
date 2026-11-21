@@ -4,7 +4,7 @@
 
 use std::collections::HashSet;
 
-use iced::widget::{column, row, scrollable, text, text_input};
+use iced::widget::{column, container, row, scrollable, text, text_input};
 use iced::{Element, Fill, Font, Widget};
 
 use crate::action::Action;
@@ -89,11 +89,15 @@ impl State {
         }
     }
 
+    /// The entries as DevTools' console draws them, a hairline under each:
+    /// the code after a `>`, its answer after a `<`, quiet, or why it has
+    /// none in the colour of an error. The prompt is a bare line after the
+    /// last: the accent's `>` and the code typed.
     pub fn view(&self) -> Element<'_, Message> {
         let entries = self.entries.iter().map(|entry| {
             let answer = match &entry.answer {
-                None => text("…").size(theme::SIZE).boxed(),
-                Some(Ok(answer)) => tree::view(
+                None => quiet("…"),
+                Some(Ok(answer)) if !answer.parts.is_empty() => tree::view(
                     [tree::Root {
                         place: &entry.place,
                         name: "",
@@ -103,40 +107,60 @@ impl State {
                     &self.open,
                     Message::Toggle,
                 ),
+                Some(Ok(answer)) => quiet(&answer.value),
                 Some(Err(error)) => text(error.as_str())
+                    .font(Font::MONOSPACE)
                     .size(theme::SIZE)
                     .style(theme::error)
                     .boxed(),
             };
+            let code = text(entry.code.as_str())
+                .font(Font::MONOSPACE)
+                .size(theme::SIZE);
             column![
-                text(format!("> {}", entry.code))
-                    .font(Font::MONOSPACE)
-                    .size(theme::SIZE)
-                    .style(text::secondary),
-                answer
+                container(column![marked(">", code.boxed()), marked("<", answer)]).padding([1, 8]),
+                theme::hairline(),
             ]
             .boxed()
         });
-        column![
-            scrollable(column(entries).spacing(2).padding([2, 6]))
-                .anchor_bottom()
-                .height(Fill)
-                .width(Fill),
-            row![
-                text(">").font(Font::MONOSPACE).size(theme::SIZE),
-                text_input("Evaluate Rust where the program is paused", &self.input)
-                    .id(INPUT)
-                    .font(Font::MONOSPACE)
-                    .size(theme::SIZE)
-                    .padding([3, 4])
-                    .on_input(Message::Input)
-                    .on_submit(Message::Submit),
-            ]
-            .spacing(4)
-            .padding([0, 6])
-            .align_y(iced::Center),
+        let prompt = row![
+            text(">")
+                .font(Font::MONOSPACE)
+                .size(theme::SIZE)
+                .style(theme::mark),
+            text_input("", &self.input)
+                .id(INPUT)
+                .font(Font::MONOSPACE)
+                .size(theme::SIZE)
+                .padding(0)
+                .style(theme::bare)
+                .on_input(Message::Input)
+                .on_submit(Message::Submit),
         ]
-        .spacing(2)
-        .boxed()
+        .spacing(MARK)
+        .padding([2, 8])
+        .align_y(iced::Center);
+        scrollable(column(entries).push(prompt.boxed()))
+            .anchor_bottom()
+            .height(Fill)
+            .width(Fill)
+            .boxed()
     }
+}
+
+/// The room between a mark and what it marks.
+const MARK: f32 = 8.0;
+
+/// `content` after a quiet `mark`.
+fn marked<'a>(mark: &'a str, content: Element<'a, Message>) -> Element<'a, Message> {
+    row![quiet(mark), content].spacing(MARK).boxed()
+}
+
+/// Monospace text in the quiet colour.
+fn quiet(content: &str) -> Element<'_, Message> {
+    text(content)
+        .font(Font::MONOSPACE)
+        .size(theme::SIZE)
+        .style(theme::faint)
+        .boxed()
 }

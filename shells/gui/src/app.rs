@@ -635,14 +635,13 @@ impl App {
     /// and the output under them all. The frame's pane shows once the
     /// program shows a window. Each split's line drags.
     pub fn view(&self) -> Element<'_, Message> {
-        let left = horizontal_split(
+        let left = theme::split(horizontal_split(
             self.source_pane(),
             pane("Console", self.console.view().map(Message::Console)),
             self.splits.console,
             |at| Message::Split(Split::Console, at),
-        )
-        .style(theme::divider);
-        let stack = horizontal_split(
+        ));
+        let stack = theme::split(horizontal_split(
             pane("Call stack", scrollable(self.frames()).height(Fill)),
             pane(
                 "Bindings",
@@ -650,23 +649,20 @@ impl App {
             ),
             self.splits.frames,
             |at| Message::Split(Split::Frames, at),
-        )
-        .style(theme::divider);
+        ));
         let right = match &self.window {
             Window::Unseen => stack.boxed(),
-            Window::Shown(frame) => horizontal_split(
+            Window::Shown(frame) => theme::split(horizontal_split(
                 pane("Frame", frame_pane(frame.as_ref())),
                 stack,
                 self.splits.frame,
                 |at| Message::Split(Split::Frame, at),
-            )
-            .style(theme::divider)
+            ))
             .boxed(),
         };
-        let panes = vertical_split(left, right, self.splits.columns, |at| {
+        let panes = theme::split(vertical_split(left, right, self.splits.columns, |at| {
             Message::Split(Split::Columns, at)
-        })
-        .style(theme::divider);
+        }));
         let output = scrollable(
             text(self.output.as_str())
                 .font(Font::MONOSPACE)
@@ -678,13 +674,12 @@ impl App {
         column![
             self.toolbar(),
             rule::horizontal(1),
-            horizontal_split(
+            theme::split(horizontal_split(
                 panes,
                 pane("Output", container(output).padding([2, 6])),
                 self.splits.output,
                 |at| Message::Split(Split::Output, at),
-            )
-            .style(theme::divider),
+            )),
         ]
         .boxed()
     }
@@ -802,11 +797,7 @@ impl App {
 
     #[must_use]
     pub fn theme(&self) -> Theme {
-        if self.light {
-            Theme::Light
-        } else {
-            Theme::Dark
-        }
+        theme::window(self.light)
     }
 }
 
