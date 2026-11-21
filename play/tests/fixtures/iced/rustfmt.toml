@@ -1,0 +1,4 @@
+# iced's examples here are copied unchanged, so they keep iced's own
+# formatting: rustfmt's defaults for edition 2024, which iced sets nothing
+# beyond.
+style_edition = "2024"

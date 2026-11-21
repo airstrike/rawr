@@ -1,5 +1,7 @@
-The arc.rs, counter.rs and pick_list.rs programs here are from iced
-(https://github.com/iced-rs/iced), examples/, under this licence:
+The bezier_tool.rs, counter.rs and styling.rs programs here are iced's own
+examples (https://github.com/iced-rs/iced), each examples/<name>/src/main.rs
+copied unchanged at the rev play/universe/Cargo.toml pins, under this
+licence:
 
 Copyright 2019 Héctor Ramón, Iced contributors
 
