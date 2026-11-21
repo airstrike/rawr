@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.84 (2026-11-21)
+
+- A save no longer fails with "the build directory is locked by another build" when two Cargo operations of one run meet: the run owner holds one Cargo lane and lends it to each resolution, publication and runner build. (#1824)
+
 ## 0.4.83 (2026-11-21)
 
 - rawr mcp's main loop owns its checks, and a call waits on one channel for its result or its cancel. A run waits for its child's exit in the kernel in place of a 10 ms poll, and ends the child's process group before reaping it. Five locks and a condvar are gone. (#2396)
