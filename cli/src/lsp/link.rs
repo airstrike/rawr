@@ -271,21 +271,32 @@ impl Server {
             .structured;
         link.event = answer["cursor"].as_u64().unwrap_or(link.event);
         link.output = answer["output_cursor"].as_u64().unwrap_or(link.output);
+        // Where the program is paused comes from the same events as the
+        // cursor, so a pause is taken once, whenever it lands.
         let mut failure = link.failure.clone();
+        let mut paused = link.paused.clone();
         let mut moved = false;
         for event in answer["events"].as_array().into_iter().flatten() {
-            match event["event"].as_str().unwrap_or_default() {
+            let name = event["event"].as_str().unwrap_or_default();
+            match name {
                 "failed" => failure = event["diagnostics"].clone(),
-                "running" | "queued" | "swapped" => {
-                    failure = Value::Null;
-                    moved = true;
-                }
-                "paused" | "resumed" | "restarting" | "ended" => moved = true,
+                "running" | "queued" | "swapped" => failure = Value::Null,
                 _ => {}
             }
+            if name == "paused" {
+                let mut at = event.clone();
+                if let Some(at) = at.as_object_mut() {
+                    at.remove("event");
+                    at.remove("seq");
+                }
+                paused = Some(at);
+                moved = true;
+            } else if name != "failed" {
+                moved = moved || paused.is_some();
+                paused = None;
+            }
         }
-        let paused = session.paused();
-        if moved || paused != link.paused {
+        if moved {
             link.paused = paused;
             link.moment += 1;
             self.read_hints(serial);
