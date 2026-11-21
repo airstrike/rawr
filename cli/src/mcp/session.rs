@@ -82,6 +82,9 @@ struct Mirror {
     output: VecDeque<(u64, Stream, String)>,
     output_bytes: usize,
     next_output: u64,
+    /// The number of the newest piece of the program's own output, which
+    /// ends a [`Wait::Next`]; rawr's lines don't (#2267).
+    program_output: u64,
     /// What the last answer returned: a call without a cursor goes on
     /// from here.
     given_event: u64,
@@ -135,11 +138,15 @@ pub enum Wait {
     Greeting,
     /// The program runs or fails.
     Settled,
-    /// The next event past `cursor` other than build progress, by default
-    /// past what was last given. A client waits once at a time, so a wait
-    /// that comes while another is still parked means the client gave the
-    /// first up (#1542): that one ends with no cursor.
-    Next { cursor: Option<u64> },
+    /// The next event past `cursor` other than build progress, or the
+    /// program's output past `output` (#2267), each by default past what
+    /// was last given. A client waits once at a time, so a wait that comes
+    /// while another is still parked means the client gave the first up
+    /// (#1542): that one ends with no cursor.
+    Next {
+        cursor: Option<u64>,
+        output: Option<u64>,
+    },
     /// An event past `event`, output past `output` or breakpoints past
     /// revision `breakpoints`: for a shell that tells each as it comes.
     Change {
@@ -257,6 +264,7 @@ enum Until {
     Settled,
     Next {
         after: u64,
+        output: u64,
         ticket: u64,
     },
     Change {
@@ -670,17 +678,18 @@ impl Session {
         });
     }
 
-    /// Wait for the next event past `cursor` other than build progress, or
-    /// `call`'s cancel: the cursor the wait went on from, or `None` once a
-    /// later wait took its place (see [`Wait::Next`]). `building` hears
-    /// each build update.
+    /// Wait for the next event past `cursor` other than build progress, the
+    /// program's output past `output`, or `call`'s cancel: the cursor the
+    /// wait went on from, or `None` once a later wait took its place (see
+    /// [`Wait::Next`]). `building` hears each build update.
     pub fn next(
         &self,
         cursor: Option<u64>,
+        output: Option<u64>,
         call: &Call,
         mut building: impl FnMut(&str, u64),
     ) -> Option<u64> {
-        self.wait_for(call, Wait::Next { cursor }, |told| match told {
+        self.wait_for(call, Wait::Next { cursor, output }, |told| match told {
             Told::Building { stage, percent } => {
                 building(&stage, percent);
                 None
@@ -790,10 +799,11 @@ impl Owner {
                 let until = match wait {
                     Wait::Greeting => Until::Greeting,
                     Wait::Settled => Until::Settled,
-                    Wait::Next { cursor } => {
+                    Wait::Next { cursor, output } => {
                         self.mirror.waiter += 1;
                         Until::Next {
                             after: cursor.unwrap_or(self.mirror.given_event),
+                            output: output.unwrap_or(self.mirror.given_output),
                             ticket: self.mirror.waiter,
                         }
                     }
@@ -998,6 +1008,9 @@ impl Mirror {
         self.next_output += 1;
         let number = self.next_output;
         self.output_bytes += text.len();
+        if stream != Stream::Rawr {
+            self.program_output = number;
+        }
         self.output.push_back((number, stream, text));
         while self.output_bytes > OUTPUT {
             let Some((_, _, dropped)) = self.output.pop_front() else {
@@ -1030,11 +1043,16 @@ impl Mirror {
         let done = match *until {
             Until::Greeting => self.greeted,
             Until::Settled => over || (self.greeted && !phase.is_pending()),
-            Until::Next { after, ticket } => {
+            Until::Next {
+                after,
+                output,
+                ticket,
+            } => {
                 if self.waiter != ticket {
                     return Some(Told::Next(None));
                 }
-                return (over || past(after)).then_some(Told::Next(Some(after)));
+                let printed = self.program_output > output;
+                return (over || printed || past(after)).then_some(Told::Next(Some(after)));
             }
             Until::Change {
                 event,
@@ -1227,6 +1245,12 @@ mod tests {
     use super::{Ear, Phase, Refusal, Session, Told, Wait};
     use crate::mcp::call::Call;
 
+    /// A wait for the next event or output past what was last given.
+    const NEXT: Wait = Wait::Next {
+        cursor: None,
+        output: None,
+    };
+
     /// An ear on a plain channel, for a test to read what a wait is told.
     fn ear() -> (Ear, mpsc::Receiver<(u64, Told)>) {
         let (told, heard) = mpsc::channel();
@@ -1246,9 +1270,9 @@ mod tests {
     fn a_later_wait_takes_the_place_of_one_still_parked() {
         let (session, _other) = Session::running_at(Phase::Starting);
         let (given_up_ear, given_up) = ear();
-        let first = session.park(Wait::Next { cursor: None }, given_up_ear);
+        let first = session.park(NEXT, given_up_ear);
         let (later_ear, later) = ear();
-        let second = session.park(Wait::Next { cursor: None }, later_ear);
+        let second = session.park(NEXT, later_ear);
         let (id, told) = given_up.recv().unwrap();
         assert_eq!(id, first);
         assert!(matches!(told, Told::Next(None)), "{told:?}");
@@ -1277,11 +1301,38 @@ mod tests {
             mirror.session.record(2, paused);
         });
         let (waiting, told) = ear();
-        let id = session.park(Wait::Next { cursor: None }, waiting);
+        let id = session.park(NEXT, waiting);
         let (heard, what) = told.recv().unwrap();
         assert_eq!(heard, id);
         assert!(matches!(what, Told::Next(Some(1))), "{what:?}");
         assert_eq!(session.answer(Some(1), None).structured["state"], "paused");
+    }
+
+    /// A running program that prints and tells no event ends a parked
+    /// wait with what it printed, while rawr's own lines leave the wait
+    /// parked (#2267).
+    #[test]
+    fn a_line_the_program_prints_ends_a_parked_wait() {
+        let (session, other) = Session::running_at(Phase::Running);
+        assert_eq!(session.answer(None, None).structured["cursor"], 1);
+        let (waiting, told) = ear();
+        let id = session.park(NEXT, waiting);
+        session.read_rawr(b"rawr: the program runs\n");
+        // A look comes after the owner took the line and checked the wait.
+        assert_eq!(session.phase(), Phase::Running);
+        assert!(told.try_recv().is_err(), "rawr's line ended the wait");
+        let printed = json!({ "jsonrpc": "2.0", "method": "output", "params": {
+            "stream": "stdout", "text": "listening on 8080\n",
+        } });
+        writeln!(&other, "{printed}").unwrap();
+        let (heard, what) = told.recv().unwrap();
+        assert_eq!(heard, id);
+        let Told::Next(Some(after)) = what else {
+            panic!("the wait goes on from its cursor: {what:?}");
+        };
+        let answer = session.answer(Some(after), None).structured;
+        assert_eq!(answer["stdout"], "listening on 8080\n", "{answer}");
+        assert_eq!(answer["events"], json!([]), "{answer}");
     }
 
     /// Which of a debugger answer and the program's `paused` event the
@@ -1317,7 +1368,7 @@ mod tests {
             Order::PauseFirst => write!(&other, "{paused}\n{answer}\n").unwrap(),
         }
         asked.join().unwrap();
-        let after = session.next(Some(1), &Call::default(), |_, _| {});
+        let after = session.next(Some(1), None, &Call::default(), |_, _| {});
         assert_eq!(after, Some(1));
         let now = session.answer(after, None).structured;
         assert_eq!(now["state"], "paused", "{now}");
