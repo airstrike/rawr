@@ -51,6 +51,10 @@ pub(super) struct Link {
     pub(super) failure: Value,
     /// The documents the failure was published to.
     pub(super) published: Vec<String>,
+    /// The session hasn't greeted the server, so where the program is
+    /// isn't known yet. The client's requests wait in `held` meanwhile.
+    greeting: bool,
+    held: Vec<Value>,
 }
 
 impl Link {
@@ -66,6 +70,8 @@ impl Link {
             hints: Hints::default(),
             failure: Value::Null,
             published: Vec::new(),
+            greeting: true,
+            held: Vec::new(),
         }
     }
 
@@ -207,9 +213,14 @@ impl Server {
 
     /// Attach program `index` to its newest run, when one serves it.
     fn attach(&mut self, index: usize) {
-        let Some(session) = Session::reach(&self.programs[index].root, None) else {
-            return;
-        };
+        if let Some(session) = Session::reach(&self.programs[index].root, None) {
+            self.attach_to(index, session);
+        }
+    }
+
+    /// Attach program `index` to `session`, and follow it once it greeted
+    /// the server.
+    fn attach_to(&mut self, index: usize, session: Arc<Session>) {
         self.links += 1;
         let serial = self.links;
         self.programs[index].link = Some(Link::new(serial, Arc::clone(&session)));
@@ -223,6 +234,18 @@ impl Server {
                 server.detach(serial);
             }
         });
+    }
+
+    /// Add the program at `root`, attached to `session`, which greets the
+    /// server once its peer answers `hello`.
+    #[cfg(test)]
+    pub(super) fn attached(&mut self, root: PathBuf, session: Arc<Session>) {
+        self.programs.push(Program {
+            root,
+            runs: None,
+            link: None,
+        });
+        self.attach_to(self.programs.len() - 1, session);
     }
 
     /// Add the program at `root`, attached to `session`, already greeted.
@@ -239,6 +262,29 @@ impl Server {
             program.link = Some(Link::new(serial, session));
         }
         self.follow(serial);
+    }
+
+    /// Hold the client's `request` about the document at `uri` while the
+    /// run its program is attached to hasn't greeted the server, to take it
+    /// once the server knows where the program is. Whether it was held.
+    pub(super) fn hold(&mut self, uri: &str, request: &Value) -> bool {
+        let Some(path) = self
+            .documents
+            .get(uri)
+            .map(|document| document.path.clone())
+        else {
+            return false;
+        };
+        let Some(index) = self.program_of(&path) else {
+            return false;
+        };
+        match &mut self.programs[index].link {
+            Some(link) if link.greeting => {
+                link.held.push(request.clone());
+                true
+            }
+            _ => false,
+        }
     }
 
     /// The link numbered `serial`, while it holds.
@@ -302,6 +348,13 @@ impl Server {
             self.read_hints(serial);
         }
         self.diagnose(serial, failure);
+        let held = self.link(serial).map_or_else(Vec::new, |link| {
+            link.greeting = false;
+            std::mem::take(&mut link.held)
+        });
+        for request in held {
+            self.take(request);
+        }
         if session.phase().is_over() {
             return self.detach(serial);
         }
@@ -332,6 +385,9 @@ impl Server {
             link.session.stop();
             if !link.hints.is_empty() {
                 self.refresh();
+            }
+            for request in link.held {
+                self.unanswered(&request);
             }
         }
     }

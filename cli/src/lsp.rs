@@ -375,6 +375,53 @@ mod tests {
         thread.join().unwrap();
     }
 
+    /// A hover asked before the run's session greeted the server waits for
+    /// the greeting, which says where the program is paused, then reads
+    /// there: an editor hovers as soon as it opens a file.
+    #[test]
+    fn a_hover_before_the_greeting_waits_for_it() {
+        let (session, other) = Session::greeting();
+        let (out, read) = UnixStream::pair().unwrap();
+        let (heard, hearing) = mpsc::channel();
+        let opened = json!({
+            "method": "textDocument/didOpen",
+            "params": { "textDocument": { "uri": URI, "languageId": "rust", "version": 1, "text": TEXT } },
+        });
+        heard.send(Heard::Message(opened)).unwrap();
+        heard.send(hover(1, 3, 26)).unwrap();
+        let telling = heard.clone();
+        let thread = std::thread::spawn(move || {
+            let mut server = Server::new(Box::new(out), telling, None);
+            server.initialized = true;
+            server.attached(PathBuf::from("/p"), session);
+            server.serve(&hearing);
+        });
+        let mut told = BufReader::new(read);
+        let mut lines = BufReader::new(other.try_clone().unwrap()).lines();
+        let hello = next(&mut lines);
+        assert_eq!(hello["method"], "hello");
+        let events = json!([{ "event": "running", "seq": 1 }, paused(2)]);
+        answer(
+            &other,
+            &hello,
+            json!({ "events": events, "breakpoints": null }),
+        );
+        let bindings = next(&mut lines);
+        assert_eq!(bindings["params"], json!({ "frame": 0 }));
+        answer(&other, &bindings, json!({ "bindings": [] }));
+        let read = next(&mut lines);
+        assert_eq!(read["params"]["op"], "hover", "{read}");
+        let score = json!({ "expression": "player.score", "value": "3" });
+        answer(&other, &read, score);
+        let hovered = written(&mut told, "id", &json!(1));
+        assert_eq!(
+            hovered["result"]["contents"]["value"], "```rust\nplayer.score = 3\n```",
+            "{hovered}"
+        );
+        heard.send(Heard::Ended).unwrap();
+        thread.join().unwrap();
+    }
+
     /// A hover whose session closes before it answers shows nothing, and
     /// so does the next, with no run to ask.
     #[test]
