@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.92 (2026-11-21)
+
+- rawr's lines about a program that ended, a restart and a save's or start's round wait while the program holds the terminal raw, like every other rawr line. (#2415)
+
 ## 0.4.91 (2026-11-21)
 
 - rawr's status line, the lines above it and the lines held while a program has the terminal are written by one printer thread: a line is on stderr when the call returns, the last line is flushed at exit, on a panic and after Ctrl-C or a kill, and a cold launch no longer starts a ticker thread. Four locks go. (#2414)

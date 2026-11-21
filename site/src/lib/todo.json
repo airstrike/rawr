@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-21",
-  "version": "0.4.91",
+  "version": "0.4.92",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.92",
+        "date": "2026-11-21",
+        "entries": [
+          {"text":"rawr's lines about a program that ended, a restart and a save's or start's round wait while the program holds the terminal raw, like every other rawr line.","issues":[2415]}
+        ]
+      },
       {
         "version": "0.4.91",
         "date": "2026-11-21",
@@ -5862,7 +5869,7 @@
     {"issue":2412,"title":"The session a run hosts keeps its state on one thread: shells, the program and the run's owner…","state":"closed","category":"Health","release":"0.4.90"},
     {"issue":2413,"title":"rawr mcp screenshot renders the window at a scale above its backing scale, for 2x detail on a 1x display","state":"open","category":"Health"},
     {"issue":2414,"title":"rawr's status line, the lines above it and the lines held while a program has the terminal are…","state":"closed","category":"Health","release":"0.4.91"},
-    {"issue":2415,"title":"Some of the owner's rawr: lines skip the hold while a program has the terminal raw","state":"open","category":"Health"}
+    {"issue":2415,"title":"Some of the owner's rawr: lines skip the hold while a program has the terminal raw","state":"closed","category":"Health","release":"0.4.92"}
   ],
   "groups": [
     {

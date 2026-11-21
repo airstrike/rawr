@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.4.92",
+      "date": "2026-11-21",
+      "entries": [
+        {"text":"rawr's lines about a program that ended, a restart and a save's or start's round wait while the program holds the terminal raw, like every other rawr line.","issues":[2415]}
+      ]
+    },
+    {
       "version": "0.4.91",
       "date": "2026-11-21",
       "entries": [
