@@ -987,6 +987,28 @@ pub(crate) fn observe(stdout: bool, chunk: &[u8]) {
     }
 }
 
+/// Say each of Cargo's own waits for a file lock in one chunk of a Cargo
+/// child's stderr. rawr keeps that stderr, so without this a Cargo that
+/// waits for another Cargo on a shared build directory waits unseen.
+pub(crate) fn cargo_waits(chunk: &[u8]) {
+    for line in cargo_wait_lines(chunk) {
+        say(&line);
+    }
+}
+
+/// The lines of `chunk` that say Cargo waits for a file lock, each marked
+/// as Cargo's own.
+fn cargo_wait_lines(chunk: &[u8]) -> impl Iterator<Item = String> + '_ {
+    chunk
+        .split(|byte| *byte == b'\n')
+        .map(String::from_utf8_lossy)
+        .filter(|line| line.contains(CARGO_WAIT))
+        .map(|line| format!("{} (Cargo's own lock)", line.trim_end()))
+}
+
+/// What Cargo says when it finds a lock it needs held.
+const CARGO_WAIT: &str = "Blocking waiting for file lock";
+
 fn count(haystack: &[u8], needle: &[u8]) -> usize {
     haystack
         .windows(needle.len())
@@ -1588,6 +1610,18 @@ fn render_phase(phase: &str, count: Option<(usize, Option<usize>)>, style: &Styl
 
 #[cfg(test)]
 mod tests {
+    /// A Cargo child's own wait for a lock is said, marked as Cargo's, and
+    /// nothing else it wrote is.
+    #[test]
+    fn cargo_waits_for_a_lock_are_said_as_cargos() {
+        let chunk =
+            b"   Compiling a v0.1.0\n    Blocking waiting for file lock on build directory\n";
+        assert_eq!(
+            super::cargo_wait_lines(chunk).collect::<Vec<_>>(),
+            ["    Blocking waiting for file lock on build directory (Cargo's own lock)"]
+        );
+    }
+
     use super::*;
 
     /// A printer's output as a test reads it: each write, sent on.

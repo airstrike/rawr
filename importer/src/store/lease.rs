@@ -133,7 +133,7 @@ fn with_owner<T>(
             // Store bootstrap enrolls every project before any graph operation. A miss
             // must not recreate a deleted control and split a still-held OS lease.
             validate_file(&path)?;
-            with_file(&path, "acquire project InFlight ownership", || {
+            with_file(root, &path, "acquire project InFlight ownership", || {
                 enter(holder)
             })
         }
@@ -257,7 +257,7 @@ pub(crate) fn with_bootstrap<T>(
     if !fresh {
         return evaluate();
     }
-    with_file(&path, "acquire typed store bootstrap lease", evaluate)
+    with_file(root, &path, "acquire typed store bootstrap lease", evaluate)
 }
 
 fn create_bootstrap(root: &Path, path: &Path) -> Result<(), Error> {
@@ -330,7 +330,7 @@ pub(crate) fn with_action<T>(
         })?;
     let path = directory.join(format!("{}.lock", action.directory()));
     ensure_keyed(root, &path)?;
-    with_file(&path, "typed node action", evaluate)
+    with_file(root, &path, "typed node action", evaluate)
 }
 
 pub(crate) fn with_execution<T>(
@@ -345,7 +345,7 @@ pub(crate) fn with_execution<T>(
         })?;
     let exact = executions.join(format!("{}.lock", execution.directory()));
     ensure_keyed(root, &exact)?;
-    with_file(&exact, "acquire typed node execution lease", evaluate)
+    with_file(root, &exact, "acquire typed node execution lease", evaluate)
 }
 
 /// Acquire one already-created execution lease without waiting. Absence means
@@ -515,7 +515,7 @@ pub(crate) fn with_project<T>(
         })?;
     let exact = projects.join(format!("{}.lock", project.directory()));
     validate_file(&exact)?;
-    with_file(&exact, "acquire typed store project lease", evaluate)
+    with_file(root, &exact, "acquire typed store project lease", evaluate)
 }
 
 pub(crate) fn with_publication<T>(
@@ -529,13 +529,20 @@ pub(crate) fn with_publication<T>(
         }
     })?;
     with_file(
+        root,
         &locks.join("publication.lock"),
         "acquire typed node publication lease",
         || evaluate(&Publication { root }),
     )
 }
 
+/// Hold the lease at `path` in the store at `root` while `evaluate` runs.
+/// When another process holds it, say once that this waits, naming the
+/// store, whose path names its project, and block on the lock. The OS lets
+/// go of it when the holder finishes or dies. The lease file's bytes are
+/// fixed, so it records no pid.
 fn with_file<T>(
+    root: &Path,
     path: &Path,
     label: &'static str,
     evaluate: impl FnOnce() -> Result<T, Error>,
@@ -571,15 +578,15 @@ fn with_file<T>(
             path: path.to_path_buf(),
             source,
         })?;
-    let mut lock = fd_lock::RwLock::new(file);
-    let guard = lock.write().map_err(|source| Error::Io {
+    let what = format!("the store at {}", root.display());
+    let guard = crate::blocking::Fixed::new(file, &what).map_err(|source| Error::Io {
         operation: label,
         path: path.to_path_buf(),
         source,
     })?;
     #[cfg(unix)]
     {
-        let opened = guard.metadata().map_err(|source| Error::Io {
+        let opened = guard.file().metadata().map_err(|source| Error::Io {
             operation: "inspect opened typed node lease",
             path: path.to_path_buf(),
             source,

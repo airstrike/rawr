@@ -1,6 +1,6 @@
 //! A lock on work that one rawr does for others: rawr's runtime, the
 //! nightly build directory that feeds extraction, a toolchain's driver, a
-//! project's runner build.
+//! project's runner build, its resolution and runner caches and its store.
 //!
 //! A process that holds one exclusively writes its pid into the lock file,
 //! and empties the file before it unlocks. A process that finds the lock
@@ -9,8 +9,14 @@
 //! waits on the lock itself: no deadline and no polling. Leases, which are
 //! shared, record nothing, so a wait for leases to end names no process.
 //!
-//! An [`Exclusive`] hold is released by an explicit unlock, not by close,
-//! so a child process that inherited the file holds nothing (D1036.1).
+//! A holder that builds for a project writes the project after its pid,
+//! and a wait names both, so a user sees which build blocks them.
+//!
+//! A lock whose file's bytes are fixed, such as a store's leases, records
+//! nothing: a [`Fixed`] hold says the wait naming what the lock covers.
+//!
+//! Each hold is released by an explicit unlock, not by close, so a child
+//! process that inherited the file holds nothing (D1036.1).
 
 use std::fs::{self, File, TryLockError};
 use std::io;
@@ -38,6 +44,21 @@ impl Exclusive {
         Ok(Self(file))
     }
 
+    /// [`new`](Self::new) for a build of `project`, which a wait for this
+    /// hold names after the pid.
+    pub(crate) fn building(
+        file: File,
+        path: &Path,
+        what: &str,
+        project: &Path,
+    ) -> io::Result<Self> {
+        wait(&file, path, what, Mode::Exclusive, crate::progress::say)?;
+        let pid = std::process::id().to_string();
+        let project = format!(" {}", project.display());
+        file.write_all_at(project.as_bytes(), pid.len() as u64)?;
+        Ok(Self(file))
+    }
+
     /// [`new`](Self::new), saying the wait through `say`.
     #[cfg(test)]
     fn new_saying(file: File, path: &Path, what: &str, say: impl FnOnce(&str)) -> io::Result<Self> {
@@ -49,6 +70,44 @@ impl Exclusive {
 impl Drop for Exclusive {
     fn drop(&mut self) {
         let _ = release(&self.0, Mode::Exclusive);
+    }
+}
+
+/// An exclusive hold on a lock file whose bytes are fixed, released when
+/// this goes. It records no holder, so a wait for it names only what the
+/// lock covers.
+#[derive(Debug)]
+pub(crate) struct Fixed(File);
+
+impl Fixed {
+    /// Hold `file`, the lock on `what`, waiting for its holder first and
+    /// saying so on the status line.
+    pub(crate) fn new(file: File, what: &str) -> io::Result<Self> {
+        Self::new_saying(file, what, crate::progress::say)
+    }
+
+    /// [`new`](Self::new), saying the wait through `say`.
+    pub(crate) fn new_saying(file: File, what: &str, say: impl FnOnce(&str)) -> io::Result<Self> {
+        match file.try_lock() {
+            Ok(()) => {}
+            Err(TryLockError::WouldBlock) => {
+                say(&message(what, None));
+                file.lock()?;
+            }
+            Err(TryLockError::Error(error)) => return Err(error),
+        }
+        Ok(Self(file))
+    }
+
+    /// The held file.
+    pub(crate) const fn file(&self) -> &File {
+        &self.0
+    }
+}
+
+impl Drop for Fixed {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
     }
 }
 
@@ -93,10 +152,10 @@ pub(crate) fn release(file: &File, mode: Mode) -> io::Result<()> {
     file.unlock()
 }
 
-/// The pid of the exclusive holder of the lock at `path`, which `file`
-/// failed to take in `mode`. A lock that a shared take would get has only
-/// leases, so no builder.
-fn builder(file: &File, path: &Path, mode: Mode) -> io::Result<Option<u32>> {
+/// The exclusive holder of the lock at `path`, which `file` failed to take
+/// in `mode`: its pid, and the project it builds when it wrote one. A lock
+/// that a shared take would get has only leases, so no builder.
+fn builder(file: &File, path: &Path, mode: Mode) -> io::Result<Option<Builder>> {
     if mode == Mode::Exclusive {
         match file.try_lock_shared() {
             Ok(()) => {
@@ -109,15 +168,31 @@ fn builder(file: &File, path: &Path, mode: Mode) -> io::Result<Option<u32>> {
     }
     // The holder writes its pid once it has the lock, so a read in between
     // finds the file empty.
-    Ok(fs::read_to_string(path)
-        .ok()
-        .and_then(|text| text.trim().parse().ok()))
+    Ok(fs::read_to_string(path).ok().and_then(|text| {
+        let (pid, project) = text.split_once(' ').unwrap_or((text.as_str(), ""));
+        Some(Builder {
+            pid: pid.trim().parse().ok()?,
+            project: project.trim().to_owned(),
+        })
+    }))
+}
+
+/// The process that holds a lock exclusively, as its file records it.
+struct Builder {
+    pid: u32,
+    /// The project it builds, empty when it recorded none.
+    project: String,
 }
 
 /// What a wait for the lock on `what` says.
-fn message(what: &str, builder: Option<u32>) -> String {
+fn message(what: &str, builder: Option<Builder>) -> String {
     match builder {
-        Some(pid) => format!("    Blocking waiting for file lock on {what}, held by process {pid}"),
+        Some(Builder { pid, project }) if project.is_empty() => {
+            format!("    Blocking waiting for file lock on {what}, held by process {pid}")
+        }
+        Some(Builder { pid, project }) => format!(
+            "    Blocking waiting for file lock on {what}, held by process {pid} building {project}"
+        ),
         None => format!("    Blocking waiting for file lock on {what}"),
     }
 }
@@ -197,6 +272,37 @@ mod tests {
             "",
             "each builder clears its pid"
         );
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// A lock whose bytes are fixed keeps them: a wait for it names what it
+    /// covers and no process, and goes on once the holder lets go.
+    #[test]
+    fn a_fixed_lock_records_nothing_and_its_wait_names_what_it_covers() {
+        let directory = scratch("blocking-fixed");
+        let path = directory.join(".lock");
+        let held = super::Fixed::new_saying(open(&path), "the store", |_| {
+            panic!("nothing else holds the lock")
+        })
+        .expect("the lock is free");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "");
+        let (said, message) = mpsc::channel();
+        let waiting = path.clone();
+        let waiter = std::thread::spawn(move || {
+            drop(
+                super::Fixed::new_saying(open(&waiting), "the store", |line| {
+                    said.send(line.to_owned()).expect("the test listens");
+                })
+                .expect("the lock is taken once its holder lets go"),
+            );
+        });
+        assert_eq!(
+            message.recv().expect("a blocked wait says so"),
+            "    Blocking waiting for file lock on the store"
+        );
+        drop(held);
+        waiter.join().unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "");
         fs::remove_dir_all(directory).unwrap();
     }
 

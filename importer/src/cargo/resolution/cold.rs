@@ -693,11 +693,12 @@ pub(in crate::cargo) fn shared_build(
     // Held across the Cargo run and the copy of what it wrote: another
     // project's build would rewrite those files, and cleanup skips a held
     // directory. Extraction then reads the bundle's copies.
-    let lock = crate::deps::nightly_lock(&shared).map_err(|source| Error::Io {
-        operation: "lock rawr's nightly build directory",
-        path: shared.clone(),
-        source,
-    })?;
+    let lock =
+        crate::deps::nightly_lock(&shared, &request.project_root).map_err(|source| Error::Io {
+            operation: "lock rawr's nightly build directory",
+            path: shared.clone(),
+            source,
+        })?;
     // A package whose build script gave a project other outputs than its
     // run here is cleaned first, so Cargo runs the script again with this
     // build's environment (D742). One this manifest doesn't resolve stays

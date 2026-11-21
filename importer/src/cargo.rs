@@ -25,6 +25,7 @@ use crate::{Error, Result};
 pub mod config;
 pub(crate) mod execution;
 pub(crate) mod internal;
+mod lease;
 pub(crate) mod messages;
 pub mod resolution;
 pub mod toolchain;
@@ -1154,12 +1155,7 @@ impl Request {
     ) -> Result<Resolution> {
         crate::progress::resolved();
         let native = native.production();
-        let mut lease = open_lease(&self)?;
-        let _lease_owner = acquire_lease(
-            &mut lease,
-            &self.cache_root.join(LEASE_FILE),
-            "acquire resolution cache lease",
-        )?;
+        let _lease_owner = acquire_lease(&self, "acquire resolution cache lease")?;
         let harness = self
             .prepare_harness(&native, limits, limits, cached)
             .map_err(|error| self.settle(limits, None, error))?;
@@ -1176,12 +1172,7 @@ impl Request {
         evidence: &process::EvidenceSession,
     ) -> Result<Resolution> {
         let native = native.evidence(evidence);
-        let mut lease = open_lease(&self)?;
-        let _lease_owner = acquire_lease(
-            &mut lease,
-            &self.cache_root.join(LEASE_FILE),
-            "acquire resolution cache lease",
-        )?;
+        let _lease_owner = acquire_lease(&self, "acquire resolution cache lease")?;
         let harness = self
             .prepare_harness(&native, limits, limits, None)
             .map_err(|error| self.settle(limits, None, error))?;
@@ -2829,18 +2820,12 @@ impl Resolution {
         limits: &Limits,
         publish: impl FnOnce(Self) -> Result<T>,
     ) -> Result<T> {
-        let mut lease = open_lease_at(&self.project_root, &self.cache_root)?;
-        let _lease_owner = lease.try_write().map_err(|source| {
-            if source.kind() == std::io::ErrorKind::WouldBlock {
-                Error::Owner
-            } else {
-                Error::Io {
-                    operation: "acquire publication cache lease",
-                    path: self.cache_root.join(LEASE_FILE),
-                    source,
-                }
-            }
-        })?;
+        let _lease_owner = lease::Lease::hold(
+            open_lease_at(&self.project_root, &self.cache_root)?,
+            &self.cache_root.join(LEASE_FILE),
+            &self.project_root,
+            "acquire publication cache lease",
+        )?;
         let native = native.production();
         execution::Scope::bind(
             &self.context,
@@ -3104,29 +3089,17 @@ impl Authority {
     }
 }
 
-fn open_lease(request: &Request) -> Result<fd_lock::RwLock<File>> {
-    open_lease_at(&request.project_root, &request.cache_root)
+/// Hold `request`'s resolution lease, waiting for another holder first.
+fn acquire_lease(request: &Request, operation: &'static str) -> Result<lease::Lease> {
+    lease::Lease::hold(
+        open_lease_at(&request.project_root, &request.cache_root)?,
+        &request.cache_root.join(LEASE_FILE),
+        &request.project_root,
+        operation,
+    )
 }
 
-fn acquire_lease<'lease>(
-    lease: &'lease mut fd_lock::RwLock<File>,
-    path: &Path,
-    operation: &'static str,
-) -> Result<fd_lock::RwLockWriteGuard<'lease, File>> {
-    lease.try_write().map_err(|source| {
-        if source.kind() == std::io::ErrorKind::WouldBlock {
-            Error::Owner
-        } else {
-            Error::Io {
-                operation,
-                path: path.to_path_buf(),
-                source,
-            }
-        }
-    })
-}
-
-fn open_lease_at(project_root: &Path, requested_cache: &Path) -> Result<fd_lock::RwLock<File>> {
+fn open_lease_at(project_root: &Path, requested_cache: &Path) -> Result<File> {
     reject_existing_symlink(project_root, requested_cache)?;
     fs::create_dir_all(requested_cache).map_err(|source| Error::Io {
         operation: "create project cache root",
@@ -3168,7 +3141,7 @@ fn open_lease_at(project_root: &Path, requested_cache: &Path) -> Result<fd_lock:
             reason: "is reached through a symlink".into(),
         });
     }
-    Ok(fd_lock::RwLock::new(file))
+    Ok(file)
 }
 
 /// The fixed namespace's placement when a completed receipt for this request
@@ -5725,8 +5698,8 @@ mod authority_boundary_tests {
 #[cfg(all(test, feature = "rustc-driver"))]
 mod epoch_tests {
     use super::*;
-    use std::process::Command;
-    use std::sync::{Arc, Barrier};
+    use std::io::{BufRead as _, BufReader};
+    use std::process::{Command, Stdio};
 
     const ROOT_ENV: &str = "RAWR_IMPORT_EPOCH_TEST_ROOT";
 
@@ -5734,60 +5707,140 @@ mod epoch_tests {
         crate::store::TestProject::new(&format!("rawr-epoch-{name}"))
     }
 
+    /// The test binary running only the ignored entry point `name`, on the
+    /// project at `root`, with its standard streams piped.
     fn helper(name: &str, root: &Path) -> std::process::Child {
         Command::new(std::env::current_exe().expect("test executable is available"))
             .args(["--exact", name, "--ignored", "--nocapture"])
             .env(ROOT_ENV, root)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .spawn()
             .expect("competing process can spawn")
     }
 
+    /// Hold the resolution lease of the project at `root`.
+    fn hold(root: &Path) -> lease::Lease {
+        let cache = root.join("cache");
+        lease::Lease::hold(
+            open_lease_at(root, &cache).expect("the cache lease opens"),
+            &cache.join(LEASE_FILE),
+            root,
+            "test lease",
+        )
+        .expect("the lease is taken once its holder lets go")
+    }
+
+    /// Read `lines` up to and including the first one that `wanted` accepts.
+    fn read_to(lines: &mut impl Iterator<Item = std::io::Result<String>>, wanted: &str) -> String {
+        lines
+            .map(|line| line.expect("the helper's output reads"))
+            .find(|line| line.contains(wanted))
+            .unwrap_or_else(|| panic!("the helper said `{wanted}`"))
+    }
+
+    const WAITING: &str = "Blocking waiting for file lock on the resolution cache of";
+
+    /// Hold the lease, say so on stdout, and keep it while stdin is open.
+    /// The test kills it there.
+    #[test]
+    #[ignore = "subprocess entry point"]
+    fn production_lease_holder_process_helper() {
+        let Some(root) = std::env::var_os(ROOT_ENV).map(PathBuf::from) else {
+            return;
+        };
+        let _held = hold(&root);
+        println!("held");
+        let _ = std::io::stdin().read_to_end(&mut Vec::new());
+    }
+
+    /// Take the lease, waiting for its holder, and say so on stdout.
     #[test]
     #[ignore = "subprocess entry point"]
     fn production_lease_contender_process_helper() {
         let Some(root) = std::env::var_os(ROOT_ENV).map(PathBuf::from) else {
             return;
         };
-        let cache = root.join("cache");
-        let mut lease = open_lease_at(&root, &cache).expect("contender opens the cache lease");
-        let error = acquire_lease(&mut lease, &cache.join(LEASE_FILE), "test lease")
-            .expect_err("the production epoch excludes a competing process");
-        assert!(matches!(error, Error::Owner));
+        drop(hold(&root));
+        println!("held");
     }
 
+    /// A second process on one project finds the lease held, says once that
+    /// it waits, naming this process and the project, and holds the lease
+    /// once this lets go, as a second Cargo does on its build directory.
     #[test]
-    fn production_epoch_holds_file_ownership_across_threads_and_processes() {
-        let project = fixture("production-barrier");
+    fn a_second_process_waits_for_the_lease_and_says_so_once() {
+        let project = fixture("production-wait");
         let root = project.path();
-        let cache = root.join("cache");
-        fs::create_dir(&cache).expect("cache fixture can be created");
-        let mut lease = open_lease_at(root, &cache).expect("fixture opens the cache lease");
-        let _lease_owner = acquire_lease(&mut lease, &cache.join(LEASE_FILE), "test lease")
-            .expect("fixture owns the cache epoch");
-        let barrier = Arc::new(Barrier::new(2));
-        std::thread::scope(|scope| {
-            let contender_barrier = Arc::clone(&barrier);
-            scope.spawn(move || {
-                contender_barrier.wait();
-                // A second owner in this process opens the lease again, and
-                // the held lock refuses it as it refuses another process.
-                let mut lease = open_lease_at(root, &cache).expect("contender opens the lease");
-                assert!(matches!(
-                    acquire_lease(&mut lease, &cache.join(LEASE_FILE), "test lease"),
-                    Err(Error::Owner)
-                ));
-                contender_barrier.wait();
-            });
-            barrier.wait();
-            let status = helper(
-                "cargo::epoch_tests::production_lease_contender_process_helper",
-                root,
-            )
-            .wait()
-            .expect("lease contender can be reaped");
-            assert!(status.success(), "lease contender observed the held epoch");
-            barrier.wait();
-        });
+        let held = hold(root);
+        let mut contender = helper(
+            "cargo::epoch_tests::production_lease_contender_process_helper",
+            root,
+        );
+        let mut said = BufReader::new(contender.stderr.take().expect("stderr is piped")).lines();
+        let waiting = read_to(&mut said, WAITING);
+        assert!(
+            waiting.ends_with(&format!(
+                "held by process {} building {}",
+                std::process::id(),
+                root.display()
+            )),
+            "the wait names its holder: {waiting}"
+        );
+        drop(held);
+        let mut output = String::new();
+        contender
+            .stdout
+            .take()
+            .expect("stdout is piped")
+            .read_to_string(&mut output)
+            .expect("the contender's stdout reads");
+        assert!(contender.wait().expect("the contender is reaped").success());
+        assert!(output.lines().any(|line| line == "held"), "{output}");
+        let rest = said.collect::<std::io::Result<Vec<_>>>().unwrap();
+        assert!(
+            !rest.iter().any(|line| line.contains(WAITING)),
+            "the wait is said once: {rest:?}"
+        );
+    }
+
+    /// A holder that dies leaves no lock behind: the OS lets go of it, and
+    /// the process waiting for it goes on.
+    #[test]
+    fn a_waiter_goes_on_when_the_holder_dies() {
+        let project = fixture("production-dead-holder");
+        let root = project.path();
+        let mut holder = helper(
+            "cargo::epoch_tests::production_lease_holder_process_helper",
+            root,
+        );
+        let mut heard = BufReader::new(holder.stdout.take().expect("stdout is piped")).lines();
+        read_to(&mut heard, "held");
+        let mut contender = helper(
+            "cargo::epoch_tests::production_lease_contender_process_helper",
+            root,
+        );
+        let mut said = BufReader::new(contender.stderr.take().expect("stderr is piped")).lines();
+        let waiting = read_to(&mut said, WAITING);
+        assert!(
+            waiting.contains(&format!("held by process {}", holder.id())),
+            "the wait names the holder: {waiting}"
+        );
+        holder.kill().expect("the holder can be killed");
+        holder.wait().expect("the holder is reaped");
+        assert!(contender.wait().expect("the contender is reaped").success());
+    }
+
+    /// The thread that holds the lease would wait on itself if it took it
+    /// again, so that is a rawr bug and panics at once.
+    #[test]
+    fn a_nested_hold_on_one_thread_panics_instead_of_waiting_on_itself() {
+        let project = fixture("production-nested");
+        let root = project.path();
+        let _held = hold(root);
+        let nested = std::panic::catch_unwind(|| drop(hold(root)));
+        assert!(nested.is_err());
     }
 }
 

@@ -39,18 +39,7 @@ impl<B> super::Manifest<super::Generated, B> {
         if self.chain.is_some() || self.profile.node_chain().is_some() {
             return cached::build(self, lane, cache);
         }
-        let mut lease = cache.lease()?;
-        let _writer = lease.try_write().map_err(|source| {
-            if source.kind() == std::io::ErrorKind::WouldBlock {
-                crate::cache::entry::Error::Busy
-            } else {
-                crate::cache::entry::Error::Io {
-                    operation: "acquire runner cache writer lease",
-                    path: cache.root().join(".writer.lock"),
-                    source,
-                }
-            }
-        })?;
+        let _writer = cache.lease()?;
         let key = self.generated.build_request_key();
         let entry = crate::cache::entry::path(cache.root(), key);
         if crate::cache::seal::exists(&entry) {

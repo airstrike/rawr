@@ -1177,6 +1177,9 @@ fn execute<O: Observation>(
             if watch {
                 crate::progress::observe(false, chunk);
             }
+            if building.is_some() {
+                crate::progress::cargo_waits(chunk);
+            }
         })
     });
     let status = child.finish();
