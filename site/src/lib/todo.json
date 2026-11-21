@@ -5794,7 +5794,8 @@
     {"issue":2399,"title":"The store's heavy lease, the owner lease and a nested with_heavy deadlock remain after the Cargo lane token","state":"open","category":"Health"},
     {"issue":2400,"title":"build_script's whole-tree test: a file outside the package's archive no longer changes the freshness fingerprint","state":"open","category":"Health"},
     {"issue":2401,"title":"The engine's Cargo answer memos (DESCRIBED, BUILT) are process-wide statics","state":"open","category":"Health"},
-    {"issue":2402,"title":"The bindings format root's process lease sits in a static table (format::OPENED)","state":"open","category":"Health"}
+    {"issue":2402,"title":"The bindings format root's process lease sits in a static table (format::OPENED)","state":"open","category":"Health"},
+    {"issue":2403,"title":"The base-attach test leaves its `looping` program running after the test ends","state":"open","category":"Health"}
   ],
   "groups": [
     {

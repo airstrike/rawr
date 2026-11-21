@@ -2401,6 +2401,7 @@
     {"t":"T2399","issue":2399,"title":"T2399: The store's heavy lease, the owner lease and a nested with_heavy deadlock remain after the Cargo lane token","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T2400","issue":2400,"title":"T2400: build_script's whole-tree test: a file outside the package's archive no longer changes the freshness fingerprint","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T2401","issue":2401,"title":"T2401: The engine's Cargo answer memos (DESCRIBED, BUILT) are process-wide statics","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T2402","issue":2402,"title":"T2402: The bindings format root's process lease sits in a static table (format::OPENED)","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T2402","issue":2402,"title":"T2402: The bindings format root's process lease sits in a static table (format::OPENED)","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T2403","issue":2403,"title":"T2403: The base-attach test leaves its `looping` program running after the test ends","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }
