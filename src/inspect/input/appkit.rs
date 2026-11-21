@@ -21,6 +21,7 @@ use std::time::Duration;
 
 use super::travel::Travel;
 use super::{Button, Error, Gesture, Key, Modifiers, Point, Sent, Unit};
+use crate::inspect::framing::{self, Fit, Framing};
 use crate::inspect::screenshot;
 use crate::inspect::Interrupt;
 
@@ -1081,13 +1082,15 @@ struct Pixels {
     bgra: bool,
 }
 
-/// Capture the window titled `title`, or the program's front window, into
-/// `file` (see [`screenshot`]): it draws a frame as it would for a redraw,
-/// shown as visible while it does, and the drawable its renderer drew
-/// into is read back, below the title bar its frame view draws.
+/// Capture `framing`'s part of the window titled `title`, or of the
+/// program's front window, into `file` (see [`screenshot`]): it draws a
+/// frame as it would for a redraw, shown as visible while it does, and the
+/// drawable its renderer drew into is read back, below the title bar its
+/// frame view draws.
 pub(in crate::inspect) fn capture(
     title: Option<&str>,
     file: &Path,
+    framing: &Framing,
     interrupted: &Interrupt,
 ) -> Result<screenshot::Shot, screenshot::Error> {
     let lost = |error: Error| match error {
@@ -1107,7 +1110,11 @@ pub(in crate::inspect) fn capture(
     // within a frame.
     std::thread::sleep(FRAME);
     let file = file.to_owned();
-    main(interrupted, move || compose(runtime, &drawn, &file)).map_err(lost)?
+    let framing = *framing;
+    main(interrupted, move || {
+        compose(runtime, &drawn, &file, &framing)
+    })
+    .map_err(lost)?
 }
 
 /// Draw a frame of the window titled `title`, or the front one, with its
@@ -1161,12 +1168,13 @@ fn draw(runtime: &Runtime, title: Option<&str>) -> Result<Drawn, screenshot::Err
     drawn
 }
 
-/// Read `drawn` back below its window's title bar, write the PNG to
-/// `file` and give the layer back its settings.
+/// Read `drawn` back below its window's title bar, write the PNG of
+/// `framing`'s part of it to `file` and give the layer back its settings.
 fn compose(
     runtime: &Runtime,
     drawn: &Drawn,
     file: &Path,
+    framing: &Framing,
 ) -> Result<screenshot::Shot, screenshot::Error> {
     // SAFETY: the pool is pushed and popped on this thread around the
     // objects this call makes.
@@ -1187,14 +1195,25 @@ fn compose(
         msg!(runtime, (); frame, "cacheDisplayInRect:toBitmapImageRep:", bounds => Rect, rep => Id);
         place(runtime, rep, frame, content, &pixels)?;
         cursor_over(runtime, rep, frame, content);
-        let png = png(runtime, rep)?;
+        let fit = framing
+            .fit(
+                bounds.size.width,
+                bounds.size.height,
+                scale(runtime, rep, bounds),
+            )
+            .map_err(screenshot::Error::Framing)?;
+        let png = if fit.is_whole() {
+            png(runtime, rep)?
+        } else {
+            framed(runtime, rep, &fit)?
+        };
         std::fs::write(file, png).map_err(|error| screenshot::Error::Write(error.to_string()))?;
         let size = runtime.rect(window, "frame\0").size;
         Ok(screenshot::Shot {
             title: runtime.text(msg!(runtime, Id; window, "title")),
             width: size.width,
             height: size.height,
-            scale: msg!(runtime, f64; window, "backingScaleFactor"),
+            fit,
             windows: titles(runtime),
         })
     });
@@ -1380,6 +1399,64 @@ fn cursor_over(runtime: &Runtime, rep: Id, frame: Id, content: Id) {
         msg!(runtime, (); cursor, "renderInContext:", context => *mut c_void);
         runtime.release(context);
     }
+}
+
+/// The PNG of `fit`'s region of `rep`, the frame view's bitmap, resampled
+/// to its scale into a bitmap of `rep`'s format and color space.
+fn framed(runtime: &Runtime, rep: Id, fit: &Fit) -> Result<Vec<u8>, screenshot::Error> {
+    let wide = msg!(runtime, isize; rep, "pixelsWide").max(0) as usize;
+    let high = msg!(runtime, isize; rep, "pixelsHigh").max(0) as usize;
+    let stride = msg!(runtime, isize; rep, "bytesPerRow").max(0) as usize;
+    let data = msg!(runtime, *const u8; rep, "bitmapData");
+    if data.is_null() || wide == 0 || high == 0 {
+        return Err(screenshot::Error::Write(
+            "the window's frame drew no pixels".to_owned(),
+        ));
+    }
+    // SAFETY: the bitmap holds `stride * high` bytes, which nothing
+    // writes while this reads them.
+    let bytes = unsafe { std::slice::from_raw_parts(data, stride * high) };
+    let pixels = fit.draw(&framing::Source {
+        bytes,
+        stride,
+        width: wide,
+        height: high,
+    });
+    let (width, height) = (fit.width(), fit.height());
+    let made = msg!(runtime, Id; runtime.class(c"NSBitmapImageRep"), "alloc");
+    let made = msg!(runtime, Id; made,
+        "initWithBitmapDataPlanes:pixelsWide:pixelsHigh:bitsPerSample:samplesPerPixel:hasAlpha:isPlanar:colorSpaceName:bitmapFormat:bytesPerRow:bitsPerPixel:",
+        std::ptr::null_mut::<*mut u8>() => *mut *mut u8,
+        width as isize => isize,
+        height as isize => isize,
+        8_isize => isize,
+        4_isize => isize,
+        true => bool,
+        false => bool,
+        msg!(runtime, Id; rep, "colorSpaceName") => Id,
+        msg!(runtime, usize; rep, "bitmapFormat") => usize,
+        (width * 4) as isize => isize,
+        32_isize => isize,
+    );
+    let target = msg!(runtime, *mut u8; made, "bitmapData");
+    if target.is_null() {
+        msg!(runtime, (); made, "release");
+        return Err(screenshot::Error::Write(
+            "AppKit made no bitmap for the region".to_owned(),
+        ));
+    }
+    let row = msg!(runtime, isize; made, "bytesPerRow").max(0) as usize;
+    // SAFETY: the bitmap AppKit allocated holds `row * height` bytes,
+    // which this function alone writes while it runs.
+    let target = unsafe { std::slice::from_raw_parts_mut(target, row * height) };
+    for (to, from) in target.chunks_mut(row).zip(pixels.chunks(width * 4)) {
+        to[..width * 4].copy_from_slice(from);
+    }
+    let space = msg!(runtime, Id; rep, "colorSpace");
+    let tagged = msg!(runtime, Id; made, "bitmapImageRepByRetaggingWithColorSpace:", space => Id);
+    let png = png(runtime, if tagged.is_null() { made } else { tagged });
+    msg!(runtime, (); made, "release");
+    png
 }
 
 /// The PNG of `rep`.

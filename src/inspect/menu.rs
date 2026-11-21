@@ -166,8 +166,13 @@ fn screenshot(title: String) {
                 .map_or(Ok(()), std::fs::create_dir_all)
                 .map_err(|error| error.to_string())
                 .and_then(|()| {
-                    super::screenshot::capture(Some(&title), &path, &Interrupt::default())
-                        .map_err(|error| error.to_string())
+                    super::screenshot::capture(
+                        Some(&title),
+                        &path,
+                        &super::framing::Framing::default(),
+                        &Interrupt::default(),
+                    )
+                    .map_err(|error| error.to_string())
                 });
             match captured {
                 Ok(_) => eprintln!(
