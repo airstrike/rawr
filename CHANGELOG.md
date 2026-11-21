@@ -6,6 +6,12 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.87 (2026-11-21)
+
+- rawr mcp's `start`, `run` and `check` take `package`, `bin`, `features`, `no_default_features`, `all_features` and `env`, as `rawr run` takes `-p`, `--bin` and the feature flags; `env` sets variables for one call's build and program, and a started program keeps them across reloads. (#2398)
+- rawr mcp's sessions each have one owner thread that answers requests and waits on reply channels, a cancel is a message on the call's own channel, and rawr dap runs on one adapter thread that never blocks on the program. A request is stamped when it is sent, so a debugger tool's answer never overrides a newer pause the program told, which could leave a later `wait` hanging. Eight locks go. (#2397)
+- Debugger eval refuses a crate use the running build wasn't compiled with, such as a field the program never reads or a generic at a new type, at the use and before any of the code runs, and says that saving the use in the program rebuilds the runner. (#2406)
+
 ## 0.4.86 (2026-11-21)
 
 - Read sets stay on the thread that owns them, and the compiler proves it: the importer's read-set validator is an Rc closure, and the resolution's capture, the owner's replay memos and the prepared closure's pins lose their locks. The background API rebuild and the classifier's workers take only the data they read. (#2405)
