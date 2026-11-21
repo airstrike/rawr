@@ -28,6 +28,16 @@
 //! profile `cargo build` gives it, not with the project's settings for
 //! packages outside the workspace (#1789).
 //!
+//! Cargo keys a path package by that relative path alone, and its
+//! freshness by its sources' times. Two projects that share a target
+//! directory, as worktrees of one repository do, lay their path packages
+//! out alike, so their runners would build each one as one unit, and one
+//! would take the other's build of it as fresh (#2423). A runner whose Rawr
+//! directory is keyed apart in a shared target places its links under
+//! [`PLACES`]`/<key>` instead, so its path packages hash apart from every
+//! other project's. They hash apart from the project's own `cargo build`
+//! too, which in a shared target is as unsafe to share.
+//!
 //! A workspace root that is a package itself, as `app = { path = "." }`
 //! names it, can't be placed at its own path: the runner is its workspace's
 //! root. The runner names a copy of it under its root ([`ROOT`]), as it does
@@ -38,14 +48,14 @@
 //! profile in place of the project's `[profile.dev.package."*"]`.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use toml_edit::{DocumentMut, Item, TableLike};
 
 /// The names the runner's own directory uses.
-const RUNNER: [&str; 9] = [
+const RUNNER: [&str; 10] = [
     "Cargo.toml",
     "Cargo.lock",
     "build.rs",
@@ -55,7 +65,12 @@ const RUNNER: [&str; 9] = [
     "rawr-generated-manifest.carrier",
     "incremental-directories",
     COPIES,
+    PLACES,
 ];
+
+/// The directory under the runner's root that holds, under its project's
+/// key, the links of a runner that shares its target directory (#2423).
+const PLACES: &str = "rawr-places";
 
 /// The directory under the runner's root that holds its copies of the
 /// packages rawr generates beside it (#1777).
@@ -76,11 +91,26 @@ const INHERITED: [&str; 3] = ["package", "dependencies", "lints"];
 /// links in place. A package rawr generates beside the runner, as its copy
 /// of the program's crate, is named through its copy under the runner
 /// ([`COPIES`]). The project's `[workspace]` tables a member inherits from
-/// come along. Returns `manifest` unchanged when the packages can't all be
-/// placed.
+/// come along. With `key`, the key of a Rawr directory in a shared target
+/// directory, the links are under [`PLACES`]`/<key>` instead. Returns
+/// `manifest` unchanged when the packages can't all be placed.
 #[must_use]
-pub fn mirror(workspace: &Path, runner: &Path, manifest: &str) -> String {
-    place(workspace, runner, manifest).unwrap_or_else(|| manifest.to_owned())
+pub fn mirror(workspace: &Path, runner: &Path, key: Option<&OsStr>, manifest: &str) -> String {
+    place(workspace, runner, key, manifest).unwrap_or_else(|| manifest.to_owned())
+}
+
+/// The key [`mirror`] places the links of `project`'s runner under, when its
+/// Rawr directory `rawr` is one of several in a shared target directory
+/// ([`rawr_location::PROJECTS`]). The members of one workspace share it, and
+/// with it their path packages' units.
+#[must_use]
+pub fn key(rawr: &Path, project: &Path) -> Option<OsString> {
+    let shared = rawr_location::shared_path(rawr, project)?;
+    let mut components = shared.components();
+    (components.next()?.as_os_str() == rawr_location::PROJECTS)
+        .then(|| components.next())
+        .flatten()
+        .map(|key| key.as_os_str().to_owned())
 }
 
 /// The path packages one placement names through the runner: those it
@@ -97,21 +127,31 @@ struct Root<'a> {
     runner: &'a Path,
     /// The top-level directory under the workspace that holds the runner.
     inside: Option<OsString>,
+    /// The path from the runner's root to the directory of its links.
+    places: PathBuf,
 }
 
 impl<'a> Root<'a> {
-    fn new(workspace: &Path, runner: &'a Path) -> Option<Self> {
+    fn new(workspace: &Path, runner: &'a Path, key: Option<&OsStr>) -> Option<Self> {
         let workspace = fs::canonicalize(workspace).ok()?;
         fs::create_dir_all(runner).ok()?;
         let inside = fs::canonicalize(runner).ok().and_then(|runner| {
             let inside = runner.strip_prefix(&workspace).ok()?;
             Some(inside.components().next()?.as_os_str().to_owned())
         });
+        let places = key.map_or_else(PathBuf::new, |key| Path::new(PLACES).join(key));
         Some(Self {
             workspace,
             runner,
             inside,
+            places,
         })
+    }
+
+    /// The path from the runner's root to the link of `relative`, a path
+    /// under the workspace.
+    fn placed(&self, relative: &Path) -> PathBuf {
+        self.places.join(relative)
     }
 
     /// A name the runner uses, or the directory that holds the runner.
@@ -215,14 +255,17 @@ impl<'a> Root<'a> {
     }
 
     /// One link per top-level directory of `seen`, and none left from
-    /// another manifest.
+    /// another manifest. A runner whose links are under [`PLACES`] keeps
+    /// none at its root, and only its own key's under [`PLACES`].
     fn link(&self, seen: &BTreeSet<PathBuf>) -> Option<()> {
         let names = seen
             .iter()
             .filter_map(|relative| relative.components().next())
             .map(|first| first.as_os_str().to_owned())
             .collect::<BTreeSet<_>>();
-        for entry in fs::read_dir(self.runner).ok()?.flatten() {
+        let places = self.runner.join(&self.places);
+        fs::create_dir_all(&places).ok()?;
+        for entry in fs::read_dir(&places).ok()?.flatten() {
             let name = entry.file_name();
             if entry.file_type().ok()?.is_symlink()
                 && (!names.contains(&name)
@@ -231,8 +274,23 @@ impl<'a> Root<'a> {
                 fs::remove_file(entry.path()).ok()?;
             }
         }
+        // Links an earlier runner left at its root, and another key's.
+        if places != self.runner {
+            for entry in fs::read_dir(self.runner).ok()?.flatten() {
+                if entry.file_type().ok()?.is_symlink()
+                    && fs::read_link(entry.path()).is_ok_and(|to| to.starts_with(&self.workspace))
+                {
+                    fs::remove_file(entry.path()).ok()?;
+                }
+            }
+            for entry in fs::read_dir(self.runner.join(PLACES)).ok()?.flatten() {
+                if entry.path() != places {
+                    fs::remove_dir_all(entry.path()).ok()?;
+                }
+            }
+        }
         for name in &names {
-            let link = self.runner.join(name);
+            let link = places.join(name);
             match fs::symlink_metadata(&link) {
                 Ok(metadata) if metadata.file_type().is_symlink() => {}
                 Ok(_) => return None,
@@ -377,7 +435,7 @@ impl<'a> Root<'a> {
                 } else {
                     self.relative(&path)
                         .filter(|relative| linked.iter().any(|placed| relative.starts_with(placed)))
-                        .map_or(path, |relative| self.runner.join(relative))
+                        .map_or(path, |relative| self.runner.join(self.placed(&relative)))
                 };
                 dependency.insert("path", toml_edit::value(renamed.display().to_string()));
             });
@@ -423,8 +481,8 @@ impl<'a> Root<'a> {
     }
 }
 
-fn place(workspace: &Path, runner: &Path, manifest: &str) -> Option<String> {
-    let root = Root::new(workspace, runner)?;
+fn place(workspace: &Path, runner: &Path, key: Option<&OsStr>, manifest: &str) -> Option<String> {
+    let root = Root::new(workspace, runner, key)?;
     let document = manifest.parse::<DocumentMut>().ok()?;
     let mut manifests = Manifests::default();
     linked(&root, &mut manifests, document.clone())
@@ -465,7 +523,7 @@ fn linked(root: &Root<'_>, manifests: &mut Manifests, mut document: DocumentMut)
         match root.relative(path) {
             Some(relative) => {
                 placed.push(relative.clone());
-                dependency.insert("path", toml_edit::value(slashed(&relative)));
+                dependency.insert("path", toml_edit::value(slashed(&root.placed(&relative))));
             }
             None => unplaced.push(normalize(path)),
         }
@@ -489,7 +547,7 @@ fn linked(root: &Root<'_>, manifests: &mut Manifests, mut document: DocumentMut)
                 continue;
             };
             if let Some(relative) = root.relative(path) {
-                *entry = slashed(&relative).into();
+                *entry = slashed(&root.placed(&relative)).into();
             }
         }
     }
@@ -644,8 +702,8 @@ fn copy_path(root: &Root<'_>, path: &Path) -> Option<String> {
 /// The tables a placed member inherits into `document`'s `[workspace]`, as
 /// the project's workspace has them. A workspace dependency outside the
 /// project's workspace is named by its absolute path, which Cargo would
-/// otherwise join to the runner's root, and the workspace's root package
-/// by its copy's.
+/// otherwise join to the runner's root, the workspace's root package by its
+/// copy's, and one under the workspace through its link.
 fn inherit(root: &Root<'_>, manifests: &mut Manifests, document: &mut DocumentMut) -> Option<()> {
     let project = manifests.of(&root.workspace)?;
     let Some(inherited) = project.get("workspace").and_then(Item::as_table_like) else {
@@ -674,8 +732,8 @@ fn inherit(root: &Root<'_>, manifests: &mut Manifests, document: &mut DocumentMu
                 // The root package is named through its copy (#1913).
                 let renamed = if path == root.workspace {
                     copy_path(root, &root.workspace)?
-                } else if path.starts_with(&root.workspace) {
-                    continue;
+                } else if let Ok(relative) = path.strip_prefix(&root.workspace) {
+                    slashed(&root.placed(relative))
                 } else {
                     path.display().to_string()
                 };
@@ -872,7 +930,7 @@ mod tests {
              events = {{ path = \"{}\" }}\nrawr = {{ path = \"/elsewhere/rawr\" }}\n",
             project.join("crates/events").display()
         );
-        let mirrored = super::mirror(&project, &runner, &manifest);
+        let mirrored = super::mirror(&project, &runner, None, &manifest);
         assert!(
             mirrored.contains("events = { path = \"crates/events\" }"),
             "{mirrored}"
@@ -887,7 +945,7 @@ mod tests {
             project.join("crates")
         );
         // A second pass changes nothing.
-        assert_eq!(super::mirror(&project, &runner, &manifest), mirrored);
+        assert_eq!(super::mirror(&project, &runner, None, &manifest), mirrored);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -912,7 +970,7 @@ mod tests {
             "[workspace]\nexclude = [\"{0}\"]\n\n[dependencies]\nshell = {{ path = \"{0}\" }}\n",
             shell.display()
         );
-        let mirrored = super::mirror(&project, &runner, &manifest);
+        let mirrored = super::mirror(&project, &runner, None, &manifest);
         assert!(mirrored.contains("exclude = [\"shell\"]"), "{mirrored}");
         assert!(
             mirrored.contains("shell = { path = \"shell\" }"),
@@ -954,7 +1012,7 @@ mod tests {
             generated.display(),
             project.join("events").display()
         );
-        let mirrored = super::mirror(&project, &runner, &manifest);
+        let mirrored = super::mirror(&project, &runner, None, &manifest);
         assert!(
             mirrored.contains("app = { path = \"rawr-copies/crate\" }"),
             "{mirrored}"
@@ -975,7 +1033,7 @@ mod tests {
             generated.join("src")
         );
         // A second pass changes nothing.
-        assert_eq!(super::mirror(&project, &runner, &manifest), mirrored);
+        assert_eq!(super::mirror(&project, &runner, None, &manifest), mirrored);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1012,7 +1070,7 @@ mod tests {
             project.join("app").display(),
             project.display()
         );
-        let mirrored = super::mirror(&project, &runner, &manifest);
+        let mirrored = super::mirror(&project, &runner, None, &manifest);
         assert!(mirrored.contains("app = { path = \"app\" }"), "{mirrored}");
         let copy = "path = \"rawr-copies/rawr-workspace-root\"";
         assert_eq!(mirrored.matches(copy).count(), 2, "{mirrored}");
@@ -1034,7 +1092,7 @@ mod tests {
             project.join("core")
         );
         // A second pass changes nothing.
-        assert_eq!(super::mirror(&project, &runner, &manifest), mirrored);
+        assert_eq!(super::mirror(&project, &runner, None, &manifest), mirrored);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1069,7 +1127,7 @@ mod tests {
              [dependencies]\napp = {{ path = \"{}\" }}\n",
             generated.display(),
         );
-        let mirrored = super::mirror(&project, &runner, &manifest);
+        let mirrored = super::mirror(&project, &runner, None, &manifest);
         let document = mirrored.parse::<toml_edit::DocumentMut>().unwrap();
         let events = &document["profile"]["dev"]["package"]["events"];
         assert_eq!(events["opt-level"].as_integer(), Some(0), "{mirrored}");
@@ -1099,7 +1157,7 @@ mod tests {
             "[workspace]\n\n[dependencies]\nevents = {{ path = \"{}\" }}\n",
             project.join("events").display()
         );
-        assert_eq!(super::mirror(&project, &runner, &manifest), manifest);
+        assert_eq!(super::mirror(&project, &runner, None, &manifest), manifest);
         assert!(fs::symlink_metadata(runner.join("events")).is_err());
         fs::remove_dir_all(root).unwrap();
     }
@@ -1128,7 +1186,7 @@ mod tests {
             project.join("events").display(),
             root.join("lib").display()
         );
-        let mirrored = super::mirror(&project, &runner, &manifest);
+        let mirrored = super::mirror(&project, &runner, None, &manifest);
         assert!(
             mirrored.contains("events = { path = \"events\" }"),
             "{mirrored}"
@@ -1172,7 +1230,7 @@ mod tests {
             generated.display(),
             project.join("events").display()
         );
-        let mirrored = super::mirror(&project, &runner, &manifest);
+        let mirrored = super::mirror(&project, &runner, None, &manifest);
         assert!(
             mirrored.contains("app = { path = \"rawr-copies/crate\" }"),
             "{mirrored}"
@@ -1190,6 +1248,102 @@ mod tests {
             "{copied}"
         );
         assert!(fs::symlink_metadata(runner.join("events")).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// `git` with `arguments` in `directory`, which must succeed.
+    fn git(directory: &Path, arguments: &[&str]) {
+        let status = std::process::Command::new("git")
+            .args(["-c", "user.name=rawr", "-c", "user.email=rawr@localhost"])
+            .args(arguments)
+            .current_dir(directory)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {arguments:?}");
+    }
+
+    /// Two worktrees of one repository share a target directory, and one
+    /// changes its path package `model`'s API with sources older than the
+    /// other's last build, as a checkout leaves them. Cargo keys a path
+    /// package by its path under the workspace root and its freshness by
+    /// its sources' times, so the second runner would take the first's
+    /// `model` as fresh and fail on the API it lacks. Each runner places
+    /// its links under its own key, and both build (#2423).
+    #[test]
+    fn worktrees_sharing_a_target_build_their_own_path_packages() {
+        let root = scratch("worktrees");
+        let main = root.join("main");
+        write(
+            &main.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"app\", \"model\"]\nresolver = \"3\"\n",
+        );
+        let package = |name: &str| {
+            format!("[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n")
+        };
+        write(
+            &main.join("app/Cargo.toml"),
+            &format!(
+                "{}\n[dependencies]\nmodel = {{ path = \"../model\" }}\n",
+                package("app")
+            ),
+        );
+        write(&main.join("app/src/main.rs"), "fn main() {}\n");
+        write(&main.join("model/Cargo.toml"), &package("model"));
+        write(&main.join("model/src/lib.rs"), "pub fn old() {}\n");
+        git(&main, &["init", "-q"]);
+        git(&main, &["add", "-A"]);
+        git(&main, &["commit", "-qm", "model"]);
+        git(&main, &["worktree", "add", "-q", "../other"]);
+        let other = root.join("other");
+        let lib = other.join("model/src/lib.rs");
+        write(&lib, "pub fn new() {}\n");
+        fs::File::options()
+            .write(true)
+            .open(&lib)
+            .unwrap()
+            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(86_400))
+            .unwrap();
+
+        let target = root.join("target");
+        let build = |project: &Path, call: &str, version: &str| {
+            let rawr = rawr_location::rawr_directory_in(&target, &project.join("app"));
+            let runner = rawr.join("runner");
+            let key = super::key(&rawr, &project.join("app"));
+            assert!(key.is_some(), "{}", rawr.display());
+            let manifest = format!(
+                "[workspace]\n\n[package]\nname = \"rawr-generated-runner\"\n\
+                 version = \"{version}\"\nedition = \"2024\"\n\n[dependencies]\n\
+                 model = {{ path = \"{}\" }}\n",
+                project.join("model").display()
+            );
+            let mirrored = super::mirror(project, &runner, key.as_deref(), &manifest);
+            write(&runner.join("Cargo.toml"), &mirrored);
+            write(
+                &runner.join("src/main.rs"),
+                &format!("fn main() {{ model::{call}(); }}\n"),
+            );
+            let output = std::process::Command::new("cargo")
+                .args(["build", "--offline", "--manifest-path"])
+                .arg(runner.join("Cargo.toml"))
+                .arg("--config")
+                .arg(format!(
+                    "build.build-dir={:?}",
+                    target.display().to_string()
+                ))
+                .arg("--target-dir")
+                .arg(runner.join("target"))
+                .env_remove("CARGO_TARGET_DIR")
+                .env_remove("CARGO_BUILD_BUILD_DIR")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        build(&main, "old", "0.0.0+1");
+        build(&other, "new", "0.0.0+2");
         fs::remove_dir_all(root).unwrap();
     }
 }

@@ -141,7 +141,8 @@ fn compare(
     // is, and the rawr crate's own opt-level. No rawr-iced and no iced.
     // The runner's build places the project's path packages under its root
     // as they lie under the project's (T277).
-    let manifest = |text: String| rawr_import::runner::mirror::mirror(&project, &runner, &text);
+    let manifest =
+        |text: String| rawr_import::runner::mirror::mirror(&project, &runner, None, &text);
     fs::write(
         runner.join("Cargo.toml"),
         manifest(format!(
