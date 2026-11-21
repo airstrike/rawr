@@ -76,6 +76,11 @@ impl Program {
         }
     }
 
+    /// The text of `file`, one of the program's files, as it compiled it.
+    pub(super) fn text(&self, file: &str) -> Option<&str> {
+        self.snapshot.read(std::path::Path::new(file))
+    }
+
     /// The program, which compiled from `parses`.
     #[must_use]
     pub(crate) fn reading(self, parses: Option<crate::package::Parses>) -> Self {
