@@ -213,6 +213,15 @@ export class Debugger {
     this.set({ ...IDLE, lines: this.state.lines, evaluated: this.state.evaluated });
   }
 
+  /**
+   * Forget every breakpoint, for a different snippet: the next run sets
+   * none. A program still attached runs the old code, which the next run
+   * replaces, so it is not asked.
+   */
+  clearBreakpoints() {
+    if (this.state.lines.length) this.set({ lines: [] });
+  }
+
   /** A click on line `line`'s number: set a breakpoint there, or clear the one there. */
   async toggle(line: number): Promise<void> {
     const had = this.state.lines.includes(line);

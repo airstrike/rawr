@@ -25,10 +25,13 @@
 // allows. The browser builds nothing, so any other dependency gets one
 // line that says which crates run here.
 //
-// The address keeps the page's state: `#<slug>` names the example loaded,
-// written with history.replaceState. A share's code wins over an example's
-// hash, which a share page drops, and an edit to the code drops the hash,
-// since the code no longer is the example's. Share's link never has a hash.
+// The address keeps the page's state: `#<slug>` names the example picked,
+// written with history.replaceState, so `/play#<slug>` opens that example
+// as written. An edit keeps the hash, which names where the code came
+// from, until Share or the next pick replaces it. A share's code wins over
+// an example's hash, which a share page drops. Share's link never has a
+// hash. Picking an example whose code differs from the editor's clears the
+// debugger's breakpoints, whose lines were the old code's.
 //
 // The debugger icon (D1071) runs every program, plain or not, on the
 // debugger build of the universe instead (Deps.debugging), fetched the first
@@ -235,10 +238,7 @@ export class Session {
 
   setCode(code: string) {
     if (code === this.state.code) return;
-    // An edit makes the code no longer the example's.
-    const mark = this.state.mark;
-    this.set({ code, mark: "" });
-    if (mark) this.remember();
+    this.set({ code });
     this.edited();
     this.typed();
   }
@@ -252,6 +252,7 @@ export class Session {
   pick(value: string) {
     const example = value === "reset" ? this.data.examples[0] : this.data.examples.find((e) => e.slug === value);
     if (!example) return;
+    if (example.code !== this.state.code) this.deps.debugging?.debugger.clearBreakpoints();
     this.fill(example);
     this.set({ mark: example.slug });
     this.save();
