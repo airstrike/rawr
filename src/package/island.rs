@@ -2881,7 +2881,7 @@ impl<'a> Generator<'a> {
             } else {
                 writeln!(
                     text,
-                    "    let mut __call = {island}::call(__key, {owned}).given(&[{}]);",
+                    "    let mut __call = {island}::call(__key, {owned}).named_by(&[{}]);",
                     given.join(", ")
                 )
             };
@@ -7408,7 +7408,7 @@ pub fn ended<T: ?Sized>(value: &T) {
 pub struct Call<'c> {
     path: &'static str,
     /// The key with the names the impls of a call's boxed arguments give
-    /// themselves ([`Call::given`]).
+    /// themselves ([`Call::named_by`]).
     given: ::std::option::Option<::std::string::String>,
     owned: bool,
     pinned: bool,
@@ -7458,7 +7458,7 @@ impl<'c> Call<'c> {
     /// The call of a generic function's instance whose boxed arguments
     /// are of the impls of a marked trait that name themselves `given`
     /// (`+Content`), as the resolver compiles one instance for each impl.
-    pub fn given(mut self, given: &[&'static str]) -> Self {
+    pub fn named_by(mut self, given: &[&'static str]) -> Self {
         self.given = ::std::option::Option::Some(::std::format!("{}{}", self.path, given.concat()));
         self
     }
@@ -8097,6 +8097,73 @@ mod tests {
     /// it re-exports, which names no crate's items, so one build of the
     /// package serves every crate and every save (#1808). The package's
     /// macros are exported, as the copy names them through the module.
+    #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
+    #[test]
+    fn the_island_package_defines_each_method_of_a_type_once() {
+        let [_, (_, library)] = package();
+        let mut methods = BTreeSet::new();
+        let mut owner: Option<String> = None;
+        for line in library.lines() {
+            if let Some(header) = line.strip_prefix("impl") {
+                let header = header.trim_end_matches('{').trim();
+                // The impl's own generics, then its trait and type.
+                let mut depth = 0_i32;
+                let after = header
+                    .char_indices()
+                    .find(|&(_, character)| {
+                        match character {
+                            '<' => depth += 1,
+                            '>' => depth -= 1,
+                            _ => {}
+                        }
+                        depth == 0 && character != '>'
+                    })
+                    .map_or(header, |(at, _)| &header[at..])
+                    .trim();
+                owner = Some(if after.contains(" for ") {
+                    header.to_owned()
+                } else {
+                    after
+                        .split(|character: char| character == '<' || character.is_whitespace())
+                        .next()
+                        .unwrap_or(after)
+                        .to_owned()
+                });
+                continue;
+            }
+            if line == "}" {
+                owner = None;
+                continue;
+            }
+            let Some(owner) = &owner else {
+                continue;
+            };
+            let Some(signature) = line.strip_prefix("    ") else {
+                continue;
+            };
+            let signature = ["pub(crate) ", "pub ", "const ", "unsafe "]
+                .iter()
+                .fold(signature, |rest, prefix| {
+                    rest.strip_prefix(prefix).unwrap_or(rest)
+                });
+            let Some(name) = signature.strip_prefix("fn ") else {
+                continue;
+            };
+            let name = name
+                .split(|character: char| !(character.is_alphanumeric() || character == '_'))
+                .next()
+                .unwrap_or(name);
+            assert!(
+                methods.insert((owner.clone(), name.to_owned())),
+                "`{owner}` defines `{name}` twice in the island package, which rustc refuses (E0592)"
+            );
+        }
+        assert!(
+            methods.contains(&("Call".to_owned(), "named_by".to_owned())),
+            "the scan reads the package's impls"
+        );
+    }
+
     #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
     #[test]
     fn the_island_module_re_exports_a_package_that_names_no_crate() {
@@ -9621,7 +9688,7 @@ mod tests {
             "let __a0: ::std::boxed::Box<dyn crate::physics::__RawrGivenIntoContent<'a, Message> + '_> = \
              { let __value = __a0; ::std::boxed::Box::new(__value) };",
             "crate::__rawr_island::call(__key, true)\
-             .given(&[crate::physics::__RawrGivenIntoContent::__rawr_given(&*__a0)])",
+             .named_by(&[crate::physics::__RawrGivenIntoContent::__rawr_given(&*__a0)])",
             "crate::physics::__RawrGivenIntoContent::__rawr_give_boxed(__a0, &mut __call);",
             "fn __rawr_give(self, __call: &mut crate::__rawr_island::Call<'_>)\n    where\n        Message: 'static,\n    {",
             "\"+Content\"",
