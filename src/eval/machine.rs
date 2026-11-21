@@ -45,7 +45,7 @@ pub(crate) struct Machine {
 impl Machine {
     /// The hash of the body it was lowered from: a frame suspended in a
     /// machine of another hash can't resume in this one.
-    #[cfg(all(feature = "rust-import", feature = "sync"))]
+    #[cfg(feature = "rust-import")]
     pub(crate) const fn body(&self) -> u64 {
         self.body
     }
@@ -919,11 +919,9 @@ struct Iteration {
 
 // SAFETY: the iterator is only advanced and dropped on the thread that made
 // it (`next`, `Drop`); on any other thread it is leaked.
-#[cfg(feature = "sync")]
 unsafe impl Send for Iteration {}
 // SAFETY: as above: no shared access advances or drops the iterator on a
 // thread other than the one that made it.
-#[cfg(feature = "sync")]
 unsafe impl Sync for Iteration {}
 
 impl Iteration {

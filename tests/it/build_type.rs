@@ -151,14 +151,6 @@ fn test_build_type_generics() {
         x: T,
     }
 
-    #[cfg(not(feature = "sync"))]
-    impl<T: Clone + 'static> Foo<T> {
-        fn build_extra(builder: &mut TypeBuilder<Self>) {
-            builder.with_fn("new_foo", |x: T| Self { x });
-        }
-    }
-
-    #[cfg(feature = "sync")]
     impl<T: Send + Sync + Clone + 'static> Foo<T> {
         fn build_extra(builder: &mut TypeBuilder<Self>) {
             builder.with_fn("new_foo", |x: T| Self { x });

@@ -9,7 +9,7 @@ repository = "https://github.com/airstrike/rawr"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-rawr = { path = "..", features = ["rust-import", "sync"] }
+rawr = { path = "..", features = ["rust-import"] }
 rawr-cli = { path = "../cli" }
 rawr-import = { path = "../importer", features = ["rustc-driver", "embedded-host"] }
 rawr-location = { path = "../location" }

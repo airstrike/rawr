@@ -72,7 +72,7 @@ impl Snapshot {
 
     /// The snapshot with the file at `path` reading `text`, or `None` when
     /// it has no such file.
-    #[cfg(all(feature = "debugging", feature = "sync"))]
+    #[cfg(feature = "debugging")]
     pub(crate) fn with_text(&self, path: &Path, text: &str) -> Option<Self> {
         let path = normalize(path.to_path_buf()).ok()?;
         let index = self

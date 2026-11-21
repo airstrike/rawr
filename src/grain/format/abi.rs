@@ -1,7 +1,7 @@
 //! What a `Dynamic` is, on the machine that wrote the artifact.
 //!
 //! Some of rawr's features change the value representation rather than just
-//! what is available: `sync` swaps `Rc` for `Arc`. Loading an artifact across
+//! what is available: `decimal` adds a kind of value. Loading an artifact across
 //! one of those is not a missing feature, it is a value decoded as the wrong
 //! type — so the header carries a fingerprint and the loader refuses a
 //! mismatch by name.
@@ -10,7 +10,7 @@
 //!
 //! Widths are *measured*, so they are right no matter how rawr was configured.
 //! The booleans are read from this crate's own features, which is why the
-//! manifest mirrors them — `cfg!(feature = "sync")` here does not consult
+//! manifest mirrors them — `cfg!(feature = "decimal")` here does not consult
 //! rawr's manifest.
 //!
 //! That leaves one gap: enabling a restriction on rawr directly, bypassing the
@@ -24,11 +24,13 @@
 /// Order is the wire order and must never change; append only. A flag's name
 /// is what the loader reports, so it has to match rawr's own spelling.
 ///
-/// The bits after `decimal` belonged to rawr's retired language-trimming
+/// The `sync` bit is always on: rawr's values are always `Arc`s, which an
+/// artifact written while that was a feature recorded with it set. The bits
+/// after `decimal` belonged to rawr's retired language-trimming
 /// features. They are always off, so no artifact's flags depend on where
 /// they sit.
 const FLAGS: &[(&str, bool)] = &[
-    ("sync", cfg!(feature = "sync")),
+    ("sync", true),
     ("decimal", cfg!(feature = "decimal")),
     ("no_index", false),
     ("no_object", false),
@@ -40,9 +42,8 @@ const FLAGS: &[(&str, bool)] = &[
     ("unchecked", false),
 ];
 
-/// `Engine` is only `Send + Sync` when rawr is built with `sync`, so claiming
-/// the flag without rawr agreeing fails to compile.
-#[cfg(feature = "sync")]
+/// `Engine` is `Send + Sync`, as the always-on `sync` flag claims: a value
+/// representation that broke that fails to compile here.
 const _: () = {
     const fn assert_sync<T: Send + Sync>() {}
     let _ = assert_sync::<rawr::Engine>;

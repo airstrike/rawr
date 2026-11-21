@@ -70,9 +70,7 @@ impl std::fmt::Debug for Builder {
 
 /// `builder.spawn(f)` of the builder `value`: the thread `start` starts
 /// with std's builder and the name it gives the thread, as std's
-/// `io::Result<JoinHandle<T>>`. Only rawr with its `sync` feature starts
-/// threads.
-#[cfg(feature = "sync")]
+/// `io::Result<JoinHandle<T>>`.
 pub(crate) fn spawn(
     value: &Dynamic,
     start: impl FnOnce(

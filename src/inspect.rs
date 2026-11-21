@@ -121,7 +121,6 @@
 #![cfg(feature = "debugging")]
 
 // What it compiles code with is shared between threads.
-#[cfg(feature = "sync")]
 mod evaluate;
 mod host;
 mod input;
@@ -160,7 +159,6 @@ pub const HOLD: &str = "RAWR_DEBUG_HOLD";
 /// The file beside the inspector's socket that keeps its breakpoints.
 pub const BREAKPOINTS: &str = "breakpoints.json";
 
-#[cfg(feature = "sync")]
 pub use evaluate::Program;
 pub use host::Host;
 
@@ -671,7 +669,6 @@ pub type Locate = dyn Fn(Position) -> Option<(String, usize)> + Send + Sync;
 /// all of them from the same generation.
 struct Placed {
     locate: Box<Locate>,
-    #[cfg(feature = "sync")]
     program: Option<Program>,
     snapshot: Option<crate::package::snapshot::Snapshot>,
 }
@@ -683,8 +680,6 @@ pub struct Located {
     entry: crate::diagnostic::Source,
     positions: Arc<crate::program::Positions>,
     /// The files it was compiled from, when a debugger was registered.
-    // Only a `sync` build's debugger reads them.
-    #[cfg_attr(not(feature = "sync"), allow(dead_code))]
     snapshot: Option<crate::package::snapshot::Snapshot>,
 }
 
@@ -713,7 +708,6 @@ impl Located {
 
     /// What evaluating code in this program takes, when it kept the files
     /// it compiled from (#490).
-    #[cfg(feature = "sync")]
     #[must_use]
     pub fn program(&self) -> Option<Program> {
         Some(self.program_from(self.snapshot.clone()?))
@@ -722,7 +716,6 @@ impl Located {
     /// What evaluating code in this program takes, which compiled from
     /// `snapshot`: the files of a generation compiled before a debugger
     /// was registered, which the host kept beside it (#2308).
-    #[cfg(feature = "sync")]
     #[must_use]
     pub fn program_from(&self, snapshot: crate::package::snapshot::Snapshot) -> Program {
         Program::new(snapshot, self.entry.clone(), Arc::clone(&self.positions))
@@ -1205,9 +1198,7 @@ impl Inspector {
     /// compiled as `ast`: code evaluated at a pause compiles into it, a
     /// hosted inspector reads lines from the files it compiled from, and
     /// [`Self::compiled`] moves the breakpoints to it. The locator reads
-    /// `located`'s sources from the socket's threads, and only `sync`
-    /// shares sources between threads.
-    #[cfg(feature = "sync")]
+    /// `located`'s sources from the socket's threads.
     pub fn compiled_from(&self, located: &Arc<Located>, ast: &crate::AST) {
         let lines = Arc::clone(located);
         self.set_placed(Placed {
@@ -1289,7 +1280,6 @@ impl Inspector {
     ) {
         self.set_placed(Placed {
             locate: Box::new(locate),
-            #[cfg(feature = "sync")]
             program: None,
             snapshot: None,
         });
@@ -1297,7 +1287,6 @@ impl Inspector {
 
     /// The program that runs next: code evaluated at a pause compiles into
     /// `program`, when there is one (#490), and `locate` places its steps.
-    #[cfg(feature = "sync")]
     pub fn place(
         &self,
         program: Option<Program>,
@@ -2102,17 +2091,9 @@ impl Shared {
         code: &str,
         position: Position,
     ) -> Value {
-        #[cfg(feature = "sync")]
         let placed = self.placed();
-        #[cfg(feature = "sync")]
         let program = placed.as_ref().and_then(|placed| placed.program.as_ref());
-        #[cfg(not(feature = "sync"))]
-        let program: Option<()> = {
-            let _ = (context, code, position, request.frame);
-            None
-        };
         match program {
-            #[cfg(feature = "sync")]
             Some(program) => request.shape.add(evaluate::answer(
                 context,
                 program,

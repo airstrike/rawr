@@ -12,45 +12,18 @@ use crate::{
 };
 use std::any::type_name;
 
-/// Trait that maps to `Send + Sync` only under the `sync` feature.
-#[cfg(feature = "sync")]
+/// `Send + Sync`, as one bound.
 pub trait SendSync: Send + Sync {}
-/// Trait that maps to `Send + Sync` only under the `sync` feature.
-#[cfg(feature = "sync")]
+/// Every `Send + Sync` type is [`SendSync`].
 impl<T: Send + Sync> SendSync for T {}
 
-/// Trait that maps to `Send + Sync` only under the `sync` feature.
-#[cfg(not(feature = "sync"))]
-pub trait SendSync {}
-/// Trait that maps to `Send + Sync` only under the `sync` feature.
-#[cfg(not(feature = "sync"))]
-impl<T> SendSync for T {}
-
 /// Immutable reference-counted container.
-#[cfg(not(feature = "sync"))]
-pub use std::rc::Rc as Shared;
-/// Immutable reference-counted container.
-#[cfg(feature = "sync")]
 pub use std::sync::Arc as Shared;
 
 /// Synchronized shared object.
-#[cfg(not(feature = "sync"))]
-pub use std::cell::RefCell as Locked;
-
-/// Read-only lock guard for synchronized shared object.
-#[cfg(not(feature = "sync"))]
-pub type LockGuard<'a, T> = std::cell::Ref<'a, T>;
-
-/// Mutable lock guard for synchronized shared object.
-#[cfg(not(feature = "sync"))]
-pub type LockGuardMut<'a, T> = std::cell::RefMut<'a, T>;
-
-/// Synchronized shared object.
-#[cfg(feature = "sync")]
 #[allow(dead_code)]
 pub use std::sync::RwLock as Locked;
 
-#[cfg(feature = "sync")]
 thread_local! {
     /// How many [`Locked`] values this thread holds: a thread that holds
     /// none waits for one another thread holds, and so closes no cycle of
@@ -60,17 +33,14 @@ thread_local! {
 
 /// Read-only lock guard for synchronized shared object, counted among the
 /// locks its thread holds while it lives.
-#[cfg(feature = "sync")]
 #[derive(Debug)]
 pub struct LockGuard<'a, T>(std::sync::RwLockReadGuard<'a, T>);
 
 /// Mutable lock guard for synchronized shared object, counted as
 /// [`LockGuard`] is.
-#[cfg(feature = "sync")]
 #[derive(Debug)]
 pub struct LockGuardMut<'a, T>(std::sync::RwLockWriteGuard<'a, T>);
 
-#[cfg(feature = "sync")]
 impl<'a, T> LockGuard<'a, T> {
     fn held(guard: std::sync::RwLockReadGuard<'a, T>) -> Self {
         HOLDING.set(HOLDING.get() + 1);
@@ -78,7 +48,6 @@ impl<'a, T> LockGuard<'a, T> {
     }
 }
 
-#[cfg(feature = "sync")]
 impl<'a, T> LockGuardMut<'a, T> {
     fn held(guard: std::sync::RwLockWriteGuard<'a, T>) -> Self {
         HOLDING.set(HOLDING.get() + 1);
@@ -86,7 +55,6 @@ impl<'a, T> LockGuardMut<'a, T> {
     }
 }
 
-#[cfg(feature = "sync")]
 impl<T> std::ops::Deref for LockGuard<'_, T> {
     type Target = T;
 
@@ -95,7 +63,6 @@ impl<T> std::ops::Deref for LockGuard<'_, T> {
     }
 }
 
-#[cfg(feature = "sync")]
 impl<T> std::ops::Deref for LockGuardMut<'_, T> {
     type Target = T;
 
@@ -104,21 +71,18 @@ impl<T> std::ops::Deref for LockGuardMut<'_, T> {
     }
 }
 
-#[cfg(feature = "sync")]
 impl<T> std::ops::DerefMut for LockGuardMut<'_, T> {
     fn deref_mut(&mut self) -> &mut T {
         &mut self.0
     }
 }
 
-#[cfg(feature = "sync")]
 impl<T> Drop for LockGuard<'_, T> {
     fn drop(&mut self) {
         HOLDING.set(HOLDING.get() - 1);
     }
 }
 
-#[cfg(feature = "sync")]
 impl<T> Drop for LockGuardMut<'_, T> {
     fn drop(&mut self) {
         HOLDING.set(HOLDING.get() - 1);
@@ -694,11 +658,7 @@ pub fn shared_take<T>(value: Shared<T>) -> T {
 #[must_use]
 #[allow(dead_code)]
 pub fn locked_read<T>(value: &Locked<T>) -> Option<LockGuard<'_, T>> {
-    #[cfg(not(feature = "sync"))]
-    return value.try_borrow().ok();
-
     // A holder that panicked left the value as it was, as a `RefCell` does.
-    #[cfg(feature = "sync")]
     match value.try_read() {
         Ok(guard) => Some(LockGuard::held(guard)),
         Err(std::sync::TryLockError::Poisoned(poisoned)) => {
@@ -721,10 +681,6 @@ pub fn locked_read<T>(value: &Locked<T>) -> Option<LockGuard<'_, T>> {
 #[must_use]
 #[allow(dead_code)]
 pub fn locked_write<T>(value: &Locked<T>) -> Option<LockGuardMut<'_, T>> {
-    #[cfg(not(feature = "sync"))]
-    return value.try_borrow_mut().ok();
-
-    #[cfg(feature = "sync")]
     match value.try_write() {
         Ok(guard) => Some(LockGuardMut::held(guard)),
         Err(std::sync::TryLockError::Poisoned(poisoned)) => {
@@ -742,10 +698,6 @@ pub fn locked_write<T>(value: &Locked<T>) -> Option<LockGuardMut<'_, T>> {
 /// there is another thread's, and ends when that thread's access does.
 #[inline(always)]
 pub(crate) fn waited_read<T>(value: &Locked<T>) -> LockGuard<'_, T> {
-    #[cfg(not(feature = "sync"))]
-    return value.borrow();
-
-    #[cfg(feature = "sync")]
     LockGuard::held(
         value
             .read()
@@ -757,10 +709,6 @@ pub(crate) fn waited_read<T>(value: &Locked<T>) -> LockGuard<'_, T> {
 /// waiting while another thread holds it, as [`waited_read`] does.
 #[inline(always)]
 pub(crate) fn waited_write<T>(value: &Locked<T>) -> LockGuardMut<'_, T> {
-    #[cfg(not(feature = "sync"))]
-    return value.borrow_mut();
-
-    #[cfg(feature = "sync")]
     LockGuardMut::held(
         value
             .write()
@@ -786,10 +734,6 @@ pub(crate) fn shared_write(value: &Locked<crate::Dynamic>) -> LockGuardMut<'_, c
 }
 
 /// General Rust function trait object.
-#[cfg(not(feature = "sync"))]
-pub type FnAny = dyn Fn(Option<NativeCallContext>, &mut FnCallArgs) -> RawrResult;
-/// General Rust function trait object.
-#[cfg(feature = "sync")]
 pub type FnAny = dyn Fn(Option<NativeCallContext>, &mut FnCallArgs) -> RawrResult + Send + Sync;
 
 /// Built-in function trait object.
@@ -799,60 +743,27 @@ pub type FnBuiltin = (
 );
 
 /// Function that gets an iterator from a type.
-#[cfg(not(feature = "sync"))]
-pub type FnIterator = dyn Fn(Dynamic) -> Box<dyn Iterator<Item = RawrResultOf<Dynamic>>>;
-/// Function that gets an iterator from a type.
-#[cfg(feature = "sync")]
 pub type FnIterator =
     dyn Fn(Dynamic) -> Box<dyn Iterator<Item = RawrResultOf<Dynamic>>> + Send + Sync;
 
 /// Plugin function trait object.
-#[cfg(not(feature = "sync"))]
-pub type FnPlugin = dyn PluginFunc;
-/// Plugin function trait object.
-#[cfg(feature = "sync")]
 pub type FnPlugin = dyn PluginFunc + Send + Sync;
 
 /// Callback function for progress reporting.
-#[cfg(not(feature = "sync"))]
-pub type OnProgressCallback = dyn Fn(u64) -> Option<Dynamic>;
-/// Callback function for progress reporting.
-#[cfg(feature = "sync")]
 pub type OnProgressCallback = dyn Fn(u64) -> Option<Dynamic> + Send + Sync;
 
 /// Callback function for `print!`, `println!`, `eprint!` and `eprintln!`.
-#[cfg(not(feature = "sync"))]
-pub type OnOutputCallback = dyn Fn(crate::Output, &str);
-/// Callback function for `print!`, `println!`, `eprint!` and `eprintln!`.
-#[cfg(feature = "sync")]
 pub type OnOutputCallback = dyn Fn(crate::Output, &str) + Send + Sync;
 
-/// _(internals)_ Callback function when a property accessed is not found in a [`Map`][crate::Map].
-/// Exported under the `internals` feature only.
-#[cfg(not(feature = "sync"))]
-#[cfg(feature = "internals")]
-pub type OnInvalidArrayIndexCallback = dyn for<'a> Fn(
-    &'a mut crate::Array,
-    crate::INT,
-    EvalContext,
-) -> RawrResultOf<crate::Target<'a>>;
 /// Callback function when a property accessed is not found in a [`Map`][crate::Map].
 /// Exported under the `internals` feature only.
-#[cfg(feature = "sync")]
 #[cfg(feature = "internals")]
 pub type OnInvalidArrayIndexCallback = dyn for<'a> Fn(&'a mut crate::Array, crate::INT, EvalContext) -> RawrResultOf<crate::Target<'a>>
     + Send
     + Sync;
 
-/// _(internals)_ Callback function when a property accessed is not found in a [`Map`][crate::Map].
-/// Exported under the `internals` feature only.
-#[cfg(not(feature = "sync"))]
-#[cfg(feature = "internals")]
-pub type OnMissingMapPropertyCallback =
-    dyn for<'a> Fn(&'a mut crate::Map, &str, EvalContext) -> RawrResultOf<crate::eval::Target<'a>>;
 /// Callback function when a property accessed is not found in a [`Map`][crate::Map].
 /// Exported under the `internals` feature only.
-#[cfg(feature = "sync")]
 #[cfg(feature = "internals")]
 pub type OnMissingMapPropertyCallback = dyn for<'a> Fn(&'a mut crate::Map, &str, EvalContext) -> RawrResultOf<crate::eval::Target<'a>>
     + Send
@@ -862,40 +773,19 @@ pub type OnMissingMapPropertyCallback = dyn for<'a> Fn(&'a mut crate::Map, &str,
 /// Exported under the `internals` feature only.
 ///
 /// Not triggered for qualified function calls (e.g. `module::function()`).
-#[cfg(not(feature = "sync"))]
-#[cfg(feature = "internals")]
-pub type OnMissingFunctionCallback =
-    dyn Fn(&str, &mut [&mut Dynamic], bool, EvalContext) -> RawrResultOf<Option<Dynamic>>;
-/// _(internals)_ Callback function when a function call is not found.
-/// Exported under the `internals` feature only.
-///
-/// Not triggered for qualified function calls (e.g. `module::function()`).
-#[cfg(feature = "sync")]
 #[cfg(feature = "internals")]
 pub type OnMissingFunctionCallback = dyn Fn(&str, &mut [&mut Dynamic], bool, EvalContext) -> RawrResultOf<Option<Dynamic>>
     + Send
     + Sync;
 
 /// Callback function for mapping tokens during parsing.
-#[cfg(not(feature = "sync"))]
-pub type OnParseTokenCallback = dyn Fn(Token, Position, &TokenizeState) -> Token;
-/// Callback function for mapping tokens during parsing.
-#[cfg(feature = "sync")]
 pub type OnParseTokenCallback = dyn Fn(Token, Position, &TokenizeState) -> Token + Send + Sync;
 
 /// Callback function for variable access.
-#[cfg(not(feature = "sync"))]
-pub type OnVarCallback = dyn Fn(&str, usize, EvalContext) -> RawrResultOf<Option<Dynamic>>;
-/// Callback function for variable access.
-#[cfg(feature = "sync")]
 pub type OnVarCallback =
     dyn Fn(&str, usize, EvalContext) -> RawrResultOf<Option<Dynamic>> + Send + Sync;
 
 /// Callback function for variable definition.
-#[cfg(not(feature = "sync"))]
-pub type OnDefVarCallback = dyn Fn(bool, VarDefInfo, EvalContext) -> RawrResultOf<bool>;
-/// Callback function for variable definition.
-#[cfg(feature = "sync")]
 pub type OnDefVarCallback =
     dyn Fn(bool, VarDefInfo, EvalContext) -> RawrResultOf<bool> + Send + Sync;
 
@@ -936,7 +826,6 @@ mod tests {
     /// A value another thread holds is waited for by a thread that holds
     /// no other, as threads share a borrow, and is a conflict at once to
     /// one that does (#2303).
-    #[cfg(feature = "sync")]
     #[test]
     fn a_thread_that_holds_no_value_waits_for_one_another_thread_holds() {
         use super::{locked_read, locked_write, Locked};

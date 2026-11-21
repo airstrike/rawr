@@ -21,8 +21,7 @@ pub const MIN_SCOPE_ENTRIES: usize = 8;
 ///
 /// # Thread Safety
 ///
-/// Currently, [`Scope`] is neither [`Send`] nor [`Sync`]. Turn on the `sync` feature to make it
-/// [`Send`] `+` [`Sync`].
+/// [`Scope`] is [`Send`] `+` [`Sync`].
 ///
 /// # Example
 ///

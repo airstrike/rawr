@@ -119,7 +119,6 @@ mod ast;
 /// Compile-time capabilities proven for Rawr values and callables.
 pub mod capability;
 pub mod config;
-#[cfg(feature = "sync")]
 pub mod crossing;
 /// Canonical structured diagnostics shared by compilers, hosts, and tools.
 pub mod diagnostic;
@@ -205,7 +204,7 @@ pub mod scope;
 pub mod teller;
 /// A crate's own interpreter: a marked file loaded against the generated
 /// bindings the crate links, and reloaded in process (#1387).
-#[cfg(all(feature = "rust-import", feature = "sync"))]
+#[cfg(feature = "rust-import")]
 pub mod universe;
 /// A result that borrows the values a runner lends it, kept beside them in
 /// one value: a generated runner's own dependency (#846).

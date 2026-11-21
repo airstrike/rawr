@@ -81,10 +81,6 @@ fn test_functions_trait_object() {
         }
     }
 
-    #[cfg(not(feature = "sync"))]
-    type MySharedTestTrait = Shared<dyn TestTrait>;
-
-    #[cfg(feature = "sync")]
     type MySharedTestTrait = Shared<dyn TestTrait + Send + Sync>;
 
     let mut engine = Engine::new();

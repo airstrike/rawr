@@ -99,7 +99,6 @@ fn host_type_clones_share_one_parser_proof_allocation() {
         );
 }
 
-#[cfg(feature = "sync")]
 #[test]
 fn executable_ops_remain_send_and_sync() {
     const fn assert_send_sync<T: Send + Sync>() {}

@@ -1,11 +1,7 @@
 //! The runtime half of [`crate::future`]: futures Rawr code holds, and
 //! [`Script`], which polls one as a std future.
 
-// Without `sync` the values are not `Send`, and one thread runs everything.
-#![cfg_attr(not(feature = "sync"), allow(clippy::arc_with_non_send_sync))]
-
 use std::cell::{Cell, RefCell};
-#[cfg(feature = "sync")]
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::rc::Rc;
@@ -18,41 +14,16 @@ use crate::{item, Dynamic, EvalAltResult, Position, RawrResultOf};
 
 /// What a native future gives when it ends: a function that makes its Rawr
 /// value on the owner thread, where imported values are stored.
-#[cfg(feature = "sync")]
 pub type Finish = Box<dyn FnOnce() -> RawrResultOf<Dynamic> + Send>;
-/// What a native future gives when it ends.
-#[cfg(not(feature = "sync"))]
-pub type Finish = Box<dyn FnOnce() -> RawrResultOf<Dynamic>>;
 
 /// A native future, made on the thread that first polls it.
-#[cfg(feature = "sync")]
 pub type Native = Pin<Box<dyn std::future::Future<Output = Finish> + Send>>;
-/// A native future, made on the thread that first polls it.
-#[cfg(not(feature = "sync"))]
-pub type Native = Pin<Box<dyn std::future::Future<Output = Finish>>>;
 
 /// What makes a native future.
-#[cfg(feature = "sync")]
 type Make = Box<dyn FnOnce() -> Native + Send>;
-#[cfg(not(feature = "sync"))]
-type Make = Box<dyn FnOnce() -> Native>;
 
 /// Work for the owner thread, boxed.
-#[cfg(feature = "sync")]
 type Work = Box<dyn FnOnce() + Send>;
-#[cfg(not(feature = "sync"))]
-type Work = Box<dyn FnOnce()>;
-
-/// `Send` when the crate is built with `sync`, as the values are.
-#[cfg(feature = "sync")]
-pub trait MaybeSend: Send {}
-#[cfg(feature = "sync")]
-impl<T: Send> MaybeSend for T {}
-/// `Send` when the crate is built with `sync`, as the values are.
-#[cfg(not(feature = "sync"))]
-pub trait MaybeSend {}
-#[cfg(not(feature = "sync"))]
-impl<T> MaybeSend for T {}
 
 /// The native values a future's bodies hold, in an arena that goes with it
 /// to the threads that poll it (`island::arrive`).
@@ -114,7 +85,7 @@ impl Future {
 
     /// A native future that `make` makes on the thread that first polls it.
     #[must_use]
-    pub fn native(make: impl FnOnce() -> Native + MaybeSend + 'static) -> Self {
+    pub fn native(make: impl FnOnce() -> Native + Send + 'static) -> Self {
         Self::of(Kind::Native(Box::new(make)))
     }
 
@@ -208,8 +179,8 @@ impl Future {
     #[must_use]
     pub fn into_native<T, F>(self, finish: F) -> Converted<T, F>
     where
-        T: MaybeSend + 'static,
-        F: FnOnce(Dynamic) -> T + MaybeSend + 'static,
+        T: Send + 'static,
+        F: FnOnce(Dynamic) -> T + Send + 'static,
     {
         Converted {
             script: self.into_script(),
@@ -236,8 +207,8 @@ impl<T, F> Unpin for Converted<T, F> {}
 
 impl<T, F> std::future::Future for Converted<T, F>
 where
-    T: MaybeSend + 'static,
-    F: FnOnce(Dynamic) -> T + MaybeSend + 'static,
+    T: Send + 'static,
+    F: FnOnce(Dynamic) -> T + Send + 'static,
 {
     type Output = T;
 
@@ -294,8 +265,7 @@ where
     }
 }
 
-/// A Rawr future as a [`std::future::Future`]. It is `Send` when the crate
-/// is built with `sync`.
+/// A Rawr future as a [`std::future::Future`], which is `Send`.
 pub struct Script {
     poller: Poller,
     /// The native values its bodies hold between two polls on threads no
@@ -868,19 +838,10 @@ fn run(
 
 /// Each async body that has suspended, while its future lives: a reload
 /// that changed the function one waits in can't resume it (#2117).
-#[cfg(feature = "sync")]
 static SUSPENDED: Mutex<Vec<std::sync::Weak<Mutex<Step>>>> = Mutex::new(Vec::new());
 
-#[cfg(not(feature = "sync"))]
-thread_local! {
-    static SUSPENDED: RefCell<Vec<std::sync::Weak<Mutex<Step>>>> = const { RefCell::new(Vec::new()) };
-}
-
 fn with_suspended<R>(work: impl FnOnce(&mut Vec<std::sync::Weak<Mutex<Step>>>) -> R) -> R {
-    #[cfg(feature = "sync")]
-    return work(&mut lock(&SUSPENDED));
-    #[cfg(not(feature = "sync"))]
-    return SUSPENDED.with_borrow_mut(work);
+    work(&mut lock(&SUSPENDED))
 }
 
 /// List the body in `shared`, which suspended for the first time. A full
@@ -1269,19 +1230,10 @@ pub struct Held {
 
 /// Each callable a marked `main`'s own frame gave native code, while
 /// native code holds it.
-#[cfg(feature = "sync")]
 static HELD: Mutex<Vec<std::sync::Weak<Held>>> = Mutex::new(Vec::new());
 
-#[cfg(not(feature = "sync"))]
-thread_local! {
-    static HELD: RefCell<Vec<std::sync::Weak<Held>>> = const { RefCell::new(Vec::new()) };
-}
-
 fn with_held<R>(work: impl FnOnce(&mut Vec<std::sync::Weak<Held>>) -> R) -> R {
-    #[cfg(feature = "sync")]
-    return work(&mut lock(&HELD));
-    #[cfg(not(feature = "sync"))]
-    return HELD.with_borrow_mut(work);
+    work(&mut lock(&HELD))
 }
 
 /// Each callable a marked `main`'s own frame gave native code that native
@@ -1299,19 +1251,10 @@ pub fn held() -> Vec<(item::Value, Program)> {
 /// Each callable script code gave native code, while native code holds
 /// it: code of the generation that made it, which runs when the callable
 /// doesn't rebind in a newer one (#1746).
-#[cfg(feature = "sync")]
 static KEPT: Mutex<Vec<std::sync::Weak<Held>>> = Mutex::new(Vec::new());
 
-#[cfg(not(feature = "sync"))]
-thread_local! {
-    static KEPT: RefCell<Vec<std::sync::Weak<Held>>> = const { RefCell::new(Vec::new()) };
-}
-
 fn with_kept<R>(work: impl FnOnce(&mut Vec<std::sync::Weak<Held>>) -> R) -> R {
-    #[cfg(feature = "sync")]
-    return work(&mut lock(&KEPT));
-    #[cfg(not(feature = "sync"))]
-    return KEPT.with_borrow_mut(work);
+    work(&mut lock(&KEPT))
 }
 
 /// `function` of `program` as a callable native code holds, kept in
@@ -1344,29 +1287,19 @@ pub fn kept() -> Vec<(item::Value, Program)> {
 
 /// The program the process runs, for script values native code holds
 /// (`rawr::Value`'s `Clone` and `Debug`) on any thread.
-#[cfg(feature = "sync")]
 static PUBLISHED: std::sync::RwLock<Option<Program>> = std::sync::RwLock::new(None);
 
 /// Make `program` the one script values native code holds belong to.
 pub fn publish(program: Program) {
-    #[cfg(feature = "sync")]
-    {
-        *PUBLISHED.write().unwrap_or_else(PoisonError::into_inner) = Some(program);
-    }
-    #[cfg(not(feature = "sync"))]
-    let _ = program;
+    *PUBLISHED.write().unwrap_or_else(PoisonError::into_inner) = Some(program);
 }
 
 fn published() -> Option<Program> {
-    #[cfg(feature = "sync")]
-    return PUBLISHED.read().ok()?.clone();
-    #[cfg(not(feature = "sync"))]
-    return None;
+    PUBLISHED.read().ok()?.clone()
 }
 
 /// The program script code runs in on this thread: the generation current
 /// here, and else the one the process published.
-#[cfg(feature = "sync")]
 pub(crate) fn current_program() -> Option<Program> {
     with_host(|host| host.share()).flatten().or_else(published)
 }
@@ -1422,7 +1355,6 @@ impl Callable {
 
     /// The function `function` of `program`, as native code calls it
     /// through a proxy (D594).
-    #[cfg(feature = "sync")]
     pub(crate) fn of_item(function: item::Value, program: Program) -> Self {
         let kept = keep(&function, &program);
         Self {
@@ -1472,7 +1404,6 @@ impl Callable {
 
     /// [`Callable::call_places`] in `program`, the generation the caller
     /// entered and found the function in (`crossing::Member`).
-    #[cfg(feature = "sync")]
     pub(crate) fn call_places_in(
         &self,
         program: &Program,
@@ -1579,7 +1510,7 @@ impl Callable {
 pub struct Job(Work);
 
 impl Job {
-    fn new(work: impl FnOnce() + MaybeSend + 'static) -> Self {
+    fn new(work: impl FnOnce() + Send + 'static) -> Self {
         Self(Box::new(work))
     }
 
@@ -1594,14 +1525,11 @@ static FORWARD: OnceLock<Box<dyn Fn(Job) + Send + Sync>> = OnceLock::new();
 
 /// Jobs for an owner that drives them itself, as the thread running the
 /// runtime entry's `block_on` does (D527): it drains them in its own poll.
-#[cfg(feature = "sync")]
 static QUEUE: Mutex<VecDeque<Job>> = Mutex::new(VecDeque::new());
 /// What wakes that owner when a job arrives.
-#[cfg(feature = "sync")]
 static DRIVER: Mutex<Option<Waker>> = Mutex::new(None);
 /// Whether [`DRIVER`] was ever set: [`drive`] only ever sets it, so a
 /// thread asks this without the lock.
-#[cfg(feature = "sync")]
 static DRIVEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 thread_local! {
@@ -1612,7 +1540,6 @@ thread_local! {
 /// Make the owner the thread that polls with `waker`, as the runtime entry
 /// does each time it polls the program's `main`: jobs from other threads
 /// queue for [`drain`] and wake it (D527).
-#[cfg(feature = "sync")]
 pub fn drive(waker: &Waker) {
     *lock(&DRIVER) = Some(waker.clone());
     DRIVEN.store(true, std::sync::atomic::Ordering::Release);
@@ -1620,7 +1547,6 @@ pub fn drive(waker: &Waker) {
 
 /// Run every job queued for the owner, in order, on this, the owner thread.
 pub fn drain() {
-    #[cfg(feature = "sync")]
     loop {
         let job = lock(&QUEUE).pop_front();
         match job {
@@ -1667,7 +1593,7 @@ pub fn forward(forward: impl Fn(Job) + Send + Sync + 'static) {
 /// Run `work` on the owner thread: here when this is it, and else as a
 /// [`Job`] it runs next. A native value that leaves its slot for a future
 /// goes back this way when the future ends on another thread (D513.6).
-pub fn on_owner(work: impl FnOnce() + MaybeSend + 'static) {
+pub fn on_owner(work: impl FnOnce() + Send + 'static) {
     if owns() {
         work();
     } else {
@@ -1678,7 +1604,6 @@ pub fn on_owner(work: impl FnOnce() + MaybeSend + 'static) {
 /// Whether an owner thread runs the steps other threads send it: the
 /// runtime entry's poll drains them (D527), or a forward hands them on.
 fn served() -> bool {
-    #[cfg(feature = "sync")]
     if DRIVEN.load(std::sync::atomic::Ordering::Acquire) {
         return true;
     }
@@ -1715,10 +1640,7 @@ fn here() -> Option<Program> {
     if let Some(program) = RUNNING.with(|running| running.borrow().clone()) {
         return Some(program);
     }
-    #[cfg(feature = "sync")]
-    return current_program();
-    #[cfg(not(feature = "sync"))]
-    return None;
+    current_program()
 }
 
 /// Whether this thread runs async steps.
@@ -1739,27 +1661,22 @@ pub(crate) fn debug(value: &Dynamic) -> Option<String> {
 
 /// `lhs == rhs` by their script type's `PartialEq`, through the program
 /// they belong to.
-#[cfg(feature = "sync")]
 pub(crate) fn equal(lhs: &Dynamic, rhs: &Dynamic) -> Option<RawrResultOf<bool>> {
     published()?.equal(lhs, rhs)
 }
 
 /// `value`'s text by its script type's own `Display`, through the program
 /// it belongs to.
-#[cfg(feature = "sync")]
 pub(crate) fn display(value: &Dynamic) -> Option<RawrResultOf<String>> {
     published()?.display(value)
 }
 
 fn send(job: Job) {
-    #[cfg(feature = "sync")]
-    {
-        let driver = lock(&DRIVER).clone();
-        if let Some(driver) = driver {
-            lock(&QUEUE).push_back(job);
-            driver.wake();
-            return;
-        }
+    let driver = lock(&DRIVER).clone();
+    if let Some(driver) = driver {
+        lock(&QUEUE).push_back(job);
+        driver.wake();
+        return;
     }
     match FORWARD.get() {
         Some(forward) => forward(job),

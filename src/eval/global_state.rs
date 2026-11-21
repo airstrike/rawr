@@ -63,7 +63,6 @@ pub struct GlobalRuntimeState {
     #[cfg(feature = "debugging")]
     pub(crate) debugger: super::Debugger,
     /// The threads the evaluation spawns, which it joins before it returns.
-    #[cfg(feature = "sync")]
     pub(crate) threads: super::threads::Threads,
 }
 
@@ -100,7 +99,6 @@ impl Engine {
                 None => crate::eval::Debugger::new(crate::eval::DebuggerStatus::CONTINUE),
             },
 
-            #[cfg(feature = "sync")]
             threads: super::threads::Threads::root(self.lasting),
         }
     }

@@ -15,9 +15,6 @@
 
 use super::*;
 
-#[cfg(not(feature = "sync"))]
-type BorrowToken = std::rc::Weak<Held>;
-#[cfg(feature = "sync")]
 type BorrowToken = std::sync::Weak<Held>;
 
 /// A `RefCell`: its value and the borrows it holds.

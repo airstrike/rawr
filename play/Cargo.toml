@@ -15,7 +15,7 @@ bot = ["dep:http-body-util", "dep:hyper", "dep:hyper-util", "dep:reqwest", "dep:
 [dependencies]
 # Server tokens in reports: one AES-256 block per guild ID (see src/server.rs).
 aes = "0.8"
-rawr = { path = "..", features = ["sync"] }
+rawr = { path = ".." }
 # How a snippet becomes a program, shared with rawr-web.
 rawr-snippet = { path = "snippet" }
 # Already in the bot through serenity; plain HTTP to the channel config store.

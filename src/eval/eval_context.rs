@@ -82,7 +82,7 @@ impl<'a, 's, 'ps, 'g, 'c, 't> EvalContext<'a, 's, 'ps, 'g, 'c, 't> {
     }
     /// Its engine, runtime state, caches, scope and `this`, apart: what
     /// running more statements where it is takes.
-    #[cfg(all(feature = "debugging", feature = "sync"))]
+    #[cfg(feature = "debugging")]
     pub(crate) fn parts(
         &mut self,
     ) -> (

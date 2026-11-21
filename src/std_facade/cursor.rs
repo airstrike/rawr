@@ -60,7 +60,6 @@ pub(crate) fn register_debug() {
     crate::host::debug::register::<SeekFrom>();
 }
 
-#[cfg(feature = "sync")]
 impl<T> crate::crossing::StdOf<T> for Cursor<T> {
     fn take<E>(
         value: Dynamic,

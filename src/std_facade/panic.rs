@@ -10,14 +10,10 @@
 //! locations only where it compiles a call, so rawr makes one for each
 //! site of the program's it stands for (`at`).
 
-#[cfg(feature = "sync")]
 use std::cell::Cell;
-#[cfg(feature = "sync")]
 use std::collections::{HashMap, HashSet};
 use std::panic::Location;
-#[cfg(feature = "sync")]
 use std::ptr::NonNull;
-#[cfg(feature = "sync")]
 use std::sync::{Mutex, PoisonError};
 
 use super::held::{self, Held};
@@ -69,7 +65,6 @@ impl Site {
     }
 }
 
-#[cfg(feature = "sync")]
 thread_local! {
     /// The location of the program's call running on this thread, which a
     /// location given from the adapter's call stands for.
@@ -78,7 +73,6 @@ thread_local! {
 
 /// Run `call`, a call the program makes at `site`, which a location the
 /// call gives from the adapter's own call stands for.
-#[cfg(feature = "sync")]
 pub(crate) fn calling<R>(site: Option<&Site>, call: impl FnOnce() -> R) -> R {
     let Some(caller) = site.and_then(|site| at(&site.file, site.line, site.column)) else {
         return call();
@@ -94,17 +88,9 @@ pub(crate) fn calling<R>(site: Option<&Site>, call: impl FnOnce() -> R) -> R {
     call()
 }
 
-/// Run `call`: only native code a runner builds, with rawr's `sync`,
-/// gives a location.
-#[cfg(not(feature = "sync"))]
-pub(crate) fn calling<R>(_site: Option<&Site>, call: impl FnOnce() -> R) -> R {
-    call()
-}
-
 /// `location`, given from native code at `here`: the program's caller when
 /// it names `here`'s file, the adapter's, and isn't one rawr made for the
 /// program's own code.
-#[cfg(feature = "sync")]
 fn stood_for(location: Location<'static>, here: &Location<'_>) -> Location<'static> {
     if location.file() != here.file() || made(location.file()) {
         return location;
@@ -114,15 +100,12 @@ fn stood_for(location: Location<'static>, here: &Location<'_>) -> Location<'stat
 
 /// The file names of the locations rawr made, each followed by the NUL
 /// byte `Location::file_as_c_str` reads, by their text.
-#[cfg(feature = "sync")]
 static FILES: Mutex<Option<HashMap<Box<str>, &'static str>>> = Mutex::new(None);
 
 /// The locations a crate borrows for good, one per location.
-#[cfg(feature = "sync")]
 static PLACED: Mutex<Option<HashSet<&'static Location<'static>>>> = Mutex::new(None);
 
 /// Whether `file` is the name of a location rawr made.
-#[cfg(feature = "sync")]
 fn made(file: &str) -> bool {
     FILES
         .lock()
@@ -134,7 +117,6 @@ fn made(file: &str) -> bool {
 
 /// The file name `file`, kept for good with its NUL byte; `None` for one
 /// that holds a NUL, which a location's name never does.
-#[cfg(feature = "sync")]
 fn kept(file: &str) -> Option<&'static str> {
     if file.contains('\0') {
         return None;
@@ -152,7 +134,6 @@ fn kept(file: &str) -> Option<&'static str> {
 
 /// A `&'static` borrow of `location`, as a crate's `&'static Location`
 /// takes it: the one kept for every equal location.
-#[cfg(feature = "sync")]
 fn placed(location: Location<'static>) -> &'static Location<'static> {
     let mut placed = PLACED.lock().unwrap_or_else(PoisonError::into_inner);
     let placed = placed.get_or_insert_with(HashSet::new);
@@ -165,7 +146,6 @@ fn placed(location: Location<'static>) -> &'static Location<'static> {
 }
 
 /// std's location's parts, in a layout of rawr's own.
-#[cfg(feature = "sync")]
 #[repr(C)]
 struct Parts {
     file: NonNull<str>,
@@ -177,7 +157,6 @@ struct Parts {
 /// for one, so it is std's own value with these parts, laid out as a
 /// location std made here lays out its own; `None` when that layout is not
 /// [`Parts`]'.
-#[cfg(feature = "sync")]
 fn at(file: &str, line: u32, column: u32) -> Option<Location<'static>> {
     let probe = Location::caller();
     // SAFETY: `Parts` is as large as a location (`transmute` below checks
@@ -206,7 +185,6 @@ fn at(file: &str, line: u32, column: u32) -> Option<Location<'static>> {
 /// A location the program's code gives native code is its own value, and
 /// one native code gives from the adapter's call is the program's call it
 /// stands for.
-#[cfg(feature = "sync")]
 impl crate::crossing::Std for Location<'static> {
     type Lent = &'static Location<'static>;
 

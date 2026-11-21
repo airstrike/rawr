@@ -7,10 +7,7 @@ use crate::Shared;
 use std::fmt;
 use std::sync::{Mutex, PoisonError};
 
-#[cfg(feature = "sync")]
 type Finish = Box<dyn FnOnce(Witness) -> Dynamic + Send + 'static>;
-#[cfg(not(feature = "sync"))]
-type Finish = Box<dyn FnOnce(Witness) -> Dynamic + 'static>;
 
 /// A host value that becomes its final form once the bridge gives it the
 /// exact output witness of the call that returned it.
@@ -22,16 +19,8 @@ pub struct Unwitnessed(Shared<Mutex<Option<Finish>>>);
 
 impl Unwitnessed {
     /// Wrap the step that builds the final value from its witness.
-    #[cfg(feature = "sync")]
     #[must_use]
     pub fn new(finish: impl FnOnce(Witness) -> Dynamic + Send + 'static) -> Self {
-        Self(Shared::new(Mutex::new(Some(Box::new(finish)))))
-    }
-
-    /// Wrap the step that builds the final value from its witness.
-    #[cfg(not(feature = "sync"))]
-    #[must_use]
-    pub fn new(finish: impl FnOnce(Witness) -> Dynamic + 'static) -> Self {
         Self(Shared::new(Mutex::new(Some(Box::new(finish)))))
     }
 
@@ -53,10 +42,7 @@ impl fmt::Debug for Unwitnessed {
     }
 }
 
-#[cfg(feature = "sync")]
 type Resolve = Box<dyn FnOnce() -> Result<Dynamic, String> + Send + 'static>;
-#[cfg(not(feature = "sync"))]
-type Resolve = Box<dyn FnOnce() -> Result<Dynamic, String> + 'static>;
 
 /// A Rust value a native stream yielded, which becomes a Rawr value only on
 /// the thread that owns the script runtime and its imported-value arena.
@@ -65,16 +51,8 @@ pub struct Deferred(Shared<Mutex<Option<Resolve>>>);
 
 impl Deferred {
     /// Wrap the step that builds the Rawr value.
-    #[cfg(feature = "sync")]
     #[must_use]
     pub fn new(resolve: impl FnOnce() -> Result<Dynamic, String> + Send + 'static) -> Self {
-        Self(Shared::new(Mutex::new(Some(Box::new(resolve)))))
-    }
-
-    /// Wrap the step that builds the Rawr value.
-    #[cfg(not(feature = "sync"))]
-    #[must_use]
-    pub fn new(resolve: impl FnOnce() -> Result<Dynamic, String> + 'static) -> Self {
         Self(Shared::new(Mutex::new(Some(Box::new(resolve)))))
     }
 

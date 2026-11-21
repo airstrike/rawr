@@ -63,13 +63,13 @@ struct Definition {
 
 /// One field of a struct's schema, or one variant of an enum's: its name
 /// and the parts of its type, or of its payload's types (#2026).
-#[cfg(feature = "sync")]
+#[cfg(feature = "rust-import")]
 pub(crate) struct Member<'schema> {
     name: &'schema ImmutableString,
     parts: &'schema [Part],
 }
 
-#[cfg(feature = "sync")]
+#[cfg(feature = "rust-import")]
 impl Member<'_> {
     pub(crate) fn name(&self) -> &str {
         self.name
@@ -129,7 +129,7 @@ impl Fingerprint {
 
     /// A struct's fields or an enum's variants, in declaration order, each
     /// by its name with its type or payload (#2026).
-    #[cfg(feature = "sync")]
+    #[cfg(feature = "rust-import")]
     pub(crate) fn members(&self) -> Box<[Member<'_>]> {
         let (_, rest) = self.representation();
         let mut members = Vec::new();

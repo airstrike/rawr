@@ -339,7 +339,6 @@ impl Type {
     }
 
     /// Rust's `JoinHandle` of `element`, held as `runtime`.
-    #[cfg(feature = "sync")]
     pub(crate) fn joined(runtime: TypeId, element: Self) -> Self {
         Self::Joined {
             runtime: Representation::exact(runtime),

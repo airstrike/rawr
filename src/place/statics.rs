@@ -171,45 +171,23 @@ pub fn given<T: Any + crate::func::SendSync>(witness: Witness, value: &'static T
 #[must_use]
 pub fn slot(key: &str) -> Slot {
     let reserve = || Slot(Shared::new(Mutex::new(State::Reserved { memory: None })));
-    #[cfg(feature = "sync")]
-    {
-        static SLOTS: std::sync::OnceLock<Mutex<HashMap<Box<str>, Slot>>> =
-            std::sync::OnceLock::new();
-        SLOTS
-            .get_or_init(Mutex::default)
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .entry(key.into())
-            .or_insert_with(reserve)
-            .clone()
-    }
-    #[cfg(not(feature = "sync"))]
-    {
-        thread_local! {
-            static SLOTS: std::cell::RefCell<HashMap<Box<str>, Slot>> =
-                std::cell::RefCell::default();
-        }
-        SLOTS.with_borrow_mut(|slots| slots.entry(key.into()).or_insert_with(reserve).clone())
-    }
+    static SLOTS: std::sync::OnceLock<Mutex<HashMap<Box<str>, Slot>>> = std::sync::OnceLock::new();
+    SLOTS
+        .get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .entry(key.into())
+        .or_insert_with(reserve)
+        .clone()
 }
 
 /// The statics being built that refer to each other, for `change`.
 fn building<R>(change: impl FnOnce(&mut Building) -> R) -> R {
-    #[cfg(feature = "sync")]
-    {
-        static BUILDING: Mutex<Building> = Mutex::new(Building {
-            open: 0,
-            cycle: Cycle::new(),
-        });
-        change(&mut BUILDING.lock().unwrap_or_else(PoisonError::into_inner))
-    }
-    #[cfg(not(feature = "sync"))]
-    {
-        thread_local! {
-            static BUILDING: std::cell::RefCell<Building> = std::cell::RefCell::default();
-        }
-        BUILDING.with_borrow_mut(change)
-    }
+    static BUILDING: Mutex<Building> = Mutex::new(Building {
+        open: 0,
+        cycle: Cycle::new(),
+    });
+    change(&mut BUILDING.lock().unwrap_or_else(PoisonError::into_inner))
 }
 
 impl Slot {

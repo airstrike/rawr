@@ -7,23 +7,9 @@ use crate::{Dynamic, Engine, EvalAltResult, ImmutableString, Position, RawrResul
 use std::{fmt, mem};
 
 /// Callback function to initialize the debugger.
-#[cfg(not(feature = "sync"))]
-pub type OnDebuggingInit = dyn Fn(&Engine, Debugger) -> Debugger;
-/// Callback function to initialize the debugger.
-#[cfg(feature = "sync")]
 pub type OnDebuggingInit = dyn Fn(&Engine, Debugger) -> Debugger + Send + Sync;
 
 /// Callback function for debugging.
-#[cfg(not(feature = "sync"))]
-pub type OnDebuggerCallback = dyn Fn(
-    EvalContext,
-    DebuggerEvent,
-    ASTNode,
-    Option<&str>,
-    Position,
-) -> RawrResultOf<DebuggerCommand>;
-/// Callback function for debugging.
-#[cfg(feature = "sync")]
 pub type OnDebuggerCallback = dyn Fn(EvalContext, DebuggerEvent, ASTNode, Option<&str>, Position) -> RawrResultOf<DebuggerCommand>
     + Send
     + Sync;

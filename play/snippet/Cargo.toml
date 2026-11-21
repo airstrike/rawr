@@ -10,4 +10,4 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 # The facts of a snippet's parse, which say whether it is iced's.
-rawr = { path = "../..", features = ["sync"] }
+rawr = { path = "../.." }

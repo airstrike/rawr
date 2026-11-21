@@ -8,10 +8,7 @@
 use crate::types::dynamic::Union;
 use crate::Dynamic;
 
-#[cfg(feature = "sync")]
 type Weak = std::sync::Weak<crate::Locked<Dynamic>>;
-#[cfg(not(feature = "sync"))]
-type Weak = std::rc::Weak<crate::Locked<Dynamic>>;
 
 /// The cells noted, and how many were alive when they were last swept.
 #[derive(Default)]
@@ -20,26 +17,17 @@ struct Cells {
     swept: usize,
 }
 
-#[cfg(feature = "sync")]
 static CELLS: std::sync::Mutex<Cells> = std::sync::Mutex::new(Cells {
     cells: Vec::new(),
     swept: 0,
 });
 
-#[cfg(not(feature = "sync"))]
-thread_local! {
-    static CELLS: std::cell::RefCell<Cells> = std::cell::RefCell::default();
-}
-
 fn with_cells<R>(work: impl FnOnce(&mut Cells) -> R) -> R {
-    #[cfg(feature = "sync")]
-    return work(
+    work(
         &mut CELLS
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner),
-    );
-    #[cfg(not(feature = "sync"))]
-    return CELLS.with_borrow_mut(work);
+    )
 }
 
 /// Note the cell `value` is, when it is one. The cells that went are swept

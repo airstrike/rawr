@@ -60,7 +60,6 @@ pub fn locate_panics_with(
 /// The report of `error`, a run-time failure of the running program, at
 /// its place in the program's files when the program was located, else at
 /// none.
-#[cfg(any(feature = "sync", feature = "rust-import"))]
 pub(crate) fn located(error: &crate::EvalAltResult) -> Option<Report> {
     let locator = LOCATOR
         .read()

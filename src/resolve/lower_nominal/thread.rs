@@ -170,7 +170,6 @@ pub(crate) struct Sender(std::sync::mpsc::Sender<Dynamic>);
 pub(crate) struct SyncSender(std::sync::mpsc::SyncSender<Dynamic>);
 
 /// A `thread::scope`'s threads, which it joins before it returns.
-#[cfg(feature = "sync")]
 #[derive(Clone)]
 pub(crate) struct Scope(crate::Shared<std::sync::Mutex<Vec<crate::eval::threads::Handle>>>);
 
@@ -282,7 +281,6 @@ pub(super) fn invoke(context: Option<&NativeCallContext<'_>>, args: &mut FnCallA
     }
 }
 
-#[cfg(feature = "sync")]
 fn spawn(context: Option<&NativeCallContext<'_>>, closure: Dynamic) -> RawrResult {
     let context = context.ok_or_else(|| invariant("a thread is spawned outside a call"))?;
     let closure = closure
@@ -295,14 +293,6 @@ fn spawn(context: Option<&NativeCallContext<'_>>, closure: Dynamic) -> RawrResul
     Ok(Dynamic::from(handle))
 }
 
-/// Without `sync`, rawr's values stay on one thread.
-#[cfg(not(feature = "sync"))]
-fn spawn(_: Option<&NativeCallContext<'_>>, _: Dynamic) -> RawrResult {
-    Err(invariant(
-        "`std::thread::spawn` needs rawr built with its `sync` feature",
-    ))
-}
-
 /// A channel's two halves, as `channel` and `sync_channel` give them.
 fn halves(sender: Dynamic, receiver: std::sync::mpsc::Receiver<Dynamic>) -> Dynamic {
     let receiver = Receiver(crate::Shared::new(std::sync::Mutex::new(receiver)));
@@ -312,7 +302,6 @@ fn halves(sender: Dynamic, receiver: std::sync::mpsc::Receiver<Dynamic>) -> Dyna
 /// `thread::scope(f)`: `f` called with a new scope, then each thread it
 /// spawned joined, as std's `scope` does before it returns. A scoped
 /// thread that panicked and that `f` didn't join is std's panic.
-#[cfg(feature = "sync")]
 fn scope(context: Option<&NativeCallContext<'_>>, closure: Dynamic) -> RawrResult {
     let context = context.ok_or_else(|| invariant("a scope is made outside a call"))?;
     let closure = closure
@@ -347,7 +336,6 @@ fn scope(context: Option<&NativeCallContext<'_>>, closure: Dynamic) -> RawrResul
 
 /// `builder.spawn(f)`: `f` on a thread std's `builder` starts, or the
 /// error of one the system doesn't start.
-#[cfg(feature = "sync")]
 fn builder_spawn(
     context: Option<&NativeCallContext<'_>>,
     builder: &Dynamic,
@@ -366,22 +354,7 @@ fn builder_spawn(
     })
 }
 
-#[cfg(not(feature = "sync"))]
-fn builder_spawn(_: Option<&NativeCallContext<'_>>, _: &Dynamic, _: Dynamic) -> RawrResult {
-    Err(invariant(
-        "`std::thread::Builder::spawn` needs rawr built with its `sync` feature",
-    ))
-}
-
-#[cfg(not(feature = "sync"))]
-fn scope(_: Option<&NativeCallContext<'_>>, _: Dynamic) -> RawrResult {
-    Err(invariant(
-        "`std::thread::scope` needs rawr built with its `sync` feature",
-    ))
-}
-
 /// `s.spawn(f)`: `f` on a thread of its own, which the scope `s` joins.
-#[cfg(feature = "sync")]
 fn scoped_spawn(
     context: Option<&NativeCallContext<'_>>,
     scope: &Dynamic,
@@ -403,14 +376,6 @@ fn scoped_spawn(
     Ok(handle)
 }
 
-#[cfg(not(feature = "sync"))]
-fn scoped_spawn(_: Option<&NativeCallContext<'_>>, _: &Dynamic, _: Dynamic) -> RawrResult {
-    Err(invariant(
-        "`std::thread::scope` needs rawr built with its `sync` feature",
-    ))
-}
-
-#[cfg(feature = "sync")]
 fn join(handle: &Dynamic) -> RawrResult {
     let handle = handle
         .read_lock::<crate::eval::threads::Handle>()
@@ -427,22 +392,11 @@ fn join(handle: &Dynamic) -> RawrResult {
     })
 }
 
-#[cfg(not(feature = "sync"))]
-fn join(_: &Dynamic) -> RawrResult {
-    Err(invariant("a `JoinHandle` is not one at runtime"))
-}
-
-#[cfg(feature = "sync")]
 fn is_finished(handle: &Dynamic) -> RawrResult {
     handle
         .read_lock::<crate::eval::threads::Handle>()
         .map(|handle| Dynamic::from(handle.is_finished()))
         .ok_or_else(|| invariant("a `JoinHandle` is not one at runtime"))
-}
-
-#[cfg(not(feature = "sync"))]
-fn is_finished(_: &Dynamic) -> RawrResult {
-    Err(invariant("a `JoinHandle` is not one at runtime"))
 }
 
 /// std's `Debug` of a thread or channel value.

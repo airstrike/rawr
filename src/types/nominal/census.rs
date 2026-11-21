@@ -27,25 +27,15 @@ type Entries = HashMap<type_def::Identity, Entry>;
 
 /// Each script type's entry, by its identity, for the process's life: a
 /// type keeps its token whatever generation makes its values.
-#[cfg(feature = "sync")]
 static ENTRIES: std::sync::LazyLock<std::sync::Mutex<Entries>> =
     std::sync::LazyLock::new(std::sync::Mutex::default);
 
-// A build without `sync` runs its program on one thread.
-#[cfg(not(feature = "sync"))]
-thread_local! {
-    static ENTRIES: std::cell::RefCell<Entries> = std::cell::RefCell::default();
-}
-
 fn with_entries<R>(work: impl FnOnce(&mut Entries) -> R) -> R {
-    #[cfg(feature = "sync")]
-    return work(
+    work(
         &mut ENTRIES
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner),
-    );
-    #[cfg(not(feature = "sync"))]
-    return ENTRIES.with_borrow_mut(work);
+    )
 }
 
 impl Entry {

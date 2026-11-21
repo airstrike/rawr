@@ -26,17 +26,17 @@ impl Catalog {
         }
     }
 
-    #[cfg(all(feature = "rust-import", feature = "sync"))]
+    #[cfg(feature = "rust-import")]
     pub(crate) fn items(&self) -> impl ExactSizeIterator<Item = &crate::item::Value> {
         self.executable.items()
     }
 
-    #[cfg(all(feature = "rust-import", feature = "sync"))]
+    #[cfg(feature = "rust-import")]
     pub(crate) fn machine_body(&self, key: &crate::item::Key) -> Option<u64> {
         self.executable.machine_body(key)
     }
 
-    #[cfg(all(feature = "rust-import", feature = "sync"))]
+    #[cfg(feature = "rust-import")]
     pub(crate) fn in_async_fn(&self, step: &crate::item::Key) -> bool {
         self.executable.in_async_fn(step)
     }

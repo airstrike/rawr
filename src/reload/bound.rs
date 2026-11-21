@@ -92,7 +92,7 @@ impl BoundCatalog {
     }
 
     /// The program and its runtime, for calls from other threads (D490).
-    #[cfg(all(feature = "rust-import", feature = "sync"))]
+    #[cfg(feature = "rust-import")]
     pub(crate) fn shared(&self) -> (program::Authority, Shared<host::runtime::Registry>) {
         (self.authority.clone(), self.runtime.clone())
     }

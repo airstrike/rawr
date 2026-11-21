@@ -421,9 +421,6 @@ impl Dependency {
     }
 
     pub(crate) fn rawr(path: &Path) -> Result<Self> {
-        // `sync` makes script values `Send`, so a script future is a `Send`
-        // std future any runtime polls (D513.3). It changes no unit the
-        // project builds: only rawr's own proc macro sees it.
         // `debugging` lets `rawr mcp` read the running program's values
         // (D675). It adds no dependency, so the project's units are the
         // same, and the runtime compiles once per rawr version either way
@@ -435,7 +432,7 @@ impl Dependency {
         let debugger = crate::universe::debugged().then(|| Box::<str>::from("browser-debugger"));
         let features: Box<[Box<str>]> = debugger
             .into_iter()
-            .chain(["debugging", "rust-import", "std", "sync"].map(Box::<str>::from))
+            .chain(["debugging", "rust-import", "std"].map(Box::<str>::from))
             .collect();
         Ok(Self {
             alias: validated_alias(INTERNAL_ALIAS)?,

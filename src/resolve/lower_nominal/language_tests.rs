@@ -11630,7 +11630,7 @@ fn language_float_exclusive_range_is_a_value() {
 /// function and a closure with the same captures do, and the closure stays
 /// in its own generation once a closure written before it renumbers it, or
 /// once its captures change.
-#[cfg(all(feature = "sync", feature = "rust-import"))]
+#[cfg(feature = "rust-import")]
 #[test]
 fn language_held_callables_rebind_to_a_new_generation_by_stable_identity() {
     let generation = |source: &str| {

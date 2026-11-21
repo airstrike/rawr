@@ -447,7 +447,6 @@ main();
 /// A `sync_channel`'s sender waits while the channel is full, a scope's
 /// threads borrow what outlives it and are joined before it returns, and a
 /// `thread::Builder` names the thread it spawns, as std's do (#950).
-#[cfg(feature = "sync")]
 #[test]
 fn a_sync_channel_a_scope_and_a_builder_run_as_std_s() {
     let source = r#"
@@ -611,7 +610,6 @@ main();
 /// A read through a lock's temporary guard, as a value, a method's
 /// receiver and a `match` subject, waits for the guard another thread
 /// holds, so it reads what that thread stored before letting go (#2357).
-#[cfg(feature = "sync")]
 #[test]
 fn a_read_through_a_temporary_guard_waits_for_the_held_lock() {
     let source = r#"

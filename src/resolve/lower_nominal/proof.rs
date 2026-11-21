@@ -769,7 +769,6 @@ impl<'a> Parser<'a> {
             // A thread's `JoinHandle`, the program's or a crate's (#1266,
             // #1274): rawr's thread handle, whose value becomes rawr's where
             // it is joined, attested as its `T` (#1275).
-            #[cfg(feature = "sync")]
             Ty::Thread(thread::Kind::JoinHandle, inner) => intrinsic::Type::joined(
                 TypeId::of::<crate::eval::threads::Handle>(),
                 self.proven_type(&inner, operation, span)?,

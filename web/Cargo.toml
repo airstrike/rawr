@@ -17,7 +17,7 @@ console_error_panic_hook = "0.1.7"
 # rawr's hash maps seed from getrandom, which takes the page's crypto in a browser.
 getrandom = { version = "0.3", features = ["wasm_js"] }
 js-sys = "0.3.105"
-rawr = { path = "..", features = ["sync"] }
+rawr = { path = ".." }
 # How a snippet becomes a program, shared with rawr-play.
 rawr-snippet = { path = "../play/snippet" }
 wasm-bindgen = "0.2.105"

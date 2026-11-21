@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[cfg(feature = "rust-import")]
 pub(crate) mod island;
-#[cfg(feature = "sync")]
+#[cfg(feature = "rust-import")]
 pub(crate) mod migration;
 
 type EnumConstruction = (
@@ -47,14 +47,14 @@ pub(crate) struct Model {
     /// path of the type the runner names it by (`associated_path`): a type
     /// Rust code holds as a script value, as a `type State =
     /// RefCell<Vec<Cache>>` of a canvas program, is a proxy whose `Default` is made here.
-    #[cfg_attr(not(all(feature = "rust-import", feature = "sync")), allow(dead_code))]
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
     associated: BTreeMap<String, type_ref::Type>,
     /// Each script type, in the order the program defines them, in a
     /// universe runner (`rawr_import::universe`), with the name the runner
     /// gives it: [`crossing_name`] of its index, so it depends on the shape
     /// of the program's native calls and never on its type names. Empty
     /// elsewhere.
-    #[cfg_attr(not(all(feature = "rust-import", feature = "sync")), allow(dead_code))]
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
     crossing: Box<[Crossed]>,
     /// Each marked type by the identity of its mirror in rawr's copy of a
     /// native root's crate (`resolve::Program::mirrored`): a type that
@@ -67,7 +67,7 @@ pub(crate) struct Model {
 
 /// A script type as a universe runner names it.
 #[derive(Clone)]
-#[cfg_attr(not(all(feature = "rust-import", feature = "sync")), allow(dead_code))]
+#[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
 struct Crossed {
     /// Its path below its crate (`State`, `app::State`).
     path: String,
@@ -102,7 +102,7 @@ pub(crate) fn associated_path(owner: &str, name: &str) -> String {
 struct Definition {
     /// The type's name and its members' names, which a derived `Debug`
     /// writes.
-    #[cfg_attr(not(all(feature = "rust-import", feature = "sync")), allow(dead_code))]
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
     names: Names,
     /// The type's generic type parameters, in order.
     generics: Box<[ImmutableString]>,
@@ -117,7 +117,7 @@ struct Definition {
 }
 
 #[derive(Clone)]
-#[cfg_attr(not(all(feature = "rust-import", feature = "sync")), allow(dead_code))]
+#[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
 struct Names {
     name: ImmutableString,
     /// A struct's fields, `None` for a tuple or unit struct.
@@ -380,7 +380,7 @@ impl Model {
     /// The types of the by-value parameters of marked functions that hold
     /// native values, by whether each function belongs to a type and its
     /// path, as [`Self::inputs`] keeps them.
-    #[cfg_attr(not(all(feature = "rust-import", feature = "sync")), allow(dead_code))]
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
     pub(crate) fn island_inputs(&self) -> &BTreeMap<(bool, String), Box<[Option<type_ref::Type>]>> {
         &self.inputs
     }
@@ -389,7 +389,7 @@ impl Model {
     /// (`State`, `app::State`): [`crossing_name`] of its index, or `path`
     /// itself when no script type is there.
     #[must_use]
-    #[cfg_attr(not(all(feature = "rust-import", feature = "sync")), allow(dead_code))]
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
     pub(crate) fn crossing_path(&self, path: &str) -> String {
         match self.crossing.iter().find(|known| known.path == path) {
             Some(known) => known.name.clone(),
@@ -399,7 +399,7 @@ impl Model {
 
     /// The type of each parameter of the function of a script's trait impl
     /// at `path` (D594), where it has one.
-    #[cfg_attr(not(all(feature = "rust-import", feature = "sync")), allow(dead_code))]
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
     pub(crate) fn member_types(
         &self,
         path: &str,
@@ -508,7 +508,7 @@ impl Model {
 
     /// `value`'s text as a derived `Debug` writes it, for a value of a
     /// script type; `None` for any other value.
-    #[cfg_attr(not(all(feature = "rust-import", feature = "sync")), allow(dead_code))]
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
     pub(crate) fn debug_text(&self, value: &Dynamic) -> Option<String> {
         let (identity, members, variant) = match &value.0 {
             Union::Struct(value, ..) => (value.identity(), value.fields(), None),
@@ -548,7 +548,7 @@ impl Model {
         Some(text)
     }
 
-    #[cfg_attr(not(all(feature = "rust-import", feature = "sync")), allow(dead_code))]
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
     fn member_debug(&self, value: &Dynamic) -> String {
         if let Some(text) = self.debug_text(value) {
             return text;
@@ -604,7 +604,7 @@ impl Model {
     /// The derived `Default` of the script type at `path` (`State`,
     /// `app::State`), by its modules and name. `None` when no type is
     /// there (D594).
-    #[cfg(all(feature = "sync", feature = "rust-import"))]
+    #[cfg(feature = "rust-import")]
     pub(crate) fn default_by_path(
         &self,
         path: &str,
@@ -620,7 +620,7 @@ impl Model {
     /// The unit variant `variant` of the script enum the runner names by
     /// `path`, as a runner's holder of a fieldless `Copy` enum makes the
     /// value it holds (#1940). `None` when the program has no such type.
-    #[cfg(all(feature = "sync", feature = "rust-import"))]
+    #[cfg(feature = "rust-import")]
     pub(crate) fn variant_by_path(
         &self,
         path: &str,
@@ -640,7 +640,7 @@ impl Model {
     /// The script type the runner names by `path` (D594): the crate's own
     /// where a module with its own `main` counts one there too, named by
     /// its index in a universe runner.
-    #[cfg(all(feature = "sync", feature = "rust-import"))]
+    #[cfg(feature = "rust-import")]
     fn script_by_path(&self, path: &str) -> Option<(&type_def::Identity, &Definition)> {
         let named = || self.crossing.iter().filter(|known| known.name == path);
         let path = named()

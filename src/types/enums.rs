@@ -7,12 +7,6 @@ use std::any::TypeId;
 
 /// A host callback that projects an opaque enum value into its variant index
 /// and positional payload.
-#[cfg(not(feature = "sync"))]
-type EnumExtractor = dyn Fn(&Dynamic) -> Option<(usize, Vec<Dynamic>)>;
-
-/// A host callback that projects an opaque enum value into its variant index
-/// and positional payload.
-#[cfg(feature = "sync")]
 type EnumExtractor = dyn Fn(&Dynamic) -> Option<(usize, Vec<Dynamic>)> + Send + Sync;
 
 /// Metadata for one registered Rust enum variant.

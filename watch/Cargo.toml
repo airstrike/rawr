@@ -14,8 +14,8 @@ manual = []
 
 [dependencies]
 notify = { package = "rawr-notify", path = "notify" }
-rawr = { path = "..", features = ["sync"] }
+rawr = { path = ".." }
 
 [dev-dependencies]
-rawr = { path = "..", features = ["rust-import", "sync"] }
+rawr = { path = "..", features = ["rust-import"] }
 rawr_import = { package = "rawr-import", path = "../importer" }

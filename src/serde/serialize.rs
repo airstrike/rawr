@@ -54,9 +54,6 @@ impl Serialize for Dynamic {
                 "{value} does not have a serialization capability"
             ))),
 
-            #[cfg(not(feature = "sync"))]
-            Union::Shared(ref cell, ..) => cell.borrow().serialize(ser),
-            #[cfg(feature = "sync")]
             Union::Shared(ref cell, ..) => cell.read().unwrap().serialize(ser),
         }
     }

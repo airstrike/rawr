@@ -8,8 +8,7 @@
 //! carries and dispatches. A value that comes back out is checked against
 //! the script type it stands for.
 //!
-//! Its traits are a closed set: `Send` and `Sync` (with the crate's `sync`
-//! feature), `'static`, `Unpin`, `Clone`, `Debug` and `Display`, the last
+//! Its traits are a closed set: `Send`, `Sync`, `'static`, `Unpin`, `Clone`, `Debug` and `Display`, the last
 //! two rendered by the program when native code formats the value, as a
 //! `&dyn Debug` or `&dyn Display` it was lent. Bounds that pick
 //! behaviour by type alone, such as `Default`, `Deserialize`, `Copy` or a
@@ -42,10 +41,7 @@ impl Value {
     /// first used, as a future's output polled on another thread is
     /// (`crossing::settled`).
     pub fn into_inner(self) -> Dynamic {
-        #[cfg(feature = "sync")]
-        return crate::crossing::settled(self.0);
-        #[cfg(not(feature = "sync"))]
-        self.0
+        crate::crossing::settled(self.0)
     }
 
     /// The script value, borrowed.
@@ -104,7 +100,6 @@ impl std::fmt::Display for Value {
     /// rendered only when native code formats it, as a `&dyn Display` it
     /// was lent.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        #[cfg(feature = "sync")]
         if let Some(text) = crate::future::display(&self.0) {
             return f.write_str(&text.map_err(|_| std::fmt::Error)?);
         }
@@ -120,11 +115,8 @@ mod tests {
     fn value_has_the_closed_trait_set() {
         fn traits<T: Clone + std::fmt::Debug + std::fmt::Display + Unpin + 'static>() {}
         traits::<Value>();
-        #[cfg(feature = "sync")]
-        {
-            fn shared<T: Send + Sync>() {}
-            shared::<Value>();
-        }
+        fn shared<T: Send + Sync>() {}
+        shared::<Value>();
         assert_eq!(
             format!("{:?}", Value::from(crate::Dynamic::from(3_i64))),
             "3"

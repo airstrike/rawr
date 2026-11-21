@@ -1356,18 +1356,11 @@ impl Ty {
             Self::Cow(_) => Some(TypeId::of::<cow::Value>()),
             Self::Cell(..) => Some(TypeId::of::<cell::Cell>()),
             Self::Thread(kind, _) => match kind {
-                #[cfg(feature = "sync")]
                 thread::Kind::JoinHandle => Some(TypeId::of::<crate::eval::threads::Handle>()),
-                #[cfg(not(feature = "sync"))]
-                thread::Kind::JoinHandle => None,
-                #[cfg(feature = "sync")]
                 thread::Kind::ScopedJoinHandle => {
                     Some(TypeId::of::<crate::eval::threads::Handle>())
                 }
-                #[cfg(feature = "sync")]
                 thread::Kind::Scope => Some(TypeId::of::<thread::Scope>()),
-                #[cfg(not(feature = "sync"))]
-                thread::Kind::ScopedJoinHandle | thread::Kind::Scope => None,
                 thread::Kind::Sender => Some(TypeId::of::<thread::Sender>()),
                 thread::Kind::SyncSender => Some(TypeId::of::<thread::SyncSender>()),
                 thread::Kind::Receiver => Some(TypeId::of::<thread::Receiver>()),
@@ -1437,9 +1430,7 @@ impl Ty {
             TypeId::of::<std::cmp::Reverse<Dynamic>>(),
             TypeId::of::<cow::Value>(),
             TypeId::of::<cell::Cell>(),
-            #[cfg(feature = "sync")]
             TypeId::of::<crate::eval::threads::Handle>(),
-            #[cfg(feature = "sync")]
             TypeId::of::<thread::Scope>(),
             TypeId::of::<thread::Sender>(),
             TypeId::of::<thread::SyncSender>(),

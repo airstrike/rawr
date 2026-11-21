@@ -100,7 +100,7 @@ impl Bootstrap {
     /// # Errors
     ///
     /// Returns the error the evaluation stopped at.
-    #[cfg(all(feature = "rust-import", feature = "sync"))]
+    #[cfg(feature = "rust-import")]
     pub(crate) fn evaluate_top_level(&self) -> Result<(), Box<crate::EvalAltResult>> {
         self.binding
             .authority()
