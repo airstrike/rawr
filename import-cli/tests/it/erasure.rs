@@ -382,8 +382,10 @@ fn main() {
     // a handle the protocol gave out stays alive (review 5), one it took
     // back is the program's alone (#1852), a lent value given back on a
     // thread without the arena, or while a native call holds it, returns
-    // to its slot (review 6, 7), and a lent value reached at another type
-    // is a rawr bug (#1528).
+    // to its slot (review 6, 7), a dropped handle frees its slot in its own
+    // arena alone, from any thread, and nothing once that arena is gone
+    // (#1826), and a lent value reached at another type is a rawr bug
+    // (#1528).
     let test = Command::new("cargo")
         .current_dir(&root)
         .args([

@@ -359,20 +359,34 @@ fn a_proxy_lends_its_state_to_script_functions_without_a_copy() {
     COPIES.with(|copies| copies.set(0));
     let mut state = crate::crossing::Proxy::new(made);
     let update = crate::crossing::Slot::new();
-    update.set(Dynamic::from(item("update"))).unwrap();
+    update
+        .set(Dynamic::from(item("update")), vec![None, None])
+        .unwrap();
     let view = crate::crossing::Slot::new();
-    view.set(Dynamic::from(item("view"))).unwrap();
+    view.set(Dynamic::from(item("view")), vec![None]).unwrap();
     let mut shown = 0;
     for _ in 0..1000 {
         let mut values = [state.lend_mut(), Dynamic::from_int(1)];
-        let _ = update.invoke(&mut values, &[0]);
+        let _ = update.filled().invoke(&mut values, &[0]);
         state.restore(std::mem::take(&mut values[0]));
     }
     let after_update = COPIES.with(Cell::get);
     for _ in 0..1000 {
-        shown = view.invoke(&mut [state.lend()], &[]).as_int().unwrap();
+        shown = view
+            .filled()
+            .invoke(&mut [state.lend()], &[])
+            .as_int()
+            .unwrap();
     }
     assert_eq!((shown, after_update, COPIES.with(Cell::get)), (1005, 0, 0));
+    // A call reads one pass's function and witnesses together: what it
+    // read stays that pair while a later pass fills the slot again.
+    let read = update.filled();
+    update.set(Dynamic::from(item("view")), vec![None]).unwrap();
+    assert_eq!(
+        (read.witnesses().len(), update.filled().witnesses().len()),
+        (2, 1)
+    );
 }
 
 /// Script structs holding 100 native values in each `Vec`, for
