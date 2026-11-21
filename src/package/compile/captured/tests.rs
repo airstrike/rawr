@@ -60,7 +60,12 @@ pub(crate) fn compiler() -> Engine {
     let facade = iced_facade();
     let mut engine = Engine::new();
     engine.register_host_facade(facade).unwrap();
+    engine.register_host_facade(native_facade()).unwrap();
+    engine
+}
 
+/// The `native` crate's facade: its imported `fn echo<T>(value: T) -> T`.
+pub(crate) fn native_facade() -> host::facade::Definition {
     let mut native =
         host::facade::Builder::new("native", host::facade::Abi::new(1).unwrap()).unwrap();
     let mut echo = host::signature::Builder::new();
@@ -76,10 +81,7 @@ pub(crate) fn compiler() -> Engine {
                 }),
         )
         .unwrap();
-    engine
-        .register_host_facade(native.finish().unwrap())
-        .unwrap();
-    engine
+    native.finish().unwrap()
 }
 
 pub(crate) fn source(label: &str) -> String {

@@ -547,48 +547,11 @@ mod tests {
         mut engine: crate::Engine,
         finish: impl FnOnce(crate::Engine) -> crate::Shared<crate::Engine>,
         program: &str,
-        (line, frame): (usize, usize),
+        at: (usize, usize),
         codes: &[&str],
     ) -> (Vec<Value>, String) {
         let snapshot = Snapshot::new(FILE.into(), vec![(FILE.into(), program.into())]).unwrap();
-        let printed = Arc::new(Mutex::new(String::new()));
-        let answers = Arc::new(Mutex::new(Vec::new()));
-        let shared: Arc<Mutex<Option<(Program, Stops)>>> = Arc::default();
-        let printing = Arc::clone(&printed);
-        engine.on_output(move |_, text| printing.lock().unwrap().push_str(text));
-        let answering = Arc::clone(&answers);
-        let at = Arc::clone(&shared);
-        let done = AtomicBool::new(false);
-        let codes: Vec<String> = codes.iter().map(|code| (*code).to_owned()).collect();
-        #[allow(deprecated)]
-        engine.register_debugger(
-            |_, mut debugger| {
-                debugger.status = crate::eval::DebuggerStatus::STEP;
-                debugger
-            },
-            move |mut context, event, node, _, position| {
-                // The code's own steps call back too, inside the pause: as
-                // the inspector's `answering` does, they go on at once.
-                if done.load(Ordering::Acquire) {
-                    return Ok(crate::debugger::DebuggerCommand::StepInto);
-                }
-                let paused = matches!(event, crate::debugger::DebuggerEvent::Step)
-                    && at.lock().unwrap().as_ref().is_some_and(|(_, stops)| {
-                        stops
-                            .get(position, &node)
-                            .is_some_and(|stop| stop.line == line)
-                    });
-                if paused && !done.swap(true, Ordering::AcqRel) {
-                    let at = at.lock().unwrap();
-                    let (program, _) = at.as_ref().unwrap();
-                    for code in &codes {
-                        let answer = answer(&mut context, program, frame, position, code);
-                        answering.lock().unwrap().push(answer);
-                    }
-                }
-                Ok(crate::debugger::DebuggerCommand::StepInto)
-            },
-        );
+        let probe = Probe::register(&mut engine, at, codes);
         let engine = finish(engine);
         let (ast, positions) = engine
             .compile_package_snapshot_with_positions(&snapshot, None)
@@ -610,7 +573,7 @@ mod tests {
             let (file, span) = located.locate_position(&located_entry, position)?;
             Some((file.identity().to_owned(), span.start().line()?))
         });
-        *shared.lock().unwrap() = Some((Program::new(snapshot, entry, positions), stops));
+        *probe.shared.lock().unwrap() = Some((Program::new(snapshot, entry, positions), stops));
         let mut scope = crate::Scope::new();
         let _ = engine
             .eval_ast_with_scope::<crate::Dynamic>(&mut scope, &ast)
@@ -628,9 +591,79 @@ mod tests {
         let _ = engine
             .call_fn::<crate::Dynamic>(&mut scope, &ast, main, ())
             .unwrap_or_else(|error| panic!("{error}"));
-        let answers = answers.lock().unwrap().clone();
-        let printed = printed.lock().unwrap().clone();
-        (answers, printed)
+        probe.finish()
+    }
+
+    /// A debugger on an engine that answers codes where its program first
+    /// pauses at a line, in a frame, and what the program prints.
+    struct Probe {
+        printed: Arc<Mutex<String>>,
+        answers: Arc<Mutex<Vec<Value>>>,
+        /// The program the codes compile into and its stops, once it is
+        /// compiled.
+        shared: Arc<Mutex<Option<(Program, Stops)>>>,
+    }
+
+    impl Probe {
+        /// Register on `engine` the debugger that evaluates each of
+        /// `codes` in frame `frame` where the program first pauses at
+        /// `line`.
+        fn register(
+            engine: &mut crate::Engine,
+            (line, frame): (usize, usize),
+            codes: &[&str],
+        ) -> Self {
+            let printed = Arc::new(Mutex::new(String::new()));
+            let answers = Arc::new(Mutex::new(Vec::new()));
+            let shared: Arc<Mutex<Option<(Program, Stops)>>> = Arc::default();
+            let printing = Arc::clone(&printed);
+            engine.on_output(move |_, text| printing.lock().unwrap().push_str(text));
+            let answering = Arc::clone(&answers);
+            let at = Arc::clone(&shared);
+            let done = AtomicBool::new(false);
+            let codes: Vec<String> = codes.iter().map(|code| (*code).to_owned()).collect();
+            #[allow(deprecated)]
+            engine.register_debugger(
+                |_, mut debugger| {
+                    debugger.status = crate::eval::DebuggerStatus::STEP;
+                    debugger
+                },
+                move |mut context, event, node, _, position| {
+                    // The code's own steps call back too, inside the pause:
+                    // as the inspector's `answering` does, they go on at once.
+                    if done.load(Ordering::Acquire) {
+                        return Ok(crate::debugger::DebuggerCommand::StepInto);
+                    }
+                    let paused = matches!(event, crate::debugger::DebuggerEvent::Step)
+                        && at.lock().unwrap().as_ref().is_some_and(|(_, stops)| {
+                            stops
+                                .get(position, &node)
+                                .is_some_and(|stop| stop.line == line)
+                        });
+                    if paused && !done.swap(true, Ordering::AcqRel) {
+                        let at = at.lock().unwrap();
+                        let (program, _) = at.as_ref().unwrap();
+                        for code in &codes {
+                            let answer = answer(&mut context, program, frame, position, code);
+                            answering.lock().unwrap().push(answer);
+                        }
+                    }
+                    Ok(crate::debugger::DebuggerCommand::StepInto)
+                },
+            );
+            Self {
+                printed,
+                answers,
+                shared,
+            }
+        }
+
+        /// What the codes answered, and what the program printed.
+        fn finish(self) -> (Vec<Value>, String) {
+            let answers = self.answers.lock().unwrap().clone();
+            let printed = self.printed.lock().unwrap().clone();
+            (answers, printed)
+        }
     }
 
     const PROGRAM: &str = "// rawr
@@ -938,6 +971,72 @@ fn main() {
             (6, 0),
             &["count + 1"],
         );
+        assert_eq!(answers, [json!({ "value": "4" })]);
+        assert_eq!(printed, "3\n");
+    }
+
+    /// Code evaluated in a generation bound to a runner's native runtime
+    /// calls a crate's item through the adapters that generation's calls
+    /// reach (#2264).
+    #[cfg(feature = "rust-import")]
+    #[test]
+    fn code_calls_a_crates_item_through_the_runners_bindings() {
+        use crate::package::compile::captured::tests::{compiler, native_facade};
+        use crate::package::import::runner::account;
+        use rawr_import::classify::representability::convert::{Builtin, Type};
+        use rawr_import::surface::identity::{Definition, Selector};
+        let program = "// rawr
+fn main() {
+    let count: i64 = native::echo(3);
+    println!(\"{count}\");
+}
+";
+        let mut engine = compiler();
+        let probe = Probe::register(&mut engine, (4, 0), &["native::echo(count) + 1"]);
+        let native = account::Native::transform(account::tests::carrier());
+        let engine = engine
+            .retain_imported_native(native)
+            .expect("a fresh compiler retains a native surface");
+        let snapshot = Snapshot::new(FILE.into(), vec![(FILE.into(), program.into())]).unwrap();
+        let (candidate, ast) = engine
+            .compile_package_snapshot_generation_with_top_level(&snapshot, None)
+            .unwrap_or_else(|error| panic!("{error}"));
+        let located = Arc::clone(
+            candidate
+                .located()
+                .expect("a run compiled under a debugger is located"),
+        );
+        let lines = Arc::clone(&located);
+        let stops = Stops::of(&ast, &move |position| lines.line(position));
+        let program = located.program().expect("a debugger's run keeps its files");
+        *probe.shared.lock().unwrap() = Some((program, stops));
+        // The runner's adapter of `echo::<i64>`, the one instance it was
+        // built with.
+        let mut runtime = crate::host::runtime::Builder::new(native_facade());
+        let echo = Selector::Function {
+            item: Definition::authenticated([41; 32]),
+        };
+        let instance = rawr_import::surface::instance::key_with_items(
+            &[Type::Builtin(Builtin::I64)],
+            &[],
+            &[],
+            &[],
+        );
+        runtime
+            .bind_imported_instance(echo.fingerprint(), instance, "native::echo", |_, args| {
+                Ok(args[0].take())
+            })
+            .unwrap();
+        let mut registry = crate::host::runtime::Registry::new();
+        registry.install(runtime.finish()).unwrap();
+        let bootstrap = candidate
+            .bind(&engine, registry)
+            .unwrap_or_else(|error| panic!("{error}"));
+        let _ = bootstrap
+            .invoke_main()
+            .expect("the program has a `fn main`")
+            .unwrap_or_else(|error| panic!("{error}"));
+        let (answers, printed) = probe.finish();
         assert_eq!(answers, [json!({ "value": "4" })]);
         assert_eq!(printed, "3\n");
     }
