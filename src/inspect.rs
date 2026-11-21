@@ -665,6 +665,17 @@ fn short_type_name(name: &str) -> String {
 /// Where a step of the program is: its file and line.
 pub type Locate = dyn Fn(Position) -> Option<(String, usize)> + Send + Sync;
 
+/// One generation as the inspector reads it, once it compiled: where its
+/// steps are, what code evaluated at a pause compiles into, and the files
+/// a hosted inspector's breakpoints read their lines from. A request reads
+/// all of them from the same generation.
+struct Placed {
+    locate: Box<Locate>,
+    #[cfg(feature = "sync")]
+    program: Option<Program>,
+    snapshot: Option<crate::package::snapshot::Snapshot>,
+}
+
 /// A compiled program's entry source and the compiler's positions, which
 /// place a step of the lowered program in its file and line, and a panic
 /// at its place.
@@ -952,12 +963,8 @@ struct Shared {
     entry: AtomicBool,
     /// One step of the program pauses at a time.
     one: Mutex<()>,
-    /// Where the running program's steps are, once it compiled.
-    locate: Mutex<Option<Arc<Locate>>>,
-    /// What compiling code into the running program takes, once it
-    /// compiled.
-    #[cfg(feature = "sync")]
-    program: Mutex<Option<Arc<Program>>>,
+    /// The generation that runs next, once it compiled.
+    placed: Mutex<Option<Arc<Placed>>>,
     /// Where the breakpoints are kept across restarts, when they are.
     saved: Option<std::path::PathBuf>,
     told: Option<Told>,
@@ -994,9 +1001,7 @@ impl Shared {
             stepping: AtomicBool::new(false),
             entry: AtomicBool::new(false),
             one: Mutex::new(()),
-            locate: Mutex::new(None),
-            #[cfg(feature = "sync")]
-            program: Mutex::new(None),
+            placed: Mutex::new(None),
             saved,
             told,
             wanted: Mutex::new(Wanted::Wait),
@@ -1072,14 +1077,17 @@ impl Shared {
         );
     }
 
-    /// Where `position` is in the program's files.
-    fn locate(&self, position: Position) -> Option<(String, usize)> {
-        let locator = self
-            .locate
+    /// The generation that runs next, once it compiled.
+    fn placed(&self) -> Option<Arc<Placed>> {
+        self.placed
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .clone();
-        locator.and_then(|locate| locate(position))
+            .clone()
+    }
+
+    /// Where `position` is in the program's files.
+    fn locate(&self, position: Position) -> Option<(String, usize)> {
+        self.placed().and_then(|placed| (placed.locate)(position))
     }
 }
 
@@ -1164,7 +1172,7 @@ impl Inspector {
                 saved: None,
                 told: Some(Told::Host(Box::new(tell))),
                 waits: Waits::Host(Box::new(host)),
-                files: Files::Compiled(Mutex::new(None)),
+                files: Files::Compiled,
             },
         )))
     }
@@ -1201,12 +1209,12 @@ impl Inspector {
     /// shares sources between threads.
     #[cfg(feature = "sync")]
     pub fn compiled_from(&self, located: &Arc<Located>, ast: &crate::AST) {
-        if let Some(program) = located.program() {
-            self.evaluate_in(program);
-        }
-        self.0.files.compiled_from(located.snapshot.as_ref());
-        let placed = Arc::clone(located);
-        self.locate_with(move |position| placed.line(position));
+        let lines = Arc::clone(located);
+        self.set_placed(Placed {
+            locate: Box::new(move |position| lines.line(position)),
+            program: located.program(),
+            snapshot: located.snapshot.clone(),
+        });
         self.compiled(ast);
     }
 
@@ -1274,22 +1282,36 @@ impl Inspector {
     }
 
     /// Place the program's steps with `locate` from now on: the positions
-    /// of the program that runs next.
+    /// of the program that runs next, in which no code is evaluated.
     pub fn locate_with(
         &self,
         locate: impl Fn(Position) -> Option<(String, usize)> + Send + Sync + 'static,
     ) {
-        *self.0.locate.lock().unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(locate));
+        self.set_placed(Placed {
+            locate: Box::new(locate),
+            #[cfg(feature = "sync")]
+            program: None,
+            snapshot: None,
+        });
     }
 
-    /// Evaluate code in the program that runs next, `program` (#490).
+    /// The program that runs next: code evaluated at a pause compiles into
+    /// `program`, when there is one (#490), and `locate` places its steps.
     #[cfg(feature = "sync")]
-    pub fn evaluate_in(&self, program: Program) {
-        *self
-            .0
-            .program
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(program));
+    pub fn place(
+        &self,
+        program: Option<Program>,
+        locate: impl Fn(Position) -> Option<(String, usize)> + Send + Sync + 'static,
+    ) {
+        self.set_placed(Placed {
+            locate: Box::new(locate),
+            program,
+            snapshot: None,
+        });
+    }
+
+    fn set_placed(&self, placed: Placed) {
+        *self.0.placed.lock().unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(placed));
     }
 
     /// The program that runs next compiled as `ast`, its steps placed by
@@ -1297,12 +1319,15 @@ impl Inspector {
     /// now, and those whose line is gone are removed.
     pub fn compiled(&self, ast: &crate::AST) {
         let shared = &self.0;
-        let stops = Arc::new(stops::Stops::of(ast, &|position| shared.locate(position)));
+        let placed = shared.placed();
+        let locate = |position| placed.as_ref().and_then(|placed| (placed.locate)(position));
+        let stops = Arc::new(stops::Stops::of(ast, &locate));
+        let read = |file: &str| shared.files.read(file, placed.as_deref());
         let mut state = shared.state();
         let points: Vec<stops::Point> = state
             .points
             .iter()
-            .filter_map(|point| stops::moved(point, &stops, &shared.files))
+            .filter_map(|point| stops::moved(point, &stops, &read))
             .collect();
         let changed = points.len() != state.points.len()
             || points
@@ -1561,12 +1586,9 @@ impl Shared {
         };
         let mut state = self.state();
         // Named by the revision this set makes.
-        let mut point = match stops::set(
-            state.revision + 1,
-            spec,
-            state.stops.as_deref(),
-            &self.files,
-        ) {
+        let placed = self.placed();
+        let read = |file: &str| self.files.read(file, placed.as_deref());
+        let mut point = match stops::set(state.revision + 1, spec, state.stops.as_deref(), &read) {
             Ok(point) => point,
             Err(error) => return json!({ "error": error }),
         };
@@ -2081,11 +2103,9 @@ impl Shared {
         position: Position,
     ) -> Value {
         #[cfg(feature = "sync")]
-        let program = self
-            .program
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone();
+        let placed = self.placed();
+        #[cfg(feature = "sync")]
+        let program = placed.as_ref().and_then(|placed| placed.program.as_ref());
         #[cfg(not(feature = "sync"))]
         let program: Option<()> = {
             let _ = (context, code, position, request.frame);
@@ -2095,7 +2115,7 @@ impl Shared {
             #[cfg(feature = "sync")]
             Some(program) => request.shape.add(evaluate::answer(
                 context,
-                &program,
+                program,
                 request.frame,
                 position,
                 code,

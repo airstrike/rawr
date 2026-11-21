@@ -60,7 +60,7 @@ impl Engine {
         &self,
         target: &crate::project::Target,
     ) -> Result<program::Executable, crate::package::Error> {
-        crate::package::compile::executable(self, target, None)
+        crate::package::compile::executable(self, target)
     }
 
     /// Compile one loaded package graph to run as a program: its [`AST`]
@@ -82,8 +82,7 @@ impl Engine {
         graph: crate::package::Graph,
     ) -> Result<(AST, Option<crate::ImmutableString>, program::Positions), crate::package::Error>
     {
-        let (executable, ..) =
-            crate::package::compile::executable_from_graph(self, graph, None, false)?;
+        let (executable, ..) = crate::package::compile::executable_from_graph(self, graph, false)?;
         let main = executable
             .items()
             .find(|item| {
@@ -110,8 +109,7 @@ impl Engine {
         graph: crate::package::Graph,
     ) -> Result<(AST, Box<[crate::package::Test]>, program::Positions), crate::package::Error> {
         let declared = crate::package::test::Declared::of(&graph);
-        let (executable, ..) =
-            crate::package::compile::executable_from_graph(self, graph, None, false)?;
+        let (executable, ..) = crate::package::compile::executable_from_graph(self, graph, false)?;
         let tests = crate::package::test::Declared::compiled_in(declared, &executable);
         let (ast, positions) = executable.into_ast_with_positions();
         Ok((ast, tests, positions))
@@ -132,7 +130,6 @@ impl Engine {
             unit,
             (source.identity(), source.text()),
             (Some(&Scope::new()), self.optimization_level),
-            None,
         )
         .map(program::Executable::into_hosted_ast)
     }
@@ -150,7 +147,6 @@ impl Engine {
             unit,
             (source.identity(), source.text()),
             (Some(&Scope::new()), self.optimization_level),
-            None,
         )
         .map(program::Executable::into_ast_with_positions)
     }
@@ -174,7 +170,6 @@ impl Engine {
         self.compile_executable_scripts_with_scope_raw(
             Some(scope),
             &[script],
-            None,
             None,
             self.optimization_level,
         )
@@ -355,24 +350,18 @@ impl Engine {
         scripts: impl AsRef<[S]>,
         optimization_level: crate::OptimizationLevel,
     ) -> ParseResult<AST> {
-        self.compile_executable_scripts_with_scope_raw(
-            scope,
-            scripts,
-            None,
-            None,
-            optimization_level,
-        )
-        .map(|executable| {
-            self.freeze_exports(executable.host_dependencies());
-            // A runtime error in this program is at the script's own text,
-            // in the walker and in anything compiled from the AST.
-            let positions = executable.positions();
-            let mut ast = executable.into_hosted_ast();
-            crate::resolve::lower_nominal::relocate(&mut ast, &mut |position| {
-                positions.located(position)
-            });
-            ast
-        })
+        self.compile_executable_scripts_with_scope_raw(scope, scripts, None, optimization_level)
+            .map(|executable| {
+                self.freeze_exports(executable.host_dependencies());
+                // A runtime error in this program is at the script's own text,
+                // in the walker and in anything compiled from the AST.
+                let positions = executable.positions();
+                let mut ast = executable.into_hosted_ast();
+                crate::resolve::lower_nominal::relocate(&mut ast, &mut |position| {
+                    positions.located(position)
+                });
+                ast
+            })
     }
 
     /// Compile one script into its hosted [`AST`] and the typed signatures
@@ -383,23 +372,17 @@ impl Engine {
         text: &str,
         identity: &str,
     ) -> ParseResult<(AST, program::signatures::Signatures)> {
-        self.compile_executable_scripts_with_scope_raw(
-            None,
-            [text],
-            None,
-            None,
-            self.optimization_level,
-        )
-        .map(|executable| {
-            self.freeze_exports(executable.host_dependencies());
-            let positions = executable.positions();
-            let (mut ast, signatures) = executable.into_hosted_parts();
-            crate::resolve::lower_nominal::relocate(&mut ast, &mut |position| {
-                positions.located(position)
-            });
-            (ast, signatures)
-        })
-        .map_err(|error| error.rendered(identity, text))
+        self.compile_executable_scripts_with_scope_raw(None, [text], None, self.optimization_level)
+            .map(|executable| {
+                self.freeze_exports(executable.host_dependencies());
+                let positions = executable.positions();
+                let (mut ast, signatures) = executable.into_hosted_parts();
+                crate::resolve::lower_nominal::relocate(&mut ast, &mut |position| {
+                    positions.located(position)
+                });
+                (ast, signatures)
+            })
+            .map_err(|error| error.rendered(identity, text))
     }
 
     fn compile_executable_scripts_with_scope_raw<S: AsRef<str>>(
@@ -407,7 +390,6 @@ impl Engine {
         scope: Option<&Scope>,
         scripts: impl AsRef<[S]>,
         evidence: Option<crate::diagnostic::Source>,
-        session: Option<&crate::timing::Session>,
         optimization_level: crate::OptimizationLevel,
     ) -> ParseResult<program::Executable> {
         let source = scripts
@@ -417,10 +399,7 @@ impl Engine {
                 source.push_str(script.as_ref());
                 source
             });
-        let unit =
-            crate::timing::observe_optional(session, crate::timing::Phase::ParseItems, || {
-                self.parse_unit(&source)
-            })?;
+        let unit = self.parse_unit(&source)?;
         let identity = evidence
             .as_ref()
             .map_or("<script>", crate::diagnostic::Source::identity);
@@ -429,7 +408,6 @@ impl Engine {
             unit,
             (identity, &source),
             (scope, optimization_level),
-            session,
         )
     }
 

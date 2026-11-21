@@ -3,7 +3,7 @@
 #[cfg(feature = "rust-import")]
 pub(crate) mod captured;
 
-use crate::{program, project, resolve, timing, Engine, Scope};
+use crate::{program, project, resolve, Engine, Scope};
 
 use super::{Error, Graph};
 
@@ -17,9 +17,8 @@ type ExecutableEvidence = (
 pub(crate) fn executable(
     engine: &Engine,
     target: &project::Target,
-    session: Option<&timing::Session>,
 ) -> Result<program::Executable, Error> {
-    executable_with_evidence(engine, target, session, false).map(|(executable, ..)| executable)
+    executable_with_evidence(engine, target, false).map(|(executable, ..)| executable)
 }
 
 /// One in-memory file, `text` named `identity` and already parsed as
@@ -35,7 +34,6 @@ pub(crate) fn one_file(
     unit: crate::parse::Unit,
     (identity, text): (&str, &str),
     (scope, optimization_level): (Option<&Scope>, crate::OptimizationLevel),
-    session: Option<&timing::Session>,
 ) -> crate::parser::ParseResult<program::Executable> {
     for item in unit.items() {
         if let crate::item::Parsed::Module(module) = item
@@ -57,7 +55,7 @@ pub(crate) fn one_file(
         .or_else(|_| snapshot("main.rs"))
         .expect("one absolute file is a valid snapshot");
     let compiled = Graph::load_parsed(engine, &snapshot, unit)
-        .and_then(|graph| lower_graph(engine, graph, session, false, (scope, optimization_level)))
+        .and_then(|graph| lower_graph(engine, graph, false, (scope, optimization_level)))
         .map_err(Error::into_file_error);
     compiled.map(|(executable, ..)| executable.into_one_file())
 }
@@ -173,39 +171,20 @@ fn snapshot_executable(
 fn executable_with_evidence(
     engine: &Engine,
     target: &project::Target,
-    session: Option<&timing::Session>,
     retain_source: bool,
 ) -> Result<ExecutableEvidence, Error> {
-    executable_from_graph(
-        engine,
-        load(engine, target, session)?,
-        session,
-        retain_source,
-    )
-}
-
-/// Load (parse) a target's graph, observed as [`timing::Phase::ParseItems`].
-pub(crate) fn load(
-    engine: &Engine,
-    target: &project::Target,
-    session: Option<&timing::Session>,
-) -> Result<Graph, Error> {
-    timing::observe_optional(session, timing::Phase::ParseItems, || {
-        Graph::load(engine, target)
-    })
+    executable_from_graph(engine, Graph::load(engine, target)?, retain_source)
 }
 
 /// [`executable_with_evidence`] of a graph already loaded.
 pub(crate) fn executable_from_graph(
     engine: &Engine,
     graph: Graph,
-    session: Option<&timing::Session>,
     retain_source: bool,
 ) -> Result<ExecutableEvidence, Error> {
     lower_graph(
         engine,
         graph,
-        session,
         retain_source,
         (Some(&Scope::new()), engine.optimization_level),
     )
@@ -216,24 +195,18 @@ pub(crate) fn executable_from_graph(
 fn lower_graph(
     engine: &Engine,
     graph: Graph,
-    session: Option<&timing::Session>,
     retain_source: bool,
     (scope, optimization_level): (Option<&Scope>, crate::OptimizationLevel),
 ) -> Result<ExecutableEvidence, Error> {
     let sources = graph.diagnostic_sources();
     let entry = graph.entry_source().id();
     let source = retain_source.then(|| crate::reload::source::Graph::from_package(&graph));
-    let program = timing::observe_optional(session, timing::Phase::Resolve, || {
-        resolve::package::resolve(graph, &engine.host_registry)
-            .map_err(|failure| Error::resolution(sources.clone(), failure))
-    })?;
-    let executable = timing::observe_optional(session, timing::Phase::Lower, || {
-        resolve::lower_package_with_engine(engine, program, scope, optimization_level).map_err(
-            |failure| {
-                let (evidence, error) = failure.into_parts();
-                Error::compilation(sources.clone(), evidence, error)
-            },
-        )
-    })?;
+    let program = resolve::package::resolve(graph, &engine.host_registry)
+        .map_err(|failure| Error::resolution(sources.clone(), failure))?;
+    let executable = resolve::lower_package_with_engine(engine, program, scope, optimization_level)
+        .map_err(|failure| {
+            let (evidence, error) = failure.into_parts();
+            Error::compilation(sources.clone(), evidence, error)
+        })?;
     Ok((executable, sources, entry, source))
 }

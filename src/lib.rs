@@ -228,8 +228,6 @@ mod stored;
 #[doc(hidden)]
 pub mod std_table;
 mod tests;
-/// Host-requested timing observations.
-pub mod timing;
 mod tokenizer;
 /// Generation-local nominal type definitions.
 pub mod type_def;

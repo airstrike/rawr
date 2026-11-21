@@ -3,10 +3,7 @@
 use super::{argument, failure, Access, Operation, Policy};
 use crate::host::runtime::Witness;
 use crate::{Dynamic, RawrResult};
-use std::any::{Any, TypeId};
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
-use std::sync::{Mutex, OnceLock};
 
 /// Native `Debug` evidence for one concrete type.
 pub struct Debugging<T> {
@@ -89,29 +86,6 @@ impl<T> Reading<T> {
             total,
         }
     }
-}
-
-type Evidence = &'static (dyn Any + Send + Sync);
-fn registry() -> &'static Mutex<BTreeMap<TypeId, Evidence>> {
-    static REGISTRY: OnceLock<Mutex<BTreeMap<TypeId, Evidence>>> = OnceLock::new();
-    REGISTRY.get_or_init(Mutex::default)
-}
-
-/// Cache a generated type's read capabilities once for this runner process.
-pub fn register<T: 'static>(reading: Reading<T>) {
-    registry()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .entry(TypeId::of::<T>())
-        .or_insert_with(|| Box::leak(Box::new(reading)));
-}
-
-pub(super) fn known<T: 'static>() -> Option<&'static Reading<T>> {
-    registry()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .get(&TypeId::of::<T>())
-        .and_then(|evidence| evidence.downcast_ref())
 }
 
 /// Run one read using the policy's cached native traits and borrowed operands.

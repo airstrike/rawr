@@ -226,9 +226,10 @@ pub trait Policy: crate::func::SendSync + 'static {
         sequence::known_comparing::<Self::Value>()
     }
 
-    /// Native formatting and ordering evidence cached by this runner.
+    /// Native formatting and ordering evidence: a concrete policy's own,
+    /// and none for one that keeps none.
     fn reading() -> Option<&'static reading::Reading<Self::Value>> {
-        reading::known::<Self::Value>()
+        None
     }
 
     /// Read an operand without consuming its owner or cloning native elements.

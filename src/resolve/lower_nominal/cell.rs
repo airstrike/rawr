@@ -10,14 +10,15 @@
 //!
 //! A `std::sync::Mutex<T>` is the same cell, whose `lock` is a mutable
 //! borrow that waits for the one held, on whichever thread holds it, to be
-//! released, as Rust's lock does.
+//! released, as Rust's lock does. A guard's release, or the drop of its
+//! last copy, wakes a waiting locker.
 
 use super::*;
 
 #[cfg(not(feature = "sync"))]
-type BorrowToken = std::rc::Weak<()>;
+type BorrowToken = std::rc::Weak<Held>;
 #[cfg(feature = "sync")]
-type BorrowToken = std::sync::Weak<()>;
+type BorrowToken = std::sync::Weak<Held>;
 
 /// A `RefCell`: its value and the borrows it holds.
 #[derive(Clone)]
@@ -42,9 +43,53 @@ struct Lockers {
 
 /// One borrow of a cell, held while any copy of it lives.
 #[derive(Clone)]
-pub(super) struct Guard {
+pub(super) struct Guard(crate::Shared<Held>);
+
+/// What the copies of one borrow share. The cell's list holds it weakly,
+/// so the borrow ends at its release or as its last copy drops, whichever
+/// comes first, and a `Mutex`'s waiting locker wakes then.
+struct Held {
     cell: crate::Shared<Inner>,
-    token: crate::Shared<()>,
+    released: std::sync::atomic::AtomicBool,
+}
+
+impl Guard {
+    /// A new borrow of `cell`, mutable when `mutable`.
+    fn of(cell: &crate::Shared<Inner>, mutable: bool) -> Self {
+        let held = crate::Shared::new(Held {
+            cell: cell.clone(),
+            released: std::sync::atomic::AtomicBool::new(false),
+        });
+        crate::func::waited_write(&cell.borrows).push((crate::Shared::downgrade(&held), mutable));
+        Self(held)
+    }
+
+    /// End the borrow before its copies drop: a borrow in an expression,
+    /// at the end of its statement.
+    fn release(&self) {
+        if self
+            .0
+            .released
+            .swap(true, std::sync::atomic::Ordering::AcqRel)
+        {
+            return;
+        }
+        let held = crate::Shared::as_ptr(&self.0);
+        crate::func::waited_write(&self.0.cell.borrows).retain(|(token, _)| token.as_ptr() != held);
+        if let Some(lockers) = &self.0.cell.lockers {
+            lockers.release();
+        }
+    }
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        if !*self.released.get_mut()
+            && let Some(lockers) = &self.cell.lockers
+        {
+            lockers.release();
+        }
+    }
 }
 
 // A cell's value and borrow list are held only for the read or store at
@@ -57,11 +102,6 @@ impl Inner {
 
     fn set(&self, value: Dynamic) -> Dynamic {
         std::mem::replace(&mut *crate::func::waited_write(&self.value), value)
-    }
-
-    /// Hold a borrow under `token`, mutable when `mutable`.
-    fn hold(&self, token: &crate::Shared<()>, mutable: bool) {
-        crate::func::waited_write(&self.borrows).push((crate::Shared::downgrade(token), mutable));
     }
 
     /// Whether a borrow is held, and whether a held one is mutable.
@@ -83,7 +123,7 @@ fn cell(value: &Dynamic) -> Option<crate::Shared<Inner>> {
     if let Some(cell) = value.read_lock::<Cell>() {
         return Some(cell.0.clone());
     }
-    value.read_lock::<Guard>().map(|guard| guard.cell.clone())
+    value.read_lock::<Guard>().map(|guard| guard.0.cell.clone())
 }
 
 /// The value of a cell or a borrow, for `==`.
@@ -131,9 +171,10 @@ pub(super) fn is_mutex(value: &Dynamic) -> bool {
 
 impl Lockers {
     /// Wait for `inner`'s held borrow to be released, then hold one: Rust's
-    /// `lock`. A guard dropped without its release is seen at the next
-    /// wake, which comes at least once a millisecond.
-    fn lock(&self, inner: &Inner) -> crate::Shared<()> {
+    /// `lock`. A borrow is released by its explicit release or by its last
+    /// guard's drop, and each wakes a waiting locker under the gate, so a
+    /// locker that saw the borrow held is waiting by the time it is woken.
+    fn lock(&self, inner: &crate::Shared<Inner>) -> Guard {
         counted!(CellLock);
         let mut gate = self
             .gate
@@ -143,13 +184,10 @@ impl Lockers {
             counted!(CellWait);
             gate = self
                 .released
-                .wait_timeout(gate, std::time::Duration::from_millis(1))
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .0;
+                .wait(gate)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
-        let token = crate::Shared::new(());
-        inner.hold(&token, true);
-        token
+        Guard::of(inner, true)
     }
 
     /// Wake a locker, once a lock is released.
@@ -180,9 +218,7 @@ pub(super) fn try_borrow_mut(value: &Dynamic) -> Option<Dynamic> {
     if inner.held().0 {
         return None;
     }
-    let token = crate::Shared::new(());
-    inner.hold(&token, true);
-    Some(Dynamic::from(Guard { cell: inner, token }))
+    Some(Dynamic::from(Guard::of(&inner, true)))
 }
 
 pub(super) fn invoke(op: PreludeOp, args: &mut FnCallArgs) -> RawrResult {
@@ -212,11 +248,7 @@ pub(super) fn invoke(op: PreludeOp, args: &mut FnCallArgs) -> RawrResult {
     let inner = cell(args[0]).ok_or_else(|| invariant("a `RefCell` is not one at runtime"))?;
     match op {
         PreludeOp::CellBorrow if let Some(lockers) = &inner.lockers => {
-            let token = lockers.lock(&inner);
-            Ok(Dynamic::from(Guard {
-                cell: inner.clone(),
-                token,
-            }))
+            Ok(Dynamic::from(lockers.lock(&inner)))
         }
         PreludeOp::CellBorrow => {
             let mutable = args[1].as_bool().unwrap_or(false);
@@ -227,9 +259,7 @@ pub(super) fn invoke(op: PreludeOp, args: &mut FnCallArgs) -> RawrResult {
             if held_mutably {
                 return panic("already mutably borrowed: BorrowError");
             }
-            let token = crate::Shared::new(());
-            inner.hold(&token, mutable);
-            Ok(Dynamic::from(Guard { cell: inner, token }))
+            Ok(Dynamic::from(Guard::of(&inner, mutable)))
         }
         PreludeOp::CellGet => Ok(inner.value()),
         PreludeOp::CellSet => {
@@ -238,12 +268,7 @@ pub(super) fn invoke(op: PreludeOp, args: &mut FnCallArgs) -> RawrResult {
         }
         PreludeOp::CellRelease => {
             if let Some(guard) = args[0].read_lock::<Guard>() {
-                let held = crate::Shared::as_ptr(&guard.token);
-                crate::func::waited_write(&inner.borrows)
-                    .retain(|(token, _)| token.as_ptr() != held);
-            }
-            if let Some(lockers) = &inner.lockers {
-                lockers.release();
+                guard.release();
             }
             Ok(Dynamic::UNIT)
         }
@@ -448,6 +473,15 @@ impl Parser<'_> {
             _ => member.clone(),
         };
         let mut locked = self.parse_cell_member(value, inner, cell_member, member_span)?;
+        // A read through the lock's temporary guard (`*m.lock().unwrap()`,
+        // a method's receiver, a `match` subject) holds the lock for the
+        // read, so it waits for another thread's guard.
+        if member.as_str() == "lock"
+            && let Some(borrow) = &self.last_cell_borrow
+        {
+            let borrow = borrow.borrow.clone();
+            locked.source = self.prelude_op(PreludeOp::CellGet, [borrow]);
+        }
         self.expect(Token::Period, "'.' after the call")?;
         let (unwrap, _) = self.expect_member_name()?;
         // `unwrap_or_else(f)`: `f` takes the `PoisonError` of what the lock
@@ -745,14 +779,67 @@ impl Parser<'_> {
         rendered
     }
 
+    /// The local bound to a borrow that `drop(..)`'s arguments name alone,
+    /// before they are parsed: `drop(guard)`.
+    pub(super) fn dropped_cell_guard(&self) -> Option<ImmutableString> {
+        let mut ahead = self.input.clone();
+        let mut next = || ahead.next().map_or(Token::EOF, |(token, _)| token);
+        let (Token::LeftParen, Token::Identifier(name), Token::RightParen) =
+            (next(), next(), next())
+        else {
+            return None;
+        };
+        let name: ImmutableString = name.as_str().into();
+        let declaration = self.bindings.get(name.as_str())?.declaration;
+        self.cell_guards
+            .get(&name)
+            .is_some_and(|(guard_declaration, ..)| *guard_declaration == declaration)
+            .then_some(name)
+    }
+
+    /// `drop(guard)` of the local `name` bound to a borrow, its argument
+    /// parsed at `at`: the borrow's guard is taken out of its hidden local
+    /// and released, and `name` is moved. The release ends the borrow
+    /// though a place's step still holds a copy of the guard to its block's
+    /// end. `None` when a closure or async body captures `name`, whose guard
+    /// is the enclosing body's.
+    pub(super) fn drop_cell_guard(
+        &mut self,
+        name: &ImmutableString,
+        at: Span,
+    ) -> Option<origin::Fragment> {
+        if self
+            .closures
+            .last()
+            .is_some_and(|scope| scope.captures.contains(name.as_str()))
+        {
+            return None;
+        }
+        let (_, guard, ..) = self.cell_guards.get(name)?;
+        let taken = origin::Fragment::call(
+            crate::engine::KEYWORD_MOVE,
+            [origin::Fragment::plain(guard.as_str())],
+        );
+        let binding = self.bindings.get_mut(name.as_str())?;
+        binding.available = false;
+        let declaration = binding.declaration;
+        self.moved_at.insert(declaration, at);
+        Some(self.prelude_op(PreludeOp::CellRelease, [taken]))
+    }
+
     /// A use of a local bound to a borrow: the cell's value, a place a
-    /// change stores back into the cell.
+    /// change stores back into the cell. `None` once `drop(..)` moved the
+    /// local, whose use is then rustc's E0382.
     pub(super) fn cell_guard_use(
         &mut self,
         name: &ImmutableString,
         at: Span,
     ) -> Option<ParsedExpr> {
-        let declaration = self.bindings.get(name.as_str())?.declaration;
+        let binding = self.bindings.get(name.as_str())?;
+        if !binding.available {
+            return None;
+        }
+        let declaration = binding.declaration;
         let (_, guard, mutable, inner, native) = self
             .cell_guards
             .get(name)

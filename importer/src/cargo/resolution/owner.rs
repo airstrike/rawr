@@ -63,26 +63,19 @@ pub(crate) struct Ready {
     node: node::Validated<Product>,
     replay: replay::Replay,
     evaluation: Arc<Evaluation>,
+    /// The shared tables its cold extraction left.
+    settled: Vec<crate::bindings::Settled>,
+    /// The registry and git packages of that extraction's resolution whose
+    /// closure reaches a path package (`shared::local_closures`).
+    local_closures: Box<[Box<str>]>,
 }
 
 impl Ready {
     /// The shared tables this evaluation's cold extraction left to publish.
     pub(crate) fn settlement(&mut self) -> crate::bindings::Settlement {
-        let entries = self
-            .evaluation
-            .settled
-            .lock()
-            .map(|mut settled| std::mem::take(&mut *settled))
-            .unwrap_or_default();
-        let local_closures = self
-            .evaluation
-            .local_closures
-            .lock()
-            .map(|local| local.clone())
-            .unwrap_or_default();
         crate::bindings::Settlement {
-            entries,
-            local_closures,
+            entries: std::mem::take(&mut self.settled),
+            local_closures: self.local_closures.clone(),
             bindings: Some(crate::bindings::directory(
                 self.evaluation.cached.context.cargo_home(),
             )),
@@ -116,6 +109,7 @@ impl Ready {
             node,
             replay,
             evaluation,
+            ..
         } = self;
         let commitment = evaluation
             .bundle_commitment(node.value(), evaluation.cached.context.graph_budget())
@@ -152,6 +146,7 @@ impl Ready {
             node,
             replay,
             evaluation,
+            ..
         } = self;
         let commitment = evaluation
             .bundle_commitment(node.value(), evaluation.cached.context.graph_budget())
@@ -431,22 +426,27 @@ struct Evaluation {
     semantic: cargo::Digest,
     accounts: node::account::Key<Accounts>,
     captured: Mutex<Captured>,
-    /// The shared tables a cold extraction of this evaluation left.
-    settled: Mutex<Vec<crate::bindings::Settled>>,
-    /// The registry and git packages of that extraction's resolution whose
-    /// closure reaches a path package (`shared::local_closures`).
-    local_closures: Mutex<Box<[Box<str>]>>,
-    /// What shared bindings gave in place of a cold extraction.
-    shared: Mutex<Option<Shared>>,
-    /// What a cold build's check recorded when it stopped before its
-    /// probe: other instances than the request kept, or uses that have the
-    /// crates written again.
-    recorded: Mutex<Option<Stopped>>,
     /// The request's authority as shared bindings check it, captured once
     /// for every replay of this evaluation.
     current: Option<input::bindings::Current>,
     #[cfg(test)]
     script: Option<ScriptFactory>,
+}
+
+/// What an evaluation's execution left beside its result.
+#[derive(Default)]
+struct Left {
+    /// The shared tables a cold extraction left.
+    settled: Vec<crate::bindings::Settled>,
+    /// The registry and git packages of that extraction's resolution whose
+    /// closure reaches a path package (`shared::local_closures`).
+    local_closures: Box<[Box<str>]>,
+    /// What shared bindings gave in place of a cold extraction.
+    shared: Option<Shared>,
+    /// What a cold build's check recorded when it stopped before its
+    /// probe: other instances than the request kept, or uses that have the
+    /// crates written again.
+    recorded: Option<Stopped>,
 }
 
 /// A sealed bundle's record as its build interpreted it: the bundle's
@@ -640,10 +640,6 @@ fn evaluate(
             current: None,
             built: None,
         }),
-        settled: Mutex::new(Vec::new()),
-        local_closures: Mutex::default(),
-        shared: Mutex::new(None),
-        recorded: Mutex::new(None),
         current,
     });
     // A shared resolution whose request, toolchain, files and entries are
@@ -663,28 +659,18 @@ fn evaluate(
         })));
     }
     let validator = Arc::clone(&state);
-    let executor = Arc::clone(&state);
+    let mut left = Left::default();
     let node = match node::Evaluator::new(&store, sink).discover_bundled_budgeted(
         &recipe,
         move |value, graph| validator.validate(value, graph),
-        move |attempt| executor.execute(attempt),
+        |attempt| state.execute(attempt, &mut left),
     ) {
         Ok(node) => node,
         Err(error) => {
-            if let Some(stopped) = state
-                .recorded
-                .lock()
-                .ok()
-                .and_then(|mut recorded| recorded.take())
-            {
+            if let Some(stopped) = left.recorded {
                 return Ok(Resolved::Recorded(Box::new(stopped)));
             }
-            let shared = state
-                .shared
-                .lock()
-                .ok()
-                .and_then(|mut shared| shared.take());
-            return match shared {
+            return match left.shared {
                 Some(parts) => Ok(remembered(state, parts, &attestation)),
                 None => Err(error),
             };
@@ -712,6 +698,8 @@ fn evaluate(
         node,
         replay,
         evaluation: state,
+        settled: left.settled,
+        local_closures: left.local_closures,
     })))
 }
 
@@ -1027,6 +1015,7 @@ impl Evaluation {
     fn execute(
         &self,
         attempt: store::bundle::Attempt,
+        left: &mut Left,
     ) -> Result<node::Bundled<Product>, node::Error> {
         let graph = self.store.graph_budget();
         self.accounts.with(
@@ -1044,10 +1033,8 @@ impl Evaluation {
                 // from the next run's (#400).
                 let attestation = self.cached.attestation.content().digest();
                 let mut tables = self.request.tables().clone();
-                if let Some(parts) = self.carried_parts(&attestation.as_bytes(), &mut tables)
-                    && let Ok(mut shared) = self.shared.lock()
-                {
-                    *shared = Some(parts);
+                if let Some(parts) = self.carried_parts(&attestation.as_bytes(), &mut tables) {
+                    left.shared = Some(parts);
                     return Err(node::Error::State(SHARED));
                 }
 
@@ -1066,7 +1053,7 @@ impl Evaluation {
                         .script
                         .map(|factory| factory(&self.request, &self.cached, &layout));
                     let run = || {
-                        self.execute_in(layout, cargo_account, accounts, graph, tables)
+                        self.execute_in(layout, cargo_account, accounts, graph, tables, left)
                             .map_err(|error| self.settle(error))
                     };
                     #[cfg(test)]
@@ -1098,6 +1085,7 @@ impl Evaluation {
         accounts: &mut Accounts,
         graph: &node::GraphBudget,
         mut tables: crate::extract::plan::replayed::Tables,
+        left: &mut Left,
     ) -> Result<node::Bundled<Product>, node::Error> {
         let preparing = std::time::Instant::now();
         let harness = self.request.prepare_harness_in(
@@ -1120,10 +1108,8 @@ impl Evaluation {
             manifest: final_form.manifest(),
             lock: final_form.lock(),
         };
-        if let Ok(parts) = self.shared_parts(&basis, &mut tables)
-            && let Ok(mut shared) = self.shared.lock()
-        {
-            *shared = Some(parts);
+        if let Ok(parts) = self.shared_parts(&basis, &mut tables) {
+            left.shared = Some(parts);
             return Err(node::Error::State(SHARED));
         }
         let carrying = carried::Carried::of(
@@ -1156,10 +1142,8 @@ impl Evaluation {
                 .as_ref()
                 .zip(uses.as_ref())
                 .is_some_and(|(bodies, uses)| bodies.rewritten(uses));
-            if (new_instances || rewritten)
-                && let Ok(mut recorded) = self.recorded.lock()
-            {
-                *recorded = Some(Stopped { instances, uses });
+            if new_instances || rewritten {
+                left.recorded = Some(Stopped { instances, uses });
                 return Err(node::Error::State(NEW_INSTANCES));
             }
         }
@@ -1170,13 +1154,9 @@ impl Evaluation {
             &self.limits,
             &self.limits,
         )?;
-        if let Ok(mut settled) = self.settled.lock() {
-            *settled = std::mem::take(&mut completed.settlement);
-        }
-        if let (Some(capture), Ok(mut local)) =
-            (completed.capture.as_ref(), self.local_closures.lock())
-        {
-            *local = capture.local_closures().into();
+        left.settled = std::mem::take(&mut completed.settlement);
+        if let Some(capture) = completed.capture.as_ref() {
+            left.local_closures = capture.local_closures().into();
         }
         let reprobe = completed
             .capture

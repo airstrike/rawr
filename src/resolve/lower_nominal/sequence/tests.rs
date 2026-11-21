@@ -37,12 +37,6 @@ fn register_strings() {
         None,
         Some(crate::place::sequence::comparing()),
     );
-    crate::place::reading::register::<Vec<String>>(crate::place::reading::Reading::from_traits(
-        Some(crate::place::reading::debugging()),
-        None,
-        Some(crate::place::reading::partial()),
-        Some(crate::place::reading::total()),
-    ));
 }
 
 #[test]

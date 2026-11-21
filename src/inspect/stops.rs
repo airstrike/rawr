@@ -12,7 +12,6 @@ use std::mem::Discriminant;
 
 use serde_json::{json, Value};
 
-use super::host::Files;
 use crate::ast::{ASTNode, Expr, Stmt};
 use crate::{Position, AST};
 
@@ -389,19 +388,17 @@ impl Point {
 }
 
 /// A breakpoint `id` set on `spec` in the program `stops` holds, its line's
-/// text read from `files`, or why it can't be. Without `stops`, the
+/// text given by `read`, or why it can't be. Without `stops`, the
 /// program hasn't compiled yet and the breakpoint waits for it.
 pub(super) fn set(
     id: u64,
     spec: Spec,
     stops: Option<&Stops>,
-    files: &Files,
+    read: &dyn Fn(&str) -> Result<String, String>,
 ) -> Result<Point, String> {
     let spec = match spec {
         Spec::Line { file, line, .. } => {
-            let text = files
-                .read(&file)
-                .map_err(|error| format!("cannot read {file}: {error}"))?;
+            let text = read(&file).map_err(|error| format!("cannot read {file}: {error}"))?;
             let count = text.lines().count();
             let Some(written) = line
                 .checked_sub(1)
@@ -442,12 +439,16 @@ pub(super) fn set(
 }
 
 /// `point` in a program compiled again: its line moved to where its text
-/// is now in `files`, and its steps there, under the same id. `None` when
-/// its line's text is gone.
-pub(super) fn moved(point: &Point, stops: &Stops, files: &Files) -> Option<Point> {
+/// is now in the text `read` gives, and its steps there, under the same
+/// id. `None` when its line's text is gone.
+pub(super) fn moved(
+    point: &Point,
+    stops: &Stops,
+    read: &dyn Fn(&str) -> Result<String, String>,
+) -> Option<Point> {
     let spec = match &point.spec {
         Spec::Line { file, line, text } => {
-            let source = files.read(file).ok()?;
+            let source = read(file).ok()?;
             let lines: Vec<&str> = source.lines().map(str::trim).collect();
             let line = nearest(&lines, *line, text)?;
             Spec::Line {

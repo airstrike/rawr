@@ -5,10 +5,12 @@
 //!
 //! A host value is an opaque Rust value inside a `Dynamic`, so both are the
 //! functions compiled for its type, looked up by `TypeId` (or, for carried
-//! bytes, by the type's name) when used.
+//! bytes, by the type's name) when used. What a type declared for `==`,
+//! ordering, `Default`, `Debug` and `Display` is one row of one table.
 
 use crate::Dynamic;
-use std::{any::TypeId, collections::BTreeMap, sync::RwLock};
+use std::any::{Any, TypeId};
+use std::{collections::BTreeMap, sync::RwLock};
 
 /// How a host value type whose values are plain data is carried into the
 /// next runner process: the bytes of a value, and the value they encode.
@@ -26,28 +28,49 @@ pub trait Carry: 'static {
 type Equal = fn(&Dynamic, &Dynamic) -> Option<bool>;
 type Encode = fn(&Dynamic, &mut Vec<u8>) -> Option<()>;
 type Decode = fn(&[u8]) -> Option<Dynamic>;
+type Compare = fn(&Dynamic, &Dynamic) -> Option<std::cmp::Ordering>;
+/// The text of a value of the row's type, `None` for a value of another.
+pub(super) type Text = fn(&dyn Any) -> Option<String>;
 
-static EQUALITIES: RwLock<BTreeMap<TypeId, Equal>> = RwLock::new(BTreeMap::new());
+/// What one host value type declared.
+#[derive(Clone, Copy, Default)]
+pub(super) struct Declared {
+    pub(super) debug: Option<Text>,
+    pub(super) display: Option<Text>,
+    equal: Option<Equal>,
+    compare: Option<Compare>,
+    default: Option<fn() -> Dynamic>,
+}
+
+/// Each host value type's declarations, one row per type.
+static DECLARED: RwLock<BTreeMap<TypeId, Declared>> = RwLock::new(BTreeMap::new());
+
 static ENCODERS: RwLock<BTreeMap<TypeId, (&'static str, Encode)>> = RwLock::new(BTreeMap::new());
 static DECODERS: RwLock<BTreeMap<&'static str, Decode>> = RwLock::new(BTreeMap::new());
 
-type Compare = fn(&Dynamic, &Dynamic) -> Option<std::cmp::Ordering>;
+/// Change the row of `ty` with `declare`.
+pub(super) fn declare(ty: TypeId, declare: impl FnOnce(&mut Declared)) {
+    if let Ok(mut declared) = DECLARED.write() {
+        declare(declared.entry(ty).or_default());
+    }
+}
 
-static ORDERINGS: RwLock<BTreeMap<TypeId, Compare>> = RwLock::new(BTreeMap::new());
-
-static DEFAULTS: RwLock<BTreeMap<TypeId, fn() -> Dynamic>> = RwLock::new(BTreeMap::new());
+/// The row of `ty`, when it declared anything.
+pub(super) fn declared(ty: TypeId) -> Option<Declared> {
+    DECLARED.read().ok()?.get(&ty).copied()
+}
 
 /// Let a derived `Default` build a host value field by the type's own
 /// `Default`.
 pub(crate) fn register_default<T: Default + Clone + crate::func::SendSync + 'static>() {
-    if let Ok(mut defaults) = DEFAULTS.write() {
-        defaults.insert(TypeId::of::<T>(), || Dynamic::from(T::default()));
-    }
+    declare(TypeId::of::<T>(), |declared| {
+        declared.default = Some(|| Dynamic::from(T::default()));
+    });
 }
 
 /// The `Default` value of the host type `ty`, when it declared one.
 pub(crate) fn host_default(ty: TypeId) -> Option<Dynamic> {
-    DEFAULTS.read().ok()?.get(&ty).map(|default| default())
+    declared(ty)?.default.map(|default| default())
 }
 
 type MakeDefault = std::sync::Arc<dyn Fn() -> Dynamic + Send + Sync>;
@@ -95,17 +118,17 @@ fn decode<T: Carry>(bytes: &[u8]) -> Option<Dynamic> {
 }
 
 pub(crate) fn register_equality<T: PartialEq + Clone + 'static>() {
-    if let Ok(mut equalities) = EQUALITIES.write() {
-        equalities.insert(TypeId::of::<T>(), equal::<T>);
-    }
+    declare(TypeId::of::<T>(), |declared| {
+        declared.equal = Some(equal::<T>)
+    });
 }
 
 /// Let the values of the host type `T` order by its own `PartialOrd`, as a
 /// facade's ordered std type does: `<` and `Ord::cmp` of them.
 pub(crate) fn register_ordering<T: PartialOrd + Clone + 'static>() {
-    if let Ok(mut orderings) = ORDERINGS.write() {
-        orderings.insert(TypeId::of::<T>(), compare::<T>);
-    }
+    declare(TypeId::of::<T>(), |declared| {
+        declared.compare = Some(compare::<T>)
+    });
 }
 
 /// Let the values of the host type `T` compare: `==`, and the order a
@@ -116,10 +139,10 @@ pub fn register_relations<T: 'static>(
     equal: fn(&Dynamic, &Dynamic) -> Option<bool>,
     compare: fn(&Dynamic, &Dynamic) -> Option<std::cmp::Ordering>,
 ) {
-    if let (Ok(mut equalities), Ok(mut orderings)) = (EQUALITIES.write(), ORDERINGS.write()) {
-        equalities.insert(TypeId::of::<T>(), equal);
-        orderings.insert(TypeId::of::<T>(), compare);
-    }
+    declare(TypeId::of::<T>(), |declared| {
+        declared.equal = Some(equal);
+        declared.compare = Some(compare);
+    });
 }
 
 /// The order of two host values of one type that registered one.
@@ -129,8 +152,7 @@ pub(crate) fn host_compare(lhs: &Dynamic, rhs: &Dynamic) -> Option<std::cmp::Ord
         if ty != rhs.type_id() {
             return None;
         }
-        let compare = *ORDERINGS.read().ok()?.get(&ty)?;
-        compare(lhs, rhs)
+        declared(ty)?.compare?(lhs, rhs)
     }
 }
 
@@ -162,8 +184,7 @@ pub(crate) fn host_equal(lhs: &Dynamic, rhs: &Dynamic) -> Option<bool> {
             }
             ty
         };
-        let equal = *EQUALITIES.read().ok()?.get(&ty)?;
-        equal(lhs, rhs)
+        declared(ty)?.equal?(lhs, rhs)
     }
 }
 

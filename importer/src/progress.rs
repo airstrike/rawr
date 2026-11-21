@@ -27,7 +27,7 @@
 use std::io::{IsTerminal as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 const STAGES: [&str; 4] = [
@@ -76,6 +76,9 @@ struct State {
     /// The step of its stage a launch named last, which its line says in
     /// place of the stage's name (#1763).
     step: Option<&'static str>,
+    /// What the observer heard last of this launch: the stage and the 5%
+    /// step.
+    observed: Option<(usize, u8)>,
 }
 
 /// The phase whose line counts Cargo's finished units.
@@ -91,36 +94,26 @@ static STATE: Mutex<State> = Mutex::new(State::new());
 static SAID: AtomicUsize = AtomicUsize::new(0);
 
 /// Who hears each stage and each 5% step of a launch beside the status
-/// line, such as a supervising `rawr mcp` (set by the command).
-static OBSERVER: Mutex<Option<Observer>> = Mutex::new(None);
+/// line, such as a supervising `rawr mcp` (set once by the command).
+static OBSERVER: OnceLock<Observer> = OnceLock::new();
 
 /// Hears a stage's name and the launch's percent.
 type Observer = fn(&str, u8);
 
-/// What the observer heard last: the stage and the 5% step.
-static OBSERVED: Mutex<Option<(usize, u8)>> = Mutex::new(None);
-
-/// Tell `observer` each launch's stage and percent as they move.
+/// Tell `observer` each launch's stage and percent as they move. The first
+/// observer a process names is the one it keeps.
 pub fn listen(observer: fn(&str, u8)) {
-    *OBSERVER
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(observer);
+    let _ = OBSERVER.set(observer);
 }
 
 fn report(state: &mut State) {
-    let Some(observer) = *OBSERVER
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-    else {
+    let Some(observer) = OBSERVER.get() else {
         return;
     };
     let percent = (state.percent(Instant::now()) * 100.0).floor() as u8;
     let step = (state.stage, percent / 5);
-    let mut observed = OBSERVED
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if *observed != Some(step) {
-        *observed = Some(step);
+    if state.observed != Some(step) {
+        state.observed = Some(step);
         observer(STAGES[state.stage.clamp(1, STAGES.len()) - 1], percent);
     }
 }
@@ -971,6 +964,7 @@ impl State {
             phases: false,
             phase: None,
             step: None,
+            observed: None,
         }
     }
 

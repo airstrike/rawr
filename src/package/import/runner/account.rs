@@ -15,7 +15,7 @@ pub(crate) mod support;
 
 use std::{
     fmt,
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{Arc, Mutex, MutexGuard, OnceLock},
 };
 
 use crate::host::ImportAllocation;
@@ -41,7 +41,7 @@ struct Baseline {
 #[doc(hidden)]
 #[must_use]
 pub struct Attempt {
-    latch: Arc<Mutex<Option<Refusal>>>,
+    latch: Arc<OnceLock<Refusal>>,
     // The baseline scope itself has no owner, so this cannot form a cycle.
     baseline: Option<Arc<Baseline>>,
 }
@@ -127,7 +127,7 @@ impl Native {
     /// The first refusal that latched this account, if any.
     #[must_use]
     pub fn first_refusal(&self) -> Option<Refusal> {
-        *lock(&lock(&self.inner.allocation).latch)
+        lock(&self.inner.allocation).latch.get().copied()
     }
 
     /// How many scopes keep this decoded metadata alive.
@@ -163,14 +163,14 @@ impl Attempt {
     /// A scope in a fresh account that shares no native owner.
     pub(super) fn fresh() -> Self {
         Self {
-            latch: Arc::new(Mutex::new(None)),
+            latch: Arc::new(OnceLock::new()),
             baseline: None,
         }
     }
 
     /// Refuse a new scope once the account has latched.
     fn admit(&self) -> Result<(), Error> {
-        match *lock(&self.latch) {
+        match self.latch.get() {
             Some(_) => Err(Error::Allocation),
             None => Ok(()),
         }
@@ -184,11 +184,10 @@ impl Attempt {
 
 impl ImportAllocation for Attempt {
     fn retain_checked(&mut self, items: Option<usize>, bytes: Option<usize>) -> Result<(), Error> {
-        let mut latch = lock(&self.latch);
         // A refusal is terminal for the whole shared account. Every later
         // admission (a charge, a fresh attempt or a reconstruction sharing
         // the account) is refused and the first cause is preserved.
-        if latch.is_some() {
+        if self.latch.get().is_some() {
             return Err(Error::Allocation);
         }
         let axis = match (items, bytes) {
@@ -196,7 +195,9 @@ impl ImportAllocation for Attempt {
             (None, _) => Axis::Items,
             (Some(_), None) => Axis::Bytes,
         };
-        *latch = Some(Refusal { axis });
+        // Of two scopes that refuse at once, the first to set the latch
+        // keeps its cause.
+        let _ = self.latch.set(Refusal { axis });
         Err(Error::Allocation)
     }
 }

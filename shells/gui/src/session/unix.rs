@@ -5,7 +5,7 @@
 use std::io::{BufRead as _, BufReader, Write as _};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc, Arc, Mutex, PoisonError};
+use std::sync::{mpsc, Arc};
 
 use iced::futures::channel::mpsc as stream;
 use iced::futures::{SinkExt as _, Stream, StreamExt as _};
@@ -14,16 +14,12 @@ use super::transport::{Event, Link, Transport};
 
 /// The writing half of a socket connection.
 struct Socket {
-    lines: Mutex<mpsc::Sender<String>>,
+    lines: mpsc::Sender<String>,
 }
 
 impl Transport for Socket {
     fn send(&self, line: &str) {
-        let _ = self
-            .lines
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .send(line.to_owned());
+        let _ = self.lines.send(line.to_owned());
     }
 }
 
@@ -87,7 +83,5 @@ fn open(socket: &Path, heard: stream::UnboundedSender<Event>) -> std::io::Result
             }
             let _ = heard.unbounded_send(Event::Closed("the session closed".to_owned()));
         })?;
-    Ok(Link::new(Arc::new(Socket {
-        lines: Mutex::new(lines),
-    })))
+    Ok(Link::new(Arc::new(Socket { lines })))
 }
