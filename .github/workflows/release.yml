@@ -5,21 +5,19 @@
 #   1. binaries (binaries.yml): the GitHub release's prebuilt archives. Off
 #      unless the `binaries` input is ticked: patch releases have no tags of
 #      their own yet. It does nothing when the version already has archives.
-#   2. playground (playground.yml): rawr-web, built into this run's `web`
-#      artifact. About 3 minutes with its cache.
+#   2. playground (playground.yml): rawr-web and the browser's universe,
+#      built and published to R2, where the site runs them from the next
+#      page load. No deploy.
 #   3. bot (bot.yml): the ?play image, built and pushed only when its inputs
 #      changed since the image Cloudflare runs (`bot: auto`), always
-#      (`always`) or never (`skip`). Skipped, the deploy keeps the running
-#      image. Built, about 10-15 minutes with its cache (see bot.yml).
-#   4. site (site.yml): one deploy of the Worker and site with this run's
-#      rawr-web and the new image (or the running one), then the wait for the
-#      bot to report it. About 3 minutes, plus up to 5 for a new image's
-#      rollout.
+#      (`always`) or never (`skip`). Built, about 10-15 minutes with its
+#      cache (see bot.yml), it dispatches site.yml to roll it out: one deploy
+#      of main's latest commit with the new image, in its turn among the
+#      Worker's deploys, then the wait for the bot to report it. Skipped,
+#      nothing rolls out and nothing deploys.
 #
-# Stages 2 and 3 publish only (an artifact, a registry image); the site
-# stage makes the one deploy, so the site never goes live ahead of its bot,
-# and a failed stage leaves the live site as it was. A Worker settings or
-# code change needs none of this: site.yml deploys it on its own on push.
+# A Worker settings or code change needs none of this: site.yml deploys it
+# on its own on push.
 #
 # It needs the CLOUDFLARE_API_TOKEN secret and the
 # CLOUDFLARE_ACCOUNT_ID variable (see "Release from GitHub Actions" in
@@ -39,11 +37,11 @@ on:
         options: [auto, always, skip]
         default: auto
 
-# One release or deploy at a time: every stage workflow run on its own takes
-# this group too. `queue: max` keeps every waiting run in order, so a queued
-# one never cancels another.
+# One release at a time. Its stages take their own workflows' groups too
+# (`web-modules`, `bot-image`), and the rollout is a site.yml run in
+# `worker-deploy`, the group of every Worker deploy.
 concurrency:
-  group: release-play
+  group: release
   cancel-in-progress: false
   queue: max
 
@@ -63,24 +61,17 @@ jobs:
     needs: binaries
     if: ${{ !failure() && !cancelled() }}
     uses: ./.github/workflows/playground.yml
-    with:
-      deploy: false
     secrets: inherit
 
   bot:
     needs: playground
     if: ${{ !failure() && !cancelled() && inputs.bot != 'skip' }}
     uses: ./.github/workflows/bot.yml
+    # Its rollout job dispatches site.yml.
+    permissions:
+      contents: read
+      actions: write
     with:
       build: ${{ inputs.bot }}
-      deploy: false
-    secrets: inherit
-
-  site:
-    needs: [playground, bot]
-    if: ${{ !failure() && !cancelled() }}
-    uses: ./.github/workflows/site.yml
-    with:
-      image: ${{ needs.bot.outputs.image }}
-      web: artifact
+      deploy: true
     secrets: inherit

@@ -15,6 +15,7 @@ import { Button } from "../components/ui/button.tsx";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from "../components/ui/select.tsx";
 import { onTheme, theme as pageTheme, type Theme } from "../lib/theme.ts";
 import { DEBUGGER, universe } from "../scripts/universe.ts";
+import { webFiles } from "../scripts/web.ts";
 import { canPause, Debugger, ROOT, type DebugState } from "./debugger.ts";
 import { createConsole, createEditor, setDebugging, setDoc, setMarks } from "./editor.ts";
 import { clamp, PartsOf, SplitBar, Twisty, useOpen, useStoredSize, ValueTable, type Row } from "./panes.tsx";
@@ -33,6 +34,9 @@ function readData(): PlayData {
 let copies = 0;
 
 function browserDeps() {
+  // rawr-web and both builds of the universe come from the one set the
+  // site's pointer names when the page first loads a module.
+  const files = webFiles(window.fetch.bind(window));
   return {
     fetch: window.fetch.bind(window),
     location: window.location,
@@ -47,7 +51,7 @@ function browserDeps() {
     loadWeb: async () => {
       // A module is imported once per address, so a copy after the first
       // has its own query: its own instance, from the same cached files.
-      const m = await import(/* @vite-ignore */ WEB_MODULE + (copies++ ? "?" + copies : ""));
+      const m = await import(/* @vite-ignore */ (await files(WEB_MODULE)) + (copies++ ? "?" + copies : ""));
       await m.default();
       return m as Web;
     },
@@ -55,12 +59,14 @@ function browserDeps() {
     universe: universe({
       document,
       fetch: window.fetch.bind(window),
+      files,
       compile: (response) => WebAssembly.compileStreaming(response),
     }),
     // Its debugger build, fetched the first time the debugger is turned on.
     debugging: {
       universe: universe({
         document,
+        files,
         fetch: window.fetch.bind(window),
         compile: (response) => WebAssembly.compileStreaming(response),
         build: DEBUGGER,

@@ -20,8 +20,6 @@ import {
   renderRequest,
   same,
   shareId,
-  webAsset,
-  webHeaders,
   type Snippet,
 } from "../src/play.ts";
 import { escape } from "../src/dashboard.ts";
@@ -426,64 +424,6 @@ test("each iced example is one the browser's universe holds", async () => {
     .filter(([name]) => name);
   const browser = new Set(listed.filter(([, target]) => target === undefined).map(([name]) => name));
   for (const name of examples) assert.ok(browser.has(name), `examples.txt names ${name} for the browser`);
-});
-
-test("rawr-web's files are served with types the edge compresses", () => {
-  const headers = (path: string) => webHeaders(path, new Headers({ etag: "\"x\"", "content-type": "application/octet-stream" }));
-  assert.equal(headers("/web/rawr_web_bg.wasm")?.get("content-type"), "application/wasm");
-  assert.equal(headers("/web/rawr_web_bg.wasm")?.get("etag"), "\"x\"");
-  assert.equal(headers("/web/rawr_web_bg.wasm")?.get("cache-control"), null, "the module revalidates");
-  assert.equal(headers("/web/rawr_web.js")?.get("content-type"), "text/javascript; charset=utf-8");
-  assert.equal(headers("/web/index.html"), null);
-});
-
-test("a browser that takes brotli gets rawr-web's brotli copy as is", async () => {
-  const stored: Record<string, string> = { "/web/rawr_web_bg.wasm": "wasm", "/web/rawr_web_bg.wasm.br": "packed", "/web/rawr_web.js": "js" };
-  const assets = {
-    fetch: async (request: Request) => {
-      const body = stored[new URL(request.url).pathname];
-      return body ? new Response(body, { headers: { etag: `"${body}"` } }) : new Response("no", { status: 404 });
-    },
-  };
-  const get = (path: string, encoding: string) =>
-    webAsset(new Request("https://rawr.airstrike.fyi" + path, { headers: { "accept-encoding": encoding } }), assets);
-  const packed = await get("/web/rawr_web_bg.wasm", "gzip, deflate, br, zstd");
-  assert.equal(await packed.text(), "packed");
-  assert.equal(packed.headers.get("content-encoding"), "br");
-  assert.equal(packed.headers.get("content-type"), "application/wasm");
-  const plain = await get("/web/rawr_web_bg.wasm", "gzip");
-  assert.equal(await plain.text(), "wasm");
-  assert.equal(plain.headers.get("content-encoding"), null);
-  assert.equal(plain.headers.get("content-type"), "application/wasm");
-  // No brotli copy: the stored file, which the edge compresses itself.
-  const js = await get("/web/rawr_web.js", "br");
-  assert.equal(await js.text(), "js");
-  assert.equal(js.headers.get("content-type"), "text/javascript; charset=utf-8");
-  assert.equal((await get("/web/missing.wasm", "br")).status, 404);
-  assert.equal((await get("/web/missing.wasm", "gzip")).status, 404);
-});
-
-test("a module stored only as its brotli copy goes out as that copy to every client", async () => {
-  // The universe's module (#1459): raw, it is over Cloudflare's limit on an asset.
-  const stored: Record<string, string> = { "/web/universe_bg.wasm.br": "packed" };
-  const assets = {
-    fetch: async (request: Request) => {
-      const body = stored[new URL(request.url).pathname];
-      return body ? new Response(body, { headers: { etag: `"${body}"` } }) : new Response("no", { status: 404 });
-    },
-  };
-  for (const encoding of ["gzip, deflate, br, zstd", "gzip", ""]) {
-    const served = await webAsset(new Request("https://rawr.airstrike.fyi/web/universe_bg.wasm", { headers: { "accept-encoding": encoding } }), assets);
-    assert.equal(served.status, 200);
-    assert.equal(await served.text(), "packed");
-    assert.equal(served.headers.get("content-encoding"), "br");
-    assert.equal(served.headers.get("content-type"), "application/wasm");
-    assert.equal(served.headers.get("etag"), "\"packed\"");
-  }
-  // live-web.sh fetches the copy itself by its name, as stored.
-  const copy = await webAsset(new Request("https://rawr.airstrike.fyi/web/universe_bg.wasm.br"), assets);
-  assert.equal(await copy.text(), "packed");
-  assert.equal(copy.headers.get("content-encoding"), null);
 });
 
 test("the build names each asset over Cloudflare's limit", async () => {

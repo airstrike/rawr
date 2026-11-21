@@ -33,6 +33,11 @@
   // .Codex/ documents (never in this repository). src/todo.ts serves them
   // behind the TODO_PASSWORD secret.
   "kv_namespaces": [{ "binding": "TODO_PRIVATE", "id": "c587b986e0fd47c8a8e25a24d836048e" }],
+  // The playground's modules (/web, src/web.ts): each set web/build.sh makes
+  // under web/<version>/, and web/current.json, the pointer to the set the
+  // site runs. upload-web.mjs writes them (the Playground workflow); a deploy
+  // never touches them, and none is among the assets.
+  "r2_buckets": [{ "binding": "WEB", "bucket_name": "rawr-web" }],
   // Restart the bot within five minutes if it ever stops.
   "triggers": { "crons": ["*/5 * * * *"] },
   "vars": {
@@ -58,7 +63,7 @@
   // src/cards.gen.ts, each link card's URL with its content hash.
   "build": { "command": "node build.mjs" },
   // The Worker runs first so it can redirect the old host; for the new host
-  // it hands every path but /play and /bot to the assets.
+  // it hands every path but /play, /bot and /web to the assets.
   "assets": { "directory": "dist", "binding": "ASSETS", "html_handling": "drop-trailing-slash", "run_worker_first": true },
   "routes": [
     { "pattern": "rawr.airstrike.fyi", "custom_domain": true },

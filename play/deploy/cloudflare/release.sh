@@ -3,15 +3,14 @@
 # path. This script stays for releasing from a Mac.
 # Release the committed HEAD to Cloudflare in one step:
 #   ./release.sh            build and push the image, then deploy
-#   ./release.sh --worker   deploy the Worker and site only (no new image,
-#                           the live rawr-web)
+#   ./release.sh --worker   deploy the Worker and site only (no new image)
 # It refuses to run while the Worker or site sources have uncommitted changes,
 # since `wrangler deploy` ships the working tree. deploy.sh then tests,
 # deploys and waits for the bot. Last, this script commits the image bump
 # and pushes main.
-# The site runs every snippet in rawr-web, so public/web must hold it: run
-# web/build.sh play/deploy/cloudflare/public/web, or live-web.sh, first.
-# Without it the site's build fails.
+# The site's build runs every snippet in rawr-web, so this script first
+# fetches the set the site runs into target/web (live-web.sh). The modules
+# themselves are never deployed: the Worker serves them from R2.
 set -eu
 here="$(cd "$(dirname "$0")" && pwd)"
 repo="$(git -C "$here" rev-parse --show-toplevel)"
@@ -30,9 +29,8 @@ else
   # Keep the image Cloudflare runs, which a GitHub release may have advanced
   # past the committed wrangler.jsonc.
   ./pin-image.sh >/dev/null
-  # And the rawr-web the site serves, since a deploy replaces every asset.
-  ./live-web.sh >/dev/null
 fi
+./live-web.sh >/dev/null
 ./deploy.sh
 want="$(sed -nE 's/.*"PLAY_VERSION": "([^"]*)".*/\1/p' wrangler.jsonc)"
 

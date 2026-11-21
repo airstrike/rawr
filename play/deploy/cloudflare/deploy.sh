@@ -5,9 +5,12 @@
 # deploys the container in one step (--containers-rollout=immediate),
 # retries the deploy when Cloudflare answers 100146 (wrangler only waits 2 s
 # for a new image version), a 500 or 10013 (an assets upload session's
-# "unknown error", which passed on a re-run each time), and waits for the bot
-# to report the image named by PLAY_VERSION. Logs go to target/logs. The
-# site needs its packages: `npm ci` in site/.
+# "unknown error", which passed on a re-run each time), and, when the deploy
+# rolls out an image Cloudflare didn't run before it, waits for the bot to
+# report the image named by PLAY_VERSION. A deploy that keeps the running
+# image never waits on the bot. Logs go to target/logs. The site needs its
+# packages (`npm ci` in site/) and rawr-web's set in target/web
+# (live-web.sh), which its build runs the docs' snippets in.
 set -eu
 here="$(cd "$(dirname "$0")" && pwd)"
 repo="$(git -C "$here" rev-parse --show-toplevel)"
@@ -17,6 +20,9 @@ mkdir -p "$logs"
 cd "$here"
 
 want="$(sed -nE 's/.*"PLAY_VERSION": "([^"]*)".*/\1/p' wrangler.jsonc)"
+# The image Cloudflare runs before this deploy. Unknown, the deploy counts
+# as a rollout and waits for it.
+running="$(./pin-image.sh --running 2>/dev/null || true)"
 
 # The site's build (site/dist) comes first: the tests read its pages, and
 # wrangler deploy then merges it as built (SITE_BUILT) instead of building again.
@@ -55,6 +61,14 @@ if node "$repo/plan/private.mjs" >"$logs/release-private.log" 2>&1; then
   tail -1 "$logs/release-private.log"
 else
   echo "warning: the private tabs were not uploaded; see $logs/release-private.log" >&2
+fi
+
+# A deploy of the image Cloudflare already runs rolls nothing out: the bot
+# keeps running, and the Durable Object restarts it for changed settings on
+# its own (src/index.ts's ensure).
+if [ -n "$running" ] && [ "${running##*:}" = "$want" ]; then
+  echo "Cloudflare already runs image $want; nothing rolls out."
+  exit 0
 fi
 
 # Query the application itself: the account-wide list can retain an old image

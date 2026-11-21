@@ -54,6 +54,13 @@ for (const source of sources) {
     seen.set(file, source);
   }
 }
+// The Worker serves /web from R2 (src/web.ts) before the assets, so a module
+// among them would ship and never be served.
+const modules = [...seen.keys()].filter((file) => file.startsWith("web/"));
+if (modules.length > 0) {
+  console.error(`build: rawr-web's files come from R2, not the assets; remove ${modules.map((file) => join(seen.get(file), file)).join(", ")}`);
+  process.exit(1);
+}
 
 // The site's frame, from its built pages: the stylesheets both the landing
 // page and the playground load (global.css compiled: the tokens, the reset,
@@ -95,7 +102,7 @@ console.log(`build: ${seen.size} files in dist/`);
 
 const large = oversized(dist);
 if (large.length > 0) {
-  console.error(`build: Cloudflare takes no asset over ${mib(ASSET_LIMIT)}; ship a large module as its brotli copy only (web/build.sh):`);
+  console.error(`build: Cloudflare takes no asset over ${mib(ASSET_LIMIT)}:`);
   for (const [file, size] of large) console.error(`  ${file}: ${mib(size)} (${size} bytes)`);
   process.exit(1);
 }

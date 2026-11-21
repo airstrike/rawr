@@ -2,6 +2,9 @@
 //!
 //! [`run_text`] runs a snippet and returns its output as the `?play`
 //! server's text result.
+//!
+//! The page calls these exports as site/src/scripts/web.ts's `WEB_PROTOCOL`
+//! names them: a change a page on the other side of it can't call bumps it.
 #![cfg(target_arch = "wasm32")]
 
 mod text;

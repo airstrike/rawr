@@ -100,6 +100,7 @@ test("a universe program starts after its shown frame's next animation frame, wh
   };
   const page = universe({
     document: {} as Document,
+    files: async (name: string) => "/web/" + name,
     fetch: (async () => new Response("[dependencies]\n")) as typeof fetch,
     compile: async () => ({}) as WebAssembly.Module,
   });
@@ -132,6 +133,7 @@ test("a universe program whose main sleeps runs on, printing to a terminal in it
   };
   const page = universe({
     document: {} as Document,
+    files: async (name: string) => "/web/" + name,
     fetch: (async () => new Response("[dependencies]\n")) as typeof fetch,
     compile: async () => ({}) as WebAssembly.Module,
   });
@@ -186,6 +188,7 @@ test("a program stopped for want of JSPI says so in its frame", async () => {
   };
   const page = universe({
     document: {} as Document,
+    files: async (name: string) => "/web/" + name,
     fetch: (async () => new Response("[dependencies]\n")) as typeof fetch,
     compile: async () => ({}) as WebAssembly.Module,
   });
@@ -215,7 +218,7 @@ function heldFrame(answer: () => Promise<string>) {
 /** A universe over stand-ins, for the frames `heldFrame` makes. */
 async function heldUniverse() {
   const { universe } = await import("../src/scripts/universe.ts");
-  return universe({ document: {} as Document, fetch: (async () => new Response("[dependencies]\n")) as typeof fetch, compile: async () => ({}) as WebAssembly.Module });
+  return universe({ document: {} as Document, files: async (name: string) => "/web/" + name, fetch: (async () => new Response("[dependencies]\n")) as typeof fetch, compile: async () => ({}) as WebAssembly.Module });
 }
 
 test("a debugged run that ends at its release shows its answer, and tells its end", async () => {
@@ -268,6 +271,7 @@ test("an engine without the module's exception handling is named, and the module
   const fetched: string[] = [];
   const page = universe({
     document: {} as Document,
+    files: async (name: string) => "/web/" + name,
     fetch: (async (url: string) => (fetched.push(url), new Response("[dependencies]\n"))) as typeof fetch,
     compile: async () => ({}) as WebAssembly.Module,
     wasm: noExnref,

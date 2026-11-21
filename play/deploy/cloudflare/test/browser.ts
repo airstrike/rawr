@@ -1,9 +1,10 @@
 // The playground and the docs' Run buttons in a real headless Chrome, driven
 // over the DevTools protocol with Node's own WebSocket:
-//   web/build.sh && npm run build --prefix site && node test/browser.ts [WEB_DIR] [SHOTS_DIR]
+//   web/build.sh target/web && npm run build --prefix site && node test/browser.ts [WEB_DIR] [SHOTS_DIR]
 // It serves the site's build (site/dist) as the Worker does: /play is
 // play.html with the request's data written in (playpage.ts's inject), and
-// /web is rawr-web from WEB_DIR (default target/wasm/site). On the
+// /web is rawr-web from WEB_DIR (default target/web) as one set, with
+// a pointer to it (web-dir.ts). On the
 // playground's island it runs a plain program in the browser (the default),
 // edits it and sees the output follow, checks that an iced snippet and an
 // async one each show their message, restores an example from its address,
@@ -16,11 +17,13 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { extname, join, resolve } from "node:path";
-import { webAsset } from "../src/play.ts";
 import { inject } from "../src/playpage.ts";
+import { webAsset } from "../src/web.ts";
+import { dirBucket } from "./web-dir.ts";
 
 const repo = resolve(import.meta.dirname, "../../../..");
-const web = resolve(process.argv[2] ?? join(repo, "target/wasm/site"));
+const web = resolve(process.argv[2] ?? join(repo, "target/web"));
+const bucket = dirBucket(web);
 const shots = resolve(process.argv[3] ?? join(repo, "target/web-check"));
 const chrome = process.env.CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const histogram = readFileSync(join(repo, "play/tests/fixtures/rust/histogram.rs"), "utf8");
@@ -58,17 +61,8 @@ const server = createServer(async (request, response) => {
   }
   if (path.startsWith("/web/")) {
     // The Worker's own /web handler, over the files in WEB_DIR.
-    const assets = {
-      fetch: async (asset: Request) => {
-        try {
-          return new Response(readFileSync(join(web, new URL(asset.url).pathname.slice("/web/".length))));
-        } catch {
-          return new Response("not found", { status: 404 });
-        }
-      },
-    };
     const headers = new Headers(request.headers as Record<string, string>);
-    const served = await webAsset(new Request(`http://127.0.0.1${path}`, { headers }), assets);
+    const served = await webAsset(new Request(`http://127.0.0.1${path}`, { headers }), bucket);
     if (served.headers.get("content-encoding")) brotli.push(path);
     return response.writeHead(served.status, Object.fromEntries(served.headers)).end(Buffer.from(await served.arrayBuffer()));
   }
@@ -179,7 +173,7 @@ try {
   await until("the output", `(document.querySelector("#out pre.term") || {}).textContent?.includes("#")`, 15000);
   await shot("histogram.png");
   check(await evaluate(`document.getElementById("status").textContent.includes("in the browser")`), "a plain program runs in the browser");
-  check(brotli.includes("/web/rawr_web_bg.wasm"), "the module comes as its brotli copy");
+  check(brotli.some((path) => path.endsWith("/rawr_web_bg.wasm")), "the module comes as its brotli copy");
 
   // An edit runs again after a pause, and the output follows.
   await setCode('for i in 1..=3 {\n    println!("line {i}");\n}\neprintln!("done");');
