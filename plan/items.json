@@ -2387,6 +2387,9 @@
     {"t":"T2385","issue":2385,"title":"T2385: Three native-miss tests fail: an absent native import is reported as E0432","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T2386","issue":2386,"title":"T2386: Prune old rawr-web sets from R2, and build modules on a push that bumps WEB_PROTOCOL","state":"open","category":"Platforms","labels":["platform","playground"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T2387","issue":2387,"title":"T2387: The kept-expansion read log (expand::kept NAMED) is a process static the rawr engine writes","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T2388","issue":2388,"title":"T2388: rawr-import's lib suite fails 36 tests on main, mostly hot runner builds with StaleReadSet","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T2388","issue":2388,"title":"T2388: rawr-import's lib suite fails 36 tests on main, mostly hot runner builds with StaleReadSet","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T2389","issue":2389,"title":"T2389: rawr dap, rawr mcp, rawr gui, the reload stream and the --web page server each hand their state…","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":"0.4.81"},
+    {"t":"T2390","issue":2390,"title":"T2390: The engine drops locks one thread uses or nothing reads: the native account's baseline, the…","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":"0.4.81"},
+    {"t":"T2391","issue":2391,"title":"T2391: Import-cli integration tests read run events through RAWR_MCP_EVENTS, a file path the shipped binary keeps only for them","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }

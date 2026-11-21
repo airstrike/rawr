@@ -6,6 +6,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.81 (2026-11-20)
+
+- rawr dap, rawr mcp, rawr gui, the reload stream and the --web page server each hand their state to one owner thread, which removes 15 locks. rawr mcp no longer sleeps 20 ms after each child, and a pipe a process outside the child's group holds open no longer delays a call's output. (#2389)
+- The engine drops locks one thread uses or nothing reads: the native account's baseline, the global constants map, the window-frame session, the reload publication slot and a second copy of the published program. A runner's pins and the host value tables each keep one lock in place of four. (#2390)
+
 ## 0.4.80 (2026-11-20)
 
 - The generated runner frees native values and takes back lent values on a channel each arena owns, with no process-wide queue or lock, and a callback reads its script function and that function's witnesses together, so it never pairs one call's function with another call's witnesses. (#1826)

@@ -8,6 +8,14 @@
   },
   "releases": [
     {
+      "version": "0.4.81",
+      "date": "2026-11-20",
+      "entries": [
+        {"text":"rawr dap, rawr mcp, rawr gui, the reload stream and the --web page server each hand their state to one owner thread, which removes 15 locks. rawr mcp no longer sleeps 20 ms after each child, and a pipe a process outside the child's group holds open no longer delays a call's output.","issues":[2389]},
+        {"text":"The engine drops locks one thread uses or nothing reads: the native account's baseline, the global constants map, the window-frame session, the reload publication slot and a second copy of the published program. A runner's pins and the host value tables each keep one lock in place of four.","issues":[2390]}
+      ]
+    },
+    {
       "version": "0.4.80",
       "date": "2026-11-20",
       "entries": [
