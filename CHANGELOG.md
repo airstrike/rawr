@@ -4,7 +4,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 ## Unreleased
 
-- The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
+- The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors.
+
+## 0.5.1 (2026-11-21)
+
+- A method call on a program type calls its inherent method, as rustc does, when the type's impl of a dependency's trait with a method of the same name isn't in scope there: iced's game_of_life builds again. (#2455)
 
 ## 0.5.0 (2026-11-21)
 

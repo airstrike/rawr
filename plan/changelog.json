@@ -3,10 +3,17 @@
   "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
   "tracked_from": "0.3.12",
   "unreleased": {
-    "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
+    "notes": ["The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors."],
     "entries": []
   },
   "releases": [
+    {
+      "version": "0.5.1",
+      "date": "2026-11-21",
+      "entries": [
+        {"text":"A method call on a program type calls its inherent method, as rustc does, when the type's impl of a dependency's trait with a method of the same name isn't in scope there: iced's game_of_life builds again.","issues":[2455]}
+      ]
+    },
     {
       "version": "0.5.0",
       "date": "2026-11-21",
