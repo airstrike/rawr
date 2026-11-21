@@ -17,7 +17,8 @@ impl Engine {
 
     /// Compile one immutable snapshot as a run compiles it, with the
     /// [`program::Positions`] that place its steps in its files: a runner
-    /// lowers it against its retained native surface, and a program with
+    /// lowers it against its retained native surface and refuses a use its
+    /// carrier doesn't cover where the use is written, and a program with
     /// no dependencies compiles as `rawr run` compiles it. A source whose
     /// text `parses` holds the parse of is read from it, and nothing the
     /// compile does is kept.

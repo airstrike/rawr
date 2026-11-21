@@ -39,6 +39,17 @@ impl Hosted {
         }
     }
 
+    /// Whether `registry` binds each of this program's facades,
+    /// requirements and projections: the check its first evaluation makes
+    /// before any callback runs, and code a debugger evaluates makes
+    /// against the paused generation's registry.
+    pub(crate) fn validate(
+        &self,
+        registry: &host::runtime::Registry,
+    ) -> Result<(), host::runtime::Error> {
+        registry.validate(&self.dependencies, &self.requirements, &self.projections)
+    }
+
     /// This program's runtime generation of `engine`'s registry, bound on
     /// first use. An engine that exports nothing binds a program that names
     /// only std's types and the core's future to a registry of its own
@@ -53,9 +64,7 @@ impl Hosted {
             EvalAltResult::ErrorRuntime(error.to_string().into(), Position::NONE).into()
         };
         let validate = |registry: &host::runtime::Registry| {
-            registry
-                .validate(&self.dependencies, &self.requirements, &self.projections)
-                .map_err(|error| failed(&error))
+            self.validate(registry).map_err(|error| failed(&error))
         };
         let Some(registry) = engine.host_runtime.as_ref() else {
             let names = |root: &str| {

@@ -306,7 +306,20 @@ pub const fn carrier_versions() -> [u32; 5] {
 #[cfg(any(test, feature = "test-fixtures"))]
 #[must_use]
 pub fn carrier_fixture(entries: &[([u8; 32], [u8; 32], u32)]) -> Vec<u8> {
-    let coverage = coverage::Inventory::empty();
+    carrier_fixture_covering(entries, &[])
+}
+
+/// [`carrier_fixture`], its inventory covering each of `covered`: a use
+/// bound to the entry at its index, as a runner built with that use
+/// carries it.
+#[doc(hidden)]
+#[cfg(any(test, feature = "test-fixtures"))]
+#[must_use]
+pub fn carrier_fixture_covering(
+    entries: &[([u8; 32], [u8; 32], u32)],
+    covered: &[(usize, coverage::Use<'_>)],
+) -> Vec<u8> {
+    let coverage = coverage::Inventory::covering(covered);
     let mut bytes = Vec::new();
     bytes.extend_from_slice(b"RAWRGM01");
     bytes.extend_from_slice(&[3; 32]);

@@ -6,9 +6,10 @@ use std::process::Command;
 
 use serde_json::{json, Value};
 
+use super::call::Call;
 use super::options::Options;
-use super::process::{self, Cancel};
-use super::{check, content, extension, session, Progress, Server};
+use super::process;
+use super::{check, content, extension, session, sessions, Progress, Server};
 use crate::layer;
 
 /// Core's tool names: an extension's tool by one of these names is not
@@ -524,7 +525,7 @@ fn strings(arguments: &Value, key: &str) -> Vec<String> {
 }
 
 /// Run one `tools/call`.
-pub fn call(server: &Server, params: &Value, cancel: &Cancel) -> Value {
+pub fn call(server: &Server, params: &Value, call: &Call) -> Value {
     let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
     let progress = Progress {
         server,
@@ -539,10 +540,10 @@ pub fn call(server: &Server, params: &Value, cancel: &Cancel) -> Value {
         .and_then(Value::as_str)
         .unwrap_or_default();
     let outcome = match name {
-        "new" => new(server, text("path"), text("template"), cancel),
+        "new" => new(server, text("path"), text("template"), call),
         "check" => Options::new(&arguments).and_then(|options| {
             program(&server.root, text("path"), &options)
-                .map(|place| check::check(server, &place, &options, cancel))
+                .map(|place| check::check(server, &place, &options, call))
         }),
         "run" => Options::new(&arguments).and_then(|options| {
             program(&server.root, text("path"), &options).map(|place| {
@@ -551,7 +552,7 @@ pub fn call(server: &Server, params: &Value, cancel: &Cancel) -> Value {
                     &options,
                     &strings(&arguments, "args"),
                     text("stdin"),
-                    cancel,
+                    call,
                 )
             })
         }),
@@ -563,20 +564,20 @@ pub fn call(server: &Server, params: &Value, cancel: &Cancel) -> Value {
                 &options,
                 &strings(&arguments, "args"),
                 text("stdin"),
-                cancel,
+                call,
                 &progress,
             )
         }),
-        "wait" => session(server, text("path"), cancel).map(|session| {
+        "wait" => session(server, text("path"), call).map(|session| {
             let after = session.next(
                 arguments.get("cursor").and_then(Value::as_u64),
-                cancel,
+                call,
                 |stage, percent| progress.send(percent as f64, Some(100.0), stage),
             );
             // A cancelled call gets no answer, so it gives no events: the
             // next call without a cursor still returns them. One a later
             // wait took the place of gives none either.
-            if cancel.is_cancelled() {
+            if call.is_cancelled() {
                 return content::success(json!({}), "cancelled", Vec::new());
             }
             let Some(after) = after else {
@@ -592,29 +593,29 @@ pub fn call(server: &Server, params: &Value, cancel: &Cancel) -> Value {
             );
             content::success(answer.structured, answer.summary, Vec::new())
         }),
-        "status" => Ok(status(server, text("path"), cancel)),
-        "stop" => stop(server, text("path")),
+        "status" => Ok(status(server, text("path"), call)),
+        "stop" => stop(server, text("path"), call),
         "inspect" => inspect(
             server,
             text("path"),
             text("name"),
             text("file"),
             arguments.get("frame").and_then(Value::as_u64).unwrap_or(0),
-            cancel,
+            call,
         ),
         "eval" => evaluate(
             server,
             text("path"),
             text("code").unwrap_or_default(),
             arguments.get("frame").and_then(Value::as_u64).unwrap_or(0),
-            cancel,
+            call,
         ),
-        "break" | "step" | "continue" | "clear" => debug(server, name, &arguments, cancel),
-        "screenshot" => screenshot(server, text("path"), text("title"), cancel, &progress),
+        "break" | "step" | "continue" | "clear" => debug(server, name, &arguments, call),
+        "screenshot" => screenshot(server, text("path"), text("title"), call, &progress),
         "move" | "click" | "drag" | "scroll" | "key" | "type" => {
-            input(server, name, &arguments, cancel)
+            input(server, name, &arguments, call)
         }
-        name => extension_call(server, name, &arguments, cancel, &progress),
+        name => extension_call(server, name, &arguments, call, &progress),
     };
     outcome.unwrap_or_else(content::failure)
 }
@@ -625,7 +626,7 @@ fn new(
     server: &Server,
     path: Option<&str>,
     template: Option<&str>,
-    cancel: &Cancel,
+    call: &Call,
 ) -> Result<Value, String> {
     let path = path.ok_or("`new` needs a `path`")?;
     let path = if Path::new(path).is_absolute() {
@@ -639,7 +640,7 @@ fn new(
         command.args(["--template", template]);
     }
     command.current_dir(&server.root);
-    let finished = process::run(&mut command, None, cancel).map_err(|error| error.to_string())?;
+    let finished = process::run(&mut command, None, call).map_err(|error| error.to_string())?;
     let (stdout, _) = finished.stdout.finish();
     let (stderr, _) = finished.stderr.finish();
     if !finished.status.is_some_and(|status| status.success()) {
@@ -687,7 +688,7 @@ fn run(
     options: &Options,
     arguments: &[String],
     stdin: Option<&str>,
-    cancel: &Cancel,
+    call: &Call,
 ) -> Value {
     let Ok(executable) = std::env::current_exe() else {
         return content::failure("cannot find rawr");
@@ -707,7 +708,7 @@ fn run(
         } else {
             place.root.parent().unwrap_or(&place.root)
         });
-    let finished = match process::run(&mut command, Some(stdin.unwrap_or_default()), cancel) {
+    let finished = match process::run(&mut command, Some(stdin.unwrap_or_default()), call) {
         Ok(finished) => finished,
         Err(error) => return content::failure(format!("cannot run rawr: {error}")),
     };
@@ -756,7 +757,7 @@ fn start(
     options: &Options,
     arguments: &[String],
     stdin: Option<&str>,
-    cancel: &Cancel,
+    call: &Call,
     progress: &Progress<'_>,
 ) -> Result<Value, String> {
     if let Some(name) = terminal_ui(&place.root) {
@@ -764,21 +765,17 @@ fn start(
             "this program uses `{name}`, which draws a terminal UI, and `start` can't host a terminal yet. Run it with `rawr run` in a terminal of your own."
         ));
     }
-    let session = server
-        .sessions
-        .start(
-            &place.root,
-            session::Program {
-                path: &place.path,
-                options,
-                arguments,
-                stdin,
-            },
-            session::Entry::Run,
-            cancel,
-        )
-        .map_err(|error| format!("cannot start rawr run: {error}"))?;
-    session.settle(cancel, |stage, percent| {
+    let session = sessions::start(
+        server,
+        &place.root,
+        &place.path,
+        options,
+        arguments,
+        stdin,
+        call,
+    )
+    .map_err(|error| format!("cannot start rawr run: {error}"))?;
+    session.settle(call, |stage, percent| {
         progress.send(percent as f64, Some(100.0), stage);
     });
     let answer = session.answer(None, None);
@@ -797,10 +794,10 @@ fn start(
 fn session(
     server: &Server,
     path: Option<&str>,
-    cancel: &Cancel,
+    call: &Call,
 ) -> Result<std::sync::Arc<session::Session>, String> {
     let place = place(&server.root, path)?;
-    server.sessions.get(&place.root, cancel).ok_or_else(|| {
+    sessions::get(server, &place.root, call).ok_or_else(|| {
         format!(
             "nothing was started for {}: call `start` first",
             place.root.display()
@@ -808,14 +805,14 @@ fn session(
     })
 }
 
-fn status(server: &Server, path: Option<&str>, cancel: &Cancel) -> Value {
-    let sessions = match path {
-        Some(_) => session(server, path, cancel)
+fn status(server: &Server, path: Option<&str>, call: &Call) -> Value {
+    let reached = match path {
+        Some(_) => session(server, path, call)
             .map(|session| vec![session])
             .unwrap_or_default(),
-        None => server.sessions.all(),
+        None => sessions::all(server, call),
     };
-    let list: Vec<Value> = sessions
+    let list: Vec<Value> = reached
         .iter()
         .map(|session| {
             json!({
@@ -850,9 +847,9 @@ fn status(server: &Server, path: Option<&str>, cancel: &Cancel) -> Value {
     content::success(json!({ "sessions": list }), summary, Vec::new())
 }
 
-fn stop(server: &Server, path: Option<&str>) -> Result<Value, String> {
+fn stop(server: &Server, path: Option<&str>, call: &Call) -> Result<Value, String> {
     let place = place(&server.root, path)?;
-    let Some(session) = server.sessions.stop(&place.root) else {
+    let Some(session) = sessions::stop(server, &place.root, call) else {
         return Ok(content::success(
             json!({ "stopped": false }),
             format!("nothing was running for {}", place.root.display()),
@@ -870,7 +867,7 @@ fn stop(server: &Server, path: Option<&str>) -> Result<Value, String> {
         ));
     }
     // The group has its grace to end, then is killed.
-    session.wait_exit();
+    session.wait_exit(call);
     Ok(content::success(
         json!({ "stopped": true, "root": session.root, "pid": session.pid() }),
         format!("stopped {}", session.root.display()),
@@ -885,16 +882,16 @@ fn inspect(
     name: Option<&str>,
     file: Option<&str>,
     frame: u64,
-    cancel: &Cancel,
+    call: &Call,
 ) -> Result<Value, String> {
-    let session = session(server, path, cancel)?;
+    let session = session(server, path, call)?;
     let file = file.map(|file| absolute(&server.root, Some(file)));
     let request = json!({
         "name": name,
         "file": file,
         "frame": frame,
     });
-    let answer = ask(&session, &request, cancel)?;
+    let (answer, _) = ask(&session, &request, call)?;
     if answer["reached"] != true {
         let paused = &answer["paused"];
         if paused.is_object() {
@@ -994,11 +991,11 @@ fn evaluate(
     path: Option<&str>,
     code: &str,
     frame: u64,
-    cancel: &Cancel,
+    call: &Call,
 ) -> Result<Value, String> {
-    let session = session(server, path, cancel)?;
+    let session = session(server, path, call)?;
     let request = json!({ "op": "eval", "code": code, "frame": frame });
-    let answer = ask(&session, &request, cancel)?;
+    let (answer, _) = ask(&session, &request, call)?;
     match (answer["value"].as_str(), answer["error"].as_str()) {
         (Some(value), _) => Ok(content::success(
             json!({ "root": session.root, "value": value }),
@@ -1015,12 +1012,8 @@ fn evaluate(
 
 /// `break`, `step`, `continue` and `clear`: ask the started program over
 /// its socket, and say where it paused.
-fn debug(server: &Server, tool: &str, arguments: &Value, cancel: &Cancel) -> Result<Value, String> {
-    let session = session(
-        server,
-        arguments.get("path").and_then(Value::as_str),
-        cancel,
-    )?;
+fn debug(server: &Server, tool: &str, arguments: &Value, call: &Call) -> Result<Value, String> {
+    let session = session(server, arguments.get("path").and_then(Value::as_str), call)?;
     let file = arguments
         .get("file")
         .and_then(Value::as_str)
@@ -1032,7 +1025,7 @@ fn debug(server: &Server, tool: &str, arguments: &Value, cancel: &Cancel) -> Res
         "function": arguments.get("function"),
         "kind": arguments.get("kind"),
     });
-    let answer = ask(&session, &request, cancel)?;
+    let (answer, seen) = ask(&session, &request, call)?;
     match answer["error"].as_str() {
         Some("not paused") => {
             return Err(format!(
@@ -1085,7 +1078,7 @@ fn debug(server: &Server, tool: &str, arguments: &Value, cancel: &Cancel) -> Res
     let paused = &answer["paused"];
     // `status` and `wait` say so at once, before the program's own event
     // arrives (#535).
-    session.observe_pause(paused.as_object().map(|_| paused.clone()));
+    session.observe_pause(paused.as_object().map(|_| paused.clone()), seen);
     if paused.is_object() {
         summary.push_str(&format!(
             "paused at {}:{}",
@@ -1118,23 +1111,19 @@ fn debug(server: &Server, tool: &str, arguments: &Value, cancel: &Cancel) -> Res
 /// `move`, `click`, `drag`, `scroll`, `key` and `type`: ask the started
 /// program over its socket to hand its window the input, and say what it
 /// reached.
-fn input(server: &Server, tool: &str, arguments: &Value, cancel: &Cancel) -> Result<Value, String> {
-    let session = session(
-        server,
-        arguments.get("path").and_then(Value::as_str),
-        cancel,
-    )?;
+fn input(server: &Server, tool: &str, arguments: &Value, call: &Call) -> Result<Value, String> {
+    let session = session(server, arguments.get("path").and_then(Value::as_str), call)?;
     let mut request = arguments.clone();
     if !request.is_object() {
         request = json!({});
     }
     request["op"] = json!("input");
     request["action"] = json!(tool);
-    let answer = ask(&session, &request, cancel)?;
+    let (answer, seen) = ask(&session, &request, call)?;
     match answer["error"].as_str() {
         Some("paused") if answer["taken"] == true => {
             let paused = &answer["paused"];
-            session.observe_pause(Some(paused.clone()));
+            session.observe_pause(Some(paused.clone()), seen);
             let mut summary = format!(
                 "{tool} sent; the program paused at {}:{}",
                 paused["file"].as_str().unwrap_or_default(),
@@ -1194,18 +1183,20 @@ fn input(server: &Server, tool: &str, arguments: &Value, cancel: &Cancel) -> Res
 /// session, or why there is none. The session gives a request made while
 /// the program starts or restarts to the program that comes of it, not the
 /// one it retires (#1964).
-fn ask(session: &session::Session, request: &Value, cancel: &Cancel) -> Result<Value, String> {
-    session
-        .ask(request, cancel)
-        .map_err(|refusal| match refusal {
-            session::Refusal::NotRunning => format!(
-                "the program started for {} isn't running (state: {})",
-                session.root.display(),
-                session.phase().name()
-            ),
-            session::Refusal::Error(error) => error,
-            session::Refusal::Cancelled => "cancelled".to_owned(),
-        })
+fn ask(
+    session: &session::Session,
+    request: &Value,
+    call: &Call,
+) -> Result<(Value, session::Seen), String> {
+    session.ask(request, call).map_err(|refusal| match refusal {
+        session::Refusal::NotRunning => format!(
+            "the program started for {} isn't running (state: {})",
+            session.root.display(),
+            session.phase().name()
+        ),
+        session::Refusal::Error(error) => error,
+        session::Refusal::Cancelled => "cancelled".to_owned(),
+    })
 }
 
 /// `screenshot`: an extension's own capture first, else the started
@@ -1216,21 +1207,21 @@ fn screenshot(
     server: &Server,
     path: Option<&str>,
     title: Option<&str>,
-    cancel: &Cancel,
+    call: &Call,
     progress: &Progress<'_>,
 ) -> Result<Value, String> {
     let place = place(&server.root, path)?;
-    let session = server.sessions.get(&place.root, cancel);
+    let session = sessions::get(server, &place.root, call);
     let installed = layer::installed();
     let mut reasons = Vec::new();
     if let Some(offered) = extension::find(&installed, "screenshot") {
-        let call = content::Call {
+        let asked = content::Call {
             arguments: json!({ "title": title }),
             root: place.root.clone(),
             target_dir: place.target_dir.clone(),
             pid: session.as_ref().map(|session| session.pid()),
         };
-        let result = extension::call(&offered.binary, "screenshot", &call, cancel, |record| {
+        let result = extension::call(&offered.binary, "screenshot", &asked, call, |record| {
             relay(progress, record)
         });
         if result["isError"] != true {
@@ -1252,7 +1243,7 @@ fn screenshot(
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
     let request = json!({ "op": "screenshot", "title": title, "file": file });
-    let answer = ask(&session, &request, cancel)?;
+    let (answer, _) = ask(&session, &request, call)?;
     match answer["error"].as_str() {
         Some("paused") => {
             let paused = &answer["paused"];
@@ -1311,7 +1302,7 @@ fn extension_call(
     server: &Server,
     name: &str,
     arguments: &Value,
-    cancel: &Cancel,
+    call: &Call,
     progress: &Progress<'_>,
 ) -> Result<Value, String> {
     let installed = layer::installed();
@@ -1335,20 +1326,17 @@ fn extension_call(
             Err(reason)
         }
     })?;
-    let call = content::Call {
+    let asked = content::Call {
         arguments: arguments.clone(),
         root: place.root.clone(),
         target_dir: place.target_dir.clone(),
-        pid: server
-            .sessions
-            .get(&place.root, cancel)
-            .map(|session| session.pid()),
+        pid: sessions::get(server, &place.root, call).map(|session| session.pid()),
     };
     Ok(extension::call(
         &offered.binary,
         name,
-        &call,
-        cancel,
+        &asked,
+        call,
         |record| relay(progress, record),
     ))
 }

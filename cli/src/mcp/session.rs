@@ -5,6 +5,16 @@
 //! terminal, which a tool attaches to (D1053.2). The owner keeps watching
 //! and reloading, as at a terminal; the server keeps its own copy of what
 //! the session tells, numbered as the session numbers it.
+//!
+//! One thread per session owns that copy and the requests waiting for
+//! answers. The connection's reader, the run's output readers, the thread
+//! that reaps the run, and every caller send to its inbox. A caller's
+//! request or wait names an [`Ear`] on the caller's own channel, and the
+//! owner tells it there once the answer comes, what it waited for
+//! happens, or the session is over. Each wait is checked after every
+//! message, so none waits on something already true. `rawr mcp`'s calls
+//! block on their call's channel, which their cancel also wakes; `rawr
+//! dap`'s adapter hears on its own inbox and blocks on nothing.
 
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead as _, BufReader, Read as _, Write as _};
@@ -12,10 +22,11 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{mpsc, Arc};
 
 use serde_json::{json, Value};
 
+use super::call::{Call, Wake};
 use super::options::Options;
 use super::process;
 use crate::events::session;
@@ -24,6 +35,11 @@ pub use crate::events::session::Phase;
 
 /// Output kept per session, oldest first out.
 const OUTPUT: usize = 256 * 1024;
+
+/// The number of the next request or wait, across sessions, so an answer
+/// meant for a wait of one session never passes for another's. Requests
+/// use it on the wire too: the session's `hello` is 0.
+static NEXT: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Stream {
@@ -70,22 +86,13 @@ struct Mirror {
     /// from here.
     given_event: u64,
     given_output: u64,
-    /// The newest `wait`'s number: a wait whose number is older was given
-    /// up by its client, which waits once at a time, and answers nothing.
+    /// The newest `Next` wait's number: a wait whose number is older was
+    /// given up by its client, which waits once at a time, and answers
+    /// nothing.
     waiter: u64,
     /// The newest breakpoints the session told, as its `breakpoints` event
     /// tells them (#2278).
     breakpoints: Value,
-}
-
-/// How the session answered a request.
-#[derive(Debug)]
-enum Reply {
-    Answer(Value),
-    Error(Value),
-    /// The connection closed first.
-    Closed,
-    Cancelled,
 }
 
 /// Why a request to the program has no answer.
@@ -98,17 +105,71 @@ pub enum Refusal {
     Cancelled,
 }
 
-/// The connection to a run's session: requests by number, written in
-/// order by a thread of its own, so output the server tells never waits on
-/// the session.
+/// How far the session's events had come when an answer came. What the
+/// answer says of the program holds only until a later event, which the
+/// session told after it and which is newer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Seen(u64);
+
+/// What a session tells one of its waiters.
 #[derive(Debug)]
-struct Link {
-    stream: UnixStream,
-    out: mpsc::Sender<String>,
-    /// The requests waiting for their answers; `None` once the connection
-    /// closed.
-    pending: Mutex<Option<HashMap<u64, mpsc::Sender<Reply>>>>,
-    next: AtomicU64,
+pub enum Told {
+    /// The answer to a request, and how far the events had come with it.
+    Answer(Result<(Value, Seen), Refusal>),
+    /// A build's stage and percent, while a wait for the program waits.
+    Building { stage: String, percent: u64 },
+    /// What the wait waited for came, or the session is over.
+    Done,
+    /// A [`Wait::Next`] ended: the cursor it goes on from, or `None` once a
+    /// later wait took its place.
+    Next(Option<u64>),
+}
+
+/// What a waiter waits for. Each ends too when the session is over, but
+/// for [`Wait::Exit`], which outlasts a stop.
+#[derive(Clone, Copy, Debug)]
+pub enum Wait {
+    /// The session's greeting, or its close.
+    Greeting,
+    /// The program runs or fails.
+    Settled,
+    /// The next event past `cursor` other than build progress, by default
+    /// past what was last given. A client waits once at a time, so a wait
+    /// that comes while another is still parked means the client gave the
+    /// first up (#1542): that one ends with no cursor.
+    Next { cursor: Option<u64> },
+    /// An event past `event`, output past `output` or breakpoints past
+    /// revision `breakpoints`: for a shell that tells each as it comes.
+    Change {
+        event: u64,
+        output: u64,
+        breakpoints: u64,
+    },
+    /// The exit of the `rawr run` the server started, at once for a run
+    /// started elsewhere.
+    Exit,
+}
+
+/// Where a session tells a waiter: the waiter's own channel. A tell fails
+/// once the waiter is gone, and the session forgets the wait.
+pub struct Ear(Box<dyn Fn(u64, Told) -> bool + Send>);
+
+impl std::fmt::Debug for Ear {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Ear")
+    }
+}
+
+impl Ear {
+    /// An ear that hands each wait's number and what it is told to `tell`,
+    /// which says whether the waiter took it.
+    pub fn new(tell: impl Fn(u64, Told) -> bool + Send + 'static) -> Self {
+        Self(Box::new(tell))
+    }
+
+    fn tell(&self, id: u64, told: Told) -> bool {
+        (self.0)(id, told)
+    }
 }
 
 /// A `rawr run` the server started.
@@ -121,7 +182,32 @@ struct Started {
     place: session::Place,
 }
 
-/// One program the server reaches.
+/// What a session's owner hears.
+enum Inbox {
+    /// A message the session sent.
+    Message(Value),
+    /// The connection to the session closed.
+    Closed,
+    /// A piece of the output of the `rawr run` the server started.
+    Output { stream: Stream, text: String },
+    /// One of that run's output pipes closed.
+    PipeClosed,
+    /// That run exited, with this status.
+    Exited(Option<i32>),
+    /// A look at the mirror, or a change to it.
+    Look(Box<dyn FnOnce(&mut Mirror) + Send>),
+    /// A request for the program, answered to `ear` as `id`.
+    Ask { id: u64, request: Value, ear: Ear },
+    /// A wait, told to `ear` as `id`.
+    Park { id: u64, wait: Wait, ear: Ear },
+    /// The waiter of `id` gave up: a request, which the session is told to
+    /// cancel, or a wait.
+    Forget(u64),
+    /// End the session.
+    Stop,
+}
+
+/// One program the server reaches: a handle on its owner thread.
 #[derive(Debug)]
 pub struct Session {
     /// The project root, the session's key.
@@ -130,14 +216,56 @@ pub struct Session {
     pub path: PathBuf,
     /// The program's arguments.
     pub arguments: Vec<String>,
-    /// The run `start` started; `None` for a run started elsewhere.
-    started: Option<Started>,
-    link: Link,
-    state: Mutex<Mirror>,
-    changed: Condvar,
+    /// Whether the server started the run, rather than one started
+    /// elsewhere.
+    started: bool,
+    inbox: mpsc::Sender<Inbox>,
 }
 
-/// How the program of a run [`Sessions::start`] starts goes.
+/// The thread that owns a session's mirror.
+struct Owner {
+    mirror: Mirror,
+    /// The run `start` started; `None` for a run started elsewhere.
+    started: Option<Started>,
+    /// The connection, which a stop shuts for a run started elsewhere.
+    stream: UnixStream,
+    /// The connection's writer thread: requests in order, so output the
+    /// server tells never waits on the session.
+    out: mpsc::Sender<String>,
+    /// The requests waiting for their answers; `None` once the connection
+    /// closed.
+    pending: Option<HashMap<u64, Ear>>,
+    parked: Vec<Parked>,
+    /// The status of the `rawr run` the server started, once it was reaped.
+    status: Option<Option<i32>>,
+}
+
+/// A wait the owner holds until it ends.
+struct Parked {
+    id: u64,
+    until: Until,
+    ear: Ear,
+    /// The build update last told.
+    heard: Option<(String, u64)>,
+}
+
+/// A [`Wait`] as the owner holds it.
+enum Until {
+    Greeting,
+    Settled,
+    Next {
+        after: u64,
+        ticket: u64,
+    },
+    Change {
+        event: u64,
+        output: u64,
+        breakpoints: u64,
+    },
+    Exit,
+}
+
+/// How the program of a run [`Session::spawn`] starts goes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Entry {
     /// It runs at once.
@@ -147,84 +275,29 @@ pub enum Entry {
     Hold,
 }
 
-/// What [`Sessions::start`] starts `rawr run` with.
-#[derive(Clone, Copy, Debug)]
-pub struct Program<'a> {
-    /// The path given to `rawr run`.
-    pub path: &'a Path,
-    /// The feature flags and environment.
-    pub options: &'a Options,
-    /// The program's arguments.
-    pub arguments: &'a [String],
-    /// The program's input, then end of input.
-    pub stdin: Option<&'a str>,
+/// What one answer about a session holds.
+#[derive(Debug)]
+pub struct Answer {
+    /// The data.
+    pub structured: Value,
+    /// The text form.
+    pub summary: String,
 }
 
-/// The sessions, one per project root.
-#[derive(Debug, Default)]
-pub struct Sessions(Mutex<HashMap<PathBuf, Arc<Session>>>);
-
-impl Sessions {
-    fn lock(&self) -> MutexGuard<'_, HashMap<PathBuf, Arc<Session>>> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// The session for `root`: the server's, or the session of a run
-    /// started elsewhere, which the server attaches to. One that is over
-    /// gives way to a run there now.
-    pub fn get(&self, root: &Path, cancel: &process::Cancel) -> Option<Arc<Session>> {
-        let known = self.lock().get(root).cloned();
-        if known
-            .as_ref()
-            .is_some_and(|session| !session.phase().is_over())
-        {
-            return known;
-        }
-        let Some(attached) = Session::attach(root, cancel) else {
-            return known;
-        };
-        self.lock()
-            .insert(root.to_path_buf(), Arc::clone(&attached));
-        Some(attached)
-    }
-
-    /// Every session.
-    #[must_use]
-    pub fn all(&self) -> Vec<Arc<Session>> {
-        let mut all: Vec<_> = self.lock().values().cloned().collect();
-        all.sort_by(|a, b| a.root.cmp(&b.root));
-        all
-    }
-
-    /// Start `rawr run <path> <feature flags> -- arguments` of `program`
-    /// for `root` in its options' environment, replacing the session the
-    /// server started there, its program going as `entry` says. A run
-    /// started elsewhere that serves `root` is attached to instead. The run
-    /// keeps the options for its reloads: its process selects the flags for
-    /// every Cargo answer it asks and hands them to the program's process,
-    /// which also inherits the environment.
-    pub fn start(
-        &self,
+impl Session {
+    /// Start `rawr run <path> <feature flags> -- arguments` for `root` in
+    /// `options`' environment, its program going as `entry` says and
+    /// reading `stdin`. The run keeps the options for its reloads: its
+    /// process selects the flags for every Cargo answer it asks and hands
+    /// them to the program's process, which also inherits the environment.
+    pub fn spawn(
         root: &Path,
-        program: Program<'_>,
+        path: &Path,
+        options: &Options,
+        arguments: &[String],
+        stdin: Option<&str>,
         entry: Entry,
-        cancel: &process::Cancel,
-    ) -> std::io::Result<Arc<Session>> {
-        let Program {
-            path,
-            options,
-            arguments,
-            stdin,
-        } = program;
-        if let Some(old) = self.lock().remove(root) {
-            old.stop();
-            old.wait_exit();
-        }
-        if let Some(attached) = Session::attach(root, cancel) {
-            self.lock()
-                .insert(root.to_path_buf(), Arc::clone(&attached));
-            return Ok(attached);
-        }
+    ) -> std::io::Result<Arc<Self>> {
         let place = session::Place::new(root)?;
         place.make()?;
         let socket = place.socket();
@@ -257,7 +330,7 @@ impl Sessions {
         let mut child = process::spawn(&mut command)?;
         drop(listener);
         // The kernel holds the connection until the run accepts it.
-        let session = Session::open(
+        let session = Self::open(
             root,
             path,
             arguments,
@@ -293,50 +366,31 @@ impl Sessions {
             ),
         ] {
             if let Some(pipe) = pipe {
-                let reading = Arc::clone(&session);
-                session.state().pipes += 1;
+                // Counted before the reader starts, so its close comes after.
+                session.change(|mirror| mirror.pipes += 1);
+                let inbox = session.inbox.clone();
                 let spawned = std::thread::Builder::new()
                     .name("rawr-mcp-session-output".into())
-                    .spawn(move || reading.read_output(pipe, stream));
+                    .spawn(move || read_output(pipe, stream, &inbox));
                 if spawned.is_err() {
-                    session.state().pipes -= 1;
+                    session.change(|mirror| mirror.pipes -= 1);
                 }
             }
         }
-        let waiting = Arc::clone(&session);
-        let _ = std::thread::Builder::new()
-            .name("rawr-mcp-session".into())
-            .spawn(move || waiting.follow(child));
-        self.lock().insert(root.to_path_buf(), Arc::clone(&session));
+        let inbox = session.inbox.clone();
+        let reaping = std::thread::Builder::new()
+            .name("rawr-mcp-session-exit".into())
+            .spawn(move || {
+                let status = child.wait().ok().map(process::code);
+                let _ = inbox.send(Inbox::Exited(status));
+            });
+        if reaping.is_err() {
+            // The child went with the closure: the run's waits still end.
+            let _ = session.inbox.send(Inbox::Exited(None));
+        }
         Ok(session)
     }
 
-    /// End the session for `root`, if any.
-    pub fn stop(&self, root: &Path) -> Option<Arc<Session>> {
-        let session = self.lock().remove(root)?;
-        session.stop();
-        Some(session)
-    }
-
-    /// End every session.
-    pub fn stop_all(&self) {
-        let sessions: Vec<_> = self.lock().drain().map(|(_, session)| session).collect();
-        for session in sessions {
-            session.stop();
-        }
-    }
-}
-
-/// What one answer about a session holds.
-#[derive(Debug)]
-pub struct Answer {
-    /// The data.
-    pub structured: Value,
-    /// The text form.
-    pub summary: String,
-}
-
-impl Session {
     /// A session reached on `stream`, which it greets: of the `rawr run`
     /// the server `started`, or of a run started elsewhere.
     fn open(
@@ -358,52 +412,58 @@ impl Session {
                     }
                 }
             })?;
-        let session = Arc::new(Self {
+        // The session's first answer is to `hello`: what happened so far.
+        let hello = json!({ "jsonrpc": "2.0", "id": 0, "method": "hello" });
+        let _ = out.send(format!("{hello}\n"));
+        let is_started = started.is_some();
+        let owner = Owner {
+            mirror: Mirror {
+                pid: started.as_ref().map_or(0, |started| started.group),
+                ..Mirror::default()
+            },
+            started,
+            stream,
+            out,
+            pending: Some(HashMap::new()),
+            parked: Vec::new(),
+            status: None,
+        };
+        let (inbox, messages) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("rawr-mcp-session".into())
+            .spawn(move || owner.run(&messages))?;
+        let listening = inbox.clone();
+        std::thread::Builder::new()
+            .name("rawr-mcp-session-read".into())
+            .spawn(move || listen(reading, &listening))?;
+        Ok(Arc::new(Self {
             root: root.to_path_buf(),
             path: path.to_path_buf(),
             arguments: arguments.to_vec(),
-            link: Link {
-                stream,
-                out,
-                pending: Mutex::new(Some(HashMap::new())),
-                next: AtomicU64::new(1),
-            },
-            state: Mutex::new(Mirror {
-                pid: started.as_ref().map_or(0, |started| started.group),
-                ..Mirror::default()
-            }),
-            started,
-            changed: Condvar::new(),
-        });
-        // The session's first answer is to `hello`: what happened so far.
-        session
-            .link
-            .send(&json!({ "jsonrpc": "2.0", "id": 0, "method": "hello" }));
-        let listening = Arc::clone(&session);
-        std::thread::Builder::new()
-            .name("rawr-mcp-session-read".into())
-            .spawn(move || listening.listen(reading))?;
-        Ok(session)
+            started: is_started,
+            inbox,
+        }))
+    }
+
+    /// The session of a run started elsewhere that serves `root`, not yet
+    /// greeted: `None` when no run serves it there. Its greeting ends a
+    /// [`Wait::Greeting`], and [`Self::reached`] then says whether it came.
+    #[must_use]
+    pub fn reach(root: &Path) -> Option<Arc<Self>> {
+        let socket = session::Place::new(root).ok()?.socket();
+        let stream = UnixStream::connect(socket).ok()?;
+        Self::open(root, root, &[], None, stream).ok()
     }
 
     /// The session of a run started elsewhere that serves `root`, once it
-    /// greeted the server: `None` when no run serves it there, or `cancel`
-    /// fired first.
-    fn attach(root: &Path, cancel: &process::Cancel) -> Option<Arc<Self>> {
-        let socket = session::Place::new(root).ok()?.socket();
-        let stream = UnixStream::connect(socket).ok()?;
-        let session = Self::open(root, root, &[], None, stream).ok()?;
-        session.wake_on(cancel);
-        let mut state = session.state();
-        while !state.greeted && !cancel.is_cancelled() {
-            state = session
-                .changed
-                .wait(state)
-                .unwrap_or_else(PoisonError::into_inner);
-        }
-        let reached = state.greeted && !state.closed;
-        drop(state);
-        if !reached {
+    /// greeted the server: `None` when no run serves it there, or `call`
+    /// was cancelled first.
+    pub fn attach(root: &Path, call: &Call) -> Option<Arc<Self>> {
+        let session = Self::reach(root)?;
+        let greeted = session.wait_for(call, Wait::Greeting, |told| {
+            matches!(told, Told::Done).then_some(())
+        });
+        if greeted.is_none() || !session.reached() {
             session.stop();
             return None;
         }
@@ -416,14 +476,14 @@ impl Session {
     pub fn running_at(phase: Phase) -> (Arc<Self>, UnixStream) {
         let (stream, other) = UnixStream::pair().unwrap();
         let session = Self::open(Path::new("/p"), Path::new("/p"), &[], None, stream).unwrap();
-        let mut state = session.state();
-        state.greeted = true;
-        match phase {
-            Phase::Running => state.session.record(1, json!({ "event": "running" })),
-            Phase::Starting => {}
-            other => state.session.end(other),
-        }
-        drop(state);
+        session.change(move |mirror| {
+            mirror.greeted = true;
+            match phase {
+                Phase::Running => mirror.session.record(1, json!({ "event": "running" })),
+                Phase::Starting => {}
+                other => mirror.session.end(other),
+            }
+        });
         (session, other)
     }
 
@@ -431,167 +491,392 @@ impl Session {
     /// rawr's own lines.
     #[cfg(test)]
     pub fn read_rawr(&self, text: &'static [u8]) {
-        self.state().pipes += 1;
-        self.read_output(Box::new(text), Stream::Rawr);
+        self.change(|mirror| mirror.pipes += 1);
+        read_output(Box::new(text), Stream::Rawr, &self.inbox);
     }
 
-    fn state(&self) -> MutexGuard<'_, Mirror> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    /// Change the mirror on the owner's thread.
+    fn change(&self, change: impl FnOnce(&mut Mirror) + Send + 'static) {
+        let _ = self.inbox.send(Inbox::Look(Box::new(change)));
     }
 
-    /// Wake this session's waits when `cancel` fires.
-    fn wake_on(self: &Arc<Self>, cancel: &process::Cancel) {
-        let waking = Arc::clone(self);
-        cancel.on_cancel(move || {
-            // A wait looks at the cancel under this lock.
-            drop(waking.state());
-            waking.changed.notify_all();
+    /// What `look` reads of the mirror on the owner's thread. The owner
+    /// reads its inbox while this handle holds a sender, so it is `None`
+    /// only if the owner panicked.
+    fn look<T: Send + 'static>(
+        &self,
+        look: impl FnOnce(&mut Mirror) -> T + Send + 'static,
+    ) -> Option<T> {
+        let (reply, answer) = mpsc::channel();
+        self.change(move |mirror| {
+            let _ = reply.send(look(mirror));
         });
+        answer.recv().ok()
     }
 
     /// The current phase.
     #[must_use]
     pub fn phase(&self) -> Phase {
-        self.state().session.phase().clone()
+        self.look(|mirror| mirror.session.phase().clone())
+            .unwrap_or(Phase::Exited(None))
     }
 
     /// The pid of `rawr run`.
     #[must_use]
     pub fn pid(&self) -> u32 {
-        self.state().pid
+        self.look(|mirror| mirror.pid).unwrap_or(0)
     }
 
     /// Whether the server started this session's run.
     #[must_use]
     pub const fn is_started(&self) -> bool {
-        self.started.is_some()
+        self.started
+    }
+
+    /// Whether the session greeted the server before its connection
+    /// closed.
+    #[must_use]
+    pub fn reached(&self) -> bool {
+        self.look(|mirror| mirror.greeted && !mirror.closed)
+            .unwrap_or(false)
     }
 
     /// Where the program is paused, if it is.
     #[must_use]
     pub fn paused(&self) -> Option<Value> {
-        self.state().session.paused().cloned()
+        self.look(|mirror| mirror.session.paused().cloned())
+            .flatten()
     }
 
-    /// The program answered a debugger tool: paused at `paused`, or
-    /// running. Its own `paused` and `resumed` events say the same once
-    /// they come.
-    pub fn observe_pause(&self, paused: Option<Value>) {
-        self.state().session.observe_pause(paused);
+    /// The program answered a debugger tool, as of `seen`: paused at
+    /// `paused`, or running. Its own `paused` and `resumed` events say the
+    /// same once they come, so an event that came after the answer wins:
+    /// the program may have paused or gone on since.
+    pub fn observe_pause(&self, paused: Option<Value>, seen: Seen) {
+        self.change(move |mirror| {
+            if mirror.seen() == seen {
+                mirror.session.observe_pause(paused);
+            }
+        });
+    }
+
+    /// The newest breakpoints the session told: `{"event": "breakpoints",
+    /// "revision", "breakpoints": [..]}`, or null before `hello`.
+    #[must_use]
+    pub fn breakpoints(&self) -> Value {
+        self.look(|mirror| mirror.breakpoints.clone())
+            .unwrap_or(Value::Null)
+    }
+
+    /// The session now: its phase, the events past `cursor` and the output
+    /// past `output_cursor` (each defaulting to what was last given), which
+    /// then count as given.
+    #[must_use]
+    pub fn answer(&self, cursor: Option<u64>, output_cursor: Option<u64>) -> Answer {
+        let mut structured = self
+            .look(move |mirror| mirror.answer(cursor, output_cursor))
+            .unwrap_or_else(|| Mirror::default().answer(cursor, output_cursor));
+        structured["root"] = json!(self.root);
+        let summary = summary(&structured);
+        Answer {
+            structured,
+            summary,
+        }
+    }
+
+    /// End the session: the group the server started, SIGTERM and then
+    /// SIGKILL after a grace, or the connection to a run started
+    /// elsewhere, which goes on.
+    pub fn stop(&self) {
+        let _ = self.inbox.send(Inbox::Stop);
     }
 
     /// Ask the program `request` through the session, which waits for the
-    /// program that runs next while it starts or restarts.
-    pub fn ask(&self, request: &Value, cancel: &process::Cancel) -> Result<Value, Refusal> {
-        let id = self.link.next.fetch_add(1, Ordering::Relaxed);
-        let (reply, answer) = mpsc::channel();
-        {
-            let mut pending = self
-                .link
-                .pending
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
-            let Some(pending) = pending.as_mut() else {
-                return Err(Refusal::NotRunning);
-            };
-            pending.insert(id, reply.clone());
+    /// program that runs next while it starts or restarts. The answer goes
+    /// to `ear` under the number returned.
+    pub fn request(&self, request: Value, ear: Ear) -> u64 {
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        let _ = self.inbox.send(Inbox::Ask { id, request, ear });
+        id
+    }
+
+    /// Wait for `wait`, told to `ear` under the number returned.
+    pub fn park(&self, wait: Wait, ear: Ear) -> u64 {
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        let _ = self.inbox.send(Inbox::Park { id, wait, ear });
+        id
+    }
+
+    /// Give up the request or wait `id`.
+    pub fn forget(&self, id: u64) {
+        let _ = self.inbox.send(Inbox::Forget(id));
+    }
+
+    /// [`Self::request`] for a call, which waits for the answer or its
+    /// cancel.
+    pub fn ask(&self, request: &Value, call: &Call) -> Result<(Value, Seen), Refusal> {
+        if call.is_cancelled() {
+            return Err(Refusal::Cancelled);
         }
-        let out = self.link.out.clone();
-        cancel.on_cancel(move || {
-            let cancel = json!({ "jsonrpc": "2.0", "method": "cancel", "params": { "id": id } });
-            let _ = out.send(format!("{cancel}\n"));
-            let _ = reply.send(Reply::Cancelled);
+        let id = self.request(request.clone(), ear(call));
+        let answer = call.wait(|wake| match wake {
+            Wake::Session {
+                id: asked,
+                told: Told::Answer(answer),
+            } if asked == id => Some(answer),
+            _ => None,
         });
-        self.link
-            .send(&json!({ "jsonrpc": "2.0", "id": id, "method": "program", "params": request }));
-        let reply = answer.recv().unwrap_or(Reply::Closed);
-        if let Some(pending) = self
-            .link
-            .pending
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .as_mut()
-        {
-            pending.remove(&id);
+        answer.unwrap_or_else(|| {
+            self.forget(id);
+            Err(Refusal::Cancelled)
+        })
+    }
+
+    /// Wait for `wait` on behalf of `call`, until `heard` takes what the
+    /// session tells or the call is cancelled.
+    fn wait_for<T>(
+        &self,
+        call: &Call,
+        wait: Wait,
+        mut heard: impl FnMut(Told) -> Option<T>,
+    ) -> Option<T> {
+        if call.is_cancelled() {
+            return None;
         }
-        match reply {
-            Reply::Answer(answer) => Ok(answer),
-            Reply::Error(error) if error["code"] == session::NOT_RUNNING => {
-                Err(Refusal::NotRunning)
+        let id = self.park(wait, ear(call));
+        let taken = call.wait(|wake| match wake {
+            Wake::Session { id: waited, told } if waited == id => heard(told),
+            _ => None,
+        });
+        if taken.is_none() {
+            self.forget(id);
+        }
+        taken
+    }
+
+    /// Wait until the program runs or fails, or `call` is cancelled;
+    /// `building` hears each build update.
+    pub fn settle(&self, call: &Call, mut building: impl FnMut(&str, u64)) {
+        self.wait_for(call, Wait::Settled, |told| match told {
+            Told::Building { stage, percent } => {
+                building(&stage, percent);
+                None
             }
-            Reply::Error(error) if error["code"] == session::CANCELLED => Err(Refusal::Cancelled),
-            Reply::Error(error) => Err(Refusal::Error(
-                error["message"].as_str().unwrap_or_default().to_owned(),
-            )),
-            Reply::Closed => Err(Refusal::NotRunning),
-            Reply::Cancelled => Err(Refusal::Cancelled),
+            Told::Done => Some(()),
+            _ => None,
+        });
+    }
+
+    /// Wait for the next event past `cursor` other than build progress, or
+    /// `call`'s cancel: the cursor the wait went on from, or `None` once a
+    /// later wait took its place (see [`Wait::Next`]). `building` hears
+    /// each build update.
+    pub fn next(
+        &self,
+        cursor: Option<u64>,
+        call: &Call,
+        mut building: impl FnMut(&str, u64),
+    ) -> Option<u64> {
+        self.wait_for(call, Wait::Next { cursor }, |told| match told {
+            Told::Building { stage, percent } => {
+                building(&stage, percent);
+                None
+            }
+            Told::Next(after) => Some(after),
+            _ => None,
+        })
+        .flatten()
+    }
+
+    /// Wait for `rawr run` to exit, after [`Self::stop`] ended the group
+    /// the server started, or for `call`'s cancel.
+    pub fn wait_exit(&self, call: &Call) {
+        if !self.started {
+            return;
+        }
+        self.wait_for(call, Wait::Exit, |told| {
+            matches!(told, Told::Done).then_some(())
+        });
+    }
+}
+
+/// An ear on `call`'s channel.
+fn ear(call: &Call) -> Ear {
+    let waker = call.waker();
+    Ear::new(move |id, told| waker.wake(Wake::Session { id, told }))
+}
+
+/// Read the session's messages until its connection closes.
+fn listen(stream: UnixStream, inbox: &mpsc::Sender<Inbox>) {
+    for line in BufReader::new(stream).lines() {
+        let Ok(line) = line else {
+            break;
+        };
+        let Ok(message) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        if inbox.send(Inbox::Message(message)).is_err() {
+            return;
+        }
+    }
+    let _ = inbox.send(Inbox::Closed);
+}
+
+/// Read one of `rawr run`'s output pipes until it closes.
+fn read_output(
+    mut pipe: Box<dyn std::io::Read + Send>,
+    stream: Stream,
+    inbox: &mpsc::Sender<Inbox>,
+) {
+    let mut buffer = [0_u8; 8192];
+    while let Ok(read @ 1..) = pipe.read(&mut buffer) {
+        let text = String::from_utf8_lossy(&buffer[..read]).into_owned();
+        if inbox.send(Inbox::Output { stream, text }).is_err() {
+            return;
+        }
+    }
+    let _ = inbox.send(Inbox::PipeClosed);
+}
+
+impl Owner {
+    /// Take each message, then end the waits it ended, until every sender
+    /// is gone.
+    fn run(mut self, inbox: &mpsc::Receiver<Inbox>) {
+        for message in inbox {
+            self.take(message);
+            self.reap();
+            self.wake();
         }
     }
 
-    /// Read the session's messages until its connection closes.
-    fn listen(&self, stream: UnixStream) {
-        for line in BufReader::new(stream).lines() {
-            let Ok(line) = line else {
-                break;
-            };
-            let Ok(mut message) = serde_json::from_str::<Value>(&line) else {
-                continue;
-            };
-            match (message["id"].as_u64(), message["method"].as_str()) {
-                (Some(0), None) => self.greeted(&message["result"]),
-                (Some(id), None) => self.link.answered(id, message),
-                (None, Some("event")) => {
-                    let event = message["params"].take();
-                    if let Some(seq) = event["seq"].as_u64() {
-                        self.state().session.record(seq, event);
-                        self.changed.notify_all();
-                    } else if event["event"] == "breakpoints" {
-                        self.state().take_breakpoints(event);
-                        self.changed.notify_all();
-                    }
-                }
-                (None, Some("output")) => {
-                    let params = &message["params"];
-                    let stream = match params["stream"].as_str() {
-                        Some("stderr") => Stream::Stderr,
-                        _ => Stream::Stdout,
-                    };
-                    if let Some(text) = params["text"].as_str() {
-                        self.state().keep(stream, text.to_owned());
-                        self.changed.notify_all();
-                    }
-                }
-                _ => {}
+    fn send(&self, message: &Value) {
+        let _ = self.out.send(format!("{message}\n"));
+    }
+
+    fn take(&mut self, message: Inbox) {
+        match message {
+            Inbox::Message(message) => self.heard(message),
+            Inbox::Closed => self.close(),
+            Inbox::Output { stream, text } => {
+                // The other shells attached to the session hear it too.
+                self.send(&json!({
+                    "jsonrpc": "2.0",
+                    "method": "output",
+                    "params": { "stream": stream.name(), "text": text },
+                }));
+                self.mirror.keep(stream, text);
             }
+            Inbox::PipeClosed => self.mirror.pipes -= 1,
+            Inbox::Exited(status) => self.status = Some(status),
+            Inbox::Look(look) => look(&mut self.mirror),
+            Inbox::Ask { id, request, ear } => match &mut self.pending {
+                Some(pending) => {
+                    pending.insert(id, ear);
+                    self.send(&json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "method": "program",
+                        "params": request,
+                    }));
+                }
+                None => {
+                    ear.tell(id, Told::Answer(Err(Refusal::NotRunning)));
+                }
+            },
+            Inbox::Park { id, wait, ear } => {
+                let until = match wait {
+                    Wait::Greeting => Until::Greeting,
+                    Wait::Settled => Until::Settled,
+                    Wait::Next { cursor } => {
+                        self.mirror.waiter += 1;
+                        Until::Next {
+                            after: cursor.unwrap_or(self.mirror.given_event),
+                            ticket: self.mirror.waiter,
+                        }
+                    }
+                    Wait::Change {
+                        event,
+                        output,
+                        breakpoints,
+                    } => Until::Change {
+                        event,
+                        output,
+                        breakpoints,
+                    },
+                    Wait::Exit => Until::Exit,
+                };
+                self.parked.push(Parked {
+                    id,
+                    until,
+                    ear,
+                    heard: None,
+                });
+            }
+            Inbox::Forget(id) => {
+                if let Some(pending) = &mut self.pending
+                    && pending.remove(&id).is_some()
+                {
+                    self.send(
+                        &json!({ "jsonrpc": "2.0", "method": "cancel", "params": { "id": id } }),
+                    );
+                }
+                self.parked.retain(|parked| parked.id != id);
+            }
+            Inbox::Stop => self.stop(),
         }
-        self.link.close();
-        let mut state = self.state();
-        state.closed = true;
-        state.greeted = true;
-        // A run started elsewhere ended: its last `ended` says how.
-        if self.started.is_none() {
-            let status = match state.session.phase() {
-                Phase::Ended(status) => Some(*status),
-                _ => None,
-            };
-            state.session.end(Phase::Exited(status));
+    }
+
+    /// A message the session sent: an answer, an event or output.
+    fn heard(&mut self, mut message: Value) {
+        match (message["id"].as_u64(), message["method"].as_str()) {
+            (Some(0), None) => self.greeted(&message["result"]),
+            (Some(id), None) => {
+                let answer = match message.get_mut("result") {
+                    Some(result) => Ok((result.take(), self.mirror.seen())),
+                    None => Err(refusal(&message["error"])),
+                };
+                if let Some(ear) = self
+                    .pending
+                    .as_mut()
+                    .and_then(|pending| pending.remove(&id))
+                {
+                    ear.tell(id, Told::Answer(answer));
+                }
+            }
+            (None, Some("event")) => {
+                let event = message["params"].take();
+                if let Some(seq) = event["seq"].as_u64() {
+                    self.mirror.session.record(seq, event);
+                } else if event["event"] == "breakpoints" {
+                    self.mirror.take_breakpoints(event);
+                }
+            }
+            (None, Some("output")) => {
+                let params = &message["params"];
+                let stream = match params["stream"].as_str() {
+                    Some("stderr") => Stream::Stderr,
+                    _ => Stream::Stdout,
+                };
+                if let Some(text) = params["text"].as_str() {
+                    self.mirror.keep(stream, text.to_owned());
+                }
+            }
+            _ => {}
         }
-        drop(state);
-        self.changed.notify_all();
     }
 
     /// The session's answer to `hello`: the events so far, and for a run
     /// started elsewhere, its pid and the output it kept.
-    fn greeted(&self, result: &Value) {
-        let mut state = self.state();
+    fn greeted(&mut self, result: &Value) {
+        let mirror = &mut self.mirror;
         for event in result["events"].as_array().into_iter().flatten() {
             if let Some(seq) = event["seq"].as_u64() {
-                state.session.record(seq, event.clone());
+                mirror.session.record(seq, event.clone());
             }
         }
-        state.take_breakpoints(result["breakpoints"].clone());
+        mirror.take_breakpoints(result["breakpoints"].clone());
         if self.started.is_none() {
-            state.pid = result["pid"]
+            mirror.pid = result["pid"]
                 .as_u64()
                 .and_then(|pid| u32::try_from(pid).ok())
                 .unwrap_or(0);
@@ -601,291 +886,110 @@ impl Session {
                     _ => Stream::Stdout,
                 };
                 if let Some(text) = piece["text"].as_str() {
-                    state.keep(stream, text.to_owned());
+                    mirror.keep(stream, text.to_owned());
                 }
             }
         }
-        state.greeted = true;
-        drop(state);
-        self.changed.notify_all();
+        mirror.greeted = true;
     }
 
-    /// Keep `rawr run`'s output, and tell it to the session for the other
-    /// shells attached to it.
-    fn read_output(&self, mut pipe: Box<dyn std::io::Read + Send>, stream: Stream) {
-        let mut buffer = [0_u8; 8192];
-        while let Ok(read) = pipe.read(&mut buffer) {
-            if read == 0 {
-                break;
-            }
-            let text = String::from_utf8_lossy(&buffer[..read]).into_owned();
-            self.link.send(&json!({
-                "jsonrpc": "2.0",
-                "method": "output",
-                "params": { "stream": stream.name(), "text": text },
-            }));
-            self.state().keep(stream, text);
-            self.changed.notify_all();
+    /// The connection closed: no request waiting gets an answer.
+    fn close(&mut self) {
+        for (id, ear) in self.pending.take().into_iter().flatten() {
+            ear.tell(id, Told::Answer(Err(Refusal::NotRunning)));
         }
-        self.state().pipes -= 1;
-        self.changed.notify_all();
+        let mirror = &mut self.mirror;
+        mirror.closed = true;
+        mirror.greeted = true;
+        // A run started elsewhere ended: its last `ended` says how.
+        if self.started.is_none() {
+            let status = match mirror.session.phase() {
+                Phase::Ended(status) => Some(*status),
+                _ => None,
+            };
+            mirror.session.end(Phase::Exited(status));
+        }
     }
 
-    /// Wait for `rawr run` to exit, then for its session's last words and
-    /// the end of its output, then record the exit. The run's place goes
-    /// first, so a `start` that waited for the exit binds a new one.
-    fn follow(&self, mut child: std::process::Child) {
-        let status = child.wait().ok().map(process::code);
-        let mut state = self.state();
-        while !state.closed || state.pipes > 0 {
-            state = self
-                .changed
-                .wait(state)
-                .unwrap_or_else(PoisonError::into_inner);
+    /// Once the `rawr run` the server started exited, its session said its
+    /// last words and its output ended, record the exit. The run's place
+    /// goes first, so a `start` that waited for the exit binds a new one.
+    fn reap(&mut self) {
+        let mirror = &mut self.mirror;
+        let (Some(started), Some(status)) = (&self.started, self.status) else {
+            return;
+        };
+        if mirror.exited || !mirror.closed || mirror.pipes > 0 {
+            return;
         }
-        if let Some(started) = &self.started {
-            started.place.remove();
-        }
-        state.session.end(Phase::Exited(status));
-        state.exited = true;
-        drop(state);
-        self.changed.notify_all();
+        started.place.remove();
+        mirror.session.end(Phase::Exited(status));
+        mirror.exited = true;
     }
 
-    /// End the session: the group the server started, SIGTERM and then
-    /// SIGKILL after a grace, or the connection to a run started
-    /// elsewhere, which goes on.
-    pub fn stop(&self) {
-        {
-            let mut state = self.state();
-            if state.session.phase().is_over() {
-                return;
-            }
-            state.session.end(Phase::Stopped);
+    fn stop(&mut self) {
+        if self.mirror.session.phase().is_over() {
+            return;
         }
+        self.mirror.session.end(Phase::Stopped);
         match &self.started {
             Some(started) => process::end_group(started.group),
             None => {
-                let _ = self.link.stream.shutdown(std::net::Shutdown::Both);
+                let _ = self.stream.shutdown(std::net::Shutdown::Both);
             }
         }
-        self.changed.notify_all();
     }
 
-    /// Wait for `rawr run` to exit, after [`Self::stop`] ended the group
-    /// the server started.
-    pub fn wait_exit(&self) {
-        if self.started.is_none() {
-            return;
-        }
-        let mut state = self.state();
-        while !state.exited {
-            state = self
-                .changed
-                .wait(state)
-                .unwrap_or_else(PoisonError::into_inner);
-        }
-    }
-
-    /// Block until something past `event` happens that `wakes`, the session
-    /// is over, or `cancel` fires; `building` hears each build update.
-    fn block(
-        self: &Arc<Self>,
-        event: u64,
-        cancel: &process::Cancel,
-        wakes: impl Fn(&Mirror, u64) -> bool,
-        mut building: impl FnMut(&str, u64),
-    ) {
-        self.wake_on(cancel);
-        let mut heard: Option<(String, u64)> = None;
-        let mut state = self.state();
-        loop {
-            if let Some((stage, percent)) = state.session.building()
-                && heard
+    /// Tell each wait the build updates it hasn't heard, and end those
+    /// whose ends came. A wait whose waiter is gone goes.
+    fn wake(&mut self) {
+        let mirror = &self.mirror;
+        let started = self.started.is_some();
+        self.parked.retain_mut(|parked| {
+            if matches!(parked.until, Until::Settled | Until::Next { .. })
+                && let Some((stage, percent)) = mirror.session.building()
+                && parked
+                    .heard
                     .as_ref()
                     .is_none_or(|(said, then)| said != stage || *then != percent)
             {
-                building(stage, percent);
-                heard = Some((stage.to_owned(), percent));
-            }
-            if wakes(&state, event) || state.session.phase().is_over() || cancel.is_cancelled() {
-                return;
-            }
-            state = self
-                .changed
-                .wait(state)
-                .unwrap_or_else(PoisonError::into_inner);
-        }
-    }
-
-    /// Wait until the program runs or fails, or `cancel` fires.
-    pub fn settle(self: &Arc<Self>, cancel: &process::Cancel, building: impl FnMut(&str, u64)) {
-        self.block(
-            0,
-            cancel,
-            |state, _| state.greeted && !state.session.phase().is_pending(),
-            building,
-        );
-    }
-
-    /// Wait for the next event past `cursor` other than build progress, or
-    /// `cancel`: the cursor the wait went on from, or `None` once a later
-    /// wait took its place. A client waits once at a time, so a wait that
-    /// comes while another is still blocked means the client gave the
-    /// first up (#1542): that one gives no events, and the later one
-    /// returns them.
-    pub fn next(
-        self: &Arc<Self>,
-        cursor: Option<u64>,
-        cancel: &process::Cancel,
-        building: impl FnMut(&str, u64),
-    ) -> Option<u64> {
-        let (after, ticket) = {
-            let mut state = self.state();
-            state.waiter += 1;
-            (cursor.unwrap_or(state.given_event), state.waiter)
-        };
-        self.changed.notify_all();
-        self.block(
-            after,
-            cancel,
-            |state, after| {
-                state.waiter != ticket
-                    || state
-                        .session
-                        .events()
-                        .iter()
-                        .any(|(seq, event)| *seq > after && event["event"] != "building")
-            },
-            building,
-        );
-        (self.state().waiter == ticket).then_some(after)
-    }
-
-    /// The newest breakpoints the session told: `{"event": "breakpoints",
-    /// "revision", "breakpoints": [..]}`, or null before `hello`.
-    #[must_use]
-    pub fn breakpoints(&self) -> Value {
-        self.state().breakpoints.clone()
-    }
-
-    /// Wait for an event past `event`, output past `output`, breakpoints
-    /// past revision `breakpoints`, the end of the session, or `cancel`:
-    /// for a shell that tells each as it comes.
-    pub fn hear(
-        self: &Arc<Self>,
-        event: u64,
-        output: u64,
-        breakpoints: u64,
-        cancel: &process::Cancel,
-    ) {
-        self.block(
-            event,
-            cancel,
-            |state, after| {
-                state.next_output > output
-                    || state.breakpoints["revision"]
-                        .as_u64()
-                        .is_some_and(|revision| revision > breakpoints)
-                    || state
-                        .session
-                        .events()
-                        .last()
-                        .is_some_and(|(seq, _)| *seq > after)
-            },
-            |_, _| {},
-        );
-    }
-
-    /// The session now: its phase, the events past `cursor` and the output
-    /// past `output_cursor` (each defaulting to what was last given), which
-    /// then count as given.
-    pub fn answer(&self, cursor: Option<u64>, output_cursor: Option<u64>) -> Answer {
-        let mut state = self.state();
-        let after = cursor.unwrap_or(state.given_event);
-        let output_after = output_cursor.unwrap_or(state.given_output);
-        let events: Vec<Value> = state
-            .session
-            .events()
-            .iter()
-            .filter(|(seq, event)| *seq > after && event["event"] != "building")
-            .map(|(seq, event)| {
-                let mut event = event.clone();
-                event["seq"] = json!(seq);
-                event
-            })
-            .collect();
-        let cursor = state
-            .session
-            .events()
-            .last()
-            .map_or(after, |(seq, _)| *seq.max(&after));
-        let dropped = state
-            .output
-            .front()
-            .is_some_and(|(number, _, _)| *number > output_after + 1);
-        let mut stdout = String::new();
-        let mut stderr = String::new();
-        let mut rawr = String::new();
-        for (number, stream, text) in &state.output {
-            if *number > output_after {
-                match stream {
-                    Stream::Stdout => stdout.push_str(text),
-                    Stream::Stderr => stderr.push_str(text),
-                    Stream::Rawr => rawr.push_str(text),
+                let told = Told::Building {
+                    stage: stage.to_owned(),
+                    percent,
+                };
+                if !parked.ear.tell(parked.id, told) {
+                    return false;
                 }
+                parked.heard = Some((stage.to_owned(), percent));
             }
-        }
-        let output_cursor = state.next_output.max(output_after);
-        state.given_event = cursor;
-        state.given_output = output_cursor;
-        // The newest failure among these events, else the one the running
-        // program carries.
-        let diagnostics = events
-            .iter()
-            .rev()
-            .find(|event| event["event"] == "failed")
-            .or(state.session.failure())
-            .map(|event| event["diagnostics"].clone());
-        let phase = state.session.phase().clone();
-        let paused = state.session.paused().cloned();
-        let status = match phase {
-            Phase::Ended(status) => Some(status),
-            Phase::Exited(status) => status,
-            _ => None,
-        };
-        let building = state
-            .session
-            .building()
-            .filter(|_| phase == Phase::Building)
-            .map(|(stage, percent)| json!({ "stage": stage, "percent": percent }));
-        let pid = state.pid;
-        drop(state);
-        let structured = json!({
-            "root": self.root,
-            "pid": pid,
-            "state": phase.name(),
-            "paused": paused,
-            "status": status,
-            "building": building,
-            "events": events,
-            "diagnostics": diagnostics,
-            "stdout": stdout,
-            "stderr": stderr,
-            "rawr": rawr,
-            "output_dropped": dropped,
-            "cursor": cursor,
-            "output_cursor": output_cursor,
+            match mirror.ended(&parked.until, started) {
+                Some(told) => {
+                    parked.ear.tell(parked.id, told);
+                    false
+                }
+                None => true,
+            }
         });
-        let summary = summary(&structured);
-        Answer {
-            structured,
-            summary,
-        }
+    }
+}
+
+/// A session's error as a refusal.
+fn refusal(error: &Value) -> Refusal {
+    if error["code"] == session::NOT_RUNNING {
+        Refusal::NotRunning
+    } else if error["code"] == session::CANCELLED {
+        Refusal::Cancelled
+    } else {
+        Refusal::Error(error["message"].as_str().unwrap_or_default().to_owned())
     }
 }
 
 impl Mirror {
+    /// How far the events have come.
+    fn seen(&self) -> Seen {
+        Seen(self.session.next_number())
+    }
+
     /// Keep a piece of output, dropping the oldest past [`OUTPUT`].
     fn keep(&mut self, stream: Stream, text: String) {
         self.next_output += 1;
@@ -908,40 +1012,122 @@ impl Mirror {
             self.breakpoints = told;
         }
     }
-}
 
-impl Link {
-    fn send(&self, message: &Value) {
-        let _ = self.out.send(format!("{message}\n"));
-    }
-
-    /// The session answered request `id`.
-    fn answered(&self, id: u64, mut message: Value) {
-        let reply = match message.get_mut("result") {
-            Some(result) => Reply::Answer(result.take()),
-            None => Reply::Error(message["error"].take()),
+    /// What ends a wait for `until` now, if it ends: of a session whose run
+    /// the server `started` or not.
+    fn ended(&self, until: &Until, started: bool) -> Option<Told> {
+        let phase = self.session.phase();
+        let over = phase.is_over();
+        let past = |after: u64| {
+            self.session
+                .events()
+                .iter()
+                .any(|(seq, event)| *seq > after && event["event"] != "building")
         };
-        let waiting = self
-            .pending
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .as_mut()
-            .and_then(|pending| pending.remove(&id));
-        if let Some(waiting) = waiting {
-            let _ = waiting.send(reply);
-        }
+        let done = match *until {
+            Until::Greeting => self.greeted,
+            Until::Settled => over || (self.greeted && !phase.is_pending()),
+            Until::Next { after, ticket } => {
+                if self.waiter != ticket {
+                    return Some(Told::Next(None));
+                }
+                return (over || past(after)).then_some(Told::Next(Some(after)));
+            }
+            Until::Change {
+                event,
+                output,
+                breakpoints,
+            } => {
+                over || self.next_output > output
+                    || self.breakpoints["revision"]
+                        .as_u64()
+                        .is_some_and(|revision| revision > breakpoints)
+                    || self
+                        .session
+                        .events()
+                        .last()
+                        .is_some_and(|(seq, _)| *seq > event)
+            }
+            Until::Exit => self.exited || !started,
+        };
+        done.then_some(Told::Done)
     }
 
-    /// The connection closed: no request waiting gets an answer.
-    fn close(&self) {
-        let pending = self
-            .pending
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take();
-        for (_, waiting) in pending.into_iter().flatten() {
-            let _ = waiting.send(Reply::Closed);
+    /// The session now, as [`Session::answer`] gives it, but for its root.
+    fn answer(&mut self, cursor: Option<u64>, output_cursor: Option<u64>) -> Value {
+        let after = cursor.unwrap_or(self.given_event);
+        let output_after = output_cursor.unwrap_or(self.given_output);
+        let events: Vec<Value> = self
+            .session
+            .events()
+            .iter()
+            .filter(|(seq, event)| *seq > after && event["event"] != "building")
+            .map(|(seq, event)| {
+                let mut event = event.clone();
+                event["seq"] = json!(seq);
+                event
+            })
+            .collect();
+        let cursor = self
+            .session
+            .events()
+            .last()
+            .map_or(after, |(seq, _)| *seq.max(&after));
+        let dropped = self
+            .output
+            .front()
+            .is_some_and(|(number, _, _)| *number > output_after + 1);
+        let mut stdout = String::new();
+        let mut stderr = String::new();
+        let mut rawr = String::new();
+        for (number, stream, text) in &self.output {
+            if *number > output_after {
+                match stream {
+                    Stream::Stdout => stdout.push_str(text),
+                    Stream::Stderr => stderr.push_str(text),
+                    Stream::Rawr => rawr.push_str(text),
+                }
+            }
         }
+        let output_cursor = self.next_output.max(output_after);
+        self.given_event = cursor;
+        self.given_output = output_cursor;
+        // The newest failure among these events, else the one the running
+        // program carries.
+        let diagnostics = events
+            .iter()
+            .rev()
+            .find(|event| event["event"] == "failed")
+            .or(self.session.failure())
+            .map(|event| event["diagnostics"].clone());
+        let phase = self.session.phase().clone();
+        let paused = self.session.paused().cloned();
+        let status = match phase {
+            Phase::Ended(status) => Some(status),
+            Phase::Exited(status) => status,
+            _ => None,
+        };
+        let building = self
+            .session
+            .building()
+            .filter(|_| phase == Phase::Building)
+            .map(|(stage, percent)| json!({ "stage": stage, "percent": percent }));
+        json!({
+            "root": Value::Null,
+            "pid": self.pid,
+            "state": phase.name(),
+            "paused": paused,
+            "status": status,
+            "building": building,
+            "events": events,
+            "diagnostics": diagnostics,
+            "stdout": stdout,
+            "stderr": stderr,
+            "rawr": rawr,
+            "output_dropped": dropped,
+            "cursor": cursor,
+            "output_cursor": output_cursor,
+        })
     }
 }
 
@@ -1030,37 +1216,143 @@ pub fn pause_text(paused: &serde_json::Map<String, Value>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Phase, Session};
-    use serde_json::json;
+    use std::io::{BufRead as _, BufReader, Write as _};
+    use std::sync::mpsc;
 
-    /// A wait the client gave up on without cancelling, still blocked when
-    /// the next wait comes, gives that one the events (#1542).
+    use serde_json::{json, Value};
+
+    use super::{Ear, Phase, Refusal, Session, Told, Wait};
+    use crate::mcp::call::Call;
+
+    /// An ear on a plain channel, for a test to read what a wait is told.
+    fn ear() -> (Ear, mpsc::Receiver<(u64, Told)>) {
+        let (told, heard) = mpsc::channel();
+        let ear = Ear::new(move |id, what| told.send((id, what)).is_ok());
+        (ear, heard)
+    }
+
+    /// The next line the session's peer reads, as JSON.
+    fn next(lines: &mut impl Iterator<Item = std::io::Result<String>>) -> Value {
+        serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap()
+    }
+
+    /// A wait the client gave up on without cancelling, still parked when
+    /// the next wait comes, ends with no cursor, and the later one takes
+    /// the events (#1542).
     #[test]
-    fn a_later_wait_takes_the_place_of_one_still_blocked() {
+    fn a_later_wait_takes_the_place_of_one_still_parked() {
         let (session, _other) = Session::running_at(Phase::Starting);
-        let waiting = |session: &std::sync::Arc<Session>| {
-            let session = std::sync::Arc::clone(session);
-            std::thread::spawn(move || {
-                let cancel = super::process::Cancel::default();
-                let after = session.next(None, &cancel, |_, _| {});
-                after.map(|after| session.answer(Some(after), None).structured)
-            })
+        let (given_up_ear, given_up) = ear();
+        let first = session.park(Wait::Next { cursor: None }, given_up_ear);
+        let (later_ear, later) = ear();
+        let second = session.park(Wait::Next { cursor: None }, later_ear);
+        let (id, told) = given_up.recv().unwrap();
+        assert_eq!(id, first);
+        assert!(matches!(told, Told::Next(None)), "{told:?}");
+        session.change(|mirror| mirror.session.record(1, json!({ "event": "swapped" })));
+        let (id, told) = later.recv().unwrap();
+        assert_eq!(id, second);
+        let Told::Next(Some(after)) = told else {
+            panic!("the later wait goes on from its cursor: {told:?}");
         };
-        let given_up = waiting(&session);
-        while session.state().waiter < 1 {
-            std::thread::yield_now();
-        }
-        let later = waiting(&session);
-        assert_eq!(given_up.join().unwrap(), None);
-        session
-            .state()
-            .session
-            .record(1, json!({ "event": "swapped" }));
-        session.changed.notify_all();
-        let answer = later.join().unwrap().expect("the later wait answers");
+        let answer = session.answer(Some(after), None).structured;
         assert_eq!(answer["events"][0]["event"], "swapped");
         assert_eq!(answer["cursor"], 1);
         // The next wait goes on from there.
-        assert_eq!(session.state().given_event, 1);
+        assert_eq!(session.look(|mirror| mirror.given_event), Some(1));
+    }
+
+    /// A wait parked after the event it waits for already came ends at
+    /// once: the owner checks each wait as it parks it.
+    #[test]
+    fn a_wait_parked_after_its_event_ends_at_once() {
+        let (session, _other) = Session::running_at(Phase::Running);
+        let given = session.answer(None, None).structured;
+        assert_eq!(given["cursor"], 1);
+        session.change(|mirror| {
+            let paused = json!({ "event": "paused", "file": "/p/src/main.rs", "line": 9 });
+            mirror.session.record(2, paused);
+        });
+        let (waiting, told) = ear();
+        let id = session.park(Wait::Next { cursor: None }, waiting);
+        let (heard, what) = told.recv().unwrap();
+        assert_eq!(heard, id);
+        assert!(matches!(what, Told::Next(Some(1))), "{what:?}");
+        assert_eq!(session.answer(Some(1), None).structured["state"], "paused");
+    }
+
+    /// The program's `paused` event, told right after its answer to a
+    /// `continue`, wins over what the answer said, whichever reaches the
+    /// session's owner first: the program stays paused, and the next wait
+    /// returns that pause rather than waiting for an event that never
+    /// comes.
+    #[test]
+    fn a_pause_told_after_an_answer_wins_over_the_answer() {
+        let (session, other) = Session::running_at(Phase::Running);
+        let mut lines = BufReader::new(other.try_clone().unwrap()).lines();
+        assert_eq!(next(&mut lines)["method"], "hello");
+        let asking = std::sync::Arc::clone(&session);
+        let continued = std::thread::spawn(move || {
+            let call = Call::default();
+            let (answer, seen) = asking.ask(&json!({ "op": "continue" }), &call).unwrap();
+            asking.observe_pause(answer["paused"].as_object().map(|_| answer.clone()), seen);
+        });
+        let request = next(&mut lines);
+        let answer = json!({ "jsonrpc": "2.0", "id": request["id"], "result": { "paused": null } });
+        let paused = json!({ "jsonrpc": "2.0", "method": "event", "params": {
+            "event": "paused", "seq": 2, "file": "/p/src/main.rs", "line": 9,
+        } });
+        // One write, so the event follows the answer at once.
+        write!(&other, "{answer}\n{paused}\n").unwrap();
+        continued.join().unwrap();
+        let after = session.next(Some(1), &Call::default(), |_, _| {});
+        assert_eq!(after, Some(1));
+        let now = session.answer(after, None).structured;
+        assert_eq!(now["state"], "paused", "{now}");
+        assert_eq!(now["paused"]["line"], 9, "{now}");
+    }
+
+    /// A request in flight when the session's connection closes is
+    /// refused as not running, and a wait for the program ends, so no
+    /// call hangs on a peer that went away.
+    #[test]
+    fn a_peer_that_closes_mid_request_ends_the_request_and_the_wait() {
+        let (session, other) = Session::running_at(Phase::Starting);
+        let mut lines = BufReader::new(other.try_clone().unwrap()).lines();
+        assert_eq!(next(&mut lines)["method"], "hello");
+        let asking = std::sync::Arc::clone(&session);
+        let asked =
+            std::thread::spawn(move || asking.ask(&json!({ "op": "pause" }), &Call::default()));
+        let waiting = std::sync::Arc::clone(&session);
+        let settled = std::thread::spawn(move || waiting.settle(&Call::default(), |_, _| {}));
+        assert_eq!(next(&mut lines)["method"], "program");
+        other.shutdown(std::net::Shutdown::Both).unwrap();
+        assert!(matches!(asked.join().unwrap(), Err(Refusal::NotRunning)));
+        settled.join().unwrap();
+        assert_eq!(session.phase(), Phase::Exited(None));
+    }
+
+    /// A request cancelled while the program has it returns at once, and
+    /// the session hears the cancel of that request.
+    #[test]
+    fn a_cancel_mid_request_returns_and_cancels_it_at_the_session() {
+        let (session, other) = Session::running_at(Phase::Running);
+        let mut lines = BufReader::new(other.try_clone().unwrap()).lines();
+        assert_eq!(next(&mut lines)["method"], "hello");
+        let call = Call::default();
+        let waker = call.waker();
+        let asking = std::sync::Arc::clone(&session);
+        let asked = std::thread::spawn(move || asking.ask(&json!({ "op": "pause" }), &call));
+        let request = next(&mut lines);
+        assert_eq!(request["method"], "program");
+        waker.cancel();
+        assert!(matches!(asked.join().unwrap(), Err(Refusal::Cancelled)));
+        let cancel = next(&mut lines);
+        assert_eq!(cancel["method"], "cancel", "{cancel}");
+        assert_eq!(cancel["params"]["id"], request["id"]);
+        // The program's late answer finds no request and changes nothing.
+        let late = json!({ "jsonrpc": "2.0", "id": request["id"], "result": {} });
+        writeln!(&other, "{late}").unwrap();
+        assert_eq!(session.phase(), Phase::Running);
     }
 }

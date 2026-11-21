@@ -265,11 +265,31 @@ impl fmt::Display for Path<'_> {
 impl Inventory {
     #[cfg(any(test, feature = "test-fixtures"))]
     pub(crate) fn empty() -> Self {
-        let mut bytes = Vec::with_capacity(20);
+        Self::covering(&[])
+    }
+
+    /// An inventory whose rows are `covered`: each use, which passes no
+    /// static function and no mapper, bound to the adapter at its index
+    /// among the carrier's entries. Its facts are written as [`cover`]
+    /// writes a use's, so that use finds its row.
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub(crate) fn covering(covered: &[(usize, Use<'_>)]) -> Self {
+        let mut bytes = Vec::new();
         bytes.extend_from_slice(&VERSION.to_le_bytes());
+        bytes.extend_from_slice(&(covered.len() as u64).to_le_bytes());
+        for (index, used) in covered {
+            let facts = serde_json::to_vec(&Facts {
+                used: *used,
+                functions: Sequence(std::iter::empty::<Function<'_>>()),
+                mappers: Sequence(std::iter::empty::<Mapper<'_>>()),
+            })
+            .expect("a use's facts serialize");
+            bytes.extend_from_slice(&(*index as u64).to_le_bytes());
+            bytes.extend_from_slice(&(facts.len() as u64).to_le_bytes());
+            bytes.extend_from_slice(&facts);
+        }
         bytes.extend_from_slice(&0_u64.to_le_bytes());
-        bytes.extend_from_slice(&0_u64.to_le_bytes());
-        Self::retain(bytes.into_boxed_slice(), 0)
+        Self::retain(bytes.into_boxed_slice(), covered.len())
     }
 
     /// Project the resident inventory. `retained_target` is an accounting
