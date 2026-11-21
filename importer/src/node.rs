@@ -1332,8 +1332,7 @@ fn terminal_replay_failure(error: &Error) -> bool {
         Error::Importer(error) => match error.as_ref() {
             crate::Error::Node { source, .. } => terminal_replay_failure(source),
             crate::Error::Io { source, .. } => source.kind() != std::io::ErrorKind::NotFound,
-            crate::Error::Owner
-            | crate::Error::Allocation { .. }
+            crate::Error::Allocation { .. }
             | crate::Error::Limit { .. }
             | crate::Error::Process { .. }
             | crate::Error::NonSendFuture { .. }

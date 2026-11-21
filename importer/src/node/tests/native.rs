@@ -297,9 +297,9 @@ fn uncached_scope_owns_the_project_and_exact_execution_and_releases_after_failur
         assert_eq!(executions.len(), 1);
         assert!(locked(&executions[0]));
         assert!(!locked(&store.root().join("locks/publication.lock")));
-        Err(crate::Error::Owner)
+        Err(crate::Error::InputAccountRefused)
     });
-    assert!(matches!(failure, Err(crate::Error::Owner)));
+    assert!(matches!(failure, Err(crate::Error::InputAccountRefused)));
     assert!(!locked(&store.fixture_owner_lock()));
     scope
         .run(|| Ok(()))

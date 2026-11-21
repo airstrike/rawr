@@ -22,12 +22,13 @@ pub(crate) fn directory(build: &Path) -> io::Result<PathBuf> {
 /// Held by every runner build in the project across its Cargo run and any
 /// read of what Cargo wrote, so no other Rawr build changes the shared files
 /// in between. It lives in `<target>/rawr`, which `cargo clean` removes with
-/// the rest. A wait for it says so, naming the build that holds it. The
-/// nightly build has its own ([`nightly_lock`]).
-pub(crate) fn lock(rawr: &Path) -> io::Result<crate::blocking::Exclusive> {
+/// the rest. Every worktree on one target directory shares it. A wait for
+/// it says so, naming the process that holds it and the project it builds.
+/// The nightly build has its own ([`nightly_lock`]).
+pub(crate) fn lock(rawr: &Path, project: &Path) -> io::Result<crate::blocking::Exclusive> {
     fs::create_dir_all(rawr)?;
     let path = rawr.join("build.lock");
-    crate::blocking::Exclusive::new(open_lock(&path)?, &path, BUILD_DIRECTORY)
+    crate::blocking::Exclusive::building(open_lock(&path)?, &path, BUILD_DIRECTORY, project)
 }
 
 /// The lock file at `path`, kept as it is: it names its holder.
@@ -59,17 +60,20 @@ const BUILD_DIRECTORY: &str = "build directory";
 /// Lock the nightly `directory` for one Cargo run and the copy of what it
 /// wrote, so no other project's build rewrites those files in between and
 /// cleanup skips the directory. A wait says what Cargo says of its own,
-/// naming the build that holds it. Records the directory's last use, which
-/// cleanup orders by.
+/// naming the process that holds it and the project it builds. Records the
+/// directory's last use, which cleanup orders by.
 #[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
-pub(crate) fn nightly_lock(directory: &Path) -> io::Result<crate::blocking::Exclusive> {
+pub(crate) fn nightly_lock(
+    directory: &Path,
+    project: &Path,
+) -> io::Result<crate::blocking::Exclusive> {
     use std::os::unix::fs::MetadataExt as _;
     let path = directory.join(".lock");
     loop {
         fs::create_dir_all(directory)?;
         let file = open_lock(&path)?;
         let opened = file.metadata()?.ino();
-        let held = crate::blocking::Exclusive::new(file, &path, BUILD_DIRECTORY)?;
+        let held = crate::blocking::Exclusive::building(file, &path, BUILD_DIRECTORY, project)?;
         // Cleanup renames an unlocked directory aside before removing it; a
         // lock taken on the retired one is retaken on a new directory.
         if fs::metadata(&path).is_ok_and(|on_disk| on_disk.ino() == opened) {
@@ -502,9 +506,15 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         let (target, rawr) = (root.join("target"), root.join("target/rawr"));
         assert_eq!(super::directory(&target).unwrap(), target);
-        let held = super::lock(&rawr).unwrap();
-        assert!(rawr.join("build.lock").is_file());
+        let held = super::lock(&rawr, &root.join("worktree")).unwrap();
+        // The holder records its pid and the project it builds, which a
+        // wait from another worktree names.
+        assert_eq!(
+            fs::read_to_string(rawr.join("build.lock")).unwrap(),
+            format!("{} {}", std::process::id(), root.join("worktree").display())
+        );
         drop(held);
+        assert_eq!(fs::read_to_string(rawr.join("build.lock")).unwrap(), "");
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -525,7 +535,7 @@ mod tests {
         let root = home.join("nightly");
         let age = |name: &str, hours: u64| {
             let directory = root.join(name);
-            drop(super::nightly_lock(&directory).unwrap());
+            drop(super::nightly_lock(&directory, &home).unwrap());
             let used = SystemTime::now() - Duration::from_secs(hours * 60 * 60);
             fs::File::open(&directory)
                 .unwrap()
@@ -536,7 +546,7 @@ mod tests {
         age("nightly-old", 30);
         age("nightly-held", 30);
         age("nightly-recent", 2);
-        let held = super::nightly_lock(&root.join("nightly-held")).unwrap();
+        let held = super::nightly_lock(&root.join("nightly-held"), &home).unwrap();
         let left = || {
             let mut names = fs::read_dir(&root)
                 .unwrap()
@@ -576,11 +586,11 @@ mod tests {
         let home = std::env::temp_dir().join(format!("rawr-nightly-wait-{}", std::process::id()));
         let _ = fs::remove_dir_all(&home);
         let directory = super::nightly_directory(&home);
-        let held = super::nightly_lock(&directory).unwrap();
+        let held = super::nightly_lock(&directory, &home).unwrap();
         let (sender, receiver) = std::sync::mpsc::channel();
         let waiting = directory.clone();
         let waiter = std::thread::spawn(move || {
-            let lock = super::nightly_lock(&waiting).unwrap();
+            let lock = super::nightly_lock(&waiting, std::path::Path::new("/project")).unwrap();
             sender.send(()).unwrap();
             drop(lock);
         });

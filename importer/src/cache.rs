@@ -55,10 +55,9 @@ impl Writer {
         &self.root
     }
 
-    pub(crate) fn lease(
-        &self,
-    ) -> std::result::Result<fd_lock::RwLock<std::fs::File>, entry::Error> {
-        lease::open(&self.root)
+    /// Hold the cache's writer lease, waiting for another holder first.
+    pub(crate) fn lease(&self) -> std::result::Result<crate::blocking::Exclusive, entry::Error> {
+        lease::hold(&self.root)
     }
 
     /// Inspect cache entries without granting lookup or deletion authority.
@@ -90,18 +89,7 @@ impl Writer {
         &self,
         key: crate::bridge::BuildRequestKey,
     ) -> std::result::Result<bool, entry::Error> {
-        let mut lease = self.lease()?;
-        let _guard = lease.try_write().map_err(|source| {
-            if source.kind() == std::io::ErrorKind::WouldBlock {
-                entry::Error::Busy
-            } else {
-                entry::Error::Io {
-                    operation: "acquire runner cache deletion lease",
-                    path: self.root.join(".writer.lock"),
-                    source,
-                }
-            }
-        })?;
+        let _guard = self.lease()?;
         let path = entry::path(&self.root, key);
         if !path.exists() {
             return Ok(false);

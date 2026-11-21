@@ -303,11 +303,12 @@ fn compile<B>(
         environment,
     )?;
     before_cargo()?;
-    let shared = crate::deps::lock(context.rawr()).map_err(|source| node::Error::Io {
-        operation: "lock shared runner build directory",
-        path: context.rawr().join("build.lock"),
-        source,
-    })?;
+    let shared =
+        crate::deps::lock(context.rawr(), context.project()).map_err(|source| node::Error::Io {
+            operation: "lock shared runner build directory",
+            path: context.rawr().join("build.lock"),
+            source,
+        })?;
     let carrier = &inputs.carrier;
     let file_of = |path: &str| {
         manifest

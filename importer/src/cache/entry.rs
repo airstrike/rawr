@@ -125,6 +125,4 @@ pub enum Error {
     AlreadySealed,
     #[error("runner cache seal does not match its manifest and artifact")]
     SealDrift,
-    #[error("runner cache writer lease is busy")]
-    Busy,
 }

@@ -17,11 +17,6 @@ pub enum Error {
         source: Box<crate::node_parts::Error>,
     },
 
-    /// Another build holds the build directory, as Cargo's "Blocking
-    /// waiting for file lock on build directory" says of its own.
-    #[error("the build directory is locked by another build; run again when it finishes")]
-    Owner,
-
     /// Something in the user's Cargo setup or environment that rawr can't
     /// build with, said as Cargo or rustc would say it. A condition only a
     /// rawr bug could cause is a panic, never this.
@@ -316,10 +311,6 @@ mod tests {
     #[test]
     fn messages_name_the_project_in_cargos_words() {
         let cases = [
-            (
-                Error::Owner,
-                "the build directory is locked by another build; run again when it finishes",
-            ),
             (
                 Error::Path {
                     field: "Cargo config candidate",

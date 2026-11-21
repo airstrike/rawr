@@ -1213,7 +1213,7 @@ mod tests {
                         assert!(!held(&store.root().join("locks/publication.lock")));
                         stages.push(stage);
                         if stages.len() == fail_at + 1 {
-                            return Err(crate::Error::Owner);
+                            return Err(crate::Error::InputAccountRefused);
                         }
                     }
                     Ok(raw.clone())

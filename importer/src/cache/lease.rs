@@ -1,20 +1,29 @@
 //! Cross-process writer exclusion for cache mutation.
 
-use std::fs::{File, OpenOptions};
+use std::fs::OpenOptions;
 use std::path::Path;
 
-pub(crate) fn open(root: &Path) -> Result<fd_lock::RwLock<File>, super::entry::Error> {
+/// Hold the writer lease of the runner cache at `root`. When another
+/// process holds it, say once that this waits, naming that process, and
+/// block on the lock. The OS lets go of it when the holder finishes or dies.
+pub(crate) fn hold(root: &Path) -> Result<crate::blocking::Exclusive, super::entry::Error> {
     let path = root.join(".writer.lock");
+    let io = |operation| {
+        let path = path.clone();
+        move |source| super::entry::Error::Io {
+            operation,
+            path,
+            source,
+        }
+    };
     let file = OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .truncate(false)
         .open(&path)
-        .map_err(|source| super::entry::Error::Io {
-            operation: "open runner cache writer lease",
-            path,
-            source,
-        })?;
-    Ok(fd_lock::RwLock::new(file))
+        .map_err(io("open runner cache writer lease"))?;
+    let what = format!("the runner cache at {}", root.display());
+    crate::blocking::Exclusive::new(file, &path, &what)
+        .map_err(io("acquire runner cache writer lease"))
 }
