@@ -130,6 +130,64 @@ impl<'a> Parser<'a> {
             .collect()
     }
 
+    /// The type each argument of a call of the generic function
+    /// `definition` is expected to have when the call is expected to be
+    /// `expected`, as rustc's `expected_inputs_for_expected_output`: the
+    /// output unified with the expectation in a probe, and each parameter's
+    /// type the probe settles (`&str` for `f(&name)` as a `P<&str>`, of
+    /// `fn f<T>(t: T) -> P<T>`). None for a parameter it leaves open.
+    pub(super) fn expected_inputs(
+        &mut self,
+        definition: &item::Function,
+        expected: &Ty,
+    ) -> Vec<Option<Ty>> {
+        let Some(output) = &definition.output else {
+            return Vec::new();
+        };
+        let checkpoint = self.inference.checkpoint();
+        let substitution: BTreeMap<ImmutableString, Ty> = definition
+            .generics
+            .iter()
+            .map(|generic| (generic.name.text.clone(), self.inference.fresh()))
+            .collect();
+        let output = instantiate(&Ty::from_resolved(output), &substitution);
+        let inputs = if self.unify_type(&output, expected) {
+            definition
+                .parameters
+                .iter()
+                .map(|parameter| {
+                    let input = instantiate(&Ty::from_resolved(&parameter.ty), &substitution);
+                    let input = self.inference.resolve(&input);
+                    (!contains_unsettled(&input)).then_some(input)
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        self.inference.rollback(checkpoint);
+        inputs
+    }
+
+    /// `argument` coerced to `input`, the type the call's expectation gives
+    /// its parameter of type `formal`, which then takes that type, as rustc
+    /// checks an argument against its expected input. An argument that
+    /// doesn't coerce to it is left to the parameter's own coercion.
+    pub(super) fn coerce_expected_input(
+        &mut self,
+        input: &Ty,
+        formal: &Ty,
+        argument: &mut ParsedExpr,
+    ) {
+        let checkpoint = self.inference.checkpoint();
+        let mut coerced = argument.clone();
+        if self.coerce_expr(input, &mut coerced).is_ok() && self.unify_type(formal, input) {
+            self.inference.commit(checkpoint);
+            *argument = coerced;
+        } else {
+            self.inference.rollback(checkpoint);
+        }
+    }
+
     /// The bounds `generics` write, from the `pending` ones on, as the
     /// call of `function` written `callee` needs its `arguments` to meet
     /// them: each at the argument whose parameter's type is the bounded
@@ -257,6 +315,16 @@ impl<'a> Parser<'a> {
             let ty = self.inference.resolve(&ty);
             if matches!(ty, Ty::Infer(_) | Ty::Unknown) {
                 continue;
+            }
+            // A `From` or `Into` bound selects std's impl, whose types fix
+            // what the converted value leaves open.
+            if self.prelude_trait(&trait_name)
+                && let [argument] = &arguments[..]
+            {
+                match trait_name.as_str() {
+                    "From" => self.settle_conversion(&ty, argument),
+                    _ => self.settle_conversion(argument, &ty),
+                }
             }
             if !self.type_implements_with(&ty, &trait_name, &arguments) {
                 if self.prelude_trait(&trait_name)

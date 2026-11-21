@@ -863,6 +863,7 @@ impl Parser<'_> {
     /// How rawr runs `target::from(source)` when std has that impl
     /// (`runs_from`).
     pub(super) fn std_conversion(&mut self, target: &Ty, source: &Ty) -> Option<Option<PreludeOp>> {
+        self.settle_conversion(target, source);
         let (target, source) = (
             self.inference.resolve(target),
             self.inference.resolve(source),
@@ -873,6 +874,31 @@ impl Parser<'_> {
         runs_from(&target, &source)
     }
 
+    /// The types std's impl of `From<source>` for `target` names, which
+    /// rustc's selection of it gives what the two leave open: `(0.1, 0.2)`
+    /// into `(f32, f32)` is the reflexive impl's, so a pair of `f32`s, and
+    /// `VecDeque::from(tasks)` is a `VecDeque<Task>`. A lone literal or an
+    /// unknown target is left to the use: many impls take a literal, and
+    /// rustc's fallback chooses among them.
+    pub(super) fn settle_conversion(&mut self, target: &Ty, source: &Ty) {
+        let (target, source) = (
+            self.inference.resolve(target),
+            self.inference.resolve(source),
+        );
+        if is_unsettled(&source)
+            || is_unsettled(&target)
+            || !(contains_unsettled(&source) || contains_unsettled(&target))
+        {
+            return;
+        }
+        let checkpoint = self.inference.checkpoint();
+        if select(self, "core::convert::From", &target, &[source], true, 0).is_ok() {
+            self.inference.commit(checkpoint);
+        } else {
+            self.inference.rollback(checkpoint);
+        }
+    }
+
     /// rawr's not-yet error (D712.1) for a conversion std has and rawr
     /// doesn't run: `From<u8> for f64`.
     pub(super) fn conversion_not_yet(
@@ -881,6 +907,7 @@ impl Parser<'_> {
         source: &Ty,
         reference: Span,
     ) -> Option<Error> {
+        self.settle_conversion(target, source);
         let (target, source) = (
             self.inference.resolve(target),
             self.inference.resolve(source),

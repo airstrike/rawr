@@ -43,6 +43,7 @@ impl<'a> Parser<'a> {
         self.finish_conversions()?;
         self.finish_bounds()?;
         self.finish_witnesses()?;
+        self.finish_local_types()?;
         let ops = self.finish_ops()?;
         let (mut source, locations) = std::mem::take(&mut self.output).finish();
         // As in a block, a script whose last statement ends with `;` has
@@ -88,6 +89,7 @@ impl<'a> Parser<'a> {
             self.finish_conversions()?;
             self.finish_bounds()?;
             self.finish_witnesses()?;
+            self.finish_local_types()?;
             let ops = self.finish_ops()?;
             let (source, locations) = std::mem::take(&mut self.output).finish();
             return Ok(Lowered {
@@ -136,6 +138,7 @@ impl<'a> Parser<'a> {
             self.finish_conversions()?;
             self.finish_bounds()?;
             self.finish_witnesses()?;
+            self.finish_local_types()?;
             let ops = self.finish_ops()?;
             let (source, locations) = std::mem::take(&mut self.output).finish();
             return Ok(Lowered {
@@ -214,6 +217,7 @@ impl<'a> Parser<'a> {
         self.finish_conversions()?;
         self.finish_bounds()?;
         self.finish_witnesses()?;
+        self.finish_local_types()?;
         let ops = self.finish_ops()?;
         let (source, locations) = std::mem::take(&mut self.output).finish();
 
@@ -592,6 +596,7 @@ impl<'a> Parser<'a> {
         self.finish_conversions()?;
         self.finish_bounds()?;
         self.finish_witnesses()?;
+        self.finish_local_types()?;
         let ops = self.finish_ops()?;
         let (source, locations) = std::mem::take(&mut self.output).finish();
 
@@ -716,18 +721,8 @@ impl<'a> Parser<'a> {
                 _ if self.macro_statement_ahead() => self.parse_macro_statement()?,
                 _ if self.nested_item_ahead() => self.skip_nested_item()?,
                 _ => {
-                    // A tail literal is expected to be the return type:
-                    // `vec![Box::new(A), Box::new(B)]` as `Vec<Box<dyn
-                    // Named>>`.
                     let expected = self.tail_expected(definition.output.as_ref());
-                    if let Some(element) = self.literal_element(&expected)
-                        && self.literal_ends_block()
-                    {
-                        self.array_hint = Some(element);
-                    }
-                    let statement = self.parse_tail_expecting(Some(&expected));
-                    self.array_hint = None;
-                    statement?;
+                    self.parse_tail_expecting(Some(&expected))?;
                 }
             }
         }
@@ -775,6 +770,27 @@ impl<'a> Parser<'a> {
                 .filter(|_| made.is_none())
                 .map(|bound| format!("the type must implement `{bound}`").into()),
         })
+    }
+
+    /// rustc's E0282 at the first `let` whose type the read body leaves
+    /// unknown, as `let v = Vec::new();` with no use that fixes its
+    /// element: rustc needs every local's type known.
+    pub(super) fn finish_local_types(&self) -> Result<(), Error> {
+        for local in &self.local_types {
+            let ty = self.inference.resolve(&local.ty);
+            let unknown = std::cell::RefCell::new(None);
+            contains(&ty, &|inner| {
+                matches!(inner, Ty::Infer(_)) && unknown.replace(Some(inner.clone())).is_none()
+            });
+            let Some(unknown) = unknown.into_inner() else {
+                continue;
+            };
+            let needed = local.value.unwrap_or(local.declaration);
+            if let Some(error) = self.unsettled(&unknown, needed, None) {
+                return Err(error);
+            }
+        }
+        Ok(())
     }
 
     /// The body's locals and parameters a debugger prints by their type,

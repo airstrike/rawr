@@ -1367,6 +1367,9 @@ impl<'a> Parser<'a> {
             let reference = Span::new(name_span.start(), text_end(name_span.start(), &written));
             return Err(self.module_value(&name, reference).unwrap_or(error));
         }
+        // The type the call is expected to have, which a generic function's
+        // output gives its arguments.
+        let expectation = self.coercion_target();
         // A non-generic function's parameter types are each argument's
         // expected type.
         if let Some(function) = &function
@@ -1408,10 +1411,16 @@ impl<'a> Parser<'a> {
                 .then(|| self.expression_stack.len() + 1),
         );
         // A generic function's parameter types, its parameters fresh, for
-        // what each argument read tells the ones after it.
+        // what each argument read tells the ones after it, and the types the
+        // call's expectation gives them.
+        let mut expected_inputs = Vec::new();
         if let Some(function) = &function
             && !function.definition.generics.is_empty()
         {
+            if let Some(expected) = expectation {
+                expected_inputs = self.expected_inputs(&function.definition, &expected);
+                self.argument_hints.clone_from(&expected_inputs);
+            }
             self.generic_argument_hints = self.generic_parameter_hints(&function.definition);
         }
         let arguments = self.parse_call_arguments("function arguments");
@@ -1490,6 +1499,9 @@ impl<'a> Parser<'a> {
                     continue;
                 }
                 let expected = instantiate(&Ty::from_resolved(&parameter.ty), &substitution);
+                if let Some(Some(input)) = expected_inputs.get(index) {
+                    self.coerce_expected_input(input, &expected, argument);
+                }
                 self.coerce_argument(&parameter.ty, &expected, argument)?;
                 self.convert_into_host(&function.definition.generics, &parameter.ty, argument)?;
                 self.move_local(argument)?;

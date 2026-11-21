@@ -118,9 +118,20 @@ impl<'a> Parser<'a> {
         (!(referenced && vec) || kind == sequence::Kind::Vec).then_some(*element)
     }
 
-    /// The statement ahead, a block-like tail of its block expected to be
-    /// `expected` as rustc expects it: its arms coerce to that type.
+    /// The statement ahead, a tail of its block expected to be `expected`
+    /// as rustc expects it: a block-like tail's arms coerce to that type,
+    /// and a tail literal's elements to its element type (`vec![Box::new(A),
+    /// Box::new(B)]` as `Vec<Box<dyn Named>>`, in an `if` arm too).
     pub(super) fn parse_tail_expecting(&mut self, expected: Option<&Ty>) -> Result<(), Error> {
+        if let Some(expected) = expected
+            && let Some(element) = self.literal_element(expected)
+            && self.literal_ends_block()
+        {
+            self.array_hint = Some(element);
+            let statement = self.parse_statement();
+            self.array_hint = None;
+            return statement;
+        }
         let expected = expected.filter(|_| self.peek_block_like() && self.block_like_ends_block());
         let Some(expected) = expected else {
             return self.parse_statement();
