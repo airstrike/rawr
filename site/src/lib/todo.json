@@ -6002,7 +6002,8 @@
     {"issue":2444,"title":"A let r = &local binding reads as no binding","state":"open","category":"Health"},
     {"issue":2445,"title":"The hover read tells std types apart by the shape of their Debug text","state":"open","category":"Health"},
     {"issue":2446,"title":"rawr gui's inline values match bindings by name","state":"open","category":"Health"},
-    {"issue":2447,"title":"`rawr tui` draws in `rawr gui`'s Oxocarbon colours: the paused line sits on a faint accent band…","state":"closed","category":"Health","release":"0.4.106"}
+    {"issue":2447,"title":"`rawr tui` draws in `rawr gui`'s Oxocarbon colours: the paused line sits on a faint accent band…","state":"closed","category":"Health","release":"0.4.106"},
+    {"issue":2448,"title":"A hover over a binding the pause hasn't reached says where it is declared","state":"open","category":"Health"}
   ],
   "groups": [
     {
