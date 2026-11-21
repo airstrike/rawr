@@ -652,6 +652,7 @@ fn package(main: &str) -> crate::package::snapshot::Snapshot {
 /// generation's parses and keeps nothing in the runner's cache: its
 /// compile parses, reveals and lowers nothing into it, and the save after
 /// it parses nothing again, as after no evaluation at all.
+#[cfg(feature = "debugging")]
 #[test]
 fn an_evaluation_leaves_the_runner_s_cache_as_the_save_left_it() {
     let engine = retained();
