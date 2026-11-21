@@ -3068,6 +3068,18 @@ fn a_script_impl_of_a_crate_trait_is_called_back_by_the_crate() {
     );
 }
 
+/// game_of_life's `self.grid.update(message)`: the program's type has an
+/// inherent `update(&mut self, message)` and implements the crate's
+/// `canvas::Program`, whose `update` takes four arguments. The trait is
+/// not in scope at the call, so the call is the inherent function, as
+/// rustc's probe finds it. The output is `cargo run`'s.
+#[test]
+fn an_inherent_method_before_a_crate_trait_method_out_of_scope() {
+    let (rawr, cargo) = both_printed("inherent.rs", "");
+    assert_eq!(rawr, cargo);
+    assert!(rawr.contains("presses 9"), "{rawr}");
+}
+
 #[test]
 fn native_trait_callbacks_preserve_builtin_result_signatures_and_variants() {
     let (rawr, cargo) = both_printed("results.rs", "");
