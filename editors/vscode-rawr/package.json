@@ -24,6 +24,7 @@
   "main": "./extension.js",
   "files": [
     "extension.js",
+    "hover.js",
     "program.js"
   ],
   "contributes": {

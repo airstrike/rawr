@@ -19,7 +19,10 @@ session, so `rawr mcp` and a terminal can reach the same run at once.
 
 Breakpoints on lines and on functions, stepping over, in and out, pause, the
 call stack named by Rust paths, variables you can expand field by field, and
-evaluation in the paused function all go through rawr's inspector. Press F5
+evaluation in the paused function all go through rawr's inspector. A hover
+reads the whole place under the pointer, such as `player.score` or
+`names[turn]`, and never runs a call: a selected `tick()` says to evaluate
+it in the Debug Console instead. Press F5
 with no `launch.json` to run the crate the active Rawr file belongs to, by
 the nearest `Cargo.toml` above it, or the file alone when there is none. An
 active `.rs` file that isn't marked runs nothing and says so. With no Rust

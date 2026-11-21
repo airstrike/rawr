@@ -129,6 +129,7 @@ enum Asked {
     Continue,
     Pause,
     Eval { entry: usize },
+    Hover { asked: u64 },
     Screenshot { file: PathBuf },
 }
 
@@ -288,18 +289,37 @@ impl App {
             }
             Message::Source(message) => {
                 let action = self.source.update(message);
-                if let Some(source::Instruction::Toggle { file, line }) = action.instruction {
-                    let request = if self.breakpoints.contains(&(file.clone(), line)) {
-                        json!({ "op": "clear", "file": file, "line": line })
-                    } else {
-                        json!({ "op": "break", "file": file, "line": line })
-                    };
-                    let kind = if request["op"] == "clear" {
-                        Asked::Clear
-                    } else {
-                        Asked::Break
-                    };
-                    self.ask(request, kind);
+                match action.instruction {
+                    Some(source::Instruction::Toggle { file, line }) => {
+                        let request = if self.breakpoints.contains(&(file.clone(), line)) {
+                            json!({ "op": "clear", "file": file, "line": line })
+                        } else {
+                            json!({ "op": "break", "file": file, "line": line })
+                        };
+                        let kind = if request["op"] == "clear" {
+                            Asked::Clear
+                        } else {
+                            Asked::Break
+                        };
+                        self.ask(request, kind);
+                    }
+                    // A hover reads only a paused program, in the frame
+                    // the function under the pointer runs in, the selected
+                    // one first.
+                    Some(source::Instruction::Hover {
+                        file,
+                        line,
+                        column,
+                        text,
+                        asked,
+                    }) if self.phase.stop().is_some() => {
+                        let request = json!({
+                            "op": "hover", "file": file, "line": line, "column": column,
+                            "text": text, "frame": self.selected,
+                        });
+                        self.ask(request, Asked::Hover { asked });
+                    }
+                    Some(source::Instruction::Hover { .. }) | None => {}
                 }
                 action.task.map(Message::Source)
             }
@@ -466,6 +486,7 @@ impl App {
         }
         match self.phase.stop().cloned() {
             Some(stop) if self.inspected.as_ref() != Some(&stop) => {
+                self.source.unhover();
                 self.selected = 0;
                 self.read(0);
                 let task = match &stop.file {
@@ -477,6 +498,7 @@ impl App {
             }
             Some(_) => Task::none(),
             None => {
+                self.source.unhover();
                 if self.inspected.take().is_some() {
                     // A read still on its way tells of the pause just left.
                     self.reads += 1;
@@ -498,6 +520,13 @@ impl App {
         if let Asked::Inspect { read, .. } = kind
             && read != self.reads
         {
+            return Task::none();
+        }
+        // A hover that reads nothing shows nothing, and tells no note.
+        if let Asked::Hover { asked } = kind {
+            if let Ok(answer) = &result {
+                self.source.hovered(asked, answer);
+            }
             return Task::none();
         }
         let answer = match result {
@@ -551,7 +580,7 @@ impl App {
             }
             // The session tells the breakpoints as they are now to every
             // shell, this one among them.
-            Asked::Break | Asked::Clear => Task::none(),
+            Asked::Break | Asked::Clear | Asked::Hover { .. } => Task::none(),
             Asked::Inspect { frame, .. } => {
                 if answer["reached"] != true {
                     self.note = Some(format!("frame {frame} isn't there to read"));

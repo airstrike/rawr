@@ -7,6 +7,7 @@
 
 const vscode = require("vscode");
 
+const { placeAt } = require("./hover");
 const { isMarker, programFor } = require("./program");
 
 /** The first line of `document`, or nothing. */
@@ -31,6 +32,27 @@ const adapter = {
     const folder = session.workspaceFolder;
     const options = folder === undefined ? undefined : { cwd: folder.uri.fsPath };
     return new vscode.DebugAdapterExecutable(command, ["dap"], options);
+  },
+};
+
+/**
+ * What a hover in a `rawr` debug session reads: the whole place under the
+ * pointer, `names[turn]` included, which `rawr dap` reads without running
+ * any call.
+ */
+const evaluatable = {
+  provideEvaluatableExpression(document, position) {
+    if (vscode.debug.activeDebugSession?.type !== "rawr") {
+      return undefined;
+    }
+    const range = placeAt(document.lineAt(position.line).text, position.character);
+    if (range === undefined) {
+      return undefined;
+    }
+    const [start, end] = range;
+    return new vscode.EvaluatableExpression(
+      new vscode.Range(position.line, start, position.line, end),
+    );
   },
 };
 
@@ -70,6 +92,7 @@ function activate(context) {
   context.subscriptions.push(
     vscode.debug.registerDebugAdapterDescriptorFactory("rawr", adapter),
     vscode.debug.registerDebugConfigurationProvider("rawr", configurations),
+    vscode.languages.registerEvaluatableExpressionProvider("rust", evaluatable),
   );
   context.subscriptions.push(
     vscode.window.onDidChangeActiveTextEditor(update),

@@ -1,5 +1,5 @@
 //! Values in the code: which binding's value shows at the end of which
-//! line near the pause, and which name a column of a line is in.
+//! line near the pause, and which place a column of a line is in.
 
 /// How far above the marked line names are looked for, at most.
 const REACH: usize = 40;
@@ -55,11 +55,127 @@ pub fn short(value: &str) -> String {
     cut
 }
 
-/// The name `text` has at character `column`, if any.
-pub fn word_at(text: &str, column: usize) -> Option<&str> {
-    words(text)
-        .find(|(start, word)| (*start..*start + word.chars().count()).contains(&column))
-        .map(|(_, word)| word)
+/// The characters, from 0, of the place `text` has at character `column`:
+/// the name there with the fields, tuple items, indices and derefs around
+/// it, as `*player.items[turn].0`. `None` where no place is, as in a
+/// string, a comment or between tokens.
+pub fn place_at(text: &str, column: usize) -> Option<std::ops::Range<usize>> {
+    let characters: Vec<char> = text.chars().collect();
+    let word = |at: usize| {
+        characters
+            .get(at)
+            .is_some_and(|character| *character == '_' || character.is_alphanumeric())
+    };
+    let pointed = *characters.get(column)?;
+    if !in_code(text, column) {
+        return None;
+    }
+    let (mut start, mut end) = match pointed {
+        '[' => (column, closing(&characters, column)? + 1),
+        ']' => (matching(&characters, column)?, column + 1),
+        '.' | '*' => (column, column + 1),
+        _ if word(column) => (column, column + 1),
+        _ => return None,
+    };
+    while start > 0 && word(start - 1) {
+        start -= 1;
+    }
+    while word(end) {
+        end += 1;
+    }
+    // Leftward: the base before each `.`, through its indices.
+    while start >= 2
+        && characters[start - 1] == '.'
+        && (word(start - 2) || characters[start - 2] == ']')
+    {
+        start -= 1;
+        while start > 0 && characters[start - 1] == ']' {
+            start = matching(&characters, start - 1)?;
+        }
+        while start > 0 && word(start - 1) {
+            start -= 1;
+        }
+    }
+    while start > 0 && characters[start - 1] == '*' {
+        start -= 1;
+    }
+    // Rightward: `.field`, `.0` and `[..]` after it.
+    loop {
+        match characters.get(end) {
+            Some('.') if word(end + 1) => {
+                end += 1;
+                while word(end) {
+                    end += 1;
+                }
+            }
+            Some('[') => end = closing(&characters, end)? + 1,
+            _ => break,
+        }
+    }
+    Some(start..end)
+}
+
+/// The `[` the `]` at `close` closes, at the same depth.
+fn matching(characters: &[char], close: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for at in (0..=close).rev() {
+        match characters[at] {
+            ']' => depth += 1,
+            '[' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(at);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The `]` that closes the `[` at `open`.
+fn closing(characters: &[char], open: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for (at, character) in characters.iter().enumerate().skip(open) {
+        match character {
+            '[' => depth += 1,
+            ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(at);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Whether character `column` of `text` is code: outside its strings and
+/// its comment.
+fn in_code(text: &str, column: usize) -> bool {
+    let mut quoted = false;
+    let mut escaped = false;
+    let mut characters = text.chars().enumerate().peekable();
+    while let Some((at, character)) = characters.next() {
+        if at == column {
+            return !quoted;
+        }
+        if quoted {
+            match (escaped, character) {
+                (false, '\\') => escaped = true,
+                (false, '"') => quoted = false,
+                _ => escaped = false,
+            }
+            continue;
+        }
+        match (character, characters.peek().map(|(_, next)| *next)) {
+            ('/', Some('/')) => return false,
+            ('"', _) => quoted = true,
+            _ => {}
+        }
+    }
+    false
 }
 
 /// The names in `text`, each with the character it starts at: its
@@ -104,7 +220,20 @@ fn words(text: &str) -> impl Iterator<Item = (usize, &str)> {
 mod tests {
     use std::borrow::Cow;
 
-    use super::{placed, short, word_at};
+    use super::{place_at, placed, short};
+
+    #[test]
+    fn a_place_runs_through_its_fields_indices_and_derefs() {
+        let line = "    total += *player.items[turn].0 + count; // player.score";
+        let at = |column: usize| place_at(line, column).map(|range| &line[range]);
+        assert_eq!(at(20), Some("*player.items[turn].0"), "on `items`");
+        assert_eq!(at(15), Some("*player.items[turn].0"), "on `player`");
+        assert_eq!(at(28), Some("turn"), "an index is a place of its own");
+        assert_eq!(at(26), Some("*player.items[turn].0"), "on `[`");
+        assert_eq!(at(39), Some("count"));
+        assert_eq!(at(10), None, "between tokens");
+        assert_eq!(at(50), None, "in a comment");
+    }
 
     const SOURCE: [&str; 6] = [
         "fn other(absent: u32) {}",
@@ -124,9 +253,12 @@ mod tests {
             vec![(3, vec![2]), (4, vec![3, 0, 1])],
             "the function's first line ends the search, and comments and strings name nothing"
         );
-        assert_eq!(word_at(SOURCE[4], 15), Some("count"));
-        assert_eq!(word_at(SOURCE[4], 20), None);
-        assert_eq!(word_at(SOURCE[3], 18), None, "a string names nothing");
+        assert_eq!(
+            place_at(SOURCE[4], 15).map(|range| &SOURCE[4][range]),
+            Some("count")
+        );
+        assert_eq!(place_at(SOURCE[4], 20), None);
+        assert_eq!(place_at(SOURCE[3], 18), None, "a string names nothing");
         assert_eq!(short("Point {\n    x: 1,\n}"), "Point { x: 1, }");
         assert_eq!(short(&"a".repeat(40)).chars().count(), 28);
     }
