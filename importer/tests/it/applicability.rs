@@ -8,14 +8,14 @@ use rawr_import::process::Native;
 
 #[test]
 fn independent_intrinsic_domains_keep_full_predicates_and_associated_links() {
-    let _lane = crate::shared::lane();
+    let mut lane = crate::shared::lane();
     rawr_import::store::isolate_for_tests();
     let limits = Limits::standard();
     let native = Native::pinned().expect("the pinned driver toolchain is installed");
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/tmp/independent-inventories");
     std::fs::create_dir_all(&root).unwrap();
-    let first = capture(&root.join("ab"), &["a", "b"], &native, &limits);
-    let second = capture(&root.join("cb"), &["c", "b"], &native, &limits);
+    let first = capture(&mut lane, &root.join("ab"), &["a", "b"], &native, &limits);
+    let second = capture(&mut lane, &root.join("cb"), &["c", "b"], &native, &limits);
     assert_eq!(first.partitions(), 2);
     assert_eq!(second.partitions(), 2);
     assert!(first
@@ -59,7 +59,13 @@ fn independent_intrinsic_domains_keep_full_predicates_and_associated_links() {
     assert!(catalog.export("facts_c", &["Left"]).is_some());
 }
 
-fn capture(root: &Path, selected: &[&str], native: &Native, limits: &Limits) -> Acquired {
+fn capture(
+    lane: &mut rawr_import::cargo::Lane,
+    root: &Path,
+    selected: &[&str],
+    native: &Native,
+    limits: &Limits,
+) -> Acquired {
     std::fs::create_dir_all(root).unwrap();
     let root = std::fs::canonicalize(root).unwrap();
     let environment = Environment::capture()
@@ -82,6 +88,6 @@ fn capture(root: &Path, selected: &[&str], native: &Native, limits: &Limits) -> 
                 .unwrap(),
         );
     }
-    Acquired::capture(builder.build().unwrap(), native, limits)
+    Acquired::capture(builder.build().unwrap(), lane, native, limits)
         .expect("the independent intrinsic domain authenticates")
 }

@@ -2,9 +2,12 @@
 
 use std::path::Path;
 
-/// CLI-owned native process slot and its exact cache/process authorities.
+/// CLI-owned native process slot and its exact cache/process authorities,
+/// with the run's native Cargo lane, which it lends to each preparation
+/// and runner build.
 pub struct Lane<B> {
     supervisor: rawr_import::supervisor::Owner,
+    cargo: rawr_import::cargo::Lane,
     cache: rawr_import::cache::Writer,
     process: rawr_import::process::Owner,
     slot: rawr_import::supervisor::slot::Slot<B>,
@@ -112,6 +115,7 @@ impl<B> Lane<B> {
         }
         Ok(Self {
             supervisor: rawr_import::supervisor::Owner::new(),
+            cargo: rawr_import::cargo::Lane::new(),
             cache: rawr_import::cache::Writer::new(project)?,
             process,
             slot: rawr_import::supervisor::slot::Slot::new(),
@@ -134,14 +138,19 @@ impl<B> Lane<B> {
         self
     }
 
+    /// The run's native Cargo lane, lent to one preparation.
+    pub fn cargo(&mut self) -> &mut rawr_import::cargo::Lane {
+        &mut self.cargo
+    }
+
     /// Allocate the next exact compilation revision from this lane's sole
     /// supervisor authority.
     pub fn revision(&mut self) -> Result<rawr_import::supervisor::Revision, Error> {
         self.supervisor.revision().map_err(Error::Supervisor)
     }
 
-    /// Build or revalidate one typed runner, release the global native Cargo
-    /// lane, finish staged admission, then directly replace the process route.
+    /// Build or revalidate one typed runner on the run's Cargo lane, finish
+    /// staged admission, then directly replace the process route.
     pub fn replace(
         &mut self,
         generated: rawr_import::runner::Manifest<rawr_import::runner::Generated, B>,
@@ -190,7 +199,7 @@ impl<B> Lane<B> {
         generated: rawr_import::runner::Manifest<rawr_import::runner::Generated, B>,
     ) -> Result<rawr_import::runner::Manifest<rawr_import::runner::Built, B>, Error> {
         let built = generated
-            .build_on_demand(&self.cache)
+            .build(&mut self.cargo, &self.cache)
             .map_err(Error::Build)?;
         rawr_import::universe::deliver(&built).map_err(Error::Deliver)?;
         Ok(built)

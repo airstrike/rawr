@@ -9,7 +9,7 @@ use crate::process::{test_launch, Native};
 
 #[test]
 fn native_equivalence_retains_transitive_sources_config_and_script_outputs() {
-    let _turn = crate::store::test_turn();
+    let mut lane = crate::store::test_lane();
     crate::store::isolate_for_tests();
     let limits = Limits::standard();
     let native = Native::pinned().unwrap();
@@ -48,16 +48,28 @@ fn main() {
         )
     };
     let inventories = [
-        Acquired::capture(request("ab", &["a", "b"], true, "first"), &native, &limits).unwrap(),
-        Acquired::capture(request("cb", &["c", "b"], true, "first"), &native, &limits).unwrap(),
+        Acquired::capture(
+            request("ab", &["a", "b"], true, "first"),
+            &mut lane,
+            &native,
+            &limits,
+        )
+        .unwrap(),
+        Acquired::capture(
+            request("cb", &["c", "b"], true, "first"),
+            &mut lane,
+            &native,
+            &limits,
+        )
+        .unwrap(),
     ];
     let catalog =
         Catalog::join(&inventories).expect("B witnesses agree across independent harnesses");
-    let capture = |request| {
+    let mut capture = |request| {
         let recorder = Recorder::transform(1000).unwrap();
         let inputs = {
             let _scope = recorder.scope().unwrap();
-            super::Inputs::capture(request, &native, &limits).unwrap()
+            super::Inputs::capture(request, &mut lane, &native, &limits).unwrap()
         };
         let evidence = recorder.snapshot().unwrap();
         assert!(

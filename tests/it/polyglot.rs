@@ -322,7 +322,7 @@ fn the_app_crate_is_imported_and_a_rawr_module_uses_its_rust_module() {
     use rawr_import::process::Native;
     use rawr_import::{classify, extract};
 
-    let _turn = rawr_import::store::test_turn();
+    let mut lane = rawr_import::store::test_lane();
     let project = Project::new("import");
     for file in ["Cargo.toml", "src/main.rs", "src/view.rs", "src/model.rs"] {
         project.write(file, &fs::read_to_string(fixture().join(file)).unwrap());
@@ -336,13 +336,13 @@ fn the_app_crate_is_imported_and_a_rawr_module_uses_its_rust_module() {
     let limits = graph.rust_limits();
     let native = Native::pinned().expect("the pinned driver toolchain is installed");
     let environment = Environment::capture().and_then(|environment| environment.setting("CARGO_NET_OFFLINE", "true")).unwrap();
-    let import = |graph: &Graph| {
+    let mut import = |graph: &Graph| {
         graph
             .rust_import(environment.clone(), &limits)
             .expect("the app crate request seals")
             .expect("the package declares a Rust import")
-            .resolve(&native, &limits)
-            .and_then(|resolution| extract::from_resolution(resolution, &native, &limits))
+            .resolve(&mut lane, &native, &limits)
+            .and_then(|resolution| extract::from_resolution(resolution, &mut lane, &native, &limits))
             .expect("the generated app crate builds without its marked modules and extracts")
             .classify(&classify::Policy::standard(), &limits)
             .expect("the app crate classifies")

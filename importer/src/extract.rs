@@ -85,10 +85,11 @@ struct FacadeSurfaceEvidenceCapability {
 #[cfg(feature = "rustc-driver")]
 pub fn from_resolution(
     resolution: cargo::Resolution,
+    lane: &mut cargo::Lane,
     native: &crate::process::Native,
     limits: &cargo::Limits,
 ) -> Result<api::Graph<api::Extracted>> {
-    resolution.publication(native, limits, |resolution| {
+    resolution.publication(lane, native, limits, |resolution| {
         resolution.into_extraction(limits)?.publish(limits)
     })
 }
@@ -366,12 +367,13 @@ pub(crate) fn retain_shared(
 #[cfg(feature = "rustc-driver")]
 pub fn measure_canonicalization(
     request: cargo::Request,
+    lane: &mut cargo::Lane,
     native: &crate::process::Native,
     limits: &cargo::Limits,
 ) -> Result<CanonicalizationEvidence> {
     let session = crate::process::EvidenceSession::new();
-    let resolution = request.resolve_evidence(native, limits, &session)?;
-    resolution.publication(native, limits, |resolution| {
+    let resolution = request.resolve_evidence(lane, native, limits, &session)?;
+    resolution.publication(lane, native, limits, |resolution| {
         let publication = resolution.into_extraction_uncached(limits)?;
         EvidenceCapability {
             publication,
@@ -390,11 +392,12 @@ pub fn measure_canonicalization(
 #[doc(hidden)]
 pub fn measure_classification(
     request: cargo::Request,
+    lane: &mut cargo::Lane,
     native: &crate::process::Native,
     limits: &cargo::Limits,
 ) -> Result<()> {
-    let resolution = request.resolve(native, limits)?;
-    resolution.publication(native, limits, |resolution| {
+    let resolution = request.resolve(lane, native, limits)?;
+    resolution.publication(lane, native, limits, |resolution| {
         let publication = resolution.into_extraction_uncached(limits)?;
         ClassificationEvidenceCapability { publication }.measure(limits)
     })
@@ -407,8 +410,13 @@ pub fn measure_classification(
 /// graph, contract, facade plan, or publication capability.
 #[cfg(all(feature = "rustc-driver", feature = "test-fixtures"))]
 #[doc(hidden)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the request, its lane and toolchain, and the surface it must show"
+)]
 pub fn verify_facade_surface(
     request: cargo::Request,
+    lane: &mut cargo::Lane,
     native: &crate::process::Native,
     limits: &cargo::Limits,
     root: &str,
@@ -417,8 +425,8 @@ pub fn verify_facade_surface(
     rejected_paths: &[&str],
 ) -> Result<()> {
     let session = crate::process::EvidenceSession::new();
-    let resolution = request.resolve_evidence(native, limits, &session)?;
-    resolution.publication(native, limits, |resolution| {
+    let resolution = request.resolve_evidence(lane, native, limits, &session)?;
+    resolution.publication(lane, native, limits, |resolution| {
         let publication = resolution.into_extraction_uncached(limits)?;
         FacadeSurfaceEvidenceCapability { publication }.verify(
             limits,

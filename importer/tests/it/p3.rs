@@ -139,10 +139,10 @@ where
 {
     let limits = rawr_import::cargo::Limits::standard();
     let native = Native::pinned().expect("the pinned driver toolchain is installed");
-    let lane = crate::shared::lane();
+    let mut lane = crate::shared::lane();
     let graph = request(root, &limits)
-        .resolve(&native, &limits)
-        .and_then(|resolution| extract::from_resolution(resolution, &native, &limits))
+        .resolve(&mut lane, &native, &limits)
+        .and_then(|resolution| extract::from_resolution(resolution, &mut lane, &native, &limits))
         .expect("real facade evidence canonicalizes");
     drop(lane);
     let contract = graph

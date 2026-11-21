@@ -264,10 +264,11 @@ impl Basis {
     /// dependencies with the pinned nightly as the metadata probe does.
     pub fn capture(
         request: crate::cargo::Request,
+        lane: &mut crate::cargo::Lane,
         native: &crate::process::Native,
         limits: &crate::limits::Limits,
     ) -> crate::Result<Self> {
-        let resolution = request.resolve(native, limits)?;
+        let resolution = request.resolve(lane, native, limits)?;
         resolution
             .expansion()
             .map(Self::of)

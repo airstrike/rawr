@@ -49,6 +49,8 @@ pub fn check(
             graph,
             revision,
             &rawr_import::supervisor::snapshot::attempt::Scope::begin(),
+            // A check is its own run owner, with a lane of its own.
+            &mut rawr_import::cargo::Lane::new(),
             None,
         )
         .map_err(|error| unchecked(error, fallback.clone()))?;
@@ -798,8 +800,14 @@ fn session(
                 };
                 let preparation = resident::Start::now();
                 let store_work = rawr_import::progress::store_work();
-                let prepared =
-                    profile.prepare(&next_target, None, revision, &scope, Some(&mut *kept));
+                let prepared = profile.prepare(
+                    &next_target,
+                    None,
+                    revision,
+                    &scope,
+                    lane.cargo(),
+                    Some(&mut *kept),
+                );
                 preparation.tell_preparation();
                 work.tell_reads();
                 let prepared = match prepared {
@@ -1528,6 +1536,7 @@ fn prepare_on_lane(
                 graph.take(),
                 revision,
                 &rawr_import::supervisor::snapshot::attempt::Scope::begin(),
+                lane.cargo(),
                 kept.as_deref_mut(),
             ),
         };

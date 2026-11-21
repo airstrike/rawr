@@ -11,10 +11,9 @@ fn supervisor_artifact_proof_detects_post_link_tampering() {
     let missing = p3::generated_at(root);
     let wrong_record = p3::generated_at(root);
     let cache = rawr_import::cache::Writer::new(root).expect("the fixed cache writer binds");
-    let lane = crate::shared::lane();
-    let cargo = rawr_import::cargo::Owner::acquire().expect("the sole Cargo owner is available");
+    let mut lane = crate::shared::lane();
     let built = generated
-        .build(&cargo, &cache)
+        .build(&mut lane, &cache)
         .expect("the generated runner builds and seals");
     built
         .artifact()
@@ -32,7 +31,7 @@ fn supervisor_artifact_proof_detects_post_link_tampering() {
     let mut tampered = carrier.clone();
     tampered[8] ^= 1;
     fs::write(&carrier_path, tampered).expect("the disposable carrier can be tampered");
-    let warm = wrong_key.build(&cargo, &cache);
+    let warm = wrong_key.build(&mut lane, &cache);
     assert!(matches!(
         warm,
         Err(rawr_import::runner::BuildError::Manifest(
@@ -43,7 +42,7 @@ fn supervisor_artifact_proof_detects_post_link_tampering() {
 
     fs::remove_file(&carrier_path).expect("the disposable carrier can be removed");
     assert!(matches!(
-        missing.build(&cargo, &cache),
+        missing.build(&mut lane, &cache),
         Err(rawr_import::runner::BuildError::Io { .. })
     ));
     fs::write(&carrier_path, &carrier).expect("the exact carrier is restored");
@@ -53,7 +52,7 @@ fn supervisor_artifact_proof_detects_post_link_tampering() {
     tampered[last] ^= 1;
     fs::write(&carrier_path, tampered).expect("one derived record can be tampered");
     assert!(matches!(
-        wrong_record.build(&cargo, &cache),
+        wrong_record.build(&mut lane, &cache),
         Err(rawr_import::runner::BuildError::Manifest(
             rawr_import::runner::manifest::Error::Carrier
         ))
@@ -66,6 +65,5 @@ fn supervisor_artifact_proof_detects_post_link_tampering() {
     fs::write(&executable, bytes).expect("the disposable cache executable can be tampered");
     assert!(built.artifact().revalidate().is_err());
     drop(built);
-    drop(cargo);
     drop(lane);
 }

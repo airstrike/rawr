@@ -48,11 +48,11 @@ pub fn graphs(count: usize) -> Vec<rawr_import::api::Graph<rawr_import::api::Ext
     let native = Native::pinned().expect("the pinned driver toolchain is installed");
     (0..count)
         .map(|_| {
-            let _lane = crate::shared::lane();
+            let mut lane = crate::shared::lane();
             request(&project.0, &limits)
-                .resolve(&native, &limits)
+                .resolve(&mut lane, &native, &limits)
                 .and_then(|resolution| {
-                    rawr_import::extract::from_resolution(resolution, &native, &limits)
+                    rawr_import::extract::from_resolution(resolution, &mut lane, &native, &limits)
                 })
                 .expect("the real P2 facade evidence canonicalizes")
         })

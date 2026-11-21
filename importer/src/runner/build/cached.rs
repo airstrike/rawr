@@ -58,7 +58,7 @@ pub(crate) use hot::fixture_build;
 
 pub(super) fn build<B>(
     mut manifest: super::super::Manifest<super::super::Generated, B>,
-    cargo_owner: Option<&crate::cargo::Owner>,
+    _lane: &mut crate::cargo::Lane,
     _cache: &crate::cache::Writer,
 ) -> Result<super::super::Manifest<super::super::Built, B>, super::Error> {
     let chain = manifest
@@ -97,7 +97,6 @@ pub(super) fn build<B>(
             &inputs,
             &context,
             parallelism,
-            cargo_owner,
             attempt,
             store.graph_budget(),
             || {
@@ -250,7 +249,6 @@ fn compile<B>(
     inputs: &Inputs,
     context: &crate::context::Context,
     parallelism: crate::process::parallelism::Proof,
-    cargo_owner: Option<&crate::cargo::Owner>,
     attempt: crate::store::bundle::Attempt,
     budget: &node::GraphBudget,
     before_cargo: impl FnOnce() -> Result<(), node::Error>,
@@ -303,11 +301,6 @@ fn compile<B>(
         context.project().to_path_buf(),
         environment,
     )?;
-    let acquired = if cargo_owner.is_none() {
-        Some(crate::cargo::Owner::acquire()?)
-    } else {
-        None
-    };
     before_cargo()?;
     let shared = crate::deps::lock(context.rawr()).map_err(|source| node::Error::Io {
         operation: "lock shared runner build directory",
@@ -538,7 +531,7 @@ fn compile<B>(
             (second, copied)
         }
     };
-    drop((shared, acquired, runtime));
+    drop((shared, runtime));
     result?;
     copied.transpose()?;
     let executable = crate::store::bundle::path(

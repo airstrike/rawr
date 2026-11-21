@@ -15,11 +15,11 @@ static NEXT: AtomicU64 = AtomicU64::new(1);
 
 #[test]
 fn real_extracted_contract_is_snapshot_bound_positioned_and_symbolic() {
-    let _turn = rawr_import::store::test_turn();
+    let mut lane = rawr_import::store::test_lane();
     let capture = Fixture::new("");
     let limits = Limits::standard();
     let native = Native::pinned().expect("the pinned driver toolchain is installed");
-    let contract = extracted_contract(&capture.root, &native, &limits).expect("the unchanged Rust fixture extracts and classifies");
+    let contract = extracted_contract(&mut lane, &capture.root, &native, &limits).expect("the unchanged Rust fixture extracts and classifies");
     let record = contract
         .outcomes()
         .find(|outcome| outcome.export().root_alias() == "fixture" && outcome.export().path().eq(["Record"]))
@@ -187,20 +187,20 @@ opaque.visible
 /// demanded resolves the path and type-checks the call.
 #[test]
 fn a_path_through_a_reexported_crate_is_demanded_then_resolves() {
-    let _turn = rawr_import::store::test_turn();
+    let mut lane = rawr_import::store::test_lane();
     let limits = Limits::standard();
     let native = Native::pinned().expect("the pinned driver toolchain is installed");
     let engine = Engine::new();
     let source = Fixture::new("use outer::inner_api::nested::deeper; let value = deeper();\n");
 
-    let undemanded = reexport_contract(&source.root, &native, &limits, &[]);
+    let undemanded = reexport_contract(&mut lane, &source.root, &native, &limits, &[]);
     let error = match engine.compile_imported(&undemanded, snapshot(&engine, &source.source)) {
         Ok(_) => panic!("an unextracted path through the alias cannot resolve"),
         Err(error) => error,
     };
     assert_eq!(error.rust_demand(), Some("outer::inner_api::nested::deeper"));
 
-    let demanded = reexport_contract(&source.root, &native, &limits, &["outer", "inner_api", "nested", "deeper"]);
+    let demanded = reexport_contract(&mut lane, &source.root, &native, &limits, &["outer", "inner_api", "nested", "deeper"]);
     let demand = engine
         .compile_imported(&demanded, snapshot(&engine, &source.source))
         .expect("the demanded path resolves and its call type-checks");
@@ -223,7 +223,7 @@ fn a_path_through_a_reexported_crate_is_demanded_then_resolves() {
 /// attempt; a malformed file is an empty set.
 #[test]
 fn a_remembered_crate_demand_resolves_on_the_first_attempt() {
-    let _turn = rawr_import::store::test_turn();
+    let mut lane = rawr_import::store::test_lane();
     let limits = Limits::standard();
     let native = Native::pinned().expect("the pinned driver toolchain is installed");
     let engine = Engine::new();
@@ -238,7 +238,7 @@ fn a_remembered_crate_demand_resolves_on_the_first_attempt() {
     let remembered = rawr_import::crate_demand::load(&source.root);
     assert_eq!(remembered, [Box::<str>::from(path)]);
     let segments = remembered[0].split("::").collect::<Vec<_>>();
-    let contract = reexport_contract(&source.root, &native, &limits, &segments);
+    let contract = reexport_contract(&mut lane, &source.root, &native, &limits, &segments);
     engine
         .compile_imported(&contract, snapshot(&engine, &source.source))
         .expect("the remembered demand resolves on the first attempt");
@@ -248,12 +248,12 @@ fn a_remembered_crate_demand_resolves_on_the_first_attempt() {
 /// is an unresolved import with a suggestion, never demand (no extra probe).
 #[test]
 fn a_typo_in_a_demanded_path_is_unresolved_without_demand() {
-    let _turn = rawr_import::store::test_turn();
+    let mut lane = rawr_import::store::test_lane();
     let limits = Limits::standard();
     let native = Native::pinned().expect("the pinned driver toolchain is installed");
     let engine = Engine::new();
     let source = Fixture::new("use app::widget::buton; buton(1)\n");
-    let contract = demand_contract(&source.root, &native, &limits, &["app::widget::Button", "app::widget::buton"]);
+    let contract = demand_contract(&mut lane, &source.root, &native, &limits, &["app::widget::Button", "app::widget::buton"]);
     let error = match engine.compile_imported(&contract, snapshot(&engine, &source.source)) {
         Ok(_) => panic!("a typo cannot resolve"),
         Err(error) => error,
@@ -267,12 +267,12 @@ fn a_typo_in_a_demanded_path_is_unresolved_without_demand() {
 /// binds (here through the module's own glob re-export) resolve.
 #[test]
 fn a_glob_import_expands_and_resolves() {
-    let _turn = rawr_import::store::test_turn();
+    let mut lane = rawr_import::store::test_lane();
     let limits = Limits::standard();
     let native = Native::pinned().expect("the pinned driver toolchain is installed");
     let engine = Engine::new();
     let source = Fixture::new("use app::widget::*; let value = slider(1); let made = button(2); Button::new(3)\n");
-    let contract = demand_contract(&source.root, &native, &limits, &["app::widget::*"]);
+    let contract = demand_contract(&mut lane, &source.root, &native, &limits, &["app::widget::*"]);
     engine
         .compile_imported(&contract, snapshot(&engine, &source.source))
         .expect("the names the glob binds resolve and type-check");
@@ -282,18 +282,18 @@ fn a_glob_import_expands_and_resolves() {
 /// importing again with it demanded resolves it.
 #[test]
 fn a_path_the_index_holds_is_demanded_once_then_resolves() {
-    let _turn = rawr_import::store::test_turn();
+    let mut lane = rawr_import::store::test_lane();
     let limits = Limits::standard();
     let native = Native::pinned().expect("the pinned driver toolchain is installed");
     let engine = Engine::new();
     let source = Fixture::new("use app::widget::{Button, slider}; let value = slider(1); Button::new(2)\n");
-    let first = demand_contract(&source.root, &native, &limits, &["app::widget::Button"]);
+    let first = demand_contract(&mut lane, &source.root, &native, &limits, &["app::widget::Button"]);
     let error = match engine.compile_imported(&first, snapshot(&engine, &source.source)) {
         Ok(_) => panic!("an undemanded item is not extracted"),
         Err(error) => error,
     };
     assert_eq!(error.rust_miss(), Some("app::widget::slider"));
-    let second = demand_contract(&source.root, &native, &limits, &["app::widget::Button", "app::widget::slider"]);
+    let second = demand_contract(&mut lane, &source.root, &native, &limits, &["app::widget::Button", "app::widget::slider"]);
     engine.compile_imported(&second, snapshot(&engine, &source.source)).expect("the demanded path resolves");
 }
 
@@ -301,12 +301,12 @@ fn a_path_the_index_holds_is_demanded_once_then_resolves() {
 /// so one more import asks for it all, not one item per attempt (#662).
 #[test]
 fn every_miss_is_demanded_at_once() {
-    let _turn = rawr_import::store::test_turn();
+    let mut lane = rawr_import::store::test_lane();
     let limits = Limits::standard();
     let native = Native::pinned().expect("the pinned driver toolchain is installed");
     let engine = Engine::new();
     let source = Fixture::new("fn first() -> i64 {\n    let label = app::widget::button(2).label;\n    let value = app::widget::slider(1).value();\n    label + value\n}\nfn second() -> i64 { app::widget::slider(3).value() }\nfirst() + second()\n");
-    let first = demand_contract(&source.root, &native, &limits, &["app::widget::Button"]);
+    let first = demand_contract(&mut lane, &source.root, &native, &limits, &["app::widget::Button"]);
     let error = match engine.compile_imported(&first, snapshot(&engine, &source.source)) {
         Ok(_) => panic!("undemanded items are not extracted"),
         Err(error) => error,
@@ -314,11 +314,11 @@ fn every_miss_is_demanded_at_once() {
     let missed = error.rust_misses().into_iter().map(|(path, ..)| path).collect::<Vec<_>>();
     assert_eq!(missed.first(), Some(&"app::widget::button"), "the first miss is reported: {missed:?}");
     assert!(missed.contains(&"app::widget::slider"), "a later statement's miss is asked for with it: {missed:?}");
-    let all = demand_contract(&source.root, &native, &limits, &["app::widget::Button", "app::widget::slider", "app::widget::button"]);
+    let all = demand_contract(&mut lane, &source.root, &native, &limits, &["app::widget::Button", "app::widget::slider", "app::widget::button"]);
     engine.compile_imported(&all, snapshot(&engine, &source.source)).expect("every demanded path resolves");
 }
 
-fn demand_contract(root: &Path, native: &Native, limits: &Limits, demand: &[&str]) -> rawr_import::Contract<rawr_import::Classified> {
+fn demand_contract(lane: &mut rawr_import::cargo::Lane, root: &Path, native: &Native, limits: &Limits, demand: &[&str]) -> rawr_import::Contract<rawr_import::Classified> {
     let environment = Environment::capture()
         .and_then(|environment| environment.setting("CARGO_NET_OFFLINE", "true"))
         .expect("the fixture environment is sealable");
@@ -337,14 +337,14 @@ fn demand_contract(root: &Path, native: &Native, limits: &Limits, demand: &[&str
     builder
         .build()
         .expect("the fixture request seals")
-        .resolve(native, limits)
-        .and_then(|resolution| extract::from_resolution(resolution, native, limits))
+        .resolve(lane, native, limits)
+        .and_then(|resolution| extract::from_resolution(resolution, lane, native, limits))
         .expect("the demand fixture extracts")
         .classify(&classify::Policy::standard(), limits)
         .expect("the demand fixture classifies")
 }
 
-fn reexport_contract(root: &Path, native: &Native, limits: &Limits, demand: &[&str]) -> rawr_import::Contract<rawr_import::Classified> {
+fn reexport_contract(lane: &mut rawr_import::cargo::Lane, root: &Path, native: &Native, limits: &Limits, demand: &[&str]) -> rawr_import::Contract<rawr_import::Classified> {
     let environment = Environment::capture()
         .and_then(|environment| environment.setting("CARGO_NET_OFFLINE", "true"))
         .expect("the fixture environment is sealable");
@@ -363,18 +363,18 @@ fn reexport_contract(root: &Path, native: &Native, limits: &Limits, demand: &[&s
     builder
         .build()
         .expect("the fixture request seals")
-        .resolve(native, limits)
-        .and_then(|resolution| extract::from_resolution(resolution, native, limits))
+        .resolve(lane, native, limits)
+        .and_then(|resolution| extract::from_resolution(resolution, lane, native, limits))
         .expect("the re-export fixture extracts")
         .classify(&classify::Policy::standard(), limits)
         .expect("the re-export fixture classifies")
 }
 
-fn extracted_contract(root: &Path, native: &Native, limits: &Limits) -> Result<rawr_import::Contract<rawr_import::Classified>, String> {
+fn extracted_contract(lane: &mut rawr_import::cargo::Lane, root: &Path, native: &Native, limits: &Limits) -> Result<rawr_import::Contract<rawr_import::Classified>, String> {
     let extraction_limits = Limits::standard();
     request(root, &extraction_limits)
-        .resolve(native, &extraction_limits)
-        .and_then(|resolution| extract::from_resolution(resolution, native, &extraction_limits))
+        .resolve(lane, native, &extraction_limits)
+        .and_then(|resolution| extract::from_resolution(resolution, lane, native, &extraction_limits))
         .map_err(|error| error.to_string())
         .and_then(|graph| graph.classify(&classify::Policy::standard(), limits).map_err(|error| error.to_string()))
 }
