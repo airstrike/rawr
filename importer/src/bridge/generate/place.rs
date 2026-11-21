@@ -24,22 +24,16 @@ pub(super) fn render_policies(output: &mut Vec<u8>) {
     });
 }
 
-/// What registers each descriptor's type and each sequence's, one
-/// statement or two each: the body of the function the runner calls at its
-/// start, whose crate is the one that names the type (`program`).
+/// What registers each sequence's type, one statement or two each: the
+/// body of the function the runner calls at its start, whose crate is the
+/// one that names the type (`program`). A descriptor's own policy holds
+/// what it reads.
 pub(super) fn registrations() -> Vec<String> {
     let mut registrations = Vec::new();
-    POLICIES.with_borrow(|policies| {
-        for ty in policies.keys() {
-            let rust = concrete_type(ty).expect("a native descriptor has a concrete type");
-            registrations.push(reading(&rust));
-        }
-    });
     VECTORS.with_borrow(|vectors| {
         for (ty, element) in vectors {
             let key = serde_json::to_vec(ty).expect("a concrete conversion type serializes");
             let rust = concrete_type(ty).expect("a native sequence descriptor has a concrete type");
-            let mut registration = reading(&rust);
             // A script makes a native vector of builtin values where it is
             // written (D651). One of library values stays a script array
             // until native code takes it: script code still keeps such
@@ -49,14 +43,13 @@ pub(super) fn registrations() -> Vec<String> {
             } else {
                 format!("    __rawr_internal::place::sequence::register::<{element}>(&{key:?}).expect(\"unique generated native sequence descriptor\");\n")
             };
-            registration.push_str(&format!(
+            registrations.push(format!(
                 "{factory}    __rawr_internal::place::sequence::register_capabilities::<{rust}>(
         (&DebugProbe::<{rust}>(std::marker::PhantomData)).native_sequence_cloning(),
         (&DebugProbe::<{rust}>(std::marker::PhantomData)).native_sequence_copying(),
         (&DebugProbe::<{rust}>(std::marker::PhantomData)).native_sequence_comparing(),
     );\n"
             ));
-            registrations.push(registration);
         }
     });
     registrations
@@ -68,15 +61,6 @@ fn holds_nominal(ty: &convert::Type) -> bool {
         convert::Type::Sequence { element, .. } => holds_nominal(element),
         _ => false,
     }
-}
-
-fn reading(rust: &str) -> String {
-    format!("    __rawr_internal::place::reading::register::<{rust}>(__rawr_internal::place::reading::Reading::from_traits(
-        (&DebugProbe::<{rust}>(std::marker::PhantomData)).native_place_debugging(),
-        (&DebugProbe::<{rust}>(std::marker::PhantomData)).native_place_displaying(),
-        (&DebugProbe::<{rust}>(std::marker::PhantomData)).native_place_partial(),
-        (&DebugProbe::<{rust}>(std::marker::PhantomData)).native_place_total(),
-    ));\n")
 }
 
 fn arena(expression: &str) -> String {
@@ -323,6 +307,19 @@ impl __rawr_internal::place::Policy for {name} {{
             (&DebugProbe::<{rust}>(std::marker::PhantomData)).native_sequence_comparing()
         }});
         COMPARING.as_ref()
+    }}
+    fn reading() -> Option<&'static __rawr_internal::place::reading::Reading<{rust}>> {{
+        static READING: std::sync::LazyLock<__rawr_internal::place::reading::Reading<{rust}>> = std::sync::LazyLock::new(|| {{
+            #[allow(unused_imports)]
+            use crate::__rawr_runner::{{ViaPlaceDebug as _, WithoutPlaceDebug as _, ViaPlaceDisplay as _, WithoutPlaceDisplay as _, ViaPlacePartial as _, WithoutPlacePartial as _, ViaPlaceTotal as _, WithoutPlaceTotal as _}};
+            __rawr_internal::place::reading::Reading::from_traits(
+                (&DebugProbe::<{rust}>(std::marker::PhantomData)).native_place_debugging(),
+                (&DebugProbe::<{rust}>(std::marker::PhantomData)).native_place_displaying(),
+                (&DebugProbe::<{rust}>(std::marker::PhantomData)).native_place_partial(),
+                (&DebugProbe::<{rust}>(std::marker::PhantomData)).native_place_total(),
+            )
+        }});
+        Some(&READING)
     }}
     fn with_dynamic<R>(value: &Dynamic, witness: &__rawr_internal::host::runtime::Witness, visit: impl FnOnce(&{rust}) -> Result<R, Box<__rawr_internal::EvalAltResult>>) -> Result<R, Box<__rawr_internal::EvalAltResult>> {{
         if let Some(place) = __rawr_internal::place::get(value) {{
