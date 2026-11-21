@@ -23,11 +23,18 @@
 //! A check shows its phase on the same line instead: the phase's name, and
 //! for extraction the units Cargo has finished of the planned total. It has
 //! no bar and no clock, and is redrawn only when the phase or its count moves.
+//!
+//! One printer thread owns the line, the lines printed above it and the
+//! lines held while a program has the terminal raw, with each round's
+//! counts. Every other thread sends it events. A line, a launch's end, a
+//! restore and a [`flush`] wait for its answer, so what they print is on
+//! stderr when they return and keeps its order against the caller's own
+//! writes. A count or a move of the line is sent without waiting.
 
-use std::io::{IsTerminal as _, Write as _};
+use std::io::{IsTerminal as _, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{mpsc, OnceLock};
 use std::time::{Duration, Instant};
 
 const STAGES: [&str; 4] = [
@@ -89,9 +96,15 @@ const RECORD: Record = Record {
     millis: 0,
 };
 
-static STATE: Mutex<State> = Mutex::new(State::new());
+/// The printer thread's inbox ([`printer`]).
+static PRINTER: OnceLock<mpsc::Sender<Event>> = OnceLock::new();
 /// How many lines [`note`] and [`say`] have printed in this process.
 static SAID: AtomicUsize = AtomicUsize::new(0);
+
+thread_local! {
+    /// Whether this thread is the printer, which hears no event it sends.
+    static PRINTING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
 /// Who hears each stage and each 5% step of a launch beside the status
 /// line, such as a supervising `rawr mcp` (set once by the command).
@@ -99,6 +112,76 @@ static OBSERVER: OnceLock<Observer> = OnceLock::new();
 
 /// Hears a stage's name and the launch's percent.
 type Observer = fn(&str, u8);
+
+/// What the printer thread hears: a change to the status line, a line to
+/// print above it, a count toward a round, or a question with the sender
+/// that takes its answer. An event that carries `done` is answered once
+/// its output is written.
+enum Event {
+    Begin {
+        at: Instant,
+        file: PathBuf,
+        previous: Option<[Record; 4]>,
+    },
+    Finish {
+        success: bool,
+        done: mpsc::Sender<()>,
+    },
+    BeginPhases,
+    /// `mark` is when the phase began, when it counts toward a round.
+    Phase {
+        phase: &'static str,
+        mark: Option<Instant>,
+    },
+    Stage {
+        stage: usize,
+        at: Instant,
+        mark: Option<Instant>,
+    },
+    Plan(usize),
+    /// Cargo's finished units on stdout and `Compiling` lines on stderr.
+    Observe {
+        lines: usize,
+        compiling: usize,
+    },
+    Line {
+        line: String,
+        done: mpsc::Sender<()>,
+    },
+    Note {
+        key: String,
+        line: String,
+        done: mpsc::Sender<()>,
+    },
+    /// A runner that had the terminal ended and its modes are back.
+    Restored(mpsc::Sender<()>),
+    Flush(mpsc::Sender<()>),
+    BeginRound,
+    Count {
+        stage: fn(&mut Round) -> &mut usize,
+        amount: usize,
+    },
+    Rounds(mpsc::Sender<Vec<Round>>),
+    Phases {
+        round: usize,
+        answer: mpsc::Sender<Phases>,
+    },
+}
+
+/// What the printer thread alone holds: the status line, the lines held
+/// while a program has the terminal raw, and each round with the phases
+/// it began.
+struct Printer {
+    line: State,
+    held: Vec<String>,
+    rounds: Vec<Round>,
+    marks: Vec<(usize, &'static str, Instant)>,
+    /// When a launch's line is drawn again, so its spinner and clock move.
+    next_draw: Instant,
+    out: Box<dyn Write + Send>,
+    /// Whether `out` is a terminal, where the line is drawn in place.
+    terminal: bool,
+}
 
 /// Tell `observer` each launch's stage and percent as they move. The first
 /// observer a process names is the one it keeps.
@@ -118,98 +201,134 @@ fn report(state: &mut State) {
     }
 }
 
-fn lock() -> std::sync::MutexGuard<'static, State> {
-    STATE
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+/// The printer thread's inbox, spawning the thread on first use. A thread
+/// that cannot spawn drops the inbox's receiver, so every send fails and
+/// each caller writes for itself.
+fn printer() -> &'static mpsc::Sender<Event> {
+    PRINTER.get_or_init(|| {
+        let (sender, events) = mpsc::channel();
+        let printer = Printer::new(Box::new(std::io::stderr()), std::io::stderr().is_terminal());
+        let _ = std::thread::Builder::new()
+            .name("rawr-printer".into())
+            .spawn(move || printer.run(&events));
+        sender
+    })
 }
 
-/// Start showing progress for one launch of the project at `project` until
-/// [`finish`].
+/// Send `event` to the printer thread. The event comes back when no
+/// printer hears it: on the printer thread itself, or once it is gone.
+fn send(event: Event) -> Result<(), Event> {
+    if PRINTING.get() {
+        return Err(event);
+    }
+    printer().send(event).map_err(|error| error.0)
+}
+
+/// Send the event `asking` makes and wait for its answer, or `None` when
+/// no printer heard it or the printer ended before answering.
+fn ask<T>(asking: impl FnOnce(mpsc::Sender<T>) -> Event) -> Option<T> {
+    let (answer, answered) = mpsc::channel();
+    send(asking(answer)).ok()?;
+    answered.recv().ok()
+}
+
+/// Write `line` to stderr from the calling thread, which no printer hears.
+fn write_here(line: &str) {
+    eprint!("{line}");
+    if !line.ends_with('\n') {
+        eprintln!();
+    }
+}
+
+/// Start showing progress for one launch of the project at `project`, to
+/// its [`finish`].
 pub fn begin(project: &Path) {
     let file = crate::location::rawr_directory_here(project).join("cache/progress");
     let previous = std::fs::read_to_string(&file)
         .ok()
         .and_then(|text| parse(&text));
-    let mut state = lock();
-    let notes = std::mem::take(&mut state.notes);
-    *state = State::new();
-    state.notes = notes;
-    state.start(Instant::now(), Some(file), previous);
-    drop(state);
-    std::thread::spawn(|| loop {
-        std::thread::sleep(TICK);
-        let mut state = lock();
-        if state.launch.is_none() {
-            return;
-        }
-        draw(&mut state);
-        report(&mut state);
+    let _ = send(Event::Begin {
+        at: Instant::now(),
+        file,
+        previous,
     });
 }
 
 /// Clear the status line: the window is up (`success`), or the launch failed.
 /// A successful launch that compiled anything records its stages for the next.
+/// It returns once the line is cleared.
 pub fn finish(success: bool) {
-    let mut state = lock();
-    if state.launch.is_some() {
-        state.close(Instant::now());
-        if let Some(file) = state.file.as_ref().filter(|_| success && state.compiled) {
-            if let Some(parent) = file.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            let _ = std::fs::write(file, format(&state.current));
-        }
-    }
-    clear(&mut state);
-    state.launch = None;
-    state.phases = false;
-    state.phase = None;
-    state.step = None;
+    let _ = ask(|done| Event::Finish { success, done });
 }
 
-/// Show a check's phases on the status line until [`finish`].
+/// Show a check's phases on the status line, to its [`finish`].
 pub fn begin_phases() {
-    lock().phases = true;
+    let _ = send(Event::BeginPhases);
 }
 
 /// Enter `phase` of a check. During a launch, the phase is the step of
 /// its stage the line names; outside a check or a launch, nothing is
 /// shown.
 pub fn phase(phase: &'static str) {
-    mark(phase);
-    let mut state = lock();
-    if state.launch.is_some() {
-        if state.step != Some(phase) {
-            state.step = Some(phase);
-            draw(&mut state);
-        }
-        return;
-    }
-    if !state.phases || state.phase == Some(phase) {
-        return;
-    }
-    state.phase = Some(phase);
-    if phase == EXTRACTING {
-        state.lines = 0;
-    }
-    draw(&mut state);
+    let _ = send(Event::Phase {
+        phase,
+        mark: mark_here(),
+    });
 }
 
-/// Print `line` once per process, above the status line.
+/// When a phase entered now begins for its round: never on a thread
+/// [`uncounted`].
+fn mark_here() -> Option<Instant> {
+    (!UNCOUNTED.get()).then(Instant::now)
+}
+
+/// Print `line` once per process, above the status line. It returns once
+/// the line is written or held.
 pub fn note(key: &str, line: &str) {
-    let mut state = lock();
-    if state.notes.iter().any(|seen| seen == key) {
-        return;
+    let heard = ask(|done| Event::Note {
+        key: key.into(),
+        line: line.into(),
+        done,
+    });
+    if heard.is_none() {
+        SAID.fetch_add(1, Ordering::Relaxed);
+        write_here(line);
     }
-    state.notes.push(key.into());
-    say_above(&mut state, line);
 }
 
 /// Print `line` above the status line, every time.
 #[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
 pub(crate) fn say(line: &str) {
-    say_above(&mut lock(), line);
+    SAID.fetch_add(1, Ordering::Relaxed);
+    print(line.to_owned());
+}
+
+/// Print `line` above the status line, or hold it while a program has the
+/// terminal raw. It returns once the line is written or held, so it keeps
+/// its order against what the caller writes to stderr next.
+pub(crate) fn print(line: String) {
+    let heard = ask(|done| Event::Line {
+        line: line.clone(),
+        done,
+    });
+    if heard.is_none() {
+        write_here(&line);
+    }
+}
+
+/// Print the lines held while a runner had the terminal raw, now that its
+/// modes are back, and clear a finished launch's line its screen kept.
+/// It returns once they are written.
+pub(crate) fn restored() {
+    let _ = ask(Event::Restored);
+}
+
+/// Write everything sent to the printer before this call, clear the status
+/// line and print the held lines unless a program still has the terminal
+/// raw. It returns once they are written. A process calls it before it
+/// exits and before a panic's message.
+pub fn flush() {
+    let _ = ask(Event::Flush);
 }
 
 /// How many times this process ran Cargo's resolution of the program's
@@ -685,64 +804,24 @@ impl std::fmt::Display for Round {
     }
 }
 
-/// Each round this process began ([`begin_round`]), in order.
-static ROUNDS: Mutex<Vec<Round>> = Mutex::new(Vec::new());
-
 /// Begin one round of a check: the stages that follow count toward it.
 pub fn begin_round() {
-    rounds_lock().push(Round::default());
-}
-
-/// When each phase of a round began ([`phase`]): the round's index, the
-/// phase and the time.
-static MARKS: Mutex<Vec<(usize, &'static str, Instant)>> = Mutex::new(Vec::new());
-
-/// Mark `phase` as begun in the current round, unless it is the phase the
-/// round is in; outside a round, or [`uncounted`], nothing is marked.
-fn mark(phase: &'static str) {
-    if UNCOUNTED.get() {
-        return;
-    }
-    let Some(round) = rounds_lock().len().checked_sub(1) else {
-        return;
-    };
-    let mut marks = MARKS
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let current = marks
-        .last()
-        .filter(|(index, _, _)| *index == round)
-        .map(|(_, current, _)| *current);
-    if current != Some(phase) {
-        marks.push((round, phase, Instant::now()));
-    }
+    let _ = send(Event::BeginRound);
 }
 
 /// How long each phase of the round at `index` took, in order: the last
-/// one until now (#1815).
+/// one to now (#1815).
 #[must_use]
 pub fn phases(index: usize) -> Phases {
-    let marks = MARKS
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let marks = marks
-        .iter()
-        .filter(|(round, _, _)| *round == index)
-        .collect::<Vec<_>>();
-    let now = Instant::now();
-    Phases(
-        marks
-            .iter()
-            .enumerate()
-            .map(|(at, (_, phase, began))| {
-                let ended = marks.get(at + 1).map_or(now, |(_, _, next)| *next);
-                (*phase, ended.duration_since(*began))
-            })
-            .collect(),
-    )
+    ask(|answer| Event::Phases {
+        round: index,
+        answer,
+    })
+    .unwrap_or_default()
 }
 
 /// The phases of one round and how long each took ([`phases`]).
+#[derive(Default)]
 pub struct Phases(Vec<(&'static str, Duration)>);
 
 impl std::fmt::Display for Phases {
@@ -760,13 +839,7 @@ impl std::fmt::Display for Phases {
 /// The rounds this process began, each with what its stages did.
 #[must_use]
 pub fn rounds() -> Vec<Round> {
-    rounds_lock().clone()
-}
-
-fn rounds_lock() -> std::sync::MutexGuard<'static, Vec<Round>> {
-    ROUNDS
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+    ask(Event::Rounds).unwrap_or_default()
 }
 
 thread_local! {
@@ -787,12 +860,9 @@ pub(crate) fn uncounted<T>(work: impl FnOnce() -> T) -> T {
 
 /// Add to the current round's count of one stage; outside a round, or
 /// [`uncounted`], nothing is counted.
-fn count_round(stage: impl FnOnce(&mut Round) -> &mut usize, amount: usize) {
-    if UNCOUNTED.get() {
-        return;
-    }
-    if let Some(round) = rounds_lock().last_mut() {
-        *stage(round) += amount;
+fn count_round(stage: fn(&mut Round) -> &mut usize, amount: usize) {
+    if !UNCOUNTED.get() {
+        let _ = send(Event::Count { stage, amount });
     }
 }
 
@@ -874,14 +944,12 @@ pub(crate) enum View {
 /// Count one replay of a stored Cargo view in this round.
 #[cfg_attr(not(feature = "rustc-driver"), allow(dead_code))]
 pub(crate) fn view(view: View) {
-    count_round(
-        |round| match view {
-            View::Parsed => &mut round.views.parsed,
-            View::Compared => &mut round.views.compared,
-            View::Kept => &mut round.views.kept,
-        },
-        1,
-    );
+    let stage: fn(&mut Round) -> &mut usize = match view {
+        View::Parsed => |round| &mut round.views.parsed,
+        View::Compared => |round| &mut round.views.compared,
+        View::Kept => |round| &mut round.views.kept,
+    };
+    count_round(stage, 1);
 }
 
 /// How many lines this process has printed above the status line: a
@@ -890,49 +958,32 @@ pub fn said() -> usize {
     SAID.load(Ordering::Relaxed)
 }
 
-fn say_above(state: &mut State, line: &str) {
-    SAID.fetch_add(1, Ordering::Relaxed);
-    let shown = state.drawn;
-    clear(state);
-    crate::process::say(line);
-    if shown {
-        state.drawn = true;
-        draw(state);
-    }
-}
-
 /// Enter `stage` (1-based); stages only move forward.
 pub(crate) fn stage(stage: usize) {
-    let mut state = lock();
-    state.advance(stage, Instant::now());
-    let launching = state.launch.is_some();
-    drop(state);
-    // The build that feeds extraction is a check's extracting phase; a
-    // launch's line names it by its stage.
-    if stage == 2 && !launching {
-        phase(EXTRACTING);
-    }
+    let _ = send(Event::Stage {
+        stage,
+        at: Instant::now(),
+        mark: mark_here(),
+    });
 }
 
 /// Record the planned unit count from a `--unit-graph` listing.
 pub(crate) fn plan(unit_graph: &[u8]) {
     let units = count(unit_graph, b"\"pkg_id\"");
     if units > 0 {
-        lock().units = Some(units);
+        let _ = send(Event::Plan(units));
     }
 }
 
 /// Observe one chunk of a building Cargo child's stdout or stderr.
 pub(crate) fn observe(stdout: bool, chunk: &[u8]) {
-    let mut state = lock();
-    if stdout {
-        let lines = count(chunk, b"\n");
-        state.lines += lines;
-        if lines > 0 && state.phase == Some(EXTRACTING) {
-            draw(&mut state);
-        }
+    let (lines, compiling) = if stdout {
+        (count(chunk, b"\n"), 0)
     } else {
-        state.compiling += count(chunk, b"Compiling ");
+        (0, count(chunk, b"Compiling "))
+    };
+    if lines > 0 || compiling > 0 {
+        let _ = send(Event::Observe { lines, compiling });
     }
 }
 
@@ -1078,73 +1129,284 @@ fn parse(text: &str) -> Option<[Record; 4]> {
     Some(records)
 }
 
-fn draw(state: &mut State) {
-    let (Some(launch), Some(since)) = (state.launch, state.since) else {
-        draw_phase(state);
-        return;
-    };
-    if !state.drawn && since.elapsed() < QUIET {
-        return;
+impl Printer {
+    fn new(out: Box<dyn Write + Send>, terminal: bool) -> Self {
+        Self {
+            line: State::new(),
+            held: Vec::new(),
+            rounds: Vec::new(),
+            marks: Vec::new(),
+            next_draw: Instant::now(),
+            out,
+            terminal,
+        }
     }
-    // A program that has the screen draws it alone.
-    if crate::process::terminal::raw() {
-        return;
+
+    /// Hear each event in the order it was sent, for as long as a sender
+    /// lives. During a launch the wait for the next event ends at
+    /// `next_draw`, which draws the line again.
+    fn run(mut self, events: &mpsc::Receiver<Event>) {
+        PRINTING.set(true);
+        loop {
+            if self.line.launch.is_some() {
+                let wait = self.next_draw.saturating_duration_since(Instant::now());
+                match events.recv_timeout(wait) {
+                    Ok(event) => self.hear(event),
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                }
+            } else {
+                let Ok(event) = events.recv() else {
+                    return;
+                };
+                self.hear(event);
+            }
+            if self.line.launch.is_some() && Instant::now() >= self.next_draw {
+                self.next_draw = Instant::now() + TICK;
+                self.draw();
+                report(&mut self.line);
+            }
+        }
     }
-    let percent = state.percent(Instant::now());
-    let mut stderr = std::io::stderr().lock();
-    if stderr.is_terminal() {
-        let style = Style::terminal(&stderr);
-        state.tick = state.tick.wrapping_add(1);
-        let line = render(state.label(), percent, launch.elapsed(), state.tick, &style);
-        let _ = write!(stderr, "\r\x1b[2K{line}");
-        state.drawn = true;
-    } else if state.announced < state.stage {
-        let style = Style {
-            width: None,
-            unicode: false,
-            color: false,
-            truecolor: false,
+
+    fn hear(&mut self, event: Event) {
+        match event {
+            Event::Begin { at, file, previous } => {
+                let notes = std::mem::take(&mut self.line.notes);
+                self.line = State::new();
+                self.line.notes = notes;
+                self.line.start(at, Some(file), previous);
+                self.next_draw = at + TICK;
+            }
+            Event::Finish { success, done } => {
+                self.finish(success);
+                let _ = done.send(());
+            }
+            Event::BeginPhases => self.line.phases = true,
+            Event::Phase { phase, mark } => self.phase(phase, mark),
+            Event::Stage { stage, at, mark } => {
+                self.line.advance(stage, at);
+                // The build that feeds extraction is a check's extracting
+                // phase; a launch's line names it by its stage.
+                if stage == 2 && self.line.launch.is_none() {
+                    self.phase(EXTRACTING, mark);
+                }
+            }
+            Event::Plan(units) => self.line.units = Some(units),
+            Event::Observe { lines, compiling } => {
+                self.line.lines += lines;
+                self.line.compiling += compiling;
+                if lines > 0 && self.line.phase == Some(EXTRACTING) {
+                    self.draw();
+                }
+            }
+            Event::Line { line, done } => {
+                self.above(line);
+                let _ = done.send(());
+            }
+            Event::Note { key, line, done } => {
+                if !self.line.notes.contains(&key) {
+                    self.line.notes.push(key);
+                    SAID.fetch_add(1, Ordering::Relaxed);
+                    self.above(line);
+                }
+                let _ = done.send(());
+            }
+            Event::Restored(done) => {
+                if self.line.launch.is_none() {
+                    self.clear();
+                }
+                self.release();
+                let _ = done.send(());
+            }
+            Event::Flush(done) => {
+                self.clear();
+                self.release();
+                let _ = done.send(());
+            }
+            Event::BeginRound => self.rounds.push(Round::default()),
+            Event::Count { stage, amount } => {
+                if let Some(round) = self.rounds.last_mut() {
+                    *stage(round) += amount;
+                }
+            }
+            Event::Rounds(answer) => {
+                let _ = answer.send(self.rounds.clone());
+            }
+            Event::Phases { round, answer } => {
+                let _ = answer.send(self.phases(round));
+            }
+        }
+    }
+
+    fn finish(&mut self, success: bool) {
+        let state = &mut self.line;
+        if state.launch.is_some() {
+            state.close(Instant::now());
+            if let Some(file) = state.file.as_ref().filter(|_| success && state.compiled) {
+                if let Some(parent) = file.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let _ = std::fs::write(file, format(&state.current));
+            }
+        }
+        self.clear();
+        self.line.launch = None;
+        self.line.phases = false;
+        self.line.phase = None;
+        self.line.step = None;
+    }
+
+    fn phase(&mut self, phase: &'static str, mark: Option<Instant>) {
+        if let Some(at) = mark {
+            self.mark(phase, at);
+        }
+        if self.line.launch.is_some() {
+            if self.line.step != Some(phase) {
+                self.line.step = Some(phase);
+                self.draw();
+            }
+            return;
+        }
+        if !self.line.phases || self.line.phase == Some(phase) {
+            return;
+        }
+        self.line.phase = Some(phase);
+        if phase == EXTRACTING {
+            self.line.lines = 0;
+        }
+        self.draw();
+    }
+
+    /// Mark `phase` as begun `at` in the current round, unless it is the
+    /// phase the round is in; outside a round, nothing is marked.
+    fn mark(&mut self, phase: &'static str, at: Instant) {
+        let Some(round) = self.rounds.len().checked_sub(1) else {
+            return;
         };
-        let line = render(state.label(), percent, launch.elapsed(), 0, &style);
-        let _ = writeln!(stderr, "{line}");
-        state.announced = state.stage;
+        let current = self
+            .marks
+            .last()
+            .filter(|(index, _, _)| *index == round)
+            .map(|(_, current, _)| *current);
+        if current != Some(phase) {
+            self.marks.push((round, phase, at));
+        }
     }
-    let _ = stderr.flush();
-}
 
-/// Draw a check's phase in place. A phase line is for a person at a
-/// terminal; a log or a test reading stderr sees none of it.
-fn draw_phase(state: &mut State) {
-    let Some(phase) = state.phase.filter(|_| state.phases) else {
-        return;
-    };
-    if crate::process::terminal::raw() {
-        return;
+    fn phases(&self, index: usize) -> Phases {
+        let marks = self
+            .marks
+            .iter()
+            .filter(|(round, _, _)| *round == index)
+            .collect::<Vec<_>>();
+        let now = Instant::now();
+        Phases(
+            marks
+                .iter()
+                .enumerate()
+                .map(|(at, (_, phase, began))| {
+                    let ended = marks.get(at + 1).map_or(now, |(_, _, next)| *next);
+                    (*phase, ended.duration_since(*began))
+                })
+                .collect(),
+        )
     }
-    let mut stderr = std::io::stderr().lock();
-    if !stderr.is_terminal() {
-        return;
-    }
-    let count = (phase == EXTRACTING).then_some((state.lines, state.units));
-    let line = render_phase(phase, count, &Style::terminal(&stderr));
-    let _ = write!(stderr, "\r\x1b[2K{line}");
-    let _ = stderr.flush();
-    state.drawn = true;
-}
 
-fn clear(state: &mut State) {
-    // While a program has the screen, the line stays until it is restored.
-    if state.drawn && !crate::process::terminal::raw() {
-        state.drawn = false;
-        let _ = write!(std::io::stderr(), "\r\x1b[2K");
+    /// Print `line` above the status line, or hold it while a program has
+    /// the terminal raw, so it never lands inside a full-screen program.
+    fn above(&mut self, mut line: String) {
+        if crate::process::terminal::raw() {
+            self.held.push(line);
+            return;
+        }
+        let shown = self.line.drawn;
+        self.clear();
+        if !line.ends_with('\n') {
+            line.push('\n');
+        }
+        self.write(&line);
+        if shown {
+            self.line.drawn = true;
+            self.draw();
+        }
     }
-}
 
-/// Clear a finished launch's line that a program's screen kept.
-pub(crate) fn clear_left() {
-    let mut state = lock();
-    if state.launch.is_none() {
-        clear(&mut state);
+    /// Print the held lines; any still held when a program has the
+    /// terminal raw again.
+    fn release(&mut self) {
+        for line in std::mem::take(&mut self.held) {
+            self.above(line);
+        }
+    }
+
+    fn draw(&mut self) {
+        let (Some(launch), Some(since)) = (self.line.launch, self.line.since) else {
+            self.draw_phase();
+            return;
+        };
+        if !self.line.drawn && since.elapsed() < QUIET {
+            return;
+        }
+        // A program that has the screen draws it alone.
+        if crate::process::terminal::raw() {
+            return;
+        }
+        let percent = self.line.percent(Instant::now());
+        if self.terminal {
+            let style = Style::terminal();
+            self.line.tick = self.line.tick.wrapping_add(1);
+            let line = render(
+                self.line.label(),
+                percent,
+                launch.elapsed(),
+                self.line.tick,
+                &style,
+            );
+            self.write(&format!("\r\x1b[2K{line}"));
+            self.line.drawn = true;
+        } else if self.line.announced < self.line.stage {
+            let style = Style {
+                width: None,
+                unicode: false,
+                color: false,
+                truecolor: false,
+            };
+            let line = render(self.line.label(), percent, launch.elapsed(), 0, &style);
+            self.write(&format!("{line}\n"));
+            self.line.announced = self.line.stage;
+        }
+    }
+
+    /// Draw a check's phase in place. A phase line is for a person at a
+    /// terminal; a log or a test reading stderr sees none of it.
+    fn draw_phase(&mut self) {
+        let Some(phase) = self.line.phase.filter(|_| self.line.phases) else {
+            return;
+        };
+        if !self.terminal || crate::process::terminal::raw() {
+            return;
+        }
+        let count = (phase == EXTRACTING).then_some((self.line.lines, self.line.units));
+        let line = render_phase(phase, count, &Style::terminal());
+        self.write(&format!("\r\x1b[2K{line}"));
+        self.line.drawn = true;
+    }
+
+    fn clear(&mut self) {
+        // While a program has the screen, the line stays until it is restored.
+        if self.line.drawn && !crate::process::terminal::raw() {
+            self.line.drawn = false;
+            self.write("\r\x1b[2K");
+        }
+    }
+
+    /// Write `text` from one buffer and flush it.
+    fn write(&mut self, text: &str) {
+        let _ = self
+            .out
+            .write_all(text.as_bytes())
+            .and_then(|()| self.out.flush());
     }
 }
 
@@ -1157,9 +1419,9 @@ struct Style {
 }
 
 impl Style {
-    /// The style of the terminal `stderr` is.
-    fn terminal(stderr: &std::io::StderrLock<'_>) -> Self {
-        let width = rustix::termios::tcgetwinsize(stderr).map_or(80, |size| size.ws_col);
+    /// The style of the terminal stderr is.
+    fn terminal() -> Self {
+        let width = rustix::termios::tcgetwinsize(std::io::stderr()).map_or(80, |size| size.ws_col);
         let utf8 = ["LC_ALL", "LC_CTYPE", "LANG"]
             .iter()
             .find_map(|key| std::env::var(key).ok().filter(|value| !value.is_empty()))
@@ -1327,6 +1589,120 @@ fn render_phase(phase: &str, count: Option<(usize, Option<usize>)>, style: &Styl
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A printer's output as a test reads it: each write, sent on.
+    struct Kept(mpsc::Sender<Vec<u8>>);
+
+    impl Write for Kept {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            let _ = self.0.send(bytes.to_vec());
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn kept() -> (Printer, mpsc::Receiver<Vec<u8>>) {
+        let (written, kept) = mpsc::channel();
+        (Printer::new(Box::new(Kept(written)), false), kept)
+    }
+
+    fn text(kept: &mpsc::Receiver<Vec<u8>>) -> String {
+        String::from_utf8(kept.try_iter().flatten().collect()).unwrap()
+    }
+
+    #[test]
+    fn a_flush_answers_after_every_line_sent_before_it_is_written() {
+        let (printer, kept) = kept();
+        let (sender, events) = mpsc::channel();
+        let printing = std::thread::spawn(move || printer.run(&events));
+        let (unheard, _) = mpsc::channel();
+        for (key, line) in [
+            ("one", "rawr: one\n"),
+            ("two", "rawr: two"),
+            ("one", "rawr: again"),
+        ] {
+            let event = Event::Note {
+                key: key.into(),
+                line: line.into(),
+                done: unheard.clone(),
+            };
+            assert!(sender.send(event).is_ok(), "the printer runs");
+        }
+        let line = Event::Line {
+            line: "rawr: three".into(),
+            done: unheard,
+        };
+        assert!(sender.send(line).is_ok(), "the printer runs");
+        let (done, flushed) = mpsc::channel();
+        assert!(sender.send(Event::Flush(done)).is_ok(), "the printer runs");
+        assert_eq!(flushed.recv(), Ok(()));
+        assert_eq!(text(&kept), "rawr: one\nrawr: two\nrawr: three\n");
+        drop(sender);
+        assert!(
+            printing.join().is_ok(),
+            "the printer ends with its last sender"
+        );
+    }
+
+    #[test]
+    fn a_flush_prints_the_lines_held_while_a_program_had_the_terminal() {
+        let (mut printer, kept) = kept();
+        printer.held.push("rawr: the program ended".into());
+        let (done, flushed) = mpsc::channel();
+        printer.hear(Event::Flush(done));
+        assert_eq!(flushed.try_recv(), Ok(()));
+        assert!(printer.held.is_empty());
+        assert_eq!(text(&kept), "rawr: the program ended\n");
+    }
+
+    #[test]
+    fn the_printer_counts_toward_the_last_round_and_marks_its_phases() {
+        let (mut printer, _kept) = kept();
+        let now = Instant::now();
+        printer.hear(Event::Count {
+            stage: |round| &mut round.parsed,
+            amount: 9,
+        });
+        printer.hear(Event::BeginRound);
+        printer.hear(Event::Count {
+            stage: |round| &mut round.parsed,
+            amount: 2,
+        });
+        for phase in ["resolving", "resolving", "reading API"] {
+            printer.hear(Event::Phase {
+                phase,
+                mark: Some(now),
+            });
+        }
+        printer.hear(Event::Phase {
+            phase: "classifying",
+            mark: None,
+        });
+        let (answer, rounds) = mpsc::channel();
+        printer.hear(Event::Rounds(answer));
+        let expected = Round {
+            parsed: 2,
+            ..Round::default()
+        };
+        assert_eq!(rounds.try_recv(), Ok(vec![expected]));
+        let phases = printer.phases(0).0;
+        let names = phases.iter().map(|(phase, _)| *phase).collect::<Vec<_>>();
+        assert_eq!(names, ["resolving", "reading API"]);
+    }
+
+    #[test]
+    fn the_printer_thread_never_waits_for_itself() {
+        PRINTING.set(true);
+        let heard = ask(Event::Rounds);
+        PRINTING.set(false);
+        assert!(
+            heard.is_none(),
+            "an event the printer sends itself is never queued"
+        );
+    }
 
     #[test]
     fn a_check_phase_line_names_the_phase_and_its_finished_units() {

@@ -49,7 +49,7 @@ pub(crate) mod test_launch;
 pub mod value;
 
 pub use groups::{remove_on_exit, retire_owned, Left};
-pub use terminal::say;
+pub use terminal::{say, settle};
 
 pub use runner::{Admitted, Arguments, Candidate, Error as RunnerError, Lifecycle, Owner, Stream};
 
