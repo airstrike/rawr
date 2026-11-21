@@ -2447,6 +2447,7 @@
     {"t":"T2445","issue":2445,"title":"T2445: The hover read tells std types apart by the shape of their Debug text","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":["D1102"],"commit":null,"release":null},
     {"t":"T2446","issue":2446,"title":"T2446: rawr gui's inline values match bindings by name","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T2447","issue":2447,"title":"T2447: `rawr tui` draws in `rawr gui`'s Oxocarbon colours: the paused line sits on a faint accent band…","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":"0.4.106"},
-    {"t":"T2448","issue":2448,"title":"T2448: A hover over a binding the pause hasn't reached says where it is declared","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T2448","issue":2448,"title":"T2448: A hover over a binding the pause hasn't reached says where it is declared","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T2449","issue":2449,"title":"T2449: A long hover over a function in rawr gui and the playground shows its definition","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }
