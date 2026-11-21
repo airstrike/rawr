@@ -72,6 +72,9 @@ pub(in crate::resolve) fn imported<A: crate::host::ImportAllocation>(
         }
     }
     let mut reused = BTreeSet::new();
+    // The kept expansion sources the bodies lowered again read, which the
+    // lowerings name once the checks give them back.
+    let mut named = rawr_import::expand::kept::Named::new();
     // What each source lowered again found so far, and whether each of its
     // bodies lowered.
     let mut lowered_sources = BTreeMap::<crate::program::source::Id, (Finding, bool)>::new();
@@ -125,6 +128,7 @@ pub(in crate::resolve) fn imported<A: crate::host::ImportAllocation>(
             .entry(source)
             .or_insert_with(|| (Finding::default(), true));
         entry.0.charges.append(&mut charges);
+        kept::name(&reads, &mut named);
         entry.0.reads.append(&mut reads);
         let lowered = body(lowered, more, &mut allocation_failure, source, &mut missed)?;
         let Some(lowered) = lowered else {
@@ -160,6 +164,7 @@ pub(in crate::resolve) fn imported<A: crate::host::ImportAllocation>(
     // The checks give back what they kept before the count goes in.
     drop(checks);
     if let Some(kept) = kept {
+        kept.named().append(&mut named);
         kept.count_checked(checked);
     }
     if let Some(missed) = missed {
@@ -508,6 +513,9 @@ pub(crate) fn reveal<A: crate::host::ImportAllocation>(
                     (definition.source(), result)
                 }
             };
+            if let Some(readings) = readings.as_mut() {
+                readings.name(&reads);
+            }
             match recovered_result(result, recovered, &mut allocation_failure, source) {
                 Ok(output) => revealed.push((next, output)),
                 Err(crate::resolve::ImportedFailure::Surface(error)) => {

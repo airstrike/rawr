@@ -36,6 +36,14 @@ impl Kept {
         self.lowerings.checked()
     }
 
+    /// The kept expansion sources its checks read since the last prune by
+    /// them (`rawr_import::expand::kept::prune`): what loading the program
+    /// read, and what each lowering a check made or reused read.
+    #[doc(hidden)]
+    pub fn named(&mut self) -> &mut rawr_import::expand::kept::Named {
+        self.lowerings.named()
+    }
+
     /// What its checks keep of each source's check, which the next check
     /// reuses.
     pub(super) fn lowerings(&mut self) -> &mut crate::resolve::lower_nominal::Lowerings {

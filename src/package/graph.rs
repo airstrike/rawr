@@ -195,6 +195,10 @@ pub struct Graph {
     /// one run.
     #[cfg(feature = "rust-import")]
     unexpanded: Vec<Box<[u8]>>,
+    /// The kept expansion sources loading and expanding the graph read,
+    /// which the check that loaded it hands its owner ([`Self::take_named`]).
+    #[cfg(feature = "rust-import")]
+    named: rawr_import::expand::kept::Named,
     /// A host's one in-memory file ([`Graph::load_parsed`]), whose paths
     /// may start at any crate the host registered, as no manifest names
     /// its dependencies.
@@ -798,6 +802,13 @@ impl Graph {
         &self.stale
     }
 
+    /// The kept expansion sources loading and expanding the graph read so
+    /// far, which the graph then names none of.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn take_named(&mut self) -> rawr_import::expand::kept::Named {
+        std::mem::take(&mut self.named)
+    }
+
     /// Each crate derive whose expansion was loaded beside its item, by the
     /// derive's source and span as written: the macro it came from.
     pub(crate) fn expanded(&self) -> crate::capability::Expanded {
@@ -898,6 +909,9 @@ struct Builder<'a> {
     expanded: BTreeMap<(source::Id, Span), ImmutableString>,
     #[cfg(feature = "rust-import")]
     stale: Vec<rawr_import::expand::Item>,
+    /// The kept expansion sources the load read (`load_expansion`).
+    #[cfg(feature = "rust-import")]
+    named: rawr_import::expand::kept::Named,
 }
 
 struct Request {
@@ -926,6 +940,8 @@ impl<'a> Builder<'a> {
             expanded: BTreeMap::new(),
             #[cfg(feature = "rust-import")]
             stale: Vec::new(),
+            #[cfg(feature = "rust-import")]
+            named: rawr_import::expand::kept::Named::default(),
         }
     }
 
@@ -966,6 +982,8 @@ impl<'a> Builder<'a> {
             stale: self.stale,
             #[cfg(feature = "rust-import")]
             unexpanded: Vec::new(),
+            #[cfg(feature = "rust-import")]
+            named: self.named,
             hosted: false,
             #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
             rawr: None,
@@ -996,6 +1014,8 @@ impl<'a> Builder<'a> {
             stale: self.stale,
             #[cfg(feature = "rust-import")]
             unexpanded: Vec::new(),
+            #[cfg(feature = "rust-import")]
+            named: self.named,
             hosted,
             #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
             rawr: None,
@@ -1720,7 +1740,7 @@ impl<'a> Builder<'a> {
         };
         // The check that loads it names it, so a passing one keeps it, as
         // it does a stale one, which is expanded again in its place.
-        rawr_import::expand::kept::name(&path);
+        self.named.name(&path);
         let resolved = match rawr_import::expand::kept(&text, &derived.text) {
             Some(rawr_import::expand::Kept::Current(resolved)) => ImmutableString::from(resolved),
             // The item changed since it was expanded: the derive is a

@@ -113,7 +113,7 @@ impl super::Graph {
                     // rustc for in its place.
                     #[cfg(feature = "rust-import")]
                     None if !call.expression && prelude.crate_macro(host, &path) => {
-                        match expansion_kept(parsed, &call, &path, &project) {
+                        match expansion_kept(parsed, &call, &path, &project, &mut self.named) {
                             Ok(text) => kept = text,
                             // A block's call is the lowering's to ask for,
                             // with the body's other calls (#2151).
@@ -284,14 +284,15 @@ fn crate_path(
 /// rustc's expansion of `call`, the dependency's proc macro at `path`, as
 /// the project at `project` keeps it (`rawr_import::expand::call`), in the
 /// place a block's statement or a module's item is: rustc expands both as
-/// a body's statements, whose items are items. The error that asks rustc
-/// for it when it has none yet.
+/// a body's statements, whose items are items, named in `named` as it is
+/// read. The error that asks rustc for it when it has none yet.
 #[cfg(feature = "rust-import")]
 fn expansion_kept(
     parsed: &crate::parse::Unit,
     call: &MacroCall,
     path: &str,
     project: &std::path::Path,
+    named: &mut rawr_import::expand::kept::Named,
 ) -> Result<String, crate::resolve::Error> {
     use rawr_import::expand::call as expand;
     let tokens = crate::resolve::lower_nominal::lex_rust(
@@ -325,7 +326,7 @@ fn expansion_kept(
     let text = std::fs::read_to_string(&source).ok();
     match text.as_deref().and_then(expand::kept) {
         Some(expansion) => {
-            rawr_import::expand::kept::name(&source);
+            named.name(&source);
             Ok(expansion.to_owned())
         }
         None => Err(crate::resolve::Error::MacroExpansionRequired {

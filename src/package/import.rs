@@ -247,6 +247,13 @@ impl crate::Engine {
         let expanded = graph.expand_crate_macros(&registry);
         let unexpanded = graph.unexpanded_calls();
         let sources = graph.diagnostic_sources();
+        // The kept expansion sources loading and expanding the program
+        // read, which the check's owner holds until a check passes and
+        // prunes by them, whether this check passes or not.
+        let mut named = graph.take_named();
+        if let Some(kept) = kept.as_deref_mut() {
+            kept.named().append(&mut named);
+        }
         let resolved = expanded.and_then(|()| crate::resolve::package::resolve(graph, &registry));
         let mut program = match resolved {
             Ok(program) => program,
@@ -315,7 +322,10 @@ impl crate::Engine {
         took("resolving");
         // rustc resolves each macro a `use` binds by name with the calls the
         // pass finds, in one driver run (#2155).
-        let unresolved = program.unresolved_crate_macros(&project);
+        let unresolved = program.unresolved_crate_macros(&project, &mut named);
+        if let Some(kept) = kept.as_deref_mut() {
+            kept.named().append(&mut named);
+        }
         let symbolic = match crate::resolve::lower_imported(
             self,
             &mut program,

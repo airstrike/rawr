@@ -44,6 +44,13 @@
 //! what the source's lowering reads, and the applications the check's
 //! registry admits, so a save that changes one source's private field
 //! lowers again only that source and those that name the type.
+//!
+//! The kept expansion sources a lowering read are reads of their own
+//! (`Read::Expansion`), kept with the lowering in memory and on disk. Each
+//! lowering a compile makes or reuses names them in its lowerings'
+//! [`Named`], so a check that reuses a lowering names each source the
+//! lowering read as a check that lowers it again does, and a passing check
+//! keeps them (`rawr_import::expand::kept::prune`).
 
 use super::constant::{included, Place};
 use super::disk::{self, Disk};
@@ -61,6 +68,7 @@ use crate::program::source;
 use crate::resolve::package::Resolutions;
 use crate::resolve::Program;
 use crate::{host, Engine, Scope, Span};
+use rawr_import::expand::kept::Named;
 use sha2::{Digest as _, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -98,8 +106,8 @@ pub(super) enum Read {
     /// The kept source of rustc's expansion of a crate macro's call
     /// (#1125), which a build of another artifact of the macro's crate
     /// retires (#2152): a lowering that read it is reused only while it
-    /// is there and the same, and each reuse names it, so a passing check
-    /// keeps it (`rawr_import::expand::kept`).
+    /// is there and the same, and each lowering that read it names it
+    /// (`Outside::name`), so a passing check keeps it.
     Expansion {
         path: std::path::PathBuf,
         /// The digest of the text it read.
@@ -173,14 +181,8 @@ impl Read {
             Self::Variable { place, name, value } => {
                 place.variable(models, name).as_deref() == value.as_deref()
             }
-            Self::Expansion { path, bytes } => {
-                let holds = std::fs::read(path)
-                    .is_ok_and(|read| <[u8; 32]>::from(Sha256::digest(read)) == *bytes);
-                if holds {
-                    rawr_import::expand::kept::name(path);
-                }
-                holds
-            }
+            Self::Expansion { path, bytes } => std::fs::read(path)
+                .is_ok_and(|read| <[u8; 32]>::from(Sha256::digest(read)) == *bytes),
             Self::Fields { identity, schema } => {
                 models.schema(identity).is_some_and(|now| now == *schema)
             }
@@ -270,6 +272,11 @@ impl Outside {
         self.reads.iter().all(|read| read.holds(models))
     }
 
+    /// Name in `named` each kept expansion source the lowering read.
+    pub(super) fn name(&self, named: &mut Named) {
+        name(&self.reads, named);
+    }
+
     /// Charge `allocation` again what the lowering charged.
     pub(super) fn charge(
         &self,
@@ -278,6 +285,15 @@ impl Outside {
         self.charges
             .iter()
             .try_for_each(|&(items, bytes)| allocation.retain_checked(items, bytes))
+    }
+}
+
+/// Name in `named` each kept expansion source among `reads`.
+pub(super) fn name(reads: &[Read], named: &mut Named) {
+    for read in reads {
+        if let Read::Expansion { path, .. } = read {
+            named.name(path);
+        }
     }
 }
 
@@ -343,6 +359,9 @@ pub(crate) struct Lowerings {
     disk: Option<Disk>,
     /// What this compiler's compiles resolved of each unit (#1876).
     resolutions: Resolutions,
+    /// The kept expansion sources each lowering its compiles made or
+    /// reused read, which its owner prunes by once a check passes.
+    named: Named,
 }
 
 impl Lowerings {
@@ -359,6 +378,7 @@ impl Lowerings {
             checked: 0,
             disk: None,
             resolutions: Resolutions::new(),
+            named: Named::new(),
         }
     }
 
@@ -381,6 +401,12 @@ impl Lowerings {
     /// How many sources this compiler's checks lowered so far.
     pub(crate) fn checked(&self) -> usize {
         self.checked
+    }
+
+    /// The kept expansion sources its compiles read since its owner last
+    /// pruned by them.
+    pub(crate) fn named(&mut self) -> &mut Named {
+        &mut self.named
     }
 
     /// Count `sources` a check of the program lowered, rather than
@@ -519,7 +545,10 @@ impl<'e> Readings<'e> {
         ) -> Result<Found, rawr_import::surface::Error>,
     ) -> Result<Found, rawr_import::surface::Error> {
         let Some(pass) = &mut self.pass else {
-            return read(allocation, &mut Vec::new());
+            let mut reads = Vec::new();
+            let found = read(allocation, &mut reads);
+            name(&reads, &mut self.lowerings.named);
+            return found;
         };
         let key = pass.key(body);
         if self.first && self.loaded.insert(body.source) {
@@ -554,6 +583,7 @@ impl<'e> Readings<'e> {
             });
         if let Some(scanned) = found.filter(|scanned| scanned.outside.holds(models)) {
             scanned.outside.charge(allocation)?;
+            scanned.outside.name(&mut self.lowerings.named);
             scanned.used = true;
             return Ok(scanned.found.clone());
         }
@@ -562,7 +592,9 @@ impl<'e> Readings<'e> {
             charges: Vec::new(),
         };
         let mut reads = Vec::new();
-        let found = read(&mut recording, &mut reads)?;
+        let found = read(&mut recording, &mut reads);
+        name(&reads, &mut self.lowerings.named);
+        let found = found?;
         self.read.insert(body.source);
         let instances = found
             .templates
@@ -584,6 +616,12 @@ impl<'e> Readings<'e> {
             None => kept.push(scanned),
         }
         Ok(found)
+    }
+
+    /// Name each kept expansion source among `reads`, what a reading
+    /// nothing keeps read.
+    pub(super) fn name(&mut self, reads: &[Read]) {
+        name(reads, &mut self.lowerings.named);
     }
 
     /// The reveal of `program` succeeded: what the earlier one kept and
@@ -786,6 +824,7 @@ impl<'e> Session<'e> {
         let kept = earlier.filter(|kept| {
             kept.key == key.digest && kept.outside.holds(models) && kept.admitted(&models.host)
         })?;
+        kept.outside.name(&mut self.lowerings.named);
         Some(self.kept.entry(place).or_insert(kept))
     }
 
@@ -801,6 +840,7 @@ impl<'e> Session<'e> {
         outside: Outside,
     ) {
         self.lowered.insert(source);
+        outside.name(&mut self.lowerings.named);
         let Some(key) = key else {
             return;
         };
@@ -940,6 +980,7 @@ impl<'e> Checks<'e> {
             .earlier
             .remove(&source)
             .filter(|earlier| earlier.key == key && earlier.outside.holds(models))?;
+        earlier.outside.name(&mut self.lowerings.named);
         Some(self.kept.entry(source).or_insert(earlier))
     }
 
@@ -1391,5 +1432,48 @@ mod tests {
             .admit_structural(adapter, &mut host::TestImportAllocation::default())
             .unwrap();
         assert!(kept.admitted(&engine.host_registry));
+    }
+
+    #[test]
+    fn a_reused_check_keeps_the_expansion_sources_its_lowering_read() {
+        let project =
+            std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/target/tests"))
+                .join(format!("rawr-kept-reuse-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&project);
+        let directory = rawr_import::expand::directory(&project);
+        std::fs::create_dir_all(&directory).unwrap();
+        let read = directory.join("call-a.rs");
+        let unread = directory.join("call-b.rs");
+        let text = "// call a1 {}\n((3) * 2)\n";
+        for path in [&read, &unread] {
+            std::fs::write(path, text).unwrap();
+        }
+        let engine = crate::Engine::new();
+        let program =
+            crate::resolve::resolve(engine.parse_unit("").unwrap(), &engine.host_registry).unwrap();
+        let runtime =
+            crate::program::model::Model::new(crate::program::GenerationId::issue(), &program);
+        let models = super::Models::new(&program, runtime, engine.host_registry.share(), &engine);
+        let mut lowerings = super::Lowerings::new();
+        let source = program.source.entry();
+        // An earlier check lowered the source, reading `read`; this one
+        // reuses what it found and lowers nothing.
+        let mut checks = super::Checks::open(&engine, &mut lowerings, &program, &models).unwrap();
+        let key = checks.key(source, &program, std::iter::empty());
+        checks.earlier.insert(
+            source,
+            super::Checked {
+                key,
+                uses: Box::default(),
+                dependencies: BTreeSet::new(),
+                outside: Outside::new(Vec::new(), vec![super::Read::expansion(read.clone(), text)]),
+            },
+        );
+        assert!(checks.reuse(source, key, &models).is_some());
+        drop(checks);
+        rawr_import::expand::kept::prune(&project, lowerings.named()).unwrap();
+        assert!(read.is_file(), "the reused lowering's source stays");
+        assert!(!unread.exists());
+        let _ = std::fs::remove_dir_all(&project);
     }
 }
