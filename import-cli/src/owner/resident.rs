@@ -451,7 +451,7 @@ impl Respawn {
 #[allow(clippy::too_many_arguments)]
 pub(super) fn attempt(
     lane: &mut super::Lane,
-    adapter: &rawr_watch::Adapter,
+    adapter: &mut rawr_watch::Adapter,
     watch_request: &rawr::reload::scheduler::Request,
     started: Option<rawr_import::process::hot::Started>,
     revision: rawr_import::supervisor::Revision,
@@ -526,14 +526,14 @@ pub(super) fn attempt(
         Err(error) => {
             lane.cancel_compile(started)
                 .map_err(|error| super::framework(error, diagnostic.clone()))?;
-            if !adapter.gate().request_is_current(watch_request) {
+            if !adapter.is_current(watch_request) {
                 return Ok(Attempt::Settled);
             }
             return Err(error);
         }
     };
     let (bytes, freshness, observation, staged, reason, loaded) = captured;
-    if !adapter.gate().request_is_current(watch_request) {
+    if !adapter.is_current(watch_request) {
         lane.cancel_compile(started)
             .map_err(|error| super::framework(error, diagnostic.clone()))?;
         return Ok(Attempt::Settled);
@@ -559,9 +559,7 @@ pub(super) fn attempt(
     };
     match outcome {
         resident::Outcome::Prepared(prepared) => {
-            if !adapter.resident_eligible(native_baseline)
-                || !adapter.gate().request_is_current(watch_request)
-            {
+            if !adapter.resident_eligible(native_baseline) || !adapter.is_current(watch_request) {
                 lane.abort_resident(prepared)
                     .map_err(|error| super::framework(error, diagnostic.clone()))?;
                 return Ok(Attempt::Settled);
@@ -583,17 +581,15 @@ pub(super) fn attempt(
                 observation,
             }))
         }
-        resident::Outcome::NeedsPreparation if adapter.gate().request_is_current(watch_request) => {
-            Ok(Attempt::Prepare(
-                Some(staged),
-                Reason::Uncovered,
-                Box::new(loaded),
-            ))
-        }
-        resident::Outcome::Unstarted if adapter.gate().request_is_current(watch_request) => Ok(
-            Attempt::Prepare(Some(staged), Reason::Unstarted, Box::new(loaded)),
+        resident::Outcome::NeedsPreparation if adapter.is_current(watch_request) => Ok(
+            Attempt::Prepare(Some(staged), Reason::Uncovered, Box::new(loaded)),
         ),
-        resident::Outcome::Refused(reason) if adapter.gate().request_is_current(watch_request) => {
+        resident::Outcome::Unstarted if adapter.is_current(watch_request) => Ok(Attempt::Prepare(
+            Some(staged),
+            Reason::Unstarted,
+            Box::new(loaded),
+        )),
+        resident::Outcome::Refused(reason) if adapter.is_current(watch_request) => {
             Ok(Attempt::Restart(
                 reason,
                 Respawn {
@@ -607,7 +603,7 @@ pub(super) fn attempt(
         | resident::Outcome::Unstarted
         | resident::Outcome::Refused(_) => Ok(Attempt::Settled),
         resident::Outcome::Obsolete => obsolete(adapter, watch_request, diagnostic),
-        _ if !adapter.gate().request_is_current(watch_request) => Ok(Attempt::Settled),
+        _ if !adapter.is_current(watch_request) => Ok(Attempt::Settled),
         // The error the runner's compile found, in its own file, as the
         // owner's own compile reports it (#397).
         resident::Outcome::Source(report) => Err(rawr::diagnostic::Report::decode(&report)
@@ -620,13 +616,12 @@ pub(super) fn attempt(
 /// this owner already scheduled. Unless a newer request supersedes this one,
 /// nothing else would retry: re-arm so the current bytes are compiled again.
 fn obsolete(
-    adapter: &rawr_watch::Adapter,
+    adapter: &mut rawr_watch::Adapter,
     request: &rawr::reload::scheduler::Request,
     diagnostic: &rawr::diagnostic::Source,
 ) -> Result<Attempt, rawr::diagnostic::Report> {
-    if adapter.gate().request_is_current(request) {
+    if adapter.is_current(request) {
         adapter
-            .gate()
             .observe(std::time::Instant::now())
             .map_err(|error| super::framework(error, diagnostic.clone()))?;
     }
@@ -635,7 +630,7 @@ fn obsolete(
 
 fn failed(
     error: crate::native::Error,
-    adapter: &rawr_watch::Adapter,
+    adapter: &mut rawr_watch::Adapter,
     request: &rawr::reload::scheduler::Request,
     diagnostic: &rawr::diagnostic::Source,
 ) -> Result<Attempt, rawr::diagnostic::Report> {
@@ -653,7 +648,7 @@ fn failed(
             RunnerError::Node(_) | RunnerError::Snapshot(_) | RunnerError::HotConsumedRejected(_)
         )
     );
-    if consumed && !adapter.gate().request_is_current(request) {
+    if consumed && !adapter.is_current(request) {
         return Ok(Attempt::Settled);
     }
     Err(super::framework(error, diagnostic.clone()))

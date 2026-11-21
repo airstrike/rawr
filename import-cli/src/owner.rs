@@ -4,7 +4,6 @@
 //! one when a save fails.
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use rawr::diagnostic;
@@ -13,8 +12,6 @@ use rawr_cli::color;
 use crate::report::Task;
 
 const DEBOUNCE: Duration = Duration::from_millis(30);
-const IDLE_POLL: Duration = Duration::from_millis(25);
-const REFRESH_POLL: Duration = Duration::from_millis(250);
 
 /// The runner lane of a program.
 pub type Lane = crate::native::Lane<rawr::package::import::Brand>;
@@ -369,7 +366,7 @@ pub fn run_program(
                 }
                 Err(None) => {}
             }
-            let Some(waiting) = watcher.as_ref() else {
+            let Some(waiting) = watcher.as_mut() else {
                 return Ok(0);
             };
             // A save that changed the program's files; a build touching
@@ -629,7 +626,7 @@ fn session(
     );
     rawr_import::progress::finish(initial.is_ok());
     start.tell();
-    let Some((mut lane, adapter, mut manifests, mut native_baseline)) = initial? else {
+    let Some((mut lane, mut adapter, mut manifests, mut native_baseline)) = initial? else {
         return Ok(Ended::Exit(0));
     };
     rawr_cli::events::running();
@@ -638,7 +635,6 @@ fn session(
     let mut admits = admits(program.is_some(), &manifests);
     // Whether a save swapped into the running `main`.
     let mut swapped_marked = false;
-    let mut refresh_at = Instant::now();
     let mut refresh_required = false;
     // The preparation a restart was last announced for.
     let mut announced = None;
@@ -679,26 +675,20 @@ fn session(
                 Some(ended) => return Ok(ended),
                 None => {}
             }
-            adapter.poll();
             let now = Instant::now();
-            if now >= refresh_at {
-                refresh_at = now + REFRESH_POLL;
-                if lane
-                    .take_refresh()
-                    .map_err(|error| framework(error, source.clone()))?
-                {
-                    refresh_required = true;
-                    adapter
-                        .gate()
-                        .observe(now)
-                        .map_err(|error| framework(error, source.clone()))?;
-                }
+            // A runner that retired asked, as it retired, for its program to
+            // be refreshed: the save is attempted again in full.
+            if lane.take_refresh() {
+                refresh_required = true;
+                adapter
+                    .observe(now)
+                    .map_err(|error| framework(error, source.clone()))?;
             }
             if let Some(watch_request) = adapter.start(now) {
                 let revision = match lane.revision() {
                     Ok(revision) => revision,
                     Err(error) => {
-                        settle_failure(&mut lane, &adapter, framework(error, source.clone()))?;
+                        settle_failure(&mut lane, &mut adapter, framework(error, source.clone()))?;
                         continue;
                     }
                 };
@@ -713,7 +703,7 @@ fn session(
                             .map_err(|error| framework(error, source.clone()))?;
                         settle_failure(
                             &mut lane,
-                            &adapter,
+                            &mut adapter,
                             rawr::diagnostic::Report::from_project(&error),
                         )?;
                         continue;
@@ -722,7 +712,7 @@ fn session(
                 let work = resident::Work::now(cells);
                 let _fallback_inputs = match resident::attempt(
                     &mut lane,
-                    &adapter,
+                    &mut adapter,
                     &watch_request,
                     started,
                     revision,
@@ -798,7 +788,7 @@ fn session(
                         staged
                     }
                     Err(report) => {
-                        settle_failure(&mut lane, &adapter, report)?;
+                        settle_failure(&mut lane, &mut adapter, report)?;
                         continue;
                     }
                 };
@@ -813,7 +803,7 @@ fn session(
                     // A newer save; its own attempt follows.
                     Err(crate::Error::Rawr(error)) if error.source_changed() => continue,
                     Err(error) => {
-                        settle_failure(&mut lane, &adapter, import(error, source.clone()))?;
+                        settle_failure(&mut lane, &mut adapter, import(error, source.clone()))?;
                         continue;
                     }
                 };
@@ -827,7 +817,7 @@ fn session(
                 let observation = match inputs.encode_observation() {
                     Ok(observation) => observation,
                     Err(error) => {
-                        settle_failure(&mut lane, &adapter, watching(error, source.clone()))?;
+                        settle_failure(&mut lane, &mut adapter, watching(error, source.clone()))?;
                         continue;
                     }
                 };
@@ -839,7 +829,11 @@ fn session(
                     match lane.begin_compile() {
                         Ok(started) => started,
                         Err(error) => {
-                            settle_failure(&mut lane, &adapter, framework(error, source.clone()))?;
+                            settle_failure(
+                                &mut lane,
+                                &mut adapter,
+                                framework(error, source.clone()),
+                            )?;
                             continue;
                         }
                     }
@@ -899,7 +893,11 @@ fn session(
                             continue;
                         }
                         Err(error) => {
-                            settle_failure(&mut lane, &adapter, framework(error, source.clone()))?;
+                            settle_failure(
+                                &mut lane,
+                                &mut adapter,
+                                framework(error, source.clone()),
+                            )?;
                             continue;
                         }
                     };
@@ -920,7 +918,7 @@ fn session(
                             framework(error, source.clone())
                         }
                     };
-                        settle_failure(&mut lane, &adapter, report)?;
+                        settle_failure(&mut lane, &mut adapter, report)?;
                         continue;
                     }
                 };
@@ -936,9 +934,9 @@ fn session(
                 let admitted = match preparation {
                     rawr_import::process::hot::Preparation::Prepared(prepared) => lane
                         .revalidate_compile(prepared)
-                        // Child callbacks revoke the retained request on the exact
-                        // UI gate. Parent notices only schedule work; never hold
-                        // the parent gate through validation, pinning or hot IPC.
+                        // The runner's own watcher revokes its request; this
+                        // owner's gate is consulted only between these steps,
+                        // never through validation, pinning or hot IPC.
                         .and_then(|prepared| lane.commit_compile(prepared))
                         .map(|_| crate::native::Watched::Installed)
                         .or_else(|error| {
@@ -1025,7 +1023,7 @@ fn session(
                                 lane.replace_built_started_request(
                                     built,
                                     snapshot,
-                                    &adapter,
+                                    &mut adapter,
                                     &observation,
                                     watch_request,
                                     handover,
@@ -1091,11 +1089,11 @@ fn session(
                             ));
                         }
                     }
-                    Ok(crate::native::Watched::Obsolete) => drop(staged),
+                    Ok(crate::native::Watched::Obsolete) => warn(adapter.withdraw(staged)),
                     // The old program ended for the new one, which didn't
                     // start: no program runs, and it takes the full start.
                     Err(report) if lane.current_key().is_none() => {
-                        drop(staged);
+                        warn(adapter.withdraw(staged));
                         rawr_import::process::say(rawr_cli::diagnostic::render(&report));
                         return Ok(Ended::Restart(
                             manifests.restart_line(&next_manifests),
@@ -1105,29 +1103,23 @@ fn session(
                     // The save is attempted again, and its preparation rebuilds
                     // the entry that went stale.
                     Err(_) if stale => {
-                        drop(staged);
+                        warn(adapter.withdraw(staged));
                         adapter
-                            .gate()
                             .observe(Instant::now())
                             .map_err(|error| watching(error, source.clone()))?;
                     }
                     Err(report) => {
-                        drop(staged);
-                        settle_failure(&mut lane, &adapter, report)?;
+                        warn(adapter.withdraw(staged));
+                        settle_failure(&mut lane, &mut adapter, report)?;
                     }
                 }
             }
 
-            let now = Instant::now();
-            let timeout = adapter
-                .deadline()
-                .map_or(IDLE_POLL, |deadline| {
-                    deadline.saturating_duration_since(now)
-                })
-                .min(IDLE_POLL);
-            match adapter.notices().recv_timeout(timeout) {
-                Ok(rawr_watch::Notice::Changed(_)) | Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Ok(rawr_watch::Notice::Backend(error)) => {
+            // The next file event, the debounce's end, or the program's end
+            // wakes the owner (D765).
+            match adapter.wait() {
+                Ok(()) => {}
+                Err(rawr_watch::Notice::Backend(error)) => {
                     retain_report(
                     &mut lane,
                     watching(
@@ -1135,9 +1127,10 @@ fn session(
                         source.clone(),
                     ),
                 )?;
-                    return wait_for_window(&mut lane, &source).map(|()| Ended::Exit(0));
+                    return wait_for_window(&mut lane, &mut adapter, &source)
+                        .map(|()| Ended::Exit(0));
                 }
-                Ok(rawr_watch::Notice::Schedule(error)) => {
+                Err(rawr_watch::Notice::Schedule(error)) => {
                     retain_report(
                     &mut lane,
                     framework(
@@ -1145,17 +1138,8 @@ fn session(
                         source.clone(),
                     ),
                 )?;
-                    return wait_for_window(&mut lane, &source).map(|()| Ended::Exit(0));
-                }
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    retain_report(
-                        &mut lane,
-                        framework(
-                            "the file watcher stopped, so saves no longer reload the program",
-                            source.clone(),
-                        ),
-                    )?;
-                    return wait_for_window(&mut lane, &source).map(|()| Ended::Exit(0));
+                    return wait_for_window(&mut lane, &mut adapter, &source)
+                        .map(|()| Ended::Exit(0));
                 }
             }
         }
@@ -1371,13 +1355,16 @@ fn initial_watched_program(
         drop(lane.shutdown());
         return Ok(None);
     }
-    let adapter = match rawr_watch::Adapter::open_inputs(initial.inputs.clone(), DEBOUNCE) {
+    let mut adapter = match rawr_watch::Adapter::open_inputs(initial.inputs.clone(), DEBOUNCE) {
         Ok(adapter) => adapter,
         Err(error) => {
             drop(lane.shutdown());
             return Err(watching(error, source).into());
         }
     };
+    // Each runner's end wakes the owner, which reaps it.
+    #[cfg(unix)]
+    lane.wake_on_exit(adapter.waker());
 
     loop {
         let staged = match adapter.prepare_inputs(initial.inputs.clone()) {
@@ -1404,7 +1391,7 @@ fn initial_watched_program(
         match lane.replace_built_started_watched(
             initial.built,
             initial.snapshot,
-            &adapter,
+            &mut adapter,
             &observation,
             checkpoint,
         ) {
@@ -1421,7 +1408,7 @@ fn initial_watched_program(
                 return Ok(Some((lane, adapter, initial.manifests, native_baseline)));
             }
             Ok(crate::native::Watched::Obsolete) => {
-                drop(staged);
+                warn(adapter.withdraw(staged));
                 initial = refresh_initial(
                     &mut lane,
                     target_path,
@@ -1433,7 +1420,7 @@ fn initial_watched_program(
             // An input of the build changed since it was prepared: it is
             // prepared again, whose lookups rebuild what went stale.
             Err(error) if error.read_set_stale() => {
-                drop(staged);
+                warn(adapter.withdraw(staged));
                 initial = refresh_initial(
                     &mut lane,
                     target_path,
@@ -1445,7 +1432,7 @@ fn initial_watched_program(
             // A save as the program started (D531.9): it starts again from
             // the saved files.
             Err(error) if error.source_changed() => {
-                drop(staged);
+                warn(adapter.withdraw(staged));
                 rawr_import::process::say(
                     "rawr: the source changed as the program started; starting it again",
                 );
@@ -1458,7 +1445,7 @@ fn initial_watched_program(
                 )?;
             }
             Err(error) => {
-                drop(staged);
+                warn(adapter.withdraw(staged));
                 drop(lane.shutdown());
                 return Err(framework(error, source).into());
             }
@@ -1633,7 +1620,7 @@ fn refresh_initial(
 /// for itself if the failure persists.
 fn settle_failure(
     lane: &mut Lane,
-    adapter: &rawr_watch::Adapter,
+    adapter: &mut rawr_watch::Adapter,
     report: diagnostic::Report,
 ) -> Result<(), diagnostic::Report> {
     // A newer save reports for itself, and a program that ended as the
@@ -1654,15 +1641,30 @@ fn retain_report(lane: &mut Lane, report: diagnostic::Report) -> Result<(), diag
         .map_err(|error| framework(error, None))
 }
 
-fn wait_for_window(lane: &mut Lane, source: &diagnostic::Source) -> Result<(), diagnostic::Report> {
-    loop {
-        if lane
-            .reap_if_exited()
-            .map_err(|error| framework(error, source.clone()))?
-        {
-            return Ok(());
-        }
-        std::thread::sleep(IDLE_POLL);
+/// Wait for the program to end, once saves no longer reload it: the
+/// runner's end wakes the adapter, as any file event still does.
+fn wait_for_window(
+    lane: &mut Lane,
+    adapter: &mut rawr_watch::Adapter,
+    source: &diagnostic::Source,
+) -> Result<(), diagnostic::Report> {
+    while !lane
+        .reap_if_exited()
+        .map_err(|error| framework(error, source.clone()))?
+    {
+        // A later terminal notice changes nothing: saves already stopped.
+        drop(adapter.wait());
+    }
+    Ok(())
+}
+
+/// Say each of the file watcher's `warnings`.
+fn warn(warnings: Vec<rawr_watch::Error>) {
+    for warning in warnings {
+        rawr_import::process::say(format_args!(
+            "{}: file watcher: {warning}",
+            color::label(color::Level::Warning)
+        ));
     }
 }
 

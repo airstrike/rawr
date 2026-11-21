@@ -16,10 +16,10 @@ manual = []
 notify = { package = "rawr-notify", path = "notify" }
 rawr = { path = ".." }
 
+# Waiting for a child's end without reaping it (`Waker::wake_on_exit`).
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.4", features = ["process"] }
+
 [dev-dependencies]
 rawr = { path = "..", features = ["rust-import"] }
 rawr_import = { package = "rawr-import", path = "../importer" }
-
-# The save-delay probe's kqueue vnode watch.
-[target.'cfg(target_os = "macos")'.dev-dependencies]
-libc = "0.2.156"

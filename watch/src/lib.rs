@@ -1,15 +1,15 @@
 //! Exact filesystem-event transport shared by Rawr reload hosts.
 //!
-//! Native callbacks normalize filesystem events and advance the existing neutral
-//! admission gate. The transport does not compile candidates or own host state.
+//! Native callbacks send raw filesystem events to the owning thread, which
+//! normalizes them and advances its neutral admission gate. The transport
+//! does not compile candidates or own host state.
 
 #![forbid(unsafe_code)]
 
 mod adapter;
+#[cfg(unix)]
+mod exit;
 mod input;
 pub mod native;
-mod notice;
 
-pub use adapter::{derived_roots, Adapter, Control, Error, Notice, StagedInputs};
-
-pub use notice::Notices;
+pub use adapter::{derived_roots, Adapter, Error, Notice, StagedInputs, Waker};

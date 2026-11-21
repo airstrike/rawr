@@ -1,20 +1,20 @@
 //! I/O-free debounce and latest-revision admission shared by reload transports.
 
 use std::fmt;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-pub mod notice;
 pub mod publication;
 
-/// One synchronized debounce and latest-revision admission boundary.
+/// One debounce and latest-revision admission boundary, owned by the one
+/// thread that observes events and admits work.
 ///
-/// Observers revoke old work immediately. Candidate preparation happens
-/// outside this gate; final admission holds the lock only through one direct
-/// current-slot replacement.
+/// An observation revokes older work at once. Candidate preparation happens
+/// outside this gate; final admission runs one direct current-slot
+/// replacement between two observations.
 pub struct Gate {
     stamp: Arc<Stamp>,
-    scheduler: Mutex<Scheduler>,
+    scheduler: Scheduler,
 }
 
 /// A compile request carrying authority for one exact observed revision.
@@ -88,94 +88,58 @@ impl Gate {
     pub fn new(debounce: Duration) -> Self {
         Self {
             stamp: Arc::new(Stamp),
-            scheduler: Mutex::new(Scheduler::new(debounce)),
+            scheduler: Scheduler::new(debounce),
         }
     }
 
-    /// Observe one relevant event and immediately revoke older work.
-    pub fn observe(&self, now: Instant) -> Result<notice::Observed, Error> {
-        lock(&self.scheduler)
-            .observe(now)
-            .map(|_| notice::Observed::new())
-    }
-
-    /// Evaluate pure relevance and observe it under the same gate lock.
-    ///
-    /// This lets transports test the current exact input filter and issue a
-    /// revoking revision as one linearized observation.
-    pub fn observe_if(&self, now: Instant, relevant: impl FnOnce() -> bool) -> Result<bool, Error> {
-        let mut scheduler = lock(&self.scheduler);
-        if !relevant() {
-            return Ok(false);
-        }
-        scheduler.observe(now)?;
-        Ok(true)
-    }
-
-    /// Evaluate pure relevance and return a non-install observation proof.
-    pub fn observe_if_notice(
-        &self,
-        now: Instant,
-        relevant: impl FnOnce() -> bool,
-    ) -> Result<Option<notice::Observed>, Error> {
-        let mut scheduler = lock(&self.scheduler);
-        if !relevant() {
-            return Ok(None);
-        }
-        scheduler
-            .observe(now)
-            .map(|_| Some(notice::Observed::new()))
+    /// Observe one relevant event and revoke older work at once.
+    pub fn observe(&mut self, now: Instant) -> Result<(), Error> {
+        self.scheduler.observe(now).map(|_| ())
     }
 
     /// Return the newest queued revision's debounce deadline.
     #[must_use]
     pub fn deadline(&self) -> Option<Instant> {
-        lock(&self.scheduler).deadline()
+        self.scheduler.deadline()
     }
 
     /// Start the newest queued request after its debounce deadline.
     #[must_use]
-    pub fn start(&self, now: Instant) -> Option<Request> {
-        lock(&self.scheduler).start(now).map(|revision| Request {
+    pub fn start(&mut self, now: Instant) -> Option<Request> {
+        self.scheduler.start(now).map(|revision| Request {
             stamp: Arc::clone(&self.stamp),
             revision,
         })
     }
 
-    /// Observe and start one request without allowing an intervening event to
-    /// replace its revision. Nonzero debounce still returns `None` and leaves
-    /// the observed request queued for its normal deadline.
-    pub fn observe_and_start(&self, now: Instant) -> Result<Option<Request>, Error> {
-        let mut scheduler = lock(&self.scheduler);
-        scheduler.observe(now)?;
-        Ok(scheduler.start(now).map(|revision| Request {
-            stamp: Arc::clone(&self.stamp),
-            revision,
-        }))
+    /// Observe and start one request in one step. Nonzero debounce still
+    /// returns `None` and leaves the observed request queued for its normal
+    /// deadline.
+    pub fn observe_and_start(&mut self, now: Instant) -> Result<Option<Request>, Error> {
+        self.scheduler.observe(now)?;
+        Ok(self.start(now))
     }
 
     /// Capture the event sequence after watcher registration and before
-    /// off-lock preparation or process work.
+    /// preparation or process work.
     pub fn checkpoint(&self) -> Result<Checkpoint, Error> {
-        let scheduler = lock(&self.scheduler);
-        if scheduler.suspended {
+        if self.scheduler.suspended {
             return Err(Error::Suspended);
         }
-        if scheduler.exhausted {
+        if self.scheduler.exhausted {
             return Err(Error::RevisionExhausted);
         }
         Ok(Checkpoint {
             stamp: Arc::clone(&self.stamp),
-            sequence: scheduler.next,
+            sequence: self.scheduler.next,
         })
     }
 
-    /// Install one already-prepared value only if no watcher event occurred
-    /// after its checkpoint.
+    /// Install one already-prepared value only if no watcher event was
+    /// observed after its checkpoint.
     ///
-    /// `admit` runs under the scheduler lock and must perform only the direct,
-    /// non-blocking in-memory slot transition. Expensive work and destructors
-    /// remain outside this boundary.
+    /// `admit` runs before the gate can observe anything else. It performs
+    /// only the direct in-memory slot transition.
     #[must_use = "the checkpoint admission result must be handled"]
     pub fn admit_checkpoint<T, U>(
         &self,
@@ -184,57 +148,28 @@ impl Gate {
         admit: impl FnOnce(T) -> U,
     ) -> Admission<T, U> {
         let Checkpoint { stamp, sequence } = checkpoint;
-        let scheduler = lock(&self.scheduler);
         if !Arc::ptr_eq(&self.stamp, &stamp)
-            || scheduler.suspended
-            || scheduler.exhausted
-            || scheduler.next != sequence
+            || self.scheduler.suspended
+            || self.scheduler.exhausted
+            || self.scheduler.next != sequence
         {
-            drop(scheduler);
             return Admission::Obsolete(value);
         }
         Admission::Current(admit(value))
-    }
-
-    /// Preserve one finished candidate only while its revision remains current.
-    ///
-    /// This structural check lets bounded transports reject inverted worker
-    /// completions before publishing them. Obsolete payloads and their
-    /// destructors are returned after the scheduler lock has been released.
-    #[must_use = "the admission result must be handled"]
-    pub fn retain_current<T>(&self, candidate: Candidate<T>) -> Admission<T, Candidate<T>> {
-        let Candidate {
-            stamp,
-            revision,
-            value,
-        } = candidate;
-        let scheduler = lock(&self.scheduler);
-        if self.is_current(&stamp, revision, &scheduler) {
-            drop(scheduler);
-            Admission::Current(Candidate {
-                stamp,
-                revision,
-                value,
-            })
-        } else {
-            drop(scheduler);
-            Admission::Obsolete(value)
-        }
     }
 
     /// Inspect the original request without consuming it or refreshing its revision.
     /// Final installation must still pass through the normal admission gate.
     #[must_use]
     pub fn request_is_current(&self, request: &Request) -> bool {
-        self.is_current(&request.stamp, request.revision, &lock(&self.scheduler))
+        self.is_current(&request.stamp, request.revision)
     }
 
-    /// Linearize one already-prepared value against its exact request revision.
+    /// Admit one already-prepared value against its exact request revision.
     ///
-    /// `admit` runs while the scheduler is locked. It may perform bounded
-    /// admission validation and a commit handshake, but must not build,
-    /// transform, or re-enter this gate. Obsolete values are returned after
-    /// the lock is dropped.
+    /// `admit` runs before the gate can observe anything else. It may
+    /// perform bounded admission validation and a commit handshake, but must
+    /// not build or transform.
     #[must_use = "the current admission result must be handled"]
     pub fn admit_current<T, U>(
         &self,
@@ -246,21 +181,19 @@ impl Gate {
             revision,
             value,
         } = candidate;
-        let scheduler = lock(&self.scheduler);
-        if !self.is_current(&stamp, revision, &scheduler) {
-            drop(scheduler);
+        if !self.is_current(&stamp, revision) {
             return Admission::Obsolete(value);
         }
         Admission::Current(admit(value))
     }
 
-    fn is_current(&self, stamp: &Arc<Stamp>, revision: Revision, scheduler: &Scheduler) -> bool {
-        Arc::ptr_eq(&self.stamp, stamp) && scheduler.is_current(revision)
+    fn is_current(&self, stamp: &Arc<Stamp>, revision: Revision) -> bool {
+        Arc::ptr_eq(&self.stamp, stamp) && self.scheduler.is_current(revision)
     }
 
     /// Revoke all work after an unrecoverable transport failure.
-    pub fn suspend(&self) {
-        lock(&self.scheduler).suspend();
+    pub fn suspend(&mut self) {
+        self.scheduler.suspend();
     }
 }
 
@@ -446,13 +379,6 @@ impl Scheduler {
     }
 }
 
-fn lock(scheduler: &Mutex<Scheduler>) -> MutexGuard<'_, Scheduler> {
-    match scheduler.lock() {
-        Ok(scheduler) => scheduler,
-        Err(poisoned) => poisoned.into_inner(),
-    }
-}
-
 impl fmt::Display for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -469,13 +395,12 @@ impl std::error::Error for Error {}
 
 #[cfg(test)]
 mod tests {
-    use super::{lock, Gate};
-    use std::sync::Arc;
+    use super::Gate;
     use std::time::{Duration, Instant};
 
     #[test]
     fn borrowed_request_current_check_preserves_the_original_revision() {
-        let gate = Gate::new(Duration::ZERO);
+        let mut gate = Gate::new(Duration::ZERO);
         let foreign = Gate::new(Duration::ZERO);
         let request = gate.observe_and_start(Instant::now()).unwrap().unwrap();
         assert!(gate.request_is_current(&request));
@@ -485,7 +410,7 @@ mod tests {
         gate.observe(Instant::now()).unwrap();
         assert!(!gate.request_is_current(&request));
         assert!(matches!(
-            gate.retain_current(request.complete(())),
+            gate.admit_current(request.complete(()), |()| ()),
             super::Admission::Obsolete(())
         ));
         let current = gate.start(Instant::now()).unwrap();
@@ -497,17 +422,14 @@ mod tests {
     #[test]
     fn observe_and_start_preserves_revision_and_debounce() {
         let now = Instant::now();
-        let gate = Gate::new(Duration::ZERO);
+        let mut gate = Gate::new(Duration::ZERO);
         let request = gate.observe_and_start(now).unwrap().unwrap();
         assert!(gate.start(now).is_none());
         gate.observe(now + Duration::from_millis(1)).unwrap();
-        assert!(matches!(
-            gate.retain_current(request.complete(())),
-            super::Admission::Obsolete(())
-        ));
+        assert!(!gate.request_is_current(&request));
         assert!(gate.start(now + Duration::from_millis(1)).is_some());
 
-        let gate = Gate::new(Duration::from_millis(75));
+        let mut gate = Gate::new(Duration::from_millis(75));
         assert!(gate.observe_and_start(now).unwrap().is_none());
         assert_eq!(gate.deadline(), Some(now + Duration::from_millis(75)));
         assert!(gate.start(now).is_none());
@@ -517,14 +439,14 @@ mod tests {
     #[test]
     fn observe_and_start_preserves_terminal_scheduler_errors() {
         let now = Instant::now();
-        let gate = Gate::new(Duration::ZERO);
+        let mut gate = Gate::new(Duration::ZERO);
         gate.suspend();
         assert!(matches!(
             gate.observe_and_start(now),
             Err(super::Error::Suspended)
         ));
-        let gate = Gate::new(Duration::ZERO);
-        lock(&gate.scheduler).next = u64::MAX;
+        let mut gate = Gate::new(Duration::ZERO);
+        gate.scheduler.next = u64::MAX;
         assert!(matches!(
             gate.observe_and_start(now),
             Err(super::Error::RevisionExhausted)
@@ -535,7 +457,7 @@ mod tests {
     #[test]
     fn event_during_preparation_revokes_the_candidate_before_commit() {
         let now = Instant::now();
-        let gate = Gate::new(Duration::ZERO);
+        let mut gate = Gate::new(Duration::ZERO);
         gate.observe(now).unwrap();
         let candidate = gate
             .start(now)
@@ -546,48 +468,34 @@ mod tests {
 
         gate.observe(now).unwrap();
 
-        assert!(!lock(&gate.scheduler).is_current(candidate.revision));
+        assert!(!gate.scheduler.is_current(candidate.revision));
         assert_eq!(candidate.value(), &("compiled", "prepared"));
     }
 
     #[test]
     fn transformations_retain_the_exact_current_revision() {
         let now = Instant::now();
-        let gate = Gate::new(Duration::ZERO);
+        let mut gate = Gate::new(Duration::ZERO);
         gate.observe(now).unwrap();
         let candidate = gate.start(now).unwrap().complete(7).map(|value| value + 1);
 
-        assert!(lock(&gate.scheduler).is_current(candidate.revision));
+        assert!(gate.scheduler.is_current(candidate.revision));
         assert_eq!(candidate.value(), &8);
-    }
-
-    #[test]
-    fn relevance_check_and_revision_observation_are_linearized() {
-        let now = Instant::now();
-        let gate = Gate::new(Duration::ZERO);
-        gate.observe(now).unwrap();
-        let candidate = gate.start(now).unwrap().complete(());
-
-        assert!(!gate.observe_if(now, || false).unwrap());
-        assert!(lock(&gate.scheduler).is_current(candidate.revision));
-        assert!(gate.observe_if(now, || true).unwrap());
-        assert!(!lock(&gate.scheduler).is_current(candidate.revision));
     }
 
     #[test]
     fn suspension_is_sticky_and_rejects_post_stop_observation() {
         let now = Instant::now();
-        let gate = Gate::new(Duration::ZERO);
+        let mut gate = Gate::new(Duration::ZERO);
         gate.observe(now).unwrap();
         let candidate = gate.start(now).unwrap().complete("running");
 
         gate.suspend();
 
         assert!(matches!(gate.observe(now), Err(super::Error::Suspended)));
-        assert_eq!(gate.observe_if(now, || true), Err(super::Error::Suspended));
         assert!(gate.start(now).is_none());
         assert!(matches!(
-            gate.retain_current(candidate),
+            gate.admit_current(candidate, |_| panic!("a suspended gate admits nothing")),
             super::Admission::Obsolete("running")
         ));
     }
@@ -595,7 +503,7 @@ mod tests {
     #[test]
     fn watcher_checkpoint_admits_only_without_an_intervening_event() {
         let now = Instant::now();
-        let gate = Gate::new(Duration::ZERO);
+        let mut gate = Gate::new(Duration::ZERO);
         let current = gate.checkpoint().unwrap();
         assert_eq!(
             gate.admit_checkpoint(current, "current", |value| (value, "installed")),
@@ -611,38 +519,25 @@ mod tests {
     }
 
     #[test]
-    fn watcher_checkpoint_is_bound_to_its_gate_and_releases_obsolete_values_off_lock() {
-        let now = Instant::now();
+    fn watcher_checkpoint_is_bound_to_its_gate() {
         let origin = Gate::new(Duration::ZERO);
-        let foreign = Arc::new(Gate::new(Duration::ZERO));
+        let foreign = Gate::new(Duration::ZERO);
         let checkpoint = origin.checkpoint().unwrap();
-        let value = Revokes {
-            gate: Arc::clone(&foreign),
-            now,
-        };
-        let super::Admission::Obsolete(value) =
-            foreign.admit_checkpoint(checkpoint, value, |_| "installed")
-        else {
-            panic!("a foreign watcher checkpoint must reject");
-        };
-        drop(value);
-        assert!(foreign.start(now).is_some());
+        assert_eq!(
+            foreign.admit_checkpoint(checkpoint, "value", |_| "installed"),
+            super::Admission::Obsolete("value"),
+            "a foreign watcher checkpoint must reject"
+        );
     }
 
     #[test]
-    fn request_admission_linearizes_only_the_current_direct_transition() {
+    fn request_admission_admits_only_the_current_revision() {
         let now = Instant::now();
-        let gate = Gate::new(Duration::ZERO);
+        let mut gate = Gate::new(Duration::ZERO);
         gate.observe(now).unwrap();
         let request = gate.start(now).unwrap();
         assert_eq!(
-            gate.admit_current(request.complete("current"), |value| {
-                assert!(matches!(
-                    gate.scheduler.try_lock(),
-                    Err(std::sync::TryLockError::WouldBlock)
-                ));
-                (value, "installed")
-            }),
+            gate.admit_current(request.complete("current"), |value| (value, "installed")),
             super::Admission::Current(("current", "installed"))
         );
 
@@ -660,7 +555,7 @@ mod tests {
     #[test]
     fn revision_authority_debug_output_is_redacted() {
         let now = Instant::now();
-        let gate = Gate::new(Duration::ZERO);
+        let mut gate = Gate::new(Duration::ZERO);
         gate.observe(now).unwrap();
         let request = gate.start(now).unwrap();
         assert_eq!(format!("{request:?}"), "Request(<private>)");
@@ -672,16 +567,5 @@ mod tests {
             format!("{:?}", Gate::new(Duration::ZERO).checkpoint().unwrap()),
             "Checkpoint(<private>)"
         );
-    }
-
-    struct Revokes {
-        gate: Arc<Gate>,
-        now: Instant,
-    }
-
-    impl Drop for Revokes {
-        fn drop(&mut self) {
-            self.gate.observe(self.now).unwrap();
-        }
     }
 }

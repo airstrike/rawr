@@ -4747,10 +4747,10 @@ dependencies = [
 name = "rawr-watch"
 version = "0.4.77"
 dependencies = [
- "libc",
  "rawr",
  "rawr-import",
  "rawr-notify",
+ "rustix 1.1.4",
 ]
 
 [[package]]

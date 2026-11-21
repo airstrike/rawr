@@ -30,9 +30,10 @@ pub(crate) enum Handover {
 }
 
 impl<B> Lane<B> {
-    pub(crate) fn take_refresh(&mut self) -> Result<bool, Error> {
-        let current = self.slot.take_refresh().map_err(Error::Process)?;
-        Ok(std::mem::take(&mut self.refresh) | current)
+    /// Whether a runner that retired since the last call asked for its
+    /// program to be refreshed, which its retirement's reply said.
+    pub(crate) const fn take_refresh(&mut self) -> bool {
+        std::mem::replace(&mut self.refresh, false)
     }
 
     pub(crate) fn native_watch(
@@ -116,6 +117,13 @@ impl<B> Lane<B> {
             slot: rawr_import::supervisor::slot::Slot::new(),
             refresh: false,
         })
+    }
+
+    /// Wake `waker`'s owner when each runner this lane starts ends, so the
+    /// owner reaps it without looking on a clock.
+    #[cfg(unix)]
+    pub fn wake_on_exit(&mut self, waker: rawr_watch::Waker) {
+        self.process.on_spawn(move |pid| waker.wake_on_exit(pid));
     }
 
     /// Name the build target this lane's runners are generations of, so the
@@ -221,7 +229,7 @@ impl<B> Lane<B> {
         &mut self,
         built: rawr_import::runner::Manifest<rawr_import::runner::Built, B>,
         snapshot: rawr_import::supervisor::snapshot::Bytes,
-        adapter: &rawr_watch::Adapter,
+        adapter: &mut rawr_watch::Adapter,
         observation: &[u8],
         checkpoint: rawr::reload::scheduler::Checkpoint,
     ) -> Result<Watched, Error> {
@@ -248,7 +256,7 @@ impl<B> Lane<B> {
         &mut self,
         built: rawr_import::runner::Manifest<rawr_import::runner::Built, B>,
         snapshot: rawr_import::supervisor::snapshot::Bytes,
-        adapter: &rawr_watch::Adapter,
+        adapter: &mut rawr_watch::Adapter,
         observation: &[u8],
         request: rawr::reload::scheduler::Request,
         handover: Handover,

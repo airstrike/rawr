@@ -1,45 +1,68 @@
 //! Narrow raw filesystem-event transport for exact current and staged inputs.
+//!
+//! The native watcher's thread only stamps each event and sends it to the
+//! adapter's inbox. The thread that owns the adapter classifies, observes
+//! and admits. Every query that decides a start, an admission or a report
+//! first takes every event already sent, so an event the OS delivered before
+//! an admission always revokes it, and one delivered after it issues the
+//! next revision.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard, Weak};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use notify::{RecursiveMode, Watcher};
 
 use rawr::reload::scheduler;
 
-use super::{input, native, notice};
+use super::{input, native};
 
-/// One host-owned native watcher and shared neutral admission gate.
+/// One owner's native watcher, its inbox and its admission gate.
 pub struct Adapter {
-    control: Arc<Control>,
-    gate: Arc<scheduler::Gate>,
-    publication: Arc<rawr::reload::scheduler::publication::Slot>,
-    filter: Arc<Filter>,
-    notices: notice::Notices,
-    wake: notice::Publisher,
+    inbox: Receiver<Wake>,
+    /// What the native callbacks and each [`Waker`] send on.
+    sender: Sender<Wake>,
+    watch: Watch,
+    gate: scheduler::Gate,
+    filter: Filter,
     history: native::History,
-    /// Whether [`Adapter::poll`] stats the sources: not for a watcher whose
-    /// native callbacks are disabled.
-    polls: bool,
+    /// This adapter's identity, which its staged inputs carry.
+    origin: Arc<Origin>,
+    /// The first terminal notice, until [`Adapter::wait`] reports it.
+    failed: Option<Notice>,
+    /// How many relevant events the tests' adapter observed.
+    #[cfg(test)]
+    observed: u64,
 }
 
-/// Shared registration control for the watcher's current and staged input union.
-pub struct Control {
-    watch: Mutex<Watch>,
-    filter: Arc<Filter>,
-    gate: Arc<scheduler::Gate>,
+/// One adapter's identity.
+struct Origin;
+
+/// What wakes the owner.
+enum Wake {
+    /// One native event, stamped when the watcher's thread received it, so
+    /// the debounce runs from the OS's delivery and not from the owner's
+    /// next look.
+    Event(Instant, notify::Result<notify::Event>),
+    /// Something outside the watched files happened, such as the owner's
+    /// program ending: the owner looks again.
+    Nudge,
 }
 
-/// One authority-free candidate input union retained only through final owner
-/// admission or explicit retirement.
-#[must_use = "staged watcher inputs must be committed or retired"]
+/// Wakes the adapter's owner from another thread, without a change of its
+/// own: the owner then looks at whatever it waits on besides files.
+#[derive(Clone)]
+pub struct Waker(Sender<Wake>);
+
+/// One authority-free candidate input union, kept relevant until the owner
+/// commits or withdraws it, or the adapter's next start withdraws it.
+#[must_use = "staged watcher inputs must be committed or withdrawn"]
 pub struct StagedInputs {
-    control: Weak<Control>,
+    origin: Arc<Origin>,
     stamp: u64,
-    active: bool,
 }
 
 struct Watch {
@@ -47,12 +70,14 @@ struct Watch {
     roots: BTreeMap<PathBuf, bool>,
     /// What the watcher registered for `roots`: see [`registration`].
     registered: BTreeMap<PathBuf, bool>,
-    handler: Option<Handler>,
+    /// Where each native watcher sends its events; `None` for a watcher
+    /// whose native callbacks are disabled.
+    deliver: Option<Sender<Wake>>,
 }
 
 enum Filter {
     Publication(Arc<rawr::reload::scheduler::publication::Slot>),
-    Direct(RwLock<Direct>),
+    Direct(Direct),
 }
 
 struct Direct {
@@ -64,13 +89,14 @@ struct Direct {
 struct DirectEntry {
     stamp: u64,
     inputs: Arc<rawr::reload::source::Inputs>,
+    /// Whether the filter held these inputs already when they were staged:
+    /// otherwise they registered roots a withdrawal retires.
+    held: Held,
 }
 
-/// One watcher lifecycle notice for the owning session.
+/// One terminal watcher notice for the owning session.
 #[derive(Debug)]
 pub enum Notice {
-    /// A relevant current or staged input advanced the current revision.
-    Changed(scheduler::notice::Observed),
     /// The native watcher reported an asynchronous backend failure.
     Backend(notify::Error),
     /// The deterministic scheduler could not issue the relevant revision.
@@ -130,68 +156,10 @@ impl Held {
     }
 }
 
-#[derive(Clone)]
-struct Handler {
-    history: native::History,
-    filter: Arc<Filter>,
-    gate: Arc<scheduler::Gate>,
-    notices: notice::Publisher,
-}
-
 impl Adapter {
     /// Open a raw watcher over one generation's exact resolved graph inputs.
     pub fn open(graph: &rawr::reload::source::Graph, debounce: Duration) -> Result<Self, Error> {
-        let inputs = rawr::reload::source::Inputs::from_graph(graph);
-        let publication = Arc::new(rawr::reload::scheduler::publication::Slot::new(
-            inputs.clone(),
-        ));
-        Self::attach(Arc::new(scheduler::Gate::new(debounce)), publication)
-    }
-
-    /// Attach native observation to the host's exact admission gate and input
-    /// publication. Current and staged inputs determine both relevance and
-    /// initial transport coverage. The host must keep staging and registration
-    /// ordered before candidate validation; attachment grants no admission.
-    /// Startup or registration failure suspends this same gate.
-    pub fn attach(
-        gate: Arc<scheduler::Gate>,
-        publication: Arc<rawr::reload::scheduler::publication::Slot>,
-    ) -> Result<Self, Error> {
-        Self::attach_with(gate, publication, true, |handler| {
-            notify::recommended_watcher(move |event| handler.handle(event))
-        })
-    }
-
-    fn attach_with(
-        gate: Arc<scheduler::Gate>,
-        publication: Arc<rawr::reload::scheduler::publication::Slot>,
-        native: bool,
-        start: impl FnOnce(Handler) -> notify::Result<notify::RecommendedWatcher>,
-    ) -> Result<Self, Error> {
-        let filter = Arc::new(Filter::Publication(Arc::clone(&publication)));
-        let (notices, receiver) = notice::channel();
-        let history = native::History::default();
-        let handler = Handler {
-            history: history.clone(),
-            filter: Arc::clone(&filter),
-            gate: Arc::clone(&gate),
-            notices: notices.clone(),
-        };
-        let result = start(handler).map_err(Error::Start).and_then(|watcher| {
-            Self::finish(
-                publication,
-                filter,
-                Arc::clone(&gate),
-                (notices, receiver),
-                watcher,
-                native,
-                history,
-            )
-        });
-        if result.is_err() {
-            gate.suspend();
-        }
-        result
+        Self::with_filter(Filter::graph(graph), debounce, true)
     }
 
     /// Open the generated-owner watcher over an already sealed Rawr/native
@@ -201,56 +169,13 @@ impl Adapter {
         inputs: rawr::reload::source::Inputs,
         debounce: Duration,
     ) -> Result<Self, Error> {
-        let publication = Arc::new(rawr::reload::scheduler::publication::Slot::new(
-            inputs.clone(),
-        ));
-        let filter = Arc::new(Filter::Direct(RwLock::new(Direct {
-            current: Arc::new(inputs.clone()),
-            staged: Vec::new(),
-            next: 0,
-        })));
-        let gate = Arc::new(scheduler::Gate::new(debounce));
-        let (notices, receiver) = notice::channel();
-        let history = native::History::default();
-        let handler = Handler {
-            history: history.clone(),
-            filter: Arc::clone(&filter),
-            gate: Arc::clone(&gate),
-            notices: notices.clone(),
-        };
-        let watcher = notify::recommended_watcher(move |event| handler.handle(event))
-            .map_err(Error::Start)?;
-        Self::finish(
-            publication,
-            filter,
-            gate,
-            (notices, receiver),
-            watcher,
-            true,
-            history,
-        )
+        Self::with_filter(Filter::direct(inputs), debounce, true)
     }
 
     /// Open a watcher whose native callbacks are disabled for deterministic tests.
     #[cfg(feature = "manual")]
     pub fn manual(graph: &rawr::reload::source::Graph, debounce: Duration) -> Result<Self, Error> {
-        let inputs = rawr::reload::source::Inputs::from_graph(graph);
-        let publication = Arc::new(rawr::reload::scheduler::publication::Slot::new(
-            inputs.clone(),
-        ));
-        let filter = Arc::new(Filter::Publication(Arc::clone(&publication)));
-        let gate = Arc::new(scheduler::Gate::new(debounce));
-        let (notices, receiver) = notice::channel();
-        let watcher = notify::recommended_watcher(|_event| {}).map_err(Error::Start)?;
-        Self::finish(
-            publication,
-            filter,
-            gate,
-            (notices, receiver),
-            watcher,
-            false,
-            native::History::default(),
-        )
+        Self::with_filter(Filter::graph(graph), debounce, false)
     }
 
     /// Open a direct input filter with deterministic callback delivery for tests.
@@ -259,135 +184,202 @@ impl Adapter {
         inputs: rawr::reload::source::Inputs,
         debounce: Duration,
     ) -> Result<Self, Error> {
-        let publication = Arc::new(rawr::reload::scheduler::publication::Slot::new(
-            inputs.clone(),
-        ));
-        let filter = Arc::new(Filter::Direct(RwLock::new(Direct {
-            current: Arc::new(inputs),
-            staged: Vec::new(),
-            next: 0,
-        })));
-        let gate = Arc::new(scheduler::Gate::new(debounce));
-        let channel = notice::channel();
-        let watcher = notify::recommended_watcher(|_event| {}).map_err(Error::Start)?;
-        Self::finish(
-            publication,
-            filter,
-            gate,
-            channel,
-            watcher,
-            false,
-            native::History::default(),
-        )
+        Self::with_filter(Filter::direct(inputs), debounce, false)
     }
 
-    /// Deliver a deterministic data event through this watcher's real handler.
+    /// Take a deterministic data event as the native watcher would deliver it.
     #[cfg(feature = "manual")]
-    pub fn inject_modify(&self, path: &Path) {
-        Handler {
-            history: self.history.clone(),
-            filter: Arc::clone(&self.filter),
-            gate: Arc::clone(&self.gate),
-            notices: self.wake.clone(),
-        }
-        .handle(Ok(notify::Event::new(notify::EventKind::Modify(
-            notify::event::ModifyKind::Data(notify::event::DataChange::Content),
-        ))
-        .add_path(path.to_path_buf())));
+    pub fn inject_modify(&mut self, path: &Path) {
+        self.take(
+            Instant::now(),
+            Ok(
+                notify::Event::new(notify::EventKind::Modify(notify::event::ModifyKind::Data(
+                    notify::event::DataChange::Content,
+                )))
+                .add_path(path.to_path_buf()),
+            ),
+        );
     }
 
-    fn finish(
-        publication: Arc<rawr::reload::scheduler::publication::Slot>,
-        filter: Arc<Filter>,
-        gate: Arc<scheduler::Gate>,
-        (wake, receiver): (notice::Publisher, notice::Notices),
-        mut watcher: notify::RecommendedWatcher,
-        native: bool,
-        history: native::History,
-    ) -> Result<Self, Error> {
+    /// Observe and start one request at once, for deterministic tests.
+    #[cfg(feature = "manual")]
+    pub fn observe_and_start(
+        &mut self,
+        now: Instant,
+    ) -> Result<Option<scheduler::Request>, scheduler::Error> {
+        self.drain();
+        self.gate.observe_and_start(now)
+    }
+
+    fn with_filter(filter: Filter, debounce: Duration, native: bool) -> Result<Self, Error> {
+        let (sender, inbox) = mpsc::channel();
+        let deliver = native.then(|| sender.clone());
+        let mut watcher = start(deliver.clone()).map_err(Error::Start)?;
         let roots = filter.wanted().roots()?;
         let registered = registration(&roots, &filter.watched());
         register_all(&mut watcher, &registered)?;
-        let handler = native.then(|| Handler {
-            history: history.clone(),
-            filter: Arc::clone(&filter),
-            gate: Arc::clone(&gate),
-            notices: wake.clone(),
-        });
-        let control = Arc::new(Control {
-            watch: Mutex::new(Watch {
+        Ok(Self {
+            inbox,
+            sender,
+            watch: Watch {
                 watcher,
                 roots,
                 registered,
-                handler,
-            }),
-            filter: Arc::clone(&filter),
-            gate: Arc::clone(&gate),
-        });
-        Ok(Self {
-            control,
-            gate,
-            publication,
+                deliver,
+            },
+            gate: scheduler::Gate::new(debounce),
             filter,
-            notices: receiver,
-            wake,
-            history,
-            polls: native,
+            history: native::History::default(),
+            origin: Arc::new(Origin),
+            failed: None,
+            #[cfg(test)]
+            observed: 0,
         })
     }
 
-    /// Stat each Rawr source input, as an owner does between notices, and
-    /// deliver a changed one as the data event the native stream would.
-    /// Under a busy disk FSEvents can deliver a save seconds late; a few
-    /// stats a tick see it at once. A source seen the first time only
-    /// records its identity: its events still arrive from the stream.
-    pub fn poll(&self) {
-        if !self.polls {
-            return;
-        }
-        let changed = self.history.poll(self.filter.sources());
-        if changed.is_empty() {
-            return;
-        }
-        let handler = Handler {
-            history: self.history.clone(),
-            filter: Arc::clone(&self.filter),
-            gate: Arc::clone(&self.gate),
-            notices: self.wake.clone(),
-        };
-        for path in &changed {
-            handler.handle(Ok(notify::Event::new(notify::EventKind::Modify(
-                notify::event::ModifyKind::Data(notify::event::DataChange::Content),
-            ))
-            .add_path(path.clone())));
-        }
-        self.history.deliver(&changed);
+    /// A handle that wakes this adapter's owner from another thread.
+    #[must_use]
+    pub fn waker(&self) -> Waker {
+        Waker(self.sender.clone())
     }
 
-    /// Return watcher notices without granting candidate authority.
-    #[must_use]
-    pub const fn notices(&self) -> &notice::Notices {
-        &self.notices
+    /// Wait for the next wake: until the debounce of a pending save ends
+    /// while one is pending, and for as long as it takes otherwise. Every
+    /// event already sent is taken before this returns. The first terminal
+    /// notice is returned once, before any wait.
+    pub fn wait(&mut self) -> Result<(), Notice> {
+        if let Some(notice) = self.failed.take() {
+            return Err(notice);
+        }
+        let wake = match self.gate.deadline() {
+            Some(deadline) => {
+                match self
+                    .inbox
+                    .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                {
+                    Ok(wake) => Some(wake),
+                    // The debounce ended: the owner starts the save.
+                    Err(RecvTimeoutError::Timeout) => None,
+                    Err(RecvTimeoutError::Disconnected) => {
+                        unreachable!("the adapter holds a sender of its own inbox")
+                    }
+                }
+            }
+            None => Some(
+                self.inbox
+                    .recv()
+                    .expect("the adapter holds a sender of its own inbox"),
+            ),
+        };
+        if let Some(wake) = wake {
+            self.receive(wake);
+        }
+        self.drain();
+        self.failed.take().map_or(Ok(()), Err)
+    }
+
+    /// Take every wake already sent.
+    fn drain(&mut self) {
+        while let Ok(wake) = self.inbox.try_recv() {
+            self.receive(wake);
+        }
+    }
+
+    fn receive(&mut self, wake: Wake) {
+        match wake {
+            Wake::Event(at, event) => self.take(at, event),
+            Wake::Nudge => {}
+        }
+    }
+
+    /// Classify one native event delivered at `at`, and observe it when it
+    /// is relevant.
+    fn take(&mut self, at: Instant, event: notify::Result<notify::Event>) {
+        let event = match event {
+            Ok(event) => event,
+            Err(error) => {
+                self.gate.suspend();
+                self.fail(Notice::Backend(error));
+                return;
+            }
+        };
+        let change = input::Change::from_event(&event);
+        // Creation of an absent input's parent is relevant even though the
+        // new directory is not itself an exact input file.
+        let change = match (event.kind, change) {
+            (notify::EventKind::Create(_), input::Change::Exact(paths)) => {
+                input::Change::Tree(paths)
+            }
+            (_, change) => change,
+        };
+        let (relevant, source_only) = self.filter.classify(&change);
+        if !source_only {
+            self.history.roots_moved();
+        }
+        if matches!(change, input::Change::Rescan) {
+            self.history.rescan();
+        } else if relevant && !source_only {
+            self.history.invalidate(
+                change
+                    .known_paths()
+                    .and_then(<[_]>::first)
+                    .map(PathBuf::as_path),
+            );
+        }
+        if !relevant {
+            return;
+        }
+        match self.gate.observe(at) {
+            Ok(()) => {
+                #[cfg(test)]
+                {
+                    self.observed += 1;
+                }
+            }
+            Err(scheduler::Error::Suspended) => {}
+            Err(error) => self.fail(Notice::Schedule(error)),
+        }
+    }
+
+    /// Keep the first terminal notice for the owner's next wait.
+    fn fail(&mut self, notice: Notice) {
+        if self.failed.is_none() {
+            self.failed = Some(notice);
+        }
     }
 
     /// Return the newest outstanding request's debounce deadline.
     #[must_use]
-    pub fn deadline(&self) -> Option<Instant> {
+    pub fn deadline(&mut self) -> Option<Instant> {
+        self.drain();
         self.gate.deadline()
     }
 
+    /// Observe a revision with no file event, as a save does: the owner
+    /// attempts the program again.
+    pub fn observe(&mut self, now: Instant) -> Result<(), scheduler::Error> {
+        self.drain();
+        self.gate.observe(now)
+    }
+
     /// Start the newest outstanding request after its debounce deadline.
+    /// Inputs still staged then belong to a finished attempt, and are
+    /// withdrawn.
     #[must_use]
-    pub fn start(&self, now: Instant) -> Option<scheduler::Request> {
-        let request = self.gate.start(now)?;
+    pub fn start(&mut self, now: Instant) -> Option<scheduler::Request> {
+        self.drain();
+        let retired = self.filter.withdraw_all() == Some(Held::New);
+        let request = self.gate.start(now);
         // Rearm after parent creation even if the candidate later fails to
         // compile, so subsequent children remain observable. Only an event
-        // that may have created or removed a directory moves the roots: a
+        // that may have created or removed a directory moves the roots, and
+        // only inputs staged with roots of their own leave some behind: a
         // save that writes a Rawr source derives none (#1604).
-        if !self.history.take_roots_moved() {
-            return Some(request);
+        let moved = request.is_some() && self.history.take_roots_moved();
+        if !moved && !retired {
+            return request;
         }
-        let errors = self.control.reconcile();
+        let errors = self.reconcile();
         if !errors.is_empty() {
             self.history.roots_moved();
         }
@@ -395,35 +387,44 @@ impl Adapter {
             match error {
                 Error::Watch { path, source } => {
                     self.gate.suspend();
-                    self.wake.publish(Notice::Backend(source.add_path(path)));
+                    self.fail(Notice::Backend(source.add_path(path)));
                     return None;
                 }
                 error => eprintln!("warning: file watcher: {error}"),
             }
         }
-        Some(request)
+        request
+    }
+
+    /// Whether `request` is still the newest revision, after every event
+    /// already sent.
+    #[must_use]
+    pub fn is_current(&mut self, request: &scheduler::Request) -> bool {
+        self.drain();
+        self.gate.request_is_current(request)
     }
 
     /// Capture native invalidation history before full native validation.
     /// Retain this only with the owner successfully admitted by that work.
     #[must_use]
-    pub fn native_baseline(&self) -> native::Baseline {
+    pub fn native_baseline(&mut self) -> native::Baseline {
+        self.drain();
         let (paths, trees) = self.filter.native();
         self.history.capture(native::Stamp::capture(paths, trees))
     }
 
     /// Inspect observed native invalidation after the original request begins.
     /// This grants neither current Rust freshness nor admission authority:
-    /// subsequent events still revoke the request through the shared gate.
+    /// subsequent events still revoke the request through the gate.
     #[must_use]
-    pub fn resident_eligible(&self, baseline: &native::Baseline) -> bool {
+    pub fn resident_eligible(&mut self, baseline: &native::Baseline) -> bool {
         self.resident_change(baseline).is_none()
     }
 
     /// The watcher's word that no native input changed since `baseline`,
     /// `None` when one may have.
     #[must_use]
-    pub fn unchanged(&self, baseline: &native::Baseline) -> Option<native::Unchanged> {
+    pub fn unchanged(&mut self, baseline: &native::Baseline) -> Option<native::Unchanged> {
         self.resident_eligible(baseline)
             .then_some(native::Unchanged(()))
     }
@@ -431,53 +432,43 @@ impl Adapter {
     /// Why a save can't take the resident route against `baseline`, `None`
     /// when it can (see [`Self::resident_eligible`]).
     #[must_use]
-    pub fn resident_change(&self, baseline: &native::Baseline) -> Option<native::Change> {
+    pub fn resident_change(&mut self, baseline: &native::Baseline) -> Option<native::Change> {
+        self.drain();
         if self.gate.checkpoint().is_err() {
             return Some(native::Change::Suspended);
         }
         self.history.change(baseline)
     }
 
-    /// Capture the exact watcher event sequence before off-lock process work.
-    pub fn checkpoint(&self) -> Result<rawr::reload::scheduler::Checkpoint, scheduler::Error> {
+    /// Capture the exact watcher event sequence before process work.
+    pub fn checkpoint(&mut self) -> Result<rawr::reload::scheduler::Checkpoint, scheduler::Error> {
+        self.drain();
         self.gate.checkpoint()
     }
 
-    /// Linearize one direct imported-owner slot transition against the watcher
-    /// sequence captured by [`Self::checkpoint`].
+    /// Admit one direct imported-owner slot transition only if no event was
+    /// observed since [`Self::checkpoint`], after every event already sent.
     pub fn admit_checkpoint<T, U>(
-        &self,
+        &mut self,
         checkpoint: rawr::reload::scheduler::Checkpoint,
         value: T,
         admit: impl FnOnce(T) -> U,
     ) -> scheduler::Admission<T, U> {
+        self.drain();
         self.gate.admit_checkpoint(checkpoint, value, admit)
     }
 
-    /// Linearize one request-bound direct owner transition against the latest
-    /// watcher revision. The callback must remain a short structural transition:
-    /// no filesystem or store I/O, IPC, destruction, or watcher re-entry.
+    /// Admit one request-bound direct owner transition only while its
+    /// revision is the newest, after every event already sent. The callback
+    /// must remain a short structural transition: no filesystem or store
+    /// I/O, IPC, destruction, or watcher re-entry.
     pub fn admit_current<T, U>(
-        &self,
+        &mut self,
         candidate: scheduler::Candidate<T>,
         admit: impl FnOnce(T) -> U,
     ) -> scheduler::Admission<T, U> {
+        self.drain();
         self.gate.admit_current(candidate, admit)
-    }
-
-    /// Share the exact admission gate advanced by this watcher.
-    pub fn gate(&self) -> Arc<scheduler::Gate> {
-        Arc::clone(&self.gate)
-    }
-
-    /// Share the publication slot used by the graph-owned input filter.
-    pub fn publication(&self) -> Arc<rawr::reload::scheduler::publication::Slot> {
-        Arc::clone(&self.publication)
-    }
-
-    /// Share off-gate watch registration and reconciliation control.
-    pub fn control(&self) -> Arc<Control> {
-        Arc::clone(&self.control)
     }
 
     /// Register a candidate filter's roots without changing current event
@@ -485,77 +476,93 @@ impl Adapter {
     /// the filter already holds, current or staged, register nothing: a
     /// save that changes only a source's text stages no root (#1604).
     pub fn prepare_inputs(
-        &self,
+        &mut self,
         inputs: impl Into<Arc<rawr::reload::source::Inputs>>,
     ) -> Result<StagedInputs, Error> {
         let inputs = inputs.into();
         let (stamp, held) = self.filter.stage(Arc::clone(&inputs))?;
-        let staged = StagedInputs {
-            control: Arc::downgrade(&self.control),
-            stamp,
-            active: true,
-        };
         if held == Held::New
-            && let Err(error) = self.control.prepare(&inputs)
+            && let Err(error) = self.prepare(&inputs)
         {
-            drop(staged);
+            self.filter.withdraw(stamp);
+            drop(self.reconcile());
             return Err(error);
         }
-        Ok(staged)
+        Ok(StagedInputs {
+            origin: Arc::clone(&self.origin),
+            stamp,
+        })
     }
 
     /// Publish one admitted generated-owner filter and retire roots no longer
     /// reachable from the last-good generation. When the admitted inputs
     /// are the very ones already current, every root still stands.
-    pub fn commit_inputs(&self, mut staged: StagedInputs) -> Result<Vec<Error>, Error> {
-        let Some(control) = staged.control.upgrade() else {
-            return Err(Error::StaleStage);
-        };
-        if !Arc::ptr_eq(&control, &self.control) {
+    pub fn commit_inputs(&mut self, staged: StagedInputs) -> Result<Vec<Error>, Error> {
+        if !Arc::ptr_eq(&staged.origin, &self.origin) {
             return Err(Error::StaleStage);
         }
-        let held = self.filter.commit(staged.stamp)?;
-        staged.active = false;
-        if held == Held::Already {
+        if self.filter.commit(staged.stamp)? == Held::Already {
             return Ok(Vec::new());
         }
-        Ok(self.control.reconcile())
+        Ok(self.reconcile())
     }
-}
 
-impl Control {
+    /// Withdraw inputs an attempt staged and will not commit, and retire the
+    /// roots only they needed.
+    pub fn withdraw(&mut self, staged: StagedInputs) -> Vec<Error> {
+        if !Arc::ptr_eq(&staged.origin, &self.origin) {
+            return Vec::new();
+        }
+        match self.filter.withdraw(staged.stamp) {
+            Some(Held::New) => self.reconcile(),
+            Some(Held::Already) | None => Vec::new(),
+        }
+    }
+
     /// Register a successor over the full transport union while retaining the
     /// incumbent. No registration occurs when the union is unchanged.
-    pub fn prepare(&self, inputs: &rawr::reload::source::Inputs) -> Result<(), Error> {
+    fn prepare(&mut self, inputs: &rawr::reload::source::Inputs) -> Result<(), Error> {
         let result = (|| {
             let mut wanted = Wanted::default();
             wanted.add(inputs);
             let added = wanted.roots()?;
-            let mut watch = lock(&self.watch);
-            let mut desired = watch.roots.clone();
+            let mut desired = self.watch.roots.clone();
             for (path, recursive) in added {
                 desired
                     .entry(path)
                     .and_modify(|current| *current |= recursive)
                     .or_insert(recursive);
             }
-            watch.replace(desired, &self.filter.watched())
+            self.watch.replace(desired, &self.filter.watched())
         })();
-        if result.is_err() {
-            self.gate.suspend();
+        match result {
+            Ok(replaced) => {
+                if replaced {
+                    self.history.registered();
+                }
+                Ok(())
+            }
+            Err(error) => {
+                self.gate.suspend();
+                Err(error)
+            }
         }
-        result
     }
 
     /// Reconcile the union without mutating registrations on the incumbent.
-    pub fn reconcile(&self) -> Vec<Error> {
-        let result = (|| {
-            let mut watch = lock(&self.watch);
-            let desired = self.filter.wanted().roots()?;
-            watch.replace(desired, &self.filter.watched())
-        })();
+    fn reconcile(&mut self) -> Vec<Error> {
+        let result = self
+            .filter
+            .wanted()
+            .roots()
+            .and_then(|desired| self.watch.replace(desired, &self.filter.watched()));
         match result {
-            Ok(()) => Vec::new(),
+            Ok(replaced) => {
+                if replaced {
+                    self.history.registered();
+                }
+                Vec::new()
+            }
             Err(error) => {
                 self.gate.suspend();
                 vec![error]
@@ -564,17 +571,52 @@ impl Control {
     }
 }
 
+impl Waker {
+    /// Wake the owner.
+    pub fn wake(&self) {
+        // A send fails only once the adapter is gone, and with it the owner.
+        let _ = self.0.send(Wake::Nudge);
+    }
+
+    /// Wake the owner when the child process `pid` ends, without reaping
+    /// it: the owner reaps it as it does on any wake. A thread waits for the
+    /// end in the kernel.
+    #[cfg(unix)]
+    pub fn wake_on_exit(&self, pid: u32) {
+        let waker = self.clone();
+        let spawned = std::thread::Builder::new()
+            .name("rawr-exit".into())
+            .spawn(move || {
+                super::exit::wait(pid);
+                waker.wake();
+            });
+        // A thread that can't start leaves the owner to see the end at its
+        // next wake from a file.
+        drop(spawned);
+    }
+}
+
+/// Start a native watcher that sends each event to `deliver`, or drops it.
+fn start(deliver: Option<Sender<Wake>>) -> notify::Result<notify::RecommendedWatcher> {
+    match deliver {
+        Some(sender) => notify::recommended_watcher(move |event| {
+            // A send fails only once the adapter is gone.
+            let _ = sender.send(Wake::Event(Instant::now(), event));
+        }),
+        None => notify::recommended_watcher(|_event| {}),
+    }
+}
+
 impl Watch {
+    /// Register `desired`, and say whether a successor replaced the
+    /// incumbent watcher.
     fn replace(
         &mut self,
         desired: BTreeMap<PathBuf, bool>,
         exact: &BTreeSet<PathBuf>,
-    ) -> Result<(), Error> {
-        let handler = self.handler.clone();
-        self.replace_with(desired, exact, || match handler {
-            Some(handler) => notify::recommended_watcher(move |event| handler.handle(event)),
-            None => notify::recommended_watcher(|_event| {}),
-        })
+    ) -> Result<bool, Error> {
+        let deliver = self.deliver.clone();
+        self.replace_with(desired, exact, || start(deliver))
     }
 
     fn replace_with(
@@ -582,29 +624,24 @@ impl Watch {
         desired: BTreeMap<PathBuf, bool>,
         exact: &BTreeSet<PathBuf>,
         start: impl FnOnce() -> notify::Result<notify::RecommendedWatcher>,
-    ) -> Result<(), Error> {
+    ) -> Result<bool, Error> {
         let registered = registration(&desired, exact);
         if self.registered == registered {
             self.roots = desired;
-            return Ok(());
+            return Ok(false);
         }
         // The incumbent remains alive through every fallible successor step.
-        // Native lifecycle work never runs under the scheduler admission gate.
         let mut successor = start().map_err(Error::Start)?;
         register_all(&mut successor, &registered)?;
         // The successor cannot see events queued before its SinceNow origin.
-        // Deliver those incumbent callbacks before retiring it. This lock is
-        // registration-only; callbacks use the gate/filter, never this mutex.
+        // Deliver those incumbent events to the inbox before retiring it.
         #[cfg(target_os = "macos")]
         self.watcher.drain().map_err(Error::Start)?;
         let retired = std::mem::replace(&mut self.watcher, successor);
         self.roots = desired;
         self.registered = registered;
         drop(retired);
-        if let Some(handler) = &self.handler {
-            handler.history.registered();
-        }
-        Ok(())
+        Ok(self.deliver.is_some())
     }
 }
 
@@ -814,6 +851,21 @@ fn existing_directory(path: &Path) -> Result<PathBuf, Error> {
 }
 
 impl Filter {
+    fn graph(graph: &rawr::reload::source::Graph) -> Self {
+        let inputs = rawr::reload::source::Inputs::from_graph(graph);
+        Self::Publication(Arc::new(rawr::reload::scheduler::publication::Slot::new(
+            inputs,
+        )))
+    }
+
+    fn direct(inputs: rawr::reload::source::Inputs) -> Self {
+        Self::Direct(Direct {
+            current: Arc::new(inputs),
+            staged: Vec::new(),
+            next: 0,
+        })
+    }
+
     #[cfg(test)]
     fn relevant(&self, change: &input::Change) -> bool {
         self.classify(change).0
@@ -848,7 +900,6 @@ impl Filter {
                 (relevant, source_only)
             }
             Self::Direct(state) => {
-                let state = read(state);
                 let relevant = change.relevant_inputs(&state.current)
                     || state
                         .staged
@@ -888,7 +939,6 @@ impl Filter {
                 wanted.add_paths(&read.paths(), &read.trees(), &read.unwatched());
             }
             Self::Direct(state) => {
-                let state = read(state);
                 for inputs in std::iter::once(&state.current)
                     .chain(state.staged.iter().map(|entry| &entry.inputs))
                 {
@@ -920,7 +970,6 @@ impl Filter {
                     .collect()
             }
             Self::Direct(state) => {
-                let state = read(state);
                 let inputs = || {
                     std::iter::once(&state.current)
                         .chain(state.staged.iter().map(|entry| &entry.inputs))
@@ -937,26 +986,6 @@ impl Filter {
         }
     }
 
-    /// Every input path with only a Rawr source role, current and staged.
-    fn sources(&self) -> BTreeSet<PathBuf> {
-        match self {
-            Self::Publication(publication) => publication
-                .read()
-                .current()
-                .source_paths()
-                .iter()
-                .cloned()
-                .collect(),
-            Self::Direct(state) => {
-                let state = read(state);
-                std::iter::once(&state.current)
-                    .chain(state.staged.iter().map(|entry| &entry.inputs))
-                    .flat_map(|inputs| inputs.source_paths().iter().cloned())
-                    .collect()
-            }
-        }
-    }
-
     /// Every non-source input path and recursive root, current and staged.
     fn native(&self) -> (Box<[PathBuf]>, Box<[PathBuf]>) {
         match self {
@@ -965,7 +994,6 @@ impl Filter {
                 (read.native_paths(), read.trees())
             }
             Self::Direct(state) => {
-                let state = read(state);
                 let mut paths = BTreeSet::new();
                 let mut trees = BTreeSet::new();
                 for inputs in std::iter::once(&state.current)
@@ -988,11 +1016,10 @@ impl Filter {
     /// Stage `inputs`, and say whether the filter held these inputs
     /// already, the very ones current or staged or the current ones' equal,
     /// whose roots then stand.
-    fn stage(&self, inputs: Arc<rawr::reload::source::Inputs>) -> Result<(u64, Held), Error> {
+    fn stage(&mut self, inputs: Arc<rawr::reload::source::Inputs>) -> Result<(u64, Held), Error> {
         let Self::Direct(state) = self else {
             return Err(Error::FixedFilter);
         };
-        let mut state = write(state);
         let held = Held::of(
             std::iter::once(&state.current)
                 .chain(state.staged.iter().map(|entry| &entry.inputs))
@@ -1001,17 +1028,20 @@ impl Filter {
         );
         let stamp = state.next;
         state.next = state.next.checked_add(1).ok_or(Error::StageExhausted)?;
-        state.staged.push(DirectEntry { stamp, inputs });
+        state.staged.push(DirectEntry {
+            stamp,
+            inputs,
+            held,
+        });
         Ok((stamp, held))
     }
 
     /// Make the staged inputs current, and say whether they were the inputs
     /// current already.
-    fn commit(&self, stamp: u64) -> Result<Held, Error> {
+    fn commit(&mut self, stamp: u64) -> Result<Held, Error> {
         let Self::Direct(state) = self else {
             return Err(Error::FixedFilter);
         };
-        let mut state = write(state);
         let index = state
             .staged
             .iter()
@@ -1024,109 +1054,27 @@ impl Filter {
         Ok(held)
     }
 
-    fn withdraw(&self, stamp: u64) {
+    /// Withdraw the inputs staged as `stamp`, and say whether the filter
+    /// held them already when they were staged; `None` when none are.
+    fn withdraw(&mut self, stamp: u64) -> Option<Held> {
         let Self::Direct(state) = self else {
-            return;
+            return None;
         };
-        let mut state = write(state);
-        if let Some(index) = state.staged.iter().position(|entry| entry.stamp == stamp) {
-            drop(state.staged.swap_remove(index));
-        }
+        let index = state.staged.iter().position(|entry| entry.stamp == stamp)?;
+        Some(state.staged.swap_remove(index).held)
     }
-}
 
-impl Drop for StagedInputs {
-    fn drop(&mut self) {
-        if !self.active {
-            return;
-        }
-        let Some(control) = self.control.upgrade() else {
-            return;
+    /// Withdraw every staged input, and say whether any registered roots
+    /// of its own (`New`); `None` when none were staged.
+    fn withdraw_all(&mut self) -> Option<Held> {
+        let Self::Direct(state) = self else {
+            return None;
         };
-        control.filter.withdraw(self.stamp);
-        drop(control.reconcile());
-    }
-}
-
-impl Handler {
-    fn handle(&self, event: notify::Result<notify::Event>) {
-        self.handle_at(event, Instant::now());
-    }
-
-    fn handle_at(&self, event: notify::Result<notify::Event>, now: Instant) {
-        let event = match event {
-            Ok(event) => event,
-            Err(error) => {
-                self.gate.suspend();
-                self.send(Notice::Backend(error));
-                return;
-            }
-        };
-        let change = input::Change::from_event(&event);
-        // Creation of an absent input's parent is relevant even though the
-        // new directory is not itself an exact input file.
-        let change = match (event.kind, change) {
-            (notify::EventKind::Create(_), input::Change::Exact(paths)) => {
-                input::Change::Tree(paths)
-            }
-            (_, change) => change,
-        };
-        // Serialize observation with coalescing so concurrently delivered
-        // callbacks cannot replace a newer revision with an older notice.
-        self.notices.publish_with(|| {
-            match self.gate.observe_if_notice(now, || {
-                let (relevant, source_only) = self.filter.classify(&change);
-                if !source_only {
-                    self.history.roots_moved();
-                }
-                // A source write the poll already delivered, reported late.
-                let relevant = relevant
-                    && !(source_only
-                        && change
-                            .known_paths()
-                            .is_some_and(|paths| self.history.delivered(paths)));
-                if matches!(change, input::Change::Rescan) {
-                    self.history.rescan();
-                } else if relevant && !source_only {
-                    self.history.invalidate(
-                        change
-                            .known_paths()
-                            .and_then(<[_]>::first)
-                            .map(PathBuf::as_path),
-                    );
-                }
-                relevant
-            }) {
-                Ok(Some(observed)) => Some(Notice::Changed(observed)),
-                Ok(None) | Err(scheduler::Error::Suspended) => None,
-                Err(error) => Some(Notice::Schedule(error)),
-            }
-        });
-    }
-
-    fn send(&self, notice: Notice) {
-        self.notices.publish(notice);
-    }
-}
-
-fn lock<T>(value: &Mutex<T>) -> MutexGuard<'_, T> {
-    match value.lock() {
-        Ok(value) => value,
-        Err(poisoned) => poisoned.into_inner(),
-    }
-}
-
-fn read<T>(value: &RwLock<T>) -> RwLockReadGuard<'_, T> {
-    match value.read() {
-        Ok(value) => value,
-        Err(poisoned) => poisoned.into_inner(),
-    }
-}
-
-fn write<T>(value: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
-    match value.write() {
-        Ok(value) => value,
-        Err(poisoned) => poisoned.into_inner(),
+        state
+            .staged
+            .drain(..)
+            .map(|entry| entry.held)
+            .reduce(|held, next| if next == Held::New { next } else { held })
     }
 }
 
@@ -1182,7 +1130,6 @@ impl std::error::Error for Error {
 
 #[cfg(test)]
 mod tests {
-    use crate::notice;
     use std::fs;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
@@ -1190,14 +1137,25 @@ mod tests {
     use notify::event::{AccessKind, ModifyKind};
     use notify::{Event, EventKind};
 
-    use super::{Adapter, Direct, Filter, Handler, Notice};
+    use super::{Adapter, Filter, Notice};
+
+    impl Adapter {
+        /// Take `event` as the inbox delivers it, stamped `now`.
+        fn handle_at(&mut self, event: notify::Result<Event>, now: Instant) {
+            self.take(now, event);
+        }
+
+        /// Whether a relevant event revoked older work since the last call.
+        fn changed(&mut self) -> bool {
+            std::mem::take(&mut self.observed) > 0
+        }
+    }
 
     #[test]
     fn unchanged_roots_do_not_construct_a_successor() {
         let fixture = Fixture::new("unchanged-successor");
-        let gate = Arc::new(rawr::reload::scheduler::Gate::new(Duration::ZERO));
-        let (adapter, _) = attached(gate, Arc::clone(&fixture.publication));
-        let mut watch = super::lock(&adapter.control.watch);
+        let mut adapter = transport(fixture.publication.read().current().clone(), true);
+        let watch = &mut adapter.watch;
         let exact = adapter.filter.watched();
         let desired = watch.roots.clone();
         watch
@@ -1210,10 +1168,9 @@ mod tests {
     #[test]
     fn failed_successor_preserves_incumbent_roots() {
         let fixture = Fixture::new("failed-successor");
-        let gate = Arc::new(rawr::reload::scheduler::Gate::new(Duration::ZERO));
-        let (adapter, _) = attached(gate, Arc::clone(&fixture.publication));
+        let mut adapter = transport(fixture.publication.read().current().clone(), true);
         let exact = adapter.filter.watched();
-        let mut watch = super::lock(&adapter.control.watch);
+        let watch = &mut adapter.watch;
         let original = watch.roots.clone();
         let mut desired = original.clone();
         // No backend registers a missing tree. FSEvents registers only trees
@@ -1229,132 +1186,6 @@ mod tests {
             .replace_with(desired, &exact, || notify::recommended_watcher(|_| {}))
             .is_err());
         assert_eq!(watch.roots, original);
-    }
-
-    #[test]
-    fn attachment_revokes_the_supplied_gate_before_notice_consumption() {
-        let fixture = Fixture::new("attached-revocation");
-        let gate = Arc::new(rawr::reload::scheduler::Gate::new(Duration::ZERO));
-        let (adapter, handler) = attached(Arc::clone(&gate), Arc::clone(&fixture.publication));
-        assert!(Arc::ptr_eq(&gate, &adapter.gate()));
-        assert!(Arc::ptr_eq(&fixture.publication, &adapter.publication()));
-        let now = Instant::now();
-        gate.observe(now).unwrap();
-        let candidate = gate.start(now).unwrap().complete("candidate");
-        handler.handle_at(
-            Ok(Event::new(EventKind::Modify(ModifyKind::Any)).add_path(fixture.source.clone())),
-            now,
-        );
-        assert!(matches!(
-            gate.admit_current(candidate, |_| panic!("revoked candidate cannot install")),
-            rawr::reload::scheduler::Admission::Obsolete("candidate")
-        ));
-        assert!(matches!(
-            adapter.notices().try_recv(),
-            Ok(Notice::Changed(_))
-        ));
-    }
-
-    #[test]
-    fn attachment_uses_supplied_current_and_staged_publication() {
-        let current = Fixture::new("attached-current");
-        let mut next = Fixture::new("attached-next");
-        let gate = Arc::new(rawr::reload::scheduler::Gate::new(Duration::ZERO));
-        let now = Instant::now();
-        gate.observe(now).unwrap();
-        let staged = gate
-            .start(now)
-            .unwrap()
-            .complete(((), next.snapshot.take().unwrap()))
-            .stage_inputs(&current.publication);
-        let (adapter, handler) = attached(Arc::clone(&gate), Arc::clone(&current.publication));
-        assert!(super::lock(&adapter.control.watch)
-            .roots
-            .contains_key(next.source.parent().unwrap()));
-        assert!(super::lock(&adapter.control.watch)
-            .roots
-            .contains_key(current.source.parent().unwrap()));
-        let change = |path| Ok(Event::new(EventKind::Modify(ModifyKind::Any)).add_path(path));
-        handler.handle_at(change(current.source.clone()), now);
-        assert!(matches!(
-            adapter.notices().try_recv(),
-            Ok(Notice::Changed(_))
-        ));
-        handler.handle_at(change(next.source.clone()), now);
-        assert!(matches!(
-            adapter.notices().try_recv(),
-            Ok(Notice::Changed(_))
-        ));
-        handler.handle_at(change(next.root.join("unrelated.rs")), now);
-        assert!(adapter.notices().try_recv().is_err());
-
-        drop(staged);
-        assert!(adapter.control.reconcile().is_empty());
-        assert!(!super::lock(&adapter.control.watch)
-            .roots
-            .contains_key(next.source.parent().unwrap()));
-        handler.handle_at(change(next.source.clone()), now);
-        assert!(adapter.notices().try_recv().is_err());
-        handler.handle_at(change(current.source.clone()), now);
-        assert!(matches!(
-            adapter.notices().try_recv(),
-            Ok(Notice::Changed(_))
-        ));
-    }
-
-    #[test]
-    fn attachment_backend_failure_suspends_the_supplied_gate() {
-        let fixture = Fixture::new("attached-failure");
-        let gate = Arc::new(rawr::reload::scheduler::Gate::new(Duration::ZERO));
-        let (adapter, handler) = attached(Arc::clone(&gate), Arc::clone(&fixture.publication));
-        let now = Instant::now();
-        gate.observe(now).unwrap();
-        let candidate = gate.start(now).unwrap().complete("candidate");
-        handler.handle_at(Err(notify::Error::generic("backend failed")), now);
-        assert!(matches!(
-            gate.checkpoint(),
-            Err(rawr::reload::scheduler::Error::Suspended)
-        ));
-        assert!(matches!(
-            gate.admit_current(candidate, |_| panic!("suspended candidate cannot install")),
-            rawr::reload::scheduler::Admission::Obsolete("candidate")
-        ));
-        assert!(matches!(
-            adapter.notices().try_recv(),
-            Ok(Notice::Backend(_))
-        ));
-    }
-
-    #[test]
-    fn attachment_start_failure_suspends_the_supplied_gate() {
-        let fixture = Fixture::new("attached-start-failure");
-        let gate = Arc::new(rawr::reload::scheduler::Gate::new(Duration::ZERO));
-        let result = Adapter::attach_with(
-            Arc::clone(&gate),
-            Arc::clone(&fixture.publication),
-            false,
-            |_| Err(notify::Error::generic("cannot start backend")),
-        );
-        assert!(matches!(result, Err(super::Error::Start(_))));
-        assert!(matches!(
-            gate.checkpoint(),
-            Err(rawr::reload::scheduler::Error::Suspended)
-        ));
-    }
-
-    fn attached(
-        gate: Arc<rawr::reload::scheduler::Gate>,
-        publication: Arc<rawr::reload::scheduler::publication::Slot>,
-    ) -> (Adapter, Handler) {
-        let mut callback = None;
-        let adapter = Adapter::attach_with(gate, publication, false, |handler| {
-            callback = Some(handler);
-            // Use the production attachment and registration path while leaving
-            // callback timing entirely under the test's control.
-            notify::recommended_watcher(|_event| {})
-        })
-        .unwrap();
-        (adapter, callback.unwrap())
     }
 
     #[test]
@@ -1374,11 +1205,7 @@ mod tests {
             .with_imported([rawr_import::input::proof::Watch::Exact(
                 candidate_path.clone(),
             )]);
-        let filter = Filter::Direct(std::sync::RwLock::new(Direct {
-            current: Arc::new(current),
-            staged: Vec::new(),
-            next: 0,
-        }));
+        let mut filter = Filter::direct(current);
         let change = super::input::Change::from_event(
             &Event::new(EventKind::Modify(ModifyKind::Any)).add_path(candidate_path.clone()),
         );
@@ -1402,65 +1229,63 @@ mod tests {
     }
 
     #[test]
-    fn relevant_callback_revokes_immediately_before_the_owner_reads_its_wake() {
+    fn relevant_event_revokes_before_the_owner_admits() {
         let fixture = Fixture::new("revocation");
-        let gate = Arc::new(rawr::reload::scheduler::Gate::new(Duration::ZERO));
+        let mut adapter = transport(fixture.publication.read().current().clone(), true);
         let now = Instant::now();
-        gate.observe(now).unwrap();
-        let obsolete = gate.start(now).unwrap();
-        let (notices, receiver) = notice::channel();
-        let handler = Handler {
-            history: super::native::History::default(),
-            filter: Arc::new(Filter::Publication(Arc::clone(&fixture.publication))),
-            gate: Arc::clone(&gate),
-            notices,
-        };
+        adapter.gate.observe(now).unwrap();
+        let obsolete = adapter.gate.start(now).unwrap().complete("obsolete");
+        // The native thread's send: the owner has not looked yet.
+        adapter
+            .sender
+            .send(super::Wake::Event(
+                now,
+                Ok(Event::new(EventKind::Modify(ModifyKind::Any)).add_path(fixture.source.clone())),
+            ))
+            .unwrap();
+        assert!(matches!(
+            adapter.admit_current(obsolete, |_| panic!("a delivered event revokes")),
+            rawr::reload::scheduler::Admission::Obsolete("obsolete")
+        ));
+        assert!(adapter.start(now).is_some());
+    }
 
-        handler.handle_at(
-            Ok(Event::new(EventKind::Modify(ModifyKind::Any)).add_path(fixture.source.clone())),
-            now,
-        );
-
-        assert!(gate.start(now).is_some());
-        assert!(matches!(receiver.try_recv(), Ok(Notice::Changed(_))));
-        drop(obsolete);
+    #[test]
+    fn a_wake_without_a_change_starts_nothing() {
+        let fixture = Fixture::new("nudge");
+        let mut adapter = transport(fixture.publication.read().current().clone(), true);
+        adapter.waker().wake();
+        assert!(adapter.wait().is_ok());
+        assert!(adapter.start(Instant::now()).is_none());
     }
 
     #[test]
     fn access_stays_quiet_and_backend_failure_wakes_the_owner_once() {
         let fixture = Fixture::new("failure");
-        let gate = Arc::new(rawr::reload::scheduler::Gate::new(Duration::ZERO));
-        let (notices, receiver) = notice::channel();
-        let handler = Handler {
-            history: super::native::History::default(),
-            filter: Arc::new(Filter::Publication(Arc::clone(&fixture.publication))),
-            gate: Arc::clone(&gate),
-            notices,
-        };
+        let mut adapter = transport(fixture.publication.read().current().clone(), true);
         let now = Instant::now();
 
-        handler.handle_at(
+        adapter.handle_at(
             Ok(Event::new(EventKind::Access(AccessKind::Read)).add_path(fixture.source.clone())),
             now,
         );
-        assert!(gate.deadline().is_none());
-        assert!(receiver.try_recv().is_err());
+        assert!(adapter.gate.deadline().is_none());
+        assert!(!adapter.changed());
 
-        gate.observe(now).unwrap();
-        let obsolete = gate.start(now).unwrap();
-        handler.handle_at(Err(notify::Error::generic("watch failed")), now);
-        assert!(gate.deadline().is_none());
-        assert!(matches!(receiver.try_recv(), Ok(Notice::Backend(_))));
-        assert!(receiver.try_recv().is_err());
+        adapter.gate.observe(now).unwrap();
+        let obsolete = adapter.gate.start(now).unwrap();
+        adapter.handle_at(Err(notify::Error::generic("watch failed")), now);
+        assert!(adapter.gate.deadline().is_none());
+        assert!(matches!(adapter.wait(), Err(Notice::Backend(_))));
 
-        handler.handle_at(
+        adapter.handle_at(
             Ok(Event::new(EventKind::Modify(ModifyKind::Any)).add_path(fixture.source.clone())),
             now,
         );
-        assert!(gate.deadline().is_none());
-        assert!(gate.start(now).is_none());
-        assert!(receiver.try_recv().is_err());
-        drop(obsolete);
+        assert!(adapter.gate.deadline().is_none());
+        assert!(adapter.start(now).is_none());
+        assert!(!adapter.changed());
+        assert!(!adapter.is_current(&obsolete));
     }
 
     #[test]
@@ -1495,39 +1320,20 @@ mod tests {
                 .clone()
                 .with_imported([rawr_import::input::proof::Watch::Tree(path)])
         };
-        let adapter = direct(current.clone());
+        let mut adapter = direct(current.clone());
         let first_stage = adapter.prepare_inputs(candidate(first.clone())).unwrap();
         let second_stage = adapter.prepare_inputs(candidate(second.clone())).unwrap();
-        assert_eq!(
-            super::lock(&adapter.control.watch).roots.get(&first),
-            Some(&true)
-        );
-        assert_eq!(
-            super::lock(&adapter.control.watch).roots.get(&second),
-            Some(&true)
-        );
-        drop(first_stage);
-        assert!(!super::lock(&adapter.control.watch)
-            .roots
-            .contains_key(&first));
-        assert_eq!(
-            super::lock(&adapter.control.watch).roots.get(&second),
-            Some(&true)
-        );
+        assert_eq!(adapter.watch.roots.get(&first), Some(&true));
+        assert_eq!(adapter.watch.roots.get(&second), Some(&true));
+        assert!(adapter.withdraw(first_stage).is_empty());
+        assert!(!adapter.watch.roots.contains_key(&first));
+        assert_eq!(adapter.watch.roots.get(&second), Some(&true));
         assert!(adapter.commit_inputs(second_stage).unwrap().is_empty());
-        assert_eq!(
-            super::lock(&adapter.control.watch).roots.get(&second),
-            Some(&true)
-        );
+        assert_eq!(adapter.watch.roots.get(&second), Some(&true));
         let replacement = adapter.prepare_inputs(current).unwrap();
-        assert_eq!(
-            super::lock(&adapter.control.watch).roots.get(&second),
-            Some(&true)
-        );
+        assert_eq!(adapter.watch.roots.get(&second), Some(&true));
         assert!(adapter.commit_inputs(replacement).unwrap().is_empty());
-        assert!(!super::lock(&adapter.control.watch)
-            .roots
-            .contains_key(&second));
+        assert!(!adapter.watch.roots.contains_key(&second));
     }
 
     #[cfg(target_os = "macos")]
@@ -1609,7 +1415,7 @@ mod tests {
                 input.display()
             );
         }
-        let registered = super::lock(&adapter.control.watch).registered.clone();
+        let registered = adapter.watch.registered.clone();
         assert!(
             watched
                 .iter()
@@ -1721,7 +1527,7 @@ mod tests {
         .with_checkouts(&[root.join("home/registry/src")]);
         let adapter = Adapter::open_inputs(native, Duration::ZERO).unwrap();
 
-        let watch = super::lock(&adapter.control.watch);
+        let watch = &adapter.watch;
         assert_eq!(
             watch.roots,
             BTreeMap::from([
@@ -1743,7 +1549,6 @@ mod tests {
             watch.roots.clone()
         };
         assert_eq!(watch.registered, expected);
-        drop(watch);
 
         let relevant = |path: &Path| {
             adapter
@@ -1770,65 +1575,50 @@ mod tests {
             .with_imported([rawr_import::input::proof::Watch::Exact(config.clone())]);
         assert!(inputs.contains(&config));
         assert!(!inputs.contains(&root.join(".cargo")));
-        let adapter = direct(inputs.clone());
-        assert_eq!(
-            super::lock(&adapter.control.watch).roots.get(&root),
-            Some(&false)
-        );
-        let (notices, receiver) = notice::channel();
-        let handler = Handler {
-            history: adapter.history.clone(),
-            filter: Arc::clone(&adapter.filter),
-            gate: Arc::clone(&adapter.gate),
-            notices,
-        };
+        let mut adapter = direct(inputs.clone());
+        assert_eq!(adapter.watch.roots.get(&root), Some(&false));
         let now = Instant::now();
         fs::create_dir(root.join("unrelated")).unwrap();
-        handler.handle_at(
+        adapter.handle_at(
             Ok(
                 Event::new(EventKind::Create(notify::event::CreateKind::Folder))
                     .add_path(root.join("unrelated")),
             ),
             now,
         );
-        assert!(receiver.try_recv().is_err());
+        assert!(!adapter.changed());
         assert!(adapter.start(now).is_none());
 
         for parent in [root.join(".cargo"), root.join(".cargo/nested")] {
             fs::create_dir(&parent).unwrap();
-            handler.handle_at(
+            adapter.handle_at(
                 Ok(
                     Event::new(EventKind::Create(notify::event::CreateKind::Folder))
                         .add_path(parent.clone()),
                 ),
                 now,
             );
-            assert!(matches!(receiver.try_recv(), Ok(Notice::Changed(_))));
+            assert!(adapter.changed());
             let candidate = adapter
                 .start(now)
                 .expect("parent creation queues a candidate");
-            assert_eq!(
-                super::lock(&adapter.control.watch).roots.get(&parent),
-                Some(&false)
-            );
+            assert_eq!(adapter.watch.roots.get(&parent), Some(&false));
             // Failing the candidate must not undo the newly armed transport.
             drop(candidate);
         }
         fs::write(&config, "[build]\njobs = 1\n").unwrap();
-        handler.handle_at(
+        adapter.handle_at(
             Ok(
                 Event::new(EventKind::Create(notify::event::CreateKind::File))
                     .add_path(config.clone()),
             ),
             now,
         );
-        assert!(matches!(receiver.try_recv(), Ok(Notice::Changed(_))));
+        assert!(adapter.changed());
         assert!(adapter.start(now).is_some());
         let staged = adapter.prepare_inputs(inputs).unwrap();
         assert!(adapter.commit_inputs(staged).unwrap().is_empty());
-        assert!(!super::lock(&adapter.control.watch)
-            .roots
-            .contains_key(&root));
+        assert!(!adapter.watch.roots.contains_key(&root));
     }
 
     #[test]
@@ -1842,33 +1632,20 @@ mod tests {
             .current()
             .clone()
             .with_imported([rawr_import::input::proof::Watch::Tree(tree.clone())]);
-        let adapter = direct(inputs.clone());
-        assert_eq!(
-            super::lock(&adapter.control.watch).roots.get(&root),
-            Some(&false)
-        );
-        let (notices, receiver) = notice::channel();
-        let handler = Handler {
-            history: adapter.history.clone(),
-            filter: Arc::clone(&adapter.filter),
-            gate: Arc::clone(&adapter.gate),
-            notices,
-        };
+        let mut adapter = direct(inputs.clone());
+        assert_eq!(adapter.watch.roots.get(&root), Some(&false));
         let now = Instant::now();
         fs::create_dir_all(&tree).unwrap();
-        handler.handle_at(
+        adapter.handle_at(
             Ok(
                 Event::new(EventKind::Create(notify::event::CreateKind::Folder))
                     .add_path(root.join("generated")),
             ),
             now,
         );
-        assert!(matches!(receiver.try_recv(), Ok(Notice::Changed(_))));
+        assert!(adapter.changed());
         assert!(adapter.start(now).is_some());
-        assert_eq!(
-            super::lock(&adapter.control.watch).roots.get(&tree),
-            Some(&true)
-        );
+        assert_eq!(adapter.watch.roots.get(&tree), Some(&true));
         // Publication filters also retain ancestor relevance for tree inputs.
         let publication = Arc::new(rawr::reload::scheduler::publication::Slot::new(inputs));
         let filter = Filter::Publication(publication);
@@ -1885,31 +1662,16 @@ mod tests {
         let inputs = fixture.publication.read().current().clone().with_imported([
             rawr_import::input::proof::Watch::Exact(parent.join("config.toml")),
         ]);
-        let adapter = transport(inputs, true);
+        let mut adapter = transport(inputs, true);
         assert!(adapter.filter.wanted().directories.contains_key(&parent));
-        assert_eq!(
-            super::lock(&adapter.control.watch).roots.get(&root),
-            Some(&false)
-        );
+        assert_eq!(adapter.watch.roots.get(&root), Some(&false));
         fs::create_dir_all(&parent).unwrap();
-        assert!(adapter.control.reconcile().is_empty());
-        assert_eq!(
-            super::lock(&adapter.control.watch).roots.get(&parent),
-            Some(&false)
-        );
+        assert!(adapter.reconcile().is_empty());
+        assert_eq!(adapter.watch.roots.get(&parent), Some(&false));
     }
 
     fn direct(inputs: rawr::reload::source::Inputs) -> super::Adapter {
         transport(inputs, false)
-    }
-
-    fn callback(adapter: &Adapter) -> Handler {
-        Handler {
-            history: adapter.history.clone(),
-            filter: Arc::clone(&adapter.filter),
-            gate: Arc::clone(&adapter.gate),
-            notices: adapter.wake.clone(),
-        }
     }
 
     fn source_event(path: &std::path::Path) -> Event {
@@ -1922,19 +1684,18 @@ mod tests {
     #[test]
     fn resident_source_edit_stays_eligible_but_revokes_the_original_request() {
         let fixture = Fixture::new("resident-source");
-        let adapter = direct(fixture.publication.read().current().clone());
-        let handler = callback(&adapter);
+        let mut adapter = direct(fixture.publication.read().current().clone());
         let baseline = adapter.native_baseline();
         let now = Instant::now();
         adapter.gate.observe(now).unwrap();
         let candidate = adapter.start(now).unwrap().complete(());
-        handler.handle_at(Ok(source_event(&fixture.source)), now);
+        adapter.handle_at(Ok(source_event(&fixture.source)), now);
         assert!(adapter.resident_eligible(&baseline));
         assert!(matches!(
             adapter.admit_current(candidate, |_| panic!("source event must revoke")),
             rawr::reload::scheduler::Admission::Obsolete(())
         ));
-        let foreign = direct(fixture.publication.read().current().clone());
+        let mut foreign = direct(fixture.publication.read().current().clone());
         assert!(!foreign.resident_eligible(&baseline));
     }
 
@@ -1949,18 +1710,14 @@ mod tests {
             .current()
             .clone()
             .with_imported([Watch::Exact(native.clone())]);
-        let adapter = direct(inputs.clone());
-        let handler = callback(&adapter);
+        let mut adapter = direct(inputs.clone());
         let before_validation = adapter.native_baseline();
         let now = Instant::now();
         let staged = adapter.prepare_inputs(inputs.clone()).unwrap();
-        handler.handle_at(Ok(source_event(&native)), now);
-        handler.handle_at(Ok(source_event(&fixture.source)), now);
-        assert!(matches!(
-            adapter.notices().try_recv(),
-            Ok(Notice::Changed(_))
-        ));
-        assert!(adapter.notices().try_recv().is_err());
+        adapter.handle_at(Ok(source_event(&native)), now);
+        adapter.handle_at(Ok(source_event(&fixture.source)), now);
+        assert!(adapter.changed());
+        assert!(!adapter.changed());
         assert!(!adapter.resident_eligible(&before_validation));
         adapter.commit_inputs(staged).unwrap();
         assert!(!adapter.resident_eligible(&before_validation));
@@ -1970,14 +1727,14 @@ mod tests {
         let before_next_validation = adapter.native_baseline();
         let staged = adapter.prepare_inputs(inputs).unwrap();
         assert!(adapter.resident_eligible(&before_next_validation));
-        handler.handle_at(Ok(source_event(&native)), now);
+        adapter.handle_at(Ok(source_event(&native)), now);
         adapter.commit_inputs(staged).unwrap();
         assert!(!adapter.resident_eligible(&before_next_validation));
 
         let admitted = adapter.native_baseline();
         let candidate = adapter.start(now).unwrap().complete(());
         assert!(adapter.resident_eligible(&admitted));
-        handler.handle_at(Ok(source_event(&native)), now);
+        adapter.handle_at(Ok(source_event(&native)), now);
         assert!(matches!(
             adapter.admit_current(candidate, |_| panic!("later native event must revoke")),
             rawr::reload::scheduler::Admission::Obsolete(())
@@ -1998,8 +1755,7 @@ mod tests {
             .current()
             .clone()
             .with_imported([Watch::Exact(native.clone())]);
-        let adapter = direct(inputs);
-        let handler = callback(&adapter);
+        let mut adapter = direct(inputs);
         let now = Instant::now();
         let attribute = |path: &std::path::Path| {
             Event::new(EventKind::Modify(ModifyKind::Metadata(
@@ -2009,19 +1765,18 @@ mod tests {
         };
         // Cargo tags its registry and git caches on every invocation.
         let baseline = adapter.native_baseline();
-        handler.handle_at(Ok(attribute(&cache)), now);
+        adapter.handle_at(Ok(attribute(&cache)), now);
         assert!(adapter.resident_eligible(&baseline));
-        assert!(adapter.notices().try_recv().is_err());
+        assert!(!adapter.changed());
 
-        handler.handle_at(Ok(attribute(&native)), now);
+        adapter.handle_at(Ok(attribute(&native)), now);
         assert!(!adapter.resident_eligible(&baseline));
     }
 
     #[test]
     fn resident_unknown_pathless_rescan_and_ancestor_events_fail_closed() {
         let fixture = Fixture::new("resident-unknown");
-        let adapter = direct(fixture.publication.read().current().clone());
-        let handler = callback(&adapter);
+        let mut adapter = direct(fixture.publication.read().current().clone());
         let now = Instant::now();
         // Dropped-event rescans re-stamp the untouched native inputs instead
         // of assuming a change; every uncertain event still revokes the request.
@@ -2059,7 +1814,7 @@ mod tests {
             let baseline = adapter.native_baseline();
             adapter.gate.observe(now).unwrap();
             let candidate = adapter.start(now).unwrap().complete(());
-            handler.handle_at(Ok(event), now);
+            adapter.handle_at(Ok(event), now);
             assert_eq!(adapter.resident_eligible(&baseline), dropped);
             assert!(matches!(
                 adapter.admit_current(candidate, |_| panic!("uncertain event must revoke")),
@@ -2067,7 +1822,7 @@ mod tests {
             ));
         }
         let baseline = adapter.native_baseline();
-        handler.handle_at(Err(notify::Error::generic("watcher failed")), now);
+        adapter.handle_at(Err(notify::Error::generic("watcher failed")), now);
         assert!(!adapter.resident_eligible(&baseline));
     }
 
@@ -2081,11 +1836,7 @@ mod tests {
             .with_imported([Watch::Exact(fixture.source.clone())]);
         let change = super::input::Change::from_event(&source_event(&fixture.source));
         for (current, candidate) in [(source.clone(), native.clone()), (native, source)] {
-            let direct = Filter::Direct(std::sync::RwLock::new(Direct {
-                current: Arc::new(current.clone()),
-                staged: Vec::new(),
-                next: 0,
-            }));
+            let mut direct = Filter::direct(current.clone());
             direct.stage(Arc::new(candidate.clone())).unwrap();
             assert_eq!(direct.classify(&change), (true, false));
             let publication = Arc::new(rawr::reload::scheduler::publication::Slot::new(current));
@@ -2101,8 +1852,7 @@ mod tests {
     fn resident_rename_ignores_unrelated_save_temp_paths_in_both_filters() {
         let fixture = Fixture::new("resident-save-temp");
         for published in [false, true] {
-            let adapter = transport(fixture.publication.read().current().clone(), published);
-            let handler = callback(&adapter);
+            let mut adapter = transport(fixture.publication.read().current().clone(), published);
             let baseline = adapter.native_baseline();
             let now = Instant::now();
             adapter.gate.observe(now).unwrap();
@@ -2118,7 +1868,7 @@ mod tests {
                     .classify(&super::input::Change::from_event(&event)),
                 (true, true)
             );
-            handler.handle_at(Ok(event), now);
+            adapter.handle_at(Ok(event), now);
             assert!(adapter.resident_eligible(&baseline));
             assert!(matches!(
                 adapter.admit_current(candidate, |_| panic!("rename must revoke old request")),
@@ -2134,14 +1884,13 @@ mod tests {
         let current = fixture.publication.read().current().clone();
         let native = fixture.source.with_file_name("native");
         for published in [false, true] {
-            let adapter = transport(current.clone(), published);
-            let handler = callback(&adapter);
+            let mut adapter = transport(current.clone(), published);
             let inputs = current.clone().with_imported([
                 Watch::Exact(native.join("exact.rs")),
                 Watch::Tree(native.join("tree")),
             ]);
             let (_observation, _staged) = if published {
-                (Some(adapter.publication.register(inputs)), None)
+                (Some(publication(&adapter).register(inputs)), None)
             } else {
                 (None, Some(adapter.prepare_inputs(inputs).unwrap()))
             };
@@ -2164,7 +1913,7 @@ mod tests {
                         .classify(&super::input::Change::from_event(&event)),
                     (true, false)
                 );
-                handler.handle_at(Ok(event), Instant::now());
+                adapter.handle_at(Ok(event), Instant::now());
                 assert!(!adapter.resident_eligible(&baseline));
             }
         }
@@ -2190,8 +1939,7 @@ mod tests {
                     .current()
                     .clone()
                     .with_imported([Watch::Exact(native.clone())]);
-                let adapter = transport(inputs, published);
-                let handler = callback(&adapter);
+                let mut adapter = transport(inputs, published);
                 let baseline = adapter.native_baseline();
                 let now = Instant::now();
                 adapter.gate.observe(now).unwrap();
@@ -2210,7 +1958,7 @@ mod tests {
                         .classify(&super::input::Change::from_event(&event)),
                     (true, false)
                 );
-                handler.handle_at(Ok(event), now);
+                adapter.handle_at(Ok(event), now);
                 assert!(!adapter.resident_eligible(&baseline));
                 assert!(matches!(
                     adapter.admit_current(candidate, |_| panic!("native symlink must revoke")),
@@ -2248,8 +1996,7 @@ mod tests {
                     .current()
                     .clone()
                     .with_imported([Watch::Exact(native.clone())]);
-                let adapter = transport(inputs, published);
-                let handler = callback(&adapter);
+                let mut adapter = transport(inputs, published);
                 let baseline = adapter.native_baseline();
                 let now = Instant::now();
                 adapter.gate.observe(now).unwrap();
@@ -2264,7 +2011,7 @@ mod tests {
                         .classify(&super::input::Change::from_event(&event)),
                     (true, false)
                 );
-                handler.handle_at(Ok(event), now);
+                adapter.handle_at(Ok(event), now);
                 assert!(!adapter.resident_eligible(&baseline));
                 assert!(matches!(
                     adapter.admit_current(candidate, |_| panic!("ancestor symlink must revoke")),
@@ -2300,8 +2047,7 @@ mod tests {
                     .current()
                     .clone()
                     .with_imported([Watch::Exact(native.clone())]);
-                let adapter = transport(inputs, published);
-                let handler = callback(&adapter);
+                let mut adapter = transport(inputs, published);
                 fs::rename(&directory, &retired).unwrap();
                 symlink(target, &directory).unwrap();
 
@@ -2324,7 +2070,7 @@ mod tests {
                             .classify(&super::input::Change::from_event(&event)),
                         (true, false)
                     );
-                    handler.handle_at(Ok(event), now);
+                    adapter.handle_at(Ok(event), now);
                     assert!(!adapter.resident_eligible(&baseline));
                     assert!(matches!(
                         adapter
@@ -2354,32 +2100,22 @@ mod tests {
     }
 
     fn transport(inputs: rawr::reload::source::Inputs, published: bool) -> super::Adapter {
-        let publication = Arc::new(rawr::reload::scheduler::publication::Slot::new(
-            inputs.clone(),
-        ));
-        let filter = Arc::new(if published {
-            Filter::Publication(Arc::clone(&publication))
+        let filter = if published {
+            Filter::Publication(Arc::new(rawr::reload::scheduler::publication::Slot::new(
+                inputs,
+            )))
         } else {
-            Filter::Direct(std::sync::RwLock::new(Direct {
-                current: Arc::new(inputs.clone()),
-                staged: Vec::new(),
-                next: 0,
-            }))
-        });
-        let gate = Arc::new(rawr::reload::scheduler::Gate::new(Duration::ZERO));
-        let channel = notice::channel();
-        // Native registration is real; callback delivery is deterministic.
-        let watcher = notify::recommended_watcher(|_event| {}).unwrap();
-        super::Adapter::finish(
-            publication,
-            filter,
-            gate,
-            channel,
-            watcher,
-            false,
-            super::native::History::default(),
-        )
-        .unwrap()
+            Filter::direct(inputs)
+        };
+        // Native registration is real; delivery is the test's.
+        Adapter::with_filter(filter, Duration::ZERO, false).unwrap()
+    }
+
+    fn publication(adapter: &Adapter) -> Arc<rawr::reload::scheduler::publication::Slot> {
+        match &adapter.filter {
+            Filter::Publication(publication) => Arc::clone(publication),
+            Filter::Direct(_) => panic!("a published transport has a publication filter"),
+        }
     }
 
     const MAIN: &str = "// rawr\nfn main() {\n    println!(\"watch\");\n}\n";
@@ -2388,7 +2124,6 @@ mod tests {
         root: std::path::PathBuf,
         source: std::path::PathBuf,
         publication: Arc<rawr::reload::scheduler::publication::Slot>,
-        snapshot: Option<rawr::reload::source::Snapshot>,
     }
 
     impl Fixture {
@@ -2418,9 +2153,6 @@ mod tests {
                 root,
                 source,
                 publication,
-                snapshot: Some(rawr::reload::source::Snapshot::from_graph(
-                    candidate.source(),
-                )),
             }
         }
     }
