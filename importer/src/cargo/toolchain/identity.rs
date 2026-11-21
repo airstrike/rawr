@@ -261,7 +261,11 @@ mod tests {
         assert!(!identity.is_pinned());
         assert!(identity.supported(&Source::Environment).is_ok());
         assert!(Identity::pinned().is_pinned());
-        assert_eq!(super::active(), Identity::pinned());
+        // A process that adopted no toolchain imports with the pinned one.
+        // Another test of the process may have adopted one.
+        if super::ACTIVE.get().is_none() {
+            assert_eq!(super::active(), Identity::pinned());
+        }
     }
 
     #[test]

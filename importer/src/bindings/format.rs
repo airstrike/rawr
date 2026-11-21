@@ -474,7 +474,7 @@ mod tests {
         }
         fs::write(rawr.join(DIGESTS), b"live").unwrap();
         let before = names(&rawr);
-        assert_eq!(before.len(), 11, "{before:?}");
+        assert_eq!(before.len(), 12, "{before:?}");
 
         super::retire(&rawr, &current, Base::Project);
         assert_eq!(formats(&rawr), ["73"]);

@@ -5726,6 +5726,8 @@ mod epoch_tests {
         let root = project.path();
         let cache = root.join("cache");
         fs::create_dir(&cache).expect("cache fixture can be created");
+        // The lane admits one owner per process: this test's turn on it.
+        let _turn = crate::store::test_turn();
         let _process_owner = acquire_process_owner().expect("fixture owns the process epoch");
         let mut lease = open_lease_at(root, &cache).expect("fixture opens the cache lease");
         let _lease_owner = acquire_lease(&mut lease, &cache.join(LEASE_FILE), "test lease")
