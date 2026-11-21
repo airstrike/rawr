@@ -6,6 +6,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.107 (2026-11-21)
+
+- The reload's live lists, the owner's inbox and the program's statics each share one lock, the leaked texts, slices and locations are kept in the one lasting pin table, generic instance keys are literals in the generated runner, and a script impl's member takes no lock to find. Fifteen locks are gone. (#2450)
+- rawr gui shows no hover over a call, a macro or anything else the hover read doesn't run, as over a blank spot, instead of a line saying why. (#2451)
+
 ## 0.4.106 (2026-11-21)
 
 - `rawr tui` draws in `rawr gui`'s Oxocarbon colours: the paused line sits on a faint accent band with the gutter marker in the accent, code takes the GUI's syntax colours in 24-bit colour or the nearest of 256, pane borders are quiet, and the status line reads like the GUI's. (#2447)

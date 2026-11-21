@@ -8,6 +8,14 @@
   },
   "releases": [
     {
+      "version": "0.4.107",
+      "date": "2026-11-21",
+      "entries": [
+        {"text":"The reload's live lists, the owner's inbox and the program's statics each share one lock, the leaked texts, slices and locations are kept in the one lasting pin table, generic instance keys are literals in the generated runner, and a script impl's member takes no lock to find. Fifteen locks are gone.","issues":[2450]},
+        {"text":"rawr gui shows no hover over a call, a macro or anything else the hover read doesn't run, as over a blank spot, instead of a line saying why.","issues":[2451]}
+      ]
+    },
+    {
       "version": "0.4.106",
       "date": "2026-11-21",
       "entries": [

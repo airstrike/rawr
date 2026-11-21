@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-21",
-  "version": "0.4.106",
+  "version": "0.4.107",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,14 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.107",
+        "date": "2026-11-21",
+        "entries": [
+          {"text":"The reload's live lists, the owner's inbox and the program's statics each share one lock, the leaked texts, slices and locations are kept in the one lasting pin table, generic instance keys are literals in the generated runner, and a script impl's member takes no lock to find. Fifteen locks are gone.","issues":[2450]},
+          {"text":"rawr gui shows no hover over a call, a macro or anything else the hover read doesn't run, as over a blank spot, instead of a line saying why.","issues":[2451]}
+        ]
+      },
       {
         "version": "0.4.106",
         "date": "2026-11-21",
@@ -6004,7 +6012,10 @@
     {"issue":2446,"title":"rawr gui's inline values match bindings by name","state":"open","category":"Health"},
     {"issue":2447,"title":"`rawr tui` draws in `rawr gui`'s Oxocarbon colours: the paused line sits on a faint accent band…","state":"closed","category":"Health","release":"0.4.106"},
     {"issue":2448,"title":"A hover over a binding the pause hasn't reached says where it is declared","state":"open","category":"Health"},
-    {"issue":2449,"title":"A long hover over a function in rawr gui and the playground shows its definition","state":"open","category":"Health"}
+    {"issue":2449,"title":"A long hover over a function in rawr gui and the playground shows its definition","state":"open","category":"Health"},
+    {"issue":2450,"title":"The reload's live lists, the owner's inbox and the program's statics each share one lock, the…","state":"closed","category":"Health","release":"0.4.107"},
+    {"issue":2451,"title":"rawr gui shows no hover over a call, a macro or anything else the hover read doesn't run, as…","state":"closed","category":"Health","release":"0.4.107"},
+    {"issue":2452,"title":"A marked module's `impl page::Page for …` resolves `page::Page` as a module, not the trait","state":"open","category":"Health"}
   ],
   "groups": [
     {
