@@ -1784,6 +1784,24 @@ mod tests {
         assert!(clicked.iter().all(|turn| turn.events.len() == 1));
     }
 
+    /// Each typed character is one key down and one key up carrying it,
+    /// the first as the rest: nothing sends the first twice (#2017).
+    #[test]
+    fn each_typed_character_is_one_key_down_and_up() {
+        let typed: Vec<(bool, String)> = events(&Gesture::Type("abc".into()), None, 100.0, 100.0)
+            .into_iter()
+            .map(|timed| match timed.event {
+                Event::Key { down, key, .. } => (down, key.characters.unwrap_or_default()),
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        let expected: Vec<(bool, String)> = "abc"
+            .chars()
+            .flat_map(|character| [(true, character.into()), (false, character.into())])
+            .collect();
+        assert_eq!(typed, expected);
+    }
+
     #[test]
     fn a_drag_moves_in_short_strides_with_its_button_held() {
         let gesture = Gesture::Drag {
