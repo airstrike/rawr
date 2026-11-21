@@ -41,7 +41,7 @@ fn native_waits_for_heavy_before_action_and_releases_publication_during_executio
     let recipe = context
         .direct::<Artifact>(b"native-order")
         .expect("recipe seals");
-    let heavy = store.root().join("locks/heavy.lock");
+    let heavy = store.fixture_owner_lock();
     let action = store
         .root()
         .join(format!("locks/actions/{}.lock", recipe.action()));
@@ -118,7 +118,7 @@ fn retained_bundle_rejects_parent_drift_after_execution_wait() {
         .discover_with_parents::<super::BundleValue>(b"wait-child", &[Parent::validated(&parent)])
         .unwrap();
     let validation_store = store.clone();
-    let heavy = store.root().join("locks/heavy.lock");
+    let heavy = store.fixture_owner_lock();
     let before = refreshes.load(Ordering::Relaxed);
     let entered = AtomicBool::new(false);
     let launched = AtomicBool::new(false);
@@ -243,7 +243,7 @@ fn native_same_key_contenders_execute_once_and_different_heavy_actions_cannot_ov
 }
 
 #[test]
-fn healthy_native_hits_and_unrelated_pure_work_do_not_wait_for_heavy() {
+fn healthy_native_hits_do_not_wait_for_heavy() {
     let root = temporary("native-hit");
     let context = prepare_fixture(&root);
     let store = context.open_store().expect("the hit store opens");
@@ -264,33 +264,28 @@ fn healthy_native_hits_and_unrelated_pure_work_do_not_wait_for_heavy() {
                     let warm = context
                         .direct::<Artifact>(b"warm-native")
                         .expect("warm recipe seals");
-                    let pure = context
-                        .direct::<Artifact>(b"pure-independent")
-                        .expect("pure recipe seals");
-                    let evaluator = Evaluator::new(&store, &counts);
-                    let hit = evaluator.native(&warm, || panic!("healthy hit cannot execute"));
-                    let pure = evaluator.direct(&pure, value);
-                    sent.send(hit.is_ok() && pure.is_ok())
-                        .expect("independent work reports");
+                    let hit = Evaluator::new(&store, &counts)
+                        .native(&warm, || panic!("healthy hit cannot execute"));
+                    sent.send(hit.is_ok()).expect("the hit reports");
                 });
                 Ok(received.recv())
             })
             .expect("the external heavy lease releases");
-        assert!(result.expect("hit and pure miss finish while heavy is held"));
+        assert!(result.expect("a hit finishes while heavy is held"));
     });
     assert_eq!(counts.hit.load(Ordering::Relaxed), 1);
-    assert_eq!(counts.miss.load(Ordering::Relaxed), 1);
     fs::remove_dir_all(root).expect("the native hit fixture retires");
 }
 
 #[test]
-fn uncached_scope_owns_installation_and_exact_execution_and_releases_after_failure() {
+fn uncached_scope_owns_the_project_and_exact_execution_and_releases_after_failure() {
     let root = temporary("native-scope");
     let context = std::rc::Rc::new(prepare_fixture(&root));
     let store = context.open_store().expect("the scope store opens");
     let scope = execution::Scope::bind(&context, execution::Operation::Probe, [17; 32]);
     let failure: crate::Result<()> = scope.run(|| {
-        assert!(locked(&store.root().join("locks/heavy.lock")));
+        assert!(locked(&store.fixture_owner_lock()));
+        assert!(!locked(&store.root().join("locks/heavy.lock")));
         let executions = fs::read_dir(store.root().join("locks/executions"))
             .expect("execution leases enumerate")
             .map(|entry| entry.expect("execution lease reads").path())
@@ -301,46 +296,100 @@ fn uncached_scope_owns_installation_and_exact_execution_and_releases_after_failu
         Err(crate::Error::Owner)
     });
     assert!(matches!(failure, Err(crate::Error::Owner)));
-    assert!(!locked(&store.root().join("locks/heavy.lock")));
+    assert!(!locked(&store.fixture_owner_lock()));
     scope
         .run(|| Ok(()))
         .expect("failure releases both execution leases");
-    let other_project = root.join("other-project");
-    fs::create_dir(&other_project).expect("a second project shares the installation");
-    let environment = context.environment().clone();
-    let target = context.target();
-    let limits = context.limits();
-    let (sent, received) = mpsc::channel();
-    std::thread::scope(|threads| {
-        let before_release = store
-            .with_heavy_lease(|| {
-                threads.spawn(|| {
-                    let other_context = std::rc::Rc::new(
-                        crate::context::Context::capture(
-                            &other_project,
-                            environment,
-                            target,
-                            &limits,
-                        )
-                        .expect("the other project context seals"),
-                    );
-                    let other_scope = execution::Scope::bind(
-                        &other_context,
-                        execution::Operation::Probe,
-                        [19; 32],
-                    );
-                    let result = other_scope.run(|| Ok(()));
-                    sent.send(result.is_ok())
-                        .expect("scope contender reports completion");
-                });
-                Ok(received.recv_timeout(Duration::from_millis(100)))
-            })
-            .expect("external ownership releases");
-        assert!(matches!(
-            before_release,
-            Err(mpsc::RecvTimeoutError::Timeout)
-        ));
-        assert!(received.recv().expect("scope resumes after heavy"));
-    });
     fs::remove_dir_all(root).expect("the native scope fixture retires");
+}
+
+/// A second open of the owner lease on one thread used to wait on the first
+/// forever. Native work now finds the lease its thread holds and runs under
+/// it, and a node inside a node is refused at once.
+#[test]
+fn nested_heavy_work_runs_under_the_held_owner_lease() {
+    let root = temporary("native-nested");
+    let context = std::rc::Rc::new(prepare_fixture(&root));
+    let store = context.open_store().expect("the nested store opens");
+    let outer = context
+        .direct::<Artifact>(b"nested-outer")
+        .expect("outer recipe seals");
+    let inner = context
+        .direct::<Artifact>(b"nested-inner")
+        .expect("inner recipe seals");
+    let scoped = context
+        .direct::<Artifact>(b"nested-scoped")
+        .expect("scoped recipe seals");
+    let probe = execution::Scope::bind(&context, execution::Operation::Probe, [23; 32]);
+    let build = execution::Scope::bind(&context, execution::Operation::Build, [29; 32]);
+    let counts = Counts::default();
+    let evaluator = Evaluator::new(&store, &counts);
+    let mut nested = None;
+    evaluator
+        .native(&outer, || {
+            probe
+                .run(|| build.run(|| Ok(())))
+                .expect("a scope inside a scope inside a node runs");
+            nested = Some(evaluator.direct(&inner, value));
+            value()
+        })
+        .expect("the outer node publishes");
+    assert!(matches!(
+        nested,
+        Some(Err(Error::State(
+            "a node evaluation began inside another node's ownership of its project"
+        )))
+    ));
+    let mut scoped_node = None;
+    probe
+        .run(|| {
+            scoped_node = Some(evaluator.direct(&scoped, value));
+            Ok(())
+        })
+        .expect("a node inside a scope runs");
+    assert!(matches!(scoped_node, Some(Ok(_))));
+    assert!(!locked(&store.fixture_owner_lock()));
+    fs::remove_dir_all(root).expect("the nested fixture retires");
+}
+
+/// Two projects sharing one store run their heavy work at once: each holds
+/// its own owner lease and execution lease, and both executors meet inside.
+#[test]
+fn two_projects_execute_heavy_work_at_once_in_one_store() {
+    use crate::node::Value as _;
+
+    let root = temporary("native-projects");
+    prepare_fixture(&root);
+    let shared = root.join("shared-store");
+    fs::create_dir(&shared).expect("the shared store root creates");
+    let both = std::sync::Barrier::new(2);
+    let counts = Counts::default();
+    std::thread::scope(|threads| {
+        for (project, input) in [
+            ([0x31; 32], &b"first-project"[..]),
+            ([0x32; 32], b"second-project"),
+        ] {
+            let (root, shared, both, counts) = (&root, &shared, &both, &counts);
+            threads.spawn(move || {
+                let context = fixture_context(root);
+                let store = crate::store::Store::open(shared, project).expect("the store opens");
+                let recipe = context
+                    .discover::<Artifact>(input)
+                    .expect("the recipe seals");
+                Evaluator::new(&store, counts)
+                    .discover(
+                        &recipe,
+                        |value: &Artifact| value.encode(),
+                        || {
+                            assert!(locked(&store.fixture_owner_lock()));
+                            both.wait();
+                            value()
+                        },
+                    )
+                    .expect("each project's execution publishes");
+            });
+        }
+    });
+    assert_eq!(counts.miss.load(Ordering::Relaxed), 2);
+    fs::remove_dir_all(root).expect("the shared-store fixture retires");
 }

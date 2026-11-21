@@ -37,16 +37,107 @@ pub(crate) fn with_ownership<T>(
     project: Digest,
     evaluate: impl FnOnce(&Ownership<'_>) -> Result<T, Error>,
 ) -> Result<T, Error> {
-    let directory = super::entry::existing_directory(root, Path::new("locks/owners"))?.ok_or(
-        Error::CleanupRequired("project ownership lease directory is missing"),
-    )?;
-    let path = directory.join(format!("{}.lock", project.directory()));
-    // Store bootstrap enrolls every project before any graph operation. A miss
-    // must not recreate a deleted control and split a still-held OS lease.
-    validate_file(&path)?;
-    with_file(&path, "acquire project InFlight ownership", || {
+    with_owner(root, project, Holder::Node, || {
         evaluate(&Ownership { root, project })
     })
+}
+
+/// Native work outside a node: the project's owner lease, which also
+/// covers every node's heavy work. Two projects' heavy work shares no lease:
+/// each has its own owner lease, and execution keys carry the project's
+/// context (#2399).
+pub(crate) fn with_heavy<T>(
+    root: &Path,
+    project: Digest,
+    evaluate: impl FnOnce() -> Result<T, Error>,
+) -> Result<T, Error> {
+    with_owner(root, project, Holder::Native, evaluate)
+}
+
+/// What took a project's owner lease on this thread.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Holder {
+    /// A node evaluation, which acquires, replaces or releases InFlight.
+    Node,
+    /// Native work outside a node, which leaves InFlight alone.
+    Native,
+}
+
+/// One frame of this thread's stack inside a project's owner lease.
+struct Held {
+    root: std::path::PathBuf,
+    project: Digest,
+    holder: Holder,
+}
+
+std::thread_local! {
+    /// The owner leases this thread's stack holds, innermost last. The OS
+    /// lease belongs to the open file of the outermost frame, so a nested
+    /// acquisition on a second file of the same process would wait on that
+    /// frame forever. A frame found here is proof the lease is already held.
+    static HELD: std::cell::RefCell<Vec<Held>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Pops this frame's entry from `HELD` when the frame returns or unwinds.
+struct Frame;
+
+impl Drop for Frame {
+    fn drop(&mut self) {
+        HELD.with_borrow_mut(|held| {
+            held.pop();
+        });
+    }
+}
+
+/// Take the project's owner lease, or enter it again when this thread already
+/// holds it. Native work nests under a node or other native work and inside
+/// it a node may run. A node inside a node is refused, since the outer one's
+/// InFlight reservation is still open.
+fn with_owner<T>(
+    root: &Path,
+    project: Digest,
+    holder: Holder,
+    evaluate: impl FnOnce() -> Result<T, Error>,
+) -> Result<T, Error> {
+    let enclosing = HELD.with_borrow(|held| {
+        held.iter()
+            .rev()
+            .find(|frame| frame.root == root && frame.project == project)
+            .map(|frame| frame.holder)
+    });
+    let enter = |holder| {
+        HELD.with_borrow_mut(|held| {
+            held.push(Held {
+                root: root.to_path_buf(),
+                project,
+                holder,
+            });
+        });
+        let _frame = Frame;
+        evaluate()
+    };
+    match (enclosing, holder) {
+        (Some(Holder::Node), Holder::Node) => Err(Error::State(
+            "a node evaluation began inside another node's ownership of its project",
+        )),
+        (Some(Holder::Node), Holder::Native) | (Some(Holder::Native), Holder::Node) => {
+            enter(Holder::Node)
+        }
+        (Some(Holder::Native), Holder::Native) => enter(Holder::Native),
+        (None, holder) => {
+            let directory = super::entry::existing_directory(root, Path::new("locks/owners"))?
+                .ok_or(Error::CleanupRequired(
+                    "project ownership lease directory is missing",
+                ))?;
+            let path = directory.join(format!("{}.lock", project.directory()));
+            // Store bootstrap enrolls every project before any graph operation. A miss
+            // must not recreate a deleted control and split a still-held OS lease.
+            validate_file(&path)?;
+            with_file(&path, "acquire project InFlight ownership", || {
+                enter(holder)
+            })
+        }
+    }
 }
 
 pub(crate) struct Publication<'store> {
@@ -195,6 +286,8 @@ pub(crate) fn initialize(root: &Path, fresh: bool) -> Result<(), Error> {
             reason: "typed store lease directory is missing",
         }
     })?;
+    // Nothing here takes `heavy.lock` any more. An older rawr sharing the
+    // store still serialises its own heavy work on it, so it stays (#2399).
     for name in ["heavy.lock", "publication.lock"] {
         let path = locks.join(name);
         if fresh {
@@ -238,20 +331,6 @@ pub(crate) fn with_action<T>(
     let path = directory.join(format!("{}.lock", action.directory()));
     ensure_keyed(root, &path)?;
     with_file(&path, "typed node action", evaluate)
-}
-
-pub(crate) fn with_heavy<T>(
-    root: &Path,
-    evaluate: impl FnOnce() -> Result<T, Error>,
-) -> Result<T, Error> {
-    let locks = super::entry::existing_directory(root, Path::new("locks"))?.ok_or_else(|| {
-        Error::Corrupt {
-            path: root.join("locks"),
-            reason: "typed store lease directory is missing",
-        }
-    })?;
-    let heavy = locks.join("heavy.lock");
-    with_file(&heavy, "acquire typed node heavyweight lease", evaluate)
 }
 
 pub(crate) fn with_execution<T>(

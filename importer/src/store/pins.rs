@@ -1428,29 +1428,22 @@ mod tests {
             .unwrap();
             let before = fs::read(store.root().join("ledgers/installation")).unwrap();
             let result = store.with_ownership(|ownership| {
-                store.with_heavy_lease(|| {
-                    store.with_execution_lease(recipe.execution(), || {
-                        store.with_execution_bundle_reservation(
-                            ownership,
-                            &recipe,
-                            None,
-                            |attempt| {
-                                assert!(
-                                    reclaim_last,
-                                    "the 4097th project must reject before bundle execution"
-                                );
-                                assert!(!last.exists());
-                                assert!(store.fixture_project_ledger_exists());
-                                assert_eq!(
-                                    fs::read_dir(store.root().join("ledgers/projects"))
-                                        .unwrap()
-                                        .count(),
-                                    MAX_PROJECT_LEDGERS
-                                );
-                                drop(attempt);
-                                Ok(crate::store::Reserved::Reuse(()))
-                            },
-                        )
+                store.with_execution_lease(recipe.execution(), || {
+                    store.with_execution_bundle_reservation(ownership, &recipe, None, |attempt| {
+                        assert!(
+                            reclaim_last,
+                            "the 4097th project must reject before bundle execution"
+                        );
+                        assert!(!last.exists());
+                        assert!(store.fixture_project_ledger_exists());
+                        assert_eq!(
+                            fs::read_dir(store.root().join("ledgers/projects"))
+                                .unwrap()
+                                .count(),
+                            MAX_PROJECT_LEDGERS
+                        );
+                        drop(attempt);
+                        Ok(crate::store::Reserved::Reuse(()))
                     })
                 })
             });

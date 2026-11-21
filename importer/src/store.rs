@@ -427,6 +427,14 @@ impl Store {
         bundle::retire_fixture_store(&self.root)
     }
 
+    /// The project's owner lease file, which heavy work holds.
+    #[cfg(test)]
+    pub(crate) fn fixture_owner_lock(&self) -> PathBuf {
+        self.root
+            .join("locks/owners")
+            .join(format!("{}.lock", self.project.directory()))
+    }
+
     #[cfg(test)]
     pub(crate) fn fixture_usage(&self) -> Result<(u64, u64, u64, usize), Error> {
         let (charge, reservations) = accounting::usage(&self.root)?;
@@ -2122,11 +2130,13 @@ impl Store {
         lease::with_action(&self.root, action, evaluate)
     }
 
+    /// Native work outside a node takes the project's owner lease, or runs
+    /// under it when this thread already holds it.
     pub(crate) fn with_heavy_lease<T>(
         &self,
         evaluate: impl FnOnce() -> Result<T, Error>,
     ) -> Result<T, Error> {
-        lease::with_heavy(&self.root, evaluate)
+        lease::with_heavy(&self.root, self.project, evaluate)
     }
 
     pub(crate) fn with_execution_lease<T>(

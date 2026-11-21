@@ -61,23 +61,15 @@ impl Fixture {
         // Exercise the actual owner, project lease, capacity reservation, and
         // Attempt cleanup. No fixture publishes a Product or current authority.
         self.store.with_ownership(|ownership| {
-            self.store.with_heavy_lease(|| {
-                self.store.with_execution_lease(recipe.execution(), || {
-                    self.store.with_execution_bundle_reservation(
-                        ownership,
-                        &recipe,
-                        None,
-                        |attempt| {
-                            let layout = resolution::layout::Layout::bind(
-                                attempt,
-                                self.store.graph_budget(),
-                            )?;
-                            operation(&layout, toolchain.value().proof())
-                                .map(store::Reserved::Reuse)
-                                .map_err(node::Error::from)
-                        },
-                    )
-                })
+            self.store.with_execution_lease(recipe.execution(), || {
+                self.store
+                    .with_execution_bundle_reservation(ownership, &recipe, None, |attempt| {
+                        let layout =
+                            resolution::layout::Layout::bind(attempt, self.store.graph_budget())?;
+                        operation(&layout, toolchain.value().proof())
+                            .map(store::Reserved::Reuse)
+                            .map_err(node::Error::from)
+                    })
             })
         })
     }
