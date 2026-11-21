@@ -16,6 +16,7 @@ use std::sync::{mpsc, Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
 use serde_json::{json, Value};
 
+use super::options::Options;
 use super::process;
 use crate::events::session;
 
@@ -146,6 +147,19 @@ pub enum Entry {
     Hold,
 }
 
+/// What [`Sessions::start`] starts `rawr run` with.
+#[derive(Clone, Copy, Debug)]
+pub struct Program<'a> {
+    /// The path given to `rawr run`.
+    pub path: &'a Path,
+    /// The feature flags and environment.
+    pub options: &'a Options,
+    /// The program's arguments.
+    pub arguments: &'a [String],
+    /// The program's input, then end of input.
+    pub stdin: Option<&'a str>,
+}
+
 /// The sessions, one per project root.
 #[derive(Debug, Default)]
 pub struct Sessions(Mutex<HashMap<PathBuf, Arc<Session>>>);
@@ -182,19 +196,26 @@ impl Sessions {
         all
     }
 
-    /// Start `rawr run <path> -- arguments` for `root`, replacing the
-    /// session the server started there, its program going as `entry`
-    /// says. A run started elsewhere that serves `root` is attached to
-    /// instead.
+    /// Start `rawr run <path> <feature flags> -- arguments` of `program`
+    /// for `root` in its options' environment, replacing the session the
+    /// server started there, its program going as `entry` says. A run
+    /// started elsewhere that serves `root` is attached to instead. The run
+    /// keeps the options for its reloads: its process selects the flags for
+    /// every Cargo answer it asks and hands them to the program's process,
+    /// which also inherits the environment.
     pub fn start(
         &self,
         root: &Path,
-        path: &Path,
-        arguments: &[String],
-        stdin: Option<&str>,
+        program: Program<'_>,
         entry: Entry,
         cancel: &process::Cancel,
     ) -> std::io::Result<Arc<Session>> {
+        let Program {
+            path,
+            options,
+            arguments,
+            stdin,
+        } = program;
         if let Some(old) = self.lock().remove(root) {
             old.stop();
             old.wait_exit();
@@ -210,9 +231,9 @@ impl Sessions {
         let _ = std::fs::remove_file(&socket);
         let listener = UnixListener::bind(&socket)?;
         let mut command = Command::new(std::env::current_exe()?);
+        command.arg("run").arg(path);
+        options.apply(&mut command);
         command
-            .arg("run")
-            .arg(path)
             // A host that takes no arguments refuses even an empty `--`.
             .args(if arguments.is_empty() {
                 None

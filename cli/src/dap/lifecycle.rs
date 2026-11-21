@@ -7,8 +7,9 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use super::Adapter;
+use crate::mcp::options::Options;
 use crate::mcp::process::Cancel;
-use crate::mcp::session::{Entry, Session};
+use crate::mcp::session::{Entry, Program, Session};
 use crate::mcp::tools;
 
 /// Why a second `launch` or `attach` is refused: a client debugs one
@@ -58,9 +59,12 @@ impl Adapter {
             .sessions
             .start(
                 &place.root,
-                &place.path,
-                &program,
-                None,
+                Program {
+                    path: &place.path,
+                    options: &Options::default(),
+                    arguments: &program,
+                    stdin: None,
+                },
                 Entry::Hold,
                 &Cancel::default(),
             )

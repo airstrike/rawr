@@ -18,14 +18,23 @@ use std::time::{Instant, SystemTime};
 use serde_json::{json, Value};
 
 use super::content;
+use super::options::Options;
 use super::process::{self, Cancel, Tail};
 use super::tools::Place;
 use super::{Heard, Server};
 
-/// A call's ask for a check of its root.
-pub(super) struct Request {
+/// What one check checks: a program, its root and the call's options. Two
+/// calls share a check only when they ask the same.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct Key {
     path: PathBuf,
     root: PathBuf,
+    options: Options,
+}
+
+/// A call's ask for a check of its program.
+pub(super) struct Request {
+    key: Key,
     /// Where the check's diagnostics are written.
     directory: PathBuf,
     /// The root's files when the call asked.
@@ -34,16 +43,16 @@ pub(super) struct Request {
     reply: mpsc::Sender<Option<Value>>,
 }
 
-/// A check thread's result for its root.
+/// A check thread's result for its key.
 pub(super) struct Report {
-    root: PathBuf,
+    key: Key,
     result: Value,
 }
 
-/// The checks, one per root. The server's loop owns them.
+/// The checks, one per key. The server's loop owns them.
 #[derive(Debug, Default)]
 pub(super) struct Checks {
-    jobs: HashMap<PathBuf, Job>,
+    jobs: HashMap<Key, Job>,
     /// The number of the next check's diagnostics file.
     next: u64,
 }
@@ -71,15 +80,18 @@ enum State {
 
 /// Check `place` through the server's loop, until it is checked or
 /// `cancel` fires.
-pub(super) fn check(server: &Server, place: &Place, cancel: &Cancel) -> Value {
+pub(super) fn check(server: &Server, place: &Place, options: &Options, cancel: &Cancel) -> Value {
     let (reply, answer) = mpsc::channel();
     let cancelled = reply.clone();
     cancel.on_cancel(move || {
         let _ = cancelled.send(None);
     });
     server.ask(Heard::Check(Request {
-        path: place.path.clone(),
-        root: place.root.clone(),
+        key: Key {
+            path: place.path.clone(),
+            root: place.root.clone(),
+            options: options.clone(),
+        },
         directory: place.directory(),
         files: fingerprint(&place.root),
         reply,
@@ -93,17 +105,16 @@ pub(super) fn check(server: &Server, place: &Place, cancel: &Cancel) -> Value {
 }
 
 impl Checks {
-    /// Answer `request`: join the root's running check, take its result
-    /// while nothing changed since it began, or start a check.
+    /// Answer `request`: join the running check of its key, take its
+    /// result while nothing changed since it began, or start a check.
     pub(super) fn ask(&mut self, request: Request, heard: &mpsc::Sender<Heard>) {
         let Request {
-            path,
-            root,
+            key,
             directory,
             files,
             reply,
         } = request;
-        match self.jobs.get_mut(&root) {
+        match self.jobs.get_mut(&key) {
             Some(Job {
                 state: State::Running { joined, .. },
                 ..
@@ -116,7 +127,7 @@ impl Checks {
                 if let Some(Job {
                     state: State::Done(result),
                     ..
-                }) = self.jobs.remove(&root)
+                }) = self.jobs.remove(&key)
                 {
                     let _ = reply.send(Some(result));
                 }
@@ -126,14 +137,14 @@ impl Checks {
         }
         self.next += 1;
         let sink = directory.join(format!("check-{}-{}.jsonl", std::process::id(), self.next));
-        match start(&path, &root, sink, heard) {
+        match start(&key, sink, heard) {
             Ok(group) => {
                 let joined = vec![reply];
                 let state = State::Running { group, joined };
-                self.jobs.insert(root, Job { files, state });
+                self.jobs.insert(key, Job { files, state });
             }
             Err(error) => {
-                self.jobs.remove(&root);
+                self.jobs.remove(&key);
                 let failure = content::failure(format!("cannot run rawr check: {error}"));
                 let _ = reply.send(Some(failure));
             }
@@ -143,9 +154,9 @@ impl Checks {
     /// A check is done: the calls still waiting get its result, or the
     /// next call takes it.
     pub(super) fn finished(&mut self, report: Report) {
-        let Report { root, result } = report;
+        let Report { key, result } = report;
         // A check `stop_all` ended has no job.
-        let Some(job) = self.jobs.get_mut(&root) else {
+        let Some(job) = self.jobs.get_mut(&key) else {
             return;
         };
         let State::Running { joined, .. } = &mut job.state else {
@@ -157,7 +168,7 @@ impl Checks {
             taken |= reply.send(Some(result.clone())).is_ok();
         }
         if taken {
-            self.jobs.remove(&root);
+            self.jobs.remove(&key);
         } else {
             job.state = State::Done(result);
         }
@@ -173,23 +184,19 @@ impl Checks {
     }
 }
 
-/// Start `rawr check` of `path` (whose root is `root`) in a group of its
-/// own, writing its diagnostics to `sink`, and a thread that reports its
-/// result to the loop. Returns the group.
-fn start(
-    path: &Path,
-    root: &Path,
-    sink: PathBuf,
-    heard: &mpsc::Sender<Heard>,
-) -> std::io::Result<u32> {
+/// Start `rawr check` of `key`'s path, with its feature flags and in its
+/// environment, in a group of its own, writing its diagnostics to `sink`,
+/// and a thread that reports its result to the loop. Returns the group.
+fn start(key: &Key, sink: PathBuf, heard: &mpsc::Sender<Heard>) -> std::io::Result<u32> {
     if let Some(parent) = sink.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
     let started = Instant::now();
+    let root = key.root.as_path();
     let mut command = Command::new(std::env::current_exe()?);
+    command.arg("check").arg(&key.path);
+    key.options.apply(&mut command);
     command
-        .arg("check")
-        .arg(path)
         .current_dir(if root.is_dir() {
             root
         } else {
@@ -203,7 +210,7 @@ fn start(
     let group = child.id();
     let stdout = child.stdout.take().map(Tail::read).unwrap_or_default();
     let stderr = child.stderr.take().map(Tail::read).unwrap_or_default();
-    let root = root.to_path_buf();
+    let key = key.clone();
     let reporting = heard.clone();
     let spawned = std::thread::Builder::new()
         .name("rawr-mcp-check".into())
@@ -221,7 +228,7 @@ fn start(
             };
             let result = answer(finished, &sink);
             let _ = std::fs::remove_file(&sink);
-            let _ = reporting.send(Heard::Checked(Report { root, result }));
+            let _ = reporting.send(Heard::Checked(Report { key, result }));
         });
     if let Err(error) = spawned {
         // The child went with the thread's closure: its group ends, and
@@ -326,13 +333,21 @@ mod tests {
 
     use serde_json::{json, Value};
 
-    use super::{Checks, Fingerprint, Job, Report, Request, State};
+    use super::{Checks, Fingerprint, Job, Key, Report, Request, State};
+    use crate::mcp::options::Options;
+
+    fn key() -> Key {
+        Key {
+            path: PathBuf::from("/p/src/main.rs"),
+            root: PathBuf::from("/p"),
+            options: Options::default(),
+        }
+    }
 
     fn request(files: &Fingerprint) -> (Request, mpsc::Receiver<Option<Value>>) {
         let (reply, answer) = mpsc::channel();
         let request = Request {
-            path: PathBuf::from("/p/src/main.rs"),
-            root: PathBuf::from("/p"),
+            key: key(),
             directory: PathBuf::from("/p/target/mcp"),
             files: files.clone(),
             reply,
@@ -358,11 +373,11 @@ mod tests {
         let (gone, _) = mpsc::channel();
         checks
             .jobs
-            .insert(PathBuf::from("/p"), running(&files, vec![gone, waiting]));
+            .insert(key(), running(&files, vec![gone, waiting]));
         let (joining, joined) = request(&files);
         checks.ask(joining, &heard);
         checks.finished(Report {
-            root: PathBuf::from("/p"),
+            key: key(),
             result: json!(1),
         });
         assert_eq!(answer.recv().unwrap(), Some(json!(1)));
@@ -373,11 +388,9 @@ mod tests {
         );
 
         let (cancelled, _) = mpsc::channel();
-        checks
-            .jobs
-            .insert(PathBuf::from("/p"), running(&files, vec![cancelled]));
+        checks.jobs.insert(key(), running(&files, vec![cancelled]));
         checks.finished(Report {
-            root: PathBuf::from("/p"),
+            key: key(),
             result: json!(2),
         });
         let (taking, taken) = request(&files);

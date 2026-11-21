@@ -6,6 +6,7 @@ use std::process::Command;
 
 use serde_json::{json, Value};
 
+use super::options::Options;
 use super::process::{self, Cancel};
 use super::{check, content, extension, session, Progress, Server};
 use crate::layer;
@@ -55,6 +56,27 @@ pub fn path_schema() -> Value {
         "type": "string",
         "description": "The crate's directory or a .rs file: absolute, or relative to the server's project root; defaults to that root",
     })
+}
+
+/// The schema of `start`, `run` and `check`: `path`, the options `rawr
+/// run` takes beside it ([`Options`]) and `properties` of the tool's own.
+fn program_schema(properties: Value) -> Value {
+    let mut schema = json!({
+        "type": "object",
+        "properties": {
+            "path": path_schema(),
+            "package": { "type": "string", "description": "A package of the Cargo workspace at `path`, as `cargo run -p`: the program is that package's" },
+            "bin": { "type": "string", "description": "A binary of the package, as `cargo run --bin`: the program is that binary" },
+            "features": { "type": "array", "items": { "type": "string" }, "description": "Features to enable, as `cargo run --features`; a dependency's as `crate/feature`" },
+            "no_default_features": { "type": "boolean", "default": false, "description": "Leave the package's default features off, as `--no-default-features`" },
+            "all_features": { "type": "boolean", "default": false, "description": "Enable every feature, as `--all-features`" },
+            "env": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Environment variables for this call alone, set over the server's: the build and the program read them, as `CARGO_TARGET_DIR` or a data directory" },
+        },
+    });
+    if let (Some(all), Some(own)) = (schema["properties"].as_object_mut(), properties.as_object()) {
+        all.extend(own.clone());
+    }
+    schema
 }
 
 /// An input tool's schema: its own `properties`, which `required` names,
@@ -141,32 +163,24 @@ pub fn list() -> Vec<Value> {
         }),
         json!({
             "name": "check",
-            "description": "Check a program without running it: rawr's check and `cargo check`. Returns each error with its absolute file, line and column. A first check of a program with Rust dependencies builds them first.",
-            "inputSchema": { "type": "object", "properties": { "path": path_schema() } },
+            "description": "Check a program without running it: rawr's check and `cargo check`. Returns each error with its absolute file, line and column. A first check of a program with Rust dependencies builds them first. `package`, `bin`, `features`, `no_default_features` and `all_features` choose what is checked as `rawr check` takes them, and `env` sets variables for the check alone.",
+            "inputSchema": program_schema(json!({})),
         }),
         json!({
             "name": "run",
-            "description": "Run a program to its end, with arguments and stdin, and return its exit status, stdout and stderr. For command-line programs. For a window or a long-running program, use `start`.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "path": path_schema(),
-                    "args": arguments,
-                    "stdin": { "type": "string", "description": "The program's input; it then reads end of input" },
-                },
-            },
+            "description": "Run a program to its end, with arguments and stdin, and return its exit status, stdout and stderr. For command-line programs. For a window or a long-running program, use `start`. `package`, `bin`, `features`, `no_default_features` and `all_features` choose what runs as `rawr run` takes them, and `env` sets variables for the build and the program of this run alone.",
+            "inputSchema": program_schema(json!({
+                "args": arguments,
+                "stdin": { "type": "string", "description": "The program's input; it then reads end of input" },
+            })),
         }),
         json!({
             "name": "start",
-            "description": "Start a program that keeps running, such as a window, and keep it running: a save reloads it, and one that panics or exits with an error runs again on the next save. One that exits with status 0 ends the session, and `start` runs it again. Returns once it runs, with `running`, or `failed` with diagnostics; a first start builds its Rust dependencies first, and tells its progress meanwhile. Starting a program again replaces it. Programs that draw a terminal UI are refused for now.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "path": path_schema(),
-                    "args": arguments,
-                    "stdin": { "type": "string", "description": "The program's input; it then reads end of input" },
-                },
-            },
+            "description": "Start a program that keeps running, such as a window, and keep it running: a save reloads it, and one that panics or exits with an error runs again on the next save. One that exits with status 0 ends the session, and `start` runs it again. Returns once it runs, with `running`, or `failed` with diagnostics; a first start builds its Rust dependencies first, and tells its progress meanwhile. Starting a program again replaces it, also with another `bin`, other features or another `env`. `package`, `bin`, `features`, `no_default_features` and `all_features` choose what runs as `rawr run` takes them, and `env` sets variables for its builds and its program; every reload keeps them. Programs that draw a terminal UI are refused for now.",
+            "inputSchema": program_schema(json!({
+                "args": arguments,
+                "stdin": { "type": "string", "description": "The program's input; it then reads end of input" },
+            })),
         }),
         json!({
             "name": "wait",
@@ -436,7 +450,18 @@ pub(crate) fn absolute(root: &Path, path: Option<&str>) -> PathBuf {
 /// Resolve `path`, relative to `root`, once: its program's root and the
 /// root's target directory.
 pub(crate) fn place(root: &Path, path: Option<&str>) -> Result<Place, String> {
-    let path = absolute(root, path);
+    locate(root, absolute(root, path), &Options::default())
+}
+
+/// Resolve `path`, relative to `root`, with a call's `options`: the program
+/// they choose there, its root and the target directory the call's
+/// environment gives that root.
+fn program(root: &Path, path: Option<&str>, options: &Options) -> Result<Place, String> {
+    let path = options.program(absolute(root, path))?;
+    locate(root, path, options)
+}
+
+fn locate(root: &Path, path: PathBuf, options: &Options) -> Result<Place, String> {
     let target = crate::base::discover(Some(&path))
         .map_err(|report| crate::diagnostic::lines(&crate::diagnostic::shape(&report, root)))?;
     let root = target.project().map_or_else(
@@ -452,17 +477,29 @@ pub(crate) fn place(root: &Path, path: Option<&str>) -> Result<Place, String> {
     Ok(Place {
         path,
         root,
-        target_dir: target_directory(&directory),
+        target_dir: target_directory(&directory, options),
     })
 }
 
-/// The Cargo target directory of the project at `directory`.
+/// The Cargo target directory of the project at `directory`, in the
+/// server's environment with `options`' variables over it.
 #[must_use]
-pub fn target_directory(directory: &Path) -> PathBuf {
-    let environment: HashMap<String, String> = std::env::vars().collect();
-    let cargo_home = std::env::var_os("CARGO_HOME")
+pub fn target_directory(directory: &Path, options: &Options) -> PathBuf {
+    let mut environment: HashMap<String, String> = std::env::vars().collect();
+    environment.extend(
+        options
+            .environment()
+            .iter()
+            .map(|(name, value)| (name.clone(), value.clone())),
+    );
+    let cargo_home = environment
+        .get("CARGO_HOME")
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cargo")));
+        .or_else(|| {
+            environment
+                .get("HOME")
+                .map(|home| PathBuf::from(home).join(".cargo"))
+        });
     rawr_location::target_directory(
         directory,
         |key| environment.get(key).map(String::as_str),
@@ -503,15 +540,27 @@ pub fn call(server: &Server, params: &Value, cancel: &Cancel) -> Value {
         .unwrap_or_default();
     let outcome = match name {
         "new" => new(server, text("path"), text("template"), cancel),
-        "check" => {
-            place(&server.root, text("path")).map(|place| check::check(server, &place, cancel))
-        }
-        "run" => place(&server.root, text("path"))
-            .map(|place| run(&place, &strings(&arguments, "args"), text("stdin"), cancel)),
-        "start" => place(&server.root, text("path")).and_then(|place| {
+        "check" => Options::new(&arguments).and_then(|options| {
+            program(&server.root, text("path"), &options)
+                .map(|place| check::check(server, &place, &options, cancel))
+        }),
+        "run" => Options::new(&arguments).and_then(|options| {
+            program(&server.root, text("path"), &options).map(|place| {
+                run(
+                    &place,
+                    &options,
+                    &strings(&arguments, "args"),
+                    text("stdin"),
+                    cancel,
+                )
+            })
+        }),
+        "start" => Options::new(&arguments).and_then(|options| {
+            let place = program(&server.root, text("path"), &options)?;
             start(
                 server,
                 &place,
+                &options,
                 &strings(&arguments, "args"),
                 text("stdin"),
                 cancel,
@@ -631,15 +680,22 @@ fn new(
     ))
 }
 
-/// `run`: `rawr run <path> -- args` to its end.
-fn run(place: &Place, arguments: &[String], stdin: Option<&str>, cancel: &Cancel) -> Value {
+/// `run`: `rawr run <path> <feature flags> -- args` to its end, in the
+/// call's environment.
+fn run(
+    place: &Place,
+    options: &Options,
+    arguments: &[String],
+    stdin: Option<&str>,
+    cancel: &Cancel,
+) -> Value {
     let Ok(executable) = std::env::current_exe() else {
         return content::failure("cannot find rawr");
     };
     let mut command = Command::new(executable);
+    command.arg("run").arg(&place.path);
+    options.apply(&mut command);
     command
-        .arg("run")
-        .arg(&place.path)
         .args(if arguments.is_empty() {
             None
         } else {
@@ -697,6 +753,7 @@ pub(crate) fn terminal_ui(root: &Path) -> Option<&'static str> {
 fn start(
     server: &Server,
     place: &Place,
+    options: &Options,
     arguments: &[String],
     stdin: Option<&str>,
     cancel: &Cancel,
@@ -711,10 +768,13 @@ fn start(
         .sessions
         .start(
             &place.root,
-            &place.path,
-            arguments,
-            stdin,
-            crate::mcp::session::Entry::Run,
+            session::Program {
+                path: &place.path,
+                options,
+                arguments,
+                stdin,
+            },
+            session::Entry::Run,
             cancel,
         )
         .map_err(|error| format!("cannot start rawr run: {error}"))?;
@@ -726,7 +786,7 @@ fn start(
     if !session.is_started() {
         summary.insert_str(
             0,
-            "A `rawr run` started elsewhere serves this program, so `start` attached to it. That run keeps its own arguments and input.\n",
+            "A `rawr run` started elsewhere serves this program, so `start` attached to it. That run keeps its own arguments, features, environment and input.\n",
         );
     }
     Ok(content::success(answer.structured, summary, Vec::new()))
@@ -1267,7 +1327,7 @@ fn extension_call(
         let directory = absolute(&server.root, path);
         if directory.is_dir() {
             Ok(Place {
-                target_dir: target_directory(&directory),
+                target_dir: target_directory(&directory, &Options::default()),
                 root: directory.clone(),
                 path: directory,
             })
