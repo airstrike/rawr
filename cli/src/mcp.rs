@@ -3,12 +3,13 @@
 //!
 //! JSON-RPC 2.0, one message per line, with the standard library only
 //! (D430.4). A reader thread forwards each line, and the main thread loops
-//! over the lines and the calls that returned, owning the calls in flight
-//! and the tools last listed. Each `tools/call` runs on a worker, so
-//! `ping`, `notifications/cancelled` and the end of input are handled while
-//! a long build runs; one writer thread writes every message. A call waits
-//! for what it needs as long as that takes, telling its progress where it
-//! has any; the client's cancel ends it, with its process groups.
+//! over the lines, the calls that returned and the checks, owning the calls
+//! in flight, the tools last listed and the checks of each root. Each
+//! `tools/call` runs on a worker, so `ping`, `notifications/cancelled` and
+//! the end of input are handled while a long build runs; one writer thread
+//! writes every message. A call waits for what it needs as long as that
+//! takes, telling its progress where it has any; the client's cancel ends
+//! it, with its process groups.
 //!
 //! Core's tools make, check and run programs; installed extensions add
 //! tools their manifests declare ([`extension`]). The programs `start`
@@ -35,13 +36,14 @@ use serde_json::{json, Value};
 pub const PROTOCOL: &str = "2025-06-18";
 const PROTOCOLS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 
-/// The server: where relative paths start, the writer and the programs
-/// it reaches.
+/// The server: where relative paths start, the writer, the main loop and
+/// the programs it reaches.
 pub(crate) struct Server {
     root: PathBuf,
     out: mpsc::Sender<Value>,
+    /// What the main loop hears from calls.
+    heard: mpsc::Sender<Heard>,
     sessions: session::Sessions,
-    checks: check::Checks,
 }
 
 /// What the main loop hears.
@@ -52,24 +54,33 @@ enum Heard {
     Ended,
     /// A call returned: its answer, unless it panicked or was cancelled.
     Returned { id: Value, answer: Option<Value> },
+    /// A call asks for a check.
+    Check(check::Request),
+    /// A check is done.
+    Checked(check::Report),
 }
 
 /// The main loop's state, and how it starts calls.
 struct Loop<'scope, 'env> {
     server: &'scope Server,
     scope: &'scope std::thread::Scope<'scope, 'env>,
-    /// Where a call says it returned.
-    heard: mpsc::Sender<Heard>,
     /// The calls in flight, by their ids, for the client's cancels.
     calls: HashMap<String, Arc<process::Cancel>>,
     /// The tool names last listed, to tell the client when installs change
     /// them.
     listed: Vec<String>,
+    checks: check::Checks,
 }
 
 impl Server {
     fn send(&self, message: Value) {
         let _ = self.out.send(message);
+    }
+
+    /// Tell the main loop `message`. Once the loop stopped reading, every
+    /// call was cancelled, so nothing waits for an answer.
+    fn ask(&self, message: Heard) {
+        let _ = self.heard.send(message);
     }
 
     fn reply(&self, id: Value, result: Value) {
@@ -113,17 +124,17 @@ pub fn serve_on(
                 }
             }
         })?;
+    let (heard, hearing) = mpsc::channel::<Heard>();
     let server = Server {
         root,
         out,
+        heard,
         sessions: session::Sessions::default(),
-        checks: check::Checks::default(),
     };
     // Each call runs on a thread of this scope, and the scope ends once
     // every call has seen its cancel and returned.
     let served = std::thread::scope(|scope| {
-        let (heard, hearing) = mpsc::channel::<Heard>();
-        let reading = heard.clone();
+        let reading = server.heard.clone();
         std::thread::Builder::new()
             .name("rawr-mcp-read".into())
             .spawn_scoped(scope, move || {
@@ -140,14 +151,16 @@ pub fn serve_on(
         let mut serving = Loop {
             server: &server,
             scope,
-            heard,
             calls: HashMap::new(),
             listed: Vec::new(),
+            checks: check::Checks::default(),
         };
         for message in &hearing {
             match message {
                 Heard::Line(line) => serving.line(&line),
                 Heard::Returned { id, answer } => serving.returned(id, answer),
+                Heard::Check(request) => serving.checks.ask(request, &server.heard),
+                Heard::Checked(report) => serving.checks.finished(report),
                 Heard::Ended => break,
             }
         }
@@ -225,7 +238,7 @@ impl<'scope> Loop<'scope, '_> {
         let server = self.server;
         let cancel = Arc::new(process::Cancel::default());
         self.calls.insert(id.to_string(), Arc::clone(&cancel));
-        let heard = self.heard.clone();
+        let heard = server.heard.clone();
         let spawned = std::thread::Builder::new()
             .name("rawr-mcp-call".into())
             .spawn_scoped(self.scope, move || {
@@ -273,7 +286,7 @@ impl<'scope> Loop<'scope, '_> {
             call.cancel();
         }
         self.server.sessions.stop_all();
-        self.server.checks.stop_all();
+        self.checks.stop_all();
     }
 }
 

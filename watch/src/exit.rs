@@ -3,7 +3,7 @@
 /// Block until the child process `pid` ends. The child stays a zombie for
 /// its owner to reap. Returns at once when `pid` is no child of this
 /// process, or was reaped already.
-pub(super) fn wait(pid: u32) {
+pub fn wait(pid: u32) {
     let Some(pid) = i32::try_from(pid)
         .ok()
         .and_then(rustix::process::Pid::from_raw)
