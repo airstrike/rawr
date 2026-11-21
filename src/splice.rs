@@ -157,7 +157,7 @@ impl Spliced {
     }
 
     /// Add rawr's own `text`, shown at byte `from` of `shown`.
-    fn write(&mut self, shown: usize, from: usize, text: &str) {
+    pub(crate) fn write(&mut self, shown: usize, from: usize, text: &str) {
         self.piece(shown, from, text, true);
     }
 

@@ -295,6 +295,44 @@ unsafe impl Send for Lent {}
 // SAFETY: as for `Send`.
 unsafe impl Sync for Lent {}
 
+/// What a chain holds of the frame that runs it, which a step inside the
+/// chain shows (#2256, #2257).
+///
+/// A chain on the receiver (`self.items[0] += 1`) borrows a part of it, so
+/// its steps aren't lent the receiver. A chain on a local (`o.v[0]`)
+/// borrows the local where its scope keeps it, so its steps are lent no
+/// scope. The pointers are the chain's root target and the scope its start
+/// searched, from which each target down the chain is borrowed. Every step
+/// of the chain is before its write, so a step's reader only reads through
+/// them, inside the step's callback, while the frame `depth` deep runs the
+/// chain on this thread. Code that runs in the frame isn't lent them.
+#[derive(Debug, Clone, Copy, Hash)]
+pub(crate) enum Chained {
+    This {
+        this: std::ptr::NonNull<Dynamic>,
+        /// The call stack's length while the chain's frame runs it.
+        depth: usize,
+    },
+    Scope {
+        scope: std::ptr::NonNull<Scope<'static>>,
+        depth: usize,
+    },
+}
+
+impl Chained {
+    const fn depth(&self) -> usize {
+        match self {
+            Self::This { depth, .. } | Self::Scope { depth, .. } => *depth,
+        }
+    }
+}
+
+// SAFETY: as for `Lent`: the pointers are read only on the thread that
+// runs the chain, while it runs.
+unsafe impl Send for Chained {}
+// SAFETY: as for `Send`.
+unsafe impl Sync for Chained {}
+
 impl fmt::Display for CallStackFrame {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.fn_name)?;
@@ -321,6 +359,8 @@ pub struct Debugger {
     call_stack: Vec<CallStackFrame>,
     /// What the call about to be made was lent, for its frame.
     lent: Option<Lent>,
+    /// The receiver a chain on it holds, which its steps show (#2256).
+    chained: Option<Chained>,
     /// The current state.
     state: Dynamic,
 }
@@ -335,6 +375,7 @@ impl Debugger {
             break_points: Vec::new(),
             call_stack: Vec::new(),
             lent: None,
+            chained: None,
             state: Dynamic::UNIT,
         }
     }
@@ -412,10 +453,44 @@ impl Debugger {
         }
         Some(lent)
     }
+    /// Show the steps of a chain on the receiver at `this`, which the
+    /// chain holds, while the frame at the top of the call stack runs it.
+    /// Returns what was shown before, for [`Self::unchain`].
+    #[must_use]
+    pub(crate) fn chain_this(&mut self, this: *const Dynamic) -> Option<Chained> {
+        let depth = self.call_stack.len();
+        let chained =
+            std::ptr::NonNull::new(this.cast_mut()).map(|this| Chained::This { this, depth });
+        mem::replace(&mut self.chained, chained)
+    }
+    /// Show the steps of a chain on a local of `scope`, which the chain
+    /// holds, as [`Self::chain_this`] shows a receiver's.
+    #[must_use]
+    pub(crate) fn chain_scope(&mut self, scope: std::ptr::NonNull<Scope>) -> Option<Chained> {
+        let depth = self.call_stack.len();
+        let chained = Chained::Scope {
+            scope: scope.cast(),
+            depth,
+        };
+        self.chained.replace(chained)
+    }
+    /// Show `before` again, once the chain [`Self::chain_this`] or
+    /// [`Self::chain_scope`] showed ended.
+    pub(crate) fn unchain(&mut self, before: Option<Chained>) {
+        self.chained = before;
+    }
+    /// What the chain the frame at the top of the call stack runs holds of
+    /// that frame: read it only as [`Chained`] says.
+    #[must_use]
+    pub(crate) fn chained(&self) -> Option<Chained> {
+        self.chained
+            .filter(|chained| chained.depth() == self.call_stack.len())
+    }
     /// Forget where each caller keeps its bindings, for a copy of this
     /// debugger that can outlive the calls.
     pub(crate) fn forget_bindings(&mut self) {
         self.lent = None;
+        self.chained = None;
         for frame in &mut self.call_stack {
             frame.caller = None;
         }

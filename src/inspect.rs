@@ -283,19 +283,33 @@ fn entries<'c>(context: &'c EvalContext, frame: usize) -> Option<Result<Vec<Entr
     let own = |index: usize| stack.get(*frames.get(index)?)?.bindings.as_ref();
     let mut found: Vec<Entry<'c>> = Vec::new();
     if frame == 0 {
+        // A step inside an expression that reaches into a local or the
+        // receiver, as `o.v[0]` or `self.items[0] += 1` does, isn't lent
+        // the frame's scope or its receiver (#541): the chain holds them,
+        // and shows them where its start found them (#2256, #2257).
+        let chained = context.global_runtime_state().debugger.chained();
+        let (scope, this) = match chained {
+            Some(crate::eval::Chained::Scope { scope, .. }) => {
+                // SAFETY: the scope the chain the frame at the top of the
+                // call stack runs searched, read inside this step's
+                // callback, before the chain writes (`Chained`).
+                (unsafe { scope.cast::<crate::Scope<'c>>().as_ref() }, None)
+            }
+            Some(crate::eval::Chained::This { this, .. }) => {
+                // SAFETY: as for the scope, the chain's root receiver.
+                (context.scope(), Some(unsafe { this.as_ref() }))
+            }
+            None => (context.scope(), None),
+        };
         found.extend(
-            context
-                .scope()
+            scope
                 .iter_rev_inner()
                 .map(|(name, _, value)| (name.as_str(), Ok(value))),
         );
-        // A step inside an expression that reaches into the receiver, as
-        // `self.items[0].push(x)` does, has none: the expression holds it
-        // (#541).
         if let Some(name) = own(0).and_then(|bindings| bindings.this_name.as_ref()) {
             found.push((
                 name.as_str(),
-                context.this_ptr().ok_or_else(|| {
+                context.this_ptr().or(this).ok_or_else(|| {
                     format!("`{name}` is borrowed by the expression being evaluated")
                 }),
             ));
@@ -2540,29 +2554,50 @@ mod tests {
     }
 
     #[test]
-    fn a_receiver_lent_to_an_expression_on_itself_reads_or_says_why() {
+    fn a_receiver_reads_at_every_step_of_an_expression_on_it() {
         let seen = at_steps(
             "struct Counter { count: i64, items: Vec<i64> }\n\
              impl Counter {\n\
-                 fn bump(&mut self, by: i64) { self.count += by; self.items.push(by); }\n\
+                 fn bump(&mut self, by: i64) -> i64 {\n\
+                     self.count += by; self.items[0] += 1; let first = &self.items[0]; *first\n\
+                 }\n\
              }\n\
-             pub fn run() -> i64 { let mut c = Counter { count: 1, items: vec![] }; c.bump(4); c.count }\n\
+             pub fn run() -> i64 { let mut c = Counter { count: 1, items: vec![7] }; c.bump(4) }\n\
              run()",
             "bump",
             |context| shown(context, 0),
         );
-        // Every step lists `self`: read where the expression is on `self`
-        // itself, and borrowed further into it.
-        assert!(seen.iter().all(|saw| saw.starts_with("self=")), "{seen:?}");
+        // Every step reads `self`, the ones further into it too (#2256).
         assert!(
-            seen.iter()
-                .any(|saw| saw == "self=Counter { count: 5, items: [] } by=4"),
+            seen.iter().all(|saw| saw.starts_with("self=Counter {")),
             "{seen:?}"
         );
         assert!(
-            seen.iter().any(
-                |saw| saw == "self=<`self` is borrowed by the expression being evaluated> by=4"
-            ),
+            seen.iter()
+                .any(|saw| saw == "self=Counter { count: 5, items: [7] } by=4"),
+            "{seen:?}"
+        );
+    }
+
+    #[test]
+    fn a_frame_lists_its_parameters_and_never_a_binding_the_compiler_made() {
+        let seen = at_steps(
+            "#[derive(Debug)] struct P { v: Vec<i64> }\n\
+             impl std::ops::Add for P {\n\
+                 type Output = P;\n\
+                 fn add(self, o: P) -> P { P { v: vec![self.v[0] + o.v[0]] } }\n\
+             }\n\
+             pub fn run() -> i64 { (P { v: vec![1] } + P { v: vec![2] }).v[0] }\n\
+             run()",
+            "add",
+            |context| shown(context, 0),
+        );
+        // Every step lists the parameters, the ones inside a chain on a
+        // local too, and never the index the compiler binds (#2257).
+        assert!(!seen.is_empty());
+        assert!(
+            seen.iter()
+                .all(|saw| saw == "self=P { v: [1] } o=P { v: [2] }"),
             "{seen:?}"
         );
     }
