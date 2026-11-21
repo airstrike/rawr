@@ -305,6 +305,8 @@ fn a_dap_client_launches_stops_reads_values_by_reference_evaluates_steps_and_end
     );
     assert_eq!(evaluated["result"], (count * 2).to_string(), "{evaluated}");
     assert_eq!(evaluated["variablesReference"], 0, "{evaluated}");
+    // A console entry may have written a place, so the client reads again.
+    assert_eq!(client.event("invalidated")["areas"], json!(["variables"]));
 
     // Over the call, then back to the breakpoint, into `tick` and out.
     client.request("next", json!({ "threadId": 1 }));

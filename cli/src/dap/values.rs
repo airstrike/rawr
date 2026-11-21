@@ -147,6 +147,12 @@ impl Adapter {
             .ok_or("evaluate needs an expression")?;
         let frame = arguments["frameId"].as_u64().unwrap_or(1).saturating_sub(1);
         let variable = self.eval(frame, code, Place::expression(code))?;
+        // A console entry may write any place, so the client reads the
+        // paused frame's variables again; the program holds the one state.
+        if arguments["context"] == "repl" {
+            self.out
+                .event("invalidated", json!({ "areas": ["variables"] }));
+        }
         Ok(json!({
             "result": variable["value"],
             "variablesReference": variable["variablesReference"],
