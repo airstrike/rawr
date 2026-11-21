@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 #[cfg(feature = "rustc-driver")]
 use std::cell::Cell;
 
+use std::os::fd::AsFd;
 use std::os::unix::process::CommandExt as _;
 
 use crate::{Error, Result};
@@ -1165,29 +1166,25 @@ fn execute<O: Observation>(
         crate::progress::stage(stage);
     }
     let watch = building.is_some_and(|stage| stage > 1);
-    let stdout_reader = thread::spawn(move || {
-        read_bounded(stdout, stdout_limit, |chunk| {
-            if watch {
-                crate::progress::observe(true, chunk);
-            }
-        })
-    });
-    let stderr_reader = thread::spawn(move || {
-        read_bounded(stderr, stderr_limit, |chunk| {
-            if watch {
-                crate::progress::observe(false, chunk);
-            }
-            if building.is_some() {
-                crate::progress::cargo_waits(chunk);
-            }
-        })
-    });
+    let stdout_reader = Reader::spawn(stdout, stdout_limit, move |chunk| {
+        if watch {
+            crate::progress::observe(true, chunk);
+        }
+    })?;
+    let stderr_reader = Reader::spawn(stderr, stderr_limit, move |chunk| {
+        if watch {
+            crate::progress::observe(false, chunk);
+        }
+        if building.is_some() {
+            crate::progress::cargo_waits(chunk);
+        }
+    })?;
     let status = child.finish();
     let took = started.elapsed();
     let recorded = observation.record(command, took);
     let status = recorded_result(status, recorded)?;
-    let stdout = join_reader(stdout_reader, "child stdout");
-    let stderr = join_reader(stderr_reader, "child stderr");
+    let stdout = stdout_reader.finish("child stdout");
+    let stderr = stderr_reader.finish("child stderr");
     let stdout = bounded_bytes("child stdout", stdout_limit, stdout?)?;
     let stderr = bounded_bytes("child stderr", stderr_limit, stderr?)?;
     match command.kind {
@@ -1558,18 +1555,93 @@ fn canonical_program_in(field: &'static str, path: &Path) -> Result<PathBuf> {
     Ok(canonical)
 }
 
+/// One child stream read on a thread of its own as it arrives.
+///
+/// The thread reads until the pipe closes or [`Reader::finish`] tells it
+/// the child is done. A process that left the child's group (a build
+/// script's daemon, a proc-macro server, a compiler cache client) can keep
+/// the pipe open after the group ended. The thread then stops once the
+/// pipe holds nothing more to read, so the join waits on the child, not on
+/// that process (#2432).
+struct Reader {
+    thread: thread::JoinHandle<io::Result<(Vec<u8>, usize)>>,
+    /// Dropped by `finish`: its read end then reports a hang-up, which
+    /// tells the thread the child is done.
+    done: io::PipeWriter,
+}
+
+impl Reader {
+    /// Read `pipe` on a thread, keeping at most `limit` bytes and showing
+    /// each chunk to `observe`.
+    fn spawn(
+        pipe: impl Read + AsFd + Send + 'static,
+        limit: usize,
+        observe: impl FnMut(&[u8]) + Send + 'static,
+    ) -> Result<Self> {
+        let (told, done) = io::pipe().map_err(|source| Error::Process {
+            program: "child",
+            status: "failed to open output reader".into(),
+            stderr: source.to_string().into_boxed_str(),
+        })?;
+        let thread = thread::spawn(move || read_bounded(pipe, &told, limit, observe));
+        Ok(Self { thread, done })
+    }
+
+    /// What the stream held once the child is done. Called after the child
+    /// was reaped and its group ended: the thread reads what the pipe still
+    /// holds and ends.
+    fn finish(self, resource: &'static str) -> Result<(Vec<u8>, usize)> {
+        drop(self.done);
+        self.thread
+            .join()
+            .map_err(|_| Error::Process {
+                program: "child",
+                status: "output reader panicked".into(),
+                stderr: resource.into(),
+            })?
+            .map_err(|source| Error::Process {
+                program: "child",
+                status: "failed to read output".into(),
+                stderr: source.to_string().into_boxed_str(),
+            })
+    }
+}
+
+/// Read `pipe` to its end of file, or to the point where `told` hangs up
+/// and the pipe holds nothing more to read.
 fn read_bounded(
-    mut reader: impl Read,
+    mut pipe: impl Read + AsFd,
+    told: &io::PipeReader,
     limit: usize,
     mut observe: impl FnMut(&[u8]),
 ) -> io::Result<(Vec<u8>, usize)> {
+    use rustix::event::{poll, PollFd, PollFlags};
+
     let capacity = limit.min(64 * 1024);
     let mut retained = Vec::new();
     retained.try_reserve_exact(capacity)?;
     let mut observed = 0_usize;
     let mut chunk = [0_u8; 16 * 1024];
     loop {
-        let count = reader.read(&mut chunk)?;
+        let readable = {
+            let mut fds = [
+                PollFd::new(&pipe, PollFlags::IN),
+                PollFd::new(told, PollFlags::IN),
+            ];
+            match poll(&mut fds, None) {
+                Ok(_) => {}
+                Err(rustix::io::Errno::INTR) => continue,
+                Err(errno) => return Err(errno.into()),
+            }
+            // A pipe whose writers are gone reports a hang-up, and reads
+            // its end of file.
+            !fds[0].revents().is_empty()
+        };
+        if !readable {
+            // The child is done and the pipe holds nothing more.
+            break;
+        }
+        let count = pipe.read(&mut chunk)?;
         if count == 0 {
             break;
         }
@@ -1583,24 +1655,6 @@ fn read_bounded(
         }
     }
     Ok((retained, observed))
-}
-
-fn join_reader(
-    reader: thread::JoinHandle<io::Result<(Vec<u8>, usize)>>,
-    resource: &'static str,
-) -> Result<(Vec<u8>, usize)> {
-    reader
-        .join()
-        .map_err(|_| Error::Process {
-            program: "child",
-            status: "output reader panicked".into(),
-            stderr: resource.into(),
-        })?
-        .map_err(|source| Error::Process {
-            program: "child",
-            status: "failed to read output".into(),
-            stderr: source.to_string().into_boxed_str(),
-        })
 }
 
 fn bounded_bytes(
@@ -1875,6 +1929,39 @@ error[E0277]: the trait bound `__rawr_internal::Value: Default` is not satisfied
         thread::sleep(Duration::from_millis(1200));
         assert!(!escaped.exists());
         fs::remove_dir_all(root).expect("descendant fixture can be retired");
+    }
+
+    /// A grandchild that left the child's group and keeps stdout open
+    /// does not hold `execute` past the child's exit (#2432).
+    #[test]
+    fn a_grandchild_outside_the_group_does_not_hold_the_output() {
+        // The grandchild tells the child once it has left the group, and
+        // the child then names it on stderr, writes stdout and exits.
+        let script = "pipe(R, W); my $pid = fork; \
+            if (!$pid) { close R; setpgrp(0, 0); close W; sleep 600; exit } \
+            close W; <R>; print STDERR $pid; print 'before after'; exit 0";
+        let command = Command {
+            program: Program::Cargo,
+            kind: CommandKind::Preflight(Preflight(PreflightKind::ComponentList)),
+            arguments: Box::from([OsString::from("-e"), OsString::from(script)]),
+            current_dir: std::env::temp_dir(),
+            environment: Box::default(),
+        };
+        let output = execute(
+            Path::new("/usr/bin/perl"),
+            &command,
+            Limits::capture(),
+            &ProductionObservation,
+        )
+        .expect("the child exits and its output is read");
+        let grandchild = std::str::from_utf8(&output.stderr)
+            .ok()
+            .and_then(|pid| pid.parse().ok())
+            .and_then(rustix::process::Pid::from_raw)
+            .expect("the child names the grandchild");
+        let _ = rustix::process::kill_process(grandchild, rustix::process::Signal::KILL);
+        assert!(output.success);
+        assert_eq!(&*output.stdout, b"before after");
     }
 
     #[test]
