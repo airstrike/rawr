@@ -92,7 +92,9 @@ fn rawr_typos_shadowed_aliases_wrong_kinds_and_type_errors_remain_source_errors(
     ));
 }
 
-fn structure(engine: &mut Engine) -> identity::Selector {
+/// Register on `engine` the `structure` crate's facade: its tuple struct
+/// `Cell(i64)`, with no structural adapter. Its constructor's selector.
+pub(crate) fn structure(engine: &mut Engine) -> identity::Selector {
     let constructor = identity::Selector::StructConstructor(identity::Form::Tuple { arity: 1 });
     let field = serde_json::from_str(r#"{"StructField":{"index":0,"name":"0"}}"#).unwrap();
     let mut builder =
