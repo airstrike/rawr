@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.80 (2026-11-20)
+
+- The generated runner frees native values and takes back lent values on a channel each arena owns, with no process-wide queue or lock, and a callback reads its script function and that function's witnesses together, so it never pairs one call's function with another call's witnesses. (#1826)
+
 ## 0.4.79 (2026-11-20)
 
 - A `rawr run` that waits for a save no longer wakes on a clock: file events reach the owner on a channel, the program's end wakes it, and the only timed wait left is the 30 ms debounce after a save. (#1828)

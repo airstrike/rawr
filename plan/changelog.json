@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.4.80",
+      "date": "2026-11-20",
+      "entries": [
+        {"text":"The generated runner frees native values and takes back lent values on a channel each arena owns, with no process-wide queue or lock, and a callback reads its script function and that function's witnesses together, so it never pairs one call's function with another call's witnesses.","issues":[1826]}
+      ]
+    },
+    {
       "version": "0.4.79",
       "date": "2026-11-20",
       "entries": [

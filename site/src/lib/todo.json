@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-20",
-  "version": "0.4.79",
+  "version": "0.4.80",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.80",
+        "date": "2026-11-20",
+        "entries": [
+          {"text":"The generated runner frees native values and takes back lent values on a channel each arena owns, with no process-wide queue or lock, and a callback reads its script function and that function's witnesses together, so it never pairs one call's function with another call's witnesses.","issues":[1826]}
+        ]
+      },
       {
         "version": "0.4.79",
         "date": "2026-11-20",
@@ -5181,7 +5188,7 @@
     {"issue":1823,"title":"Shared Dynamic reads and writes sleep and retry, then return None that callers unwrap","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.200"},
     {"issue":1824,"title":"Cargo work takes three overlapping locks in varying order, and a clash fails a save","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1825,"title":"The run owner's per-save state sits in process statics behind locks","state":"closed","category":"Shared dependency cache (D607)","release":"0.4.79"},
-    {"issue":1826,"title":"The generated runner's release queues and callback witnesses are process globals","state":"open","category":"Shared dependency cache (D607)"},
+    {"issue":1826,"title":"The generated runner's release queues and callback witnesses are process globals","state":"closed","category":"Shared dependency cache (D607)","release":"0.4.80"},
     {"issue":1827,"title":"Every store open takes the bootstrap and publication locks, from 55 call sites","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":1828,"title":"The save loops and the watcher poll on timeouts and stat files under a lock nest","state":"closed","category":"Shared dependency cache (D607)","release":"0.4.79"},
     {"issue":1829,"title":"rawr-import-driver doesn't build on nightly-2026-11-02, the window's newest","state":"closed","category":"Shared dependency cache (D607)","release":"0.3.200"},
@@ -7454,7 +7461,7 @@
           "issues": [
             {"number":1824,"title":"Cargo work takes three overlapping locks in varying order, and a clash fails a save","state":"open"},
             {"number":1825,"title":"The run owner's per-save state sits in process statics behind locks","state":"closed"},
-            {"number":1826,"title":"The generated runner's release queues and callback witnesses are process globals","state":"open"},
+            {"number":1826,"title":"The generated runner's release queues and callback witnesses are process globals","state":"closed"},
             {"number":1827,"title":"Every store open takes the bootstrap and publication locks, from 55 call sites","state":"open"},
             {"number":1828,"title":"The save loops and the watcher poll on timeouts and stat files under a lock nest","state":"closed"},
             {"number":2239,"title":"Store, pins, session, runtime and deps locks are released only when every copy of the file closes","state":"open"},
