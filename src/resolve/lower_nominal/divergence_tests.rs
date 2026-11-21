@@ -1188,3 +1188,97 @@ main();
 "#;
     assert_eq!(printed(source), "true 1\n");
 }
+
+/// A trait in scope whose `update(&self, ..)` shares its name with an
+/// inherent `update(&mut self, ..)` is the one rustc's probe finds on a
+/// value: the `&` step comes before the `&mut` one. rustc counts the
+/// arguments against the trait's and refuses with E0061, as rawr does.
+#[test]
+fn a_trait_method_found_at_the_shared_step_counts_the_arguments() {
+    let report = refused(
+        r#"
+trait Program {
+    fn update(&self, a: u32, b: u32, c: u32, d: u32) -> u32;
+}
+struct Grid {
+    n: u32,
+}
+impl Grid {
+    fn update(&mut self, message: u32) {
+        self.n += message;
+    }
+}
+impl Program for Grid {
+    fn update(&self, a: u32, b: u32, c: u32, d: u32) -> u32 {
+        a + b + c + d + self.n
+    }
+}
+struct App {
+    grid: Grid,
+}
+fn main() {
+    let mut app = App { grid: Grid { n: 1 } };
+    app.grid.update(2);
+    println!("{}", app.grid.n);
+    println!("{}", Program::update(&app.grid, 1, 1, 1, 1));
+}
+main();
+"#,
+    );
+    assert!(
+        report
+            .starts_with("error[E0061]: this method takes 4 arguments but 1 argument was supplied"),
+        "{report}"
+    );
+}
+
+/// An inherent method and a trait method of one name with different
+/// receivers, on a value, a `&mut` and a `&` receiver. Each step of rustc's
+/// probe takes the receiver by value, then by `&`, then by `&mut`, and the
+/// first method found wins, inherent or not. The output is rustc's build of
+/// the same program.
+#[test]
+fn an_inherent_and_a_trait_method_of_one_name_follow_rustc_s_probe() {
+    let source = r#"
+trait Shared {
+    fn tag(&self) -> i32;
+}
+trait Exclusive {
+    fn mark(&mut self) -> i32;
+}
+struct Cell {
+    n: i32,
+}
+impl Cell {
+    fn tag(&mut self) -> i32 {
+        self.n += 1;
+        100 + self.n
+    }
+    fn mark(&self) -> i32 {
+        200 + self.n
+    }
+}
+impl Shared for Cell {
+    fn tag(&self) -> i32 {
+        300 + self.n
+    }
+}
+impl Exclusive for Cell {
+    fn mark(&mut self) -> i32 {
+        self.n += 10;
+        400 + self.n
+    }
+}
+fn main() {
+    let mut c = Cell { n: 0 };
+    let value = (c.tag(), c.mark());
+    let exclusive = &mut c;
+    let through_mut = (exclusive.tag(), exclusive.mark());
+    let shared = &c;
+    let through_shared = (shared.tag(), shared.mark());
+    println!("{:?} {:?} {:?} {}", value, through_mut, through_shared, c.n);
+}
+main();
+"#;
+    assert_eq!(printed(source), "(300, 200) (101, 411) (311, 211) 11\n");
+}

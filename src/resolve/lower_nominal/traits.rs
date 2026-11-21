@@ -700,8 +700,14 @@ impl<'a> Parser<'a> {
         let Some(trait_name) = definition.trait_name() else {
             return true;
         };
+        // A dependency's trait the program implements (`impl
+        // canvas::Program<Message> for Grid`) has no declaration here: a
+        // `use` that binds it puts it in scope, or the impl the call is in.
+        // Elsewhere the probe passes it by, and `grid.update(message)` is
+        // the inherent function, as game_of_life's is.
         let Some((_, declared)) = self.models.traits.get(trait_name.as_str()) else {
-            return true;
+            return self.models.import(trait_name).is_some()
+                || self.impl_trait.as_ref() == Some(trait_name);
         };
         if self.models.std_traits.contains(trait_name.as_str()) || declared.std.is_some() {
             return true;
