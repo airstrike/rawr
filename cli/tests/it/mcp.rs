@@ -371,12 +371,8 @@ fn a_started_program_that_returns_from_main_ends_its_session() {
         .as_str()
         .unwrap_or_default()
         .to_owned();
-    // What it prints once it runs comes with the next event, which a save
-    // that restarts it makes.
-    let mut saves = 0;
+    // What it prints once it runs ends a `wait` with no event (#2267).
     while !output.contains("two") {
-        saves += 1;
-        std::fs::write(&main, format!("{running}// {saves}\n")).unwrap();
         let waited = client.call("wait", json!({ "path": "app" }));
         output.push_str(
             waited["structuredContent"]["stdout"]

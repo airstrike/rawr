@@ -185,7 +185,7 @@ pub fn list() -> Vec<Value> {
         }),
         json!({
             "name": "wait",
-            "description": "Wait for what happens next to the started program: `running`, `paused` (at a breakpoint or after a step, with its file and line), `resumed`, `queued` (a save reached a program whose native loop takes it at its next call into script code), `swapped` (a save reloaded it in place, keeping its state), `restarting`, `failed` (with diagnostics; the last good program keeps running) or `ended`. Returns those events and the output since the last call. Call it after each save.",
+            "description": "Wait for what happens next to the started program: `running`, `paused` (at a breakpoint or after a step, with its file and line), `resumed`, `queued` (a save reached a program whose native loop takes it at its next call into script code), `swapped` (a save reloaded it in place, keeping its state), `restarting`, `failed` (with diagnostics; the last good program keeps running) or `ended`. Returns those events and the output since the last call, once either comes: a line the program prints returns it too, so a save may need a second `wait` for its `swapped`. Call it after each save.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -569,8 +569,10 @@ pub fn call(server: &Server, params: &Value, call: &Call) -> Value {
             )
         }),
         "wait" => session(server, text("path"), call).map(|session| {
+            let output_cursor = arguments.get("output_cursor").and_then(Value::as_u64);
             let after = session.next(
                 arguments.get("cursor").and_then(Value::as_u64),
+                output_cursor,
                 call,
                 |stage, percent| progress.send(percent as f64, Some(100.0), stage),
             );
@@ -587,10 +589,7 @@ pub fn call(server: &Server, params: &Value, call: &Call) -> Value {
                     Vec::new(),
                 );
             };
-            let answer = session.answer(
-                Some(after),
-                arguments.get("output_cursor").and_then(Value::as_u64),
-            );
+            let answer = session.answer(Some(after), output_cursor);
             content::success(answer.structured, answer.summary, Vec::new())
         }),
         "status" => Ok(status(server, text("path"), call)),
