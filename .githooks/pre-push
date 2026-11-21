@@ -4,6 +4,7 @@
 zero=0000000000000000000000000000000000000000
 CHECK_FILES=""
 pushing=""
+changed=""
 while read -r local_ref local_sha remote_ref remote_sha; do
     [ "$local_sha" = "$zero" ] && continue
     # Commits not on any remote yet.
@@ -14,6 +15,7 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     fi
     added=$(git log --format= --name-only --diff-filter=ACR "$local_sha" --not --remotes)
     CHECK_FILES=$(printf '%s\n%s' "$CHECK_FILES" "$added")
+    changed=$(printf '%s\n%s' "$changed" "$(git log --format= --name-only "$local_sha" --not --remotes)")
     pushing=1
 done
 [ -n "$pushing" ] || exit 0
@@ -22,4 +24,13 @@ done
 check_layout || exit 1
 check_audit || exit 1
 check_rust --workspace || exit 1
+# A push that changes the site or its Worker runs the tests site.yml runs
+# before it deploys, so a failing one stops here rather than the deploy.
+if printf '%s\n' "$changed" | grep -qE '^(site|play/deploy)/'; then
+    root=$(git rev-parse --show-toplevel)
+    echo "Running the site's and the Worker's tests..."
+    npm --prefix "$root/site" test >/dev/null 2>&1 || { echo "ERROR: npm --prefix site test failed"; exit 1; }
+    (cd "$root/play/deploy/cloudflare" && node build.mjs >/dev/null 2>&1 && npm test >/dev/null 2>&1) \
+        || { echo "ERROR: the Worker's tests failed: cd play/deploy/cloudflare && node build.mjs && npm test"; exit 1; }
+fi
 exit 0
