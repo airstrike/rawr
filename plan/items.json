@@ -2424,6 +2424,9 @@
     {"t":"T2422","issue":2422,"title":"T2422: `rawr gui` and `rawr tui` show a program under the home directory as `~/…` in the window title…","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":"0.4.98"},
     {"t":"T2423","issue":2423,"title":"T2423: Worktrees of one repo sharing a CARGO_TARGET_DIR build a path crate from another worktree's stale sources","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T2424","issue":2424,"title":"T2424: The debugger's inspector keeps one generation's stops, lines and program in one state, and only…","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":"0.4.99"},
-    {"t":"T2425","issue":2425,"title":"T2425: Shells order inspector answers by the pause count","state":"open","category":"Health","labels":["health","playground"],"gantt":null,"decisions":["D1097","D1100"],"commit":null,"release":null}
+    {"t":"T2425","issue":2425,"title":"T2425: Shells order inspector answers by the pause count","state":"open","category":"Health","labels":["health","playground"],"gantt":null,"decisions":["D1097","D1100"],"commit":null,"release":null},
+    {"t":"T2426","issue":2426,"title":"T2426: A runner whose program turns on a feature that reaches a patched package, such as iced_test…","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":"0.4.100"},
+    {"t":"T2427","issue":2427,"title":"T2427: rawr run --features doesn't reach the harness's dependencies","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T2428","issue":2428,"title":"T2428: An unbuilt optional or dev path dependency panics the resolution universe","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }

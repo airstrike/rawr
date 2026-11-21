@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.4.100",
+      "date": "2026-11-21",
+      "entries": [
+        {"text":"A runner whose program turns on a feature that reaches a patched package, such as iced_test through a project feature, settles its lock again: the runner keeps every project patch while Cargo settles it, then leaves out only the patches the settled lock lists as unused.","issues":[2426]}
+      ]
+    },
+    {
       "version": "0.4.99",
       "date": "2026-11-21",
       "entries": [

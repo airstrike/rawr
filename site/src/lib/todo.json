@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-21",
-  "version": "0.4.99",
+  "version": "0.4.100",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.100",
+        "date": "2026-11-21",
+        "entries": [
+          {"text":"A runner whose program turns on a feature that reaches a patched package, such as iced_test through a project feature, settles its lock again: the runner keeps every project patch while Cargo settles it, then leaves out only the patches the settled lock lists as unused.","issues":[2426]}
+        ]
+      },
       {
         "version": "0.4.99",
         "date": "2026-11-21",
@@ -5929,7 +5936,10 @@
     {"issue":2422,"title":"`rawr gui` and `rawr tui` show a program under the home directory as `~/…` in the window title…","state":"closed","category":"Health","release":"0.4.98"},
     {"issue":2423,"title":"Worktrees of one repo sharing a CARGO_TARGET_DIR build a path crate from another worktree's stale sources","state":"open","category":"Health"},
     {"issue":2424,"title":"The debugger's inspector keeps one generation's stops, lines and program in one state, and only…","state":"closed","category":"Health","release":"0.4.99"},
-    {"issue":2425,"title":"Shells order inspector answers by the pause count","state":"open","category":"Health"}
+    {"issue":2425,"title":"Shells order inspector answers by the pause count","state":"open","category":"Health"},
+    {"issue":2426,"title":"A runner whose program turns on a feature that reaches a patched package, such as iced_test…","state":"closed","category":"Health","release":"0.4.100"},
+    {"issue":2427,"title":"rawr run --features doesn't reach the harness's dependencies","state":"open","category":"Health"},
+    {"issue":2428,"title":"An unbuilt optional or dev path dependency panics the resolution universe","state":"open","category":"Health"}
   ],
   "groups": [
     {
