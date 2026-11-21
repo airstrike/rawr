@@ -627,7 +627,8 @@ impl Parser<'_> {
             }
             return Ok(Some(span(name_span.start(), end)));
         };
-        rawr_import::expand::kept::name(source);
+        // The read names the source in the lowerings the lowering is kept
+        // in, as each reuse of the lowering does (`kept::Outside::name`).
         self.read(super::kept::Read::expansion(source.clone(), &text));
         let text = call::kept(&text).unwrap_or_default();
         let remaining = self.nest_expansion(path, span(name_span.start(), text_end(end, " ")))?;

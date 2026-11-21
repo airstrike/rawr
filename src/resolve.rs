@@ -377,13 +377,15 @@ impl Program {
     /// answers: rustc resolves each in the small crate a call's expansion
     /// runs in, so one that names no macro is E0432 whether or not a body
     /// calls it (#2155). One rustc resolved is kept as an empty expansion
-    /// source, named as a check reads it so a passing check keeps it.
+    /// source, named in `named` as a check reads it so a passing check
+    /// keeps it.
     #[cfg(feature = "rust-import")]
     pub(crate) fn unresolved_crate_macros(
         &self,
         project: &std::path::Path,
+        named: &mut rawr_import::expand::kept::Named,
     ) -> Vec<(program::source::Id, Error)> {
-        use rawr_import::expand::{call, kept};
+        use rawr_import::expand::call;
         let mut unresolved: Vec<(program::source::Id, Error)> = Vec::new();
         let bindings = self.items.iter().filter_map(|shell| match &shell.kind {
             item::Kind::Use(used) => Some((shell.source, used)),
@@ -395,7 +397,7 @@ impl Program {
                     continue;
                 }
                 if let Some(path) = resolved_macro_use(project, &binding.qualified) {
-                    kept::name(&path);
+                    named.name(&path);
                     continue;
                 }
                 let request = call::Call::used(&binding.qualified);

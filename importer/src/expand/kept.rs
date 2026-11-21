@@ -5,42 +5,59 @@
 //! retires the source (`retire`): a derive's is expanded again once loading
 //! the program asks for it, as an item an edit changed is, and a call's is
 //! expanded again in its place, from the call its first line names. Each
-//! source a check reads is named here as it is read (`name`), and once a
-//! check passes, each source no check named since the last prune is
-//! removed (`prune`): a call an edit took out of the program, or an item it
-//! renamed, leaves nothing behind.
+//! source a check reads is named in the [`Named`] its owner lends the
+//! check, as it is read or as a lowering kept from an earlier check that
+//! read it is reused. The owner holds them across its rounds and saves,
+//! and once a check passes, each source no check named since the last
+//! prune is removed (`prune`): a call an edit took out of the program, or
+//! an item it renamed, leaves nothing behind.
 
 use std::collections::BTreeSet;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, PoisonError};
 
-/// The kept sources this process's checks read since their project's last
-/// prune.
-static NAMED: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
+/// The kept expansion sources an owner's checks read since their
+/// project's last prune.
+#[derive(Debug, Default)]
+pub struct Named(BTreeSet<PathBuf>);
 
-/// Note that a check read the kept expansion source at `path`.
-pub fn name(path: &Path) {
-    NAMED
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .insert(path.to_path_buf());
+impl Named {
+    /// No source named yet.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self(BTreeSet::new())
+    }
+
+    /// Note that a check read the kept expansion source at `path`.
+    pub fn name(&mut self, path: &Path) {
+        if !self.0.contains(path) {
+            self.0.insert(path.to_path_buf());
+        }
+    }
+
+    /// Take each source `other` names, which is left naming none.
+    pub fn append(&mut self, other: &mut Self) {
+        self.0.append(&mut other.0);
+    }
+
+    /// Whether a check named the source at `path`.
+    #[must_use]
+    pub fn names(&self, path: &Path) -> bool {
+        self.0.contains(path)
+    }
 }
 
 /// Remove each kept expansion source of the project at `project` that no
-/// check named since the last prune. A check that passed read every source
-/// the program needs, so what it didn't name nothing reaches.
-pub fn prune(project: &Path) -> io::Result<()> {
+/// check named in `named`, which then names none of the project's. A
+/// check that passed read every source the program needs, so what it
+/// didn't name nothing reaches.
+pub fn prune(project: &Path, named: &mut Named) -> io::Result<()> {
     let directory = super::directory(project);
-    let named = {
-        let mut named = NAMED.lock().unwrap_or_else(PoisonError::into_inner);
-        let (under, others) = std::mem::take(&mut *named)
-            .into_iter()
-            .partition::<BTreeSet<_>, _>(|path| path.starts_with(&directory));
-        *named = others;
-        under
-    };
+    let (under, others) = std::mem::take(&mut named.0)
+        .into_iter()
+        .partition::<BTreeSet<_>, _>(|path| path.starts_with(&directory));
+    named.0 = others;
     let entries = match fs::read_dir(&directory) {
         Ok(entries) => entries,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
@@ -48,7 +65,7 @@ pub fn prune(project: &Path) -> io::Result<()> {
     };
     for entry in entries {
         let path = entry?.path();
-        if source(&path) && !named.contains(&path) {
+        if source(&path) && !under.contains(&path) {
             remove(&path)?;
         }
     }
@@ -162,13 +179,15 @@ mod tests {
         for path in [&named, &dropped, &basis] {
             fs::write(path, "3\n").unwrap();
         }
-        super::name(&named);
-        super::prune(&project).unwrap();
+        let mut names = super::Named::default();
+        names.name(&named);
+        super::prune(&project, &mut names).unwrap();
         assert!(named.is_file());
         assert!(!dropped.exists());
         assert!(basis.is_file());
         // A prune forgets what it was named: the next check names again.
-        super::prune(&project).unwrap();
+        assert!(!names.names(&named));
+        super::prune(&project, &mut names).unwrap();
         assert!(!named.exists());
         let _ = fs::remove_dir_all(&project);
     }

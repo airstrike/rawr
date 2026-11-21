@@ -1034,7 +1034,8 @@ fn prepare_resolving(
                     // needs: the others are removed (#2152). A check the
                     // cache replayed read none, so it removes none.
                     Ok(completed) if passed => {
-                        rawr_import::expand::kept::prune(&project).map_err(Error::other)?;
+                        rawr_import::expand::kept::prune(&project, checked.named())
+                            .map_err(Error::other)?;
                         completed
                     }
                     Ok(completed) => completed,
