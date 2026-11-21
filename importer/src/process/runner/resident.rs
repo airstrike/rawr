@@ -5,29 +5,6 @@ use crate::process::{hot, resident};
 use crate::protocol::{self, Tag};
 
 impl<B> Candidate<super::Admitted, B> {
-    /// Drain a coalesced explicit UI refresh request on the idle live channel.
-    /// This performs no source validation or background Cargo preparation.
-    pub fn take_refresh(&mut self) -> Result<bool, Error> {
-        let inner = self.inner.as_mut().ok_or(Error::Consumed)?;
-        if !inner.started || !inner.observed {
-            return Ok(false);
-        }
-        let key = *inner.key.as_bytes();
-        super::guarded(inner, |inner| {
-            super::send_guarded(
-                inner,
-                &protocol::Frame::new(Tag::RefreshPoll, Box::from(key))?,
-            )?;
-            let response = super::receive_reply(inner, None)?;
-            refresh_status(&response, &key)
-        })
-        .map_err(|error| match error {
-            // The program ended as it was polled: the next reap says how.
-            error @ Error::WorkPeer { .. } => error,
-            error => super::terminal_owner_loss(inner, error),
-        })
-    }
-
     /// Native watch obligations remain those of the owned artifact, even when
     /// its Rawr snapshot changes. The caller joins these with fresh Rawr inputs.
     pub fn native_watch(
@@ -245,10 +222,6 @@ pub(super) fn retire<B>(inner: &mut super::Inner<B>, refresh: &mut bool) -> Resu
     })
 }
 
-fn refresh_status(response: &protocol::Frame, key: &[u8; 32]) -> Result<bool, Error> {
-    flag_status(response, Tag::RefreshStatus, key)
-}
-
 fn flag_status(response: &protocol::Frame, tag: Tag, key: &[u8; 32]) -> Result<bool, Error> {
     if response.tag() != tag || response.payload().len() != 33 || response.payload()[..32] != *key {
         return Err(Error::Stale);
@@ -263,27 +236,6 @@ fn flag_status(response: &protocol::Frame, tag: Tag, key: &[u8; 32]) -> Result<b
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn refresh_status_requires_current_key_tag_and_canonical_flag() {
-        let mut payload = [7; 33];
-        for flag in [0, 1, 2] {
-            payload[32] = flag;
-            let frame = protocol::Frame::new(Tag::RefreshStatus, Box::from(payload)).unwrap();
-            let result = refresh_status(&frame, &[7; 32]);
-            assert_eq!(result.is_ok(), flag < 2);
-            if flag < 2 {
-                assert_eq!(result.unwrap(), flag == 1);
-            }
-            assert!(refresh_status(&frame, &[8; 32]).is_err());
-        }
-        for length in [0, 31, 32] {
-            let frame = protocol::Frame::new(Tag::RefreshStatus, payload[..length].into()).unwrap();
-            assert!(refresh_status(&frame, &[7; 32]).is_err());
-        }
-        let frame = protocol::Frame::new(Tag::ProfileReply, Box::from(payload)).unwrap();
-        assert!(refresh_status(&frame, &[7; 32]).is_err());
-    }
 
     #[test]
     fn retirement_status_requires_exact_key_tag_length_and_flag() {

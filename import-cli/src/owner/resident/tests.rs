@@ -19,7 +19,7 @@ fn a_forced_full_preparation_names_its_reason() {
     let inputs = fixture
         .inputs()
         .with_imported([Watch::Exact(native.clone())]);
-    let adapter = rawr_watch::Adapter::manual_inputs(inputs, Duration::ZERO).unwrap();
+    let mut adapter = rawr_watch::Adapter::manual_inputs(inputs, Duration::ZERO).unwrap();
     let baseline = adapter.native_baseline();
     let manifests = Manifests::from_graph(&fixture.graph());
     assert_eq!(
@@ -118,13 +118,12 @@ fn resident_manifests_bind_canonical_paths() {
 fn resident_prepare_continuation_retains_watch_coverage_through_fallthrough() {
     let current = Fixture::new();
     let incoming = Fixture::new();
-    let adapter = rawr_watch::Adapter::manual_inputs(current.inputs(), Duration::ZERO).unwrap();
+    let mut adapter = rawr_watch::Adapter::manual_inputs(current.inputs(), Duration::ZERO).unwrap();
     let incoming_source = incoming.root.join("src/main.rs");
     adapter.inject_modify(&incoming_source);
     assert!(adapter.start(Instant::now()).is_none());
 
     let original = adapter
-        .gate()
         .observe_and_start(Instant::now())
         .unwrap()
         .unwrap()
@@ -148,7 +147,11 @@ fn resident_prepare_continuation_retains_watch_coverage_through_fallthrough() {
             panic!("native miss must continue full preparation")
         }
     };
-    let preparing = adapter.start(Instant::now()).unwrap().complete(());
+    let preparing = adapter
+        .observe_and_start(Instant::now())
+        .unwrap()
+        .unwrap()
+        .complete(());
     adapter.inject_modify(&incoming_source);
     assert!(matches!(
         adapter.admit_current(preparing, |_| panic!(
@@ -159,8 +162,14 @@ fn resident_prepare_continuation_retains_watch_coverage_through_fallthrough() {
 
     // The full path registers its replacement before retiring the continuation.
     let replacement = adapter.prepare_inputs(incoming.inputs()).unwrap();
-    drop(fallback_inputs);
-    let installing = adapter.start(Instant::now()).unwrap().complete(());
+    if let Some(staged) = fallback_inputs {
+        assert!(adapter.withdraw(staged).is_empty());
+    }
+    let installing = adapter
+        .observe_and_start(Instant::now())
+        .unwrap()
+        .unwrap()
+        .complete(());
     adapter.inject_modify(&incoming_source);
     assert!(matches!(
         adapter.admit_current(installing, |_| panic!(
@@ -168,23 +177,26 @@ fn resident_prepare_continuation_retains_watch_coverage_through_fallthrough() {
         )),
         scheduler::Admission::Obsolete(())
     ));
-    drop(adapter.start(Instant::now()).unwrap());
+    drop(adapter.observe_and_start(Instant::now()).unwrap().unwrap());
     assert!(adapter.commit_inputs(replacement).unwrap().is_empty());
     adapter.inject_modify(&incoming_source);
     assert!(adapter.start(Instant::now()).is_some());
 }
 
+/// An attempt that ends without committing or withdrawing what it staged
+/// leaves it to the next start, which withdraws it.
 #[test]
 fn resident_dropped_prepare_continuation_retires_candidate_inputs() {
     let current = Fixture::new();
     let incoming = Fixture::new();
-    let adapter = rawr_watch::Adapter::manual_inputs(current.inputs(), Duration::ZERO).unwrap();
+    let mut adapter = rawr_watch::Adapter::manual_inputs(current.inputs(), Duration::ZERO).unwrap();
     let continuation = Attempt::Prepare(
         Some(adapter.prepare_inputs(incoming.inputs()).unwrap()),
         Reason::Uncovered,
         Box::new(incoming.graph()),
     );
     drop(continuation);
+    assert!(adapter.start(Instant::now()).is_none());
     adapter.inject_modify(&incoming.root.join("src/main.rs"));
     assert!(adapter.start(Instant::now()).is_none());
     adapter.inject_modify(&current.root.join("src/main.rs"));
@@ -195,13 +207,9 @@ fn resident_dropped_prepare_continuation_retires_candidate_inputs() {
 fn resident_cold_retry_observes_fresh_sources_without_a_hot_begin() {
     let fixture = Fixture::new();
     let baseline = Manifests::from_graph(&fixture.graph());
-    let adapter = rawr_watch::Adapter::manual_inputs(fixture.inputs(), Duration::ZERO).unwrap();
+    let mut adapter = rawr_watch::Adapter::manual_inputs(fixture.inputs(), Duration::ZERO).unwrap();
     let native = adapter.native_baseline();
-    let request = adapter
-        .gate()
-        .observe_and_start(Instant::now())
-        .unwrap()
-        .unwrap();
+    let request = adapter.observe_and_start(Instant::now()).unwrap().unwrap();
     let mut lane = super::super::Lane::new(&fixture.root).unwrap();
     let revision = lane.revision().unwrap();
     let target = rawr::project::Target::discover(&fixture.root).unwrap();
@@ -209,7 +217,7 @@ fn resident_cold_retry_observes_fresh_sources_without_a_hot_begin() {
     let source = rawr::diagnostic::Source::new("main.rs", "pub fn main( {").unwrap();
     let result = super::attempt(
         &mut lane,
-        &adapter,
+        &mut adapter,
         &request,
         None,
         revision,
@@ -258,7 +266,7 @@ fn a_change_under_target_rawr_triggers_nothing() {
     let inputs = fixture
         .inputs()
         .with_native(&super::native_inputs(&fixture.root, watch));
-    let adapter = rawr_watch::Adapter::manual_inputs(inputs, Duration::ZERO).unwrap();
+    let mut adapter = rawr_watch::Adapter::manual_inputs(inputs, Duration::ZERO).unwrap();
     let baseline = adapter.native_baseline();
 
     for file in [&lock, &generated.join("src/main.rs"), &kept] {
@@ -280,18 +288,14 @@ fn resident_parent_only_native_event_invalidates_parent_baseline() {
     let inputs = fixture
         .inputs()
         .with_imported([Watch::Exact(native.clone())]);
-    let parent = rawr_watch::Adapter::manual_inputs(inputs.clone(), Duration::ZERO).unwrap();
-    let child = rawr_watch::Adapter::manual_inputs(inputs.clone(), Duration::ZERO).unwrap();
+    let mut parent = rawr_watch::Adapter::manual_inputs(inputs.clone(), Duration::ZERO).unwrap();
+    let mut child = rawr_watch::Adapter::manual_inputs(inputs.clone(), Duration::ZERO).unwrap();
     let parent_baseline = parent.native_baseline();
     let child_baseline = child.native_baseline();
 
     parent.inject_modify(&native);
     let _parent_request = parent.start(Instant::now()).unwrap();
-    let _child_request = child
-        .gate()
-        .observe_and_start(Instant::now())
-        .unwrap()
-        .unwrap();
+    let _child_request = child.observe_and_start(Instant::now()).unwrap().unwrap();
     assert!(!parent.resident_eligible(&parent_baseline));
     assert!(child.resident_eligible(&child_baseline));
     assert!(!parent.resident_eligible(&child_baseline));
@@ -310,26 +314,22 @@ fn resident_obsolete_completed_failures_do_not_publish_fresh_diagnostics() {
     use crate::native::Error;
     use rawr_import::process::RunnerError;
     let fixture = Fixture::new();
-    let adapter = rawr_watch::Adapter::manual_inputs(fixture.inputs(), Duration::ZERO).unwrap();
-    let request = adapter
-        .gate()
-        .observe_and_start(Instant::now())
-        .unwrap()
-        .unwrap();
+    let mut adapter = rawr_watch::Adapter::manual_inputs(fixture.inputs(), Duration::ZERO).unwrap();
+    let request = adapter.observe_and_start(Instant::now()).unwrap().unwrap();
     let source = rawr::diagnostic::Source::new("main.rs", "pub fn main() {}").unwrap();
     let drift = || {
         Error::Process(RunnerError::Snapshot(
             rawr_import::supervisor::snapshot::Error::Mismatch,
         ))
     };
-    assert!(super::failed(drift(), &adapter, &request, &source).is_err());
+    assert!(super::failed(drift(), &mut adapter, &request, &source).is_err());
     adapter.inject_modify(&fixture.root.join("src/main.rs"));
     for error in [
         drift(),
         Error::Process(RunnerError::HotConsumedRejected("obsolete".into())),
     ] {
         assert!(matches!(
-            super::failed(error, &adapter, &request, &source),
+            super::failed(error, &mut adapter, &request, &source),
             Ok(Attempt::Settled)
         ));
     }
@@ -345,7 +345,7 @@ fn resident_obsolete_completed_failures_do_not_publish_fresh_diagnostics() {
         },
         RunnerError::Stale,
     ] {
-        assert!(super::failed(Error::Process(error), &adapter, &request, &source).is_err());
+        assert!(super::failed(Error::Process(error), &mut adapter, &request, &source).is_err());
     }
 }
 
@@ -353,8 +353,8 @@ fn resident_obsolete_completed_failures_do_not_publish_fresh_diagnostics() {
 fn resident_runner_late_event_cannot_drop_the_newest_write() {
     let fixture = Fixture::new();
     let main = fixture.root.join("src/main.rs");
-    let adapter = rawr_watch::Adapter::manual_inputs(fixture.inputs(), Duration::ZERO).unwrap();
-    let runner = scheduler::Gate::new(Duration::ZERO);
+    let mut adapter = rawr_watch::Adapter::manual_inputs(fixture.inputs(), Duration::ZERO).unwrap();
+    let mut runner = scheduler::Gate::new(Duration::ZERO);
     let source = rawr::diagnostic::Source::new("main.rs", "pub fn main() {}").unwrap();
     // The CLI watcher sees the final write first; its request captures those
     // bytes and HotBegin opens the runner's request on the runner's own gate.
@@ -366,9 +366,9 @@ fn resident_runner_late_event_cannot_drop_the_newest_write() {
     // the child answers ResidentObsolete while the CLI request is still newest.
     runner.observe(Instant::now()).unwrap();
     assert!(!runner.request_is_current(&begun));
-    assert!(adapter.gate().request_is_current(&request));
+    assert!(adapter.is_current(&request));
     assert!(matches!(
-        super::obsolete(&adapter, &request, &source),
+        super::obsolete(&mut adapter, &request, &source),
         Ok(Attempt::Settled)
     ));
     // No later event exists for these bytes, so only a retry can show them.
@@ -379,7 +379,7 @@ fn resident_runner_late_event_cannot_drop_the_newest_write() {
     // Latest-wins: a newer CLI-observed write supersedes without an extra attempt.
     adapter.inject_modify(&main);
     assert!(matches!(
-        super::obsolete(&adapter, &retry, &source),
+        super::obsolete(&mut adapter, &retry, &source),
         Ok(Attempt::Settled)
     ));
     assert!(adapter.start(Instant::now()).is_some());
@@ -392,8 +392,8 @@ fn resident_runner_late_event_at_install_retries_but_real_failures_report() {
     use rawr_import::process::RunnerError;
     let fixture = Fixture::new();
     let main = fixture.root.join("src/main.rs");
-    let adapter = rawr_watch::Adapter::manual_inputs(fixture.inputs(), Duration::ZERO).unwrap();
-    let runner = scheduler::Gate::new(Duration::ZERO);
+    let mut adapter = rawr_watch::Adapter::manual_inputs(fixture.inputs(), Duration::ZERO).unwrap();
+    let mut runner = scheduler::Gate::new(Duration::ZERO);
     let source = rawr::diagnostic::Source::new("main.rs", "pub fn main() {}").unwrap();
     fixture.write("src/main.rs", "pub fn main() -> i64 { 2 }\n");
     adapter.inject_modify(&main);
@@ -404,10 +404,10 @@ fn resident_runner_late_event_at_install_retries_but_real_failures_report() {
     assert!(runner.request_is_current(&begun));
     runner.observe(Instant::now()).unwrap();
     assert!(!runner.request_is_current(&begun));
-    assert!(adapter.gate().request_is_current(&request));
+    assert!(adapter.is_current(&request));
     let superseded = || Error::Process(RunnerError::HotSuperseded);
     assert!(matches!(
-        super::failed(superseded(), &adapter, &request, &source),
+        super::failed(superseded(), &mut adapter, &request, &source),
         Ok(Attempt::Settled)
     ));
     let retry = adapter
@@ -416,13 +416,13 @@ fn resident_runner_late_event_at_install_retries_but_real_failures_report() {
 
     // A real install failure on the newest request reports and never re-arms.
     let rejected = Error::Process(RunnerError::HotConsumedRejected("widget failed".into()));
-    assert!(super::failed(rejected, &adapter, &retry, &source).is_err());
+    assert!(super::failed(rejected, &mut adapter, &retry, &source).is_err());
     assert!(adapter.start(Instant::now()).is_none());
 
     // Latest-wins: once a newer CLI request exists, superseded adds no attempt.
     adapter.inject_modify(&main);
     assert!(matches!(
-        super::failed(superseded(), &adapter, &retry, &source),
+        super::failed(superseded(), &mut adapter, &retry, &source),
         Ok(Attempt::Settled)
     ));
     assert!(adapter.start(Instant::now()).is_some());
@@ -436,15 +436,15 @@ struct Fixture {
 #[test]
 fn superseded_attempt_failure_is_not_reported() {
     let fixture = Fixture::new();
-    let adapter = rawr_watch::Adapter::manual_inputs(fixture.inputs(), Duration::ZERO).unwrap();
+    let mut adapter = rawr_watch::Adapter::manual_inputs(fixture.inputs(), Duration::ZERO).unwrap();
     let mut lane = super::super::Lane::new(&fixture.root).unwrap();
     let failure =
         || super::super::framework("prepared runner read set rejected before admission", None);
     // No live runner: reporting a current attempt's failure reaches the lane.
-    assert!(super::super::settle_failure(&mut lane, &adapter, failure()).is_err());
+    assert!(super::super::settle_failure(&mut lane, &mut adapter, failure()).is_err());
     // A newer edit arrived mid-preparation: the stale failure stays silent.
     adapter.inject_modify(&fixture.root.join("src/main.rs"));
-    assert!(super::super::settle_failure(&mut lane, &adapter, failure()).is_ok());
+    assert!(super::super::settle_failure(&mut lane, &mut adapter, failure()).is_ok());
     assert!(adapter.start(Instant::now()).is_some());
 }
 

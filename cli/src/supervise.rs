@@ -22,7 +22,6 @@ use crate::color;
 const PROGRAM: &str = "RAWR_RUN_PROGRAM";
 
 const DEBOUNCE: Duration = Duration::from_millis(30);
-const POLL: Duration = Duration::from_millis(25);
 
 /// In the process [`run`] starts: run the program once and give its exit
 /// status. `None` in any other process.
@@ -164,6 +163,9 @@ pub fn run(
             return ExitCode::FAILURE;
         }
     };
+    if let (Some(watching), Some(running)) = (&watcher, &child) {
+        watching.wake_on_exit(running);
+    }
     crate::events::running();
     let interactive = interactive();
     loop {
@@ -188,9 +190,13 @@ pub fn run(
                 }
             }
         }
-        let Some(watching) = watcher.as_ref() else {
-            // Nothing to watch: wait for the program.
-            std::thread::sleep(POLL);
+        let Some(watching) = watcher.as_mut() else {
+            // Nothing to watch: the run ends with the program, which the
+            // next turn reaps.
+            let Some(running) = child.as_mut() else {
+                return ExitCode::SUCCESS;
+            };
+            drop(running.wait());
             continue;
         };
         if !watching.changed() {
@@ -213,6 +219,10 @@ pub fn run(
         // Each change is acted on, or reported, once.
         started_from = now;
         if let Some(next) = Watcher::open(&loaded.graph) {
+            // The program that runs on wakes the new watcher when it ends.
+            if let Some(running) = &child {
+                next.wake_on_exit(running);
+            }
             watcher = Some(next);
         }
         if let Ok(Some(binary)) =
@@ -245,6 +255,9 @@ pub fn run(
                 return ExitCode::FAILURE;
             }
         };
+        if let (Some(watching), Some(running)) = (&watcher, &child) {
+            watching.wake_on_exit(running);
+        }
         crate::events::running();
     }
 }
@@ -314,23 +327,23 @@ impl Watcher {
     }
 
     /// Wait for a save, past its debounce.
-    pub fn wait(&self) {
+    pub fn wait(&mut self) {
         while !self.changed() {}
     }
 
-    /// Wait up to one poll for a save, past its debounce.
-    fn changed(&self) -> bool {
-        self.0.poll();
-        let now = Instant::now();
-        if self.0.start(now).is_some() {
-            return true;
-        }
-        let timeout = self
-            .0
-            .deadline()
-            .map_or(POLL, |deadline| deadline.saturating_duration_since(now))
-            .min(POLL);
-        let _ = self.0.notices().recv_timeout(timeout);
-        false
+    /// Wait for the next wake, and say whether it brought a save past its
+    /// debounce. The program's end wakes it too, and brings none.
+    fn changed(&mut self) -> bool {
+        // A watcher that failed reports no more saves; the program runs on.
+        drop(self.0.wait());
+        self.0.start(Instant::now()).is_some()
+    }
+
+    /// Wake this watcher's owner when `child` ends.
+    fn wake_on_exit(&self, child: &Child) {
+        #[cfg(unix)]
+        self.0.waker().wake_on_exit(child.id());
+        #[cfg(not(unix))]
+        let _ = child;
     }
 }

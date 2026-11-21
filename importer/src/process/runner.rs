@@ -101,6 +101,8 @@ pub struct Owner {
     program: Option<Arguments>,
     /// The build target each runner this owner starts is a generation of.
     target: crate::store::Target,
+    /// Told each runner's process id as it spawns.
+    spawned: Option<Box<dyn Fn(u32) + Send>>,
 }
 
 /// What a program `rawr run` runs gets as `cargo run` gives it (D500.1):
@@ -253,6 +255,7 @@ impl Owner {
             lifecycle,
             program: None,
             target: crate::store::Target::UNNAMED,
+            spawned: None,
         })
     }
 
@@ -275,6 +278,12 @@ impl Owner {
     pub fn with_target(mut self, target: crate::store::Target) -> Self {
         self.target = target;
         self
+    }
+
+    /// Tell `spawned` the process id of each runner this owner starts, as
+    /// it starts: the owner's watcher wakes when that process ends.
+    pub fn on_spawn(&mut self, spawned: impl Fn(u32) + Send + 'static) {
+        self.spawned = Some(Box::new(spawned));
     }
 
     #[cfg(not(unix))]
@@ -404,6 +413,9 @@ impl<B> crate::runner::Manifest<crate::runner::Built, B> {
         .map_err(resource_error)?;
         let evidence_spawned_ns = crate::metrics::monotonic_ns();
         let runner_pid = child.id();
+        if let Some(spawned) = &process.spawned {
+            spawned(runner_pid);
+        }
         crate::metrics::record_process(crate::metrics::ProcessKind::Runner);
         crate::metrics::record_milestone(crate::metrics::Milestone::RunnerSpawned);
         // What a program writes to the terminal itself has no log.

@@ -4750,6 +4750,7 @@ dependencies = [
  "rawr",
  "rawr-import",
  "rawr-notify",
+ "rustix 1.1.4",
 ]
 
 [[package]]

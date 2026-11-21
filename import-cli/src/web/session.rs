@@ -128,7 +128,7 @@ impl Session {
     /// Hand each save to the page, for as long as the process runs.
     pub(super) fn serve(mut self) -> ExitCode {
         loop {
-            let Some(watcher) = rawr_cli::supervise::Watcher::open(&self.graph) else {
+            let Some(mut watcher) = rawr_cli::supervise::Watcher::open(&self.graph) else {
                 // Saves can't be heard; the page runs what it has.
                 loop {
                     std::thread::park();

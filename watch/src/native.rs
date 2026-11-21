@@ -1,17 +1,15 @@
 //! Watcher-local invalidation history; never native freshness or live authority.
 
-use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 
 /// One watcher's native invalidation watermark captured before full validation.
 /// A successfully admitted owner may retain it; capture alone grants no reuse.
 #[derive(Debug)]
 pub struct Baseline {
-    history: Arc<Counters>,
+    history: Arc<Origin>,
     revision: u64,
     rescans: u64,
     registrations: u64,
@@ -82,33 +80,34 @@ impl fmt::Display for Change {
     }
 }
 
+/// One watcher's identity, which a baseline names.
 #[derive(Debug, Default)]
-struct Counters {
-    revision: AtomicU64,
-    rescans: AtomicU64,
+struct Origin;
+
+/// What the watcher's owner learned from its events, read on the owner's
+/// own thread.
+#[derive(Default)]
+pub(super) struct History {
+    origin: Arc<Origin>,
+    revision: u64,
+    rescans: u64,
     /// How many times the watcher replaced its registration.
-    registrations: AtomicU64,
+    registrations: u64,
     /// Whether an event since the watcher last derived its roots may have
     /// created or removed a directory they derive from: any event but a
     /// write to a Rawr source with nothing watched beneath it.
-    roots_moved: AtomicBool,
+    roots_moved: bool,
     /// The path of the latest native event, when it named one.
-    changed: Mutex<Option<PathBuf>>,
-    /// Each source input's identity as [`History::poll`] last saw it, and
-    /// whether that sighting was a change it delivered.
-    sources: Mutex<BTreeMap<PathBuf, (Option<Identity>, bool)>>,
+    changed: Option<PathBuf>,
 }
-
-#[derive(Clone, Default)]
-pub(super) struct History(Arc<Counters>);
 
 impl History {
     pub(super) fn capture(&self, stamp: Stamp) -> Baseline {
         Baseline {
-            history: Arc::clone(&self.0),
-            revision: self.0.revision.load(Ordering::Acquire),
-            rescans: self.0.rescans.load(Ordering::Acquire),
-            registrations: self.0.registrations.load(Ordering::Acquire),
+            history: Arc::clone(&self.origin),
+            revision: self.revision,
+            rescans: self.rescans,
+            registrations: self.registrations,
             stamp,
         }
     }
@@ -123,20 +122,17 @@ impl History {
     /// events (a rescan) only count when a native input's filesystem stamp
     /// actually differs.
     pub(super) fn change(&self, baseline: &Baseline) -> Option<Change> {
-        if !Arc::ptr_eq(&self.0, &baseline.history) || baseline.revision == u64::MAX {
+        if !Arc::ptr_eq(&self.origin, &baseline.history) || baseline.revision == u64::MAX {
             return Some(Change::Watcher);
         }
-        let registered = self.0.registrations.load(Ordering::Acquire) != baseline.registrations;
-        if self.0.revision.load(Ordering::Acquire) != baseline.revision {
-            let path = self
-                .0
-                .changed
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .clone();
-            return Some(Change::Event { path, registered });
+        let registered = self.registrations != baseline.registrations;
+        if self.revision != baseline.revision {
+            return Some(Change::Event {
+                path: self.changed.clone(),
+                registered,
+            });
         }
-        if self.0.rescans.load(Ordering::Acquire) == baseline.rescans {
+        if self.rescans == baseline.rescans {
             return None;
         }
         match baseline.stamp.compare() {
@@ -146,97 +142,34 @@ impl History {
     }
 
     /// A native input at `path`, when the event named one, changed.
-    pub(super) fn invalidate(&self, path: Option<&Path>) {
+    pub(super) fn invalidate(&mut self, path: Option<&Path>) {
         // Saturation permanently disables eligibility rather than wrapping to
-        // an earlier owner. Updates occur inside the admission gate's lock.
-        let revision = &self.0.revision;
-        revision.store(
-            revision.load(Ordering::Acquire).saturating_add(1),
-            Ordering::Release,
-        );
-        *self
-            .0
-            .changed
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = path.map(Path::to_path_buf);
+        // an earlier owner.
+        self.revision = self.revision.saturating_add(1);
+        self.changed = path.map(Path::to_path_buf);
     }
 
     /// The watcher replaced its registration with a successor's.
-    pub(super) fn registered(&self) {
-        self.0.registrations.fetch_add(1, Ordering::AcqRel);
+    pub(super) const fn registered(&mut self) {
+        self.registrations = self.registrations.wrapping_add(1);
     }
 
     /// An event may have created or removed a directory the watcher's roots
     /// derive from.
-    pub(super) fn roots_moved(&self) {
-        self.0.roots_moved.store(true, Ordering::Release);
+    pub(super) const fn roots_moved(&mut self) {
+        self.roots_moved = true;
     }
 
     /// Whether an event since the last call may have moved the watcher's
     /// roots, which the caller derives again.
-    pub(super) fn take_roots_moved(&self) -> bool {
-        self.0.roots_moved.swap(false, Ordering::AcqRel)
+    pub(super) const fn take_roots_moved(&mut self) -> bool {
+        std::mem::replace(&mut self.roots_moved, false)
     }
 
     /// The backend dropped events: anything may have changed, so eligibility
     /// now rests on re-stamping the native inputs instead of on events.
-    pub(super) fn rescan(&self) {
-        self.0.rescans.fetch_add(1, Ordering::AcqRel);
-    }
-
-    /// Stat `paths` and return those whose identity changed since the last
-    /// poll. A path seen the first time is only recorded.
-    pub(super) fn poll(&self, paths: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
-        let mut sources = self
-            .0
-            .sources
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        let mut changed = Vec::new();
-        for path in paths {
-            let now = identity(&path);
-            let delivered = match sources.get(&path) {
-                Some((seen, delivered)) if *seen == now => *delivered,
-                Some(_) => {
-                    changed.push(path.clone());
-                    false
-                }
-                None => false,
-            };
-            sources.insert(path, (now, delivered));
-        }
-        changed
-    }
-
-    /// Mark the changes [`Self::poll`] returned as delivered.
-    pub(super) fn deliver(&self, paths: &[PathBuf]) {
-        let mut sources = self
-            .0
-            .sources
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        for path in paths {
-            if let Some((_, delivered)) = sources.get_mut(path) {
-                *delivered = true;
-            }
-        }
-    }
-
-    /// Whether an event on `paths` reports only writes a poll already
-    /// delivered: each path a poll knows still has the identity it delivered.
-    /// A platform stream that lags behind the poll reports them again.
-    pub(super) fn delivered(&self, paths: &[PathBuf]) -> bool {
-        let sources = self
-            .0
-            .sources
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        let mut known = paths
-            .iter()
-            .filter_map(|path| Some((path, sources.get(path)?)))
-            .peekable();
-        known.peek().is_some()
-            && known.all(|(path, (seen, delivered))| *delivered && *seen == identity(path))
+    pub(super) const fn rescan(&mut self) {
+        self.rescans = self.rescans.wrapping_add(1);
     }
 }
 
@@ -250,7 +183,7 @@ pub(super) struct Stamp {
     entries: Vec<(PathBuf, Option<Identity>)>,
 }
 
-pub(super) type Identity = [i64; 8];
+type Identity = [i64; 8];
 
 impl Stamp {
     pub(super) fn capture(paths: Box<[PathBuf]>, trees: Box<[PathBuf]>) -> Self {
@@ -306,7 +239,7 @@ fn entries(paths: &[PathBuf], trees: &[PathBuf]) -> Vec<(PathBuf, Option<Identit
 }
 
 #[cfg(unix)]
-pub(super) fn identity(path: &Path) -> Option<Identity> {
+fn identity(path: &Path) -> Option<Identity> {
     use std::os::unix::fs::MetadataExt as _;
     let metadata = fs::symlink_metadata(path).ok()?;
     #[allow(clippy::cast_possible_wrap)]
@@ -323,7 +256,7 @@ pub(super) fn identity(path: &Path) -> Option<Identity> {
 }
 
 #[cfg(not(unix))]
-pub(super) fn identity(_: &Path) -> Option<Identity> {
+fn identity(_: &Path) -> Option<Identity> {
     None
 }
 
@@ -351,57 +284,16 @@ mod tests {
 
     #[test]
     fn exhausted_history_never_reenables_resident_eligibility() {
-        let history = History(Arc::new(Counters {
-            revision: AtomicU64::new(u64::MAX - 1),
-            rescans: AtomicU64::new(0),
-            ..Counters::default()
-        }));
+        let mut history = History {
+            revision: u64::MAX - 1,
+            ..History::default()
+        };
         let before = history.capture(Stamp::default());
         history.invalidate(None);
         let exhausted = history.capture(Stamp::default());
         history.invalidate(None);
         assert!(!history.unchanged(&before));
         assert!(!history.unchanged(&exhausted));
-    }
-
-    #[test]
-    fn a_poll_delivers_each_write_once_and_a_late_event_for_it_is_stale() {
-        let root = std::env::temp_dir().join(format!("rawr-watch-poll-{}", std::process::id()));
-        fs::create_dir_all(&root).unwrap();
-        let source = root.join("main.rs");
-        fs::write(&source, "fn main() {}\n").unwrap();
-        let history = History::default();
-        let paths = [source.clone()];
-
-        assert!(
-            history.poll(paths.clone()).is_empty(),
-            "a first sighting is recorded"
-        );
-        assert!(!history.delivered(&paths), "nothing was delivered yet");
-
-        fs::write(&source, "fn main() { 1; }\n").unwrap();
-        assert_eq!(history.poll(paths.clone()), paths);
-        assert!(
-            !history.delivered(&paths),
-            "delivery is marked after the event"
-        );
-        history.deliver(&paths);
-        assert!(
-            history.delivered(&paths),
-            "the stream's late event is stale"
-        );
-        assert!(history.poll(paths.clone()).is_empty());
-        assert!(
-            !history.delivered(&[root.join("other.rs")]),
-            "an unknown path is news"
-        );
-
-        fs::write(&source, "fn main() { 2; }\n").unwrap();
-        assert!(
-            !history.delivered(&paths),
-            "a newer write is news to the stream"
-        );
-        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -412,22 +304,22 @@ mod tests {
         let file = root.join("Cargo.toml");
         fs::write(&file, "[package]\n").unwrap();
         fs::write(tree.join("lib.rs"), "fn a() {}\n").unwrap();
-        let history = History::default();
-        let capture = || {
+        let mut history = History::default();
+        let capture = |history: &History| {
             history.capture(Stamp::capture(
                 Box::from([file.clone(), root.join("absent")]),
                 Box::from([tree.clone()]),
             ))
         };
 
-        let baseline = capture();
+        let baseline = capture(&history);
         history.rescan();
         assert!(history.unchanged(&baseline), "nothing was written");
 
         fs::write(tree.join("new.rs"), "fn b() {}\n").unwrap();
         assert!(!history.unchanged(&baseline), "a file appeared in a tree");
 
-        let baseline = capture();
+        let baseline = capture(&history);
         history.rescan();
         fs::write(&file, "[package]\nname = \"x\"\n").unwrap();
         assert!(
@@ -435,7 +327,7 @@ mod tests {
             "an exact input was rewritten"
         );
 
-        let baseline = capture();
+        let baseline = capture(&history);
         history.invalidate(None);
         assert!(
             !history.unchanged(&baseline),
@@ -452,10 +344,12 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         let file = root.join("Cargo.toml");
         fs::write(&file, "[package]\n").unwrap();
-        let history = History::default();
-        let capture = || history.capture(Stamp::capture(Box::from([file.clone()]), Box::default()));
+        let mut history = History::default();
+        let capture = |history: &History| {
+            history.capture(Stamp::capture(Box::from([file.clone()]), Box::default()))
+        };
 
-        let baseline = capture();
+        let baseline = capture(&history);
         history.rescan();
         fs::write(&file, "[package]\nname = \"x\"\n").unwrap();
         assert_eq!(
@@ -466,7 +360,7 @@ mod tests {
             })
         );
 
-        let baseline = capture();
+        let baseline = capture(&history);
         history.registered();
         history.invalidate(Some(&file));
         let change = history.change(&baseline).expect("an event changed it");

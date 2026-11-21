@@ -13,21 +13,6 @@ pub enum Installation<B> {
 }
 
 impl<B> Slot<B> {
-    pub fn take_refresh(&mut self) -> Result<bool, crate::process::RunnerError> {
-        let result = self
-            .current
-            .as_mut()
-            .ok_or(crate::process::RunnerError::NoCurrent)?
-            .take_refresh();
-        if result
-            .as_ref()
-            .is_err_and(crate::process::RunnerError::is_owner_lost)
-        {
-            drop(self.current.take());
-        }
-        result
-    }
-
     /// Borrow watch obligations from the actual owned native artifact.
     pub fn native_watch(
         &self,
