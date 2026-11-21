@@ -250,10 +250,10 @@ impl Adapter {
 
     /// `continue`: the paused program runs on.
     pub(super) fn resume(&mut self, request: Value) {
-        self.ask(json!({ "op": "continue" }), move |adapter, answer| {
-            let answer = answer.map(|_| {
+        self.ask_seen(json!({ "op": "continue" }), move |adapter, answer| {
+            let answer = answer.map(|(_, seen)| {
                 if let Some(session) = &adapter.session {
-                    session.observe_pause(None);
+                    session.observe_pause(None, seen);
                 }
                 json!({ "allThreadsContinued": true })
             });
@@ -283,15 +283,16 @@ impl Adapter {
             return self.out.respond(request, Err(message));
         }
         self.out.respond(request, Ok(json!({})));
-        self.ask(
+        self.ask_seen(
             json!({ "op": "step", "kind": kind }),
             |adapter, answer| match answer {
-                Ok(answer) => {
+                Ok((answer, seen)) => {
                     if let Some(session) = &adapter.session {
                         session.observe_pause(
                             answer["paused"]
                                 .as_object()
                                 .map(|_| answer["paused"].clone()),
+                            seen,
                         );
                     }
                 }

@@ -104,11 +104,17 @@ pub enum Refusal {
     Cancelled,
 }
 
+/// How far the session's events had come when an answer came. What the
+/// answer says of the program holds only until a later event, which the
+/// session told after it and which is newer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Seen(u64);
+
 /// What a session tells one of its waiters.
 #[derive(Debug)]
 pub enum Told {
-    /// The answer to a request.
-    Answer(Result<Value, Refusal>),
+    /// The answer to a request, and how far the events had come with it.
+    Answer(Result<(Value, Seen), Refusal>),
     /// A build's stage and percent, while a wait for the program waits.
     Building { stage: String, percent: u64 },
     /// What the wait waited for came, or the session is over.
@@ -537,11 +543,16 @@ impl Session {
             .flatten()
     }
 
-    /// The program answered a debugger tool: paused at `paused`, or
-    /// running. Its own `paused` and `resumed` events say the same once
-    /// they come.
-    pub fn observe_pause(&self, paused: Option<Value>) {
-        self.change(move |mirror| mirror.session.observe_pause(paused));
+    /// The program answered a debugger tool, as of `seen`: paused at
+    /// `paused`, or running. Its own `paused` and `resumed` events say the
+    /// same once they come, so an event that came after the answer wins:
+    /// the program may have paused or gone on since.
+    pub fn observe_pause(&self, paused: Option<Value>, seen: Seen) {
+        self.change(move |mirror| {
+            if mirror.seen() == seen {
+                mirror.session.observe_pause(paused);
+            }
+        });
     }
 
     /// The newest breakpoints the session told: `{"event": "breakpoints",
@@ -598,7 +609,7 @@ impl Session {
 
     /// [`Self::request`] for a call, which waits for the answer or its
     /// cancel.
-    pub fn ask(&self, request: &Value, call: &Call) -> Result<Value, Refusal> {
+    pub fn ask(&self, request: &Value, call: &Call) -> Result<(Value, Seen), Refusal> {
         if call.is_cancelled() {
             return Err(Refusal::Cancelled);
         }
@@ -816,7 +827,7 @@ impl Owner {
             (Some(0), None) => self.greeted(&message["result"]),
             (Some(id), None) => {
                 let answer = match message.get_mut("result") {
-                    Some(result) => Ok(result.take()),
+                    Some(result) => Ok((result.take(), self.mirror.seen())),
                     None => Err(refusal(&message["error"])),
                 };
                 if let Some(ear) = self
@@ -969,6 +980,11 @@ fn refusal(error: &Value) -> Refusal {
 }
 
 impl Mirror {
+    /// How far the events have come.
+    fn seen(&self) -> Seen {
+        Seen(self.session.next_number())
+    }
+
     /// Keep a piece of output, dropping the oldest past [`OUTPUT`].
     fn keep(&mut self, stream: Stream, text: String) {
         self.next_output += 1;
@@ -1239,6 +1255,56 @@ mod tests {
         assert_eq!(answer["cursor"], 1);
         // The next wait goes on from there.
         assert_eq!(session.look(|mirror| mirror.given_event), Some(1));
+    }
+
+    /// A wait parked after the event it waits for already came ends at
+    /// once: the owner checks each wait as it parks it.
+    #[test]
+    fn a_wait_parked_after_its_event_ends_at_once() {
+        let (session, _other) = Session::running_at(Phase::Running);
+        let given = session.answer(None, None).structured;
+        assert_eq!(given["cursor"], 1);
+        session.change(|mirror| {
+            let paused = json!({ "event": "paused", "file": "/p/src/main.rs", "line": 9 });
+            mirror.session.record(2, paused);
+        });
+        let (waiting, told) = ear();
+        let id = session.park(Wait::Next { cursor: None }, waiting);
+        let (heard, what) = told.recv().unwrap();
+        assert_eq!(heard, id);
+        assert!(matches!(what, Told::Next(Some(1))), "{what:?}");
+        assert_eq!(session.answer(Some(1), None).structured["state"], "paused");
+    }
+
+    /// The program's `paused` event, told right after its answer to a
+    /// `continue`, wins over what the answer said, whichever reaches the
+    /// session's owner first: the program stays paused, and the next wait
+    /// returns that pause rather than waiting for an event that never
+    /// comes.
+    #[test]
+    fn a_pause_told_after_an_answer_wins_over_the_answer() {
+        let (session, other) = Session::running_at(Phase::Running);
+        let mut lines = BufReader::new(other.try_clone().unwrap()).lines();
+        assert_eq!(next(&mut lines)["method"], "hello");
+        let asking = std::sync::Arc::clone(&session);
+        let continued = std::thread::spawn(move || {
+            let call = Call::default();
+            let (answer, seen) = asking.ask(&json!({ "op": "continue" }), &call).unwrap();
+            asking.observe_pause(answer["paused"].as_object().map(|_| answer.clone()), seen);
+        });
+        let request = next(&mut lines);
+        let answer = json!({ "jsonrpc": "2.0", "id": request["id"], "result": { "paused": null } });
+        let paused = json!({ "jsonrpc": "2.0", "method": "event", "params": {
+            "event": "paused", "seq": 2, "file": "/p/src/main.rs", "line": 9,
+        } });
+        // One write, so the event follows the answer at once.
+        write!(&other, "{answer}\n{paused}\n").unwrap();
+        continued.join().unwrap();
+        let after = session.next(Some(1), &Call::default(), |_, _| {});
+        assert_eq!(after, Some(1));
+        let now = session.answer(after, None).structured;
+        assert_eq!(now["state"], "paused", "{now}");
+        assert_eq!(now["paused"]["line"], 9, "{now}");
     }
 
     /// A request in flight when the session's connection closes is

@@ -826,7 +826,7 @@ fn inspect(
         "file": file,
         "frame": frame,
     });
-    let answer = ask(&session, &request, call)?;
+    let (answer, _) = ask(&session, &request, call)?;
     if answer["reached"] != true {
         let paused = &answer["paused"];
         if paused.is_object() {
@@ -930,7 +930,7 @@ fn evaluate(
 ) -> Result<Value, String> {
     let session = session(server, path, call)?;
     let request = json!({ "op": "eval", "code": code, "frame": frame });
-    let answer = ask(&session, &request, call)?;
+    let (answer, _) = ask(&session, &request, call)?;
     match (answer["value"].as_str(), answer["error"].as_str()) {
         (Some(value), _) => Ok(content::success(
             json!({ "root": session.root, "value": value }),
@@ -960,7 +960,7 @@ fn debug(server: &Server, tool: &str, arguments: &Value, call: &Call) -> Result<
         "function": arguments.get("function"),
         "kind": arguments.get("kind"),
     });
-    let answer = ask(&session, &request, call)?;
+    let (answer, seen) = ask(&session, &request, call)?;
     match answer["error"].as_str() {
         Some("not paused") => {
             return Err(format!(
@@ -1013,7 +1013,7 @@ fn debug(server: &Server, tool: &str, arguments: &Value, call: &Call) -> Result<
     let paused = &answer["paused"];
     // `status` and `wait` say so at once, before the program's own event
     // arrives (#535).
-    session.observe_pause(paused.as_object().map(|_| paused.clone()));
+    session.observe_pause(paused.as_object().map(|_| paused.clone()), seen);
     if paused.is_object() {
         summary.push_str(&format!(
             "paused at {}:{}",
@@ -1054,11 +1054,11 @@ fn input(server: &Server, tool: &str, arguments: &Value, call: &Call) -> Result<
     }
     request["op"] = json!("input");
     request["action"] = json!(tool);
-    let answer = ask(&session, &request, call)?;
+    let (answer, seen) = ask(&session, &request, call)?;
     match answer["error"].as_str() {
         Some("paused") if answer["taken"] == true => {
             let paused = &answer["paused"];
-            session.observe_pause(Some(paused.clone()));
+            session.observe_pause(Some(paused.clone()), seen);
             let mut summary = format!(
                 "{tool} sent; the program paused at {}:{}",
                 paused["file"].as_str().unwrap_or_default(),
@@ -1118,7 +1118,11 @@ fn input(server: &Server, tool: &str, arguments: &Value, call: &Call) -> Result<
 /// session, or why there is none. The session gives a request made while
 /// the program starts or restarts to the program that comes of it, not the
 /// one it retires (#1964).
-fn ask(session: &session::Session, request: &Value, call: &Call) -> Result<Value, String> {
+fn ask(
+    session: &session::Session,
+    request: &Value,
+    call: &Call,
+) -> Result<(Value, session::Seen), String> {
     session.ask(request, call).map_err(|refusal| match refusal {
         session::Refusal::NotRunning => format!(
             "the program started for {} isn't running (state: {})",
@@ -1174,7 +1178,7 @@ fn screenshot(
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
     let request = json!({ "op": "screenshot", "title": title, "file": file });
-    let answer = ask(&session, &request, call)?;
+    let (answer, _) = ask(&session, &request, call)?;
     match answer["error"].as_str() {
         Some("paused") => {
             let paused = &answer["paused"];
