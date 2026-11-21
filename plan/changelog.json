@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.5.2",
+      "date": "2026-11-21",
+      "entries": [
+        {"text":"The build line says what Cargo reports: the step, the crates finished of the total, the crate that has compiled longest and the time, as in `building runner · 212 of 340 crates · iced_wgpu · 3m12s`. It no longer fills a bar on time, so a stalled build shows as stalled. When Cargo waits for another Cargo's lock the line says which directory and for how long, and a wait for rawr's shared extraction directory names it as rawr's, with the process using it and its project. rawr mcp, rawr tui and rawr gui show the same text in place of a percent.","issues":[2456]}
+      ]
+    },
+    {
       "version": "0.5.1",
       "date": "2026-11-21",
       "entries": [

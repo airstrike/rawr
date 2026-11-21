@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors.
 
+## 0.5.2 (2026-11-21)
+
+- The build line says what Cargo reports: the step, the crates finished of the total, the crate that has compiled longest and the time, as in `building runner · 212 of 340 crates · iced_wgpu · 3m12s`. It no longer fills a bar on time, so a stalled build shows as stalled. When Cargo waits for another Cargo's lock the line says which directory and for how long, and a wait for rawr's shared extraction directory names it as rawr's, with the process using it and its project. rawr mcp, rawr tui and rawr gui show the same text in place of a percent. (#2456)
+
 ## 0.5.1 (2026-11-21)
 
 - A method call on a program type calls its inherent method, as rustc does, when the type's impl of a dependency's trait with a method of the same name isn't in scope there: iced's game_of_life builds again. (#2455)

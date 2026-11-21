@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-21",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors."],"entries":[]},
     "releases": [
+      {
+        "version": "0.5.2",
+        "date": "2026-11-21",
+        "entries": [
+          {"text":"The build line says what Cargo reports: the step, the crates finished of the total, the crate that has compiled longest and the time, as in `building runner · 212 of 340 crates · iced_wgpu · 3m12s`. It no longer fills a bar on time, so a stalled build shows as stalled. When Cargo waits for another Cargo's lock the line says which directory and for how long, and a wait for rawr's shared extraction directory names it as rawr's, with the process using it and its project. rawr mcp, rawr tui and rawr gui show the same text in place of a percent.","issues":[2456]}
+        ]
+      },
       {
         "version": "0.5.1",
         "date": "2026-11-21",
@@ -6041,9 +6048,10 @@
     {"issue":2453,"title":"The VS Code extension starts rawr lsp beside rust-analyzer","state":"open","category":"Health"},
     {"issue":2454,"title":"The home page and Debugging show one program paused at the same line in rawr tui, rawr gui, the…","state":"closed","category":"Health","release":"0.5.0"},
     {"issue":2455,"title":"A method call on a program type calls its inherent method, as rustc does, when the type's impl…","state":"closed","category":"Health","release":"0.5.1"},
-    {"issue":2456,"title":"rawr's launch line says what it waits on and what Cargo is compiling, not only a stage and a percent","state":"open","category":"Health"},
+    {"issue":2456,"title":"rawr's launch line says what it waits on and what Cargo is compiling, not only a stage and a percent","state":"closed","category":"Health","release":"0.5.2"},
     {"issue":2457,"title":"rawr's per-project state lands in the workspace's shared target, not the worktree's CARGO_TARGET_DIR","state":"open","category":"Health"},
-    {"issue":2458,"title":"Inside a dependency trait's impl, rawr treats that trait as in scope for method calls","state":"open","category":"Health"}
+    {"issue":2458,"title":"Inside a dependency trait's impl, rawr treats that trait as in scope for method calls","state":"open","category":"Health"},
+    {"issue":2459,"title":"A check's phase line says when Cargo waits for a lock","state":"open","category":"Health"}
   ],
   "groups": [
     {
