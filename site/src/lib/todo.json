@@ -8706,8 +8706,8 @@
           "name": "Read a running program's values",
           "start": 53,
           "size": 3,
-          "state": "next",
-          "note": "rawr mcp inspect works with or without dependencies, its screenshot is drawn by the program itself with no OS capture (#1989), and input waits for the first window (#1947). Next: rawr's menu bar items (#1990), locked and 2x capture checks (#1993); frames, types and the editor remain.",
+          "state": "now",
+          "note": "Frames, types, maps and hover values read in every shell (#2009, #2017, #2256, #2257, #2272). Left: locked and 2x capture checks (#1993). After 0.5: other platforms (#1995, #1996).",
           "issues": [
             {"number":488,"title":"Read a running program's values from rawr mcp and the editor","state":"closed"},
             {"number":510,"title":"inspect answers for programs with Rust dependencies","state":"closed"},
@@ -8738,7 +8738,7 @@
           "start": 56,
           "size": 1,
           "state": "now",
-          "note": "rawr mcp's input reaches the program every time. Left: input stops after about 150 calls (#1453), long text (#1415).",
+          "note": "rawr mcp's input reaches the program every time, long text included (#1415, #2255, #2267). Left: input stops after about 150 calls on a big app (#1453).",
           "issues": [
             {"number":1415,"title":"`rawr mcp`'s `type` tool drops text past 722 characters without an error; take any length or…","state":"closed"},
             {"number":1453,"title":"rawr mcp input stops reaching a running iced app after ~150 calls while it keeps drawing; clicks…","state":"open"},
@@ -8768,8 +8768,8 @@
           "name": "Evaluate in a paused frame",
           "start": 60,
           "size": 3,
-          "state": "now",
-          "note": "The same interpreter, the same errors",
+          "state": "done",
+          "note": "0.4.107. The console evaluates where the program is paused with the same interpreter and errors, and a hover reads places without running code (#2263, #2264, #2265, #2271).",
           "issues": [
             {"number":490,"title":"Evaluate Rust in a paused frame","state":"closed"},
             {"number":1207,"title":"rawr-repl drops a Drop value at the end of the line that bound it","state":"closed"},
@@ -8785,8 +8785,8 @@
           "name": "One debugger, many shells",
           "start": 60,
           "size": 3,
-          "state": "now",
-          "note": "The run's owner hosts one session any number of shells attach to, with capabilities listed at hello; rawr mcp is its first shell and attaches to terminal runs (#2258, D1053). Left: attaching keeps the program's state (#2266).",
+          "state": "done",
+          "note": "0.4.107. The run's owner hosts one session any number of shells attach to (#2258, D1053); attaching keeps the program's state (#2266), and every pane re-reads the paused program (#2320).",
           "issues": [
             {"number":2258,"title":"One debugger session per run that any number of shells attach to, with rawr mcp as its first shell","state":"closed"},
             {"number":2266,"title":"A shell attaching to a plain `rawr run` restarts the program to register a debugger, losing its state","state":"closed"},
@@ -8812,7 +8812,7 @@
           "start": 63,
           "size": 2,
           "state": "now",
-          "note": "`rawr dap` on the shared session and a VS Code debugger (#514); Neovim, Helix and Zed through their DAP config. Left: a Zed extension (#2273), and holding a launched program for its breakpoints (#2274).",
+          "note": "`rawr dap` on the shared session and a VS Code debugger that holds a launched program for its breakpoints (#514, #2274, #2275); Neovim and Helix through their DAP config. After 0.5: a Zed extension (#2273).",
           "issues": [
             {"number":514,"title":"Debug adapter: an editor reads a running program's values","state":"closed"},
             {"number":2273,"title":"A Zed extension that registers `rawr dap` as a debug adapter","state":"open"},
