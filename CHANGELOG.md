@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.103 (2026-11-21)
+
+- rawr gui edits its source in place: Cmd-S saves, and the bar shows whether the save swapped in, restarted or failed at a line. While paused, each binding's value shows at the end of its line, and a hovered name shows its value. The window draws in Oxocarbon, the console reads like DevTools', the panes meet at hairlines, and the title names the program. (#2434)
+
 ## 0.4.102 (2026-11-21)
 
 - A build no longer stalls holding a shared target's build lock after cargo exits: a process cargo started that left its process group, such as a build script's daemon or a compiler cache client, no longer keeps the build waiting on cargo's output. (#2432)

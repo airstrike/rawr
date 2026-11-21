@@ -2432,6 +2432,12 @@
     {"t":"T2430","issue":2430,"title":"T2430: A second rawr run of one project can't host a session: its socket path already exists","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"4d5fd0976","release":"0.4.102"},
     {"t":"T2431","issue":2431,"title":"T2431: A wait for a project's store lease names no process","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T2432","issue":2432,"title":"T2432: A runner build can stall holding the shared build lock after cargo exits","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"4d5fd0976","release":"0.4.102"},
-    {"t":"T2433","issue":2433,"title":"T2433: rawr mcp tools can pick only the newest of a program's several runs","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T2433","issue":2433,"title":"T2433: rawr mcp tools can pick only the newest of a program's several runs","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T2434","issue":2434,"title":"T2434: rawr gui edits its source in place: Cmd-S saves, and the bar shows whether the save swapped in…","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":"0.4.103"},
+    {"t":"T2435","issue":2435,"title":"T2435: rawr can't call a marked function returning impl Fn, or one taking Result<&str, &str>, from native code","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T2436","issue":2436,"title":"T2436: A marked module's methods on a native type, and its private types, are unreachable","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T2437","issue":2437,"title":"T2437: rawr fails on a lib+bin package whose lib has a marked module","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T2438","issue":2438,"title":"T2438: rawr doesn't run a main that returns ExitCode or reads std::env::args_os","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T2439","issue":2439,"title":"T2439: The iced adapter needs the application state to be Clone","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }

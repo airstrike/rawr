@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.4.103",
+      "date": "2026-11-21",
+      "entries": [
+        {"text":"rawr gui edits its source in place: Cmd-S saves, and the bar shows whether the save swapped in, restarted or failed at a line. While paused, each binding's value shows at the end of its line, and a hovered name shows its value. The window draws in Oxocarbon, the console reads like DevTools', the panes meet at hairlines, and the title names the program.","issues":[2434]}
+      ]
+    },
+    {
       "version": "0.4.102",
       "date": "2026-11-21",
       "entries": [
