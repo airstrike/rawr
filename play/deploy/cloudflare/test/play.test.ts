@@ -272,7 +272,9 @@ test("every link between the site's pages lands on a page and an anchor", async 
     const self = "/" + page.replace(/(^|\/)index\.html$/, "").replace(/\.html$/, "");
     for (const [, href] of html.matchAll(/href="([^"]+)"/g)) {
       if (/^(https?:|mailto:)/.test(href)) continue;
-      const [path, anchor] = href.split("#");
+      // A query names a version of the file (an icon's ?v=), not another file.
+      const [location, anchor] = href.split("#");
+      const path = location.replace(/\?.*$/, "");
       // The Worker serves /play and /bot itself.
       if (/^\/(play|bot)(\/|$)/.test(path) && !path.startsWith("/play.svg")) continue;
       const target = path === "" ? page : path === "/" ? "index.html" : file(path.startsWith("/") ? path : `${self.replace(/[^/]*$/, "")}${path}`);
