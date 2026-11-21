@@ -265,7 +265,7 @@ impl State {
             ends.push((line, message.to_owned(), theme::error));
         }
         ends.sort_by_key(|(line, _, _)| *line);
-        let mut layer = column![].padding([0.0, PAD]);
+        let mut layer = column![].padding([0.0, PAD]).width(Fill);
         let mut next = 0;
         for (line, said, style) in ends {
             let written = buffer.line(line).unwrap_or_default().into_owned();
@@ -274,8 +274,14 @@ impl State {
                 .push(
                     row![
                         code_text(written).color(Color::TRANSPARENT),
-                        code_text(format!("    {said}")).style(style),
+                        // The value fits what is left of the line in the
+                        // pane, cut with `…`; the hover shows it whole.
+                        code_text(format!("    {said}"))
+                            .style(style)
+                            .width(Fill)
+                            .ellipsis(Ellipsis::End),
                     ]
+                    .width(Fill)
                     .boxed(),
                 );
             next = line + 1;
