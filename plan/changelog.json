@@ -8,6 +8,14 @@
   },
   "releases": [
     {
+      "version": "0.4.94",
+      "date": "2026-11-21",
+      "entries": [
+        {"text":"The format directories' process leases are kept in a write-once list, so opening a bindings, inventory or project format path takes no lock.","issues":[2402]},
+        {"text":"A nested native step no longer waits on its own lock forever, and a node started inside another node fails at once instead of hanging; heavy work takes the project's own lock instead of one lock for the whole store.","issues":[2399]}
+      ]
+    },
+    {
       "version": "0.4.93",
       "date": "2026-11-21",
       "entries": [

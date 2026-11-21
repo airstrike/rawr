@@ -6,6 +6,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.94 (2026-11-21)
+
+- The format directories' process leases are kept in a write-once list, so opening a bindings, inventory or project format path takes no lock. (#2402)
+- A nested native step no longer waits on its own lock forever, and a node started inside another node fails at once instead of hanging; heavy work takes the project's own lock instead of one lock for the whole store. (#2399)
+
 ## 0.4.93 (2026-11-21)
 
 - Cargo's answers about a project (its targets, features and build units) are kept by the run, the runner or the command that asked, instead of in a process-wide lock; a save asks Cargo again only when the files it read changed. (#2401)
