@@ -2237,10 +2237,13 @@ impl Request {
             None
         } else {
             build.bind_closure(&build_unit);
+            // The reserved layout's graph owns a plan prepared in it.
+            let budget = reserved_layout.map(resolution::layout::Layout::budget);
+            let seal =
+                || extraction_plan.seal(native, &build, &build_unit, &metadata, limits, budget);
             Some(match probe_scope {
-                Some(scope) => scope
-                    .run(|| extraction_plan.seal(native, &build, &build_unit, &metadata, limits))?,
-                None => extraction_plan.seal(native, &build, &build_unit, &metadata, limits)?,
+                Some(scope) => scope.run(seal)?,
+                None => seal()?,
             })
         };
         #[cfg(feature = "rustc-driver")]

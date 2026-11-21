@@ -121,7 +121,7 @@ impl Edge for Parent {
 pub struct Chain {
     context: crate::context::Context,
     parent: Parent,
-    retention: Option<Arc<super::read_set::Retention>>,
+    retention: Option<std::rc::Rc<super::read_set::Retention>>,
 }
 
 impl Parent {
@@ -192,7 +192,7 @@ impl Chain {
         Ok(Self {
             context,
             parent,
-            retention: Some(Arc::new(retention)),
+            retention: Some(std::rc::Rc::new(retention)),
         })
     }
 

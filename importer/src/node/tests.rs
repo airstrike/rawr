@@ -1832,7 +1832,6 @@ fn direct_after_lease_recheck_spends_the_same_graph_budget_without_fallback() {
     store
         .fixture_stage_uncommitted(&recipe, b"bounded")
         .unwrap();
-    let contender = fixture_context(&root).open_store().unwrap();
     let (reached, ready) = std::sync::mpsc::sync_channel(1);
     let (resume, receiver) = std::sync::mpsc::sync_channel(1);
     let paused = PausedRejection {
@@ -1844,7 +1843,10 @@ fn direct_after_lease_recheck_spends_the_same_graph_budget_without_fallback() {
         let worker = store
             .with_ownership(|ownership| {
                 store.with_action_lease(recipe.action(), || {
+                    // The contender opens its own store on its thread: a
+                    // store's graph budget stays on its thread.
                     let worker = scope.spawn(|| {
+                        let contender = fixture_context(&root).open_store().unwrap();
                         let recipe = fixture_context(&root)
                             .direct::<Artifact>(b"direct-lease-budget")
                             .unwrap();
@@ -3631,17 +3633,20 @@ fn same_discoverable_key_contenders_execute_and_publish_exactly_once() {
     let first_store = prepare_fixture(&root)
         .open_store()
         .expect("the first contender store opens");
-    let second_store = fixture_context(&root)
-        .open_store()
-        .expect("the second contender store opens");
     let counts = Counts::default();
     let executions = AtomicUsize::new(0);
 
     std::thread::scope(|scope| {
-        let first = scope
-            .spawn(|| evaluate_discoverable_contender(&root, &first_store, &counts, &executions));
-        let second = scope
-            .spawn(|| evaluate_discoverable_contender(&root, &second_store, &counts, &executions));
+        // Each contender opens its own store on its thread: a store's graph
+        // budget stays on its thread.
+        let contend = || {
+            let store = fixture_context(&root)
+                .open_store()
+                .expect("a contender store opens");
+            evaluate_discoverable_contender(&root, &store, &counts, &executions)
+        };
+        let first = scope.spawn(contend);
+        let second = scope.spawn(contend);
         assert_eq!(
             first.join().expect("the first contender joins").as_ref(),
             b"discovered-once"

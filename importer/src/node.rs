@@ -2,7 +2,6 @@
 
 use std::marker::PhantomData;
 use std::rc::Rc;
-use std::sync::Arc;
 
 use sha2::{Digest as _, Sha256};
 
@@ -426,19 +425,21 @@ impl Miss {
 const MAX_DEEP_VALIDATIONS_PER_LOOKUP: usize = 2;
 
 /// The identity of one graph evaluation and its typed scratch accounts.
+/// It stays on the thread that owns the graph: what crosses threads
+/// carries only whether the graph owns its artifacts.
 #[derive(Clone)]
 pub(crate) struct GraphBudget {
-    accounts: Arc<account::Registry>,
+    accounts: Rc<account::Registry>,
 }
 
 impl GraphBudget {
     pub(crate) fn shares_with(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.accounts, &other.accounts)
+        Rc::ptr_eq(&self.accounts, &other.accounts)
     }
 
     pub(crate) fn new() -> Self {
         Self {
-            accounts: Arc::new(account::Registry::default()),
+            accounts: Rc::new(account::Registry::default()),
         }
     }
 }
