@@ -816,6 +816,9 @@ fn start(
             0,
             "A `rawr run` started elsewhere serves this program, so `start` attached to it. That run keeps its own arguments, features, environment and input.\n",
         );
+        if let Some(others) = session.others() {
+            summary.insert_str(0, &format!("{others}\n"));
+        }
     }
     if session.coverage() == Some(session::Coverage::Engine) {
         summary.push_str(session::AT_TERMINAL);

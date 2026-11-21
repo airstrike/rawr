@@ -11,9 +11,10 @@ use std::process::{Child, Command, ExitCode, Stdio};
 use crate::color;
 use crate::events::session;
 
-/// Run the shell on the program at `path`, or the current directory's.
+/// Run the shell on the program at `path`, or the current directory's: on
+/// its run whose pid is `pid`, or its newest.
 #[must_use]
-pub fn run(path: Option<PathBuf>) -> ExitCode {
+pub fn run(path: Option<PathBuf>, pid: Option<u32>) -> ExitCode {
     let path = match path.map_or_else(std::env::current_dir, Ok) {
         Ok(path) => std::fs::canonicalize(&path).unwrap_or(path),
         Err(error) => return failed(&error),
@@ -28,19 +29,28 @@ pub fn run(path: Option<PathBuf>) -> ExitCode {
     };
     let root = session::root(&target);
     let source = target.source().path().to_path_buf();
-    match attach(&root, &path, source) {
+    match attach(&root, &path, source, pid) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => failed(&error),
     }
 }
 
-/// Attach to the run that serves `root`, or start one for `path`.
-fn attach(root: &Path, path: &Path, source: PathBuf) -> std::io::Result<()> {
+/// Attach to the run that serves `root`, the one `pid` names or the
+/// newest, or start one for `path` when none does and `pid` names none.
+fn attach(root: &Path, path: &Path, source: PathBuf, pid: Option<u32>) -> std::io::Result<()> {
+    let runs = session::Runs::of(root)?;
+    if let Some(reached) = runs.connect(pid) {
+        // Told before the shell takes the screen, so it shows again after.
+        if let Some(notice) = reached.notice("Pick one with `rawr tui --pid <pid>`.") {
+            eprintln!("{notice}");
+        }
+        return rawr_tui::run(rawr_tui::Session::new(reached.stream, source));
+    }
+    if let Some(pid) = pid {
+        return Err(runs.unserved(pid));
+    }
     let place = session::Place::new(root)?;
     let socket = place.socket();
-    if let Ok(stream) = UnixStream::connect(&socket) {
-        return rawr_tui::run(rawr_tui::Session::new(stream, source));
-    }
     place.make()?;
     let _ = std::fs::remove_file(&socket);
     let listener = UnixListener::bind(&socket)?;

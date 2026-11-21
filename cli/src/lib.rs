@@ -79,7 +79,7 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
         Ok(Request::Mcp { path }) => serve(path),
         Ok(Request::Dap { path }) => debug(path),
         #[cfg(unix)]
-        Ok(Request::Tui { path }) => tui::run(path),
+        Ok(Request::Tui { path, pid }) => tui::run(path, pid),
         #[cfg(not(unix))]
         Ok(Request::Tui { .. }) => {
             eprintln!(
@@ -89,7 +89,7 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
             ExitCode::FAILURE
         }
         #[cfg(unix)]
-        Ok(Request::Gui { path }) => gui::open(path.as_ref()),
+        Ok(Request::Gui { path, pid }) => gui::open(path.as_ref(), pid),
         #[cfg(not(unix))]
         Ok(Request::Gui { .. }) => {
             eprintln!(
@@ -262,13 +262,17 @@ enum Request {
     Dap {
         path: Option<PathBuf>,
     },
-    /// `rawr tui [path]`: the terminal debugger on the program's run.
+    /// `rawr tui [--pid <pid>] [path]`: the terminal debugger on the
+    /// program's run, the one `pid` names or the newest.
     Tui {
         path: Option<PathBuf>,
+        pid: Option<u32>,
     },
-    /// `rawr gui [path]`: the debugger window on the program's run.
+    /// `rawr gui [--pid <pid>] [path]`: the debugger window on the
+    /// program's run, the one `pid` names or the newest.
     Gui {
         path: Option<PathBuf>,
+        pid: Option<u32>,
     },
     /// `rawr init [--claude] [--codex] [path]`.
     Init {
@@ -380,6 +384,33 @@ fn parse_init(arguments: &[OsString]) -> Result<Request, String> {
     })
 }
 
+/// A shell's path and the pid of the run it names, if it names one.
+fn parse_shell(arguments: &[OsString]) -> Result<(Option<PathBuf>, Option<u32>), String> {
+    let (mut path, mut pid) = (None, None);
+    let mut arguments = arguments.iter();
+    while let Some(argument) = arguments.next() {
+        match argument.to_string_lossy().as_ref() {
+            "--pid" => {
+                let Some(value) = arguments.next() else {
+                    return Err("`--pid` takes the pid of a run".to_owned());
+                };
+                let value = value.to_string_lossy();
+                pid = Some(
+                    value
+                        .parse()
+                        .map_err(|_| format!("`--pid` takes a pid, not `{value}`"))?,
+                );
+            }
+            option if option.starts_with('-') => {
+                return Err(format!("unknown argument `{option}`"));
+            }
+            other if path.is_some() => return Err(format!("unexpected argument `{other}`")),
+            _ => path = Some(PathBuf::from(argument)),
+        }
+    }
+    Ok((path, pid))
+}
+
 /// The arguments before the first `--`, and those after it, which belong
 /// to the program as `cargo run` gives them.
 #[must_use]
@@ -476,8 +507,8 @@ fn parse_command(arguments: &[OsString]) -> Result<Request, String> {
         Some("new") => parse_new(&arguments[1..]).map(Request::New),
         Some("mcp") => path(&arguments[1..]).map(|path| Request::Mcp { path }),
         Some("dap") => path(&arguments[1..]).map(|path| Request::Dap { path }),
-        Some("tui") => path(&arguments[1..]).map(|path| Request::Tui { path }),
-        Some("gui") => path(&arguments[1..]).map(|path| Request::Gui { path }),
+        Some("tui") => parse_shell(&arguments[1..]).map(|(path, pid)| Request::Tui { path, pid }),
+        Some("gui") => parse_shell(&arguments[1..]).map(|(path, pid)| Request::Gui { path, pid }),
         Some("init") => parse_init(&arguments[1..]),
         Some(word) if word.starts_with('-') => Err(format!("unknown argument `{word}`")),
         Some(_) if is_path(&arguments[0]) => path(arguments).map(|path| Request::Program {
@@ -529,6 +560,7 @@ fn help(installed: &[layer::Installed]) -> String {
          its run or starting one\n  \
          rawr gui [path]               Open a debugger window on the program's run,\n                                \
          starting one when none is going\n  \
+         rawr tui|gui --pid <pid>      Attach to the run of that pid, of several\n  \
          rawr init [--claude] [--codex] [path]\n                                \
          Register `rawr mcp` in the project's agent config\n",
     );
@@ -1127,13 +1159,29 @@ mod tests {
         assert!(request(&["new"]).is_err());
         assert!(request(&["new", "hello", "--template"]).is_err());
         assert_eq!(request(&["run", "--help"]), Ok(Request::Help));
-        assert_eq!(request(&["tui"]), Ok(Request::Tui { path: None }));
+        assert_eq!(
+            request(&["tui"]),
+            Ok(Request::Tui {
+                path: None,
+                pid: None
+            })
+        );
         assert_eq!(
             request(&["tui", "app"]),
             Ok(Request::Tui {
-                path: Some(PathBuf::from("app"))
+                path: Some(PathBuf::from("app")),
+                pid: None
             })
         );
+        assert_eq!(
+            request(&["gui", "--pid", "42", "app"]),
+            Ok(Request::Gui {
+                path: Some(PathBuf::from("app")),
+                pid: Some(42)
+            })
+        );
+        assert!(request(&["tui", "--pid"]).is_err());
+        assert!(request(&["tui", "--pid", "x"]).is_err());
         assert_eq!(request(&["tui", "--help"]), Ok(Request::Help));
         assert_eq!(request(&["--version"]), Ok(Request::Version));
         assert!(request(&["run", "a", "b"]).is_err());
