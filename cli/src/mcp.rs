@@ -3,13 +3,15 @@
 //!
 //! JSON-RPC 2.0, one message per line, with the standard library only
 //! (D430.4). A reader thread forwards each line, and the main thread loops
-//! over the lines, the calls that returned and the checks, owning the calls
-//! in flight, the tools last listed and the checks of each root. Each
-//! `tools/call` runs on a worker, so `ping`, `notifications/cancelled` and
-//! the end of input are handled while a long build runs; one writer thread
-//! writes every message. A call waits for what it needs as long as that
-//! takes, telling its progress where it has any; the client's cancel ends
-//! it, with its process groups.
+//! over the lines, the calls that returned, the checks and the sessions,
+//! owning the calls in flight, the tools last listed, and the check and the
+//! session of each root. Each `tools/call` runs on a worker, so `ping`,
+//! `notifications/cancelled` and the end of input are handled while a long
+//! build runs; one writer thread writes every message. A call waits for
+//! what it needs as long as that takes, on a channel of its own
+//! ([`call`]), telling its progress where it has any; the client's cancel
+//! is a message on that channel, and ends the call with its process
+//! groups.
 //!
 //! Core's tools make, check and run programs; installed extensions add
 //! tools their manifests declare ([`extension`]). The programs `start`
@@ -18,16 +20,18 @@
 //! one shell of a run's debugger session (D1053.2): its tools also reach a
 //! run started elsewhere, as in a terminal.
 
+pub(crate) mod call;
 mod check;
 pub mod content;
 mod extension;
 pub(crate) mod process;
 pub(crate) mod session;
+mod sessions;
 pub(crate) mod tools;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{mpsc, Arc};
+use std::sync::mpsc;
 
 use serde_json::{json, Value};
 
@@ -36,14 +40,12 @@ use serde_json::{json, Value};
 pub const PROTOCOL: &str = "2025-06-18";
 const PROTOCOLS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 
-/// The server: where relative paths start, the writer, the main loop and
-/// the programs it reaches.
+/// The server: where relative paths start, the writer and the main loop.
 pub(crate) struct Server {
     root: PathBuf,
     out: mpsc::Sender<Value>,
     /// What the main loop hears from calls.
     heard: mpsc::Sender<Heard>,
-    sessions: session::Sessions,
 }
 
 /// What the main loop hears.
@@ -58,6 +60,8 @@ enum Heard {
     Check(check::Request),
     /// A check is done.
     Checked(check::Report),
+    /// A call asks about the sessions.
+    Sessions(sessions::Request),
 }
 
 /// The main loop's state, and how it starts calls.
@@ -65,11 +69,13 @@ struct Loop<'scope, 'env> {
     server: &'scope Server,
     scope: &'scope std::thread::Scope<'scope, 'env>,
     /// The calls in flight, by their ids, for the client's cancels.
-    calls: HashMap<String, Arc<process::Cancel>>,
+    calls: HashMap<String, call::Waker>,
     /// The tool names last listed, to tell the client when installs change
     /// them.
     listed: Vec<String>,
     checks: check::Checks,
+    /// The programs the server reaches.
+    sessions: sessions::Sessions,
 }
 
 impl Server {
@@ -125,12 +131,7 @@ pub fn serve_on(
             }
         })?;
     let (heard, hearing) = mpsc::channel::<Heard>();
-    let server = Server {
-        root,
-        out,
-        heard,
-        sessions: session::Sessions::default(),
-    };
+    let server = Server { root, out, heard };
     // Each call runs on a thread of this scope, and the scope ends once
     // every call has seen its cancel and returned.
     let served = std::thread::scope(|scope| {
@@ -154,6 +155,7 @@ pub fn serve_on(
             calls: HashMap::new(),
             listed: Vec::new(),
             checks: check::Checks::default(),
+            sessions: sessions::Sessions::default(),
         };
         for message in &hearing {
             match message {
@@ -161,6 +163,7 @@ pub fn serve_on(
                 Heard::Returned { id, answer } => serving.returned(id, answer),
                 Heard::Check(request) => serving.checks.ask(request, &server.heard),
                 Heard::Checked(report) => serving.checks.finished(report),
+                Heard::Sessions(request) => serving.sessions.heard(request),
                 Heard::Ended => break,
             }
         }
@@ -168,6 +171,15 @@ pub fn serve_on(
         serving.shut_down();
         Ok::<(), std::io::Error>(())
     });
+    // A call that started a session as the server ended told the loop
+    // after it stopped reading: that session ends too.
+    let mut late = sessions::Sessions::default();
+    for message in hearing.try_iter() {
+        if let Heard::Sessions(request) = message {
+            late.heard(request);
+        }
+    }
+    late.stop_all();
     // The writer ends with the server's sender.
     drop(server);
     let _ = writer.join();
@@ -236,8 +248,8 @@ impl<'scope> Loop<'scope, '_> {
     /// returned.
     fn call(&mut self, id: Value, params: Value) {
         let server = self.server;
-        let cancel = Arc::new(process::Cancel::default());
-        self.calls.insert(id.to_string(), Arc::clone(&cancel));
+        let call = call::Call::default();
+        self.calls.insert(id.to_string(), call.waker());
         let heard = server.heard.clone();
         let spawned = std::thread::Builder::new()
             .name("rawr-mcp-call".into())
@@ -246,10 +258,10 @@ impl<'scope> Loop<'scope, '_> {
                 // on: its unwind ends here, so the scope's end doesn't
                 // raise it again.
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    tools::call(server, &params, &cancel)
+                    tools::call(server, &params, &call)
                 }));
                 // A cancelled request gets no answer.
-                let answer = result.ok().filter(|_| !cancel.is_cancelled());
+                let answer = result.ok().filter(|_| !call.is_cancelled());
                 let _ = heard.send(Heard::Returned { id, answer });
             });
         if let Err(error) = spawned {
@@ -285,7 +297,7 @@ impl<'scope> Loop<'scope, '_> {
         for (_, call) in self.calls.drain() {
             call.cancel();
         }
-        self.server.sessions.stop_all();
+        self.sessions.stop_all();
         self.checks.stop_all();
     }
 }
