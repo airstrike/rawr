@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-21",
-  "version": "0.4.103",
+  "version": "0.4.104",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.104",
+        "date": "2026-11-21",
+        "entries": [
+          {"text":"Worktrees of one repository that share a target directory no longer build against each other's path crates: each project's runner places its path packages under its own key, so Cargo never takes another worktree's stale build of one as fresh.","issues":[2423]}
+        ]
+      },
       {
         "version": "0.4.103",
         "date": "2026-11-21",
@@ -5956,7 +5963,7 @@
     {"issue":2420,"title":"The input and screenshot waits for the compositor are 17 ms waits","state":"open","category":"Health"},
     {"issue":2421,"title":"A window closed between a capture's draw and its compose","state":"open","category":"Health"},
     {"issue":2422,"title":"`rawr gui` and `rawr tui` show a program under the home directory as `~/…` in the window title…","state":"closed","category":"Health","release":"0.4.98"},
-    {"issue":2423,"title":"Worktrees of one repo sharing a CARGO_TARGET_DIR build a path crate from another worktree's stale sources","state":"open","category":"Health"},
+    {"issue":2423,"title":"Worktrees of one repo sharing a CARGO_TARGET_DIR build a path crate from another worktree's stale sources","state":"closed","category":"Health","release":"0.4.104"},
     {"issue":2424,"title":"The debugger's inspector keeps one generation's stops, lines and program in one state, and only…","state":"closed","category":"Health","release":"0.4.99"},
     {"issue":2425,"title":"Shells order inspector answers by the pause count","state":"open","category":"Health"},
     {"issue":2426,"title":"A runner whose program turns on a feature that reaches a patched package, such as iced_test…","state":"closed","category":"Health","release":"0.4.100"},
@@ -5972,7 +5979,8 @@
     {"issue":2436,"title":"A marked module's methods on a native type, and its private types, are unreachable","state":"open","category":"Health"},
     {"issue":2437,"title":"rawr fails on a lib+bin package whose lib has a marked module","state":"open","category":"Health"},
     {"issue":2438,"title":"rawr doesn't run a main that returns ExitCode or reads std::env::args_os","state":"open","category":"Health"},
-    {"issue":2439,"title":"The iced adapter needs the application state to be Clone","state":"open","category":"Health"}
+    {"issue":2439,"title":"The iced adapter needs the application state to be Clone","state":"open","category":"Health"},
+    {"issue":2440,"title":"rawr lsp: value hover, inlay hints and rawr's diagnostics beside rust-analyzer","state":"open","category":"Health"}
   ],
   "groups": [
     {

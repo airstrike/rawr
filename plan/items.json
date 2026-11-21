@@ -2422,7 +2422,7 @@
     {"t":"T2420","issue":2420,"title":"T2420: The input and screenshot waits for the compositor are 17 ms waits","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T2421","issue":2421,"title":"T2421: A window closed between a capture's draw and its compose","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T2422","issue":2422,"title":"T2422: `rawr gui` and `rawr tui` show a program under the home directory as `~/…` in the window title…","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":"0.4.98"},
-    {"t":"T2423","issue":2423,"title":"T2423: Worktrees of one repo sharing a CARGO_TARGET_DIR build a path crate from another worktree's stale sources","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T2423","issue":2423,"title":"T2423: Worktrees of one repo sharing a CARGO_TARGET_DIR build a path crate from another worktree's stale sources","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"55c4ce676","release":"0.4.104"},
     {"t":"T2424","issue":2424,"title":"T2424: The debugger's inspector keeps one generation's stops, lines and program in one state, and only…","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":"0.4.99"},
     {"t":"T2425","issue":2425,"title":"T2425: Shells order inspector answers by the pause count","state":"open","category":"Health","labels":["health","playground"],"gantt":null,"decisions":["D1097","D1100"],"commit":null,"release":null},
     {"t":"T2426","issue":2426,"title":"T2426: A runner whose program turns on a feature that reaches a patched package, such as iced_test…","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":"0.4.100"},
@@ -2438,6 +2438,7 @@
     {"t":"T2436","issue":2436,"title":"T2436: A marked module's methods on a native type, and its private types, are unreachable","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T2437","issue":2437,"title":"T2437: rawr fails on a lib+bin package whose lib has a marked module","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T2438","issue":2438,"title":"T2438: rawr doesn't run a main that returns ExitCode or reads std::env::args_os","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T2439","issue":2439,"title":"T2439: The iced adapter needs the application state to be Clone","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T2439","issue":2439,"title":"T2439: The iced adapter needs the application state to be Clone","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T2440","issue":2440,"title":"T2440: rawr lsp: value hover, inlay hints and rawr's diagnostics beside rust-analyzer","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":["D1102","D1053"],"commit":null,"release":null}
   ]
 }

@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.4.104",
+      "date": "2026-11-21",
+      "entries": [
+        {"text":"Worktrees of one repository that share a target directory no longer build against each other's path crates: each project's runner places its path packages under its own key, so Cargo never takes another worktree's stale build of one as fresh.","issues":[2423]}
+      ]
+    },
+    {
       "version": "0.4.103",
       "date": "2026-11-21",
       "entries": [

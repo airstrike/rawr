@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.104 (2026-11-21)
+
+- Worktrees of one repository that share a target directory no longer build against each other's path crates: each project's runner places its path packages under its own key, so Cargo never takes another worktree's stale build of one as fresh. (#2423)
+
 ## 0.4.103 (2026-11-21)
 
 - rawr gui edits its source in place: Cmd-S saves, and the bar shows whether the save swapped in, restarted or failed at a line. While paused, each binding's value shows at the end of its line, and a hovered name shows its value. The window draws in Oxocarbon, the console reads like DevTools', the panes meet at hairlines, and the title names the program. (#2434)
