@@ -287,12 +287,14 @@ mod tests {
                 .or_else(|| item.get("version").and_then(toml_edit::Item::as_str))
                 .map(str::to_owned)
         };
+        // The importer names a host-only crate, as `libc`, under its
+        // non-wasm target.
+        let host = &importer["target"][r#"cfg(not(target_arch = "wasm32"))"#]["dependencies"];
         for (name, item) in driver["dependencies"].as_table().unwrap() {
-            assert_eq!(
-                requirement(item),
-                requirement(&importer["dependencies"][name]),
-                "{name}"
-            );
+            let importer = importer["dependencies"]
+                .get(name)
+                .or_else(|| host.get(name));
+            assert_eq!(requirement(item), importer.and_then(requirement), "{name}");
         }
     }
 

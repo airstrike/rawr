@@ -606,11 +606,14 @@ mod tests {
         );
         let key = cold_request.build_request_key();
         let cold = materialize_fixture(&chain, cold_request, &executions);
+        // The lane admits one owner per process: this test's turn on it.
+        let turn = crate::store::test_turn();
         let cargo = crate::cargo::Owner::acquire().expect("the cold Cargo lane acquires");
         let cold = cold
             .build(&cargo, &cache)
             .expect("the cold overlay-runner artifact seals");
         drop(cargo);
+        drop(turn);
         cold.artifact()
             .revalidate()
             .expect("the cold overlay-runner artifact revalidates");
@@ -638,11 +641,14 @@ mod tests {
         );
         assert_eq!(warm_request.build_request_key(), key);
         let warm = materialize_fixture(&chain, warm_request, &executions);
+        // The lane admits one owner per process: this test's turn on it.
+        let turn = crate::store::test_turn();
         let cargo = crate::cargo::Owner::acquire().expect("the warm Cargo lane acquires");
         let warm = warm
             .build(&cargo, &cache)
             .expect("the warm runner restores from the shared DAG");
         drop(cargo);
+        drop(turn);
         warm.artifact()
             .revalidate()
             .expect("the warm overlay-runner artifact revalidates");

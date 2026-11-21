@@ -2262,6 +2262,8 @@ impl<'a> Resolver<'a> {
                         match self.resolve_any_path(context, &path, name.span, &mut active) {
                             Ok(target) => target,
                             Err(failure) => {
+                                #[cfg(feature = "rust-import")]
+                                let missed = failure.error.clone();
                                 let failure = self.unresolved_use(
                                     context,
                                     &parsed.tree,
@@ -2270,6 +2272,16 @@ impl<'a> Resolver<'a> {
                                     failure,
                                 );
                                 let error = super::whole_import(failure.error, &parsed.tree);
+                                // A miss against the retained facades stays
+                                // the miss of the import rustc's E0432 marks.
+                                #[cfg(feature = "rust-import")]
+                                if let Some(capture) = self.native.as_deref() {
+                                    capture.restate(
+                                        program::source::Id::from_index(context.source.index()),
+                                        &missed,
+                                        &error,
+                                    );
+                                }
                                 if !matches!(error, Error::UnknownImport { .. }) {
                                     return Err(Failure { error, ..failure });
                                 }
