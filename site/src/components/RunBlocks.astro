@@ -13,8 +13,11 @@ for (const t of document.querySelectorAll("code[data-run] + template[data-hl]"))
 <script>
   import { setup } from "../scripts/run.ts";
   import { universe } from "../scripts/universe.ts";
+  import { webFiles } from "../scripts/web.ts";
   import { WEB_MODULE } from "../play/session.ts";
   let copies = 0;
+  // Both modules come from the one set the site's pointer names.
+  const files = webFiles(fetch.bind(window));
   setup({
     document,
     window,
@@ -23,13 +26,14 @@ for (const t of document.querySelectorAll("code[data-run] + template[data-hl]"))
     universe: universe({
       document,
       fetch: fetch.bind(window),
+      files,
       compile: (response) => WebAssembly.compileStreaming(response),
     }),
     // rawr-web, as the playground loads it. A module is imported once per
     // address, so a copy after the first has its own query: its own
     // instance, from the same cached files.
     web: async () => {
-      const m = await import(/* @vite-ignore */ WEB_MODULE + (copies++ ? "?" + copies : ""));
+      const m = await import(/* @vite-ignore */ (await files(WEB_MODULE)) + (copies++ ? "?" + copies : ""));
       await m.default();
       return m;
     },

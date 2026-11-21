@@ -1,17 +1,19 @@
-# Stage 4 of the release (release.yml), and the deploy every other stage
-# calls when it runs alone: deploy the Worker and site, then check them.
-# deploy.sh builds the site, runs the Worker's and the site's tests, deploys
-# (`wrangler deploy`), waits for Cloudflare and then the bot to report the
-# pinned image.
+# The one deploy of the Worker and site: deploy main's latest commit, then
+# check it. deploy.sh builds the site, runs the Worker's and the site's
+# tests, deploys (`wrangler deploy`) and, when the deploy rolls out a new
+# ?play image, waits for Cloudflare and then the bot to report it.
 #
 # What it deploys:
-# - the image: `image` when a caller built one (the bot stage), else the one
-#   Cloudflare runs now, read inside the concurrency group so a release that
-#   ran just before is never rolled back;
-# - rawr-web (/web): this run's `web` artifact when `web` is `artifact` (the
-#   playground stage built it), else the files the site serves now
-#   (live-web.sh), since a deploy replaces every asset;
-# - the site and the Worker as committed.
+# - main's head, read when this run's turn comes: a queued run that starts
+#   later deploys newer code, never its trigger's older commit;
+# - the image: `image` when bot.yml dispatched a rollout of the one it just
+#   pushed, unless Cloudflare already runs a newer one; else the one
+#   Cloudflare runs now. Read inside the concurrency group, so a rollout
+#   that ran just before is never rolled back.
+# rawr-web's modules are not in the deploy: the Worker serves them from R2
+# (src/web.ts), and the Playground workflow publishes them there. The site's
+# build still runs the docs' snippets in rawr-web, so it fetches the set the
+# site runs from R2 (live-web.sh --r2) into target/web, and deploys none of it.
 #
 # Triggers:
 # - a push to main that changes plan/, site/ or the Worker
@@ -19,8 +21,8 @@
 #   code or settings (wrangler.jsonc's vars, such as PLAY_TIME_MS) go live in
 #   minutes with the running image. A settings change restarts the bot on its
 #   image (src/index.ts compares them);
-# - by hand (Run workflow), the same;
-# - workflow_call, from release.yml, playground.yml and bot.yml.
+# - by hand (Run workflow), and from bot.yml after it pushes an image
+#   (`gh workflow run`, with `image`).
 # It needs the CLOUDFLARE_API_TOKEN secret and the
 # CLOUDFLARE_ACCOUNT_ID variable ("Release from GitHub Actions" in
 # play/README.md). The job's copy of wrangler.jsonc is rewritten, never pushed.
@@ -28,16 +30,11 @@ name: Deploy the site
 
 on:
   workflow_dispatch:
-  workflow_call:
     inputs:
       image:
-        description: The image to deploy (registry.cloudflare.com/…/rawr-play:<commit>); empty keeps the running one.
+        description: The ?play image to roll out (registry.cloudflare.com/…/rawr-play:<commit>); empty keeps the running one.
         type: string
         default: ""
-      web:
-        description: "`artifact` deploys this run's rawr-web artifact; `live` keeps the live one."
-        type: string
-        default: live
   push:
     branches: [main]
     paths:
@@ -46,13 +43,11 @@ on:
       - "play/deploy/cloudflare/**"
       - ".github/workflows/site.yml"
 
-# Run on its own, it takes the release's group, `release-play`: one release
-# or deploy at a time, and `queue: max` keeps every waiting run in order, so
-# a queued run never cancels another. Called by another workflow, which holds
-# that group already, it takes a group of its own (the same name would
-# deadlock); github.workflow is then the caller's name.
+# Every Worker deploy is a run of this workflow, in this one group. One runs
+# at a time, and `queue: max` keeps every waiting run in order, so a queued
+# run (a rollout's among them) is never cancelled.
 concurrency:
-  group: ${{ github.workflow == 'Deploy the site' && 'release-play' || format('release-play-{0}-site', github.run_id) }}
+  group: worker-deploy
   cancel-in-progress: false
   queue: max
 
@@ -61,31 +56,36 @@ permissions:
   actions: read
 
 jobs:
-  # A push that main has moved past by the time its turn comes has nothing to
-  # deploy: a later run in the queue deploys main's newer head. Checked on its
-  # turn, inside the group, so pushes queued behind a long release collapse to
-  # the newest one. A release's own call always deploys.
-  latest:
+  # main's head, read on this run's turn, inside the group. A run with no
+  # image to roll out and a newer run of this workflow waiting behind it
+  # has nothing of its own: that run deploys main's head too, so a burst of
+  # pushes deploys once.
+  head:
     runs-on: ubuntu-latest
     outputs:
-      current: ${{ steps.head.outputs.current }}
+      sha: ${{ steps.head.outputs.sha }}
+      deploy: ${{ steps.head.outputs.deploy }}
     steps:
       - id: head
         env:
-          EVENT: ${{ github.event_name }}
-          SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ inputs.image }}
         run: |
-          head=$(git ls-remote "https://github.com/$GITHUB_REPOSITORY" refs/heads/main | cut -f1)
-          if [ "$GITHUB_WORKFLOW" != "Deploy the site" ] || [ "$EVENT" != push ] || [ "$head" = "$SHA" ]; then
-            echo current=true >> "$GITHUB_OUTPUT"
+          sha=$(git ls-remote "https://github.com/$GITHUB_REPOSITORY" refs/heads/main | cut -f1)
+          echo "main is at $sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          waiting=$(gh run list -R "$GITHUB_REPOSITORY" --workflow site.yml --limit 50 --json databaseId,status \
+            --jq "[.[] | select(.databaseId > $GITHUB_RUN_ID and .status != \"completed\")] | length")
+          if [ -z "$IMAGE" ] && [ "$waiting" -gt 0 ]; then
+            echo "::notice::a newer run waits behind this one and deploys main's head"
+            echo deploy=false >> "$GITHUB_OUTPUT"
           else
-            echo "main is at $head, past $SHA; a later run deploys it"
-            echo current=false >> "$GITHUB_OUTPUT"
+            echo deploy=true >> "$GITHUB_OUTPUT"
           fi
 
   site:
-    needs: latest
-    if: needs.latest.outputs.current == 'true'
+    needs: head
+    if: needs.head.outputs.deploy == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -96,6 +96,10 @@ jobs:
         working-directory: play/deploy/cloudflare
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.head.outputs.sha }}
+          # The image step compares commits by ancestry.
+          fetch-depth: 0
 
       - uses: actions/setup-node@v5
         with:
@@ -110,24 +114,25 @@ jobs:
         run: npm install --no-audit --no-fund
 
       # The job's own copy of wrangler.jsonc names the image and its tag as
-      # PLAY_VERSION, which tells the bot to restart when it changed.
+      # PLAY_VERSION, which tells the bot to restart when it changed. An
+      # image older than the running one (an ancestor of its commit) keeps
+      # the running one.
       - name: Point wrangler.jsonc at the image
         env:
           IMAGE: ${{ inputs.image }}
         run: |
-          if [ -n "$IMAGE" ]; then tag="$(./pin-image.sh "$IMAGE")"; else tag="$(./pin-image.sh)"; fi
+          running="$(./pin-image.sh --running)"
+          echo "Cloudflare runs $running"
+          if [ -n "$IMAGE" ] && [ "${IMAGE##*:}" != "${running##*:}" ] &&
+            git merge-base --is-ancestor "${IMAGE##*:}" "${running##*:}" 2>/dev/null; then
+            echo "::notice::$IMAGE is older than the running image; the deploy keeps $running"
+            IMAGE=""
+          fi
+          if [ -n "$IMAGE" ]; then tag="$(./pin-image.sh "$IMAGE")"; else tag="$(./pin-image.sh "$running")"; fi
           echo "deploying rawr-play:$tag"
 
-      - name: Use this run's rawr-web
-        if: inputs.web == 'artifact'
-        uses: actions/download-artifact@v4
-        with:
-          name: web
-          path: play/deploy/cloudflare/public/web
-
-      - name: Keep the live rawr-web
-        if: inputs.web != 'artifact'
-        run: ./live-web.sh
+      - name: Fetch rawr-web for the site's build
+        run: ./live-web.sh --r2
 
       - name: Test, deploy and check the site
         run: ./deploy.sh

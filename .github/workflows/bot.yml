@@ -4,7 +4,7 @@
 # `need` compares the image's inputs at this commit with those of the image
 # Cloudflare runs (image-changed.sh: every file the Docker build reads, with
 # version-only bumps of the workspace ignored). When nothing changed, the
-# build is skipped, `image` is empty, and the deploy keeps the running image.
+# build is skipped, `image` is empty, and nothing rolls out.
 # `build: always` builds regardless.
 #
 # The build keeps cargo's registry, git checkouts and target directories in
@@ -15,14 +15,18 @@
 # build after one of those changes; every later build restores it and
 # compiles rawr's own crates only. Layers go to the GitHub Actions cache too.
 #
-# Run on its own (Run workflow), it then deploys through site.yml with the
-# new image and the live rawr-web. In the chained release, `deploy` is false
-# and the site stage deploys it.
+# The image's tag lives in the Worker's config (PLAY_VERSION), so rolling it
+# out takes a Worker deploy. This workflow never deploys: once it pushed an
+# image (and `deploy` is on), it dispatches site.yml with that image, and
+# site.yml deploys main's latest commit with it, in the one group every
+# Worker deploy takes. Only that rollout waits for the bot.
 #
-# Each night at 3am Eastern (08:00 UTC) it builds and deploys the image by
+# Each night at 3am Eastern (08:00 UTC) it builds and rolls out the image by
 # itself, `auto`: when the night's main changed what the server can run (the
 # universe, the bot's own code, the Dockerfile), the bot gets it within a
-# day, and pushes never rebuild the image one by one. site.yml deploys everything else on push.
+# day, and pushes never rebuild the image one by one. The same night run
+# builds rawr-web and publishes it to R2 (playground.yml), which goes live
+# with no deploy. site.yml deploys everything else on push.
 name: Bot
 
 on:
@@ -34,7 +38,7 @@ on:
         options: [auto, always]
         default: auto
       deploy:
-        description: Deploy the Worker with the new image.
+        description: Roll out the new image (dispatch site.yml with it).
         type: boolean
         default: true
   workflow_call:
@@ -52,9 +56,10 @@ on:
   schedule:
     - cron: "0 8 * * *"
 
-# See site.yml: `release-play` when run alone, a group of its own when called.
+# One image build at a time, apart from the Worker's deploys and the module
+# builds, which take groups of their own.
 concurrency:
-  group: ${{ github.workflow == 'Bot' && 'release-play' || format('release-play-{0}-bot', github.run_id) }}
+  group: bot-image
   cancel-in-progress: false
   queue: max
 
@@ -208,27 +213,29 @@ jobs:
           printf '%s' "$password" | docker login registry.cloudflare.com -u "$(field username)" --password-stdin
           docker push "$IMAGE"
 
-  # The nightly run also builds rawr-web and the browser's universe, so the
-  # site's modules are never more than a day behind main without anyone
-  # dispatching playground.yml.
+  # The nightly run also builds rawr-web and the browser's universe and
+  # publishes them, so the site's modules are never more than a day behind
+  # main without anyone dispatching playground.yml. They go live by their
+  # pointer, apart from the image's rollout.
   web:
     if: github.event_name == 'schedule'
     uses: ./.github/workflows/playground.yml
-    with:
-      deploy: false
     secrets: inherit
 
-  deploy:
-    needs: [image, web]
-    # A push has no inputs; it always deploys what it built. The nightly run
-    # deploys its new modules even when the image is unchanged, which keeps
-    # the running image.
-    if: >-
-      !cancelled() && needs.web.result != 'failure' &&
-      (needs.image.result == 'success' || (github.event_name == 'schedule' && needs.image.result == 'skipped')) &&
-      (inputs.deploy || github.event_name == 'schedule')
-    uses: ./.github/workflows/site.yml
-    with:
-      image: ${{ needs.image.outputs.ref }}
-      web: ${{ github.event_name == 'schedule' && 'artifact' || 'live' }}
-    secrets: inherit
+  # The rollout: site.yml deploys main's latest commit with the new image, in
+  # its turn among the Worker's deploys, and waits for the bot to report it.
+  # Nothing to roll out when the build was skipped: the bot keeps its image.
+  rollout:
+    needs: image
+    if: needs.image.result == 'success' && (inputs.deploy || github.event_name == 'schedule')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ needs.image.outputs.ref }}
+        run: |
+          gh workflow run site.yml -R "$GITHUB_REPOSITORY" --ref main -f image="$IMAGE"
+          echo "::notice::dispatched site.yml to roll out $IMAGE"

@@ -24,6 +24,10 @@
 //!
 //! Built with the `browser-debugger` feature, the universe runs every
 //! program under a debugger the page asks (`super::debugger`).
+//!
+//! The page calls these exports, and the debugger's, as
+//! site/src/scripts/web.ts's `WEB_PROTOCOL` names them: a change a page on
+//! the other side of it can't call bumps it.
 
 // wasm-bindgen marks its JSPI attribute and call deprecated, as experimental.
 #![allow(deprecated)]

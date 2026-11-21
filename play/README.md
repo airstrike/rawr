@@ -244,9 +244,9 @@ keeps running in that module instance after `main` returns.
 
 `web/build.sh` packs it beside rawr-web as `universe.js`,
 `universe_bg.wasm.br` and `universe.toml`. The module ships only as its
-brotli copy (about 5 MB): raw it is about 53 MB, over Cloudflare's 25 MiB
-limit on one asset, and `build.mjs` fails a deploy that has a file over it.
-The Worker answers `/web/universe_bg.wasm` with that copy, sent as
+brotli copy (about 5 MB): raw it is about 53 MB. The set lives in R2
+("The playground's modules in R2" below), and the Worker answers
+`/web/universe_bg.wasm` with that copy, sent as
 `Content-Encoding: br` and `Content-Type: application/wasm`, so the browser
 decodes it and `WebAssembly.compileStreaming` takes it as is. The site
 (`site/src/scripts/universe.ts`) compiles the module once and gives each
@@ -520,27 +520,22 @@ status`). That answer comes from the Durable Object itself, through the
 
 `.github/workflows/release.yml` (the **Release** workflow) releases from
 GitHub instead of a Mac and is the main path. It runs by hand, from the
-Actions tab (Run workflow). It chains four stages. Each is a reusable
+Actions tab (Run workflow). It chains three stages. Each is a reusable
 workflow that also runs on its own, and each starts only after the one
 before it succeeded or was skipped. A failure stops every stage after it.
 
 | Stage | Workflow | What it does | When it runs |
 | --- | --- | --- | --- |
 | 1. binaries | `binaries.yml` | Builds the prebuilt archives for the GitHub release of the version. | Only when the `binaries` input is ticked. Patch releases have no tags yet. |
-| 2. playground | `playground.yml` | Builds rawr-web into the run's `web` artifact. | Every release. |
-| 3. bot | `bot.yml` | Builds the ?play image and pushes it as `rawr-play:<commit>`. | When the image's inputs changed since the image Cloudflare runs (`bot: auto`). `always` builds anyway and `skip` never builds. |
-| 4. site | `site.yml` | Deploys the Worker and site with the new rawr-web and the new image, or the running image when stage 3 built none. Then it waits for the bot to report it. | Every release. |
+| 2. playground | `playground.yml` | Builds rawr-web and the browser's universe and publishes them to R2. They go live with no deploy. | Every release. |
+| 3. bot | `bot.yml` | Builds the ?play image, pushes it as `rawr-play:<commit>` and dispatches `site.yml` to roll it out. | When the image's inputs changed since the image Cloudflare runs (`bot: auto`). `always` builds anyway and `skip` never builds. |
 
-Stages 2 and 3 only publish: an artifact and a registry image. The site
-stage makes the one deploy, so the site never goes live ahead of its bot,
-and a failed stage leaves the live site as it was. Run alone, `playground.yml`
-and `bot.yml` deploy through `site.yml` themselves (input `deploy`). A
-playground deploy keeps the running image. A bot deploy keeps the live
-rawr-web. `bot.yml` also runs on a push to main that changes the universe
-(`play/universe`), the bot's code (`play/src`, `play/snippet`) or `play/Dockerfile`: the
-image builds and deploys by itself, so a snippet on the site that needs a
-crate the universe gained never waits for a release. Every other change to
-the site or the docs deploys on push through `site.yml` alone.
+Only `site.yml` deploys the Worker. It runs on every push to main that
+changes the site or the Worker, by hand, and when `bot.yml` dispatches it
+with a new image. Each run deploys main's latest commit. `playground.yml`
+deploys nothing and never asks the bot. `bot.yml` runs each night at 08:00
+UTC: it builds the image when its inputs changed and rolls it out, and it
+builds and publishes rawr-web through `playground.yml`.
 
 The bot stage skips its build when nothing the image is built from has
 changed. `image-changed.sh` compares this commit with the commit of the
@@ -584,39 +579,31 @@ first runs measure them.
 The image is tagged with its commit. `pin-image.sh` writes the image and
 `PLAY_VERSION` into the job's own copy of `wrangler.jsonc`. The job never
 commits, so the committed `wrangler.jsonc` keeps the last image
-`release.sh` pushed. Every deploy without a new image runs `pin-image.sh`
-with no image, which reads the image Cloudflare runs. The jobs never see the
-Discord token, which stays among the Worker's secrets.
-
-A deploy replaces every asset, so a deploy that builds no rawr-web ships the
-live one again. `web/build.sh` writes `SHA256SUMS` beside rawr-web, which
-the site serves as `/web/SHA256SUMS`. `live-web.sh` reads it from the site,
-fetches each file it lists and checks each hash.
+`release.sh` pushed. A rollout pins the image `bot.yml` dispatched, unless
+Cloudflare already runs a newer one (a commit the dispatched one is an
+ancestor of). Every other deploy pins the image Cloudflare runs
+(`pin-image.sh --running`). A deploy that keeps the running image never
+waits on the bot. The jobs never see the Discord token, which stays among
+the Worker's secrets.
 
 ### Deploy the site and the Worker between releases
 
 `.github/workflows/site.yml` also runs on every push to main that changes
 `plan/`, `site/` or the Worker (`play/deploy/cloudflare`). `/todo`, the
 changelog, the docs, the Worker's code and its settings therefore go live
-within minutes, on the running image with the live rawr-web. One example is
-`PLAY_TIME_MS` in `wrangler.jsonc`. A settings change restarts the bot on
-the image it already runs. This deploy builds nothing in Rust.
+within minutes, on the running image. One example is `PLAY_TIME_MS` in
+`wrangler.jsonc`. A settings change restarts the bot on the image it
+already runs. This deploy builds nothing in Rust.
 
-Every workflow takes the concurrency group `release-play` with
-`queue: max` when it runs on its own. A deploy never runs beside a release,
-and a waiting run never cancels another. A stage called from another
-workflow takes a group of its own, because the caller already holds
-`release-play`. A deploy reads the running image only once its turn comes,
-so a release that ran before it is never rolled back.
-
-The first release with these workflows has to build rawr-web, because the
-live site has no `/web/SHA256SUMS` before it. Until that release, a
-site-only deploy stops at `live-web.sh` with a message that says so. Run
-**Release** with `bot: always` the first time. It rebuilds the image with
-the new Dockerfile and saves the cold caches. In the run, watch the `bot /
-image` job's "Build the image" step for the cold time, and the `site /
-site` job for the rollout. Then run **Release** again with
-`bot: always` to measure a warm build. After that, `auto` is the default.
+Every Worker deploy is a `site.yml` run in the concurrency group
+`worker-deploy`, with `queue: max`: one at a time, in order, and a waiting
+run is never cancelled. A run reads main's head when its turn comes and
+deploys that commit, so a run that starts later deploys newer code. A run
+with no image to roll out skips when a newer run waits behind it, since
+that run deploys main's head too. A run reads the running image only on its
+turn, so a rollout that ran before it is never rolled back. Module builds
+(`web-modules`) and image builds (`bot-image`) take groups of their own,
+and neither holds up a deploy.
 
 The repository needs one secret and one variable, under Settings → Secrets
 and variables → Actions:
@@ -631,17 +618,66 @@ the account permission Containers: Edit. That gives these permissions:
 
 - Account: Workers Scripts: Edit (the Worker, its Durable Object and cron).
 - Account: Containers: Edit (the registry push and the container rollout).
+- Account: Workers R2 Storage: Edit (the template's: `upload-web.mjs`
+  writes the sets and the pointer, and `live-web.sh --r2` reads them).
 - Account: Account Settings: Read.
 - Zone: Workers Routes: Edit (the two custom domains).
 - Zone: Zone: Read.
 
-The template's other permissions (Workers KV, R2, Tail and Memberships) are
+The template's other permissions (Workers KV, Tail and Memberships) are
 harmless but unused.
+
+The bucket is made once, before the first deploy that binds it:
+`npx wrangler r2 bucket create rawr-web`. It starts empty, so
+`./seed-web.sh live` (or `artifact`, the newest Playground build's
+artifact) then fills it with a set and writes the pointer, from the commit
+that introduced the bucket.
 
 `instance_type` is `lite` (1/16 vCPU, 256 MiB), and `PLAY_WORKERS=1` fits
 in it. Switch to `basic` (1/4 vCPU, 1 GiB) for faster runs. With Docker installed,
 `docker build --platform linux/amd64 -f play/Dockerfile -t rawr-play .`
 from the repository root builds the same image.
+
+### The playground's modules in R2
+
+rawr-web, the browser's universe and its debugger build (`web/build.sh`)
+live in the R2 bucket `rawr-web`, bound to the Worker as `WEB`. None of them
+is among the Worker's assets: `build.mjs` fails a build that has a `web/`
+file. A build is one set. `upload-web.mjs` puts each of its files under
+`web/<version>/`, where the version is the first 16 hex digits of the
+SHA-256 of the set's `SHA256SUMS`. Then it writes `web/current.json`, the
+pointer, which names the version, the commit the set was built from and
+the protocol it speaks. The pointer goes last, so a reader never sees a
+half set. A set built from an ancestor of the pointer's commit leaves the
+pointer as it is, so a build that finishes late never moves the site back.
+A new set therefore goes live with no Worker deploy: the next page load
+reads the new pointer.
+
+The Worker (`src/web.ts`) serves the keys as paths:
+
+- `/web/current.json` is the pointer, with `Cache-Control: no-cache` and
+  its ETag, so a page sees a new set at its next load.
+- `/web/<version>/<file>` is a file of one set, `immutable` for a year: a
+  set never changes once written.
+- `/web/<file>` is that file of the set the pointer names now, revalidated
+  like the pointer.
+
+A missing object is a 404 that names it. A `.wasm` goes out as its brotli
+copy to a browser that takes brotli, and the universe's modules, stored
+only as their copies, go out as those copies to every client.
+
+The page (`site/src/scripts/web.ts`) reads the pointer before it loads any
+module and loads every file from the set it names, so a glue file and its
+wasm always come from one build. `WEB_PROTOCOL` there numbers the
+interface between the page and the modules: rawr-web's exports, an
+instance's, and the JSON they answer with. When the pointer names another
+protocol, the page loads nothing and says which side is behind. A change
+to that interface bumps the number.
+
+The site's build runs the docs' snippets in rawr-web, from `target/web`.
+`live-web.sh` fetches the current set there from the live site, and
+`live-web.sh --r2` fetches it from the bucket with wrangler's credentials,
+as `site.yml` does. `web/build.sh target/web` builds one instead.
 
 ### Discord application
 

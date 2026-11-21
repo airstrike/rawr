@@ -3,7 +3,8 @@
 // draws it and hands it the browser.
 //
 // A snippet runs in the browser, and only there: rawr-web (WEB_MODULE,
-// from web/build.sh) loads once the page is up, and a program's output
+// from web/build.sh, in the set the site's pointer names: scripts/web.ts)
+// loads once the page is up, and a program's output
 // shows as the ?play bot's would. No server runs a visitor's snippet. A run
 // that can't start in the browser shows why and stops. Share goes through
 // POST /play/share.
@@ -44,8 +45,8 @@ import { crates, usesCrate, type Debugged, type Frame } from "../scripts/univers
 import { ROOT, type Debugger } from "./debugger.ts";
 import { frontmatter, offered, satisfied } from "./frontmatter.ts";
 
-/** rawr-web's module: web/build.sh's output, which the release puts in the Worker's /web. */
-export const WEB_MODULE = "/web/rawr_web.js";
+/** rawr-web's module: its glue's name in a set of web/build.sh's files (scripts/web.ts). */
+export const WEB_MODULE = "rawr_web.js";
 
 export type Theme = "dark" | "light";
 

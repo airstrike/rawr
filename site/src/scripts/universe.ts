@@ -79,11 +79,11 @@ export function lacking(wasm: typeof WebAssembly | null | undefined = globalThis
   return null;
 }
 
-/** The universe's files, beside rawr-web's (web/build.sh). */
-export const UNIVERSE_GLUE = "/web/universe.js";
-export const UNIVERSE_WASM = "/web/universe_bg.wasm";
+/** The universe's files, beside rawr-web's in a set (web/build.sh, web.ts). */
+export const UNIVERSE_GLUE = "universe.js";
+export const UNIVERSE_WASM = "universe_bg.wasm";
 
-/** A build of the universe's module: its glue and its wasm. */
+/** A build of the universe's module: the names of its glue and its wasm in a set. */
 export interface Build {
   glue: string;
   wasm: string;
@@ -97,9 +97,9 @@ export const PLAIN: Build = { glue: UNIVERSE_GLUE, wasm: UNIVERSE_WASM };
  * playground loads only when its debugger is turned on: every program it
  * runs is under a debugger the page asks through `debug`.
  */
-export const DEBUGGER: Build = { glue: "/web/universe-debugger.js", wasm: "/web/universe-debugger_bg.wasm" };
+export const DEBUGGER: Build = { glue: "universe-debugger.js", wasm: "universe-debugger_bg.wasm" };
 /** The universe's Cargo.toml, which a snippet's `use`s name crates from. */
-export const UNIVERSE_MANIFEST = "/web/universe.toml";
+export const UNIVERSE_MANIFEST = "universe.toml";
 
 /** One instance's API (rawr::universe::browser). */
 export interface Instance {
@@ -142,6 +142,8 @@ export interface Frame {
 export interface UniverseEnv {
   document: Document;
   fetch: typeof fetch;
+  /** The address of a file of the set the page loads (web.ts's webFiles). */
+  files(name: string): Promise<string>;
   compile(response: Promise<Response>): Promise<WebAssembly.Module>;
   /** Which build of the module its frames run: PLAIN unless named. */
   build?: Build;
@@ -303,12 +305,13 @@ function terminal(frame: Frame): void {
 }
 
 /** The page's universe: the module compiled once, an instance per frame. */
-export function universe({ document, fetch, compile, build = PLAIN, wasm = globalThis.WebAssembly }: UniverseEnv) {
+export function universe({ document, fetch, files, compile, build = PLAIN, wasm = globalThis.WebAssembly }: UniverseEnv) {
   // The manifest alone, for a page that asks which snippets use crates
   // before it fetches the module. A fetch that failed is tried again.
   let manifest: Promise<string> | null = null;
   const readManifest = () =>
-    (manifest ??= fetch(UNIVERSE_MANIFEST)
+    (manifest ??= files(UNIVERSE_MANIFEST)
+      .then((url) => fetch(url))
       .then((response) => {
         if (!response.ok) throw new Error(`the prebuilt runner's manifest answered ${response.status}`);
         return response.text();
@@ -321,7 +324,7 @@ export function universe({ document, fetch, compile, build = PLAIN, wasm = globa
   // An engine that can't compile the module says why at once, and the
   // module is never fetched.
   const missing = lacking(wasm);
-  const fetched = () => (missing ? Promise.reject(new Error(missing)) : Promise.all([compile(fetch(build.wasm)), readManifest()]));
+  const fetched = () => (missing ? Promise.reject(new Error(missing)) : Promise.all([compile(files(build.wasm).then((url) => fetch(url))), readManifest()]));
   const load = () =>
     (loaded ??= fetched().then(
       ([module, manifest]) => ({ module, manifest }),
@@ -347,7 +350,7 @@ export function universe({ document, fetch, compile, build = PLAIN, wasm = globa
         else reject(new Error(detail.error));
       });
     });
-    element.srcdoc = frameDocument(new URL(build.glue, document.baseURI).href);
+    element.srcdoc = frameDocument(new URL(await files(build.glue), document.baseURI).href);
     parent.append(element);
     const instance = await ready;
     instance.prepare();

@@ -1,7 +1,10 @@
 #!/bin/sh
 # Build rawr-web into DIR, ready to serve:
 #   web/build.sh && python3 -m http.server -d target/wasm/site
-#   web/build.sh play/deploy/cloudflare/public/web    (the release does this)
+#   web/build.sh target/web    (the Playground workflow, and the site's build)
+# The Playground workflow publishes DIR to R2 as one set
+# (play/deploy/cloudflare/upload-web.mjs), and the Worker serves it under
+# /web. The site's build runs its snippets in target/web.
 # DIR defaults to target/wasm/site, which also gets the demo page
 # (web/www/index.html). wasm-bindgen-cli must match the wasm-bindgen of the
 # Cargo.lock a module is built from, so each version it takes is installed
@@ -16,9 +19,9 @@
 # with the rawr-import that RAWR_IMPORT names (rawr-import on the PATH by
 # default), as universe.js, universe_bg.wasm.br
 # and universe.toml, the manifest a snippet compiles beside. The universe's
-# module ships as its brotli copy only (#1459): raw, it is over Cloudflare's
-# 25 MiB limit on an asset. The Worker serves it as /web/universe_bg.wasm
-# with Content-Encoding: br, which every browser decodes.
+# module ships as its brotli copy only (#1459): raw it is about 53 MB. The
+# Worker serves it as /web/universe_bg.wasm with Content-Encoding: br, which
+# every browser decodes.
 #
 # The universe is built a second time with rawr's browser debugger (D1071,
 # RAWR_UNIVERSE_DEBUGGER=1), as universe-debugger.js and
@@ -68,12 +71,14 @@ rm "$out/universe_bg.wasm"
 pack "$out/universe-debugger_bg.wasm"
 rm "$out/universe-debugger_bg.wasm"
 
-# SHA256SUMS names each file with its hash, as sha256sum writes it. A deploy
-# that keeps the live rawr-web (play/deploy/cloudflare/live-web.sh) reads it
-# from the site to know which files to fetch and to check them.
+# SHA256SUMS names each file of the set with its hash, as sha256sum writes
+# it: upload-web.mjs uploads what it names and takes the set's version from
+# its hash, and live-web.sh reads it to know which files to fetch and to
+# check them. current.json is the pointer a fetched set keeps beside it,
+# never one of its files.
 node -e 'const fs = require("fs"), path = require("path"), crypto = require("crypto");
   const dir = process.argv[1];
-  const lines = fs.readdirSync(dir).filter((f) => f !== "SHA256SUMS" && fs.statSync(path.join(dir, f)).isFile()).sort()
+  const lines = fs.readdirSync(dir).filter((f) => f !== "SHA256SUMS" && f !== "current.json" && fs.statSync(path.join(dir, f)).isFile()).sort()
     .map((f) => crypto.createHash("sha256").update(fs.readFileSync(path.join(dir, f))).digest("hex") + "  " + f + "\n");
   fs.writeFileSync(path.join(dir, "SHA256SUMS"), lines.join(""));' "$out"
 

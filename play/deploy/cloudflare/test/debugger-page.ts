@@ -1,9 +1,9 @@
 // The playground's debugger icon (#2304, D1071) in a real headless Chrome,
 // driven over the DevTools protocol with Node's own WebSocket:
-//   RAWR_IMPORT=target/release/rawr-import web/build.sh && npm run build --prefix site
+//   RAWR_IMPORT=target/release/rawr-import web/build.sh target/web && npm run build --prefix site
 //   node play/deploy/cloudflare/test/debugger-page.ts [WEB_DIR] [SHOTS_DIR]
 // It serves the site's build (site/dist) as the Worker does, with /web from
-// WEB_DIR (default target/wasm/site): rawr-web, the plain universe and its
+// WEB_DIR (default target/web) as one set: rawr-web, the plain universe and its
 // debugger build (universe-debugger.js and universe-debugger_bg.wasm.br),
 // which web/build.sh writes side by side.
 //
@@ -35,11 +35,13 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { extname, join, resolve } from "node:path";
-import { webAsset } from "../src/play.ts";
 import { inject } from "../src/playpage.ts";
+import { webAsset } from "../src/web.ts";
+import { dirBucket } from "./web-dir.ts";
 
 const repo = resolve(import.meta.dirname, "../../../..");
-const web = resolve(process.argv[2] ?? join(repo, "target/wasm/site"));
+const web = resolve(process.argv[2] ?? join(repo, "target/web"));
+const bucket = dirBucket(web);
 const shots = resolve(process.argv[3] ?? join(repo, "target/web-check"));
 const chrome = process.env.CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const live = process.env.PLAY_URL;
@@ -90,17 +92,8 @@ const server = createServer(async (request, response) => {
   if (path.startsWith("/web/")) {
     served.push(path);
     // The Worker's own /web handler, over the files in WEB_DIR.
-    const assets = {
-      fetch: async (asset: Request) => {
-        try {
-          return new Response(readFileSync(join(web, new URL(asset.url).pathname.slice("/web/".length))));
-        } catch {
-          return new Response("not found", { status: 404 });
-        }
-      },
-    };
     const headers = new Headers(request.headers as Record<string, string>);
-    const answer = await webAsset(new Request(`http://127.0.0.1${path}`, { headers }), assets);
+    const answer = await webAsset(new Request(`http://127.0.0.1${path}`, { headers }), bucket);
     return response.writeHead(answer.status, Object.fromEntries(answer.headers)).end(Buffer.from(await answer.arrayBuffer()));
   }
   const file = [path, `${path}.html`, `${path}/index.html`].map((p) => join(site, p)).find((f) => existsSync(f) && statSync(f).isFile());
@@ -236,7 +229,7 @@ const binding = (name: string) => `(${panel}?.querySelector('[data-binding="${na
 const printed = `(document.querySelector("#out iframe.universe:not([hidden])")?.contentDocument?.querySelector("pre.terminal")?.textContent ?? "")`;
 const editor = `document.querySelector("#playground .editor").editor`;
 /** How often the page fetched the debugger build's module. */
-const debuggerFetches = () => served.filter((path) => path === "/web/universe-debugger_bg.wasm").length;
+const debuggerFetches = () => served.filter((path) => path.endsWith("/universe-debugger_bg.wasm")).length;
 
 let failed = false;
 const check = (ok: boolean, what: string, detail: unknown = "") => {

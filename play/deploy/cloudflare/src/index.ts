@@ -5,6 +5,8 @@
 // It serves all of rawr.airstrike.fyi: the site's static build (site/dist:
 // the landing page, the docs and the playground's page) and the bot's files
 // (public/), merged into dist/ by build.mjs, plus /play's routes and /bot. The old host, rawr-bot.airstrike.fyi, redirects every request here.
+// The playground's modules (/web) come from the R2 bucket bound as WEB
+// (web.ts), never from the assets, so a new set goes live without a deploy.
 //
 // The channels each server's mods chose with /play-channel live in this
 // Durable Object's storage. The bot loads and saves them at
@@ -49,10 +51,10 @@ import {
   renderRequest,
   parseSnippet,
   shareId,
-  webAsset,
   type Og,
   type Snippet,
 } from "./play.ts";
+import { webAsset } from "./web.ts";
 import { inject } from "./playpage.ts";
 import { UNLOCK_LIMITS, UNLOCK_TOTAL_LIMITS, todoRoute } from "./todo.ts";
 import {
@@ -108,6 +110,8 @@ const HTTP_PORT = 8080;
 
 interface Env {
   ASSETS: Fetcher;
+  /** R2: rawr-web's sets and the pointer to the current one (web.ts). */
+  WEB: R2Bucket;
   PLAY_BOT: DurableObjectNamespace<PlayBot>;
   DISCORD_TOKEN: string;
   PLAY_WORKERS: string;
@@ -663,7 +667,7 @@ export default {
       if (response) return response;
     }
     if (path.startsWith("/web/")) {
-      return webAsset(request, env.ASSETS);
+      return webAsset(request, env.WEB);
     }
     if (path !== "/bot/health") {
       return env.ASSETS.fetch(request);
