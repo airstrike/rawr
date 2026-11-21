@@ -134,6 +134,9 @@ pub struct Program {
     /// The features Cargo enables for the package: its bodies'
     /// `cfg(feature = "..")`s hold. None for a source compiled alone.
     features: crate::project::cargo::features::Enabled,
+    /// The entry package's workspace, as Cargo described it when the
+    /// graph loaded. None for a source compiled alone.
+    workspace: Option<std::sync::Arc<crate::project::cargo::Workspace>>,
     /// The type aliases each source names, declared or imported, which a
     /// body reads as the item headers do.
     aliases: BTreeMap<(program::source::Id, ImmutableString), type_ref::Alias>,
@@ -424,6 +427,13 @@ impl Program {
     /// The features Cargo enables for the package.
     pub(crate) const fn features(&self) -> &crate::project::cargo::features::Enabled {
         &self.features
+    }
+
+    /// The entry package's workspace, as Cargo described it.
+    pub(crate) const fn workspace(
+        &self,
+    ) -> Option<&std::sync::Arc<crate::project::cargo::Workspace>> {
+        self.workspace.as_ref()
     }
 
     /// Access the source promoted into this resolved program.
@@ -790,6 +800,7 @@ fn resolve_with_evidence_and_namespace(
         own: Box::new([]),
         crates: None,
         features: crate::project::cargo::features::Enabled::default(),
+        workspace: None,
         aliases,
         scripts: vec![Script {
             source: program::source::Id::ROOT,

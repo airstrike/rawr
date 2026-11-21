@@ -684,8 +684,10 @@ mod tests {
         fs::create_dir(root.join("src")).unwrap();
         fs::write(root.join("Cargo.toml"), "[package]\nname = \"roles\"\n").unwrap();
         fs::write(root.join("src/main.rs"), "// rawr\npub fn main() {}\n").unwrap();
-        let target = crate::project::Target::discover(&root).unwrap();
-        let graph = crate::package::Graph::load(&crate::Engine::new(), &target).unwrap();
+        let mut answers = crate::project::cargo::Answers::new();
+        let target = crate::project::Target::discover(&root, &mut answers).unwrap();
+        let graph =
+            crate::package::Graph::load(&crate::Engine::new(), &target, &mut answers).unwrap();
         let graph = super::Graph::from_package(&graph);
         let inputs = Inputs::from_graph(&graph);
         let source = graph.entry_source().path();
@@ -746,8 +748,10 @@ mod tests {
                 "[package]\nname = \"app\"\n[workspace]\n",
             );
             write(project.join("src/main.rs"), "// rawr\npub fn main() {}\n");
-            let target = crate::project::Target::discover(&project).unwrap();
-            let graph = crate::package::Graph::load(&crate::Engine::new(), &target).unwrap();
+            let mut answers = crate::project::cargo::Answers::new();
+            let target = crate::project::Target::discover(&project, &mut answers).unwrap();
+            let graph =
+                crate::package::Graph::load(&crate::Engine::new(), &target, &mut answers).unwrap();
             let graph = super::Graph::from_package(&graph);
             let source = graph.entry_source().path().to_path_buf();
             let shared = project.parent().unwrap().join("_target/rawr/shared");
@@ -850,8 +854,10 @@ mod tests {
             "// rawr\npub fn edge() -> i64 { 1 }\n",
         )
         .unwrap();
-        let target = crate::project::Target::discover(&root).unwrap();
-        let graph = crate::package::Graph::load(&crate::Engine::new(), &target).unwrap();
+        let mut answers = crate::project::cargo::Answers::new();
+        let target = crate::project::Target::discover(&root, &mut answers).unwrap();
+        let graph =
+            crate::package::Graph::load(&crate::Engine::new(), &target, &mut answers).unwrap();
         let snapshot = Snapshot::from_graph(&super::Graph::from_package(&graph));
         let limits = rawr_import::limits::Limits::standard();
         snapshot.imported(&limits).unwrap();
@@ -875,8 +881,10 @@ mod tests {
         fs::write(root.join("Cargo.toml"), "[package]\nname = \"inline\"\n").unwrap();
         let main = "// rawr\nmod toast {\n    pub fn edge() -> i64 { 1 }\n}\npub fn main() {}\n";
         fs::write(root.join("src/main.rs"), main).unwrap();
-        let target = crate::project::Target::discover(&root).unwrap();
-        let graph = crate::package::Graph::load(&crate::Engine::new(), &target).unwrap();
+        let mut answers = crate::project::cargo::Answers::new();
+        let target = crate::project::Target::discover(&root, &mut answers).unwrap();
+        let graph =
+            crate::package::Graph::load(&crate::Engine::new(), &target, &mut answers).unwrap();
         let snapshot = Snapshot::from_graph(&super::Graph::from_package(&graph));
         let limits = rawr_import::limits::Limits::standard();
         snapshot.imported(&limits).unwrap();

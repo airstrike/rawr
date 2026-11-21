@@ -126,10 +126,13 @@ fn unchecked(error: crate::Error, source: diagnostic::Source) -> Unchecked {
 
 /// `cargo check` of the program at `location` as it is on disk now, run
 /// when rawr's copy of it failed to build. `None` when it is no Cargo
-/// crate or doesn't load.
-fn checked_now(location: &Path) -> Option<rawr_cli::cargo::Status> {
-    let target = rawr::project::Target::discover(location).ok()?;
-    let graph = rawr::package::Graph::load(&rawr::Engine::new(), &target).ok()?;
+/// crate or doesn't load. What Cargo answers is kept in `answers`.
+fn checked_now(
+    location: &Path,
+    answers: &mut rawr::project::cargo::Answers,
+) -> Option<rawr_cli::cargo::Status> {
+    let target = rawr::project::Target::discover(location, answers).ok()?;
+    let graph = rawr::package::Graph::load(&rawr::Engine::new(), &target, answers).ok()?;
     rawr_cli::cargo::begin(&graph).map(rawr_cli::cargo::Pending::finish)
 }
 
@@ -283,6 +286,7 @@ pub fn run_program(
     arguments: &[std::ffi::OsString],
     mut cargo: Option<rawr_cli::cargo::Pending>,
     handed: Option<rawr_cli::events::Handed>,
+    answers: rawr::project::cargo::Answers,
 ) -> Result<i32, Option<diagnostic::Report>> {
     // Ctrl-C at the terminal ends the program with SIGINT, as a shell
     // reports it.
@@ -315,8 +319,9 @@ pub fn run_program(
     let lifecycle = rawr_import::process::Lifecycle::Run;
     let interactive = rawr_cli::supervise::interactive();
     let mut watcher = graph.as_ref().and_then(rawr_cli::supervise::Watcher::open);
-    // The API graph each session's saves share, kept across restarts.
-    let mut kept = crate::Kept::default();
+    // The API graph each session's saves share, kept across restarts, and
+    // what Cargo answered the command's load.
+    let mut kept = crate::Kept::with_cargo(answers);
     let cells = cells(target, profile, &mut kept);
     let mut ran = session(
         target,
@@ -339,7 +344,7 @@ pub fn run_program(
             let pending = cargo.take().map(rawr_cli::cargo::Pending::finish);
             match &ran {
                 Err(unchecked) if unchecked.is_copy() && pending.is_none() => {
-                    checked_now(&location(target))
+                    checked_now(&location(target), kept.cargo())
                 }
                 _ => pending,
             }
@@ -377,20 +382,21 @@ pub fn run_program(
             };
             // A save that changed the program's files; a build touching
             // them without changing them is no save.
-            let ended = rawr::project::Target::discover(location(target))
+            let answers = kept.cargo();
+            let ended = rawr::project::Target::discover(location(target), answers)
                 .ok()
-                .and_then(|target| contents(&target, &cells));
+                .and_then(|target| contents(&target, &cells, answers));
             loop {
                 waiting.wait();
-                let now = rawr::project::Target::discover(location(target))
+                let now = rawr::project::Target::discover(location(target), answers)
                     .ok()
-                    .and_then(|target| contents(&target, &cells));
+                    .and_then(|target| contents(&target, &cells, answers));
                 if now.is_none() || now != ended {
                     break;
                 }
             }
         }
-        let next = match rawr::project::Target::discover(location(target)) {
+        let next = match rawr::project::Target::discover(location(target), kept.cargo()) {
             Ok(next) => next,
             Err(error) => {
                 ran = Err(diagnostic::Report::from_project(&error).into());
@@ -398,7 +404,7 @@ pub fn run_program(
             }
         };
         let parsed = cells.counts().parsed;
-        let graph = load(&next, &cells).ok();
+        let graph = load(&next, &cells, kept.cargo()).ok();
         if rawr_cli::cells::verbose() {
             eprintln!(
                 "rawr-import: a new session's load parsed {} sources",
@@ -440,6 +446,7 @@ pub fn run_tests(
     profile: &dyn crate::Profile,
     arguments: &[std::ffi::OsString],
     cargo: Option<rawr_cli::cargo::Pending>,
+    answers: rawr::project::cargo::Answers,
 ) -> Result<i32, Option<diagnostic::Report>> {
     let program = rawr_import::process::Arguments {
         name: rawr_cli::supervise::program_name(target),
@@ -449,7 +456,7 @@ pub fn run_tests(
     };
     let lifecycle = rawr_import::process::Lifecycle::Run;
     let mut origin = Origin::graph(Some(graph));
-    let mut kept = crate::Kept::default();
+    let mut kept = crate::Kept::with_cargo(answers);
     let cells = cells(target, profile, &mut kept);
     let ran = loop {
         match session(
@@ -474,7 +481,9 @@ pub fn run_tests(
     };
     let checked = cargo.map(rawr_cli::cargo::Pending::finish);
     let checked = match (&ran, checked) {
-        (Err(unchecked), None) if unchecked.is_copy() => checked_now(&location(target)),
+        (Err(unchecked), None) if unchecked.is_copy() => {
+            checked_now(&location(target), kept.cargo())
+        }
         (_, checked) => checked,
     };
     let settled = ran.map_err(|unchecked| unchecked.report(checked.as_ref()));
@@ -511,18 +520,21 @@ fn output(stream: rawr_import::process::Stream, bytes: &[u8]) -> bool {
 fn contents(
     target: &rawr::project::Target,
     cells: &rawr::package::Cells,
+    answers: &mut rawr::project::cargo::Answers,
 ) -> Option<Vec<(PathBuf, Option<Vec<u8>>)>> {
-    let graph = load(target, cells).ok()?;
+    let graph = load(target, cells, answers).ok()?;
     Some(rawr_cli::supervise::contents(&graph))
 }
 
 /// The program `target` selects, each source read from its parse in
-/// `cells` while its text is the same, and parsed otherwise (#1762).
+/// `cells` while its text is the same, and parsed otherwise (#1762). What
+/// Cargo answers is kept in `answers`.
 fn load(
     target: &rawr::project::Target,
     cells: &rawr::package::Cells,
+    answers: &mut rawr::project::cargo::Answers,
 ) -> Result<rawr::package::Graph, rawr::package::Error> {
-    rawr::package::Graph::load_with_cells(&rawr::Engine::new(), target, cells)
+    rawr::package::Graph::load_with_cells(&rawr::Engine::new(), target, cells, answers)
 }
 
 /// The parse cells of the program `target` selects, built as `profile`
@@ -702,7 +714,8 @@ fn session(
                     .begin_compile()
                     .map_err(|error| framework(error, source.clone()))?;
                 let scope = rawr_import::supervisor::snapshot::attempt::Scope::begin();
-                let next_target = match rawr::project::Target::discover(&target_path) {
+                let next_target = match rawr::project::Target::discover(&target_path, kept.cargo())
+                {
                     Ok(target) => target,
                     Err(error) => {
                         lane.cancel_compile(started)
@@ -730,6 +743,7 @@ fn session(
                     &scope,
                     &parser,
                     cells,
+                    kept.cargo(),
                     &source,
                 ) {
                     Ok(resident::Attempt::Settled) => continue,
@@ -1513,6 +1527,9 @@ fn prepare_on_lane(
     // A cache entry that went stale before the runner's build used it
     // prepares again, whose lookups rebuild it (#613).
     let mut restarts = crate::Restarts::default();
+    // What Cargo answers a discovery of the saved files, when no owner
+    // keeps the answers.
+    let mut own_answers = rawr::project::cargo::Answers::new();
     let Origin {
         mut graph,
         mut prepared,
@@ -1543,7 +1560,7 @@ fn prepare_on_lane(
         let prepared = match prepared {
             Ok(prepared) => prepared,
             Err(crate::Error::Rawr(error)) if error.source_changed() => {
-                saved = Some(discover(target)?);
+                saved = Some(discover(target, answers(&mut kept, &mut own_answers))?);
                 continue;
             }
             Err(error) => return Err(unchecked(error, source.clone())),
@@ -1553,7 +1570,7 @@ fn prepare_on_lane(
         let settlement = prepared.take_settlement();
         let demand = prepared.demand().to_vec();
         let (request, snapshot, project, inputs) = prepared.into_parts();
-        let kept = request.kept().ok();
+        let record = request.kept().ok();
         let generated = match request.generate() {
             Ok(generated) => generated,
             Err(error) if restarts.again(&error) => continue,
@@ -1563,8 +1580,8 @@ fn prepare_on_lane(
         crate::release::freed_memory();
         let mut built = match lane.build(generated) {
             Ok(built) => {
-                if let Some(kept) = &kept {
-                    crate::runner_demand::store(&project, kept, &demand);
+                if let Some(record) = &record {
+                    crate::runner_demand::store(&project, record, &demand);
                 }
                 built
             }
@@ -1599,7 +1616,9 @@ fn prepare_on_lane(
                     manifests,
                 });
             }
-            Err(rawr_import::node::Error::SourceChanged(_)) => saved = Some(discover(target)?),
+            Err(rawr_import::node::Error::SourceChanged(_)) => {
+                saved = Some(discover(target, answers(&mut kept, &mut own_answers))?);
+            }
             Err(error) if restarts.again(&error) => {}
             Err(error) => {
                 return Err(
@@ -1611,9 +1630,23 @@ fn prepare_on_lane(
 }
 
 /// The program as it is on disk now.
-fn discover(target: &rawr::project::Target) -> Result<rawr::project::Target, diagnostic::Report> {
-    rawr::project::Target::discover(location(target))
+fn discover(
+    target: &rawr::project::Target,
+    answers: &mut rawr::project::cargo::Answers,
+) -> Result<rawr::project::Target, diagnostic::Report> {
+    rawr::project::Target::discover(location(target), answers)
         .map_err(|error| rawr::diagnostic::Report::from_project(&error))
+}
+
+/// The Cargo answers `kept` holds, or `own` when no owner keeps them.
+fn answers<'a>(
+    kept: &'a mut Option<&mut crate::Kept>,
+    own: &'a mut rawr::project::cargo::Answers,
+) -> &'a mut rawr::project::cargo::Answers {
+    match kept {
+        Some(kept) => kept.cargo(),
+        None => own,
+    }
 }
 
 fn refresh_initial(
@@ -1621,9 +1654,10 @@ fn refresh_initial(
     target_path: &Path,
     profile: &dyn crate::Profile,
     source: &diagnostic::Source,
-    kept: Option<&mut crate::Kept>,
+    mut kept: Option<&mut crate::Kept>,
 ) -> Result<Initial, Unchecked> {
-    let target = rawr::project::Target::discover(target_path)
+    let mut own_answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(target_path, answers(&mut kept, &mut own_answers))
         .map_err(|error| rawr::diagnostic::Report::from_project(&error))?;
     prepare_on_lane(lane, &target, Origin::default(), profile, source, kept)
 }

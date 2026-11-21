@@ -37,10 +37,12 @@ pub fn open(path: Option<&PathBuf>) -> ExitCode {
 }
 
 fn run(path: Option<&PathBuf>) -> Result<ExitCode, String> {
-    let target = crate::base::discover(path).map_err(|report| {
-        let here = std::env::current_dir().unwrap_or_default();
-        crate::diagnostic::lines(&crate::diagnostic::shape(&report, &here))
-    })?;
+    let target = crate::base::discover(path, &mut rawr::project::cargo::Answers::new()).map_err(
+        |report| {
+            let here = std::env::current_dir().unwrap_or_default();
+            crate::diagnostic::lines(&crate::diagnostic::shape(&report, &here))
+        },
+    )?;
     let root = session::root(&target);
     let place = session::Place::new(&root).map_err(|error| error.to_string())?;
     let rawr = std::env::current_exe().map_err(|error| error.to_string())?;

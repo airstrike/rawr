@@ -31,8 +31,9 @@ impl Fixture {
     }
 
     fn graph(&self) -> Graph {
-        let target = project::Target::discover(&self.root).unwrap();
-        Graph::load(&Engine::new(), &target).unwrap()
+        let mut answers = crate::project::cargo::Answers::new();
+        let target = project::Target::discover(&self.root, &mut answers).unwrap();
+        Graph::load(&Engine::new(), &target, &mut answers).unwrap()
     }
 
     fn edit(&self, path: &str, from: &str, to: &str) {
@@ -152,12 +153,18 @@ fn a_snapshot_holds_a_file_with_inline_modules_once() {
                 fn main() { println!(\"{}\", outer::inner::f()); }\n";
     fs::write(&file, text).unwrap();
     fs::write(root.join("other.rs"), "fn main() {}\n").unwrap();
-    let target = project::Target::discover(&file).unwrap();
-    let graph = Graph::load(&Engine::new(), &target).unwrap();
+    let mut answers = crate::project::cargo::Answers::new();
+    let target = project::Target::discover(&file, &mut answers).unwrap();
+    let graph = Graph::load(&Engine::new(), &target, &mut answers).unwrap();
     assert_eq!(graph.sources().len(), 3);
     let snapshot = crate::package::snapshot::Snapshot::of(&graph).unwrap();
     assert_eq!(snapshot.read(snapshot.entry()), Some(text));
-    let reloaded = Graph::load_snapshot(&Engine::new(), &snapshot).unwrap();
+    let reloaded = Graph::load_snapshot(
+        &Engine::new(),
+        &snapshot,
+        &mut crate::project::cargo::Answers::new(),
+    )
+    .unwrap();
     assert_eq!(reloaded.sources().len(), 3);
     let _ = fs::remove_dir_all(&root);
 }

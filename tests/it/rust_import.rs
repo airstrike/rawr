@@ -45,8 +45,9 @@ impl Drop for Project {
 fn unchanged_rust_library_flows_from_manifest_to_extracted_graph() {
     let mut lane = rawr_import::store::test_lane();
     let project = Project::new();
-    let target = project::Target::discover(&project.root).expect("the zero-Rawr project is discoverable");
-    let graph = Graph::load(&Engine::new(), &target).expect("the Rawr package graph validates");
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = project::Target::discover(&project.root, &mut answers).expect("the zero-Rawr project is discoverable");
+    let graph = Graph::load(&Engine::new(), &target, &mut answers).expect("the Rawr package graph validates");
     let limits = Limits::standard();
     let environment = Environment::capture()
         .and_then(|environment| environment.setting("CARGO_NET_OFFLINE", "true"))

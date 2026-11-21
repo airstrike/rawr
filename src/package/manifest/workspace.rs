@@ -26,9 +26,13 @@ pub(crate) struct Inherited {
 }
 
 /// The fields `manifest` inherits from its workspace, from Cargo's
-/// description of it ([`crate::project::cargo::Workspace`]).
-pub(crate) fn inherited(manifest: &Path) -> Result<Inherited, String> {
-    let workspace = crate::project::cargo::Workspace::of(manifest)
+/// description of it ([`crate::project::cargo::Workspace`]), kept in
+/// `answers`.
+pub(crate) fn inherited(
+    manifest: &Path,
+    answers: &mut crate::project::cargo::Answers,
+) -> Result<Inherited, String> {
+    let workspace = crate::project::cargo::Workspace::of(manifest, answers)
         .map_err(|error| format!("`cargo metadata` failed: {error}"))?;
     let package = workspace
         .package_json(manifest)

@@ -23,11 +23,15 @@ pub struct Loaded {
     pub cells: Cells,
 }
 
-/// Discover the program at `path` (the current directory when `None`).
-pub fn discover(path: Option<&PathBuf>) -> Result<project::Target, diagnostic::Report> {
+/// Discover the program at `path` (the current directory when `None`),
+/// keeping what Cargo answers in `answers`.
+pub fn discover(
+    path: Option<&PathBuf>,
+    answers: &mut project::cargo::Answers,
+) -> Result<project::Target, diagnostic::Report> {
     match path {
-        Some(path) => project::Target::discover(path),
-        None => project::Target::current(),
+        Some(path) => project::Target::discover(path, answers),
+        None => project::Target::current(answers),
     }
     .map_err(|error| diagnostic::Report::from_project(&error))
 }
@@ -67,11 +71,16 @@ impl Build {
 
 /// Discover and load the program at `path` once, with its facts, for
 /// `build`. A source whose parse cell holds its text is read from the
-/// cell, not parsed.
-pub fn load(path: Option<&PathBuf>, build: Build) -> Result<Loaded, diagnostic::Report> {
-    let target = discover(path)?;
+/// cell, not parsed. Discovery and the load keep what Cargo answers in
+/// `answers`.
+pub fn load(
+    path: Option<&PathBuf>,
+    build: Build,
+    answers: &mut project::cargo::Answers,
+) -> Result<Loaded, diagnostic::Report> {
+    let target = discover(path, answers)?;
     let cells = Cells::new(build.cells(&target));
-    let graph = rawr::package::Graph::load_with_cells(&build.parser(), &target, &cells)
+    let graph = rawr::package::Graph::load_with_cells(&build.parser(), &target, &cells, answers)
         .map_err(|error| compile_report(&error, &target))?;
     let mut sheet = Sheet::default();
     sheet.update(&graph);

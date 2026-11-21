@@ -51,6 +51,10 @@ pub(super) struct Tables {
     /// The features Cargo enables for the package: `cfg(feature = "..")`
     /// holds for each.
     pub(super) features: crate::project::cargo::features::Enabled,
+    /// The entry package's workspace, as Cargo described it when the
+    /// program loaded: what `env!("CARGO_CRATE_NAME")` and
+    /// `module_path!()` name the entry target by.
+    pub(super) workspace: Option<std::sync::Arc<crate::project::cargo::Workspace>>,
     pub(super) imports:
         BTreeMap<(crate::program::source::Id, ImmutableString), crate::resolve::item::Binding>,
     /// Each source's original imports and their lexical scopes (D652).
@@ -925,6 +929,7 @@ impl Models {
             host,
             access: engine.access().clone(),
             features: program.features().clone(),
+            workspace: program.workspace().cloned(),
             imports,
             lexical: program.lexical.clone(),
             trait_imports: trait_imports(&program.items),

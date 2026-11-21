@@ -402,8 +402,9 @@ fn request(root: &Path, limits: &Limits) -> Request {
 }
 
 fn snapshot(engine: &Engine, source: &Path) -> reload::source::Snapshot {
-    let target = project::Target::discover(source).expect("fixture target discovers");
-    let graph = package::Graph::load(engine, &target).expect("fixture package graph loads");
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = project::Target::discover(source, &mut answers).expect("fixture target discovers");
+    let graph = package::Graph::load(engine, &target, &mut answers).expect("fixture package graph loads");
     let source = reload::source::Graph::from_package(&graph);
     reload::source::Snapshot::from_graph(&source)
 }

@@ -1028,9 +1028,12 @@ pub fn main() -> iced::Result {
             "// rawr\n#[preview(name = \"Wide\", size = (400, 200))]\npub fn wide(n: &(i64, Option<String>)) -> i64 { let x = 3; 0 }\n",
         )
         .unwrap();
-        let target = crate::project::Target::discover(&root).unwrap();
+        let mut answers = crate::project::cargo::Answers::new();
+        let target = crate::project::Target::discover(&root, &mut answers).unwrap();
         let engine = crate::Engine::new();
-        let load = |cells: &Cells| crate::package::Graph::load_with_cells(&engine, &target, cells);
+        let mut load = |cells: &Cells| {
+            crate::package::Graph::load_with_cells(&engine, &target, cells, &mut answers)
+        };
 
         let first = Cells::new(root.join("cells"));
         let parsed = load(&first).unwrap();
@@ -1060,12 +1063,15 @@ pub fn main() -> iced::Result {
             include_str!("../../examples/scripts/cart.rs"),
         )
         .unwrap();
-        let cart = crate::project::Target::discover(root.join("cart.rs")).unwrap();
+        let mut answers = crate::project::cargo::Answers::new();
+        let cart = crate::project::Target::discover(root.join("cart.rs"), &mut answers).unwrap();
         let cells = Cells::new(root.join("cart"));
-        let parsed = crate::package::Graph::load_with_cells(&engine, &cart, &cells).unwrap();
+        let parsed =
+            crate::package::Graph::load_with_cells(&engine, &cart, &cells, &mut answers).unwrap();
         cells.save(&parsed).unwrap();
         let cells = Cells::new(root.join("cart"));
-        let kept = crate::package::Graph::load_with_cells(&engine, &cart, &cells).unwrap();
+        let kept =
+            crate::package::Graph::load_with_cells(&engine, &cart, &cells, &mut answers).unwrap();
         assert_eq!(cells.counts().parsed, 0);
         engine.compile_package(kept).unwrap();
 

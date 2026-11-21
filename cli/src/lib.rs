@@ -174,7 +174,9 @@ fn binary_arguments(arguments: Vec<OsString>) -> Result<Vec<OsString>, String> {
         Some(index) => PathBuf::from(&arguments[index]),
         None => std::env::current_dir().map_err(|error| error.to_string())?,
     };
-    let binary = rawr::project::Target::binary(&start, &name).map_err(|error| error.to_string())?;
+    let binary =
+        rawr::project::Target::binary(&start, &name, &mut rawr::project::cargo::Answers::new())
+            .map_err(|error| error.to_string())?;
     Ok(arguments
         .into_iter()
         .enumerate()
@@ -580,8 +582,12 @@ fn program(
     program: &[OsString],
     handed: Option<events::Handed>,
 ) -> ExitCode {
-    let loaded = base::load(path, base::Build::Program)
-        .and_then(|loaded| served(loaded, arguments, handed.as_ref()));
+    let loaded = base::load(
+        path,
+        base::Build::Program,
+        &mut rawr::project::cargo::Answers::new(),
+    )
+    .and_then(|loaded| served(loaded, arguments, handed.as_ref()));
     match loaded {
         Ok(Served::Base(loaded)) => on_base(*loaded, check, program, handed),
         Ok(Served::Handed(code)) => code,
@@ -594,7 +600,12 @@ fn program(
 /// program on the base language goes to the binary that provides `rawr run
 /// --web`, which runs it on a runner of rawr and std alone.
 fn on_web(path: Option<&PathBuf>, arguments: &[OsString]) -> ExitCode {
-    match base::load(path, base::Build::Program).and_then(|loaded| served(loaded, arguments, None))
+    match base::load(
+        path,
+        base::Build::Program,
+        &mut rawr::project::cargo::Answers::new(),
+    )
+    .and_then(|loaded| served(loaded, arguments, None))
     {
         Ok(Served::Base(_)) => {
             let mut run = Vec::with_capacity(arguments.len() + 1);
@@ -612,7 +623,13 @@ fn on_web(path: Option<&PathBuf>, arguments: &[OsString]) -> ExitCode {
 /// `rawr test`: load the program for its tests once, then run them here
 /// or hand it to the binary that serves it.
 fn test(path: Option<&PathBuf>, arguments: &[OsString], options: &harness::Options) -> ExitCode {
-    match base::load(path, base::Build::Test).and_then(|loaded| served(loaded, arguments, None)) {
+    match base::load(
+        path,
+        base::Build::Test,
+        &mut rawr::project::cargo::Answers::new(),
+    )
+    .and_then(|loaded| served(loaded, arguments, None))
+    {
         Ok(Served::Base(loaded)) => harness::run(*loaded, options),
         Ok(Served::Handed(code)) => code,
         Err(report) => failure(&report),
@@ -844,7 +861,7 @@ fn doctor(path: Option<&PathBuf>, arguments: &[OsString]) -> ExitCode {
             ),
         }
     }
-    match base::discover(path) {
+    match base::discover(path, &mut rawr::project::cargo::Answers::new()) {
         Ok(target) => println!("program: {}", target.source().path().display()),
         Err(report) => {
             println!("program: none found");

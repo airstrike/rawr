@@ -463,13 +463,14 @@ pub(super) fn attempt(
     scope: &Scope,
     parser: &rawr::Engine,
     cells: &rawr::package::Cells,
+    answers: &mut rawr::project::cargo::Answers,
     diagnostic: &rawr::diagnostic::Source,
 ) -> Result<Attempt, rawr::diagnostic::Report> {
     let native_change = adapter.resident_change(native_baseline);
     let native_current = native_change.is_none();
     let capture = (|| {
-        let load = || {
-            rawr::package::Graph::load_with_cells(parser, target, cells)
+        let mut load = || {
+            rawr::package::Graph::load_with_cells(parser, target, cells, answers)
                 .map_err(|error| crate::report::package(&error, diagnostic.clone()))
         };
         let mut graph = load()?;

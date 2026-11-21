@@ -46,7 +46,12 @@ fn terminal_native_miss_preserves_the_original_resolution_diagnostic() {
     // Ordinary resolution binds a dependency path the facades hold no item
     // at as a macro, which rustc resolves (#2149, #2155).
     let snapshot = native_snapshot(source);
-    let graph = package::Graph::load_snapshot(&engine, &snapshot).unwrap();
+    let graph = package::Graph::load_snapshot(
+        &engine,
+        &snapshot,
+        &mut crate::project::cargo::Answers::new(),
+    )
+    .unwrap();
     assert!(resolve::package::resolve(graph, &engine.host_registry).is_ok());
     // Against the retained facades it is the import's own miss, which
     // preparation answers.

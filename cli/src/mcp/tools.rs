@@ -467,20 +467,35 @@ pub(crate) fn absolute(root: &Path, path: Option<&str>) -> PathBuf {
 
 /// Resolve `path`, relative to `root`, once: its program's root and the
 /// root's target directory.
-pub(crate) fn place(root: &Path, path: Option<&str>) -> Result<Place, String> {
-    locate(root, absolute(root, path), &Options::default())
+pub(crate) fn place(
+    root: &Path,
+    path: Option<&str>,
+    answers: &mut rawr::project::cargo::Answers,
+) -> Result<Place, String> {
+    locate(root, absolute(root, path), &Options::default(), answers)
 }
 
 /// Resolve `path`, relative to `root`, with a call's `options`: the program
 /// they choose there, its root and the target directory the call's
 /// environment gives that root.
-fn program(root: &Path, path: Option<&str>, options: &Options) -> Result<Place, String> {
-    let path = options.program(absolute(root, path))?;
-    locate(root, path, options)
+fn program(server: &Server, path: Option<&str>, options: &Options) -> Result<Place, String> {
+    let mut answers = server.answers();
+    let path = options.program(absolute(&server.root, path), &mut answers)?;
+    locate(&server.root, path, options, &mut answers)
 }
 
-fn locate(root: &Path, path: PathBuf, options: &Options) -> Result<Place, String> {
-    let target = crate::base::discover(Some(&path))
+/// [`place`], with the server's Cargo answers held only while it looks.
+fn placed(server: &Server, path: Option<&str>) -> Result<Place, String> {
+    place(&server.root, path, &mut server.answers())
+}
+
+fn locate(
+    root: &Path,
+    path: PathBuf,
+    options: &Options,
+    answers: &mut rawr::project::cargo::Answers,
+) -> Result<Place, String> {
+    let target = crate::base::discover(Some(&path), answers)
         .map_err(|report| crate::diagnostic::lines(&crate::diagnostic::shape(&report, root)))?;
     let root = target.project().map_or_else(
         || target.source().path().to_path_buf(),
@@ -559,11 +574,11 @@ pub fn call(server: &Server, params: &Value, call: &Call) -> Value {
     let outcome = match name {
         "new" => new(server, text("path"), text("template"), call),
         "check" => Options::new(&arguments).and_then(|options| {
-            program(&server.root, text("path"), &options)
+            program(server, text("path"), &options)
                 .map(|place| check::check(server, &place, &options, call))
         }),
         "run" => Options::new(&arguments).and_then(|options| {
-            program(&server.root, text("path"), &options).map(|place| {
+            program(server, text("path"), &options).map(|place| {
                 run(
                     &place,
                     &options,
@@ -574,7 +589,7 @@ pub fn call(server: &Server, params: &Value, call: &Call) -> Value {
             })
         }),
         "start" => Options::new(&arguments).and_then(|options| {
-            let place = program(&server.root, text("path"), &options)?;
+            let place = program(server, text("path"), &options)?;
             start(
                 server,
                 &place,
@@ -816,7 +831,7 @@ fn session(
     path: Option<&str>,
     call: &Call,
 ) -> Result<std::sync::Arc<session::Session>, String> {
-    let place = place(&server.root, path)?;
+    let place = placed(server, path)?;
     sessions::get(server, &place.root, call).ok_or_else(|| {
         format!(
             "nothing was started for {}: call `start` first",
@@ -872,7 +887,7 @@ fn status(server: &Server, path: Option<&str>, call: &Call) -> Value {
 }
 
 fn stop(server: &Server, path: Option<&str>, call: &Call) -> Result<Value, String> {
-    let place = place(&server.root, path)?;
+    let place = placed(server, path)?;
     let Some(session) = sessions::stop(server, &place.root, call) else {
         return Ok(content::success(
             json!({ "stopped": false }),
@@ -1234,7 +1249,7 @@ fn screenshot(
     call: &Call,
     progress: &Progress<'_>,
 ) -> Result<Value, String> {
-    let place = place(&server.root, path)?;
+    let place = placed(server, path)?;
     let session = sessions::get(server, &place.root, call);
     let installed = layer::installed();
     let mut reasons = Vec::new();
@@ -1376,7 +1391,7 @@ fn extension_call(
     };
     // An extension may serve a directory that holds no program yet.
     let path = arguments.get("path").and_then(Value::as_str);
-    let place = place(&server.root, path).or_else(|reason| {
+    let place = placed(server, path).or_else(|reason| {
         let directory = absolute(&server.root, path);
         if directory.is_dir() {
             Ok(Place {

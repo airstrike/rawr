@@ -654,10 +654,19 @@ fn prepare_resolving(
         .as_deref_mut()
         .and_then(|kept| kept.take_loaded(&cells));
     let graph = graph.or(loaded);
+    // What Cargo answers the load and each round's check, the owner's when
+    // one prepares.
+    let mut own_answers = rawr::project::cargo::Answers::new();
     let mut graph = match graph {
         Some(graph) => graph,
-        None => rawr::package::Graph::load_with_cells(&build.parser(), target, &cells)
-            .map_err(Error::Rawr)?,
+        None => {
+            let answers = match kept.as_deref_mut() {
+                Some(kept) => kept.cargo(),
+                None => &mut own_answers,
+            };
+            rawr::package::Graph::load_with_cells(&build.parser(), target, &cells, answers)
+                .map_err(Error::Rawr)?
+        }
     };
     // The shadow crate's files as they were last written, the owner's when
     // one prepares: a round writes and reads only those it changes.
@@ -926,7 +935,7 @@ fn prepare_resolving(
                 // save lowers again only the sources it changed; else this
                 // preparation's own, so a round lowers again only the
                 // sources a proof or a demand changed.
-                let (kept_api, (checker, checked), copies) = match kept.as_deref_mut() {
+                let (kept_api, (checker, checked, answers), copies) = match kept.as_deref_mut() {
                     Some(kept) => {
                         let (api, check, copies) = kept.split(build);
                         (Some(api), check, copies)
@@ -936,6 +945,7 @@ fn prepare_resolving(
                         (
                             &*own_checker.get_or_insert_with(|| rawr_cli::base::engine(build)),
                             &mut own_checked,
+                            &mut own_answers,
                         ),
                         &mut own_copies,
                     ),
@@ -978,6 +988,7 @@ fn prepare_resolving(
                                 &applications,
                                 &cells,
                                 checked,
+                                answers,
                             );
                             rawr_import::progress::parsed(cells.counts().parsed - parsed);
                             rawr_import::progress::lowered(checked.checked_sources() - lowered);

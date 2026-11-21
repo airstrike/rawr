@@ -76,7 +76,11 @@ impl Options {
     /// The program's path: `path`, or the directory of its workspace's
     /// `package`, then the crate root of that package's `bin`, as `rawr run
     /// -p <package> --bin <bin> <path>` puts them in its place.
-    pub fn program(&self, path: PathBuf) -> Result<PathBuf, String> {
+    pub fn program(
+        &self,
+        path: PathBuf,
+        answers: &mut rawr::project::cargo::Answers,
+    ) -> Result<PathBuf, String> {
         let path = match &self.package {
             Some(name) => rawr_location::package(&path, name).ok_or_else(|| {
                 format!("no package `{name}` in the workspace at {}", path.display())
@@ -91,7 +95,7 @@ impl Options {
         } else {
             path.parent().unwrap_or(&path)
         };
-        rawr::project::Target::binary(start, name).map_err(|error| error.to_string())
+        rawr::project::Target::binary(start, name, answers).map_err(|error| error.to_string())
     }
 
     /// The feature flags, as `rawr run` takes them.

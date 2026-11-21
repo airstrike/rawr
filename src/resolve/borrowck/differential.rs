@@ -71,12 +71,15 @@ fn same_code(code: &str, recorded: &str) -> bool {
 }
 
 fn load(path: &Path) -> Result<crate::package::Graph, Verdict> {
-    let target = crate::project::Target::discover(path).map_err(|error| Verdict::Other {
-        code: "load".into(),
-        line: 0,
-        message: error.to_string(),
-    })?;
-    crate::package::Graph::load(&Engine::new(), &target).map_err(|error| verdict(&error))
+    let mut answers = crate::project::cargo::Answers::new();
+    let target =
+        crate::project::Target::discover(path, &mut answers).map_err(|error| Verdict::Other {
+            code: "load".into(),
+            line: 0,
+            message: error.to_string(),
+        })?;
+    crate::package::Graph::load(&Engine::new(), &target, &mut answers)
+        .map_err(|error| verdict(&error))
 }
 
 fn verdict(error: &crate::package::Error) -> Verdict {

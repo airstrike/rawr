@@ -18,7 +18,8 @@ pub fn run(path: Option<PathBuf>) -> ExitCode {
         Ok(path) => std::fs::canonicalize(&path).unwrap_or(path),
         Err(error) => return failed(&error),
     };
-    let target = match crate::base::discover(Some(&path)) {
+    let target = match crate::base::discover(Some(&path), &mut rawr::project::cargo::Answers::new())
+    {
         Ok(target) => target,
         Err(report) => {
             crate::diagnostic::emit(&report);

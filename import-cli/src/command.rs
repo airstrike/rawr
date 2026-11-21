@@ -214,7 +214,9 @@ fn program(
     arguments: &[OsString],
     handed: Option<rawr_cli::events::Handed>,
 ) -> ExitCode {
-    let loaded = match rawr_cli::base::load(path, rawr_cli::base::Build::Program) {
+    // What Cargo answered the load, which the run's owner keeps.
+    let mut answers = rawr::project::cargo::Answers::new();
+    let loaded = match rawr_cli::base::load(path, rawr_cli::base::Build::Program, &mut answers) {
         Ok(loaded) => loaded,
         Err(report) => return failure(&report),
     };
@@ -260,6 +262,7 @@ fn program(
         arguments,
         cargo,
         handed,
+        answers,
     );
     // What the run's preparation did: a warm start reads, classifies,
     // generates and compiles nothing (#1604).
@@ -293,7 +296,9 @@ fn tests(path: Option<&PathBuf>, arguments: &[OsString]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let loaded = match rawr_cli::base::load(path, rawr_cli::base::Build::Test) {
+    // What Cargo answered the load, which the run's owner keeps.
+    let mut answers = rawr::project::cargo::Answers::new();
+    let loaded = match rawr_cli::base::load(path, rawr_cli::base::Build::Test, &mut answers) {
         Ok(loaded) => loaded,
         Err(report) => return failure(&report),
     };
@@ -310,6 +315,7 @@ fn tests(path: Option<&PathBuf>, arguments: &[OsString]) -> ExitCode {
         &Plain::TEST,
         arguments,
         cargo,
+        answers,
     ))
 }
 

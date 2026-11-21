@@ -62,7 +62,8 @@ fn explicit_source_file_never_ascends() {
     source(&temp, "outer", "outer");
     let explicit = temp.file("outer/examples/counter.rs", "explicit");
 
-    let target = Target::discover(&explicit).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = Target::discover(&explicit, &mut answers).unwrap();
     let Target::File(file) = target else {
         panic!("explicit source was promoted to a project");
     };
@@ -77,7 +78,8 @@ fn exact_marked_crate_directory_is_a_project() {
     source(&temp, "counter", "42");
     let root = temp.path().join("counter");
 
-    let discovered = project(Target::discover(&root).unwrap());
+    let mut answers = rawr::project::cargo::Answers::new();
+    let discovered = project(Target::discover(&root, &mut answers).unwrap());
 
     assert_eq!(discovered.root().as_path(), fs::canonicalize(root).unwrap());
     assert_eq!(discovered.source().text(), "// rawr\n42");
@@ -89,7 +91,8 @@ fn a_marked_lib_rs_is_the_root_without_main_rs() {
     temp.file("kit/Cargo.toml", "[package]\nname = \"kit\"\n");
     let lib = temp.file("kit/src/lib.rs", "// rawr\npub fn f() {}\n");
 
-    let discovered = project(Target::discover(temp.path().join("kit")).unwrap());
+    let mut answers = rawr::project::cargo::Answers::new();
+    let discovered = project(Target::discover(temp.path().join("kit"), &mut answers).unwrap());
 
     assert_eq!(discovered.source().path(), fs::canonicalize(lib).unwrap());
 }
@@ -100,7 +103,8 @@ fn nested_directory_finds_one_marked_crate() {
     source(&temp, "counter", "nested");
     let nested = temp.directory("counter/src/components/deep");
 
-    let discovered = project(Target::discover(nested).unwrap());
+    let mut answers = rawr::project::cargo::Answers::new();
+    let discovered = project(Target::discover(nested, &mut answers).unwrap());
 
     assert_eq!(discovered.root().as_path(), fs::canonicalize(temp.path().join("counter")).unwrap());
     assert_eq!(discovered.source().text(), "// rawr\nnested");
@@ -112,7 +116,8 @@ fn explicit_cargo_toml_selects_its_exact_crate() {
     source(&temp, "outer", "outer");
     source(&temp, "outer/inner", "inner");
 
-    let discovered = project(Target::discover(temp.path().join("outer/Cargo.toml")).unwrap());
+    let mut answers = rawr::project::cargo::Answers::new();
+    let discovered = project(Target::discover(temp.path().join("outer/Cargo.toml"), &mut answers).unwrap());
 
     assert_eq!(discovered.root().as_path(), fs::canonicalize(temp.path().join("outer")).unwrap());
     assert_eq!(discovered.source().text(), "// rawr\nouter");
@@ -124,7 +129,8 @@ fn the_marker_follows_a_shebang_and_frontmatter() {
     temp.file("tool/Cargo.toml", "[package]\nname = \"tool\"\n");
     temp.file("tool/src/main.rs", "#!/usr/bin/env rawr\n// rawr\nfn main() {}\n");
 
-    let discovered = project(Target::discover(temp.path().join("tool")).unwrap());
+    let mut answers = rawr::project::cargo::Answers::new();
+    let discovered = project(Target::discover(temp.path().join("tool"), &mut answers).unwrap());
 
     assert!(discovered.source().text().starts_with("#!"));
 }
@@ -137,7 +143,8 @@ fn a_frontmatter_crate_root_is_a_script_not_the_package() {
     let nested = temp.directory("tool/src/deep");
 
     for start in [temp.path().join("tool"), temp.path().join("tool/Cargo.toml"), nested] {
-        let Target::File(file) = Target::discover(&start).unwrap() else {
+        let mut answers = rawr::project::cargo::Answers::new();
+        let Target::File(file) = Target::discover(&start, &mut answers).unwrap() else {
             panic!("a script was folded into its package from `{}`", start.display());
         };
         assert_eq!(file.path(), fs::canonicalize(&main).unwrap());
@@ -151,7 +158,8 @@ fn an_unmarked_frontmatter_crate_root_is_unmarked() {
     // A blank line after the block: the marker is not the first line of Rust.
     temp.file("tool/src/main.rs", "---cargo\n---\n\n// rawr\nfn main() {}\n");
 
-    let error = Target::discover(temp.path().join("tool")).unwrap_err();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let error = Target::discover(temp.path().join("tool"), &mut answers).unwrap_err();
 
     assert!(matches!(error, project::Error::Unmarked { .. }), "{error}");
 }
@@ -162,7 +170,8 @@ fn an_unmarked_crate_is_not_a_rawr_project() {
     temp.file("plain/Cargo.toml", "[package]\nname = \"plain\"\n");
     let main = temp.file("plain/src/main.rs", "fn main() {}\n");
 
-    let error = Target::discover(temp.path().join("plain")).unwrap_err();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let error = Target::discover(temp.path().join("plain"), &mut answers).unwrap_err();
 
     assert!(matches!(error, project::Error::Unmarked { ref entry, .. } if entry == &fs::canonicalize(&main).unwrap()));
     assert!(
@@ -180,7 +189,8 @@ fn an_unmarked_crate_that_declares_a_marked_module_is_a_rawr_project() {
     temp.file("app/src/sim.rs", "pub mod world;\n");
     temp.file("app/src/sim/world.rs", "// rawr\npub fn run() {}\n");
 
-    let discovered = project(Target::discover(temp.path().join("app")).unwrap());
+    let mut answers = rawr::project::cargo::Answers::new();
+    let discovered = project(Target::discover(temp.path().join("app"), &mut answers).unwrap());
 
     // Found through the native module `sim`; the entry is the native root.
     assert_eq!(discovered.source().path(), fs::canonicalize(&main).unwrap());
@@ -191,7 +201,8 @@ fn a_package_without_a_target_is_cargos_error() {
     let temp = Temp::new("no-root");
     let manifest = temp.file("empty/Cargo.toml", "[package]\nname = \"empty\"\n");
 
-    let error = Target::discover(manifest).unwrap_err();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let error = Target::discover(manifest, &mut answers).unwrap_err();
 
     // Cargo describes the package, and says it has no target.
     assert!(matches!(error, project::Error::Cargo { .. }), "{error}");
@@ -205,7 +216,8 @@ fn exact_candidate_directory_wins_over_an_outer_crate() {
     source(&temp, "outer/inner", "inner");
     let inner = temp.path().join("outer/inner");
 
-    let discovered = project(Target::discover(&inner).unwrap());
+    let mut answers = rawr::project::cargo::Answers::new();
+    let discovered = project(Target::discover(&inner, &mut answers).unwrap());
 
     assert_eq!(discovered.root().as_path(), fs::canonicalize(inner).unwrap());
     assert_eq!(discovered.source().text(), "// rawr\ninner");
@@ -218,7 +230,8 @@ fn nested_marked_crates_are_ambiguous() {
     source(&temp, "outer/inner", "inner");
     let start = temp.directory("outer/inner/components/deep");
 
-    let error = Target::discover(&start).unwrap_err();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let error = Target::discover(&start, &mut answers).unwrap_err();
     let project::Error::Ambiguous { start: actual_start, candidates } = error else {
         panic!("expected ambiguity, got {error}");
     };
@@ -234,7 +247,8 @@ fn vcs_boundary_stops_ancestor_search_inclusively() {
     temp.directory("outer/repository/.git");
     let start = temp.directory("outer/repository/components/deep");
 
-    let error = Target::discover(&start).unwrap_err();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let error = Target::discover(&start, &mut answers).unwrap_err();
     let project::Error::NotFound { start: actual_start, boundary, legacy } = error else {
         panic!("expected not found, got {error}");
     };
@@ -249,7 +263,8 @@ fn an_explicit_rawr_file_says_how_to_convert_it() {
     let temp = Temp::new("legacy-file");
     let path = temp.file("cart.rawr", "fn main() {}\n");
 
-    let error = Target::discover(&path).unwrap_err();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let error = Target::discover(&path, &mut answers).unwrap_err();
 
     assert!(matches!(error, project::Error::Legacy { .. }));
     assert_eq!(
@@ -269,7 +284,8 @@ fn an_explicit_rawr_toml_says_how_to_convert_the_project() {
     temp.file("app/src/main.rawr", "fn main() {}\n");
     let path = temp.file("app/rawr.toml", "[package]\nname = \"app\"\n");
 
-    let error = Target::discover(&path).unwrap_err();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let error = Target::discover(&path, &mut answers).unwrap_err();
 
     assert!(matches!(error, project::Error::Legacy { .. }));
     assert_eq!(
@@ -292,7 +308,8 @@ fn a_search_that_passes_an_old_project_names_it() {
     let main = temp.file("app/src/main.rawr", "fn main() {}\n");
     let start = temp.directory("app/src/view");
 
-    let error = Target::discover(&start).unwrap_err();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let error = Target::discover(&start, &mut answers).unwrap_err();
     let project::Error::NotFound { ref legacy, .. } = error else {
         panic!("expected not found, got {error}");
     };
@@ -319,7 +336,8 @@ fn missing_input_has_a_positioned_error() {
     let temp = Temp::new("missing-input");
     let missing = temp.path().join("does-not-exist");
 
-    let error = Target::discover(&missing).unwrap_err();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let error = Target::discover(&missing, &mut answers).unwrap_err();
 
     assert!(matches!(
         error,
@@ -333,7 +351,8 @@ fn invalid_utf8_source_is_unreadable() {
     let temp = Temp::new("invalid-utf8");
     let expected_path = temp.file("counter/single.rs", [0xff, 0xfe]);
 
-    let error = Target::discover(&expected_path).unwrap_err();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let error = Target::discover(&expected_path, &mut answers).unwrap_err();
 
     assert!(matches!(
         error,
@@ -350,7 +369,8 @@ fn unsupported_explicit_file_is_actionable() {
     let temp = Temp::new("unsupported");
     let path = temp.file("notes.txt", "not Rawr");
 
-    let error = Target::discover(path).unwrap_err();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let error = Target::discover(path, &mut answers).unwrap_err();
 
     assert!(matches!(error, project::Error::UnsupportedInput { .. }));
     assert!(error.to_string().ends_with("Pass a directory, a `.rs` file or a `Cargo.toml`."));
@@ -367,7 +387,8 @@ fn project_source_symlink_cannot_escape_root() {
     temp.directory("counter/src");
     symlink(outside, temp.path().join("counter/src/main.rs")).unwrap();
 
-    let error = Target::discover(temp.path().join("counter")).unwrap_err();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let error = Target::discover(temp.path().join("counter"), &mut answers).unwrap_err();
 
     assert!(matches!(error, project::Error::EscapesRoot { resource: project::Resource::Source, .. }));
 }
@@ -382,7 +403,8 @@ fn explicit_source_symlink_uses_its_canonical_target() {
     let link = temp.path().join("selected.rs");
     symlink(&target, &link).unwrap();
 
-    let discovered = Target::discover(link).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let discovered = Target::discover(link, &mut answers).unwrap();
     let Target::File(file) = discovered else {
         panic!("explicit source symlink did not remain a file target");
     };
@@ -404,7 +426,8 @@ fn a_marked_binary_under_src_bin_is_the_packages_entry() {
     manifest(&temp, "tools", "");
     let tool = temp.file("tools/src/bin/tool.rs", "// rawr\nfn main() {}\n");
 
-    let discovered = project(Target::discover(temp.path().join("tools")).unwrap());
+    let mut answers = rawr::project::cargo::Answers::new();
+    let discovered = project(Target::discover(temp.path().join("tools"), &mut answers).unwrap());
 
     assert_eq!(discovered.source().path(), fs::canonicalize(tool).unwrap());
     assert_eq!(discovered.package().unwrap().name(), "tools");
@@ -420,16 +443,20 @@ fn a_bin_target_file_is_its_packages_binary() {
     temp.file("exercises/lessons/clippy3.rs", "// rawr\nfn main() {}\n");
     let lone = temp.file("exercises/lessons/notes.rs", "// rawr\nfn main() {}\n");
 
-    let discovered = project(Target::discover(&async1).unwrap());
+    let mut answers = rawr::project::cargo::Answers::new();
+    let discovered = project(Target::discover(&async1, &mut answers).unwrap());
     assert_eq!(discovered.root().as_path(), fs::canonicalize(temp.path().join("exercises")).unwrap());
     assert_eq!(discovered.source().path(), fs::canonicalize(&async1).unwrap());
 
     // A file no package lists still runs alone.
-    assert!(matches!(Target::discover(&lone).unwrap(), Target::File(_)));
+    let mut answers = rawr::project::cargo::Answers::new();
+    assert!(matches!(Target::discover(&lone, &mut answers).unwrap(), Target::File(_)));
 
     let root = temp.path().join("exercises/lessons");
-    assert_eq!(Target::binary(&root, "async1").unwrap(), fs::canonicalize(&async1).unwrap());
-    let error = Target::binary(&root, "async2").unwrap_err();
+    let mut answers = rawr::project::cargo::Answers::new();
+    assert_eq!(Target::binary(&root, "async1", &mut answers).unwrap(), fs::canonicalize(&async1).unwrap());
+    let mut answers = rawr::project::cargo::Answers::new();
+    let error = Target::binary(&root, "async2", &mut answers).unwrap_err();
     assert!(matches!(error, project::Error::NoBinary { .. }));
     assert_eq!(error.to_string(), "no bin target named `async2`\navailable bin targets:\n    async1\n    clippy3");
 }
@@ -443,11 +470,13 @@ fn several_binaries_need_a_default_run() {
     temp.file("pair/src/main.rs", "// rawr\nfn main() {}\n");
     temp.file("pair/src/bin/other.rs", "// rawr\nfn main() {}\n");
 
-    let error = Target::discover(temp.path().join("pair")).unwrap_err();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let error = Target::discover(temp.path().join("pair"), &mut answers).unwrap_err();
     assert!(matches!(error, project::Error::AmbiguousBinary { .. }), "{error}");
     assert!(error.to_string().contains("available binaries: other, pair"), "{error}");
 
     manifest(&temp, "pair", "default-run = \"other\"\n");
-    let discovered = project(Target::discover(temp.path().join("pair")).unwrap());
+    let mut answers = rawr::project::cargo::Answers::new();
+    let discovered = project(Target::discover(temp.path().join("pair"), &mut answers).unwrap());
     assert_eq!(discovered.source().path(), fs::canonicalize(temp.path().join("pair/src/bin/other.rs")).unwrap());
 }
