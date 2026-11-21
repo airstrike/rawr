@@ -363,7 +363,7 @@ fn exercise(outcome: Outcome) {
                         )
                         .expect("complete cold record and inventory seal together");
                         let cargo_home = replay_request.config.cargo_home()?;
-                        let replays = std::sync::Mutex::default();
+                        let replays = std::cell::RefCell::default();
                         let compare =|budget: &mut crate::input::stored::Budget<'_>,
                                            cargo_limits: &Limits,
                                            cargo_allocation: &mut cargo::unit::Allocation| {

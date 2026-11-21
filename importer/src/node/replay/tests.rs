@@ -216,7 +216,7 @@ fn stage_discovered(root: &Root, store: &Store, calls: Arc<AtomicUsize>) -> Stag
         .inspect_candidate::<Owned>(current.action(), store.graph_budget())
         .expect("authenticate owned output")
         .expect("find published output");
-    let validator: Validator<Owned> = Arc::new(move |_, _| {
+    let validator: Validator<Owned> = std::rc::Rc::new(move |_, _| {
         calls.fetch_add(1, Ordering::SeqCst);
         fs::read(&source)
             .map(Vec::into_boxed_slice)

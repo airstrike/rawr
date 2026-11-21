@@ -6,10 +6,10 @@ fn consumed_hot_rejection_restores_pins_and_never_sends_duplicate_abort() {
     for wrapped in [false, true] {
         let mut fixture = Fixture::new();
         let (cold, _) = fixture.generation(b"before");
-        let live = fixture.build(cold);
+        let mut live = fixture.build(cold);
         live.pin_live_last_good().unwrap();
         fs::write(fixture.root.join("main.rs"), b"after!").unwrap();
-        let prepared = fixture.prepare(&live, b"after!");
+        let mut prepared = fixture.prepare(&live, b"after!");
         let store = fixture.context.open_store().unwrap();
         let before = pins(&store);
         let guards = store.fixture_pin_counts().unwrap();
@@ -47,7 +47,7 @@ fn owner_loss_after_commit_does_not_send_abort_to_uncertain_owner() {
     let mut fixture = Fixture::new();
     let (cold, _) = fixture.generation(b"before");
     let live = fixture.build(cold);
-    let prepared = fixture.prepare(&live, b"before");
+    let mut prepared = fixture.prepare(&live, b"before");
     let mut transitions = Vec::new();
     let failure = prepared
         .commit(|transition| {

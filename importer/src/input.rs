@@ -1258,7 +1258,7 @@ impl Baseline {
         universe: Option<&cargo::universe::MetadataProof>,
         target: &str,
         profile: &str,
-        context: &std::sync::Arc<crate::context::Context>,
+        context: &std::rc::Rc<crate::context::Context>,
         graph: &cargo::unit::BuildGraph,
         command_build: &Path,
         #[cfg(feature = "rustc-driver")] partitioned: bool,

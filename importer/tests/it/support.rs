@@ -2,7 +2,6 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::OnceLock;
 
 use rawr_import::api::identity::Authority;
 use rawr_import::api::{ledger, model};
@@ -22,36 +21,43 @@ impl Drop for Project {
     }
 }
 
-/// The facade fixture under two aliases, extracted once per process. Its
+/// The facade fixture under two aliases, extracted once per test thread. Its
 /// capture leaves every fixture it compiles byte-identical.
 fn facade_graph() -> &'static rawr_import::api::Graph<rawr_import::api::Extracted> {
-    static GRAPH: OnceLock<rawr_import::api::Graph<rawr_import::api::Extracted>> = OnceLock::new();
-    GRAPH.get_or_init(|| {
-        let fixture_digest_oracle = fixture_digests();
-        let root = std::env::temp_dir().join(format!(
-            "rawr-support-{}-{}",
-            std::process::id(),
-            TEST_ID.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::create_dir(&root).expect("the unique support project can be created");
-        let project = Project(fs::canonicalize(root).expect("the support project is canonical"));
-        let limits = Limits::standard();
-        let native = Native::pinned().expect("the pinned driver toolchain is installed");
-        let lane = crate::shared::lane();
-        let graph = request(&project.0, &limits)
-            .resolve(&native, &limits)
-            .and_then(|resolution| {
-                rawr_import::extract::from_resolution(resolution, &native, &limits)
-            })
-            .expect("the cross-package compiler capture canonicalizes");
-        drop(lane);
-        assert_eq!(
-            fixture_digest_oracle,
-            fixture_digests(),
-            "fixtures remain unchanged"
-        );
-        graph
-    })
+    // It holds read sets, whose validators stay on the thread that made
+    // them, so each test thread makes its own, once.
+    thread_local! {
+        static GRAPH: &'static rawr_import::api::Graph<rawr_import::api::Extracted> = {
+            let value = {
+                let fixture_digest_oracle = fixture_digests();
+                let root = std::env::temp_dir().join(format!(
+                    "rawr-support-{}-{}",
+                    std::process::id(),
+                    TEST_ID.fetch_add(1, Ordering::Relaxed)
+                ));
+                fs::create_dir(&root).expect("the unique support project can be created");
+                let project = Project(fs::canonicalize(root).expect("the support project is canonical"));
+                let limits = Limits::standard();
+                let native = Native::pinned().expect("the pinned driver toolchain is installed");
+                let lane = crate::shared::lane();
+                let graph = request(&project.0, &limits)
+                    .resolve(&native, &limits)
+                    .and_then(|resolution| {
+                        rawr_import::extract::from_resolution(resolution, &native, &limits)
+                    })
+                    .expect("the cross-package compiler capture canonicalizes");
+                drop(lane);
+                assert_eq!(
+                    fixture_digest_oracle,
+                    fixture_digests(),
+                    "fixtures remain unchanged"
+                );
+                graph
+            };
+            Box::leak(Box::new(value))
+        };
+    }
+    GRAPH.with(|value| *value)
 }
 
 #[test]

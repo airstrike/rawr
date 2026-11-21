@@ -1,4 +1,5 @@
 use super::content::Edge;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use sha2::{Digest as _, Sha256};
@@ -9,8 +10,7 @@ use super::{ActionKey, ContentRef, Digest, Direct, Discoverable, Error, Kind, Va
 
 const MAX_ENTRIES: usize = 65_536;
 
-pub(crate) type Validator<K> =
-    Arc<dyn Fn(&K, &super::GraphBudget) -> Result<Box<[u8]>, Error> + Send + Sync + 'static>;
+pub(crate) type Validator<K> = Rc<dyn Fn(&K, &super::GraphBudget) -> Result<Box<[u8]>, Error>>;
 
 /// The physical obligation at this exact validation boundary. Both scopes
 /// always validate current behavior-affecting inputs.
@@ -21,7 +21,7 @@ pub(crate) enum Scope {
 }
 
 pub(crate) type ScopedValidator<K> =
-    Arc<dyn Fn(&K, &super::GraphBudget, Scope) -> Result<Box<[u8]>, Error> + Send + Sync + 'static>;
+    Rc<dyn Fn(&K, &super::GraphBudget, Scope) -> Result<Box<[u8]>, Error>>;
 
 /// Launch-local exact union of current node and transitive parent recipes.
 #[derive(Clone)]
@@ -456,7 +456,7 @@ pub(crate) struct Prepared {
     /// The build target whose generation this closure is once it binds as
     /// Live and LastGood.
     target: crate::store::Target,
-    pins: std::sync::Mutex<Pins>,
+    pins: Pins,
 }
 
 #[derive(Default)]
@@ -486,10 +486,10 @@ pub(crate) struct Entry {
 #[derive(Clone)]
 pub(crate) struct Witness {
     expected: Entry,
-    current: Arc<dyn Current>,
+    current: Rc<dyn Current>,
 }
 
-trait Current: Send + Sync {
+trait Current {
     fn revalidate(&self, budget: &super::GraphBudget, scope: Scope) -> Result<Entry, Error>;
 }
 
@@ -514,7 +514,7 @@ impl Witness {
         let expected = entry::<K>(recipe, content, bundled);
         Self {
             expected,
-            current: Arc::new(Static { entry: expected }),
+            current: Rc::new(Static { entry: expected }),
         }
     }
 
@@ -533,7 +533,7 @@ impl Witness {
         Self::discovered_scoped(
             recipe,
             value,
-            Arc::new(move |value, budget, _| validate(value, budget)),
+            Rc::new(move |value, budget, _| validate(value, budget)),
             current,
             content,
             bundled,
@@ -553,7 +553,7 @@ impl Witness {
     {
         Self {
             expected: entry::<K>(current, content, bundled),
-            current: Arc::new(Discovered {
+            current: Rc::new(Discovered {
                 recipe: recipe.clone(),
                 value,
                 validate,
@@ -968,7 +968,7 @@ impl Prepared {
             proof,
             retention: None,
             target: crate::store::Target::UNNAMED,
-            pins: std::sync::Mutex::new(Pins::default()),
+            pins: Pins::default(),
         })
     }
 
@@ -981,10 +981,7 @@ impl Prepared {
         if self.retention.is_some() {
             return Err(Error::State("prepared retention cannot be replaced"));
         }
-        let pins = self
-            .pins
-            .get_mut()
-            .map_err(|_| Error::State("prepared read-set pin ownership lock was poisoned"))?;
+        let pins = &self.pins;
         if pins.prepared.is_some() || pins.live.is_some() || pins.last_good.is_some() {
             return Err(Error::State("retention must bind before pin ownership"));
         }
@@ -1003,10 +1000,7 @@ impl Prepared {
             }
             return self.revalidate();
         }
-        let pins = self
-            .pins
-            .get_mut()
-            .map_err(|_| Error::State("prepared read-set pin ownership lock was poisoned"))?;
+        let pins = &self.pins;
         if pins.prepared.is_some() || pins.live.is_some() || pins.last_good.is_some() {
             return Err(Error::State(
                 "snapshot witness must bind before pin ownership",
@@ -1027,10 +1021,7 @@ impl Prepared {
             return self.pin_prepared();
         };
         let _counted = Counted::begin();
-        let pins = self
-            .pins
-            .get_mut()
-            .map_err(|_| Error::State("prepared read-set pin ownership lock was poisoned"))?;
+        let pins = &mut self.pins;
         if pins.prepared.is_some()
             || pins.live.is_some()
             || pins.last_good.is_some()
@@ -1053,10 +1044,7 @@ impl Prepared {
         &mut self,
         snapshot: &crate::supervisor::snapshot::Bytes,
     ) -> Result<(), Error> {
-        let pins = self
-            .pins
-            .get_mut()
-            .map_err(|_| Error::State("prepared read-set pin ownership lock was poisoned"))?;
+        let pins = &self.pins;
         if let Some(startup) = &pins.startup {
             if startup.closure != self.proof.digest()
                 || pins.prepared.is_none()
@@ -1095,10 +1083,7 @@ impl Prepared {
         &mut self,
         snapshot: &crate::supervisor::snapshot::Bytes,
     ) -> Result<(), Error> {
-        let pins = self
-            .pins
-            .get_mut()
-            .map_err(|_| Error::State("prepared read-set pin ownership lock was poisoned"))?;
+        let pins = &self.pins;
         if pins.prepared.is_none() || pins.startup.is_some() {
             return Err(Error::State(
                 "only an admitted closure that holds its Prepared pin starts again",
@@ -1114,24 +1099,21 @@ impl Prepared {
     /// held: the startup handoff's, the one it already holds, or one
     /// acquired now. The admission walks the closure itself, once, after
     /// the pin is held: no walk here proves more than that one (#1760).
+    /// The operation borrows the closure it runs under.
     pub(crate) fn with_startup_pin<T, E>(
-        &self,
-        operation: impl FnOnce() -> Result<T, E>,
+        &mut self,
+        operation: impl FnOnce(&Self) -> Result<T, E>,
     ) -> Result<Result<T, E>, Error> {
         if self.proof.snapshot.is_none() {
             return Err(Error::State("an admitted closure binds its snapshot first"));
         }
-        let mut pins = self
-            .pins
-            .lock()
-            .map_err(|_| Error::State("prepared read-set pin ownership lock was poisoned"))?;
+        let pins = &mut self.pins;
         let Some(startup) = pins.startup.take() else {
             let held = pins.prepared.is_some();
-            drop(pins);
             if !held {
                 self.pin_prepared()?;
             }
-            return Ok(operation());
+            return Ok(operation(self));
         };
         if startup.closure != self.proof.digest()
             || pins.prepared.is_none()
@@ -1144,18 +1126,13 @@ impl Prepared {
             .as_ref()
             .ok_or(Error::State("startup retention absent"))?
             .require_proof(&self.proof)?;
-        drop(pins);
-        Ok(operation())
+        Ok(operation(self))
     }
 
-    pub(crate) fn pin_prepared(&self) -> Result<(), Error> {
+    pub(crate) fn pin_prepared(&mut self) -> Result<(), Error> {
         let _counted = Counted::begin();
-        let mut pins = self
-            .pins
-            .lock()
-            .map_err(|_| Error::State("prepared read-set pin ownership lock was poisoned"))?;
+        let pins = &mut self.pins;
         if pins.prepared.is_some() {
-            drop(pins);
             return self.revalidate();
         }
         let store = self.context.open_store()?;
@@ -1184,11 +1161,8 @@ impl Prepared {
     /// are its consumer's watchers' to see. A pair it holds already, as a
     /// new process of the same runner's does, stands with no transaction
     /// (#1760). A closure with no Prepared pin is walked as it binds.
-    pub(crate) fn pin_live_last_good(&self) -> Result<(), Error> {
-        let mut pins = self
-            .pins
-            .lock()
-            .map_err(|_| Error::State("prepared read-set pin ownership lock was poisoned"))?;
+    pub(crate) fn pin_live_last_good(&mut self) -> Result<(), Error> {
+        let pins = &mut self.pins;
         match (pins.live.is_some(), pins.last_good.is_some()) {
             (true, true) => return Ok(()),
             (false, false) => {}
@@ -1208,7 +1182,6 @@ impl Prepared {
             pins.last_good = Some(last_good);
             return Ok(());
         }
-        drop(pins);
         match self.with_live_last_good(|| Ok::<(), std::convert::Infallible>(()))? {
             Ok(()) => Ok(()),
             Err(
@@ -1221,14 +1194,11 @@ impl Prepared {
     /// Keep durable rollback authority until the exact admission operation succeeds.
     /// The operation runs under publication and may not reopen or mutate the store.
     pub(crate) fn with_live_last_good<T, E>(
-        &self,
+        &mut self,
         operation: impl FnOnce() -> Result<T, E>,
     ) -> Result<Result<T, crate::store::transaction::Rejected<E>>, Error> {
         let _counted = Counted::begin();
-        let mut pins = self
-            .pins
-            .lock()
-            .map_err(|_| Error::State("prepared read-set pin ownership lock was poisoned"))?;
+        let pins = &mut self.pins;
         match (pins.live.is_some(), pins.last_good.is_some()) {
             (true, true) | (false, false) => {}
             _ => {
@@ -1374,7 +1344,7 @@ mod tests {
             false,
             Witness {
                 expected: entry,
-                current: Arc::new(NeverCurrent),
+                current: Rc::new(NeverCurrent),
             },
             context,
             graph,
@@ -1436,7 +1406,7 @@ mod tests {
                     entry,
                     Witness {
                         expected: entry,
-                        current: Arc::new(NeverCurrent),
+                        current: Rc::new(NeverCurrent),
                     },
                 )
             })

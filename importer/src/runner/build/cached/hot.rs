@@ -445,9 +445,9 @@ fn an_observed_start_walks_its_closure_once_after_its_prepared_pin() {
         let pinned = if startup { 0 } else { 1 };
         assert_eq!(fixture.validations.load(Ordering::Relaxed), pinned);
         built.bind_startup_snapshot(&snapshot).unwrap();
-        let read_set = built.take_prepared_read_set().unwrap();
+        let mut read_set = built.take_prepared_read_set().unwrap();
         read_set
-            .with_startup_pin(|| {
+            .with_startup_pin(|_| {
                 assert_eq!(fixture.validations.load(Ordering::Relaxed), pinned);
                 Ok::<(), ()>(())
             })
@@ -473,10 +473,10 @@ fn startup_handoff_consumes_its_marker_once_and_the_admission_walk_rejects_drift
     built.retain_startup(&snapshot).unwrap();
     built.bind_startup_snapshot(&snapshot).unwrap();
     assert_eq!(fixture.validations.load(Ordering::Relaxed), 0);
-    let read_set = built.take_prepared_read_set().unwrap();
+    let mut read_set = built.take_prepared_read_set().unwrap();
     let calls = AtomicUsize::new(0);
     read_set
-        .with_startup_pin(|| {
+        .with_startup_pin(|_| {
             calls.fetch_add(1, Ordering::Relaxed);
             Ok::<(), ()>(())
         })
@@ -489,7 +489,7 @@ fn startup_handoff_consumes_its_marker_once_and_the_admission_walk_rejects_drift
     fixture.reject_at.store(usize::MAX, Ordering::Relaxed);
     fixture.validations.store(0, Ordering::Relaxed);
     read_set
-        .with_startup_pin(|| Ok::<(), ()>(()))
+        .with_startup_pin(|_| Ok::<(), ()>(()))
         .unwrap()
         .unwrap();
     assert_eq!(
@@ -533,9 +533,9 @@ fn startup_post_bind_failure_restores_predecessors_without_minting_a_marker() {
     // pin, whose transaction walks the closure.
     built.bind_startup_snapshot(&snapshot).unwrap();
     assert_eq!(fixture.validations.load(Ordering::Relaxed), 0);
-    let read_set = built.take_prepared_read_set().unwrap();
+    let mut read_set = built.take_prepared_read_set().unwrap();
     read_set
-        .with_startup_pin(|| Ok::<(), ()>(()))
+        .with_startup_pin(|_| Ok::<(), ()>(()))
         .unwrap()
         .unwrap();
     assert_eq!(fixture.validations.load(Ordering::Relaxed), 1);
@@ -580,7 +580,7 @@ fn retained_pin_transactions_validate_once_and_preserve_rollback() {
     assert_eq!(fixture.validations.load(Ordering::Relaxed), 0);
 
     fs::write(fixture.root.join("main.rs"), b"after!").unwrap();
-    let prepared = fixture.prepare(&live, b"after!");
+    let mut prepared = fixture.prepare(&live, b"after!");
     let store = fixture.context.open_store().unwrap();
     let before = pins(&store);
     let guards = store.fixture_pin_counts().unwrap();
@@ -691,10 +691,10 @@ fn retained_equal_allocation_rename_rejects_after_supervisor_controls_validate()
 fn retained_post_bind_drift_rolls_back_before_hot_commit() {
     let mut fixture = Fixture::new();
     let (cold, _) = fixture.generation(b"before");
-    let live = fixture.build(cold);
+    let mut live = fixture.build(cold);
     live.pin_live_last_good().unwrap();
     fs::write(fixture.root.join("main.rs"), b"after!").unwrap();
-    let prepared = fixture.prepare(&live, b"after!");
+    let mut prepared = fixture.prepare(&live, b"after!");
     prepared.revalidate_prepared().unwrap();
     let store = fixture.context.open_store().unwrap();
     let before = pins(&store);
@@ -772,7 +772,7 @@ fn hot_union_replays_the_same_runner_with_only_current_application_and_overlay()
     let old_profile = live.profile.node_chain().unwrap().parent().action();
     let runner = live.chain.as_ref().unwrap().parent().action();
     fs::write(fixture.root.join("main.rs"), b"after!").unwrap();
-    let prepared = fixture.prepare(&live, b"after!");
+    let mut prepared = fixture.prepare(&live, b"after!");
     assert_eq!(
         prepared.manifest.chain.as_ref().unwrap().parent().action(),
         runner
@@ -806,7 +806,7 @@ fn hot_union_rejects_silent_rawr_and_native_drift_at_both_admission_checks() {
             let mut fixture = Fixture::new();
             let (cold, _) = fixture.generation(b"before");
             let live = fixture.build(cold);
-            let prepared = fixture.prepare(&live, b"before");
+            let mut prepared = fixture.prepare(&live, b"before");
             prepared.revalidate_prepared().unwrap();
             let store = fixture.context.open_store().unwrap();
             let before = pins(&store);
@@ -842,10 +842,10 @@ fn hot_union_rejects_silent_rawr_and_native_drift_at_both_admission_checks() {
 fn hot_profile_rejection_restores_exact_pins_and_success_replaces_the_current_proof() {
     let mut fixture = Fixture::new();
     let (cold, _) = fixture.generation(b"before");
-    let live = fixture.build(cold);
+    let mut live = fixture.build(cold);
     live.pin_live_last_good().unwrap();
     fs::write(fixture.root.join("main.rs"), b"after!").unwrap();
-    let prepared = fixture.prepare(&live, b"after!");
+    let mut prepared = fixture.prepare(&live, b"after!");
     let store = fixture.context.open_store().unwrap();
     let before = pins(&store);
     let guards = store.fixture_pin_counts().unwrap();
@@ -930,7 +930,7 @@ fn hot_transition_aborts_validation_and_profile_failures_and_preserves_abort_err
             let mut fixture = Fixture::new();
             let (cold, _) = fixture.generation(b"before");
             let live = fixture.build(cold);
-            let prepared = fixture.prepare(&live, b"before");
+            let mut prepared = fixture.prepare(&live, b"before");
             if drift {
                 fs::write(fixture.root.join("main.rs"), b"drift!").unwrap();
             }
@@ -982,10 +982,10 @@ fn hot_transition_aborts_validation_and_profile_failures_and_preserves_abort_err
 fn hot_post_bind_drift_rolls_back_before_any_commit_callback() {
     let mut fixture = Fixture::new();
     let (cold, _) = fixture.generation(b"before");
-    let live = fixture.build(cold);
+    let mut live = fixture.build(cold);
     live.pin_live_last_good().unwrap();
     fs::write(fixture.root.join("main.rs"), b"after!").unwrap();
-    let prepared = fixture.prepare(&live, b"after!");
+    let mut prepared = fixture.prepare(&live, b"after!");
     let store = fixture.context.open_store().unwrap();
     let before = pins(&store);
     let guards = store.fixture_pin_counts().unwrap();
@@ -1022,7 +1022,7 @@ fn snapshot_binding_cannot_change_after_ownership_and_new_context_has_its_own_bu
     live.bind_snapshot(&before).unwrap();
     let old_store = live.chain.as_ref().unwrap().context().open_store().unwrap();
     live.revalidate_prepared().unwrap();
-    let prepared = fixture.prepare(&live, b"before");
+    let mut prepared = fixture.prepare(&live, b"before");
     let new_graph = prepared
         .manifest
         .chain

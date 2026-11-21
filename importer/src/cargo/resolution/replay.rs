@@ -1,7 +1,8 @@
 //! Complete retained-record interpretation without execution or publication.
 
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use super::layout;
 use super::owner::Replays;
@@ -112,7 +113,7 @@ impl Request {
         context: universe::ContextProof,
         receipt: Option<universe::Receipt>,
         staged: Option<Arc<Decoded>>,
-        replays: &Mutex<Replays>,
+        replays: &RefCell<Replays>,
         limits: &Limits,
         cargo_limits: &Limits,
         cargo_allocation: &mut unit::Allocation,
@@ -268,7 +269,7 @@ impl Request {
         view: View,
         request: cargo::Digest,
         inventory: super::bundle::Inventory<'_>,
-        replays: &Mutex<Replays>,
+        replays: &RefCell<Replays>,
         limits: &Limits,
         budget: &mut stored::Budget<'_>,
     ) -> stored::Result<Replay> {
@@ -428,8 +429,8 @@ pub(in crate::cargo) struct Compared(Option<Kept>);
 impl Compared {
     /// The kept comparison made `against` the same, while its stamps hold.
     /// The stamps are taken with the lock released.
-    fn current(replays: &Mutex<Replays>, against: &Against) -> Option<Kept> {
-        let found = Replays::lock(replays)
+    fn current(replays: &RefCell<Replays>, against: &Against) -> Option<Kept> {
+        let found = Replays::borrow(replays)
             .compared
             .0
             .take_if(|kept| kept.against == *against)?;
@@ -437,7 +438,7 @@ impl Compared {
     }
 
     /// Keep `kept` in place of the comparison kept before.
-    fn keep(replays: &Mutex<Replays>, kept: Kept) {
-        Replays::lock(replays).compared.0 = Some(kept);
+    fn keep(replays: &RefCell<Replays>, kept: Kept) {
+        Replays::borrow(replays).compared.0 = Some(kept);
     }
 }

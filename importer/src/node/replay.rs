@@ -36,6 +36,10 @@ impl<K> Staged<K> {
         self.value.as_ref()
     }
 
+    pub(crate) fn value_arc(&self) -> Arc<K> {
+        Arc::clone(&self.value)
+    }
+
     pub(crate) const fn content(&self) -> ContentRef<K> {
         self.content
     }

@@ -167,9 +167,8 @@ pub(super) fn replay_hot<B>(
     let recipe = context.discover_with_parents::<Product>(&authority, &parents)?;
     let store = context.open_store()?;
     let validation_store = store.clone();
-    let validate: node::read_set::Validator<Product> = std::sync::Arc::new(move |value, budget| {
-        value.revalidate(&validation_store, &inputs, budget)
-    });
+    let validate: node::read_set::Validator<Product> =
+        std::rc::Rc::new(move |value, budget| value.revalidate(&validation_store, &inputs, budget));
     // Only the live action is admissible. This API has no discovery, execution,
     // Cargo-owner acquisition, or transform callback to fall back to.
     let action = previous.parent().action();

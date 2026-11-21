@@ -1,7 +1,5 @@
 //! Installation ownership for native work outside a cached node executor.
 
-use std::sync::Arc;
-
 use sha2::{Digest as _, Sha256};
 
 use crate::context::Context;
@@ -18,19 +16,23 @@ pub(crate) enum Operation {
 
 /// Exact execution partition bound to the caller's captured installation.
 pub(crate) struct Scope {
-    context: Arc<Context>,
+    context: std::rc::Rc<Context>,
     key: ExecutionKey,
 }
 
 impl Scope {
-    pub(crate) fn bind(context: &Arc<Context>, operation: Operation, authority: [u8; 32]) -> Self {
+    pub(crate) fn bind(
+        context: &std::rc::Rc<Context>,
+        operation: Operation,
+        authority: [u8; 32],
+    ) -> Self {
         let mut digest = Sha256::new();
         digest.update(b"rawr.cargo.uncached-execution/v1");
         digest.update(context.identity());
         digest.update([operation as u8]);
         digest.update(authority);
         Self {
-            context: Arc::clone(context),
+            context: std::rc::Rc::clone(context),
             key: ExecutionKey::from_bytes(digest.finalize().into()),
         }
     }

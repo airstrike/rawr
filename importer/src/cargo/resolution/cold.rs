@@ -2,7 +2,6 @@
 
 use std::ffi::OsString;
 use std::path::Path;
-use std::sync::Arc;
 
 use super::layout;
 use crate::bindings::format;
@@ -538,7 +537,7 @@ impl Request {
         );
         let command_target = extraction_plan.command_target()?;
         Ok(cargo::Harness {
-            context: Arc::new(cached.context.clone()),
+            context: std::rc::Rc::new(cached.context.clone()),
             harness_root: paths.root().to_path_buf(),
             manifest,
             source,

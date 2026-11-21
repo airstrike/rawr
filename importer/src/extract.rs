@@ -321,7 +321,7 @@ pub(crate) fn shared_context(
 pub(crate) fn retain_shared(
     context: &crate::context::Context,
     request: &[u8; 32],
-    parent: std::sync::Arc<crate::node::Validated<cargo::toolchain::Attestation>>,
+    parent: std::rc::Rc<crate::node::Validated<cargo::toolchain::Attestation>>,
     proof: crate::input::proof::Proof,
     policy: &Policy,
     limits: &cargo::Limits,

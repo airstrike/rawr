@@ -56,13 +56,15 @@ impl super::Owner {
             .bind_startup_snapshot(&snapshot)
             .map_err(Error::Node)?;
         let read_set = manifest.take_prepared_read_set();
-        if let Some(read_set) = read_set {
-            let checked = match check {
-                Check::BeforeAdmission => Some(&read_set),
-                Check::AfterObservation => None,
-            };
+        if let Some(mut read_set) = read_set {
             let mut admitted = read_set
-                .with_startup_pin(|| self.bootstrap_current(manifest, snapshot, process, checked))
+                .with_startup_pin(|read_set| {
+                    let checked = match check {
+                        Check::BeforeAdmission => Some(read_set),
+                        Check::AfterObservation => None,
+                    };
+                    self.bootstrap_current(manifest, snapshot, process, checked)
+                })
                 .map_err(Error::Node)??;
             if let Err(failure) = admitted.restore_prepared_read_set(read_set) {
                 return match admitted.shutdown() {

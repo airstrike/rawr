@@ -63,7 +63,7 @@ enum Source {
     },
     #[cfg(feature = "rustc-driver")]
     Shared {
-        parent: std::sync::Arc<node::Validated<crate::cargo::toolchain::Attestation>>,
+        parent: std::rc::Rc<node::Validated<crate::cargo::toolchain::Attestation>>,
         proof: crate::input::proof::Proof,
     },
 }
@@ -119,7 +119,7 @@ impl Continuation {
     #[cfg(feature = "rustc-driver")]
     pub(crate) fn capture_shared(
         context: &crate::context::Context,
-        parent: std::sync::Arc<node::Validated<crate::cargo::toolchain::Attestation>>,
+        parent: std::rc::Rc<node::Validated<crate::cargo::toolchain::Attestation>>,
         proof: crate::input::proof::Proof,
         product: node::staging::Owned<super::cached::Product>,
         retention: node::read_set::Retention,
@@ -230,12 +230,17 @@ impl Kept {
         }
         let held = match graph {
             Lazy::Ready(graph) => Held::Built(graph),
-            Lazy::Pending(materialize) => Held::Building(std::thread::spawn(move || {
-                let began = std::time::Instant::now();
-                let graph = crate::progress::uncounted(|| rebuild(&product, materialize));
-                crate::progress::deferred_graph(began.elapsed());
-                graph
-            })),
+            // The thread takes the product's value and not its read set,
+            // whose validators stay on this thread.
+            Lazy::Pending(materialize) => {
+                let product = product.value_arc();
+                Held::Building(std::thread::spawn(move || {
+                    let began = std::time::Instant::now();
+                    let graph = crate::progress::uncounted(|| rebuild(&product, materialize));
+                    crate::progress::deferred_graph(began.elapsed());
+                    graph
+                }))
+            }
         };
         self.held = Some((key, held));
     }
@@ -271,10 +276,10 @@ impl Kept {
                 match graph {
                     Some(graph) if exact => graph,
                     Some(graph) => frame(&api.product, materialize, &graph)?,
-                    None => rebuild(&api.product, materialize)?,
+                    None => rebuild(api.product.value(), materialize)?,
                 }
             }
-            (Lazy::Pending(materialize), None) => rebuild(&api.product, materialize)?,
+            (Lazy::Pending(materialize), None) => rebuild(api.product.value(), materialize)?,
         };
         api.graph = Lazy::Ready(graph.share());
         self.held = Some((key, Held::Built(graph)));
@@ -303,17 +308,16 @@ fn build(
 ) -> Result<super::Graph<super::Captured>, node::Error> {
     match graph {
         Lazy::Ready(graph) => Ok(graph),
-        Lazy::Pending(materialize) => rebuild(product, materialize),
+        Lazy::Pending(materialize) => rebuild(product.value(), materialize),
     }
 }
 
 /// The graph of `product`, decoded from the stored product.
 fn rebuild(
-    product: &node::staging::Owned<super::cached::Product>,
+    product: &super::cached::Product,
     materialize: Materialize,
 ) -> Result<super::Graph<super::Captured>, node::Error> {
     let began = std::time::Instant::now();
-    let product = product.value();
     let resolved = product.resolve()?;
     let graph = materialize(Basis::Stored(resolved.as_ref().unwrap_or(product)))?;
     crate::progress::rebuilt_graph(began.elapsed());

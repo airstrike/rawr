@@ -327,9 +327,9 @@ impl<B> Slot<B> {
 
     /// Atomically replace the durable Live and LastGood store roles with the
     /// current admitted runner's exact transitive closure.
-    pub fn pin_current_live_last_good(&self) -> Result<(), crate::node::Error> {
+    pub fn pin_current_live_last_good(&mut self) -> Result<(), crate::node::Error> {
         self.current
-            .as_ref()
+            .as_mut()
             .ok_or(crate::node::Error::State(
                 "runner slot has no current generation to pin",
             ))?

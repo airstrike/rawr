@@ -226,8 +226,8 @@ impl<B> Manifest<Built, B> {
 
     /// Bind the complete runner closure under the durable Prepared role before
     /// watcher registration or process work.
-    pub fn pin_prepared(&self) -> Result<(), crate::node::Error> {
-        match self.phase.read_set.as_ref() {
+    pub fn pin_prepared(&mut self) -> Result<(), crate::node::Error> {
+        match self.phase.read_set.as_mut() {
             Some(read_set) => read_set.pin_prepared(),
             None => Ok(()),
         }
@@ -258,8 +258,8 @@ impl<B> Manifest<Built, B> {
         }
     }
 
-    pub(crate) fn pin_live_last_good(&self) -> Result<(), crate::node::Error> {
-        match self.phase.read_set.as_ref() {
+    pub(crate) fn pin_live_last_good(&mut self) -> Result<(), crate::node::Error> {
+        match self.phase.read_set.as_mut() {
             Some(read_set) => read_set.pin_live_last_good(),
             None => Ok(()),
         }

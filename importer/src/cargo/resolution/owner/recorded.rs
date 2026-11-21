@@ -10,9 +10,10 @@
 //! hint: it only ever refuses a candidate, never admits one, so a lost,
 //! stale or damaged record costs a replay or a build, never a wrong hit.
 
+use std::cell::RefCell;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use sha2::{Digest as _, Sha256};
 
@@ -34,32 +35,32 @@ const KEPT_RECORDS: usize = 16;
 const DIRECTORY: &str = "recorded";
 
 /// The record of the owner whose wire is `wire`, held in `replays` or
-/// kept. A kept record is read with the lock released.
-pub(super) fn find(replays: &Mutex<Replays>, rawr: &Path, wire: &[u8]) -> Option<Arc<Recorded>> {
+/// kept. A kept record is read once the borrow of `replays` has ended.
+pub(super) fn find(replays: &RefCell<Replays>, rawr: &Path, wire: &[u8]) -> Option<Arc<Recorded>> {
     let key = key(wire);
-    if let Some(held) = Replays::lock(replays).recorded.get(&key) {
+    if let Some(held) = Replays::borrow(replays).recorded.get(&key) {
         return Some(held);
     }
     let recorded = Arc::new(Recorded::decode(&fs::read(path(rawr, &key)).ok()?)?);
-    Replays::lock(replays).recorded.hold(key, &recorded);
+    Replays::borrow(replays).recorded.hold(key, &recorded);
     Some(recorded)
 }
 
 /// Hold in `replays`, and keep, the record `of` gives for the owner whose
-/// wire is `wire`, unless one is held already. The record is written with
-/// the lock released.
+/// wire is `wire`, unless one is held already. The record is written once
+/// the borrow of `replays` has ended.
 pub(super) fn keep(
-    replays: &Mutex<Replays>,
+    replays: &RefCell<Replays>,
     rawr: &Path,
     wire: &[u8],
     of: impl FnOnce() -> Recorded,
 ) {
     let key = key(wire);
-    if Replays::lock(replays).recorded.get(&key).is_some() {
+    if Replays::borrow(replays).recorded.get(&key).is_some() {
         return;
     }
     let recorded = Arc::new(of());
-    Replays::lock(replays).recorded.hold(key, &recorded);
+    Replays::borrow(replays).recorded.hold(key, &recorded);
     // A record not written only costs a later process a replay.
     let _ = write(rawr, &key, &recorded);
 }

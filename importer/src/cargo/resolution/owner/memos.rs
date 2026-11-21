@@ -8,7 +8,8 @@
 //! runs and lends it to each preparation, so each memo lives exactly as long
 //! as the owner; a preparation lent a new one misses as a new process does.
 
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::cell::{RefCell, RefMut};
+use std::rc::Rc;
 
 /// What one save of a run owner leaves for the next.
 #[derive(Default)]
@@ -21,10 +22,11 @@ pub struct Memos {
     pub(in crate::cargo::resolution) witnessed: super::memo::Witnessed,
     /// What replays staged, compared and recorded. An evaluation's
     /// validator reads and writes them, and the read sets of the nodes it
-    /// admits hold that validator past the save and may run it on any
-    /// thread, so the owner shares them with each evaluation behind one
-    /// lock, which is never held across a read of a file.
-    pub(in crate::cargo::resolution) replays: Arc<Mutex<Replays>>,
+    /// admits hold that validator past the save, so the owner shares them
+    /// with each evaluation. A validator is an `Rc` closure, so it runs
+    /// only on the owner's thread, and each borrow ends before the
+    /// borrower reads a file or runs another validator.
+    pub(in crate::cargo::resolution) replays: Rc<RefCell<Replays>>,
     /// What the API's canonicalizations read, when the owner keeps them.
     reads: Option<crate::extract::Reads>,
 }
@@ -60,10 +62,8 @@ pub(in crate::cargo) struct Replays {
 }
 
 impl Replays {
-    /// The replays `shared` holds, locked. A panic under the lock leaves
-    /// each memo whole, as each is replaced in one assignment, and a memo
-    /// only ever answers a key it was kept under.
-    pub(in crate::cargo) fn lock(shared: &Mutex<Self>) -> MutexGuard<'_, Self> {
-        shared.lock().unwrap_or_else(PoisonError::into_inner)
+    /// The replays `shared` holds, borrowed for as long as the guard lives.
+    pub(in crate::cargo) fn borrow(shared: &RefCell<Self>) -> RefMut<'_, Self> {
+        shared.borrow_mut()
     }
 }

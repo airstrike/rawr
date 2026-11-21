@@ -647,13 +647,13 @@ impl<B> Candidate<Admitted, B> {
             .restore_prepared_read_set(read_set)
     }
 
-    pub(crate) fn pin_live_last_good(&self) -> Result<(), crate::node::Error> {
+    pub(crate) fn pin_live_last_good(&mut self) -> Result<(), crate::node::Error> {
         self.inner
-            .as_ref()
+            .as_mut()
             .ok_or(crate::node::Error::State(
                 "admitted runner lost its manifest before pin promotion",
             ))?
-            .manifest()
+            .manifest_mut()
             .pin_live_last_good()
     }
 
@@ -1125,7 +1125,7 @@ impl<B> Candidate<Admitted, B> {
     /// Commit one externally admitted hot preparation into the live runner.
     pub fn commit_compile(
         &mut self,
-        prepared: super::hot::Prepared<B>,
+        mut prepared: super::hot::Prepared<B>,
     ) -> Result<crate::supervisor::GenerationKey, Error> {
         let inner = self.inner.as_mut().ok_or(Error::Consumed)?;
         if inner.key != prepared.previous {

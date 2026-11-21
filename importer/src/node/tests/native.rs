@@ -52,6 +52,11 @@ fn native_waits_for_heavy_before_action_and_releases_publication_during_executio
         store
             .with_action_lease(recipe.action(), || {
                 threads.spawn(|| {
+                    let context = fixture_context(&root);
+                    let store = context.open_store().expect("the evaluator store opens");
+                    let recipe = context
+                        .direct::<Artifact>(b"native-order")
+                        .expect("recipe seals");
                     let result = Evaluator::new(&store, &counts).native(&recipe, || {
                         assert!(locked(&heavy));
                         assert!(locked(&action));
@@ -118,36 +123,38 @@ fn retained_bundle_rejects_parent_drift_after_execution_wait() {
     let entered = AtomicBool::new(false);
     let launched = AtomicBool::new(false);
     let pins = store.fixture_pin_counts().unwrap();
-    let (sent, received) = mpsc::channel();
+    let execution = recipe.execution();
+    let (held, holding) = mpsc::channel();
     std::thread::scope(|threads| {
-        store
-            .with_execution_lease(recipe.execution(), || {
-                threads.spawn(|| {
-                    let result = Evaluator::new(&store, &counts)
-                        .discover_bundled_retained_budgeted(
-                            &recipe,
-                            &retention,
-                            move |candidate, _| candidate.validate_published(&validation_store),
-                            |attempt| {
-                                entered.store(true, Ordering::Relaxed);
-                                recipe.revalidate_parents(&store)?;
-                                launched.store(true, Ordering::Relaxed);
-                                super::bundled_fixture(attempt)
-                            },
-                        );
-                    sent.send(result.is_err()).unwrap();
-                });
-                assert!(
-                    await_locked(&heavy),
-                    "evaluator holds heavy while execution is blocked"
-                );
-                assert_eq!(refreshes.load(Ordering::Relaxed), before);
-                assert!(!entered.load(Ordering::Relaxed));
-                reject.store(true, Ordering::Relaxed);
-                Ok(())
-            })
-            .unwrap();
-        assert!(received.recv().unwrap());
+        let holder = threads.spawn(|| {
+            store
+                .with_execution_lease(execution, || {
+                    held.send(()).unwrap();
+                    assert!(
+                        await_locked(&heavy),
+                        "evaluator holds heavy while execution is blocked"
+                    );
+                    assert_eq!(refreshes.load(Ordering::Relaxed), before);
+                    assert!(!entered.load(Ordering::Relaxed));
+                    reject.store(true, Ordering::Relaxed);
+                    Ok(())
+                })
+                .unwrap();
+        });
+        holding.recv().unwrap();
+        let result = Evaluator::new(&store, &counts).discover_bundled_retained_budgeted(
+            &recipe,
+            &retention,
+            move |candidate, _| candidate.validate_published(&validation_store),
+            |attempt| {
+                entered.store(true, Ordering::Relaxed);
+                recipe.revalidate_parents(&store)?;
+                launched.store(true, Ordering::Relaxed);
+                super::bundled_fixture(attempt)
+            },
+        );
+        assert!(result.is_err());
+        holder.join().unwrap();
     });
     assert!(
         entered.load(Ordering::Relaxed),
@@ -167,16 +174,7 @@ fn retained_bundle_rejects_parent_drift_after_execution_wait() {
 #[test]
 fn native_same_key_contenders_execute_once_and_different_heavy_actions_cannot_overlap() {
     let root = temporary("native-contenders");
-    let context = prepare_fixture(&root);
-    let other = fixture_context(&root);
-    let first_store = context.open_store().expect("first store opens");
-    let other_store = other.open_store().expect("other store opens");
-    let recipe = context
-        .direct::<Artifact>(b"same-native")
-        .expect("first recipe seals");
-    let different = other
-        .direct::<Artifact>(b"different-native")
-        .expect("different recipe seals");
+    prepare_fixture(&root);
     let counts = Counts::default();
     let executed = AtomicUsize::new(0);
     let active = AtomicUsize::new(0);
@@ -186,12 +184,16 @@ fn native_same_key_contenders_execute_once_and_different_heavy_actions_cannot_ov
     std::thread::scope(|threads| {
         let active_first = &active;
         let executed_first = &executed;
-        let first_store = &first_store;
         let counts_first = &counts;
-        let recipe_first = &recipe;
+        let root = &root;
         threads.spawn(move || {
-            Evaluator::new(first_store, counts_first)
-                .native(recipe_first, || {
+            let context = fixture_context(root);
+            let store = context.open_store().expect("first store opens");
+            let recipe = context
+                .direct::<Artifact>(b"same-native")
+                .expect("first recipe seals");
+            Evaluator::new(&store, counts_first)
+                .native(&recipe, || {
                     assert_eq!(active_first.fetch_add(1, Ordering::SeqCst), 0);
                     executed_first.fetch_add(1, Ordering::Relaxed);
                     entered.send(()).expect("first executor announces entry");
@@ -202,14 +204,18 @@ fn native_same_key_contenders_execute_once_and_different_heavy_actions_cannot_ov
                 .expect("first native action publishes");
         });
         entry.recv().expect("first executor holds heavy");
-        for request in [&recipe, &different] {
+        for request in [&b"same-native"[..], b"different-native"] {
             let done = done.clone();
             let counts = &counts;
             let active = &active;
             let executed = &executed;
-            let other_store = &other_store;
             threads.spawn(move || {
-                let result = Evaluator::new(other_store, counts).native(request, || {
+                let context = fixture_context(root);
+                let store = context.open_store().expect("other store opens");
+                let request = context
+                    .direct::<Artifact>(request)
+                    .expect("contender recipe seals");
+                let result = Evaluator::new(&store, counts).native(&request, || {
                     assert_eq!(active.fetch_add(1, Ordering::SeqCst), 0);
                     executed.fetch_add(1, Ordering::Relaxed);
                     active.fetch_sub(1, Ordering::SeqCst);
@@ -247,15 +253,20 @@ fn healthy_native_hits_and_unrelated_pure_work_do_not_wait_for_heavy() {
     Evaluator::new(&store, &Counts::default())
         .native(&warm, value)
         .expect("warm value seeds");
-    let pure = context
-        .direct::<Artifact>(b"pure-independent")
-        .expect("pure recipe seals");
     let counts = Counts::default();
     let (sent, received) = mpsc::channel();
     std::thread::scope(|threads| {
         let result = store
             .with_heavy_lease(|| {
                 threads.spawn(|| {
+                    let context = fixture_context(&root);
+                    let store = context.open_store().expect("the evaluator store opens");
+                    let warm = context
+                        .direct::<Artifact>(b"warm-native")
+                        .expect("warm recipe seals");
+                    let pure = context
+                        .direct::<Artifact>(b"pure-independent")
+                        .expect("pure recipe seals");
                     let evaluator = Evaluator::new(&store, &counts);
                     let hit = evaluator.native(&warm, || panic!("healthy hit cannot execute"));
                     let pure = evaluator.direct(&pure, value);
@@ -275,7 +286,7 @@ fn healthy_native_hits_and_unrelated_pure_work_do_not_wait_for_heavy() {
 #[test]
 fn uncached_scope_owns_installation_and_exact_execution_and_releases_after_failure() {
     let root = temporary("native-scope");
-    let context = Arc::new(prepare_fixture(&root));
+    let context = std::rc::Rc::new(prepare_fixture(&root));
     let store = context.open_store().expect("the scope store opens");
     let scope = execution::Scope::bind(&context, execution::Operation::Probe, [17; 32]);
     let failure: crate::Result<()> = scope.run(|| {
@@ -296,21 +307,28 @@ fn uncached_scope_owns_installation_and_exact_execution_and_releases_after_failu
         .expect("failure releases both execution leases");
     let other_project = root.join("other-project");
     fs::create_dir(&other_project).expect("a second project shares the installation");
-    let other_context = Arc::new(
-        crate::context::Context::capture(
-            &other_project,
-            context.environment().clone(),
-            context.target(),
-            &context.limits(),
-        )
-        .expect("the other project context seals"),
-    );
-    let other_scope = execution::Scope::bind(&other_context, execution::Operation::Probe, [19; 32]);
+    let environment = context.environment().clone();
+    let target = context.target();
+    let limits = context.limits();
     let (sent, received) = mpsc::channel();
     std::thread::scope(|threads| {
         let before_release = store
             .with_heavy_lease(|| {
                 threads.spawn(|| {
+                    let other_context = std::rc::Rc::new(
+                        crate::context::Context::capture(
+                            &other_project,
+                            environment,
+                            target,
+                            &limits,
+                        )
+                        .expect("the other project context seals"),
+                    );
+                    let other_scope = execution::Scope::bind(
+                        &other_context,
+                        execution::Operation::Probe,
+                        [19; 32],
+                    );
                     let result = other_scope.run(|| Ok(()));
                     sent.send(result.is_ok())
                         .expect("scope contender reports completion");

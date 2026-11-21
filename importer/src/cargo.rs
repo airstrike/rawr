@@ -7,7 +7,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, TryLockError};
+use std::sync::{Mutex, TryLockError};
 
 use sha2::Digest as _;
 use sha2::Sha256;
@@ -376,7 +376,7 @@ fn stopped() -> Error {
 
 /// The immutable final-form manifest, lock, config, metadata, and unit proof.
 pub struct Resolution {
-    context: Arc<crate::context::Context>,
+    context: std::rc::Rc<crate::context::Context>,
     project_root: PathBuf,
     cache_root: PathBuf,
     retained_inputs: Box<[Input]>,
@@ -423,7 +423,7 @@ type ClosureKey = (Box<str>, Box<[Box<str>]>);
 
 /// Completed observations without consuming the request that must validate reuse.
 struct CompletedHarness {
-    context: Arc<crate::context::Context>,
+    context: std::rc::Rc<crate::context::Context>,
     harness_root: PathBuf,
     manifest: Digest,
     source: Digest,
@@ -526,7 +526,7 @@ impl CompletedHarness {
 }
 
 struct Harness {
-    context: Arc<crate::context::Context>,
+    context: std::rc::Rc<crate::context::Context>,
     harness_root: PathBuf,
     manifest: Digest,
     source: Digest,
@@ -621,7 +621,7 @@ struct Retained {
 
 struct CachedToolchain {
     context: crate::context::Context,
-    attestation: std::sync::Arc<crate::node::Validated<toolchain::Attestation>>,
+    attestation: std::rc::Rc<crate::node::Validated<toolchain::Attestation>>,
 }
 
 #[cfg(feature = "rustc-driver")]
@@ -1167,7 +1167,7 @@ impl Request {
         cached: Option<&CachedToolchain>,
     ) -> Result<Harness> {
         let mut cargo_allocation = unit::Allocation::begin(cargo_limits);
-        let node_context = Arc::new(match cached {
+        let node_context = std::rc::Rc::new(match cached {
             Some(cached) => cached.context.clone(),
             None => crate::context::Context::capture_config(
                 &self.project_root,
@@ -1345,7 +1345,7 @@ impl Request {
             #[cfg(not(feature = "rustc-driver"))]
             let command_target = target_dir.clone();
             Ok(Harness {
-                context: Arc::clone(&node_context),
+                context: std::rc::Rc::clone(&node_context),
                 harness_root,
                 manifest,
                 source,
@@ -1386,7 +1386,7 @@ impl Request {
         catalog: universe::Catalog,
         context: universe::ContextProof,
         placement: Placement,
-        node_context: Arc<crate::context::Context>,
+        node_context: std::rc::Rc<crate::context::Context>,
         toolchain_parent: Option<&crate::node::Validated<toolchain::Attestation>>,
     ) -> Result<Harness> {
         let Placement {
@@ -1651,7 +1651,7 @@ impl Request {
         #[cfg(not(feature = "rustc-driver"))]
         let command_target = harness_root.join("target");
         Ok(Harness {
-            context: Arc::clone(&node_context),
+            context: std::rc::Rc::clone(&node_context),
             harness_root,
             manifest,
             source,

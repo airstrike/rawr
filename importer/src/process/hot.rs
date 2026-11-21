@@ -59,7 +59,7 @@ pub(crate) enum Transition {
 
 impl<B> Prepared<B> {
     pub(crate) fn commit(
-        &self,
+        &mut self,
         mut transition: impl FnMut(Transition) -> Result<(), super::RunnerError>,
     ) -> Result<(), super::RunnerError> {
         let Err(failure) = self.admit(|| transition(Transition::Commit)) else {
@@ -83,7 +83,7 @@ impl<B> Prepared<B> {
     }
 
     pub(crate) fn admit<T>(
-        &self,
+        &mut self,
         operation: impl FnOnce() -> Result<T, super::RunnerError>,
     ) -> Result<T, super::RunnerError> {
         match self.read_set.with_live_last_good(operation)? {
