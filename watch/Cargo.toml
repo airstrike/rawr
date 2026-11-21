@@ -19,3 +19,7 @@ rawr = { path = ".." }
 [dev-dependencies]
 rawr = { path = "..", features = ["rust-import"] }
 rawr_import = { package = "rawr-import", path = "../importer" }
+
+# The save-delay probe's kqueue vnode watch.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+libc = "0.2.156"
