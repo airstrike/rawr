@@ -2375,6 +2375,7 @@
     {"t":"T2373","issue":2373,"title":"T2373: A read through a RefCell's borrow_mut() temporary isn't checked against a borrow already held","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T2374","issue":2374,"title":"T2374: Three owner-harness tests fail with \"Overlay must reuse content\"","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T2375","issue":2375,"title":"T2375: A full std path to a missing item is E0433 where rustc gives E0599, and std type naming ignores dependency types","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T2376","issue":2376,"title":"T2376: /play clears the debugger's breakpoints when you pick a different snippet, keeps an example's…","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T2376","issue":2376,"title":"T2376: /play clears the debugger's breakpoints when you pick a different snippet, keeps an example's…","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":"0.4.76"},
+    {"t":"T2377","issue":2377,"title":"T2377: rawr no longer has a `sync` feature: values are always `Arc`/`RwLock`, so threads work in every…","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":"0.4.76"}
   ]
 }
