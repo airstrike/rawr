@@ -20,6 +20,7 @@ use serde_json::{json, Value};
 use crate::bindings;
 use crate::console;
 use crate::control::{Control, Shortcut};
+use crate::home;
 use crate::session::{self, Client, Incoming, Link, Phase, Stop};
 use crate::source;
 use crate::theme;
@@ -230,7 +231,7 @@ impl App {
 
     #[must_use]
     pub fn title(&self) -> String {
-        format!("rawr gui: {}", self.root)
+        format!("rawr gui: {}", home::shorten(&self.root))
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
@@ -717,7 +718,7 @@ impl App {
         };
         let note = match &self.note {
             Some(note) => text(note.as_str()).style(text::danger),
-            None => text(self.root.as_str()).style(text::secondary),
+            None => text(""),
         };
         row![
             row(controls).spacing(1),

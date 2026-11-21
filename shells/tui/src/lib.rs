@@ -13,6 +13,8 @@
 #![cfg(unix)]
 
 pub mod client;
+#[path = "../../home.rs"]
+pub mod home;
 pub mod phase;
 pub mod shell;
 mod terminal;

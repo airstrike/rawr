@@ -11,6 +11,8 @@ pub mod app;
 pub mod bindings;
 pub mod console;
 pub mod control;
+#[path = "../../home.rs"]
+pub mod home;
 pub mod icon;
 pub mod session;
 pub mod source;
