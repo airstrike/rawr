@@ -813,11 +813,23 @@ mod tests {
             self.heard.recv().expect("the session answers")
         }
 
+        /// The answer to request `id`, past the events and output told
+        /// before it: a test that emits while another test's session is
+        /// the process's open one records into that session.
+        fn answer(&self, id: u64) -> Value {
+            loop {
+                let message = self.next();
+                if message.get("method").is_none() {
+                    assert_eq!(message["id"], id, "{message}");
+                    return message;
+                }
+            }
+        }
+
         /// The events from `hello`'s answer.
         fn hello(&self) -> Vec<Value> {
             self.send(&json!({ "jsonrpc": "2.0", "id": 0, "method": "hello" }));
-            let answer = self.next();
-            assert_eq!(answer["id"], 0, "{answer}");
+            let answer = self.answer(0);
             answer["result"]["events"].as_array().unwrap().clone()
         }
     }
@@ -927,7 +939,7 @@ mod tests {
         BufReader::new(&asked).read_line(&mut line).unwrap();
         assert_eq!(line.trim(), request.to_string());
         writeln!(&asked, "{}", json!({ "answered": id })).unwrap();
-        assert_eq!(shell.next()["result"]["answered"], id);
+        assert_eq!(shell.answer(id)["result"]["answered"], id);
     }
 
     /// A program no shell started serves its inspector and registers the
