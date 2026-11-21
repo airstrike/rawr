@@ -652,10 +652,19 @@ impl Engine {
                         let target = &mut this_ptr.try_into()?;
                         let scope = Some(scope);
                         let lent = ChainLent::this_held(target);
-                        self.eval_dot_index_chain_raw(
+                        // Its steps further into the receiver show it
+                        // through the root target, which they aren't lent.
+                        #[cfg(feature = "debugging")]
+                        let before = global
+                            .debugger_mut()
+                            .chain_this(std::ptr::from_ref(target.as_ref()));
+                        let result = self.eval_dot_index_chain_raw(
                             lent, global, caches, scope, None, lhs, expr, target, rhs, idx_values,
                             new_val,
-                        )
+                        );
+                        #[cfg(feature = "debugging")]
+                        global.debugger_mut().unchain(before);
+                        result
                     },
                 )
             }
@@ -682,9 +691,16 @@ impl Engine {
                     lhs,
                 )?;
                 let lent = ChainLent::local(scope_ptr, this_lent, target);
-                self.eval_dot_index_chain_raw(
+                // Its steps show the frame's locals through the scope the
+                // search borrowed, which they aren't lent.
+                #[cfg(feature = "debugging")]
+                let before = global.debugger_mut().chain_scope(scope_ptr);
+                let result = self.eval_dot_index_chain_raw(
                     lent, global, caches, None, None, lhs, expr, target, rhs, idx_values, new_val,
-                )
+                );
+                #[cfg(feature = "debugging")]
+                global.debugger_mut().unchain(before);
+                result
             }
             // {expr}.??? = ??? or {expr}[???] = ???
             (_, Some(..)) => unreachable!("cannot assign to an expression"),

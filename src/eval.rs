@@ -23,7 +23,7 @@ pub use debugger::{
     BreakPoint, BreakPositions, Debugger, DebuggerCommand, DebuggerEvent, DebuggerStatus,
 };
 #[cfg(feature = "debugging")]
-pub(crate) use debugger::{FrameBindings, Held};
+pub(crate) use debugger::{Chained, FrameBindings, Held};
 pub use eval_context::{EvalContext, EvalContextFrameGuard};
 
 pub use global_state::GlobalRuntimeState;

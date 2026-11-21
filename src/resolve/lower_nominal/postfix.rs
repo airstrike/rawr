@@ -2319,9 +2319,13 @@ impl<'a> Parser<'a> {
         // stands for the whole expression, whose `[` a `Vec`'s panic names,
         // or for an array's or a slice's start alone, where rustc places
         // its panic: their index is built in, a `Vec`'s is `Index::index`.
-        let mut checked = origin::Fragment::plain("{ let i = ");
+        // The block's binding is the compiler's, which a debugger doesn't
+        // list among the program's (#2257).
+        let mut checked = origin::Fragment::plain("{ let __rawr_index = ");
         checked.push(index.rendered_source());
-        checked.push_text("; if i < 0 { __rawr_throw \"index out of bounds\" } i }");
+        checked.push_text(
+            "; if __rawr_index < 0 { __rawr_throw \"index out of bounds\" } __rawr_index }",
+        );
         checked.cover(match kind {
             sequence::Kind::Array(_) | sequence::Kind::Slice => point_span(value.span.start()),
             sequence::Kind::Vec | sequence::Kind::Deque => span(value.span.start(), end),
