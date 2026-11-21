@@ -93,10 +93,13 @@ fn rawr_typos_shadowed_aliases_wrong_kinds_and_type_errors_remain_source_errors(
 }
 
 /// Register on `engine` the `structure` crate's facade: its tuple struct
-/// `Cell(i64)`, with no structural adapter. Its constructor's selector.
+/// `Cell(i64)` and its struct `Meter { count: i64 }`, which the program
+/// can't construct, with no structural adapter. `Cell`'s constructor's
+/// selector.
 pub(crate) fn structure(engine: &mut Engine) -> identity::Selector {
     let constructor = identity::Selector::StructConstructor(identity::Form::Tuple { arity: 1 });
     let field = serde_json::from_str(r#"{"StructField":{"index":0,"name":"0"}}"#).unwrap();
+    let count = serde_json::from_str(r#"{"StructField":{"index":0,"name":"count"}}"#).unwrap();
     let mut builder =
         host::facade::Builder::new("structure", host::facade::Abi::new(1).unwrap()).unwrap();
     builder
@@ -115,6 +118,28 @@ pub(crate) fn structure(engine: &mut Engine) -> identity::Selector {
                     field,
                 )]),
                 constructible: true,
+                unsupported: None,
+                layout: None,
+            }),
+            &mut host::TestImportAllocation::default(),
+        )
+        .unwrap();
+    builder
+        .imported_type(
+            "Meter",
+            host::type_def::import::Identity::new([65; 32]),
+            &[],
+            Box::default(),
+            Box::default(),
+            Shared::new(host::type_def::Shape::Struct {
+                form: host::type_def::Form::Record,
+                constructor: None,
+                fields: Box::from([host::type_def::Field::new(
+                    "count".into(),
+                    host::type_ref::Type::builtin(host::type_ref::Builtin::I64),
+                    count,
+                )]),
+                constructible: false,
                 unsupported: None,
                 layout: None,
             }),
