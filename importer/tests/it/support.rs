@@ -37,11 +37,11 @@ fn facade_graph() -> &'static rawr_import::api::Graph<rawr_import::api::Extracte
         let project = Project(fs::canonicalize(root).expect("the support project is canonical"));
         let limits = Limits::standard();
         let native = Native::pinned().expect("the pinned driver toolchain is installed");
-        let lane = crate::shared::lane();
+        let mut lane = crate::shared::lane();
         let graph = request(&project.0, &limits)
-            .resolve(&native, &limits)
+            .resolve(&mut lane, &native, &limits)
             .and_then(|resolution| {
-                rawr_import::extract::from_resolution(resolution, &native, &limits)
+                rawr_import::extract::from_resolution(resolution, &mut lane, &native, &limits)
             })
             .expect("the cross-package compiler capture canonicalizes");
         drop(lane);
@@ -197,8 +197,8 @@ fn cross_package_support_and_duplicate_aliases_capture_once() {
 
 #[test]
 fn type_constants_schedule_exact_named_alias_identities() {
-    let _lane = crate::shared::lane();
-    let graph = constant_graph().expect("the pinned type-constant fixture canonicalizes");
+    let mut lane = crate::shared::lane();
+    let graph = constant_graph(&mut lane).expect("the pinned type-constant fixture canonicalizes");
 
     assert_projected_constant_alias(&graph, "projected_array", 0);
     assert_projected_constant_alias(&graph, "second_projected_array", 1);
@@ -425,7 +425,7 @@ fn assert_field_forms(graph: &rawr_import::api::Graph<rawr_import::api::Extracte
 
 #[test]
 fn duplicate_crate_names_keep_distinct_artifact_and_compiler_identities() {
-    let _lane = crate::shared::lane();
+    let mut lane = crate::shared::lane();
     let root = std::env::temp_dir().join(format!(
         "rawr-duplicate-crates-{}-{}",
         std::process::id(),
@@ -456,8 +456,10 @@ fn duplicate_crate_names_keep_distinct_artifact_and_compiler_identities() {
         .build()
         .expect("the duplicate fixture request seals");
     let graph = request
-        .resolve(&native, &limits)
-        .and_then(|resolution| rawr_import::extract::from_resolution(resolution, &native, &limits))
+        .resolve(&mut lane, &native, &limits)
+        .and_then(|resolution| {
+            rawr_import::extract::from_resolution(resolution, &mut lane, &native, &limits)
+        })
         .expect("both same-name metadata artifacts canonicalize");
 
     assert!(imported(&graph, "duplicates", &["VersionOne"]));
@@ -1528,7 +1530,9 @@ fn imported<P: rawr_import::api::Phase>(
     })
 }
 
-fn constant_graph() -> rawr_import::Result<rawr_import::api::Graph<rawr_import::api::Extracted>> {
+fn constant_graph(
+    lane: &mut rawr_import::cargo::Lane,
+) -> rawr_import::Result<rawr_import::api::Graph<rawr_import::api::Extracted>> {
     let root = std::env::temp_dir().join(format!(
         "rawr-constant-{}-{}",
         std::process::id(),
@@ -1539,8 +1543,10 @@ fn constant_graph() -> rawr_import::Result<rawr_import::api::Graph<rawr_import::
     let limits = Limits::standard();
     let native = Native::pinned()?;
     constant_request(&project.0, &limits)
-        .resolve(&native, &limits)
-        .and_then(|resolution| rawr_import::extract::from_resolution(resolution, &native, &limits))
+        .resolve(lane, &native, &limits)
+        .and_then(|resolution| {
+            rawr_import::extract::from_resolution(resolution, lane, &native, &limits)
+        })
 }
 
 fn constant_request(root: &Path, limits: &Limits) -> rawr_import::cargo::Request {

@@ -41,21 +41,21 @@ impl Project {
 
 #[test]
 fn pinned_normal_build_extracts_once_per_selected_unit_and_repeats_byte_identically() {
-    let _lane = crate::shared::lane();
+    let mut lane = crate::shared::lane();
     let project = Project::new();
     assert_fixture_hashes();
     let limits = Limits::standard();
     let native = Native::pinned().expect("the pinned driver toolchain is installed");
 
     let first = request(&project, &limits)
-        .resolve(&native, &limits)
+        .resolve(&mut lane, &native, &limits)
         .expect("the first one-pass Build extraction seals");
-    let first = rawr_import::extract::from_resolution(first, &native, &limits)
+    let first = rawr_import::extract::from_resolution(first, &mut lane, &native, &limits)
         .expect("the first compiler capture canonicalizes");
     let second = request(&project, &limits)
-        .resolve(&native, &limits)
+        .resolve(&mut lane, &native, &limits)
         .expect("the second one-pass Build extraction seals");
-    let second = rawr_import::extract::from_resolution(second, &native, &limits)
+    let second = rawr_import::extract::from_resolution(second, &mut lane, &native, &limits)
         .expect("the second compiler capture canonicalizes");
 
     assert_eq!(first.invocation_count(), 2);
@@ -111,12 +111,12 @@ fn assert_rejected_reason(reason: &ledger::Reason) {
 
 #[test]
 fn selected_rmeta_mutation_rejects_publication() {
-    let _lane = crate::shared::lane();
+    let mut lane = crate::shared::lane();
     let project = Project::new();
     let limits = Limits::standard();
     let native = Native::pinned().expect("the pinned driver toolchain is installed");
     let resolution = request(&project, &limits)
-        .resolve(&native, &limits)
+        .resolve(&mut lane, &native, &limits)
         .expect("the exact artifact capture seals");
     let artifact = find_selected_rmeta(&project.cache())
         .expect("the sealed cache contains selected geometry rmeta");
@@ -132,7 +132,8 @@ fn selected_rmeta_mutation_rejects_publication() {
     }
     fs::write(&artifact, bytes).expect("the isolated selected rmeta can be mutated");
 
-    let error = match rawr_import::extract::from_resolution(resolution, &native, &limits) {
+    let error = match rawr_import::extract::from_resolution(resolution, &mut lane, &native, &limits)
+    {
         Ok(_) => panic!("artifact drift cannot construct an extracted graph"),
         Err(error) => error,
     };

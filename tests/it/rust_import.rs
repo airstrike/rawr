@@ -43,7 +43,7 @@ impl Drop for Project {
 
 #[test]
 fn unchanged_rust_library_flows_from_manifest_to_extracted_graph() {
-    let _turn = rawr_import::store::test_turn();
+    let mut lane = rawr_import::store::test_lane();
     let project = Project::new();
     let target = project::Target::discover(&project.root).expect("the zero-Rawr project is discoverable");
     let graph = Graph::load(&Engine::new(), &target).expect("the Rawr package graph validates");
@@ -56,7 +56,7 @@ fn unchanged_rust_library_flows_from_manifest_to_extracted_graph() {
         .expect("the validated manifest transforms into an importer request")
         .expect("the entry manifest declares Rust imports");
     let native = Native::pinned().expect("the crate-owned nightly is installed");
-    let resolution = request.resolve(&native, &limits).expect("the manifest-derived Cargo universe resolves");
+    let resolution = request.resolve(&mut lane, &native, &limits).expect("the manifest-derived Cargo universe resolves");
 
     let catalog = resolution
         .selections()
@@ -82,7 +82,7 @@ fn unchanged_rust_library_flows_from_manifest_to_extracted_graph() {
     // `rust-import`-gated runtime API, so the internal dependency enables it.
     assert!(internal.contains("features = [\"rust-import\", \"std\"]"), "{internal}");
 
-    let extracted = rawr_import::extract::from_resolution(resolution, &native, &limits).expect("the unchanged Rust library canonicalizes");
+    let extracted = rawr_import::extract::from_resolution(resolution, &mut lane, &native, &limits).expect("the unchanged Rust library canonicalizes");
     assert!(
         extracted
             .exports()

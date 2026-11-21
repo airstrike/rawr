@@ -14,12 +14,10 @@ fn admitted_runner_invokes_an_exact_compiled_adapter_and_rejects_wrong_arity() {
         .copied()
         .expect("the symbolic fixture has a zero-argument adapter");
     let cache = rawr_import::cache::Writer::new(&root).expect("the cache binds");
-    let lane = crate::shared::lane();
-    let cargo = rawr_import::cargo::Owner::acquire().expect("the Cargo lane is free");
+    let mut lane = crate::shared::lane();
     let built = generated
-        .build(&cargo, &cache)
+        .build(&mut lane, &cache)
         .expect("the invocation runner builds");
-    drop(cargo);
     drop(lane);
 
     let process = rawr_import::process::Owner::new(&root).expect("the process owner binds");

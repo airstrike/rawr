@@ -43,9 +43,9 @@ impl Project {
 
 #[test]
 fn a_wholesale_reexport_is_an_alias_export_that_is_not_walked() {
-    let _lane = crate::shared::lane();
+    let mut lane = crate::shared::lane();
     let project = Project::new();
-    let graph = extract(&project, &[("outer", "outer-api")]);
+    let graph = extract(&mut lane, &project, &[("outer", "outer-api")]);
 
     let alias = imported(&graph, "outer", &["inner_api"]).expect("the re-export is exported");
     assert!(matches!(
@@ -80,9 +80,13 @@ fn a_wholesale_reexport_is_an_alias_export_that_is_not_walked() {
 
 #[test]
 fn a_reexported_crate_selected_as_its_own_root_gives_one_definition() {
-    let _lane = crate::shared::lane();
+    let mut lane = crate::shared::lane();
     let project = Project::new();
-    let graph = extract(&project, &[("outer", "outer-api"), ("inner", "inner-api")]);
+    let graph = extract(
+        &mut lane,
+        &project,
+        &[("outer", "outer-api"), ("inner", "inner-api")],
+    );
 
     let direct = imported(&graph, "inner", &["Deep"]).expect("the selected crate is walked");
     let alias = imported(&graph, "outer", &["inner_api"]).expect("the re-export is exported");
@@ -110,10 +114,10 @@ fn a_reexported_crate_selected_as_its_own_root_gives_one_definition() {
 
 #[test]
 fn a_path_named_through_the_alias_selects_that_item() {
-    let _lane = crate::shared::lane();
+    let mut lane = crate::shared::lane();
     let demand: &[&[&str]] = &[&["outer", "inner_api", "nested", "deeper"]];
     let project = Project::new();
-    let graph = extract_demanding(&project, &[("outer", "outer-api")], demand);
+    let graph = extract_demanding(&mut lane, &project, &[("outer", "outer-api")], demand);
     let deeper = imported(&graph, "outer", &["inner_api", "nested", "deeper"])
         .expect("the demanded function is extracted and named through the alias");
     let function = definition(&graph, deeper.target());
@@ -132,6 +136,7 @@ fn a_path_named_through_the_alias_selects_that_item() {
     // demand, so the selected crate's own path is named too.
     let project = Project::new();
     let graph = extract_demanding(
+        &mut lane,
         &project,
         &[("outer", "outer-api"), ("inner", "inner-api")],
         &[demand[0], &["inner", "nested", "deeper"]],
@@ -156,10 +161,14 @@ fn a_path_named_through_the_alias_selects_that_item() {
 /// into a dependency (D702), and the other facade still declares it.
 #[test]
 fn an_item_naming_another_facades_type_resolves_through_that_facade() {
-    let _lane = crate::shared::lane();
+    let mut lane = crate::shared::lane();
     let project = Project::new();
     let limits = Limits::standard();
-    let graph = extract(&project, &[("split", "split-api"), ("leaf", "leaf-api")]);
+    let graph = extract(
+        &mut lane,
+        &project,
+        &[("split", "split-api"), ("leaf", "leaf-api")],
+    );
     let contract = graph
         .classify(&rawr_import::classify::Policy::standard(), &limits)
         .expect("the split fixture classifies");
@@ -181,11 +190,16 @@ fn an_item_naming_another_facades_type_resolves_through_that_facade() {
     );
 }
 
-fn extract(project: &Project, dependencies: &[(&str, &str)]) -> Graph {
-    extract_demanding(project, dependencies, &[])
+fn extract(
+    lane: &mut rawr_import::cargo::Lane,
+    project: &Project,
+    dependencies: &[(&str, &str)],
+) -> Graph {
+    extract_demanding(lane, project, dependencies, &[])
 }
 
 fn extract_demanding(
+    lane: &mut rawr_import::cargo::Lane,
     project: &Project,
     dependencies: &[(&str, &str)],
     demand: &[&[&str]],
@@ -199,9 +213,9 @@ fn extract_demanding(
     let resolution = request
         .build()
         .expect("the re-export request seals")
-        .resolve(&native, &limits)
+        .resolve(lane, &native, &limits)
         .expect("the re-export fixture extraction seals");
-    rawr_import::extract::from_resolution(resolution, &native, &limits)
+    rawr_import::extract::from_resolution(resolution, lane, &native, &limits)
         .expect("the fixture compiler evidence canonicalizes")
 }
 

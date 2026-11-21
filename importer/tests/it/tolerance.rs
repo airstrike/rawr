@@ -38,14 +38,14 @@ impl Project {
 
 #[test]
 fn unrepresentable_anonymous_constants_reject_only_their_own_paths() {
-    let _lane = crate::shared::lane();
+    let mut lane = crate::shared::lane();
     let project = Project::new();
     let limits = Limits::standard();
     let native = Native::pinned().expect("the pinned driver toolchain is installed");
     let resolution = request(&project, &limits)
-        .resolve(&native, &limits)
+        .resolve(&mut lane, &native, &limits)
         .expect("one unrepresentable item never fails the extraction");
-    let graph = rawr_import::extract::from_resolution(resolution, &native, &limits)
+    let graph = rawr_import::extract::from_resolution(resolution, &mut lane, &native, &limits)
         .expect("the fixture compiler evidence canonicalizes");
 
     // A `char` constant is one the extractor cannot represent. A `bool` or

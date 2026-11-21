@@ -1,8 +1,8 @@
 //! The importer's integration tests, as one binary rather than one per file,
 //! each linking its own copy of Rawr and the importer.
 //!
-//! Tests run in parallel. The native Cargo lane admits one owner per process,
-//! so a test holds [`shared::lane`] only around the calls that take it.
+//! Tests run in parallel. The suite holds one native Cargo lane, so a test
+//! holds [`shared::lane`] only around the calls it lends the lane to.
 //! Everything a test builds goes to one shared Cargo build directory, and
 //! each fixture a test only reads is extracted once per process:
 //!

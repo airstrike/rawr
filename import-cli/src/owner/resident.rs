@@ -477,7 +477,7 @@ pub(super) fn attempt(
         // so its expansion's source changes in place and an edit to its
         // bodies alone swaps in (#1040). One that fails prepares, which
         // expands it again and says why.
-        if crate::plain::refresh_expansions(&graph).unwrap_or(false) {
+        if crate::plain::refresh_expansions(&graph, lane.cargo()).unwrap_or(false) {
             graph = load()?;
         }
         // The resident route uses the same limits profile.

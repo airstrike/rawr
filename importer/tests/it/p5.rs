@@ -166,6 +166,7 @@ impl profile::Definition<Checked> for Definition {
 }
 
 pub fn profile_contract(
+    lane: &mut rawr_import::cargo::Lane,
     project: &Project,
     mode: Mode,
     lease: Option<PathBuf>,
@@ -173,8 +174,8 @@ pub fn profile_contract(
     let limits = rawr_import::cargo::Limits::standard();
     let native = Native::pinned().expect("the pinned driver toolchain is installed");
     let graph = request(project.path(), &limits)
-        .resolve(&native, &limits)
-        .and_then(|resolution| extract::from_resolution(resolution, &native, &limits))
+        .resolve(lane, &native, &limits)
+        .and_then(|resolution| extract::from_resolution(resolution, lane, &native, &limits))
         .expect("real profile anchor evidence canonicalizes");
     let definition = Definition::new(mode, lease);
     let contract =
@@ -183,6 +184,7 @@ pub fn profile_contract(
 }
 
 pub fn generated(
+    lane: &mut rawr_import::cargo::Lane,
     project: &Project,
     mode: Mode,
     lease: Option<PathBuf>,
@@ -192,7 +194,7 @@ pub fn generated(
     rawr_import::runner::Manifest<rawr_import::runner::Generated, ()>,
     rawr_import::supervisor::snapshot::Bytes,
 ) {
-    let (request, snapshot) = generation_request(project, mode, lease, source, revision);
+    let (request, snapshot) = generation_request(lane, project, mode, lease, source, revision);
     let manifest = request
         .generate()
         .expect("the profile runner files generate");
@@ -200,6 +202,7 @@ pub fn generated(
 }
 
 pub fn generation_request(
+    lane: &mut rawr_import::cargo::Lane,
     project: &Project,
     mode: Mode,
     lease: Option<PathBuf>,
@@ -212,8 +215,8 @@ pub fn generation_request(
     let limits = rawr_import::cargo::Limits::standard();
     let native = Native::pinned().expect("the pinned driver toolchain is installed");
     let graph = request(project.path(), &limits)
-        .resolve(&native, &limits)
-        .and_then(|resolution| extract::from_resolution(resolution, &native, &limits))
+        .resolve(lane, &native, &limits)
+        .and_then(|resolution| extract::from_resolution(resolution, lane, &native, &limits))
         .expect("real profile anchor evidence canonicalizes");
     let definition = Definition::new(mode, lease);
     let profile_contract =

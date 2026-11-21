@@ -10,9 +10,10 @@ fn sealed_warm_entry_is_reused_pinned_and_explicitly_deletable() {
     let warm = p3::generated_at(root);
     let key = first.generated_manifest().build_request_key();
     let cache = rawr_import::cache::Writer::new(root).expect("the fixed cache writer binds");
-    let lane = crate::shared::lane();
-    let cargo = rawr_import::cargo::Owner::acquire().expect("the sole Cargo owner is available");
-    let cold = first.build(&cargo, &cache).expect("the cold entry builds");
+    let mut lane = crate::shared::lane();
+    let cold = first
+        .build(&mut lane, &cache)
+        .expect("the cold entry builds");
     let executable = fs::read_dir(cache.root())
         .expect("the cache root is readable")
         .filter_map(Result::ok)
@@ -26,7 +27,7 @@ fn sealed_warm_entry_is_reused_pinned_and_explicitly_deletable() {
         .expect("the executable timestamp exists");
 
     let warm = warm
-        .build(&cargo, &cache)
+        .build(&mut lane, &cache)
         .expect("the complete warm evidence revalidates without rebuilding");
     assert_eq!(
         fs::metadata(&executable)
@@ -51,6 +52,5 @@ fn sealed_warm_entry_is_reused_pinned_and_explicitly_deletable() {
         .inspect()
         .expect("the empty cache is inspectable")
         .is_empty());
-    drop(cargo);
     drop(lane);
 }

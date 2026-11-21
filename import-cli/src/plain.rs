@@ -132,6 +132,7 @@ impl crate::Profile for Plain {
         mut graph: Option<rawr::package::Graph>,
         revision: rawr_import::supervisor::Revision,
         scope: &rawr_import::supervisor::snapshot::attempt::Scope,
+        cargo: &mut rawr_import::cargo::Lane,
         mut kept: Option<&mut crate::Kept>,
     ) -> Result<crate::Prepared, crate::Error> {
         crate::again_while_stale(|| {
@@ -141,6 +142,7 @@ impl crate::Profile for Plain {
                 graph.take(),
                 revision,
                 scope,
+                cargo,
                 kept.as_deref_mut(),
             )
         })
@@ -224,6 +226,7 @@ struct Facts {
 /// published when the nightly saw the inputs the project's build sees.
 fn acquire(
     graph: &rawr::package::Graph,
+    cargo: &mut rawr_import::cargo::Lane,
     limits: &rawr_import::cargo::Limits,
     input: &[u8; 32],
     settlement: &mut rawr_import::bindings::Settlement,
@@ -272,7 +275,9 @@ fn acquire(
     };
     let probe = request(&[])?;
     let native = probe.pinned_native(limits).map_err(Error::other)?;
-    let closure = probe.closure(&native, limits).map_err(Error::cache)?;
+    let closure = probe
+        .closure(cargo, &native, limits)
+        .map_err(Error::cache)?;
     // What the project's last build gave its build scripts, against which
     // an entry whose closure runs one is shared (#403).
     let project = store::Scripts::project(&rawr);
@@ -324,7 +329,7 @@ fn acquire(
     if !missing.is_empty() {
         let request = request(&closure.dependencies)?;
         let acquired =
-            inventory::Acquired::capture(request, &native, limits).map_err(Error::cache)?;
+            inventory::Acquired::capture(request, cargo, &native, limits).map_err(Error::cache)?;
         entries = acquired.entries(|unit| keys.get(unit).map(|(key, ..)| *key));
         for entry in &entries {
             let (unit, witness) = entry.native();
@@ -410,6 +415,7 @@ fn expand(
     graph: &rawr::package::Graph,
     error: &rawr::package::Error,
     basis: Option<rawr_import::expand::Basis>,
+    cargo: &mut rawr_import::cargo::Lane,
     limits: &rawr_import::cargo::Limits,
 ) -> Result<bool, crate::Error> {
     use rawr_import::expand;
@@ -431,7 +437,7 @@ fn expand(
     if pending.is_empty() {
         return Ok(false);
     }
-    keep_expansions(graph, &pending, basis, limits)?;
+    keep_expansions(graph, &pending, basis, cargo, limits)?;
     Ok(true)
 }
 
@@ -439,7 +445,10 @@ fn expand(
 /// before an edit (#1040), against the basis the last expansion kept, so the
 /// edit's expansion changes its source in place. `false` when there is none,
 /// or no basis is kept: preparing the program expands it then.
-pub fn refresh_expansions(graph: &rawr::package::Graph) -> Result<bool, crate::Error> {
+pub fn refresh_expansions(
+    graph: &rawr::package::Graph,
+    cargo: &mut rawr_import::cargo::Lane,
+) -> Result<bool, crate::Error> {
     let stale = graph.stale_expansions();
     if stale.is_empty() {
         return Ok(false);
@@ -448,7 +457,7 @@ pub fn refresh_expansions(graph: &rawr::package::Graph) -> Result<bool, crate::E
     let Some(basis) = rawr_import::expand::Basis::kept(&directory) else {
         return Ok(false);
     };
-    keep_expansions(graph, stale, Some(basis), &graph.rust_limits())?;
+    keep_expansions(graph, stale, Some(basis), cargo, &graph.rust_limits())?;
     Ok(true)
 }
 
@@ -458,6 +467,7 @@ fn keep_expansions(
     graph: &rawr::package::Graph,
     items: &[rawr_import::expand::Item],
     basis: Option<rawr_import::expand::Basis>,
+    cargo: &mut rawr_import::cargo::Lane,
     limits: &rawr_import::cargo::Limits,
 ) -> Result<(), crate::Error> {
     use crate::Error;
@@ -469,7 +479,7 @@ fn keep_expansions(
         .flat_map(|item| &item.derives)
         .map(|(_, resolved)| resolved.split("::").next().unwrap_or_default())
         .collect::<Vec<_>>();
-    let (basis, native) = expansion_basis(graph, basis, &roots, limits)?;
+    let (basis, native) = expansion_basis(graph, basis, &roots, cargo, limits)?;
     let edition = graph.rust_edition();
     let expanded = expand::expand(items, &basis, &edition, &directory, &native, limits)
         .map_err(Error::other)?;
@@ -489,6 +499,7 @@ fn expand_calls(
     graph: &rawr::package::Graph,
     error: &rawr::package::Error,
     basis: Option<rawr_import::expand::Basis>,
+    cargo: &mut rawr_import::cargo::Lane,
     limits: &rawr_import::cargo::Limits,
 ) -> Result<bool, crate::Error> {
     use rawr_import::expand::call;
@@ -504,7 +515,7 @@ fn expand_calls(
     if pending.is_empty() {
         return Ok(false);
     }
-    keep_calls(graph, &pending, basis, limits)?;
+    keep_calls(graph, &pending, basis, cargo, limits)?;
     Ok(true)
 }
 
@@ -515,13 +526,14 @@ fn keep_calls(
     graph: &rawr::package::Graph,
     calls: &[rawr_import::expand::call::Call],
     basis: Option<rawr_import::expand::Basis>,
+    cargo: &mut rawr_import::cargo::Lane,
     limits: &rawr_import::cargo::Limits,
 ) -> Result<(), crate::Error> {
     let roots = calls
         .iter()
         .map(|called| called.path.split("::").next().unwrap_or_default())
         .collect::<Vec<_>>();
-    let (basis, native) = expansion_basis(graph, basis, &roots, limits)?;
+    let (basis, native) = expansion_basis(graph, basis, &roots, cargo, limits)?;
     rawr_import::expand::call::expand(
         calls,
         graph.entry_package().root(),
@@ -541,6 +553,7 @@ fn expansion_basis(
     graph: &rawr::package::Graph,
     basis: Option<rawr_import::expand::Basis>,
     roots: &[&str],
+    cargo: &mut rawr_import::cargo::Lane,
     limits: &rawr_import::cargo::Limits,
 ) -> Result<(rawr_import::expand::Basis, rawr_import::process::Native), crate::Error> {
     use crate::Error;
@@ -563,7 +576,7 @@ fn expansion_basis(
         .or_else(|| expand::Basis::kept(&directory).filter(names_roots))
     {
         Some(basis) => basis,
-        None => expand::Basis::capture(request, &native, limits).map_err(Error::other)?,
+        None => expand::Basis::capture(request, cargo, &native, limits).map_err(Error::other)?,
     };
     basis.keep(&directory).map_err(Error::other)?;
     Ok((basis, native))
@@ -597,12 +610,26 @@ fn prepare(
     graph: Option<rawr::package::Graph>,
     revision: rawr_import::supervisor::Revision,
     scope: &rawr_import::supervisor::snapshot::attempt::Scope,
+    cargo: &mut rawr_import::cargo::Lane,
     kept: Option<&mut crate::Kept>,
 ) -> Result<crate::Prepared, crate::Error> {
-    prepare_resolving(build, target, graph, revision, scope, Resolve::Last, kept)
+    prepare_resolving(
+        build,
+        target,
+        graph,
+        revision,
+        scope,
+        Resolve::Last,
+        cargo,
+        kept,
+    )
 }
 
 /// [`prepare`], resolving the API `resolve` says.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "a preparation's target, attempt and owner's loans, with what it resolves"
+)]
 fn prepare_resolving(
     build: rawr_cli::base::Build,
     target: &rawr::project::Target,
@@ -610,6 +637,7 @@ fn prepare_resolving(
     revision: rawr_import::supervisor::Revision,
     scope: &rawr_import::supervisor::snapshot::attempt::Scope,
     resolve: Resolve,
+    cargo: &mut rawr_import::cargo::Lane,
     mut kept: Option<&mut crate::Kept>,
 ) -> Result<crate::Prepared, crate::Error> {
     use crate::Error;
@@ -788,7 +816,7 @@ fn prepare_resolving(
             Some(kept) => kept.memos(),
             None => &mut own_memos,
         };
-        let mut prepared = match request.prepare_cached_in(&limits, scope, memos) {
+        let mut prepared = match request.prepare_cached_in(&limits, scope, cargo, memos) {
             Ok(prepared) => prepared,
             // A copy that holds a marked type by its handle fails where
             // native code began to open the type, as a native child module
@@ -857,10 +885,10 @@ fn prepare_resolving(
             let retired =
                 rawr_import::expand::kept::retire(&project, basis).map_err(Error::other)?;
             if !retired.calls.is_empty() {
-                keep_calls(&graph, &retired.calls, Some(basis.clone()), &limits)?;
+                keep_calls(&graph, &retired.calls, Some(basis.clone()), cargo, &limits)?;
             }
             if retired.basis {
-                return prepare(build, target, None, revision, scope, kept);
+                return prepare(build, target, None, revision, scope, cargo, kept);
             }
         }
         rawr_import::progress::phase("reading API");
@@ -973,6 +1001,7 @@ fn prepare_resolving(
                             if inventory.is_none() {
                                 inventory = Some(acquire(
                                     &graph,
+                                    cargo,
                                     &limits,
                                     &input,
                                     &mut settlement,
@@ -1004,10 +1033,10 @@ fn prepare_resolving(
                     Err(rawr_import::checked::Evaluation::Transform(Error::Rawr(error)))
                         if !error.rust_expansions().is_empty() =>
                     {
-                        if !expand(&graph, &error, basis, &limits)? {
+                        if !expand(&graph, &error, basis, cargo, &limits)? {
                             return Err(Error::Rawr(error));
                         }
-                        return prepare(build, target, None, revision, scope, kept);
+                        return prepare(build, target, None, revision, scope, cargo, kept);
                     }
                     // So does a crate macro's call in a body (#1125): kept
                     // at the call's text, the next load reads it there. A
@@ -1018,10 +1047,10 @@ fn prepare_resolving(
                         if !error.rust_macro_calls().is_empty()
                             && crate::new_demand(&error, &request_demand, &graph).is_none() =>
                     {
-                        if !expand_calls(&graph, &error, basis, &limits)? {
+                        if !expand_calls(&graph, &error, basis, cargo, &limits)? {
                             return Err(Error::Rawr(error));
                         }
-                        return prepare(build, target, None, revision, scope, kept);
+                        return prepare(build, target, None, revision, scope, cargo, kept);
                     }
                     Err(rawr_import::checked::Evaluation::Transform(Error::Rawr(error)))
                         if error.rust_application().is_some() =>
@@ -1039,6 +1068,7 @@ fn prepare_resolving(
                                     };
                                     inventory = Some(acquire(
                                         &graph,
+                                        cargo,
                                         &limits,
                                         &input,
                                         &mut settlement,
@@ -1141,7 +1171,16 @@ fn prepare_resolving(
             if !last.kept().names(&request.build_request_key())
                 && resolved != crate::runner_demand::own(&crate_demand, &seed)
             {
-                return prepare_resolving(build, target, None, revision, scope, Resolve::Own, kept);
+                return prepare_resolving(
+                    build,
+                    target,
+                    None,
+                    revision,
+                    scope,
+                    Resolve::Own,
+                    cargo,
+                    kept,
+                );
             }
             request
         }

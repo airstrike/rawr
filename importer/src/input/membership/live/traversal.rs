@@ -3,7 +3,7 @@
 
 use std::ffi::CStr;
 
-use super::{file, native, stream, Stat};
+use super::{native, stream, Stat};
 use crate::input::membership::{
     host::stream::Scope,
     observed::{self, traversal},
@@ -47,17 +47,10 @@ enum Native {
         eof: bool,
     },
     Handle {
-        _descriptor: Descriptor,
+        _descriptor: std::os::fd::OwnedFd,
         device: u64,
         inode: u64,
     },
-}
-
-struct Descriptor(i32);
-impl Drop for Descriptor {
-    fn drop(&mut self) {
-        <native::System as file::System>::close(&mut native::System, self.0);
-    }
 }
 
 pub(in super::super) struct Directory {
@@ -324,39 +317,36 @@ impl<'account> Capture<'_, '_, 'account> {
         let name = CStr::from_bytes_with_nul(&terminated)
             .map_err(|_| Error::Encoding("invalid loop handle path"))?;
         let opened = loop {
-            match <native::System as file::System>::open(&mut native::System, name) {
+            match native::open_owned(name) {
                 Err(code) if code == libc::EINTR => continue,
                 result => break result,
             }
         };
         let (result, opened) = match opened {
             Err(code) => (traversal::Handle::OpenFailed(code), Err(code)),
-            Ok(descriptor) => {
-                let descriptor = Descriptor(descriptor);
-                match <native::System as file::System>::fstat(&mut native::System, descriptor.0)? {
-                    Stat::Error(code) => (traversal::Handle::StatFailed(code), Err(code)),
-                    Stat::Metadata(metadata) => {
-                        let device = metadata.device();
-                        let inode = metadata.inode();
-                        self.active.push(Active {
+            Ok(descriptor) => match native::fstat_owned(&descriptor) {
+                Stat::Error(code) => (traversal::Handle::StatFailed(code), Err(code)),
+                Stat::Metadata(metadata) => {
+                    let device = metadata.device();
+                    let inode = metadata.inode();
+                    self.active.push(Active {
+                        id,
+                        native: Native::Handle {
+                            _descriptor: descriptor,
+                            device,
+                            inode,
+                        },
+                    })?;
+                    (
+                        traversal::Handle::Opened { device, inode },
+                        Ok(Identity {
+                            scope: self.owner.scope,
+                            invocation: self.invocation,
                             id,
-                            native: Native::Handle {
-                                _descriptor: descriptor,
-                                device,
-                                inode,
-                            },
-                        })?;
-                        (
-                            traversal::Handle::Opened { device, inode },
-                            Ok(Identity {
-                                scope: self.owner.scope,
-                                invocation: self.invocation,
-                                id,
-                            }),
-                        )
-                    }
+                        }),
+                    )
                 }
-            }
+            },
         };
         self.events
             .push(traversal::Event::Handle { path, result })?;

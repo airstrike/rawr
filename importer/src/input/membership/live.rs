@@ -160,7 +160,7 @@ pub(super) fn manifest(path: &[u8], budget: &mut Budget<'_>) -> Result<Acquired>
         path,
         crate::process::TAIL_BYTES,
         budget,
-        &mut native::System,
+        &mut native::System::default(),
     )
 }
 
@@ -172,11 +172,17 @@ pub(super) fn discovery(
     warn: bool,
     budget: &mut Budget<'_>,
 ) -> Result<observed::Record> {
-    discovery::acquire(directory, filename, warn, budget, &mut native::System)
+    discovery::acquire(
+        directory,
+        filename,
+        warn,
+        budget,
+        &mut native::System::default(),
+    )
 }
 
 /// Unconnected acquisition data; native qualification and complete association
 /// remain prerequisites before this can feed any current admission gate.
 pub(super) fn canonical(path: &[u8], budget: &mut Budget<'_>) -> Result<observed::Record> {
-    canonical::acquire(path, budget, &mut native::System)
+    canonical::acquire(path, budget, &mut native::System::default())
 }
