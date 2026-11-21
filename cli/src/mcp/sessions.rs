@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::call::{Call, Wake, Waker};
+use super::options::Options;
 use super::session::{Entry, Session};
 use super::{Heard, Server};
 
@@ -107,14 +108,15 @@ pub(super) fn all(server: &Server, call: &Call) -> Vec<Arc<Session>> {
     ask(server, call, |reply| Request::All { reply })
 }
 
-/// Start `rawr run <path> -- arguments` for `root`, replacing the session
-/// the server started there once its run exited, its program reading
-/// `stdin`. A run started elsewhere that serves `root` is attached to
+/// Start `rawr run <path> <feature flags> -- arguments` for `root` in
+/// `options`' environment, replacing the session the server started there
+/// once its run exited, its program reading `stdin`. A run started elsewhere that serves `root` is attached to
 /// instead.
 pub(super) fn start(
     server: &Server,
     root: &Path,
     path: &Path,
+    options: &Options,
     arguments: &[String],
     stdin: Option<&str>,
     call: &Call,
@@ -129,7 +131,7 @@ pub(super) fn start(
     let session = match Session::attach(root, call) {
         Some(attached) => attached,
         None if call.is_cancelled() => return Err(cancelled()),
-        None => Session::spawn(root, path, arguments, stdin, Entry::Run)?,
+        None => Session::spawn(root, path, options, arguments, stdin, Entry::Run)?,
     };
     server.ask(Heard::Sessions(Request::Keep(Arc::clone(&session))));
     Ok(session)

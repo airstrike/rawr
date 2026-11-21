@@ -27,6 +27,7 @@ use std::sync::{mpsc, Arc};
 use serde_json::{json, Value};
 
 use super::call::{Call, Wake};
+use super::options::Options;
 use super::process;
 use crate::events::session;
 
@@ -286,11 +287,15 @@ pub struct Answer {
 }
 
 impl Session {
-    /// Start `rawr run <path> -- arguments` for `root`, its program going
-    /// as `entry` says and reading `stdin`.
+    /// Start `rawr run <path> <feature flags> -- arguments` for `root` in
+    /// `options`' environment, its program going as `entry` says and
+    /// reading `stdin`. The run keeps the options for its reloads: its
+    /// process selects the flags for every Cargo answer it asks and hands
+    /// them to the program's process, which also inherits the environment.
     pub fn spawn(
         root: &Path,
         path: &Path,
+        options: &Options,
         arguments: &[String],
         stdin: Option<&str>,
         entry: Entry,
@@ -301,9 +306,9 @@ impl Session {
         let _ = std::fs::remove_file(&socket);
         let listener = UnixListener::bind(&socket)?;
         let mut command = Command::new(std::env::current_exe()?);
+        command.arg("run").arg(path);
+        options.apply(&mut command);
         command
-            .arg("run")
-            .arg(path)
             // A host that takes no arguments refuses even an empty `--`.
             .args(if arguments.is_empty() {
                 None

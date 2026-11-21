@@ -6,6 +6,7 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use super::Adapter;
+use crate::mcp::options::Options;
 use crate::mcp::session::{Entry, Session, Wait};
 use crate::mcp::tools;
 
@@ -83,7 +84,14 @@ impl Adapter {
 
     /// Start the `rawr run` a `launch` asked for, its program held.
     fn spawn(&mut self, request: &Value, place: &tools::Place, program: &[String]) {
-        match Session::spawn(&place.root, &place.path, program, None, Entry::Hold) {
+        match Session::spawn(
+            &place.root,
+            &place.path,
+            &Options::default(),
+            program,
+            None,
+            Entry::Hold,
+        ) {
             Ok(session) => {
                 self.begin(session);
                 self.held = true;

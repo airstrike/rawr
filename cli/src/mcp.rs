@@ -24,6 +24,7 @@ pub(crate) mod call;
 mod check;
 pub mod content;
 mod extension;
+pub(crate) mod options;
 pub(crate) mod process;
 pub(crate) mod session;
 mod sessions;
