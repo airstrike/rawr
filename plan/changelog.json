@@ -8,6 +8,14 @@
   },
   "releases": [
     {
+      "version": "0.4.105",
+      "date": "2026-11-21",
+      "entries": [
+        {"text":"A hover in rawr dap, rawr gui and VS Code reads the whole place under the pointer, such as player.score or names[turn as usize % names.len()], and runs none of the program's code; a call says to evaluate it in the console. rawr dap no longer runs a selected call such as tick() when the editor hovers it, and rawr gui cuts an inline value with … at the pane's edge.","issues":[2442]},
+        {"text":"A run hosts the session socket its shell handed it wherever the shell bound it, so a rawr mcp started before an upgrade hears its program run instead of waiting at \"starting\".","issues":[2441]}
+      ]
+    },
+    {
       "version": "0.4.104",
       "date": "2026-11-21",
       "entries": [

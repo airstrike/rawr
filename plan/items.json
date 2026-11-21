@@ -2439,6 +2439,12 @@
     {"t":"T2437","issue":2437,"title":"T2437: rawr fails on a lib+bin package whose lib has a marked module","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T2438","issue":2438,"title":"T2438: rawr doesn't run a main that returns ExitCode or reads std::env::args_os","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T2439","issue":2439,"title":"T2439: The iced adapter needs the application state to be Clone","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T2440","issue":2440,"title":"T2440: rawr lsp: value hover, inlay hints and rawr's diagnostics beside rust-analyzer","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":["D1102","D1053"],"commit":null,"release":null}
+    {"t":"T2440","issue":2440,"title":"T2440: rawr lsp: value hover, inlay hints and rawr's diagnostics beside rust-analyzer","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":["D1102","D1053"],"commit":null,"release":null},
+    {"t":"T2441","issue":2441,"title":"T2441: A windowed run stays \"starting\" in its session while the owner already waits for saves","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"671f87a09","release":"0.4.105"},
+    {"t":"T2442","issue":2442,"title":"T2442: A hover in rawr dap, rawr gui and VS Code reads the whole place under the pointer, such as…","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":"0.4.105"},
+    {"t":"T2443","issue":2443,"title":"T2443: rawr mcp shows a started run as starting forever when the run closes its session before greeting","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T2444","issue":2444,"title":"T2444: A let r = &local binding reads as no binding","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T2445","issue":2445,"title":"T2445: The hover read tells std types apart by the shape of their Debug text","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":["D1102"],"commit":null,"release":null},
+    {"t":"T2446","issue":2446,"title":"T2446: rawr gui's inline values match bindings by name","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }

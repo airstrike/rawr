@@ -6,6 +6,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.105 (2026-11-21)
+
+- A hover in rawr dap, rawr gui and VS Code reads the whole place under the pointer, such as player.score or names[turn as usize % names.len()], and runs none of the program's code; a call says to evaluate it in the console. rawr dap no longer runs a selected call such as tick() when the editor hovers it, and rawr gui cuts an inline value with … at the pane's edge. (#2442)
+- A run hosts the session socket its shell handed it wherever the shell bound it, so a rawr mcp started before an upgrade hears its program run instead of waiting at "starting". (#2441)
+
 ## 0.4.104 (2026-11-21)
 
 - Worktrees of one repository that share a target directory no longer build against each other's path crates: each project's runner places its path packages under its own key, so Cargo never takes another worktree's stale build of one as fresh. (#2423)
