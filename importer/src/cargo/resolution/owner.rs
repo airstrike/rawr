@@ -1741,8 +1741,7 @@ mod tests {
             !refusal(&error),
             "a missing control is not a refusal: {error:?}"
         );
-        // A real control past the target still reads; only the physical byte
-        // bound refuses, and that refusal stays terminal.
+        // A real control reads whole: no size refuses it (#1231).
         let root = std::env::temp_dir().join(format!(
             "rawr-owner-control-{}-{:?}",
             std::process::id(),
@@ -1753,10 +1752,6 @@ mod tests {
         let control = root.join("control");
         std::fs::write(&control, b"sixteen bytes!!!").unwrap();
         assert_eq!(read(&control).unwrap(), b"sixteen bytes!!!");
-        let physical = read(&control).unwrap_err();
-        assert!(matches!(&physical, node::Error::Importer(inner)
-            if matches!(inner.as_ref(), crate::Error::Limit { limit: 8, actual: 16, .. })));
-        assert!(refusal(&physical));
         std::fs::remove_dir_all(&root).unwrap();
         // Wrapped genuine failures remain terminal regardless of the graph's
         // numeric state: a smaller graph charge still fits after each of them.

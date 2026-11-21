@@ -99,11 +99,8 @@ fn canonical_evidence_returns_only_scalars_without_cache_publication() {
 fn extraction_context_carries_build_unit_and_stable_role_and_namespace_text() {
     let value =
         serde_json::to_value(api::Context::fixture()).expect("the extraction context serializes");
-    let build_unit = value["build_unit"]
-        .as_array()
-        .expect("the Build unit digest is an array");
-    assert_eq!(build_unit.len(), 32);
-    assert!(build_unit.iter().all(|byte| byte.as_u64() == Some(9)));
+    // A digest is written as 64 lowercase hex digits (#2170).
+    assert_eq!(value["build_unit"], "09".repeat(32));
     assert!(value.get("check_unit").is_none());
     assert!(value.get("doc_unit").is_none());
     assert_eq!(cargo::config::Role::Library.as_str(), "library");

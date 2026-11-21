@@ -19,7 +19,14 @@ impl<const KIND: u8> node::Value for Value<KIND> {
         9 => node::Kind::NativeProduct,
         _ => node::Kind::Overlay,
     };
-    const SCHEMA: u32 = 99;
+    // Each kind's current schema: a store evicts a plain entry of another
+    // schema as an older rawr's (#631).
+    const SCHEMA: u32 = match KIND {
+        7 => <crate::checked::Product as node::Value>::SCHEMA,
+        8 => u32::MAX,
+        9 => 99,
+        _ => crate::bridge::generate::cached::SCHEMA,
+    };
 
     fn encode(&self) -> Result<Box<[u8]>, node::Error> {
         Ok(self.0.clone())
