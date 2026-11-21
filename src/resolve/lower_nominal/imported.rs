@@ -37,6 +37,7 @@ pub(in crate::resolve) fn imported<A: crate::host::ImportAllocation>(
     program: &Program,
     host: &Shared<crate::host::Registry>,
     allocation: &mut A,
+    mut kept: Option<&mut kept::Lowerings>,
 ) -> Result<ImportedOutput, crate::resolve::ImportedFailure> {
     let runtime = crate::program::model::Model::new(crate::program::GenerationId::issue(), program)
         .mirroring(program, host);
@@ -49,10 +50,12 @@ pub(in crate::resolve) fn imported<A: crate::host::ImportAllocation>(
     // the next bodies' misses are asked for with it (#662).
     let mut missed = None;
     let bodies = checked_bodies(program);
-    // A compiler that checks the program again on each save lowers again
-    // only the sources whose check reads something that changed: the
-    // others' uses are the earlier check's.
-    let mut checks = kept::Checks::open(engine, program, &models);
+    // A check lent the lowerings of an owner that checks the program
+    // again on each save lowers again only the sources whose check reads
+    // something that changed: the others' uses are the earlier check's.
+    let mut checks = kept
+        .as_deref_mut()
+        .and_then(|kept| kept::Checks::open(engine, kept, program, &models));
     let mut keys = BTreeMap::new();
     if let Some(checks) = &checks {
         for body in &bodies {
@@ -72,7 +75,6 @@ pub(in crate::resolve) fn imported<A: crate::host::ImportAllocation>(
     // What each source lowered again found so far, and whether each of its
     // bodies lowered.
     let mut lowered_sources = BTreeMap::<crate::program::source::Id, (Finding, bool)>::new();
-    models.take_reads();
     for checked in &bodies {
         let source = checked.source;
         if reused.contains(&source) {
@@ -93,6 +95,7 @@ pub(in crate::resolve) fn imported<A: crate::host::ImportAllocation>(
         let before = uses.len();
         let mut found = BTreeSet::new();
         let mut charges = Vec::new();
+        let mut reads = Vec::new();
         let mut lower = |recover: bool, failure: &mut Option<rawr_import::surface::Error>| {
             let mut recording = kept::Recording {
                 inner: &mut *allocation,
@@ -110,6 +113,7 @@ pub(in crate::resolve) fn imported<A: crate::host::ImportAllocation>(
                     source,
                     uses: &mut uses,
                     dependencies: &mut found,
+                    reads: &mut reads,
                 },
             );
             charges.append(&mut recording.charges);
@@ -121,7 +125,7 @@ pub(in crate::resolve) fn imported<A: crate::host::ImportAllocation>(
             .entry(source)
             .or_insert_with(|| (Finding::default(), true));
         entry.0.charges.append(&mut charges);
-        entry.0.reads.append(&mut models.take_reads());
+        entry.0.reads.append(&mut reads);
         let lowered = body(lowered, more, &mut allocation_failure, source, &mut missed)?;
         let Some(lowered) = lowered else {
             entry.1 = false;
@@ -136,7 +140,7 @@ pub(in crate::resolve) fn imported<A: crate::host::ImportAllocation>(
         dependencies.append(&mut found);
         offset = uses.len();
     }
-    kept::checked(engine, lowered_sources.len());
+    let checked = lowered_sources.len();
     if let Some(checks) = checks.as_mut() {
         for (source, (found, lowered)) in lowered_sources {
             if let (true, Some(key)) = (lowered, keys.get(&source)) {
@@ -150,11 +154,16 @@ pub(in crate::resolve) fn imported<A: crate::host::ImportAllocation>(
             }
         }
     }
+    if let (None, Some(checks)) = (&missed, checks.as_mut()) {
+        checks.succeeded();
+    }
+    // The checks give back what they kept before the count goes in.
+    drop(checks);
+    if let Some(kept) = kept {
+        kept.count_checked(checked);
+    }
     if let Some(missed) = missed {
         return Err(crate::resolve::ImportedFailure::Lowering(missed));
-    }
-    if let Some(checks) = checks.as_mut() {
-        checks.succeeded();
     }
     uses.sort_unstable();
     uses.dedup();
@@ -301,11 +310,12 @@ pub(crate) fn reveal<A: crate::host::ImportAllocation>(
     program: &mut Program,
     host: &Shared<crate::host::Registry>,
     allocation: &mut A,
+    kept: Option<&mut kept::Lowerings>,
 ) -> Result<(), crate::resolve::ImportedFailure> {
     instance_templates(program);
-    // A runner's compiler reads again only the bodies whose reading reads
-    // something that changed (#1646).
-    let mut readings = kept::Readings::open(engine);
+    // A reveal lent a compiler's lowerings reads again only the bodies
+    // whose reading reads something that changed (#1646).
+    let mut readings = kept.map(|kept| kept::Readings::open(engine, kept));
     let instancing = body_templates(engine, program, host, allocation, readings.as_mut())?;
     #[derive(Clone, Copy)]
     enum Pending {
@@ -387,6 +397,8 @@ pub(crate) fn reveal<A: crate::host::ImportAllocation>(
         for &next in &pending {
             let mut uses = Vec::new();
             let mut dependencies = BTreeSet::new();
+            // Nothing keeps what revealing an opaque body reads.
+            let mut reads = Vec::new();
             let mut allocation_failure = None;
             let recovered;
             let (source, result) = match next {
@@ -427,6 +439,7 @@ pub(crate) fn reveal<A: crate::host::ImportAllocation>(
                                     source: shell.source,
                                     uses: &mut uses,
                                     dependencies: &mut dependencies,
+                                    reads: &mut reads,
                                 }),
                             );
                             parser.symbolic_only = true;
@@ -470,6 +483,7 @@ pub(crate) fn reveal<A: crate::host::ImportAllocation>(
                                     source: definition.source(),
                                     uses: &mut uses,
                                     dependencies: &mut dependencies,
+                                    reads: &mut reads,
                                 }),
                             ) {
                                 Ok(parser) => parser,
@@ -1153,7 +1167,8 @@ pub(super) fn body_templates<A: crate::host::ImportAllocation>(
                 Added::Function(index) => program.items[index].source,
                 Added::Method(index) => method_at(program, index).source(),
             };
-            let read = |allocation: &mut dyn crate::host::ImportAllocation| {
+            let read = |allocation: &mut dyn crate::host::ImportAllocation,
+                        reads: &mut Vec<kept::Read>| {
                 let mut uses = Vec::new();
                 let mut dependencies = BTreeSet::new();
                 // An erased body may fail where a crate's item takes its
@@ -1167,6 +1182,7 @@ pub(super) fn body_templates<A: crate::host::ImportAllocation>(
                     source,
                     uses: &mut uses,
                     dependencies: &mut dependencies,
+                    reads,
                 };
                 let (reaches, templates) = match *candidate {
                     Added::Function(index) => {
@@ -1244,7 +1260,7 @@ pub(super) fn body_templates<A: crate::host::ImportAllocation>(
             };
             let read = match readings.as_deref_mut() {
                 Some(readings) => readings.read(reading, &models, allocation, read),
-                None => read(allocation),
+                None => read(allocation, &mut Vec::new()),
             }
             .map_err(crate::resolve::ImportedFailure::Surface)?;
             if read.reaches {
@@ -1522,7 +1538,8 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
             if templates.contains(&key) {
                 continue;
             }
-            let read = |allocation: &mut dyn crate::host::ImportAllocation| {
+            let read = |allocation: &mut dyn crate::host::ImportAllocation,
+                        reads: &mut Vec<kept::Read>| {
                 let body_source = body_source(
                     definition
                         .body
@@ -1549,6 +1566,7 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
                         source: shell.source,
                         uses: &mut uses,
                         dependencies: &mut dependencies,
+                        reads,
                     }),
                 );
                 parser.symbolic_only = true;
@@ -1572,7 +1590,7 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
             };
             let read = match readings.as_deref_mut() {
                 Some(readings) => readings.read(reading, &models, allocation, read),
-                None => read(allocation),
+                None => read(allocation, &mut Vec::new()),
             }
             .map_err(crate::resolve::ImportedFailure::Surface)?;
             found.extend(
@@ -1588,7 +1606,8 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
             if templates.contains(definition.key()) {
                 continue;
             }
-            let read = |allocation: &mut dyn crate::host::ImportAllocation| {
+            let read = |allocation: &mut dyn crate::host::ImportAllocation,
+                        reads: &mut Vec<kept::Read>| {
                 let body_source = source_span(
                     definition
                         .body_text()
@@ -1612,6 +1631,7 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
                         source: definition.source(),
                         uses: &mut uses,
                         dependencies: &mut dependencies,
+                        reads,
                     }),
                 );
                 let mut found = kept::Found::default();
@@ -1633,7 +1653,7 @@ pub(super) fn instance_round<A: crate::host::ImportAllocation>(
             };
             let read = match readings.as_deref_mut() {
                 Some(readings) => readings.read(reading, &models, allocation, read),
-                None => read(allocation),
+                None => read(allocation, &mut Vec::new()),
             }
             .map_err(crate::resolve::ImportedFailure::Surface)?;
             found.extend(

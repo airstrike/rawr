@@ -681,6 +681,9 @@ pub struct Located {
     positions: Arc<crate::program::Positions>,
     /// The files it was compiled from, when a debugger was registered.
     snapshot: Option<crate::package::snapshot::Snapshot>,
+    /// The parses it compiled from, when its compiler kept them and a
+    /// debugger was registered: code evaluated in it reads them.
+    parses: Option<crate::package::Parses>,
 }
 
 impl Located {
@@ -694,14 +697,20 @@ impl Located {
             entry,
             positions: Arc::new(positions),
             snapshot: None,
+            parses: None,
         }
     }
 
-    /// It compiled from `snapshot`.
+    /// It compiled from `snapshot`, reading `parses`.
     #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
-    pub(crate) fn with_snapshot(self, snapshot: crate::package::snapshot::Snapshot) -> Self {
+    pub(crate) fn with_snapshot(
+        self,
+        snapshot: crate::package::snapshot::Snapshot,
+        parses: Option<crate::package::Parses>,
+    ) -> Self {
         Self {
             snapshot: Some(snapshot),
+            parses,
             ..self
         }
     }
@@ -710,7 +719,8 @@ impl Located {
     /// it compiled from (#490).
     #[must_use]
     pub fn program(&self) -> Option<Program> {
-        Some(self.program_from(self.snapshot.clone()?))
+        let program = self.program_from(self.snapshot.clone()?);
+        Some(program.reading(self.parses.clone()))
     }
 
     /// What evaluating code in this program takes, which compiled from

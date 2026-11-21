@@ -21,6 +21,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use sha2::{Digest as _, Sha256};
 
@@ -53,8 +54,17 @@ fn stamp_checking(syntax: bool) -> String {
     )
 }
 
-/// Each source's latest parse by path, with the digest of the text it parsed.
-type Remembered = BTreeMap<PathBuf, ([u8; 32], parse::Unit)>;
+/// Each source's latest parse by path, with the digest of the text it
+/// parsed. Each parse is shared, so a generation that holds the map
+/// ([`Parses`]) holds no copy of one.
+type Remembered = BTreeMap<PathBuf, ([u8; 32], Arc<parse::Unit>)>;
+
+/// The parses a compile of a program read and made, as a generation
+/// compiled from them holds them: code a debugger evaluates in the
+/// generation reads a source whose text it holds the parse of, parses any
+/// other, and keeps nothing. A clone shares them.
+#[derive(Clone, Debug)]
+pub struct Parses(Arc<Remembered>);
 
 /// The parse cells of one program, in one directory.
 #[derive(Debug)]
@@ -64,8 +74,10 @@ pub struct Cells {
     kept: RefCell<BTreeSet<PathBuf>>,
     parsed: Cell<usize>,
     stale: Cell<usize>,
-    /// Each source's latest parse by path, when remembering.
-    memory: Option<RefCell<Remembered>>,
+    /// Each source's latest parse by path, when remembering. A
+    /// generation's [`Parses`] shares the map; the next load that parses
+    /// a source copies the map, not the parses.
+    memory: Option<RefCell<Arc<Remembered>>>,
     /// Whether the cells are files in `directory`; cells only in memory
     /// read and write none.
     on_disk: bool,
@@ -80,6 +92,15 @@ pub struct Counts {
     pub parsed: usize,
     /// Of those parsed, sources whose cell another build of `rawr` wrote.
     pub stale: usize,
+}
+
+impl Parses {
+    /// The unit parsed from exactly `text` at `path` with `features`
+    /// enabled, when these parses hold it.
+    pub(crate) fn get(&self, path: &Path, text: &str, features: &Enabled) -> Option<parse::Unit> {
+        let (held, unit) = self.0.get(path)?;
+        (*held == digest(text, features)).then(|| parse::Unit::clone(unit))
+    }
 }
 
 impl Cells {
@@ -174,7 +195,7 @@ impl Cells {
             && *held == text_digest
         {
             self.kept.borrow_mut().insert(path.to_path_buf());
-            return Some(unit.clone());
+            return Some(parse::Unit::clone(unit));
         }
         if !self.on_disk {
             return None;
@@ -211,10 +232,17 @@ impl Cells {
 
     fn hold(&self, path: &Path, text_digest: [u8; 32], unit: &parse::Unit) {
         if let Some(memory) = &self.memory {
-            memory
-                .borrow_mut()
-                .insert(path.to_path_buf(), (text_digest, unit.clone()));
+            Arc::make_mut(&mut memory.borrow_mut())
+                .insert(path.to_path_buf(), (text_digest, Arc::new(unit.clone())));
         }
+    }
+
+    /// The parses these cells remember, shared: what a generation compiled
+    /// through them holds. `None` when they remember none.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn parses(&self) -> Option<Parses> {
+        let memory = self.memory.as_ref()?;
+        Some(Parses(Arc::clone(&memory.borrow())))
     }
 
     fn path(&self, source: &Path) -> PathBuf {

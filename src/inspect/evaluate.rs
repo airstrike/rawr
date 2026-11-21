@@ -38,11 +38,15 @@ const IDENTITY: &str = "<eval>";
 
 /// What compiling code into the running program takes: its files as they
 /// were compiled, its entry source and the compiler's positions, which
-/// place a paused step in its file.
+/// place a paused step in its file, and the parses it compiled from, when
+/// its compiler kept them.
 pub struct Program {
     snapshot: Snapshot,
     entry: Source,
     positions: Arc<crate::program::Positions>,
+    /// Read for each file the code isn't written into, which then isn't
+    /// parsed again; nothing an evaluation does is kept in them.
+    parses: Option<crate::package::Parses>,
 }
 
 impl Program {
@@ -58,7 +62,14 @@ impl Program {
             snapshot,
             entry,
             positions,
+            parses: None,
         }
+    }
+
+    /// The program, which compiled from `parses`.
+    #[must_use]
+    pub(crate) fn reading(self, parses: Option<crate::package::Parses>) -> Self {
+        Self { parses, ..self }
     }
 }
 
@@ -350,10 +361,11 @@ fn evaluate(
         .with_text(std::path::Path::new(&identity), splice.spliced.text())
         .ok_or_else(|| format!("{identity} isn't one of the program's files"))?;
     // The run's own compiler compiles it as it compiled the run: a crate's
-    // generic call takes the types the run's lowering revealed.
+    // generic call takes the types the run's lowering revealed. It reads
+    // the generation's parses and keeps nothing in the run's caches.
     let compiled = context
         .engine()
-        .compile_package_snapshot_with_positions(&snapshot);
+        .compile_package_snapshot_with_positions(&snapshot, program.parses.as_ref());
     let (ast, positions) = compiled.map_err(|error| match error.report() {
         Ok(report) => splice.rendered(&report, &identity),
         Err(_) => error.to_string(),
@@ -579,12 +591,12 @@ mod tests {
         );
         let engine = finish(engine);
         let (ast, positions) = engine
-            .compile_package_snapshot_with_positions(&snapshot)
+            .compile_package_snapshot_with_positions(&snapshot, None)
             .unwrap_or_else(|error| panic!("{error}"));
         // The entry as a run's debugger has it: with the expansions of the
         // macro calls among its items laid out past the file's own lines.
         let (candidate, _) = engine
-            .compile_package_snapshot_generation_with_top_level(&snapshot)
+            .compile_package_snapshot_generation_with_top_level(&snapshot, None)
             .unwrap_or_else(|error| panic!("{error}"));
         let entry = candidate
             .located()

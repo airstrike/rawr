@@ -155,7 +155,7 @@ struct Slot {
 
 struct Resolver<'a> {
     #[cfg(feature = "rust-import")]
-    native: Option<std::sync::Arc<super::native::Capture>>,
+    native: Option<std::rc::Rc<super::native::Capture>>,
     host: &'a host::Registry,
     package: ImmutableString,
     evidence: Box<[crate::diagnostic::Source]>,
@@ -279,7 +279,7 @@ pub(crate) fn resolve(graph: Graph, host: &host::Registry) -> Result<Program, Fa
 pub(crate) fn resolve_captured(
     graph: Graph,
     host: &host::Registry,
-    native: std::sync::Arc<super::native::Capture>,
+    native: std::rc::Rc<super::native::Capture>,
 ) -> Result<Program, Failure> {
     Resolver::new(graph, host, Some(native), None)?.resolve()
 }
@@ -292,7 +292,7 @@ pub(crate) fn resolve_captured(
 pub(crate) fn resolve_kept(
     graph: Graph,
     registry: &host::Current,
-    native: Option<std::sync::Arc<super::native::Capture>>,
+    native: Option<std::rc::Rc<super::native::Capture>>,
     kept: &mut Resolutions,
 ) -> Result<Program, Failure> {
     let cell = RefCell::new(std::mem::take(kept));
@@ -310,7 +310,7 @@ impl<'a> Resolver<'a> {
     fn new(
         graph: Graph,
         host: &'a host::Registry,
-        #[cfg(feature = "rust-import")] native: Option<std::sync::Arc<super::native::Capture>>,
+        #[cfg(feature = "rust-import")] native: Option<std::rc::Rc<super::native::Capture>>,
         kept: Option<(&'a RefCell<Resolutions>, u64)>,
     ) -> Result<Self, Failure> {
         #[cfg(feature = "rust-import")]

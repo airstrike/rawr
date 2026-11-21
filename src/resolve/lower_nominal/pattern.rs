@@ -3098,7 +3098,7 @@ impl<'a> Parser<'a> {
         // A lowering that reads its fields whole is reused only while
         // they are as they were (#1885).
         #[cfg(feature = "rust-import")]
-        self.models.read_fields(&definition);
+        self.read_fields(&definition);
         let (written, rest, end) = self.parse_field_patterns()?;
         let span = closed(start.start(), end);
         let names = written

@@ -55,6 +55,7 @@ use super::op::ExecutableOp;
 use super::splice::Parsed;
 use super::surface::ImportedUse;
 use super::ty::Ty;
+use super::Parser;
 use crate::ast::{NominalEnumPattern, NominalPattern, NominalPayloadType};
 use crate::program::source;
 use crate::resolve::package::Resolutions;
@@ -197,30 +198,19 @@ impl Read {
     }
 }
 
-impl Models {
-    /// Note that the lowering read `read` outside the program: what it
-    /// lowers is kept with it.
-    pub(super) fn read(&self, read: Read) {
-        self.reads
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(read);
+impl Parser<'_> {
+    /// Note that the lowering read `read` outside the program, in its
+    /// pass's log: a pass that keeps what it lowers keeps it with it.
+    pub(super) fn read(&mut self, read: Read) {
+        if let Some(imported) = self.imported.as_mut() {
+            imported.reads.push(read);
+        }
     }
 
     /// Note that the lowering read the fields of the program's type
     /// `definition` whole (`Read::Fields`).
-    pub(super) fn read_fields(&self, definition: &crate::type_def::Definition) {
+    pub(super) fn read_fields(&mut self, definition: &crate::type_def::Definition) {
         self.read(Read::fields(definition));
-    }
-
-    /// What the lowering read outside the program since the last take.
-    pub(super) fn take_reads(&self) -> Vec<Read> {
-        std::mem::take(
-            &mut self
-                .reads
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        )
     }
 }
 
@@ -323,7 +313,9 @@ struct Scanned {
     used: bool,
 }
 
-/// A compiler's kept lowerings (`Engine::resident_lowerings`).
+/// What a compiler keeps of its lowerings from one compile of a program to
+/// the next: a runner's, in its compile cache (`resident::Cache`), or an
+/// owner's check's (`import::Kept`). Its owner lends it to each compile.
 pub(crate) struct Lowerings {
     kept: BTreeMap<(source::Id, Part), Kept>,
     /// Reveal's readings, by their keys.
@@ -390,41 +382,46 @@ impl Lowerings {
     pub(crate) fn checked(&self) -> usize {
         self.checked
     }
+
+    /// Count `sources` a check of the program lowered, rather than
+    /// reusing an earlier check's lowering.
+    pub(super) fn count_checked(&mut self, sources: usize) {
+        self.checked += sources;
+    }
 }
 
-/// Whether `engine` keeps its lowerings from one compile to the next: a
-/// runner's compiler, or an owner's check of the program (#1646).
-fn keeps(engine: &Engine) -> bool {
-    engine.imported_native.is_some() || engine.keeps_lowerings
+impl Default for Lowerings {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// `graph` resolved, misses against native code recorded in `native`: a
-/// compiler that keeps its lowerings reuses each unit's resolution its
-/// last compile kept while what it reads is as it was (#1876).
+/// compile lent `kept` reuses each unit's resolution an earlier compile
+/// kept there while what it reads is as it was (#1876).
 pub(crate) fn resolve(
     engine: &Engine,
     graph: crate::package::Graph,
-    native: std::sync::Arc<crate::resolve::native::Capture>,
+    native: std::rc::Rc<crate::resolve::native::Capture>,
+    kept: Option<&mut Lowerings>,
 ) -> Result<Program, crate::resolve::package::Failure> {
-    if !keeps(engine) {
-        return crate::resolve::package::resolve_captured(graph, &engine.host_registry, native);
+    match kept {
+        Some(kept) => crate::resolve::package::resolve_kept(
+            graph,
+            &engine.host_registry,
+            Some(native),
+            &mut kept.resolutions,
+        ),
+        None => crate::resolve::package::resolve_captured(graph, &engine.host_registry, native),
     }
-    let mut resolutions = std::mem::take(&mut lock(engine).resolutions);
-    let resolved = crate::resolve::package::resolve_kept(
-        graph,
-        &engine.host_registry,
-        Some(native),
-        &mut resolutions,
-    );
-    lock(engine).resolutions = resolutions;
-    resolved
 }
 
 /// One reveal's use of its compiler's kept readings (`Scanned`). What it
-/// keeps goes back to the compiler when it drops: on a failed reveal, with
-/// what the earlier reveal kept of the bodies it didn't reach.
+/// keeps goes back to the compiler's lowerings when it drops: on a failed
+/// reveal, with what the earlier reveal kept of the bodies it didn't reach.
 pub(super) struct Readings<'e> {
     engine: &'e Engine,
+    lowerings: &'e mut Lowerings,
     /// The pass over the program under way; `None` when nothing is kept.
     pass: Option<Pass>,
     /// The readings under each key, one for each set of instances the
@@ -468,19 +465,14 @@ pub(super) enum Purpose {
 }
 
 impl<'e> Readings<'e> {
-    /// The readings of a compiler that compiles or checks the program
-    /// again on each save (`keeps`); `None` for any other compiler.
-    pub(super) fn open(engine: &'e Engine) -> Option<Self> {
-        if !keeps(engine) {
-            return None;
-        }
-        let earlier = {
-            let mut lowerings = lock(engine);
-            lowerings.remembered.begin();
-            std::mem::take(&mut lowerings.scanned)
-        };
-        Some(Self {
+    /// The readings of a reveal lent `lowerings`, a compiler's that
+    /// compiles or checks the program again on each save.
+    pub(super) fn open(engine: &'e Engine, lowerings: &'e mut Lowerings) -> Self {
+        lowerings.remembered.begin();
+        let earlier = std::mem::take(&mut lowerings.scanned);
+        Self {
             engine,
+            lowerings,
             pass: None,
             first: earlier.is_empty(),
             earlier,
@@ -488,16 +480,20 @@ impl<'e> Readings<'e> {
             read: BTreeSet::new(),
             loaded: BTreeSet::new(),
             keys: BTreeMap::new(),
-        })
+        }
     }
 
     /// Begin a pass over `program` as it is now, whose bodies' readings
     /// read `models`.
     pub(super) fn begin(&mut self, program: &Program, models: &Models) {
-        let instances = remembering(self.engine, |remembered, disk| {
-            Instances::new(self.engine, program, remembered, disk)
-        });
-        self.pass = interface(self.engine, program, models)
+        let lowerings = &mut *self.lowerings;
+        let instances = Instances::new(
+            self.engine,
+            program,
+            &mut lowerings.remembered,
+            lowerings.disk.as_mut(),
+        );
+        self.pass = interface(self.engine, lowerings, program, models)
             .zip(Calls::new(program))
             .zip(instances)
             .map(|((interface, calls), instances)| Pass {
@@ -517,10 +513,13 @@ impl<'e> Readings<'e> {
         body: Reading<'_>,
         models: &Models,
         allocation: &mut dyn host::ImportAllocation,
-        read: impl FnOnce(&mut dyn host::ImportAllocation) -> Result<Found, rawr_import::surface::Error>,
+        read: impl FnOnce(
+            &mut dyn host::ImportAllocation,
+            &mut Vec<Read>,
+        ) -> Result<Found, rawr_import::surface::Error>,
     ) -> Result<Found, rawr_import::surface::Error> {
         let Some(pass) = &mut self.pass else {
-            return read(allocation);
+            return read(allocation, &mut Vec::new());
         };
         let key = pass.key(body);
         if self.first && self.loaded.insert(body.source) {
@@ -529,7 +528,8 @@ impl<'e> Readings<'e> {
                 kind: disk::Kind::Readings,
                 key: &READINGS,
             };
-            let stored = lock(self.engine)
+            let stored = self
+                .lowerings
                 .disk
                 .as_mut()
                 .and_then(|disk| disk.read::<Vec<([u8; 32], Scanned)>>(self.engine, entry));
@@ -557,12 +557,12 @@ impl<'e> Readings<'e> {
             scanned.used = true;
             return Ok(scanned.found.clone());
         }
-        models.take_reads();
         let mut recording = Recording {
             inner: allocation,
             charges: Vec::new(),
         };
-        let found = read(&mut recording)?;
+        let mut reads = Vec::new();
+        let found = read(&mut recording, &mut reads)?;
         self.read.insert(body.source);
         let instances = found
             .templates
@@ -571,7 +571,7 @@ impl<'e> Readings<'e> {
             .collect();
         let scanned = Scanned {
             found: found.clone(),
-            outside: Outside::new(recording.charges, models.take_reads()),
+            outside: Outside::new(recording.charges, reads),
             instances,
             used: true,
         };
@@ -597,8 +597,7 @@ impl<'e> Readings<'e> {
                 scanned.used = false;
             }
         }
-        let mut lowerings = lock(self.engine);
-        let Some(disk) = lowerings.disk.as_mut() else {
+        let Some(disk) = self.lowerings.disk.as_mut() else {
             return;
         };
         for source in &self.read {
@@ -623,9 +622,8 @@ impl Drop for Readings<'_> {
     fn drop(&mut self) {
         let mut kept = std::mem::take(&mut self.earlier);
         kept.append(&mut self.kept);
-        let mut lowerings = lock(self.engine);
-        lowerings.scanned = kept;
-        lowerings.revealed += self.read.len();
+        self.lowerings.scanned = kept;
+        self.lowerings.revealed += self.read.len();
     }
 }
 
@@ -674,10 +672,11 @@ impl Pass {
 }
 
 /// One compile's use of its compiler's kept lowerings. What it keeps goes
-/// back to the compiler when it drops: on a failed compile, with what the
-/// earlier compile kept of the sources it didn't reach.
+/// back to them when it drops: on a failed compile, with what the earlier
+/// compile kept of the sources it didn't reach.
 pub(super) struct Session<'e> {
     engine: &'e Engine,
+    lowerings: &'e mut Lowerings,
     /// What each source's lowering reads of the program; `None` when
     /// nothing is kept.
     interface: Option<Interface>,
@@ -712,32 +711,31 @@ impl Key<'_> {
 }
 
 impl<'e> Session<'e> {
-    /// The session of a compiler that compiles or checks the program
-    /// again on each save (`keeps`); `None` for any other compiler.
+    /// The session of a compile lent `lowerings`, a compiler's that
+    /// compiles the program again on each save.
     pub(super) fn open(
         engine: &'e Engine,
+        lowerings: &'e mut Lowerings,
         program: &Program,
         models: &Models,
         scope: Option<&Scope>,
         optimization_level: crate::OptimizationLevel,
-    ) -> Option<Self> {
-        if !keeps(engine) {
-            return None;
-        }
-        let earlier = std::mem::take(&mut lock(engine).kept);
+    ) -> Self {
+        let earlier = std::mem::take(&mut lowerings.kept);
         let interface = scope
             .is_none_or(Scope::is_empty)
-            .then(|| interface(engine, program, models))
+            .then(|| interface(engine, lowerings, program, models))
             .flatten();
-        Some(Self {
+        Self {
             engine,
+            lowerings,
             interface,
             level: optimization_level,
             first: earlier.is_empty(),
             earlier,
             kept: BTreeMap::new(),
             lowered: BTreeSet::new(),
-        })
+        }
     }
 
     /// The key of `part` of `source`, whose bodies are `bodies`: `None`
@@ -778,7 +776,8 @@ impl<'e> Session<'e> {
         let place = (key.source, key.part);
         let earlier = match self.earlier.remove(&place) {
             Some(kept) => Some(kept),
-            None if self.first => lock(self.engine)
+            None if self.first => self
+                .lowerings
                 .disk
                 .as_mut()
                 .and_then(|disk| disk.read::<Kept>(self.engine, key.entry())),
@@ -815,7 +814,7 @@ impl<'e> Session<'e> {
             outside,
             parsed: None,
         };
-        if let Some(disk) = lock(self.engine).disk.as_mut() {
+        if let Some(disk) = self.lowerings.disk.as_mut() {
             disk.write(self.engine, key.entry(), &kept);
         }
         self.kept.insert((source, key.part), kept);
@@ -839,7 +838,7 @@ impl<'e> Session<'e> {
     /// didn't reuse is gone, and what its interfaces made is on disk.
     pub(super) fn succeeded(&mut self) {
         self.earlier.clear();
-        store_interfaces(self.engine);
+        store_interfaces(self.engine, self.lowerings);
     }
 }
 
@@ -847,9 +846,8 @@ impl Drop for Session<'_> {
     fn drop(&mut self) {
         let mut kept = std::mem::take(&mut self.earlier);
         kept.append(&mut self.kept);
-        let mut lowerings = lock(self.engine);
-        lowerings.kept = kept;
-        lowerings.lowered += self.lowered.len();
+        self.lowerings.kept = kept;
+        self.lowerings.lowered += self.lowered.len();
     }
 }
 
@@ -866,10 +864,11 @@ pub(super) struct Checked {
 /// One check's use of its compiler's kept checks: a source is lowered
 /// again only when something its check reads changed, as a runner's
 /// compile lowers a source again (`Session`). What it keeps goes back to
-/// the compiler when it drops: on a failed check, with what the earlier
-/// check kept of the sources it didn't reach.
+/// the compiler's lowerings when it drops: on a failed check, with what
+/// the earlier check kept of the sources it didn't reach.
 pub(super) struct Checks<'e> {
     engine: &'e Engine,
+    lowerings: &'e mut Lowerings,
     /// What each source's check reads of the program.
     interface: Interface,
     /// What every source's check reads besides: the applications the
@@ -880,21 +879,24 @@ pub(super) struct Checks<'e> {
 }
 
 impl<'e> Checks<'e> {
-    /// The checks of a compiler that keeps its lowerings; `None` for any
-    /// other compiler, or when what the sources read can't be written.
-    pub(super) fn open(engine: &'e Engine, program: &Program, models: &Models) -> Option<Self> {
-        if !keeps(engine) {
-            return None;
-        }
-        let interface = interface(engine, program, models)?;
+    /// The checks of a check lent `lowerings`; `None` when what the
+    /// sources read can't be written.
+    pub(super) fn open(
+        engine: &'e Engine,
+        lowerings: &'e mut Lowerings,
+        program: &Program,
+        models: &Models,
+    ) -> Option<Self> {
+        let interface = interface(engine, lowerings, program, models)?;
         let mut applied = Written(Sha256::new());
         applied.0.update(b"rawr.check.applied/v1");
         for (key, item) in models.host.applications() {
             write!(applied, "{key:?}|{item:?}|").ok()?;
         }
-        let earlier = std::mem::take(&mut lock(engine).checks);
+        let earlier = std::mem::take(&mut lowerings.checks);
         Some(Self {
             engine,
+            lowerings,
             interface,
             applied: applied.0.finalize().into(),
             earlier,
@@ -965,15 +967,13 @@ impl<'e> Checks<'e> {
     /// reuse is gone, and what its interfaces made is on disk.
     pub(super) fn succeeded(&mut self) {
         self.earlier.clear();
-        store_interfaces(self.engine);
+        store_interfaces(self.engine, self.lowerings);
     }
 }
 
-/// A compile or a check of `engine` succeeded: its disk, a runner's, holds
-/// what its interfaces made for the next runner (#1899).
-fn store_interfaces(engine: &Engine) {
-    let mut lowerings = lock(engine);
-    let lowerings = &mut *lowerings;
+/// A compile or a check lent `lowerings` succeeded: their disk, a
+/// runner's, holds what its interfaces made for the next runner (#1899).
+fn store_interfaces(engine: &Engine, lowerings: &mut Lowerings) {
     lowerings
         .remembered
         .succeeded(engine, lowerings.disk.as_mut());
@@ -983,14 +983,8 @@ impl Drop for Checks<'_> {
     fn drop(&mut self) {
         let mut kept = std::mem::take(&mut self.earlier);
         kept.append(&mut self.kept);
-        lock(self.engine).checks = kept;
+        self.lowerings.checks = kept;
     }
-}
-
-/// Count `sources` a check of the program lowered, rather than reusing an
-/// earlier check's lowering, toward `engine`'s.
-pub(super) fn checked(engine: &Engine, sources: usize) {
-    lock(engine).checked += sources;
 }
 
 /// Each adapter the ops of `lowered` call, once.
@@ -1053,74 +1047,59 @@ impl host::ImportAllocation for Recording<'_> {
     }
 }
 
-fn lock(engine: &Engine) -> std::sync::MutexGuard<'_, Lowerings> {
-    counted!(ResidentCache);
-    engine
-        .resident_lowerings
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
 /// What each source's lowering reads of `program`; `None` when it can't
-/// be written. The compiler keeps what its interfaces made, and what they
-/// read of its native surface.
-fn interface(engine: &Engine, program: &Program, models: &Models) -> Option<Interface> {
+/// be written. `lowerings` keep what its interfaces made, and what they
+/// read of the native surface.
+fn interface(
+    engine: &Engine,
+    lowerings: &mut Lowerings,
+    program: &Program,
+    models: &Models,
+) -> Option<Interface> {
     let registered = Engine::registered_facades();
-    let kept = lock(engine)
+    let kept = lowerings
         .native
         .take()
         .filter(|(at, native)| *at == registered && native.is_of(&program.own));
     let native = kept.map_or_else(
         || {
             crate::Shared::new(Native::outlined(program, &models.host, |held| {
-                outline(engine, held)
+                outline(engine, lowerings.disk.as_mut(), held)
             }))
         },
         |(_, native)| native,
     );
-    let interface = remembering(engine, |remembered, disk| {
-        Interface::new(engine, program, models, remembered, disk, &native)
-    });
-    lock(engine).native = Some((registered, native));
+    let interface = Interface::new(
+        engine,
+        program,
+        models,
+        &mut lowerings.remembered,
+        lowerings.disk.as_mut(),
+        &native,
+    );
+    lowerings.native = Some((registered, native));
     interface
 }
 
-/// What `make` gives from what `engine`'s interfaces made and its disk, a
-/// runner's, which it keeps what it makes in.
-fn remembering<R>(
-    engine: &Engine,
-    make: impl FnOnce(&mut Remembered, Option<&mut Disk>) -> R,
-) -> R {
-    let (mut remembered, mut disk) = {
-        let mut lowerings = lock(engine);
-        (
-            std::mem::replace(&mut lowerings.remembered, Remembered::new()),
-            lowerings.disk.take(),
-        )
-    };
-    let made = make(&mut remembered, disk.as_mut());
-    let mut lowerings = lock(engine);
-    lowerings.remembered = remembered;
-    lowerings.disk = disk;
-    made
-}
-
 /// The outline of `held`: the one an earlier runner of the same image
-/// kept on disk at its key, or one made and kept there (#1755).
-fn outline(engine: &Engine, held: &[&host::image::Held]) -> host::image::Outline {
+/// kept in `disk` at its key, or one made and kept there (#1755).
+fn outline(
+    engine: &Engine,
+    mut disk: Option<&mut Disk>,
+    held: &[&host::image::Held],
+) -> host::image::Outline {
     let key = host::image::outline::Key::of(held);
     let entry = disk::Entry {
         identity: "",
         kind: disk::Kind::Outline,
         key: key.as_bytes(),
     };
-    let kept = lock(engine)
-        .disk
-        .as_mut()
+    let kept = disk
+        .as_deref_mut()
         .and_then(|disk| disk.read::<host::image::Outline>(engine, entry));
     kept.unwrap_or_else(|| {
         let outline = host::image::Outline::new(held);
-        if let Some(disk) = lock(engine).disk.as_mut() {
+        if let Some(disk) = disk {
             disk.write(engine, entry, &outline);
         }
         outline

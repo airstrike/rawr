@@ -47,6 +47,8 @@ pub(in crate::resolve) fn lower(
         optimization_level,
         #[cfg(feature = "rust-import")]
         None,
+        #[cfg(feature = "rust-import")]
+        None,
     )
 }
 
@@ -54,6 +56,7 @@ pub(in crate::resolve) fn lower(
 #[cfg(feature = "rust-import")]
 pub(crate) fn with_uses<A: crate::host::ImportAllocation>(
     engine: &Engine,
+    kept: Option<&mut kept::Lowerings>,
     program: &Program,
     runtime_model: &crate::program::model::Model,
     allocation: &mut A,
@@ -70,6 +73,8 @@ pub(crate) fn with_uses<A: crate::host::ImportAllocation>(
     let mut uses = Vec::new();
     let mut dependencies = BTreeSet::new();
     let mut allocation_failure = None;
+    // What a part lent no session reads, which nothing keeps.
+    let mut reads = Vec::new();
     let programs = Programs::of(program);
     let impls = native_impls(program, &models, &programs)?.into_boxed_slice();
     let lowered = lower_with_context(
@@ -78,6 +83,7 @@ pub(crate) fn with_uses<A: crate::host::ImportAllocation>(
         models,
         scope,
         optimization_level,
+        kept,
         Some(ImportedContext {
             native: program.native.as_deref(),
             allocation,
@@ -85,6 +91,7 @@ pub(crate) fn with_uses<A: crate::host::ImportAllocation>(
             source: program.source.entry(),
             uses: &mut uses,
             dependencies: &mut dependencies,
+            reads: &mut reads,
         }),
     );
     if let Some(error) = allocation_failure {
@@ -427,7 +434,7 @@ fn lower_part(
         let mut dependencies = BTreeSet::new();
         let mut lowerings = Vec::new();
         // What this part reads outside the program is kept with it.
-        unit.models.take_reads();
+        let mut reads = Vec::new();
         {
             let mut context = ImportedContext {
                 native: imported.native,
@@ -436,6 +443,7 @@ fn lower_part(
                 source: unit.source,
                 uses: &mut uses,
                 dependencies: &mut dependencies,
+                reads: &mut reads,
             };
             for body in bodies {
                 let text = body.text(unit.program);
@@ -459,7 +467,7 @@ fn lower_part(
                 &lowerings,
                 &uses,
                 &dependencies,
-                kept::Outside::new(recording.charges, unit.models.take_reads()),
+                kept::Outside::new(recording.charges, reads),
             );
         }
         imported.uses.append(&mut uses);
@@ -559,6 +567,7 @@ pub(super) fn lower_with_context(
     models: Models,
     scope: Option<&Scope>,
     optimization_level: crate::OptimizationLevel,
+    #[cfg(feature = "rust-import")] kept: Option<&mut kept::Lowerings>,
     #[cfg(feature = "rust-import")] mut imported: Option<ImportedContext<'_>>,
 ) -> Result<Output, LoweringFailure> {
     let mut symbol_rewrites: BTreeMap<ImmutableString, ImmutableString> = program
@@ -662,12 +671,12 @@ pub(super) fn lower_with_context(
         written_receivers: BTreeMap::new(),
         declared: BTreeMap::new(),
     };
-    // A runner's compiler lowers again only the sources whose lowering
-    // reads something that changed (#1646).
+    // A compile lent a runner's lowerings lowers again only the sources
+    // whose lowering reads something that changed (#1646).
     #[cfg(feature = "rust-import")]
-    let mut session = imported
-        .as_ref()
-        .and_then(|_| kept::Session::open(engine, program, &models, scope, optimization_level));
+    let mut session = kept
+        .filter(|_| imported.is_some())
+        .map(|kept| kept::Session::open(engine, kept, program, &models, scope, optimization_level));
     // Where each part's text is: a runner's compile parses again only the
     // parts whose text changed (#1877).
     #[cfg(feature = "rust-import")]

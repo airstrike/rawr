@@ -98,6 +98,7 @@ mod __rawr_profile {
     pub fn compile_initial(
         engine: &__rawr_internal::Engine,
         snapshot: &__rawr_internal::package::snapshot::Snapshot,
+        _cache: &mut __rawr_internal::package::import::resident::Cache,
         _contract: &ApplicationContract,
         _expected: &[u8; 32],
     ) -> std::io::Result<(Option<__rawr_internal::reload::Candidate>, __rawr_internal::AST)> {
@@ -116,6 +117,7 @@ mod __rawr_profile {
     pub fn compile_resident(
         _engine: &__rawr_internal::Engine,
         _snapshot: &__rawr_internal::package::snapshot::Snapshot,
+        _cache: &mut __rawr_internal::package::import::resident::Cache,
         _contract: &ApplicationContract,
     ) -> Result<__rawr_internal::package::import::resident::Outcome, __rawr_internal::package::import::resident::Error> {
         Ok(__rawr_internal::package::import::resident::Outcome::NeedsPreparation)

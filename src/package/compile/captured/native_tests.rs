@@ -10,6 +10,7 @@ fn failure(engine: &Engine, source: &str) -> Error {
         engine,
         &native_snapshot(source),
         &mut host::TestImportAllocation::default(),
+        None,
     ) {
         Ok(_) => panic!("fixture must fail at its selected lookup: {source}"),
         Err(error) => error,
@@ -181,7 +182,7 @@ fn capture_and_lowering_allocation_refusals_precede_native_miss_classification()
     let snapshot = native_snapshot("pub fn sample() -> i64 { native::new_function() }");
     // What the whole path charges before it classifies the miss.
     let mut probe = host::TestImportAllocation::default();
-    let missed = Output::transform_plain(&engine, &snapshot, &mut probe);
+    let missed = Output::transform_plain(&engine, &snapshot, &mut probe, None);
     assert!(matches!(missed, Err(Error::NativeMiss(_))));
     let (items, bytes) = probe.usage();
     for mut allocation in [
@@ -189,13 +190,13 @@ fn capture_and_lowering_allocation_refusals_precede_native_miss_classification()
         host::TestImportAllocation::new(items - 1, bytes),
         host::TestImportAllocation::new(items, bytes - 1),
     ] {
-        let error = match Output::transform_plain(&engine, &snapshot, &mut allocation) {
+        let error = match Output::transform_plain(&engine, &snapshot, &mut allocation, None) {
             Ok(_) => panic!("bounded metadata account must refuse this compilation"),
             Err(error) => error,
         };
         assert!(matches!(error, Error::Resource(_)), "{error}");
     }
     let mut enough = host::TestImportAllocation::new(items, bytes);
-    let missed = Output::transform_plain(&engine, &snapshot, &mut enough);
+    let missed = Output::transform_plain(&engine, &snapshot, &mut enough, None);
     assert!(matches!(missed, Err(Error::NativeMiss(_))));
 }

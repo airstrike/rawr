@@ -47,19 +47,29 @@ pub(crate) enum Error {
 }
 
 impl Output {
-    /// Compile any program, a plain one included.
+    /// Compile any program, a plain one included. A compile lent `cache`
+    /// reads and keeps there.
     pub(crate) fn transform_plain<A: host::ImportAllocation>(
         engine: &Engine,
         snapshot: &package::snapshot::Snapshot,
         allocation: &mut A,
+        mut cache: Option<&mut package::import::resident::Cache>,
     ) -> Result<Self, Error> {
-        let mut graph = engine.load_snapshot_kept(snapshot)?;
+        let mut graph = match cache.as_deref() {
+            Some(cache) => cache.load_snapshot(engine, snapshot)?,
+            None => package::Graph::load_snapshot(engine, snapshot)?,
+        };
         let expanded = graph.expand_crate_macros(&engine.host_registry);
         let sources = graph.diagnostic_sources();
         let source = reload::source::Graph::from_package(&graph);
         let native = resolve::native::Capture::from_graph(&graph, allocation)?;
         let program = expanded
-            .and_then(|()| resolve::lower_nominal::kept::resolve(engine, graph, native.clone()))
+            .and_then(|()| {
+                let kept = cache
+                    .as_deref_mut()
+                    .map(package::import::resident::Cache::lowerings);
+                resolve::lower_nominal::kept::resolve(engine, graph, native.clone(), kept)
+            })
             .map_err(|failure| {
                 // A crate derive whose item changed, or a crate macro's
                 // call an edit made, is expanded by preparation, as a
@@ -81,6 +91,9 @@ impl Output {
             })?;
         let (executable, imported) = resolve::lower_package_with_uses(
             engine,
+            cache
+                .as_deref_mut()
+                .map(package::import::resident::Cache::lowerings),
             program,
             allocation,
             Some(&Scope::new()),
@@ -126,7 +139,9 @@ impl Output {
                 }
             }
         })?;
-        let candidate = reload::Candidate::from_package_plain(executable, source, engine, snapshot);
+        let parses = cache.and_then(|cache| cache.parses());
+        let candidate =
+            reload::Candidate::from_package_plain(executable, source, engine, snapshot, parses);
         Ok(Self {
             candidate,
             imported,

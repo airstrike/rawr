@@ -628,8 +628,7 @@ impl Parser<'_> {
             return Ok(Some(span(name_span.start(), end)));
         };
         rawr_import::expand::kept::name(source);
-        self.models
-            .read(super::kept::Read::expansion(source.clone(), &text));
+        self.read(super::kept::Read::expansion(source.clone(), &text));
         let text = call::kept(&text).unwrap_or_default();
         let remaining = self.nest_expansion(path, span(name_span.start(), text_end(end, " ")))?;
         let at = name_span.start();

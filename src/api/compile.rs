@@ -18,40 +18,51 @@ impl Engine {
     /// Compile one immutable snapshot as a run compiles it, with the
     /// [`program::Positions`] that place its steps in its files: a runner
     /// lowers it against its retained native surface, and a program with
-    /// no dependencies compiles as `rawr run` compiles it.
+    /// no dependencies compiles as `rawr run` compiles it. A source whose
+    /// text `parses` holds the parse of is read from it, and nothing the
+    /// compile does is kept.
     #[cfg(feature = "rust-import")]
     #[doc(hidden)]
     pub fn compile_package_snapshot_with_positions(
         &self,
         snapshot: &crate::package::snapshot::Snapshot,
+        parses: Option<&crate::package::Parses>,
     ) -> Result<(AST, program::Positions), crate::package::Error> {
-        crate::package::compile::snapshot_with_positions(self, snapshot)
+        crate::package::compile::snapshot_with_positions(self, snapshot, parses)
     }
 
     /// Compile one immutable snapshot as `rawr run` compiles a program with
     /// no dependencies, with the [`program::Positions`] that place its
-    /// steps in its files.
+    /// steps in its files. A source whose text `parses` holds the parse of
+    /// is read from it, and nothing the compile does is kept.
     #[cfg(not(feature = "rust-import"))]
     #[doc(hidden)]
     pub fn compile_package_snapshot_with_positions(
         &self,
         snapshot: &crate::package::snapshot::Snapshot,
+        parses: Option<&crate::package::Parses>,
     ) -> Result<(AST, program::Positions), crate::package::Error> {
-        crate::package::Graph::load_snapshot(self, snapshot)
-            .and_then(|graph| self.compile_package_with_positions(graph))
-            .map(|(ast, _, positions)| (ast, positions))
+        match parses {
+            Some(parses) => crate::package::Graph::load_snapshot_reading(self, snapshot, parses),
+            None => crate::package::Graph::load_snapshot(self, snapshot),
+        }
+        .and_then(|graph| self.compile_package_with_positions(graph))
+        .map(|(ast, _, positions)| (ast, positions))
     }
 
     /// A reload generation of any program, a plain one (no application or
     /// previews, a `main` run once) included, retaining the same program for
-    /// top-level evaluation before the generation is bound.
+    /// top-level evaluation before the generation is bound. A compile lent
+    /// `cache`, a runner's, reads what earlier compiles kept there and
+    /// keeps its own work there.
     #[cfg(feature = "rust-import")]
     #[doc(hidden)]
     pub fn compile_package_snapshot_generation_with_top_level(
         &self,
         snapshot: &crate::package::snapshot::Snapshot,
+        cache: Option<&mut crate::package::import::resident::Cache>,
     ) -> Result<(crate::reload::Candidate, AST), crate::package::Error> {
-        crate::package::compile::snapshot_generation_plain(self, snapshot)
+        crate::package::compile::snapshot_generation_plain(self, snapshot, cache)
             .map(crate::reload::Candidate::with_top_level)
     }
 

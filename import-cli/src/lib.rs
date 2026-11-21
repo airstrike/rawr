@@ -137,9 +137,11 @@ impl Kept {
             self.check = None;
         }
         let (_, engine, checked) = self.check.get_or_insert_with(|| {
-            let mut engine = rawr_cli::base::engine(build);
-            engine.keep_lowerings();
-            (build, engine, rawr::package::import::Kept::default())
+            (
+                build,
+                rawr_cli::base::engine(build),
+                rawr::package::import::Kept::default(),
+            )
         });
         (&mut self.api, (engine, checked), &mut self.copies)
     }

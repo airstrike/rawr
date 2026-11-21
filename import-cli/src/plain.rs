@@ -899,11 +899,7 @@ fn prepare_resolving(
                     None => (
                         None,
                         (
-                            &*own_checker.get_or_insert_with(|| {
-                                let mut engine = rawr_cli::base::engine(build);
-                                engine.keep_lowerings();
-                                engine
-                            }),
+                            &*own_checker.get_or_insert_with(|| rawr_cli::base::engine(build)),
                             &mut own_checked,
                         ),
                         &mut own_copies,
@@ -939,7 +935,7 @@ fn prepare_resolving(
                             // (D683.4). `rawr test` reads it as `cargo
                             // test` builds it.
                             let parsed = cells.counts().parsed;
-                            let lowered = checker.checked_sources();
+                            let lowered = checked.checked_sources();
                             let compiled = checker.compile_imported_with_applications(
                                 contract,
                                 facade,
@@ -949,7 +945,7 @@ fn prepare_resolving(
                                 checked,
                             );
                             rawr_import::progress::parsed(cells.counts().parsed - parsed);
-                            rawr_import::progress::lowered(checker.checked_sources() - lowered);
+                            rawr_import::progress::lowered(checked.checked_sources() - lowered);
                             let error = match compiled {
                                 Ok(demand) => {
                                     passed = true;

@@ -531,6 +531,19 @@ impl Graph {
         builder.load_snapshot()
     }
 
+    /// [`Graph::load_snapshot`], reading each source whose text `parses`
+    /// holds the parse of from it, and parsing the rest, which it keeps
+    /// nowhere: what code a debugger evaluates in a generation loads.
+    pub(crate) fn load_snapshot_reading(
+        engine: &Engine,
+        snapshot: &super::snapshot::Snapshot,
+        parses: &super::Parses,
+    ) -> Result<Self, Error> {
+        let mut builder = Builder::from_snapshot(engine, snapshot);
+        builder.parses = Some(parses);
+        builder.load_snapshot()
+    }
+
     /// [`Graph::load_snapshot`] of one file the engine already parsed as
     /// `entry`, which the graph keeps rather than parsing its text again.
     pub(crate) fn load_parsed(
@@ -843,6 +856,8 @@ fn snapshot_root(entry: &Path, snapshot: &super::snapshot::Snapshot) -> PathBuf 
 struct Builder<'a> {
     engine: &'a Engine,
     cells: Option<&'a super::Cells>,
+    /// A generation's parses, read and never written (`load_snapshot_reading`).
+    parses: Option<&'a super::Parses>,
     snapshot: Option<&'a super::snapshot::Snapshot>,
     /// The entry source's parse, when the caller already has it.
     entry: Option<crate::parse::Unit>,
@@ -873,6 +888,7 @@ impl<'a> Builder<'a> {
         Self {
             engine,
             cells: None,
+            parses: None,
             snapshot: None,
             entry: None,
             evidence: Vec::new(),
@@ -1474,13 +1490,18 @@ impl<'a> Builder<'a> {
         // A module that may call the macros of the modules around it is
         // parsed with them, which its cell, keyed by its text, doesn't hold.
         let cells = self.cells.filter(|_| self.inherited.is_empty());
+        let read = || {
+            self.parses
+                .filter(|_| self.inherited.is_empty())
+                .and_then(|parses| parses.get(&canonical, source.text(), features))
+        };
         let parse = || {
             crate::parser::item::inheriting(&self.inherited, || {
                 self.engine.parse_unit_with(source.text(), features)
             })
             .map_err(|error| Error::parse(self.evidence.clone(), evidence, error))
         };
-        let parsed = match (entry, cells) {
+        let parsed = match (entry.or_else(read), cells) {
             (Some(parsed), _) => parsed,
             (None, Some(cells)) => match cells.get(&canonical, source.text(), features) {
                 Some(parsed) => parsed,

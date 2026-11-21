@@ -40,6 +40,8 @@ mod __rawr_internal {
                     Compiled(Compiled),
                     NeedsPreparation,
                 }
+                /// What the engine's compiles kept, which the protocol lends each.
+                pub struct Cache;
                 /// A compile's error, which the runner sends as its report's text.
                 pub struct Failure(pub &'static str);
                 impl Failure {
@@ -212,6 +214,7 @@ mod __rawr_profile {
     pub fn compile_resident(
         engine: &__rawr_internal::Engine,
         snapshot: &__rawr_internal::package::snapshot::Snapshot,
+        _: &mut __rawr_internal::package::import::resident::Cache,
         _: &ApplicationContract,
     ) -> Result<
         __rawr_internal::package::import::resident::Outcome,
@@ -312,7 +315,10 @@ fn session() -> Session {
             server,
             [7; 32],
             [8; 32],
-            Arc::new(engine),
+            (
+                Arc::new(engine),
+                __rawr_internal::package::import::resident::Cache,
+            ),
             __rawr_profile::ApplicationContract,
             transport,
         )

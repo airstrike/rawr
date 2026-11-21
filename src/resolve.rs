@@ -139,7 +139,7 @@ pub struct Program {
     aliases: BTreeMap<(program::source::Id, ImmutableString), type_ref::Alias>,
     scripts: Box<[Script]>,
     #[cfg(feature = "rust-import")]
-    native: Option<std::sync::Arc<native::Capture>>,
+    native: Option<std::rc::Rc<native::Capture>>,
     /// The generic functions compiled once per instantiation (D629).
     instances: Instances,
     /// Each source's original imports with their lexical scopes (D652),
@@ -529,9 +529,10 @@ pub(crate) fn lower_imported(
     program: &mut Program,
     host: &crate::Shared<host::Registry>,
     allocation: &mut rawr_import::contract::Allocation,
+    mut kept: Option<&mut lower_nominal::Lowerings>,
 ) -> Result<lower_nominal::ImportedOutput, ImportedFailure> {
-    lower_nominal::reveal(engine, program, host, allocation)?;
-    lower_nominal::imported(engine, program, host, allocation)
+    lower_nominal::reveal(engine, program, host, allocation, kept.as_deref_mut())?;
+    lower_nominal::imported(engine, program, host, allocation, kept)
 }
 
 /// Files a host ships with the programs it runs, by the exact path a
@@ -945,10 +946,13 @@ pub(crate) fn lower_package_with_engine(
     program::Executable::from_package_resolved(engine, program, scope, optimization_level)
 }
 
-/// Consume a resolved package into its executable and same-pass imported-use evidence.
+/// Consume a resolved package into its executable and same-pass
+/// imported-use evidence, reusing and keeping lowerings in `kept` when the
+/// compile is lent a runner's.
 #[cfg(feature = "rust-import")]
 pub(crate) fn lower_package_with_uses<A: host::ImportAllocation>(
     engine: &crate::Engine,
+    kept: Option<&mut lower_nominal::Lowerings>,
     program: Program,
     allocation: &mut A,
     scope: Option<&crate::Scope>,
@@ -956,6 +960,7 @@ pub(crate) fn lower_package_with_uses<A: host::ImportAllocation>(
 ) -> Result<(program::Executable, lower_nominal::ImportedOutput), ImportedFailure> {
     program::Executable::from_package_with_uses(
         engine,
+        kept,
         program,
         allocation,
         scope,

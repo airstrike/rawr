@@ -1415,7 +1415,7 @@ impl Parser<'_> {
     /// Whether the program's type `id` has a field or method `member` of its
     /// own, which the method probe finds before it derefs. A probe that
     /// reads the fields is reused only while it finds the same (#1885).
-    pub(super) fn own_member(&self, id: type_def::Id, member: &str) -> bool {
+    pub(super) fn own_member(&mut self, id: type_def::Id, member: &str) -> bool {
         self.models.method(id, member).is_some()
             || self
                 .models
@@ -1425,8 +1425,7 @@ impl Parser<'_> {
                 Nominal::Struct { definition, item } => {
                     let found = item.fields.iter().any(|field| field.name.text == member);
                     #[cfg(feature = "rust-import")]
-                    self.models
-                        .read(super::kept::Read::field(definition, member, found));
+                    self.read(super::kept::Read::field(definition, member, found));
                     #[cfg(not(feature = "rust-import"))]
                     let _ = definition;
                     found

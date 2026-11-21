@@ -7,6 +7,18 @@ use crate::{program, project, resolve, Engine, Scope};
 
 use super::{Error, Graph};
 
+/// What a compile of a snapshot reuses of earlier compiles.
+#[cfg(feature = "rust-import")]
+pub(crate) enum Reuse<'a> {
+    /// Nothing: each source is parsed and lowered.
+    Fresh,
+    /// A runner's cache, which the compile reads and keeps its own work in.
+    Kept(&'a mut super::import::resident::Cache),
+    /// The parses a generation compiled from, read and never written:
+    /// what code a debugger evaluates in it compiles from.
+    Read(&'a super::Parses),
+}
+
 type ExecutableEvidence = (
     program::Executable,
     Box<[crate::diagnostic::Source]>,
@@ -65,30 +77,36 @@ pub(crate) fn snapshot(
     engine: &Engine,
     snapshot: &super::snapshot::Snapshot,
 ) -> Result<crate::AST, Error> {
-    snapshot_program(engine, snapshot, |_| ()).map(|(executable, ())| executable.into_hosted_ast())
+    snapshot_program(engine, snapshot, Reuse::Fresh, |_| ())
+        .map(|(executable, ())| executable.into_hosted_ast())
 }
 
 /// The program `snapshot` holds, compiled as a runner compiles its start
 /// ([`snapshot_generation_plain`]), with the [`program::Positions`] that
 /// place its steps in its files: code a debugger evaluates checks in the
-/// program as the run checked it (#2292).
+/// program as the run checked it (#2292). A source whose text `parses`
+/// holds the parse of is read from it; nothing the compile does is kept.
 #[cfg(feature = "rust-import")]
 pub(crate) fn snapshot_with_positions(
     engine: &Engine,
     snapshot: &super::snapshot::Snapshot,
+    parses: Option<&super::Parses>,
 ) -> Result<(crate::AST, program::Positions), Error> {
-    snapshot_program(engine, snapshot, |_| ())
+    let reuse = parses.map_or(Reuse::Fresh, Reuse::Read);
+    snapshot_program(engine, snapshot, reuse, |_| ())
         .map(|(executable, ())| executable.into_ast_with_positions())
 }
 
 /// A generation of any program, a plain one included, for a runner with no
-/// host profile.
+/// host profile. A compile lent `cache` reads and keeps there.
 #[cfg(feature = "rust-import")]
 pub(crate) fn snapshot_generation_plain(
     engine: &Engine,
     snapshot: &super::snapshot::Snapshot,
+    mut cache: Option<&mut super::import::resident::Cache>,
 ) -> Result<crate::reload::Candidate, Error> {
-    let (executable, (source, declared)) = snapshot_program(engine, snapshot, |graph| {
+    let reuse = cache.as_deref_mut().map_or(Reuse::Fresh, Reuse::Kept);
+    let (executable, (source, declared)) = snapshot_program(engine, snapshot, reuse, |graph| {
         // A crate built for its tests runs them in place of its `main`.
         let declared = graph
             .entry_package()
@@ -98,8 +116,9 @@ pub(crate) fn snapshot_generation_plain(
         (crate::reload::source::Graph::from_package(graph), declared)
     })?;
     let tests = declared.map(|declared| super::test::Declared::compiled_in(declared, &executable));
+    let parses = cache.and_then(|cache| cache.parses());
     Ok(
-        crate::reload::Candidate::from_package_plain(executable, source, engine, snapshot)
+        crate::reload::Candidate::from_package_plain(executable, source, engine, snapshot, parses)
             .with_tests(tests),
     )
 }
@@ -113,21 +132,31 @@ pub(crate) fn snapshot_generation_plain(
 fn snapshot_program<T>(
     engine: &Engine,
     snapshot: &super::snapshot::Snapshot,
+    reuse: Reuse<'_>,
     read: impl FnOnce(&Graph) -> T,
 ) -> Result<(program::Executable, T), Error> {
-    let mut graph = engine.load_snapshot_kept(snapshot)?;
+    let (mut graph, cache) = match reuse {
+        Reuse::Fresh => (Graph::load_snapshot(engine, snapshot)?, None),
+        Reuse::Kept(cache) => (cache.load_snapshot(engine, snapshot)?, Some(cache)),
+        Reuse::Read(parses) => (
+            Graph::load_snapshot_reading(engine, snapshot, parses)?,
+            None,
+        ),
+    };
     let expanded = graph.expand_crate_macros(&engine.host_registry);
     let sources = graph.diagnostic_sources();
     let read = read(&graph);
     let program = expanded
         .and_then(|()| resolve::package::resolve(graph, &engine.host_registry))
         .map_err(|failure| Error::resolution(sources.clone(), failure))?;
-    snapshot_executable(engine, program, &sources).map(|executable| (executable, read))
+    let kept = cache.map(super::import::resident::Cache::lowerings);
+    snapshot_executable(engine, kept, program, &sources).map(|executable| (executable, read))
 }
 
 #[cfg(feature = "rust-import")]
 fn snapshot_executable(
     engine: &Engine,
+    kept: Option<&mut resolve::lower_nominal::Lowerings>,
     program: resolve::Program,
     sources: &[crate::diagnostic::Source],
 ) -> Result<program::Executable, Error> {
@@ -141,6 +170,7 @@ fn snapshot_executable(
         );
         let (mut executable, _uses) = resolve::lower_package_with_uses(
             engine,
+            kept,
             program,
             &mut attempt,
             Some(&Scope::new()),
