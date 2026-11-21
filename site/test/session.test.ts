@@ -135,6 +135,16 @@ test("a share's code wins over an example's hash, which the share page drops", (
   assert.deepEqual(page.addresses, ["/play/abcDEF1234"]);
 });
 
+test("a share after an edit replaces the example's anchor with the share's address", async () => {
+  const page = standIn({ url: "http://localhost/play#traits", examples: EXAMPLES });
+  page.session.setCode("traits code, edited");
+  assert.equal(page.addresses.at(-1), "/play#traits");
+  await page.session.share();
+  assert.equal(page.addresses.at(-1), "/play/abcDEF1234");
+  assert.equal(page.session.state.mark, "");
+  assert.deepEqual(page.fetched[0].body, { code: "traits code, edited" });
+});
+
 test("a share's link drops the example's hash", async () => {
   const page = standIn({ code: "x", url: "http://localhost/play#traits", examples: EXAMPLES });
   const copied: string[] = [];
@@ -147,16 +157,21 @@ test("a share's link drops the example's hash", async () => {
   assert.equal(page.session.state.status, "link copied · abcDEF1234");
 });
 
-test("choosing an example and an edit keep the address with replaceState", async () => {
+test("choosing an example writes its anchor, and an edit keeps it", async () => {
   const web: Partial<Web> = { run_text: () => JSON.stringify({ kind: "text", status: 0, output: [] }) };
   const page = standIn({ code: "x", url: "http://localhost/play/abcDEF1234", shared: "abcDEF1234", examples: EXAMPLES, web });
   page.session.pick("traits");
   assert.equal(page.session.state.code, "traits code");
   assert.equal(page.session.state.mark, "traits");
   assert.equal(page.addresses.at(-1), "/play#traits");
-  // An edit drops the hash: the code is no longer the example's.
+  // An edit keeps the anchor, which names where the code came from.
+  const written = page.addresses.length;
   page.session.setCode("traits code, edited");
-  assert.equal(page.addresses.at(-1), "/play");
+  assert.equal(page.addresses.length, written, "an edit writes no address");
+  assert.equal(page.session.state.mark, "traits");
+  // The next pick replaces it.
+  page.session.pick("word-count");
+  assert.equal(page.addresses.at(-1), "/play#word-count");
   page.session.pick("reset");
   assert.equal(page.session.state.code, "word count code", "Reset is the first example");
   await new Promise((done) => setTimeout(done, 10));

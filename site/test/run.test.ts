@@ -60,6 +60,16 @@ test("a frame drew nothing while it holds only its scripts and an empty #iced", 
   assert.equal(drewNothing(body(iced(false), script, { tagName: "PRE", id: "" })), false, "a terminal");
 });
 
+test("a frame that drew nothing folds away at every width, so only what the run printed shows", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const css = await readFile(new URL("../src/styles/play.css", import.meta.url), "utf8");
+  const fold = ".out .frames:not(:has(> iframe.universe:not([hidden], [data-blank]))) { display: none; }";
+  assert.ok(css.includes(fold));
+  // The rule sits outside any @media block: everything before it closes what it opens.
+  const before = css.slice(0, css.indexOf(fold)).replace(/\/\*[\s\S]*?\*\//g, "");
+  assert.equal(before.split("{").length, before.split("}").length, "the fold is not inside a media query");
+});
+
 test("a key the focused program reads doesn't scroll the frame or the page", async () => {
   const { frameDocument } = await import("../src/scripts/universe.ts");
   const script = frameDocument("https://example.org/web/universe.js").match(/const scrolls[\s\S]*?\n\}\);/)![0];

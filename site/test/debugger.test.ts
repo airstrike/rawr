@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { assignment, canPause, Debugger, partPlace, ROOT } from "../src/play/debugger.ts";
 import { editable, visible, type Row } from "../src/play/rows.ts";
-import { Session, type State, type Universe } from "../src/play/session.ts";
+import { Session, type Example, type State, type Universe } from "../src/play/session.ts";
 import type { Frame } from "../src/scripts/universe.ts";
 
 /** A stand-in instance whose debugger answers with `answer`, and the requests it was asked. */
@@ -160,7 +160,7 @@ function universe(name: string, debuggee: object = {}) {
 }
 
 /** A session whose debugger icon has stand-in universes, in a browser that can pause or can't. */
-function debuggable(pausable: boolean) {
+function debuggable(pausable: boolean, examples: Example[] = []) {
   const plain = universe("plain");
   const page = instance(answers(true));
   const debugged = universe("debugger", page.debuggee);
@@ -168,7 +168,7 @@ function debuggable(pausable: boolean) {
   const web = { run_text: () => JSON.stringify({ kind: "text", status: 0, output: [{ stream: "stdout", text: "plain\n" }] }) };
   const timers: (() => void)[] = [];
   const session = new Session(
-    { snippet: { code: 'fn main() { println!("hi"); }' }, examples: [], shared: null },
+    { snippet: { code: 'fn main() { println!("hi"); }' }, examples, shared: null },
     {
       fetch: (async () => Response.json({})) as typeof fetch,
       location: { pathname: "/play", search: "", hash: "", origin: "http://localhost" },
@@ -206,6 +206,30 @@ test("the debugger icon runs the program again on the debugger build, held at it
   assert.ok(debugged.removed.includes("debugger"), "the debugger's frame goes");
   assert.equal((session.state as State).output.kind, "term", "and the program runs as before");
   assert.equal(debug.state.phase, "idle");
+});
+
+test("picking a different example clears the breakpoints, and the next run sets none", async () => {
+  const examples: Example[] = [
+    { name: "One", code: "fn main() {}", slug: "one" },
+    { name: "Two", code: 'fn main() { println!("two"); }', slug: "two" },
+  ];
+  const { session, page, debug } = debuggable(true, examples);
+  await session.debug();
+  await debug.toggle(1);
+  assert.deepEqual(debug.state.lines, [1]);
+  session.pick("one");
+  assert.deepEqual(debug.state.lines, [], "a different snippet's lines are not the old code's");
+  await settle();
+  await debug.toggle(1);
+  // Picking the snippet the editor already holds keeps them.
+  session.pick("one");
+  assert.deepEqual(debug.state.lines, [1]);
+  await settle();
+  const asked = page.asked.length;
+  session.pick("two");
+  await settle();
+  assert.deepEqual(debug.state.lines, []);
+  assert.ok(!page.asked.slice(asked).some((request) => request.op === "break"), "the run after the pick sets no breakpoint");
 });
 
 test("a browser can pause only with its own WebAssembly.Suspending", () => {

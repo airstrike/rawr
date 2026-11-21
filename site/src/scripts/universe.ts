@@ -253,8 +253,8 @@ export function drewNothing(body: Element): boolean {
 
 /**
  * Mark `frame`, whose program has ended, `data-blank` when it drew
- * nothing, until something shows in it. A phone's layout folds a blank
- * frame away, so what the program printed sits at the top of the output
+ * nothing, until something shows in it. The output folds a blank frame
+ * away, so what the program printed sits at the top of the output
  * (play.css). A program that is still running is never marked: a frame
  * that appears later resizes under it.
  */

@@ -34,13 +34,11 @@ body.play { font-size: var(--fs-base); line-height: 1.5; }
   outline-offset: -1px;
 }
 .out.framed pre { padding: 0 16px 16px; }
-/* A phone fits the output to what it shows: a frame whose program ended */
-/* without drawing (universe.ts's data-blank) folds away, and what the */
-/* program printed sits at the top. */
-@media (max-width: 767px) {
-  .out .frames:not(:has(> iframe.universe:not([hidden], [data-blank]))) { display: none; }
-  .out.framed:not(:has(> .frames > iframe.universe:not([hidden], [data-blank]))) { padding-top: 16px; }
-}
+/* The output fits what the run shows: a frame whose program ended without */
+/* drawing (universe.ts's data-blank) folds away, and what the program */
+/* printed sits at the top. */
+.out .frames:not(:has(> iframe.universe:not([hidden], [data-blank]))) { display: none; }
+.out.framed:not(:has(> .frames > iframe.universe:not([hidden], [data-blank]))) { padding-top: 16px; }
 .term .err { color: var(--red); }
 .term .exit, .term .none, .term .note { color: var(--quiet); }
 /* The debugger icon in a browser that can't pause a program: greyed, with */
