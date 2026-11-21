@@ -5,12 +5,12 @@
 use std::io::{BufRead as _, BufReader, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
 
 use serde_json::{json, Value};
 
-use super::call::{Call, Wake};
 use super::content;
-use super::process::{self, Tail};
+use super::process::{self, Cancel, Tail};
 use crate::layer::{Installed, Tool};
 
 /// An extension's tool, as listed.
@@ -22,6 +22,13 @@ pub struct Offered {
     pub extension: String,
     /// The tool.
     pub tool: Tool,
+}
+
+/// What a call's child says, until it stops or the call is cancelled.
+enum Heard {
+    Record(Value),
+    Ended,
+    Cancelled,
 }
 
 /// The tools `installed` extensions offer: a core name wins over an
@@ -84,22 +91,22 @@ pub fn listing(offered: &Offered) -> Value {
     })
 }
 
-/// Run `asked`, one call of `tool` from `binary`, until it answers, ends or
-/// `call` is cancelled. `progress` hears its progress records.
+/// Run one call of `tool` from `binary` until it answers, ends or `cancel`
+/// fires. `progress` hears its progress records.
 pub fn call(
     binary: &Path,
     tool: &str,
-    asked: &content::Call,
-    call: &Call,
+    call: &content::Call,
+    cancel: &Cancel,
     mut progress: impl FnMut(&Value),
 ) -> Value {
     let mut command = Command::new(binary);
     command
         .args(["mcp", "call", tool])
-        .current_dir(if asked.root.is_dir() {
-            &asked.root
+        .current_dir(if call.root.is_dir() {
+            &call.root
         } else {
-            asked.root.parent().unwrap_or(&asked.root)
+            call.root.parent().unwrap_or(&call.root)
         })
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -111,7 +118,7 @@ pub fn call(
         }
     };
     let group = child.id();
-    let input = asked.encode();
+    let input = call.encode();
     if let Some(mut stdin) = child.stdin.take() {
         let _ = std::thread::Builder::new()
             .name("rawr-mcp-call-input".into())
@@ -120,7 +127,11 @@ pub fn call(
             });
     }
     let stderr = child.stderr.take().map(Tail::read).unwrap_or_default();
-    let lines = call.waker();
+    let (lines, received) = mpsc::channel::<Heard>();
+    let cancelled = lines.clone();
+    cancel.on_cancel(move || {
+        let _ = cancelled.send(Heard::Cancelled);
+    });
     match child.stdout.take() {
         Some(stdout) => {
             let _ = std::thread::Builder::new()
@@ -131,39 +142,23 @@ pub fn call(
                             break;
                         };
                         if let Ok(record) = serde_json::from_str::<Value>(&line)
-                            && !lines.wake(Wake::Line {
-                                group,
-                                record: Some(record),
-                            })
+                            && lines.send(Heard::Record(record)).is_err()
                         {
                             return;
                         }
                     }
-                    lines.wake(Wake::Line {
-                        group,
-                        record: None,
-                    });
+                    let _ = lines.send(Heard::Ended);
                 });
         }
         None => {
-            lines.wake(Wake::Line {
-                group,
-                record: None,
-            });
+            let _ = lines.send(Heard::Ended);
         }
     }
     let mut result = None;
     let mut ended = false;
     loop {
-        let heard = call.wait(|wake| match wake {
-            Wake::Line {
-                group: from,
-                record,
-            } if from == group => Some(record),
-            _ => None,
-        });
-        match heard {
-            Some(Some(record)) => {
+        match received.recv() {
+            Ok(Heard::Record(record)) => {
                 if let Some(answer) = record.get("result") {
                     result = Some(answer.clone());
                     break;
@@ -172,8 +167,8 @@ pub fn call(
                     progress(&record);
                 }
             }
-            None => break,
-            Some(None) => {
+            Ok(Heard::Cancelled) => break,
+            Ok(Heard::Ended) | Err(mpsc::RecvError) => {
                 ended = true;
                 break;
             }

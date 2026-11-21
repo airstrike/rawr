@@ -1,15 +1,15 @@
-//! The adapter's loop. The calling thread reads each request and sends it
-//! to the adapter's thread, which takes each request and each answer of
-//! the session in turn, and ends once the client disconnected or its input
-//! ended and the program it started exited.
+//! The adapter's loop: read each request, answer it on a thread of its
+//! own, so a request that waits for the program (a breakpoint set while it
+//! builds, a step) never holds the others; end at `disconnect` or the end
+//! of input.
 
 use std::io::BufRead;
 use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use super::{wire, Adapter, Heard, THREAD};
+use super::{wire, Adapter, THREAD};
 
 /// Serve the protocol on stdin and stdout until the client disconnects.
 /// Relative paths start at `root`.
@@ -31,100 +31,59 @@ pub fn serve_on(
     mut input: impl BufRead,
     output: impl std::io::Write + Send + 'static,
 ) -> std::io::Result<()> {
-    let out = wire::Writer::new(output)?;
-    let (heard, hearing) = mpsc::channel();
-    let telling = heard.clone();
-    let adapter = std::thread::Builder::new()
-        .name("rawr-dap".into())
-        .spawn(move || Adapter::new(root, out, telling).serve(&hearing))?;
-    let read = loop {
-        match wire::read(&mut input) {
-            Ok(Some(request)) => {
-                if request["type"] != "request" {
-                    continue;
-                }
-                let last = request["command"] == "disconnect";
-                let _ = heard.send(Heard::Request(request));
-                // The client holds its end open until the adapter exits.
-                if last {
-                    break Ok(());
-                }
-            }
-            Ok(None) => {
-                let _ = heard.send(Heard::Ended);
-                break Ok(());
-            }
-            Err(error) => {
-                let _ = heard.send(Heard::Ended);
-                break Err(error);
-            }
+    let adapter = Arc::new(Adapter::new(root, wire::Writer::new(output)?));
+    while let Some(request) = wire::read(&mut input)? {
+        if request["type"] != "request" {
+            continue;
         }
-    };
-    let _ = adapter.join();
-    read
+        if request["command"] == "disconnect" {
+            adapter.disconnect(&request);
+            adapter.out.flush();
+            return Ok(());
+        }
+        let answering = Arc::clone(&adapter);
+        std::thread::Builder::new()
+            .name("rawr-dap-request".into())
+            .spawn(move || answering.take(&request))?;
+    }
+    // The client went away: what the adapter started goes too.
+    adapter.end();
+    adapter.out.flush();
+    Ok(())
 }
 
 impl Adapter {
-    /// Take what the adapter hears until it is over, then write what it
-    /// said.
-    pub(super) fn serve(mut self, hearing: &mpsc::Receiver<Heard>) {
-        for message in hearing {
-            match message {
-                Heard::Request(request) => self.take(request),
-                // The client went away: what the adapter started goes too.
-                Heard::Ended => self.end(|adapter| adapter.over = true),
-                Heard::Session { id, told } => {
-                    if let Some(then) = self.then.remove(&id) {
-                        then(&mut self, told);
-                    }
-                }
-            }
-            if self.over {
-                break;
-            }
-        }
-        self.out.flush();
-    }
-
-    /// Take one request: answer it, or start what answers it once the
-    /// program has.
-    fn take(&mut self, request: Value) {
-        let command = request["command"].as_str().unwrap_or_default().to_owned();
+    /// Answer one request.
+    fn take(self: &Arc<Self>, request: &Value) {
         let arguments = &request["arguments"];
-        let answer = match command.as_str() {
+        let answer = match request["command"].as_str().unwrap_or_default() {
             "initialize" => Ok(self.initialize(arguments)),
-            "launch" => return self.launch(request),
-            "attach" => return self.attach(request),
-            "configurationDone" => return self.configured(request),
+            "launch" => self.launch(arguments),
+            "attach" => self.attach(arguments),
+            "configurationDone" => Ok(self.configured()),
             "setExceptionBreakpoints" => Ok(json!({})),
-            "setBreakpoints" | "setFunctionBreakpoints" => return self.take_turn(request),
+            "setBreakpoints" => self.set_lines(arguments),
+            "setFunctionBreakpoints" => self.set_functions(arguments),
             "threads" => Ok(json!({ "threads": [{ "id": THREAD, "name": "main" }] })),
-            "stackTrace" => return self.stack(request),
+            "stackTrace" => self.stack(arguments),
             "scopes" => Ok(self.scopes(arguments)),
-            "variables" => return self.variables(request),
-            "evaluate" => return self.evaluate(request),
-            "setVariable" => return self.set_variable(request),
-            "setExpression" => return self.set_expression(request),
-            "continue" => return self.resume(request),
-            "pause" => return self.pause(request),
+            "variables" => self.variables(arguments),
+            "evaluate" => self.evaluate(arguments),
+            "setVariable" => self.set_variable(arguments),
+            "setExpression" => self.set_expression(arguments),
+            "continue" => self.resume(),
+            "pause" => self.pause(),
             // A step is answered at once; the pause it ends in is told as
             // `stopped`.
-            "next" => return self.step(&request, "over"),
-            "stepIn" => return self.step(&request, "into"),
-            "stepOut" => return self.step(&request, "out"),
+            "next" => return self.step(request, "over"),
+            "stepIn" => return self.step(request, "into"),
+            "stepOut" => return self.step(request, "out"),
             "terminate" => {
-                return self.end(move |adapter| adapter.out.respond(&request, Ok(json!({}))));
-            }
-            // `disconnect` ends the launched run, which ends with the
-            // adapter in any case, or detaches from one started elsewhere.
-            "disconnect" => {
-                return self.end(move |adapter| {
-                    adapter.out.respond(&request, Ok(json!({})));
-                    adapter.over = true;
-                });
+                self.end();
+                Ok(json!({}))
             }
             command => Err(format!("rawr dap doesn't support `{command}`")),
         };
-        self.out.respond(&request, answer);
+        self.out.respond(request, answer);
     }
 }

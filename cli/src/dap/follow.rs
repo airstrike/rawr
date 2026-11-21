@@ -3,99 +3,71 @@
 //! and each reload `output`, a change to the breakpoints `breakpoint`, and
 //! the end of the run `exited` and `terminated`.
 
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+
 use serde_json::{json, Value};
 
 use super::{Adapter, THREAD};
-use crate::mcp::session::{Phase, Session, Wait};
-
-/// How far the adapter told the session: its events, its output and its
-/// breakpoints' revision.
-#[derive(Debug, Default)]
-pub(super) struct Following {
-    event: u64,
-    output: u64,
-    breakpoints: u64,
-    /// The session's past is still to tell, as where it is paused: for a
-    /// run started elsewhere, whose events before now the client never
-    /// heard.
-    past: bool,
-}
-
-impl Following {
-    /// From the start of `session`, for a run the adapter started, and for
-    /// one started elsewhere from its output so far and where it is
-    /// paused.
-    pub(super) fn of(session: &Session) -> Self {
-        Self {
-            past: !session.is_started(),
-            ..Self::default()
-        }
-    }
-}
+use crate::mcp::process::Cancel;
+use crate::mcp::session::{Phase, Session};
 
 impl Adapter {
-    /// Tell the client what the session told since it last did, then wait
-    /// for more, until the session is over.
-    pub(super) fn follow(&mut self) {
-        let Some(session) = self.session.clone() else {
-            return;
-        };
-        let told = session.breakpoints();
-        self.following.breakpoints = told["revision"]
-            .as_u64()
-            .unwrap_or(self.following.breakpoints);
-        self.follow_breakpoints(&told);
-        let answer = session
-            .answer(Some(self.following.event), Some(self.following.output))
-            .structured;
-        self.following.event = answer["cursor"].as_u64().unwrap_or(self.following.event);
-        self.following.output = answer["output_cursor"]
-            .as_u64()
-            .unwrap_or(self.following.output);
-        if std::mem::take(&mut self.following.past) {
-            if let Some(mut paused) = session.paused() {
-                paused["event"] = json!("paused");
-                self.tell(&paused);
+    /// Tell the client what `session` tells until it is over: from its
+    /// start for a run the adapter started, and for one started elsewhere,
+    /// its output so far and where it is paused, if it is, then what comes.
+    pub(super) fn follow(&self, session: &Arc<Session>) {
+        let mut event = 0;
+        let mut output = 0;
+        let mut breakpoints = 0;
+        let mut past = !session.is_started();
+        loop {
+            let told = session.breakpoints();
+            breakpoints = told["revision"].as_u64().unwrap_or(breakpoints);
+            self.follow_breakpoints(&told);
+            let answer = session.answer(Some(event), Some(output)).structured;
+            event = answer["cursor"].as_u64().unwrap_or(event);
+            output = answer["output_cursor"].as_u64().unwrap_or(output);
+            if std::mem::take(&mut past) {
+                if let Some(mut paused) = session.paused() {
+                    paused["event"] = json!("paused");
+                    self.tell(&paused);
+                }
+            } else {
+                for told in answer["events"].as_array().into_iter().flatten() {
+                    self.tell(told);
+                }
             }
-        } else {
-            for told in answer["events"].as_array().into_iter().flatten() {
-                self.tell(told);
+            // Rawr's own lines, such as a cold start's progress, are the
+            // adapter's console; the program's streams keep their names.
+            for (stream, category) in [
+                ("rawr", "console"),
+                ("stdout", "stdout"),
+                ("stderr", "stderr"),
+            ] {
+                if let Some(text) = answer[stream].as_str().filter(|text| !text.is_empty()) {
+                    self.output(category, text);
+                }
             }
+            let phase = session.phase();
+            if phase.is_over() {
+                if let Phase::Exited(Some(status)) = phase {
+                    self.out.event("exited", json!({ "exitCode": status }));
+                }
+                self.out.event("terminated", json!({}));
+                return;
+            }
+            session.hear(event, output, breakpoints, &Cancel::default());
         }
-        // Rawr's own lines, such as a cold start's progress, are the
-        // adapter's console; the program's streams keep their names.
-        for (stream, category) in [
-            ("rawr", "console"),
-            ("stdout", "stdout"),
-            ("stderr", "stderr"),
-        ] {
-            if let Some(text) = answer[stream].as_str().filter(|text| !text.is_empty()) {
-                self.output(category, text);
-            }
-        }
-        let phase = session.phase();
-        if phase.is_over() {
-            if let Phase::Exited(Some(status)) = phase {
-                self.out.event("exited", json!({ "exitCode": status }));
-            }
-            self.out.event("terminated", json!({}));
-            return;
-        }
-        let change = Wait::Change {
-            event: self.following.event,
-            output: self.following.output,
-            breakpoints: self.following.breakpoints,
-        };
-        self.park(&session, change, |adapter, _| adapter.follow());
     }
 
     /// One event of the session's.
-    fn tell(&mut self, event: &Value) {
+    fn tell(&self, event: &Value) {
         let reason = event["reason"].as_str().unwrap_or_default();
         match event["event"].as_str().unwrap_or_default() {
             "paused" => {
-                self.handles.drop_all();
-                self.stopped = true;
+                self.handles().drop_all();
+                self.stopped.store(true, Ordering::Release);
                 let mut description = format!(
                     "Paused at {}:{}",
                     event["file"].as_str().unwrap_or_default(),
@@ -148,9 +120,9 @@ impl Adapter {
 
     /// The program goes on, or a restart ends where it was paused: the
     /// client's frames and references no longer hold.
-    fn went_on(&mut self) {
-        self.handles.drop_all();
-        if std::mem::take(&mut self.stopped) {
+    fn went_on(&self) {
+        self.handles().drop_all();
+        if self.stopped.swap(false, Ordering::AcqRel) {
             self.out.event(
                 "continued",
                 json!({ "threadId": THREAD, "allThreadsContinued": true }),

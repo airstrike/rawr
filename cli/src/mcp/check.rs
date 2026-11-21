@@ -5,9 +5,9 @@
 //! its result if nothing changed since it began.
 //!
 //! The server's loop owns the checks. A call sends it a [`Request`] and
-//! waits on its own channel, which its cancel also wakes. Each check runs
-//! on a thread that sends the loop a [`Report`] once it is done, and the
-//! loop answers every call still waiting.
+//! waits on its own reply channel, which its cancel also wakes. Each check
+//! runs on a thread that sends the loop a [`Report`] once it is done, and
+//! the loop answers every call still waiting.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -17,9 +17,8 @@ use std::time::{Instant, SystemTime};
 
 use serde_json::{json, Value};
 
-use super::call::{Call, Wake, Waker};
 use super::content;
-use super::process::{self, Tail};
+use super::process::{self, Cancel, Tail};
 use super::tools::Place;
 use super::{Heard, Server};
 
@@ -31,8 +30,8 @@ pub(super) struct Request {
     directory: PathBuf,
     /// The root's files when the call asked.
     files: Fingerprint,
-    /// The call the result goes to.
-    reply: Waker,
+    /// Where the result goes. The call's cancel sends `None` on it.
+    reply: mpsc::Sender<Option<Value>>,
 }
 
 /// A check thread's result for its root.
@@ -60,30 +59,37 @@ struct Job {
 #[derive(Debug)]
 enum State {
     /// `rawr check` runs, leading `group`, and the calls that joined it
-    /// wait for it.
-    Running { group: u32, joined: Vec<Waker> },
+    /// wait on `joined`.
+    Running {
+        group: u32,
+        joined: Vec<mpsc::Sender<Option<Value>>>,
+    },
     /// It finished with no call waiting. The next call takes the result
     /// while the root's files are unchanged.
     Done(Value),
 }
 
-/// Check `place` through the server's loop, until it is checked or `call`
-/// is cancelled.
-pub(super) fn check(server: &Server, place: &Place, call: &Call) -> Value {
+/// Check `place` through the server's loop, until it is checked or
+/// `cancel` fires.
+pub(super) fn check(server: &Server, place: &Place, cancel: &Cancel) -> Value {
+    let (reply, answer) = mpsc::channel();
+    let cancelled = reply.clone();
+    cancel.on_cancel(move || {
+        let _ = cancelled.send(None);
+    });
     server.ask(Heard::Check(Request {
         path: place.path.clone(),
         root: place.root.clone(),
         directory: place.directory(),
         files: fingerprint(&place.root),
-        reply: call.waker(),
+        reply,
     }));
-    // The server's end cancels every call, so a loop that stopped reading
-    // still wakes this one.
-    call.wait(|wake| match wake {
-        Wake::Checked(result) => Some(result),
-        _ => None,
-    })
-    .unwrap_or_else(|| content::failure("cancelled"))
+    // The cancel's wake holds a sender, and the server's end cancels every
+    // call, so a loop that stopped reading still wakes this one.
+    match answer.recv() {
+        Ok(Some(result)) => result,
+        Ok(None) | Err(mpsc::RecvError) => content::failure("cancelled"),
+    }
 }
 
 impl Checks {
@@ -112,7 +118,7 @@ impl Checks {
                     ..
                 }) = self.jobs.remove(&root)
                 {
-                    reply.wake(Wake::Checked(result));
+                    let _ = reply.send(Some(result));
                 }
                 return;
             }
@@ -129,7 +135,7 @@ impl Checks {
             Err(error) => {
                 self.jobs.remove(&root);
                 let failure = content::failure(format!("cannot run rawr check: {error}"));
-                reply.wake(Wake::Checked(failure));
+                let _ = reply.send(Some(failure));
             }
         }
     }
@@ -145,11 +151,10 @@ impl Checks {
         let State::Running { joined, .. } = &mut job.state else {
             return;
         };
-        // A cancelled call takes no wake. The loop sets a call's flag
-        // itself, so none is cancelled after it took the result.
+        // A cancelled call dropped its receiver, so its send fails.
         let mut taken = false;
         for reply in joined.drain(..) {
-            taken |= reply.wake(Wake::Checked(result.clone()));
+            taken |= reply.send(Some(result.clone())).is_ok();
         }
         if taken {
             self.jobs.remove(&root);
@@ -321,35 +326,21 @@ mod tests {
 
     use serde_json::{json, Value};
 
-    use super::{Call, Checks, Fingerprint, Job, Report, Request, State, Wake, Waker};
+    use super::{Checks, Fingerprint, Job, Report, Request, State};
 
-    fn request(files: &Fingerprint) -> (Request, Call) {
-        let call = Call::default();
+    fn request(files: &Fingerprint) -> (Request, mpsc::Receiver<Option<Value>>) {
+        let (reply, answer) = mpsc::channel();
         let request = Request {
             path: PathBuf::from("/p/src/main.rs"),
             root: PathBuf::from("/p"),
             directory: PathBuf::from("/p/target/mcp"),
             files: files.clone(),
-            reply: call.waker(),
+            reply,
         };
-        (request, call)
+        (request, answer)
     }
 
-    fn checked(call: &Call) -> Option<Value> {
-        call.wait(|wake| match wake {
-            Wake::Checked(result) => Some(result),
-            _ => None,
-        })
-    }
-
-    /// The waker of a call that was cancelled.
-    fn cancelled() -> Waker {
-        let waker = Call::default().waker();
-        waker.cancel();
-        waker
-    }
-
-    fn running(files: &Fingerprint, joined: Vec<Waker>) -> Job {
+    fn running(files: &Fingerprint, joined: Vec<mpsc::Sender<Option<Value>>>) -> Job {
         Job {
             files: files.clone(),
             state: State::Running { group: 0, joined },
@@ -363,34 +354,35 @@ mod tests {
         let files = Fingerprint(1, None);
         let (heard, _hearing) = mpsc::channel();
         let mut checks = Checks::default();
-        let waiting = Call::default();
-        checks.jobs.insert(
-            PathBuf::from("/p"),
-            running(&files, vec![cancelled(), waiting.waker()]),
-        );
+        let (waiting, answer) = mpsc::channel();
+        let (gone, _) = mpsc::channel();
+        checks
+            .jobs
+            .insert(PathBuf::from("/p"), running(&files, vec![gone, waiting]));
         let (joining, joined) = request(&files);
         checks.ask(joining, &heard);
         checks.finished(Report {
             root: PathBuf::from("/p"),
             result: json!(1),
         });
-        assert_eq!(checked(&waiting), Some(json!(1)));
-        assert_eq!(checked(&joined), Some(json!(1)));
+        assert_eq!(answer.recv().unwrap(), Some(json!(1)));
+        assert_eq!(joined.recv().unwrap(), Some(json!(1)));
         assert!(
             checks.jobs.is_empty(),
             "a result some call took is not kept"
         );
 
+        let (cancelled, _) = mpsc::channel();
         checks
             .jobs
-            .insert(PathBuf::from("/p"), running(&files, vec![cancelled()]));
+            .insert(PathBuf::from("/p"), running(&files, vec![cancelled]));
         checks.finished(Report {
             root: PathBuf::from("/p"),
             result: json!(2),
         });
         let (taking, taken) = request(&files);
         checks.ask(taking, &heard);
-        assert_eq!(checked(&taken), Some(json!(2)));
+        assert_eq!(taken.recv().unwrap(), Some(json!(2)));
         assert!(checks.jobs.is_empty(), "a kept result is taken once");
     }
 }
