@@ -6,6 +6,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.88 (2026-11-21)
+
+- rawr mcp's `wait` returns when the started program prints, not only at its next event; rawr's own progress lines don't end it. (#2267)
+- rawr mcp's input and screenshot reach a program's minimized window instead of saying it shows no window. (#2255)
+
 ## 0.4.87 (2026-11-21)
 
 - rawr mcp's `start`, `run` and `check` take `package`, `bin`, `features`, `no_default_features`, `all_features` and `env`, as `rawr run` takes `-p`, `--bin` and the feature flags; `env` sets variables for one call's build and program, and a started program keeps them across reloads. (#2398)

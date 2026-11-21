@@ -8,6 +8,14 @@
   },
   "releases": [
     {
+      "version": "0.4.88",
+      "date": "2026-11-21",
+      "entries": [
+        {"text":"rawr mcp's `wait` returns when the started program prints, not only at its next event; rawr's own progress lines don't end it.","issues":[2267]},
+        {"text":"rawr mcp's input and screenshot reach a program's minimized window instead of saying it shows no window.","issues":[2255]}
+      ]
+    },
+    {
       "version": "0.4.87",
       "date": "2026-11-21",
       "entries": [

@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-21",
-  "version": "0.4.87",
+  "version": "0.4.88",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,14 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.88",
+        "date": "2026-11-21",
+        "entries": [
+          {"text":"rawr mcp's `wait` returns when the started program prints, not only at its next event; rawr's own progress lines don't end it.","issues":[2267]},
+          {"text":"rawr mcp's input and screenshot reach a program's minimized window instead of saying it shows no window.","issues":[2255]}
+        ]
+      },
       {
         "version": "0.4.87",
         "date": "2026-11-21",
@@ -5672,7 +5680,7 @@
     {"issue":2252,"title":"Find which searched directory another build changed under extraction, and close the window","state":"open","category":"Shared dependency cache (D607)"},
     {"issue":2253,"title":"A cold iced emulator test spends about 10 minutes building the API","state":"open","category":"Health"},
     {"issue":2254,"title":"A test that panics in a dependency's code ends `rawr test` as a crash, where libtest reports it FAILED with a summary","state":"closed","category":"Divergences from rustc","release":"0.4.18"},
-    {"issue":2255,"title":"rawr mcp input and screenshot say 'the program shows no window' when its only window is minimized","state":"open","category":"Health"},
+    {"issue":2255,"title":"rawr mcp input and screenshot say 'the program shows no window' when its only window is minimized","state":"closed","category":"Health","release":"0.4.88"},
     {"issue":2256,"title":"inspect reads `self` deeper inside an expression on it","state":"closed","category":"Health","release":"0.4.85"},
     {"issue":2257,"title":"inspect lists a compiler-made `i` binding and drops a moved parameter at some steps","state":"closed","category":"Health","release":"0.4.85"},
     {"issue":2258,"title":"One debugger session per run that any number of shells attach to, with rawr mcp as its first shell","state":"closed","category":"Health","release":"0.4.22"},
@@ -5684,7 +5692,7 @@
     {"issue":2264,"title":"eval in a program with Rust dependencies, end to end","state":"closed","category":"Health"},
     {"issue":2265,"title":"eval paused at a match arm or another expression position fails to parse","state":"closed","category":"Health","release":"0.4.85"},
     {"issue":2266,"title":"A shell attaching to a plain `rawr run` restarts the program to register a debugger, losing its state","state":"closed","category":"Health","release":"0.4.29"},
-    {"issue":2267,"title":"rawr mcp's `wait` returns a started program's output only with the next event","state":"open","category":"Health"},
+    {"issue":2267,"title":"rawr mcp's `wait` returns a started program's output only with the next event","state":"closed","category":"Health","release":"0.4.88"},
     {"issue":2268,"title":"The inspector runs in the browser universe behind a feature, with pauses suspended through JSPI","state":"closed","category":"Platforms","release":"0.4.37"},
     {"issue":2269,"title":"Pause inside a browser callback (iced's update and view, ratzilla's draw) in the playground debugger","state":"open","category":"Platforms"},
     {"issue":2270,"title":"The playground's iced debugger shell: the window shell built for wasm","state":"open","category":"Platforms"},
@@ -5827,7 +5835,8 @@
     {"issue":2407,"title":"The graph budget rides in plan::Plan and plan::Capture, so the account registry keeps two locks","state":"open","category":"Health"},
     {"issue":2408,"title":"Importer integration fixtures extract once per test thread now that contracts are not Sync","state":"open","category":"Health"},
     {"issue":2409,"title":"Bind the visible fields of the crate types a runner already crosses, so eval can read them without a rebuild","state":"open","category":"Health"},
-    {"issue":2410,"title":"Offer to rebuild with an eval's missing use and re-run the program to the same pause","state":"open","category":"Health"}
+    {"issue":2410,"title":"Offer to rebuild with an eval's missing use and re-run the program to the same pause","state":"open","category":"Health"},
+    {"issue":2411,"title":"The session's hello says which output it hears: the engine's at a terminal, all of it when a shell started the run","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -8556,8 +8565,8 @@
             {"number":1453,"title":"rawr mcp input stops reaching a running iced app after ~150 calls while it keeps drawing; clicks…","state":"open"},
             {"number":1964,"title":"rawr mcp screenshot right after start reports 'shows no window yet' before a restarted program's window opens","state":"closed"},
             {"number":1542,"title":"An abandoned rawr mcp wait takes the events a later wait needed, through one shared given cursor","state":"closed"},
-            {"number":2255,"title":"rawr mcp input and screenshot say 'the program shows no window' when its only window is minimized","state":"open"},
-            {"number":2267,"title":"rawr mcp's `wait` returns a started program's output only with the next event","state":"open"}
+            {"number":2255,"title":"rawr mcp input and screenshot say 'the program shows no window' when its only window is minimized","state":"closed"},
+            {"number":2267,"title":"rawr mcp's `wait` returns a started program's output only with the next event","state":"closed"}
           ],
           "milestone": "0.5"
         },
