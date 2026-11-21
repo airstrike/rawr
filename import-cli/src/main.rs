@@ -12,7 +12,16 @@ fn main() -> ExitCode {
             color::label(color::Level::Warning)
         );
     }
-    rawr_import_cli::command::main(std::env::args_os().skip(1).collect())
+    // A panic's message lands below rawr's last line, not on its status
+    // line.
+    let reported = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic| {
+        rawr_import::progress::flush();
+        reported(panic);
+    }));
+    let code = rawr_import_cli::command::main(std::env::args_os().skip(1).collect());
+    rawr_import::progress::flush();
+    code
 }
 
 /// Make SIGINT, SIGTERM and SIGHUP retire every child process group this
@@ -43,6 +52,7 @@ fn retire_on_termination() -> std::io::Result<()> {
                 }
             };
             let _owned = rawr_import::process::retire_owned();
+            rawr_import::process::settle();
             std::process::exit(128 + signal as i32);
         })
         .map(drop)

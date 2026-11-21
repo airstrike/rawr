@@ -19,20 +19,18 @@ const RESET: &[u8] = b"\x1b[<99u\
 \x1b[?1049l\
 \x1b[<99u\x1b[?25h\x1b[0m";
 
-/// Print `line` on stderr, or hold it until the terminal is restored when a
-/// program holds it raw.
+/// Print `line` on stderr above the status line, or hold it for the
+/// terminal's restore when a program holds it raw. The printer thread
+/// writes it, and this returns once it is written or held.
 pub fn say(line: impl std::fmt::Display) {
-    let line = line.to_string();
-    if imp::raw()
-        && let Ok(mut held) = imp::HELD.lock()
-    {
-        held.push(line);
-        return;
-    }
-    eprint!("{line}");
-    if !line.ends_with('\n') {
-        eprintln!();
-    }
+    crate::progress::print(line.to_string());
+}
+
+/// Put the terminal back as a runner's end does, then write all that rawr
+/// still holds: the last thing a process does after it retired its runners.
+pub fn settle() {
+    imp::restore();
+    crate::progress::flush();
 }
 
 /// Whether a program holds the terminal raw, so rawr writes nothing to it.
@@ -46,7 +44,7 @@ pub(super) use imp::{give, restore, take_back, wake};
 #[cfg(unix)]
 mod imp {
     use std::io::{IsTerminal as _, Write as _};
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::OnceLock;
 
     use rustix::process::{getpgrp, kill_process_group, Pid, Signal};
     use rustix::termios::{
@@ -56,8 +54,6 @@ mod imp {
 
     /// The terminal's modes before the first runner had it, set once.
     static SAVED: OnceLock<Termios> = OnceLock::new();
-    /// Lines [`super::say`] held while a program had the terminal raw.
-    pub(super) static HELD: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
     /// Whether stdin is a terminal a program holds raw: without line
     /// editing, as every full-screen program sets it.
@@ -126,14 +122,7 @@ mod imp {
             let _ = tcsetattr(&stdin, OptionalActions::Now, saved);
             write_reset();
         }
-        crate::progress::clear_left();
-        let held = HELD
-            .lock()
-            .map(|mut held| std::mem::take(&mut *held))
-            .unwrap_or_default();
-        for line in held {
-            super::say(line);
-        }
+        crate::progress::restored();
     }
 
     fn same(left: &Termios, right: &Termios) -> bool {
@@ -165,10 +154,6 @@ mod imp {
 
 #[cfg(not(unix))]
 mod imp {
-    use std::sync::Mutex;
-
-    pub(super) static HELD: Mutex<Vec<String>> = Mutex::new(Vec::new());
-
     pub(super) fn raw() -> bool {
         false
     }
