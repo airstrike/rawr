@@ -16,13 +16,23 @@ use rawr_import::record::{Instance, Record};
 use super::graph::Graph;
 
 /// One instance the support table holds: the path the generic function's
-/// call names, its instance entry's path from the crate root, and its type
-/// arguments, written from the crate root.
+/// call names, its instance entry's path from the crate root, its type
+/// arguments, written from the crate root, and the name of their tuple, as
+/// `type_name` names it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Entry {
     pub(crate) path: String,
     pub(crate) function: String,
     pub(crate) types: Vec<String>,
+    pub(crate) name: String,
+}
+
+impl Entry {
+    /// The key the runner finds the instance by: its path, with the hash of
+    /// its types' tuple's name, as the resolver names it (`key`).
+    pub(crate) fn key(&self) -> String {
+        format!("{}#{}", self.path, key(&self.name))
+    }
 }
 
 /// Where the project whose Rawr directory is `rawr` keeps its record.
@@ -157,8 +167,9 @@ pub fn kept_in(rawr: &Path) -> Record {
 }
 
 /// The name rawr gives the instance of a generic function whose types'
-/// tuple is named `name`, as `type_name` names it: FNV-1a of the name, as
-/// the shadow crate's `keyed` hashes it at run time.
+/// tuple is named `name`, as `type_name` names it: FNV-1a of the name. The
+/// shadow crate's instance table holds each instance's key as a literal
+/// ([`Entry::key`]).
 #[must_use]
 pub(crate) fn key(name: &str) -> String {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
@@ -197,6 +208,7 @@ impl Graph {
                     function: generic.get(&instance.path)?.clone(),
                     path: instance.path,
                     types: instance.types,
+                    name: instance.name,
                 })
             })
             .collect()

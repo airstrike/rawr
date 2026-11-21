@@ -11,10 +11,8 @@
 //! site of the program's it stands for (`at`).
 
 use std::cell::Cell;
-use std::collections::{HashMap, HashSet};
 use std::panic::Location;
 use std::ptr::NonNull;
-use std::sync::{Mutex, PoisonError};
 
 use super::held::{self, Held};
 use crate::{capability, Dynamic, EvalAltResult, ImmutableString, Position};
@@ -98,21 +96,10 @@ fn stood_for(location: Location<'static>, here: &Location<'_>) -> Location<'stat
     CALLER.get().unwrap_or(location)
 }
 
-/// The file names of the locations rawr made, each followed by the NUL
-/// byte `Location::file_as_c_str` reads, by their text.
-static FILES: Mutex<Option<HashMap<Box<str>, &'static str>>> = Mutex::new(None);
-
-/// The locations a crate borrows for good, one per location.
-static PLACED: Mutex<Option<HashSet<&'static Location<'static>>>> = Mutex::new(None);
-
-/// Whether `file` is the name of a location rawr made.
+/// Whether `file` is the name of a location rawr made, which keeps its
+/// names with the NUL byte `Location::file_as_c_str` reads after each.
 fn made(file: &str) -> bool {
-    FILES
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .as_ref()
-        .and_then(|files| files.get(file))
-        .is_some_and(|kept| std::ptr::eq(*kept, file))
+    crate::scope::lasting().is_terminated(file)
 }
 
 /// The file name `file`, kept for good with its NUL byte; `None` for one
@@ -121,28 +108,13 @@ fn kept(file: &str) -> Option<&'static str> {
     if file.contains('\0') {
         return None;
     }
-    let mut files = FILES.lock().unwrap_or_else(PoisonError::into_inner);
-    let files = files.get_or_insert_with(HashMap::new);
-    if let Some(kept) = files.get(file) {
-        return Some(kept);
-    }
-    let terminated: &'static str = Box::leak(format!("{file}\0").into_boxed_str());
-    let kept = &terminated[..file.len()];
-    files.insert(file.into(), kept);
-    Some(kept)
+    Some(crate::scope::lasting().terminated(file))
 }
 
 /// A `&'static` borrow of `location`, as a crate's `&'static Location`
 /// takes it: the one kept for every equal location.
 fn placed(location: Location<'static>) -> &'static Location<'static> {
-    let mut placed = PLACED.lock().unwrap_or_else(PoisonError::into_inner);
-    let placed = placed.get_or_insert_with(HashSet::new);
-    if let Some(kept) = placed.get(&location) {
-        return kept;
-    }
-    let kept: &'static Location<'static> = Box::leak(Box::new(location));
-    placed.insert(kept);
-    kept
+    crate::scope::lasting().location(location)
 }
 
 /// std's location's parts, in a layout of rawr's own.

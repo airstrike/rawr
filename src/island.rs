@@ -843,6 +843,14 @@ fn put_kept(handle: u64, borrow: Borrow, value: Dynamic) {
     drop(released);
 }
 
+/// `text`, a `&'static str` the program gives native code, kept once per
+/// text for as long as the program runs, as a literal is, in the process's
+/// lasting pins (`scope::lasting`).
+#[unsafe(no_mangle)]
+pub fn __rawr_island_lasting_v1(text: &str) -> &'static str {
+    crate::scope::lasting().text(text)
+}
+
 /// Register the native `main` to start: the shadow crate's island module
 /// calls this from the program's Rawr `main`.
 #[unsafe(no_mangle)]

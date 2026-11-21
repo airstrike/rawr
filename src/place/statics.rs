@@ -18,7 +18,7 @@ use super::{failure, Access, Operation, Place, Storage};
 use crate::host::runtime::Witness;
 use crate::{Dynamic, RawrResult, RawrResultOf, Shared};
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::{Mutex, PoisonError};
 
 /// One static's place, shared by every generation that declares it alike.
@@ -39,10 +39,30 @@ struct Leaked(Written);
 /// The statics being built that refer to each other: how many were given
 /// as an address before they were written and aren't written yet, and the
 /// statics written since the first was.
-#[derive(Default)]
 struct Building {
     open: usize,
     cycle: Cycle,
+}
+
+/// Every static's slot, by its key, kept across generations, and the
+/// statics being built. Program threads read and initialize statics, so
+/// they share one lock. A slot's own lock is taken before this one, never
+/// after.
+struct Statics {
+    slots: BTreeMap<Box<str>, Slot>,
+    building: Building,
+}
+
+static STATICS: Mutex<Statics> = Mutex::new(Statics {
+    slots: BTreeMap::new(),
+    building: Building {
+        open: 0,
+        cycle: Cycle::new(),
+    },
+});
+
+fn statics() -> std::sync::MutexGuard<'static, Statics> {
+    STATICS.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl Storage for Leaked {
@@ -171,11 +191,8 @@ pub fn given<T: Any + crate::func::SendSync>(witness: Witness, value: &'static T
 #[must_use]
 pub fn slot(key: &str) -> Slot {
     let reserve = || Slot(Shared::new(Mutex::new(State::Reserved { memory: None })));
-    static SLOTS: std::sync::OnceLock<Mutex<HashMap<Box<str>, Slot>>> = std::sync::OnceLock::new();
-    SLOTS
-        .get_or_init(Mutex::default)
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+    statics()
+        .slots
         .entry(key.into())
         .or_insert_with(reserve)
         .clone()
@@ -183,11 +200,7 @@ pub fn slot(key: &str) -> Slot {
 
 /// The statics being built that refer to each other, for `change`.
 fn building<R>(change: impl FnOnce(&mut Building) -> R) -> R {
-    static BUILDING: Mutex<Building> = Mutex::new(Building {
-        open: 0,
-        cycle: Cycle::new(),
-    });
-    change(&mut BUILDING.lock().unwrap_or_else(PoisonError::into_inner))
+    change(&mut statics().building)
 }
 
 impl Slot {

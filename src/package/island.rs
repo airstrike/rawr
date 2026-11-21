@@ -2866,8 +2866,8 @@ impl<'a> Generator<'a> {
         }
         let owned = !matches!(owner, Owner::None) || object;
         if generic {
-            // The instance's own function, keyed by its types' names and the
-            // impl each boxed argument names itself by.
+            // The instance's own function, by the key its entry is given
+            // and the impl each boxed argument names itself by.
             let given = passes
                 .iter()
                 .enumerate()
@@ -2877,16 +2877,11 @@ impl<'a> Generator<'a> {
                 })
                 .collect::<Vec<_>>();
             let _ = if given.is_empty() {
-                writeln!(
-                    text,
-                    "    let mut __call = {island}::call({island}::keyed({path:?}, \
-                     ::std::any::type_name::<{tuple}>()), {owned});"
-                )
+                writeln!(text, "    let mut __call = {island}::call(__key, {owned});")
             } else {
                 writeln!(
                     text,
-                    "    let mut __call = {island}::call({island}::keyed_given({path:?}, \
-                     ::std::any::type_name::<{tuple}>(), &[{}]), {owned});",
+                    "    let mut __call = {island}::call(__key, {owned}).given(&[{}]);",
                     given.join(", ")
                 )
             };
@@ -4773,7 +4768,7 @@ fn instance_header(
         format!("<{}>", written.join(", "))
     };
     let header = format!(
-        "pub(crate) unsafe fn {name}{generics}(__arguments: *mut (), __out: *mut ())\nwhere\n    {},",
+        "pub(crate) unsafe fn {name}{generics}(__key: &'static str, __arguments: *mut (), __out: *mut ())\nwhere\n    {},",
         predicates.join(",\n    ")
     );
     (name, header)
@@ -5336,15 +5331,18 @@ pub(crate) fn support(
         .collect::<Vec<_>>()
         .join(", ");
     // Each instance native code calls a generic function at, by the path
-    // its call names and the name of the tuple of its types (D869).
+    // its call names and the name of the tuple of its types (D869), with
+    // the key the runner finds it by.
     let instances = instances
         .iter()
         .map(|instance| {
             let types = instance.types.join(", ");
             format!(
-                "({:?}, ::std::any::type_name::<({types},)> as fn() -> &'static str, \
+                "({:?}, ::std::any::type_name::<({types},)> as fn() -> &'static str, {:?}, \
                  {}::<{types}> as Instance)",
-                instance.path, instance.function
+                instance.path,
+                instance.key(),
+                instance.function
             )
         })
         .collect::<Vec<_>>()
@@ -5418,6 +5416,7 @@ unsafe extern "Rust" {
     ) -> ::std::result::Result<*mut (), u8>;
     fn __rawr_scope_release_v1(nonce: u64, shared: bool);
     fn __rawr_island_start_v1(entry: fn() -> i32);
+    fn __rawr_island_lasting_v1(text: &str) -> &'static str;
     fn __rawr_island_objects_v2(makers: &[(&'static str, Maker)], handles: &[&'static str]);
     fn __rawr_island_release_v1(handle: u64);
     fn __rawr_island_unanchor_v1(address: u64, ty: u64);
@@ -5463,48 +5462,10 @@ pub fn uncalled(path: &str) -> ! {
     )
 }
 
-/// A generic function's instance entry: it reads the call's arguments
-/// as the tuple of the types they are and writes the result in place.
-pub type Instance = unsafe fn(*mut (), *mut ());
-
-/// The path a generic function's instance is found by: its own, with
-/// the hash of its types' tuple's name, as rawr names the instance
-/// (`package::instances::key`), interned for the program's life.
-pub fn keyed(path: &'static str, name: &'static str) -> &'static str {
-    static KEYS: ::std::sync::Mutex<::std::collections::BTreeMap<(&'static str, &'static str), &'static str>> =
-        ::std::sync::Mutex::new(::std::collections::BTreeMap::new());
-    let mut keys = KEYS.lock().unwrap_or_else(::std::sync::PoisonError::into_inner);
-    if let ::std::option::Option::Some(key) = keys.get(&(path, name)) {
-        return key;
-    }
-    // FNV-1a, as `package::instances::key` hashes it.
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in name.bytes() {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(0x0100_0000_01b3);
-    }
-    let key: &'static str = ::std::boxed::Box::leak(::std::format!("{path}#{hash:016x}").into_boxed_str());
-    keys.insert((path, name), key);
-    key
-}
-
-/// [`keyed`], and the name each impl of a marked trait a boxed
-/// argument is of gives itself (`+Content`), as the resolver compiles
-/// one instance for each impl.
-pub fn keyed_given(path: &'static str, name: &'static str, given: &[&'static str]) -> &'static str {
-    // By `base`, then by the names given.
-    type Keys = ::std::collections::BTreeMap<&'static str, ::std::collections::BTreeMap<::std::vec::Vec<&'static str>, &'static str>>;
-    static KEYS: ::std::sync::Mutex<Keys> = ::std::sync::Mutex::new(::std::collections::BTreeMap::new());
-    let base = keyed(path, name);
-    let mut keys = KEYS.lock().unwrap_or_else(::std::sync::PoisonError::into_inner);
-    let keys = keys.entry(base).or_default();
-    if let ::std::option::Option::Some(key) = keys.get(given) {
-        return key;
-    }
-    let key: &'static str = ::std::boxed::Box::leak(::std::format!("{base}{}", given.concat()).into_boxed_str());
-    keys.insert(given.to_vec(), key);
-    key
-}
+/// A generic function's instance entry: given the key the runner finds
+/// the instance by, it reads the call's arguments as the tuple of the
+/// types they are and writes the result in place.
+pub type Instance = unsafe fn(&'static str, *mut (), *mut ());
 
 /// The panic of a failed `reply`: a marked function's panic, which the
 /// runner printed as Rust prints it at its place in the marked file,
@@ -6752,17 +6713,8 @@ impl<T, E> Outcome for ::std::result::Result<T, E> {
 /// `text`, kept once per text for as long as the program runs, as a
 /// literal is: a `&'static str` the program gives native code.
 fn lasting(text: &str) -> &'static str {
-    static TEXTS: ::std::sync::Mutex<::std::collections::BTreeSet<&'static str>> =
-        ::std::sync::Mutex::new(::std::collections::BTreeSet::new());
-    let mut texts = TEXTS.lock().unwrap_or_else(::std::sync::PoisonError::into_inner);
-    match texts.get(text) {
-        Some(kept) => kept,
-        None => {
-            let kept: &'static str = ::std::boxed::Box::leak(text.into());
-            texts.insert(kept);
-            kept
-        }
-    }
+    // SAFETY: as for `register`.
+    unsafe { __rawr_island_lasting_v1(text) }
 }
 
 /// How a value of `T` comes back: by the wire format when `T` crosses
@@ -7455,6 +7407,9 @@ pub fn ended<T: ?Sized>(value: &T) {
 /// borrow: they stay borrowed until the call is sent and answered.
 pub struct Call<'c> {
     path: &'static str,
+    /// The key with the names the impls of a call's boxed arguments give
+    /// themselves ([`Call::given`]).
+    given: ::std::option::Option<::std::string::String>,
     owned: bool,
     pinned: bool,
     in_place: u8,
@@ -7484,6 +7439,7 @@ impl<'c> Call<'c> {
     pub fn new(path: &'static str, owned: bool) -> Self {
         Self {
             path,
+            given: ::std::option::Option::None,
             owned,
             pinned: false,
             in_place: 0,
@@ -7498,6 +7454,13 @@ impl<'c> Call<'c> {
             lent: ::std::vec::Vec::new(),
             borrows: ::std::marker::PhantomData,
         }
+    }
+    /// The call of a generic function's instance whose boxed arguments
+    /// are of the impls of a marked trait that name themselves `given`
+    /// (`+Content`), as the resolver compiles one instance for each impl.
+    pub fn given(mut self, given: &[&'static str]) -> Self {
+        self.given = ::std::option::Option::Some(::std::format!("{}{}", self.path, given.concat()));
+        self
     }
     /// An argument lent to the interpreter for the call (D558.3), as
     /// ratatui's `&mut Frame<'_>` is. The call runs on this thread
@@ -7728,7 +7691,13 @@ impl<'c> Call<'c> {
         // call runs.
         let mut natives = ::std::vec::Vec::new();
         let reply = unsafe {
-            __rawr_island_call_v4(self.path, &bytes, &mut self.values.1, &self.lent, &mut natives)
+            __rawr_island_call_v4(
+                self.given.as_deref().unwrap_or(self.path),
+                &bytes,
+                &mut self.values.1,
+                &self.lent,
+                &mut natives,
+            )
         };
         match reply.first() {
             Some(0) => Reply {
@@ -7874,8 +7843,9 @@ pub mod __rawr_island {
 
     /// Each instance native code calls a generic function at, as the
     /// record of the crate's last check found them (D869): the function's
-    /// path, the name of the tuple of its types and its entry there.
-    static INSTANCES: &[(&str, fn() -> &'static str, Instance)] = &__INSTANCE_LIST__;
+    /// path, the name of the tuple of its types, the key the runner finds
+    /// the instance by and its entry there.
+    static INSTANCES: &[(&str, fn() -> &'static str, &'static str, Instance)] = &__INSTANCE_LIST__;
 
     /// The call of the marked function at `path`, the crate's [`MAKERS`]
     /// registered first, once.
@@ -7895,10 +7865,10 @@ pub mod __rawr_island {
     /// `arguments` holds the function's arguments, as a tuple in order,
     /// which the instance moves out; `out` is a place for its result.
     pub unsafe fn instance(path: &'static str, name: &'static str, arguments: *mut (), out: *mut ()) {
-        for (instance, named, entry) in INSTANCES {
+        for (instance, named, key, entry) in INSTANCES {
             if *instance == path && named() == name {
                 // SAFETY: as the caller's.
-                return unsafe { entry(arguments, out) };
+                return unsafe { entry(key, arguments, out) };
             }
         }
         ::std::panic!(
@@ -8504,9 +8474,8 @@ mod tests {
             "        crate::__rawr_island::instance(\n            \"physics::generic\",\n            \
              ::std::any::type_name::<(T,)>(),\n",
             "pub(crate) unsafe fn __rawr_instance_generic<T: Into<String>>\
-             (__arguments: *mut (), __out: *mut ())\nwhere\n    T: 'static, {\n",
-            "call(crate::__rawr_island::keyed(\"physics::generic\", \
-             ::std::any::type_name::<(T,)>()), false);",
+             (__key: &'static str, __arguments: *mut (), __out: *mut ())\nwhere\n    T: 'static, {\n",
+            "let mut __call = crate::__rawr_island::call(__key, false);",
         ] {
             assert!(text.contains(expected), "{expected}\n{text}");
         }
@@ -9605,7 +9574,7 @@ mod tests {
             "\"physics::Sidebar::spacing\",\n                \
              ::std::any::type_name::<(Message,)>(),",
             "pub(crate) unsafe fn __rawr_instance_Sidebar_a_Message_spacing<'a, Message: 'a>\
-             (__arguments: *mut (), __out: *mut ())\nwhere\n    Message: 'static, {",
+             (__key: &'static str, __arguments: *mut (), __out: *mut ())\nwhere\n    Message: 'static, {",
             "let (mut __self,__a0,): (Sidebar<'a, Message>,ui::Pixels,) = unsafe",
             "let (__self,): (&mut Sidebar<'a, Message>,) = unsafe",
             "fn __rawr_instance_From_Group_a_Message_Element_a_Message_from<'a, Message: 'a>",
@@ -9651,9 +9620,8 @@ mod tests {
             "where\n        Self: ::std::marker::Sized,\n        Message: 'static,",
             "let __a0: ::std::boxed::Box<dyn crate::physics::__RawrGivenIntoContent<'a, Message> + '_> = \
              { let __value = __a0; ::std::boxed::Box::new(__value) };",
-            "crate::__rawr_island::keyed_given(\"physics::Sidebar::content\", \
-             ::std::any::type_name::<(Message,)>(), \
-             &[crate::physics::__RawrGivenIntoContent::__rawr_given(&*__a0)])",
+            "crate::__rawr_island::call(__key, true)\
+             .given(&[crate::physics::__RawrGivenIntoContent::__rawr_given(&*__a0)])",
             "crate::physics::__RawrGivenIntoContent::__rawr_give_boxed(__a0, &mut __call);",
             "fn __rawr_give(self, __call: &mut crate::__rawr_island::Call<'_>)\n    where\n        Message: 'static,\n    {",
             "\"+Content\"",

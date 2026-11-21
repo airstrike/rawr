@@ -3,6 +3,7 @@
 mod bound;
 mod catalog;
 pub mod installation;
+pub(crate) mod live;
 pub mod scheduler;
 pub mod source;
 

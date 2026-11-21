@@ -532,12 +532,19 @@ pub fn default_of(path: &str) -> RawrResultOf<Dynamic> {
 
 /// A function of a script impl where a runner's impl for the owner's proxy
 /// calls it (D594): the function the running program holds at its path,
-/// its owner's path and the member (`Arc::Program<Message>::draw`). It is
-/// found once per generation, with the witness of each parameter, as a
-/// [`Slot`] holds a function item's callable, so a call looks nothing up.
+/// its owner's path and the member (`Arc::Program<Message>::draw`). Each
+/// thread that calls it finds it once per generation, with the witness of
+/// each parameter, and keeps what it found by the member's place in the
+/// runner, so a call looks up no path and takes no lock.
 pub struct Member {
     path: &'static str,
-    found: std::sync::RwLock<Option<std::sync::Arc<Found>>>,
+}
+
+thread_local! {
+    /// What each [`Member`] this thread called was found as, by the
+    /// member's address, in the generation it was found in.
+    static FOUND: std::cell::RefCell<std::collections::HashMap<usize, std::sync::Arc<Found>>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
 /// What a [`Member`] found in one generation.
@@ -551,10 +558,7 @@ impl Member {
     /// The member at `path`, found at its first call.
     #[must_use]
     pub const fn new(path: &'static str) -> Self {
-        Self {
-            path,
-            found: std::sync::RwLock::new(None),
-        }
+        Self { path }
     }
 
     /// Begin a call from native code into the member, in the generation
@@ -570,28 +574,24 @@ impl Member {
     }
 
     /// The member in the generation current on this thread, found again
-    /// only when that generation is another.
+    /// only when that generation is another than this thread found it in.
     fn found(&self) -> RawrResultOf<std::sync::Arc<Found>> {
         let program = crate::future::current_program().ok_or_else(|| {
             crate::future::error("rawr: no program runs script code on this thread")
         })?;
-        let read = |found: &Option<std::sync::Arc<Found>>| {
-            found
-                .as_ref()
-                .filter(|found| {
-                    std::ptr::addr_eq(
-                        std::sync::Arc::as_ptr(&found.program),
-                        std::sync::Arc::as_ptr(&program),
-                    )
-                })
-                .cloned()
-        };
-        if let Some(found) = read(
-            &self
-                .found
-                .read()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        ) {
+        let address = std::ptr::from_ref(self).addr();
+        // A thread whose own values are being dropped finds it each call.
+        let kept = FOUND
+            .try_with(|found| found.borrow().get(&address).cloned())
+            .ok()
+            .flatten()
+            .filter(|found| {
+                std::ptr::addr_eq(
+                    std::sync::Arc::as_ptr(&found.program),
+                    std::sync::Arc::as_ptr(&program),
+                )
+            });
+        if let Some(found) = kept {
             return Ok(found);
         }
         let function = program.member(self.path).ok_or_else(|| {
@@ -602,10 +602,13 @@ impl Member {
             callable: crate::future::Callable::of_item(function, program.clone()),
             program,
         });
-        *self
-            .found
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(found.clone());
+        // The one found before drops once the table is let go, as its drop
+        // may call back into script code.
+        let before = FOUND
+            .try_with(|kept| kept.borrow_mut().insert(address, found.clone()))
+            .ok()
+            .flatten();
+        drop(before);
         Ok(found)
     }
 }

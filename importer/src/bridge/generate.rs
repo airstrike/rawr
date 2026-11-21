@@ -4632,11 +4632,10 @@ pub fn frame_dispatch(arguments: &mut Arguments<'_, '_, '_>, position: usize, sl
 }
 
 /// Strings a call takes as `&'static str`, as iced's `Font::new` does,
-/// pinned for as long as the runner lives.
+/// pinned for as long as the runner lives (`scope::lasting`).
 #[allow(dead_code)]
 pub fn static_pins() -> &'static __rawr_internal::scope::Pins {
-    static PINS: std::sync::OnceLock<__rawr_internal::scope::Pins> = std::sync::OnceLock::new();
-    PINS.get_or_init(__rawr_internal::scope::Pins::lasting)
+    __rawr_internal::scope::lasting()
 }
 
 /// Whether each argument at `positions` is text the program lends at
@@ -4655,15 +4654,7 @@ pub fn lent_static(arguments: &Arguments<'_, '_, '_>, positions: &[usize]) -> bo
 /// as the runner lives: once for each content, however often it is given.
 #[allow(dead_code)]
 pub fn static_bytes(bytes: Vec<u8>) -> &'static [u8] {
-    static KEPT: std::sync::Mutex<Option<std::collections::HashSet<&'static [u8]>>> = std::sync::Mutex::new(None);
-    let mut kept = KEPT.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let kept = kept.get_or_insert_with(std::collections::HashSet::new);
-    if let Some(found) = kept.get(bytes.as_slice()) {
-        return found;
-    }
-    let leaked: &'static [u8] = Box::leak(bytes.into_boxed_slice());
-    kept.insert(leaked);
-    leaked
+    static_pins().bytes(bytes)
 }
 
 /// A scalar a slice [`static_slice`] keeps holds: equal slices are those of
@@ -4708,26 +4699,7 @@ scalar_bits! {
 /// found without looking at any other.
 #[allow(dead_code)]
 pub fn static_slice<T: Scalar>(values: Vec<T>) -> &'static [T] {
-    type Kept = std::collections::HashMap<(std::any::TypeId, u64), Vec<&'static (dyn std::any::Any + Send + Sync)>>;
-    static KEPT: std::sync::Mutex<Option<Kept>> = std::sync::Mutex::new(None);
-    let same = |kept: &[T]| kept.len() == values.len() && kept.iter().zip(&values).all(|(kept, value)| kept.bits() == value.bits());
-    let mut hasher = std::hash::DefaultHasher::new();
-    for value in &values {
-        std::hash::Hasher::write_u64(&mut hasher, value.bits());
-    }
-    let key = (std::any::TypeId::of::<T>(), std::hash::Hasher::finish(&hasher));
-    let mut kept = KEPT.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let bucket = kept.get_or_insert_with(Kept::new).entry(key).or_default();
-    if let Some(found) = bucket
-        .iter()
-        .filter_map(|kept| kept.downcast_ref::<&'static [T]>())
-        .find(|kept| same(kept))
-    {
-        return found;
-    }
-    let leaked: &'static [T] = Box::leak(values.into_boxed_slice());
-    bucket.push(Box::leak(Box::new(leaked)));
-    leaked
+    static_pins().scalars(values, T::bits)
 }
 
 /// [`take_native`] at the type `witness` names, which Rust code can't write.
@@ -27486,8 +27458,8 @@ fn render_impl_function(
             values.iter().map(|value| crossed(value)).collect::<Vec<_>>().join(", ")
         ))
     );
-    // The member is found once per generation, with its witnesses, and
-    // each call enters that generation (`crossing::Member`).
+    // Each thread finds the member once per generation, with its witnesses,
+    // and each call enters that generation (`crossing::Member`).
     let entered = format!(
         "static MEMBER: __rawr_internal::crossing::Member = __rawr_internal::crossing::Member::new({:?});
         let member = MEMBER.enter();",
