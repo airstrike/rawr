@@ -41,7 +41,7 @@ use std::sync::{mpsc, Arc};
 
 use serde_json::{json, Value};
 
-use crate::mcp::session::{Ear, Refusal, Session, Told, Wait};
+use crate::mcp::session::{Ear, Refusal, Seen, Session, Told, Wait};
 
 pub use serve::{serve, serve_on};
 
@@ -148,6 +148,18 @@ impl Adapter {
         request: Value,
         then: impl FnOnce(&mut Self, Result<Value, String>) + 'static,
     ) {
+        self.ask_seen(request, |adapter, answer| {
+            then(adapter, answer.map(|(answer, _)| answer));
+        });
+    }
+
+    /// [`Self::ask`], with how far the session's events had come when the
+    /// answer came, for an answer that says where the program is.
+    fn ask_seen(
+        &mut self,
+        request: Value,
+        then: impl FnOnce(&mut Self, Result<(Value, Seen), String>) + 'static,
+    ) {
         let Some(session) = &self.session else {
             return then(self, Err(NO_PROGRAM.to_owned()));
         };
@@ -165,8 +177,8 @@ impl Adapter {
     }
 
     /// A session's answer as the client reads it.
-    fn answered(&self, answer: Result<Value, Refusal>) -> Result<Value, String> {
-        let answer = answer.map_err(|refusal| match refusal {
+    fn answered(&self, answer: Result<(Value, Seen), Refusal>) -> Result<(Value, Seen), String> {
+        let (answer, seen) = answer.map_err(|refusal| match refusal {
             Refusal::NotRunning => format!(
                 "the program isn't running (state: {})",
                 self.session
@@ -179,7 +191,7 @@ impl Adapter {
         match answer["error"].as_str() {
             Some("not paused") => Err("the program isn't paused".to_owned()),
             Some(error) => Err(error.to_owned()),
-            None => Ok(answer),
+            None => Ok((answer, seen)),
         }
     }
 
