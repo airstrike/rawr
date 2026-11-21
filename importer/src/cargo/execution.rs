@@ -37,8 +37,10 @@ impl Scope {
         }
     }
 
-    /// Own execution before taking an exact partition; release both before a
-    /// caller can enter another cached node. This is not a reentrant launcher.
+    /// Take the project's owner lease, then the exact partition. A scope
+    /// inside a node or another scope of the same project finds the owner
+    /// lease already held on its thread and takes only the partition. Scopes
+    /// of two projects run at once, since the key carries the context.
     pub(crate) fn run<T>(&self, execute: impl FnOnce() -> crate::Result<T>) -> crate::Result<T> {
         let owned = || {
             let store = self.context.open_store()?;

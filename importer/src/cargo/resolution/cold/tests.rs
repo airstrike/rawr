@@ -170,19 +170,12 @@ impl Fixture {
             .expect("reservation recipe derives");
         store
             .with_ownership(|ownership| {
-                store.with_heavy_lease(|| {
-                    store.with_execution_lease(recipe.execution(), || {
-                        store.with_execution_bundle_reservation(
-                            ownership,
-                            &recipe,
-                            None,
-                            |attempt| {
-                                let layout = Layout::bind(attempt, store.graph_budget())?;
-                                operation(layout, &native)
-                                    .map(store::Reserved::Reuse)
-                                    .map_err(node::Error::from)
-                            },
-                        )
+                store.with_execution_lease(recipe.execution(), || {
+                    store.with_execution_bundle_reservation(ownership, &recipe, None, |attempt| {
+                        let layout = Layout::bind(attempt, store.graph_budget())?;
+                        operation(layout, &native)
+                            .map(store::Reserved::Reuse)
+                            .map_err(node::Error::from)
                     })
                 })
             })

@@ -64,15 +64,11 @@ impl Fixture {
             .context
             .discover::<resolution::BuildProduct>(b"rawr.resolution.layout-test/v1")?;
         self.store.with_ownership(|ownership| {
-            self.store.with_heavy_lease(|| {
-                self.store.with_execution_lease(recipe.execution(), || {
-                    self.store.with_execution_bundle_reservation(
-                        ownership,
-                        &recipe,
-                        None,
-                        |attempt| operation(attempt).map(store::Reserved::Reuse),
-                    )
-                })
+            self.store.with_execution_lease(recipe.execution(), || {
+                self.store
+                    .with_execution_bundle_reservation(ownership, &recipe, None, |attempt| {
+                        operation(attempt).map(store::Reserved::Reuse)
+                    })
             })
         })
     }

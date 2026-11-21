@@ -613,13 +613,14 @@ impl<'store> Evaluator<'store> {
         if let Some(hit) = self.lookup_direct(recipe, &mut recovery_required)? {
             return Ok(hit);
         }
+        // The project's owner lease is the heavy lease: it keeps the
+        // project's other heavy work out, and no other project's work
+        // shares this recipe's keys (#2399).
         self.store.with_ownership(|ownership| {
-            self.store.with_heavy_lease(|| {
-                if let Some(hit) = self.lookup_direct(recipe, &mut recovery_required)? {
-                    return Ok(hit);
-                }
-                self.execute_direct(ownership, recipe, execute, recovery_required)
-            })
+            if let Some(hit) = self.lookup_direct(recipe, &mut recovery_required)? {
+                return Ok(hit);
+            }
+            self.execute_direct(ownership, recipe, execute, recovery_required)
         })
     }
 
@@ -763,93 +764,90 @@ impl<'store> Evaluator<'store> {
         let mut repair = first.repair;
         let mut execute = Some(execute);
         self.store.with_ownership(|ownership| {
-            self.store.with_heavy_lease(|| {
-                let after_heavy = self.lookup_discoverable_scoped(recipe, &validate, &mut stale)?;
-                if let Some(hit) = after_heavy.hit {
+            let after_owner = self.lookup_discoverable_scoped(recipe, &validate, &mut stale)?;
+            if let Some(hit) = after_owner.hit {
+                self.metrics
+                    .node(K::KIND.metric(), metrics::NodeEvent::ValidatedHit);
+                return Ok(hit);
+            }
+            if after_owner.rejected && !rejection_recorded {
+                self.metrics
+                    .node(K::KIND.metric(), metrics::NodeEvent::RejectedHit);
+                rejection_recorded = true;
+            }
+            repair |= after_owner.repair;
+
+            self.store.with_execution_lease(recipe.execution, || {
+                let rechecked = self.lookup_discoverable_scoped(recipe, &validate, &mut stale)?;
+                if let Some(hit) = rechecked.hit {
                     self.metrics
                         .node(K::KIND.metric(), metrics::NodeEvent::ValidatedHit);
                     return Ok(hit);
                 }
-                if after_heavy.rejected && !rejection_recorded {
+                if rechecked.rejected && !rejection_recorded {
                     self.metrics
                         .node(K::KIND.metric(), metrics::NodeEvent::RejectedHit);
                     rejection_recorded = true;
                 }
-                repair |= after_heavy.repair;
+                repair |= rechecked.repair;
 
-                self.store.with_execution_lease(recipe.execution, || {
-                    let rechecked =
-                        self.lookup_discoverable_scoped(recipe, &validate, &mut stale)?;
-                    if let Some(hit) = rechecked.hit {
+                let in_flight = recipe.in_flight(self.store)?;
+                let (action, published) = self.store.with_execution_reservation(
+                    ownership,
+                    recipe,
+                    in_flight.as_ref(),
+                    || {
                         self.metrics
-                            .node(K::KIND.metric(), metrics::NodeEvent::ValidatedHit);
-                        return Ok(hit);
-                    }
-                    if rechecked.rejected && !rejection_recorded {
-                        self.metrics
-                            .node(K::KIND.metric(), metrics::NodeEvent::RejectedHit);
-                        rejection_recorded = true;
-                    }
-                    repair |= rechecked.repair;
-
-                    let in_flight = recipe.in_flight(self.store)?;
-                    let (action, published) = self.store.with_execution_reservation(
-                        ownership,
-                        recipe,
-                        in_flight.as_ref(),
-                        || {
-                            self.metrics
-                                .node(K::KIND.metric(), metrics::NodeEvent::ExecutedMiss);
-                            let transform = execute.take().ok_or(Error::State(
-                                "discoverable node executor was consumed before the final miss",
-                            ))?;
-                            let value = transform().map_err(Error::fresh)?;
-                            let discovered_inputs =
-                                validate(&value, budget, read_set::Scope::Consumer)?;
-                            let complete = recipe.complete(&discovered_inputs)?;
-                            let payload = value.payload()?;
-                            // An older entry at this action that no longer
-                            // checks is replaced when this one publishes (#614).
-                            match self.replay_discovered_scoped_exact(
-                                recipe,
-                                &validate,
-                                complete.action(),
-                            ) {
-                                Ok(Some(_)) => {
-                                    return Ok(crate::store::Reserved::Reuse((
-                                        complete.action(),
-                                        false,
-                                    )));
-                                }
-                                Ok(None) => {}
-                                Err(error) if rebuilds(&error) => {}
-                                Err(error) => return Err(error),
+                            .node(K::KIND.metric(), metrics::NodeEvent::ExecutedMiss);
+                        let transform = execute.take().ok_or(Error::State(
+                            "discoverable node executor was consumed before the final miss",
+                        ))?;
+                        let value = transform().map_err(Error::fresh)?;
+                        let discovered_inputs =
+                            validate(&value, budget, read_set::Scope::Consumer)?;
+                        let complete = recipe.complete(&discovered_inputs)?;
+                        let payload = value.payload()?;
+                        // An older entry at this action that no longer
+                        // checks is replaced when this one publishes (#614).
+                        match self.replay_discovered_scoped_exact(
+                            recipe,
+                            &validate,
+                            complete.action(),
+                        ) {
+                            Ok(Some(_)) => {
+                                return Ok(crate::store::Reserved::Reuse((
+                                    complete.action(),
+                                    false,
+                                )));
                             }
-                            Ok(crate::store::Reserved::Publish {
-                                result: (complete.action(), true),
-                                recipe: complete,
-                                payload,
-                                bundle: None,
-                            })
-                        },
-                    )?;
-                    self.store
-                        .hint_candidate::<K>(recipe.lookup, action, repair);
-                    if published {
-                        self.metrics
-                            .node(K::KIND.metric(), metrics::NodeEvent::Published);
-                    }
-                    self.replay_discovered_scoped_exact(recipe, &validate, action)?
-                        .ok_or(Error::State(
-                            "published discoverable node was absent during exact revalidation",
-                        ))
-                })
+                            Ok(None) => {}
+                            Err(error) if rebuilds(&error) => {}
+                            Err(error) => return Err(error),
+                        }
+                        Ok(crate::store::Reserved::Publish {
+                            result: (complete.action(), true),
+                            recipe: complete,
+                            payload,
+                            bundle: None,
+                        })
+                    },
+                )?;
+                self.store
+                    .hint_candidate::<K>(recipe.lookup, action, repair);
+                if published {
+                    self.metrics
+                        .node(K::KIND.metric(), metrics::NodeEvent::Published);
+                }
+                self.replay_discovered_scoped_exact(recipe, &validate, action)?
+                    .ok_or(Error::State(
+                        "published discoverable node was absent during exact revalidation",
+                    ))
             })
         })
     }
 
     /// Validate a discoverable bundle hit or allocate and execute one fresh
-    /// immutable bundle only after every heavyweight and exact-key recheck.
+    /// immutable bundle only after every owner and exact-key recheck.
     #[cfg(test)]
     pub(crate) fn discover_bundled<K>(
         &self,
@@ -931,100 +929,91 @@ impl<'store> Evaluator<'store> {
         let mut repair = first.repair;
         let mut execute = Some(execute);
         self.store.with_ownership(|ownership| {
-            self.store.with_heavy_lease(|| {
-                let after_heavy = self.lookup_discoverable_scoped(recipe, &validate, &mut stale)?;
-                if let Some(hit) = after_heavy.hit {
+            let after_owner = self.lookup_discoverable_scoped(recipe, &validate, &mut stale)?;
+            if let Some(hit) = after_owner.hit {
+                self.metrics
+                    .node(K::KIND.metric(), metrics::NodeEvent::ValidatedHit);
+                return Ok(hit);
+            }
+            if after_owner.rejected && !rejection_recorded {
+                self.metrics
+                    .node(K::KIND.metric(), metrics::NodeEvent::RejectedHit);
+                rejection_recorded = true;
+            }
+            repair |= after_owner.repair;
+
+            self.store.with_execution_lease(recipe.execution, || {
+                let rechecked = self.lookup_discoverable_scoped(recipe, &validate, &mut stale)?;
+                if let Some(hit) = rechecked.hit {
                     self.metrics
                         .node(K::KIND.metric(), metrics::NodeEvent::ValidatedHit);
                     return Ok(hit);
                 }
-                if after_heavy.rejected && !rejection_recorded {
+                if rechecked.rejected && !rejection_recorded {
                     self.metrics
                         .node(K::KIND.metric(), metrics::NodeEvent::RejectedHit);
                     rejection_recorded = true;
                 }
-                repair |= after_heavy.repair;
+                repair |= rechecked.repair;
 
-                self.store.with_execution_lease(recipe.execution, || {
-                    let rechecked =
-                        self.lookup_discoverable_scoped(recipe, &validate, &mut stale)?;
-                    if let Some(hit) = rechecked.hit {
-                        self.metrics
-                            .node(K::KIND.metric(), metrics::NodeEvent::ValidatedHit);
-                        return Ok(hit);
-                    }
-                    if rechecked.rejected && !rejection_recorded {
-                        self.metrics
-                            .node(K::KIND.metric(), metrics::NodeEvent::RejectedHit);
-                        rejection_recorded = true;
-                    }
-                    repair |= rechecked.repair;
-
-                    let evaluate = |attempt| {
-                        self.metrics
-                            .node(K::KIND.metric(), metrics::NodeEvent::ExecutedMiss);
-                        let transform = execute.take().ok_or(Error::State(
-                            "bundled node executor was consumed before the final miss",
-                        ))?;
-                        let (value, bundle, discovered_inputs) =
-                            transform(attempt).map_err(Error::fresh)?.into_parts();
-                        let complete = recipe.complete(&discovered_inputs)?;
-                        let payload = value.payload()?;
-                        // An older entry at this action that no longer
-                        // checks is replaced when this one publishes, as a
-                        // plain node's is (#614, #615).
-                        match self.replay_discovered_scoped_exact(
-                            recipe,
-                            &validate,
-                            complete.action(),
-                        ) {
-                            Ok(Some(_)) => {
-                                return Ok(crate::store::Reserved::Reuse((
-                                    complete.action(),
-                                    false,
-                                )));
-                            }
-                            Ok(None) => {}
-                            Err(error) if rebuilds(&error) => {}
-                            Err(error) => return Err(error),
+                let evaluate = |attempt| {
+                    self.metrics
+                        .node(K::KIND.metric(), metrics::NodeEvent::ExecutedMiss);
+                    let transform = execute.take().ok_or(Error::State(
+                        "bundled node executor was consumed before the final miss",
+                    ))?;
+                    let (value, bundle, discovered_inputs) =
+                        transform(attempt).map_err(Error::fresh)?.into_parts();
+                    let complete = recipe.complete(&discovered_inputs)?;
+                    let payload = value.payload()?;
+                    // An older entry at this action that no longer
+                    // checks is replaced when this one publishes, as a
+                    // plain node's is (#614, #615).
+                    match self.replay_discovered_scoped_exact(recipe, &validate, complete.action())
+                    {
+                        Ok(Some(_)) => {
+                            return Ok(crate::store::Reserved::Reuse((complete.action(), false)));
                         }
-                        Ok(crate::store::Reserved::Publish {
-                            result: (complete.action(), true),
-                            recipe: complete,
-                            payload,
-                            bundle: Some(bundle),
-                        })
-                    };
-                    let (action, published) = match retention {
-                        Some(retention) => self.store.with_retained_execution_bundle_reservation(
+                        Ok(None) => {}
+                        Err(error) if rebuilds(&error) => {}
+                        Err(error) => return Err(error),
+                    }
+                    Ok(crate::store::Reserved::Publish {
+                        result: (complete.action(), true),
+                        recipe: complete,
+                        payload,
+                        bundle: Some(bundle),
+                    })
+                };
+                let (action, published) = match retention {
+                    Some(retention) => self.store.with_retained_execution_bundle_reservation(
+                        ownership,
+                        recipe,
+                        retention,
+                        &rechecked.rejected_actions,
+                        evaluate,
+                    ),
+                    None => {
+                        let in_flight = recipe.in_flight(self.store)?;
+                        self.store.with_rejected_execution_bundle_reservation(
                             ownership,
                             recipe,
-                            retention,
+                            in_flight.as_ref(),
                             &rechecked.rejected_actions,
                             evaluate,
-                        ),
-                        None => {
-                            let in_flight = recipe.in_flight(self.store)?;
-                            self.store.with_rejected_execution_bundle_reservation(
-                                ownership,
-                                recipe,
-                                in_flight.as_ref(),
-                                &rechecked.rejected_actions,
-                                evaluate,
-                            )
-                        }
-                    }?;
-                    self.store
-                        .hint_candidate::<K>(recipe.lookup, action, repair);
-                    if published {
-                        self.metrics
-                            .node(K::KIND.metric(), metrics::NodeEvent::Published);
+                        )
                     }
-                    self.replay_discovered_scoped_exact(recipe, &validate, action)?
-                        .ok_or(Error::State(
-                            "published bundled node was absent during exact revalidation",
-                        ))
-                })
+                }?;
+                self.store
+                    .hint_candidate::<K>(recipe.lookup, action, repair);
+                if published {
+                    self.metrics
+                        .node(K::KIND.metric(), metrics::NodeEvent::Published);
+                }
+                self.replay_discovered_scoped_exact(recipe, &validate, action)?
+                    .ok_or(Error::State(
+                        "published bundled node was absent during exact revalidation",
+                    ))
             })
         })
     }

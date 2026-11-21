@@ -1208,7 +1208,7 @@ mod tests {
                 &counts,
                 || {
                     for stage in ["provisional", "candidate", "locked"] {
-                        assert!(held(&store.root().join("locks/heavy.lock")));
+                        assert!(held(&store.fixture_owner_lock()));
                         assert!(held(&exact));
                         assert!(!held(&store.root().join("locks/publication.lock")));
                         stages.push(stage);
@@ -1222,7 +1222,7 @@ mod tests {
             assert!(matches!(result, Err(node::Error::Importer(_))));
             assert_eq!(stages.len(), fail_at + 1);
             assert_eq!(counts.resolution_published.load(Ordering::Relaxed), 0);
-            assert!(!held(&store.root().join("locks/heavy.lock")));
+            assert!(!held(&store.fixture_owner_lock()));
             assert!(!held(&exact));
             assert_eq!(
                 store.fixture_usage().expect("reservation cleanup reads").3,
