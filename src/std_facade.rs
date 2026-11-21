@@ -66,6 +66,16 @@ trait Bind {
         callback: impl Fn(&Call<'_>, &mut [&mut Dynamic]) -> Outcome + SendSync + 'static,
     );
 
+    /// Run `callback` for the reader of the tuple variant at `path`, which
+    /// gives the variant's field when the value is that variant: the
+    /// pattern `io::SeekFrom::End(n)`. `path` binds the variant's
+    /// constructor too, which declares both.
+    fn reader(
+        &mut self,
+        path: &str,
+        callback: impl Fn(&mut [&mut Dynamic]) -> Outcome + SendSync + 'static,
+    );
+
     /// Attest that a value is the generic held type at `path` when it
     /// holds `T`, its Rust value at every argument: `io::Cursor`'s
     /// `Cursor<Dynamic>`.
@@ -91,6 +101,10 @@ impl Bind for Vec<String> {
         self.push(path.to_owned());
     }
 
+    /// A variant's reader is declared with its constructor.
+    fn reader(&mut self, _: &str, _: impl Fn(&mut [&mut Dynamic]) -> Outcome + SendSync + 'static) {
+    }
+
     /// A held type's attestation declares no item.
     fn attest<T: Clone + 'static>(&mut self, _: &str) {}
 }
@@ -112,6 +126,15 @@ impl Bind for host::runtime::Builder {
         callback: impl Fn(&Call<'_>, &mut [&mut Dynamic]) -> Outcome + SendSync + 'static,
     ) {
         self.bind_with_context(format!("{ROOT}::{path}"), callback)
+            .unwrap_or_else(|_| panic!("the std table does not declare `std::{path}`"));
+    }
+
+    fn reader(
+        &mut self,
+        path: &str,
+        callback: impl Fn(&mut [&mut Dynamic]) -> Outcome + SendSync + 'static,
+    ) {
+        self.bind_variant_reader(format!("{ROOT}::{path}"), callback)
             .unwrap_or_else(|_| panic!("the std table does not declare `std::{path}`"));
     }
 

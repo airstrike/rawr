@@ -427,25 +427,20 @@ impl Scalar {
 }
 
 /// A crate type's name as a witness writes it: its path's last segment. A
-/// type of Rawr's std is named as rustc names std's own: by its name when
-/// no other type of std's has it, else by its path, as
-/// `std::fmt::Alignment` is beside `std::mem::Alignment`.
-pub(super) fn host_type_name(definition: &crate::host::type_def::Definition) -> String {
+/// type of Rawr's std is named as rustc names std's own (`std_type_name`).
+pub(super) fn host_type_name(
+    definition: &crate::host::type_def::Definition,
+    models: &super::Models,
+) -> String {
     let path = definition.path();
-    let name = path.rsplit("::").next().unwrap_or_default();
-    let std = path
-        .strip_prefix(crate::std_facade::ROOT)
-        .and_then(|rest| rest.strip_prefix("::"));
-    match std {
-        Some(rest) if !crate::std_table::sole_type(name) => format!("std::{rest}"),
-        _ => name.to_owned(),
-    }
+    super::ty::std_type_name(path.as_str(), models)
+        .unwrap_or_else(|| path.rsplit("::").next().unwrap_or_default().to_owned())
 }
 
 /// The facade enum's `variant`, written `name`, as rustc writes a witness
 /// of it: `_` in each field, or `missed` in the field at its index, as
 /// `Event::Pressed(_)` or `Event::Moved { x: 0_i32, .. }`.
-fn variant_witness(
+pub(super) fn variant_witness(
     name: &str,
     variant: &crate::host::type_def::Variant,
     missed: Option<(usize, &String)>,
@@ -833,7 +828,7 @@ impl<'a> Parser<'a> {
         if *non_exhaustive {
             return Ok(vec![format!("{prefix}_")]);
         }
-        let owner = host_type_name(&definition);
+        let owner = host_type_name(&definition, &self.models);
         let path: ImmutableString = definition.path().as_str().into();
         let discard = pattern::Syntax::Discard { span: at };
         let mut missed = Vec::new();
@@ -890,6 +885,78 @@ impl<'a> Parser<'a> {
             }
         }
         Ok(missed)
+    }
+
+    /// rustc's witnesses of the values of `variant` of the facade enum
+    /// `ty`, written `name`, that a match's unguarded `arms` miss: below a
+    /// variant of one field the arms name, the field's values they all
+    /// miss, as `SeekFrom::Start(1_u64..=u64::MAX)` beside
+    /// `SeekFrom::Start(0)`; else `_` in each field, as
+    /// `SeekFrom::Current(_)`.
+    pub(super) fn host_variant_witnesses(
+        &mut self,
+        name: &str,
+        variant: &crate::host::type_def::Variant,
+        arms: &[pattern::Syntax],
+        ty: &Ty,
+        at: Span,
+    ) -> Result<Vec<String>, Error> {
+        fn members(syntax: &pattern::Syntax, variant: &str, found: &mut Vec<pattern::Syntax>) {
+            match syntax {
+                pattern::Syntax::Or { alternatives, .. } => {
+                    for alternative in alternatives {
+                        members(alternative, variant, found);
+                    }
+                }
+                pattern::Syntax::Enum(pattern)
+                    if pattern.variant.as_str() == variant && pattern.named.is_none() =>
+                {
+                    if let [member] = &*pattern.payload {
+                        found.push(member.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+        let whole = || vec![variant_witness(name, variant, None)];
+        let (Ty::Host { proof, arguments }, [field]) = (self.referenced(ty), variant.fields())
+        else {
+            return Ok(whole());
+        };
+        let mut found = Vec::new();
+        for arm in arms {
+            members(arm, variant.name(), &mut found);
+        }
+        if found.is_empty() {
+            return Ok(whole());
+        }
+        let definition = proof.definition.clone();
+        let mut parameters = definition
+            .parameters()
+            .iter()
+            .cloned()
+            .zip(arguments.iter().cloned())
+            .collect();
+        let field_ty = self.instantiate_host_type(
+            field.ty(),
+            &mut parameters,
+            definition.path().as_str(),
+            at,
+            proof.owner.as_ref(),
+            Some(&definition),
+        )?;
+        let written = pattern::Syntax::Or {
+            alternatives: found.into(),
+            span: at,
+        };
+        let inner = self.host_uncovered(&written, &field_ty)?;
+        if inner.is_empty() {
+            return Ok(whole());
+        }
+        Ok(inner
+            .iter()
+            .map(|inner| variant_witness(name, variant, Some((0, inner))))
+            .collect())
     }
 
     /// The patterns of the values of `ty` that `syntax`, whose coverage is
@@ -1070,7 +1137,7 @@ impl<'a> Parser<'a> {
                     return None;
                 };
                 let identity = type_def::Identity::Host(proof.definition.identity().clone());
-                let owner = host_type_name(&proof.definition);
+                let owner = host_type_name(&proof.definition, &self.models);
                 return Some(
                     variants
                         .iter()
@@ -1392,7 +1459,7 @@ impl<'a> Parser<'a> {
                         }
                     ) =>
                 {
-                    Witness::Sealed(host_type_name(&proof.definition).into())
+                    Witness::Sealed(host_type_name(&proof.definition, &self.models).into())
                 }
                 _ => Witness::Wildcard,
             };

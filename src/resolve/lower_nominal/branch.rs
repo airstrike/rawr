@@ -1136,7 +1136,10 @@ impl<'a> Parser<'a> {
     ) -> Result<ParsedExpr, Error> {
         let value = self.operator_expr(value, ty.clone(), at);
         self.pending_arguments = Some((Vec::new(), at.end()));
-        self.parse_host_method(value, member, at)
+        let outer = std::mem::replace(&mut self.reading_variant, true);
+        let read = self.parse_host_method(value, member, at);
+        self.reading_variant = outer;
+        read
     }
 
     /// Lower the facade patterns met below the script pattern just resolved:
@@ -1355,13 +1358,38 @@ impl<'a> Parser<'a> {
             // name; `_` where arms cover each variant only in part, and
             // alone for a `#[non_exhaustive]` enum, whose values outside its
             // variants no arm but a wildcard covers.
-            let owner = coverage::host_type_name(&proof.definition);
+            // A variant with fields is written with them, as
+            // `SeekFrom::Current(_)`, or with what the arms miss of them.
+            let owner = coverage::host_type_name(&proof.definition, &self.models);
             let prefix = self.reference_prefix(&written);
-            let mut witnesses = variants
+            let declared = match proof.definition.shape() {
+                crate::host::type_def::Shape::Enum { variants, .. } => variants.to_vec(),
+                _ => Vec::new(),
+            };
+            let mut witnesses = Vec::<ImmutableString>::new();
+            for variant in variants
                 .iter()
                 .filter(|variant| !sealed && !covered.contains(variant))
-                .map(|variant| format!("{prefix}{owner}::{variant}").into())
-                .collect::<Vec<ImmutableString>>();
+            {
+                let name = format!("{prefix}{owner}::{variant}");
+                match declared
+                    .iter()
+                    .find(|declared| declared.name() == variant.as_str())
+                {
+                    Some(declared) => witnesses.extend(
+                        self.host_variant_witnesses(
+                            &name,
+                            declared,
+                            &unguarded,
+                            &subject_ty,
+                            match_span,
+                        )?
+                        .into_iter()
+                        .map(ImmutableString::from),
+                    ),
+                    None => witnesses.push(name.into()),
+                }
+            }
             if witnesses.is_empty() {
                 witnesses.push(format!("{prefix}_").into());
             }

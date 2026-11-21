@@ -59,12 +59,13 @@ pub(super) enum Step {
         std: &'static str,
         capabilities: &'static [capability::Kind],
     },
-    /// A held enum's unit variants, in std's declaration order, and whether
-    /// std's enum is `#[non_exhaustive]`: `fmt::Alignment`'s `Left`,
-    /// `Right` and `Center`.
+    /// A held enum's variants, in std's declaration order, each with its
+    /// tuple fields' types, and whether std's enum is `#[non_exhaustive]`:
+    /// `fmt::Alignment`'s `Left`, `Right` and `Center`, or
+    /// `io::SeekFrom`'s `Start(u64)`, `End(i64)` and `Current(i64)`.
     Variants {
         path: &'static str,
-        names: &'static [&'static str],
+        variants: &'static [(&'static str, &'static [Ty])],
         non_exhaustive: bool,
     },
     /// Another type a held type stands for, as `path::Path` is `PathBuf`.
@@ -146,10 +147,19 @@ pub(super) fn install(
             }
             Step::Variants {
                 path,
-                names,
+                variants,
                 non_exhaustive,
             } => {
-                builder.unit_variants(path, names, *non_exhaustive)?;
+                let variants = variants
+                    .iter()
+                    .map(|(name, fields)| {
+                        Ok((
+                            *name,
+                            fields.iter().map(Ty::host).collect::<Result<_, _>>()?,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, host::Error>>()?;
+                builder.linked_variants(path, &variants, *non_exhaustive)?;
             }
             Step::Alias { path, target } => {
                 builder.alias(*path, *target)?;

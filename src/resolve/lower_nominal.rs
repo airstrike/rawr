@@ -635,6 +635,9 @@ struct Parser<'a> {
     script_callable: bool,
     /// Arguments already parsed for the next call, as for a builder chain.
     pending_arguments: Option<(Vec<ParsedExpr>, Position)>,
+    /// The next host method a pattern reads, which may be a linked enum's
+    /// variant's reader (`host_read`), no method a program calls.
+    reading_variant: bool,
     /// The scope frames each statement being parsed opens (D558 tier 1):
     /// `let made = call(..);` for each call in it whose value borrows what
     /// it takes, which the statement then runs inside.
@@ -1061,6 +1064,7 @@ impl<'a> Parser<'a> {
             script_callables: false,
             script_callable: false,
             pending_arguments: None,
+            reading_variant: false,
             frames: Vec::new(),
             frame_effects: Vec::new(),
             calls_noted: 0,

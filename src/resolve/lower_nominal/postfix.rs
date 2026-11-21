@@ -92,7 +92,44 @@ impl<'a> Parser<'a> {
     /// The postfix operations after the primary `value`.
     pub(super) fn parse_postfix_of(&mut self, value: ParsedExpr) -> Result<ParsedExpr, Error> {
         self.parse_postfix_steps(value)
-            .map_err(|error| self.inherent_not_yet(error))
+            .map_err(|error| self.std_no_item(self.inherent_not_yet(error)))
+    }
+
+    /// A member a type of Rawr's std lacks, as rustc's E0599 names it: by
+    /// std's kind of the type and its name as any message writes it,
+    /// "found for enum `std::fmt::Alignment`". Any other error as it is.
+    pub(super) fn std_no_item(&self, error: Error) -> Error {
+        let Error::UnknownMember {
+            owner,
+            member,
+            reference,
+        } = &error
+        else {
+            return error;
+        };
+        let Some(form) = crate::std_facade::held_forms(owner).first().copied() else {
+            return error;
+        };
+        let kind = match crate::std_table::path(form, crate::std_table::Namespace::Type) {
+            Some(path) if path.kind == "enum" => "enum",
+            Some(path) if path.kind == "struct" => "struct",
+            _ => return error,
+        };
+        let Some(name) = super::ty::std_type_name(owner, &self.models) else {
+            return error;
+        };
+        Error::NoItem {
+            owner: owner.clone(),
+            member: member.clone(),
+            reference: *reference,
+            receiver: Box::new(crate::resolve::Receiver {
+                kind,
+                declared: name.as_str().into(),
+                found: name.into(),
+                definition: None,
+            }),
+            similar: None,
+        }
     }
 
     /// A method std declares on a native type that rawr doesn't run yet

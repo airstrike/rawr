@@ -42,7 +42,7 @@ pub(super) trait Sink {
     fn variants(
         &mut self,
         path: &str,
-        names: &[&'static str],
+        variants: &[Variant],
         non_exhaustive: bool,
     ) -> Result<(), host::Error>;
 
@@ -87,10 +87,11 @@ impl Sink for facade::Builder {
     fn variants(
         &mut self,
         path: &str,
-        names: &[&'static str],
+        variants: &[Variant],
         non_exhaustive: bool,
     ) -> Result<(), host::Error> {
-        self.unit_variants(path, names, non_exhaustive).map(drop)
+        self.linked_variants(path, variants, non_exhaustive)
+            .map(drop)
     }
 
     fn alias(&mut self, path: &str, target: &str) -> Result<(), host::Error> {
@@ -175,8 +176,8 @@ pub(super) fn declare(
     for value in &values {
         let path = held::Value::facade(value.std);
         sink.held(value, &capabilities(value))?;
-        if let Some((names, non_exhaustive)) = variants(value) {
-            sink.variants(path, &names, non_exhaustive)?;
+        if let Some((variants, non_exhaustive)) = variants(&reader, value) {
+            sink.variants(path, &variants, non_exhaustive)?;
         }
         for form in value.forms().skip(1) {
             sink.alias(held::Value::facade(form), path)?;
@@ -261,13 +262,18 @@ fn capabilities(value: &held::Value) -> Vec<capability::Kind> {
         .collect()
 }
 
+/// A held enum's variant: its name and its tuple fields' types.
+type Variant = (&'static str, Vec<Type>);
+
 /// std's variants of the held enum `value` that stable Rust names, in
-/// their declaration order, and whether a pattern covers the enum only
-/// with a wildcard: when std's enum is `#[non_exhaustive]`, or has a
-/// variant stable Rust can't name, which rustc's witnesses write as `_`.
-/// `None` for a type that is no enum, and for an enum a variant of which
-/// has fields, which a pattern of rawr's can't read from std's value.
-fn variants(value: &held::Value) -> Option<(Vec<&'static str>, bool)> {
+/// their declaration order, each with its tuple fields' types, and whether
+/// a pattern covers the enum only with a wildcard: when std's enum is
+/// `#[non_exhaustive]`, or has a variant stable Rust can't name, which
+/// rustc's witnesses write as `_`. `None` for a type that is no enum, and
+/// for an enum a variant of which has a field a pattern of rawr's can't
+/// read from std's value: a named one, one of several, or one of a type
+/// rawr doesn't represent.
+fn variants(reader: &reader::Reader<'_>, value: &held::Value) -> Option<(Vec<Variant>, bool)> {
     let definition = solve::definition(value.std);
     let enumeration = std_table::item(definition).filter(|item| item.kind == "enum")?;
     let mut variants = std_table::members(definition)
@@ -275,20 +281,55 @@ fn variants(value: &held::Value) -> Option<(Vec<&'static str>, bool)> {
         .map(|member| Some((member.variant_index()?, member)))
         .collect::<Option<Vec<_>>>()?;
     variants.sort_unstable_by_key(|(index, _)| *index);
-    if variants
-        .iter()
-        .any(|(_, variant)| variant.declaration() != variant.name())
-    {
-        return None;
+    let reader = reader.with_parameters(value.parameters);
+    let mut stable = Vec::new();
+    for (_, variant) in &variants {
+        if variant.stability != std_table::Stability::Stable {
+            continue;
+        }
+        stable.push((variant.name(), variant_fields(&reader, variant)?));
     }
-    let stable = |variant: &std_table::Item| variant.stability == std_table::Stability::Stable;
-    let names = variants
-        .iter()
-        .filter(|(_, variant)| stable(variant))
-        .map(|(_, variant)| variant.name())
-        .collect::<Vec<_>>();
-    let unnamed = names.len() < variants.len();
-    Some((names, enumeration.non_exhaustive() || unnamed))
+    let unnamed = stable.len() < variants.len();
+    Some((stable, enumeration.non_exhaustive() || unnamed))
+}
+
+/// The types of std's `variant`'s fields a pattern of rawr's reads: none
+/// of a unit variant, the one of a tuple variant of one field. `None` for
+/// a variant of named fields or of several, and for a field of a type rawr
+/// doesn't represent.
+fn variant_fields(reader: &reader::Reader<'_>, variant: &std_table::Item) -> Option<Vec<Type>> {
+    match tuple_fields(variant)?.as_slice() {
+        [] => Some(Vec::new()),
+        [field] => Some(vec![reader.host(&solve::read(field))?]),
+        _ => None,
+    }
+}
+
+/// The types of the tuple fields std's `variant` declares, as written:
+/// `u64` of `Start(u64)`, none of a unit variant. `None` for a variant of
+/// named fields.
+fn tuple_fields(variant: &std_table::Item) -> Option<Vec<&'static str>> {
+    let rest = variant.declaration().strip_prefix(variant.name())?;
+    if rest.is_empty() {
+        return Some(Vec::new());
+    }
+    let inner = rest.strip_prefix('(')?.strip_suffix(')')?;
+    // Split at each comma outside the field types' own brackets.
+    let mut fields = Vec::new();
+    let (mut depth, mut start) = (0_usize, 0);
+    for (at, character) in inner.char_indices() {
+        match character {
+            '(' | '[' | '<' => depth += 1,
+            ')' | ']' | '>' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                fields.push(inner[start..at].trim());
+                start = at + 1;
+            }
+            _ => {}
+        }
+    }
+    fields.push(inner[start..].trim());
+    Some(fields)
 }
 
 /// std's stable type aliases in `module` whose types rawr represents, as
@@ -355,8 +396,25 @@ fn member(
     let own = Type::registered(held::Value::facade(value.std))?;
     let item = std_table::item(&format!("{}::{name}", solve::definition(value.std)));
     match item {
+        // A unit variant is a value of its enum. A tuple variant is its
+        // constructor, beside the shared reader of the same name that gives
+        // its field when the value is that variant, which a pattern reads.
         Some(item) if item.kind == "variant" => {
-            return sink.item(path, step::Kind::AssociatedValue, Vec::new(), own);
+            let Some(fields) = variant_fields(&reader.with_parameters(value.parameters), &item)
+            else {
+                return Ok(());
+            };
+            let [field] = fields.as_slice() else {
+                return sink.item(path, step::Kind::AssociatedValue, Vec::new(), own);
+            };
+            let read = Type::option(field.clone());
+            sink.item(path, step::Kind::AssociatedFunction, fields, own)?;
+            return sink.item(
+                path,
+                step::Kind::Method(crate::receiver::Mode::Shared),
+                Vec::new(),
+                read,
+            );
         }
         Some(item) if item.kind == "assoc-const" => {
             return constant(sink, reader, &item, path, step::Kind::AssociatedValue);
@@ -546,6 +604,7 @@ mod tests {
     #[test]
     fn std_facade_held_enums_have_stds_variants() {
         use crate::host::type_def::Shape as Form;
+        use crate::host::type_ref::{Builtin, Type};
         let definition = crate::std_facade::definition();
         let shape = |path: &str| {
             definition
@@ -579,8 +638,30 @@ mod tests {
         // `#[non_exhaustive]`, and `NotAPowerOfTwo` is unstable.
         assert_eq!(variants("num::IntErrorKind").0.len(), 5);
         assert!(variants("num::IntErrorKind").1 && variants("io::ErrorKind").1);
-        // `SeekFrom`'s variants have fields, which no pattern reads yet.
-        assert_eq!(shape("io::SeekFrom"), Form::Opaque);
+        // `SeekFrom`'s tuple variants, each of one field, which its
+        // variant's reader gives a pattern (#2370).
+        let Form::Enum { variants, .. } = shape("io::SeekFrom") else {
+            panic!("`io::SeekFrom` is an enum");
+        };
+        let fields = variants
+            .iter()
+            .map(|variant| {
+                let field = variant.fields().iter().map(|field| field.ty().clone());
+                (variant.name().to_owned(), field.collect::<Vec<_>>())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            fields,
+            [
+                ("Start".to_owned(), vec![Type::builtin(Builtin::U64)]),
+                ("End".to_owned(), vec![Type::builtin(Builtin::I64)]),
+                ("Current".to_owned(), vec![Type::builtin(Builtin::I64)]),
+            ]
+        );
+        let reader = forms("io::SeekFrom::End");
+        assert!(reader
+            .iter()
+            .any(|form| form.receiver() == Some(Mode::Shared)));
         // Each variant is bound, so a program names each one it misses.
         for ty in definition.types() {
             if let Form::Enum { variants, .. } = ty.shape() {

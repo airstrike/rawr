@@ -70,11 +70,17 @@ impl super::Sink for Text {
     fn variants(
         &mut self,
         path: &str,
-        names: &[&'static str],
+        variants: &[super::Variant],
         non_exhaustive: bool,
     ) -> Result<(), host::Error> {
+        let variants = variants
+            .iter()
+            .map(|(name, fields)| format!("({name:?}, {})", types(fields)))
+            .collect::<Vec<_>>()
+            .join(", ");
         self.step(format_args!(
-            "Variants {{ path: {path:?}, names: &{names:?}, non_exhaustive: {non_exhaustive} }}"
+            "Variants {{ path: {path:?}, variants: &[{variants}], non_exhaustive: \
+             {non_exhaustive} }}"
         ));
         Ok(())
     }

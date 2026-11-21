@@ -1457,7 +1457,8 @@ impl<'a> Parser<'a> {
                 expression: span,
             });
         }
-        let mut found = actual.name(&self.models).to_string();
+        let (expected_name, found) = super::ty::mismatched_names(&expected, &actual, &self.models);
+        let mut found = found.to_string();
         // Arrays of two lengths: rustc's label for them.
         if let (
             Ty::Array {
@@ -1476,7 +1477,7 @@ impl<'a> Parser<'a> {
             );
         }
         Err(Error::TypeMismatch {
-            expected: expected.name(&self.models),
+            expected: expected_name,
             actual: found.into(),
             expression: self.expression_span(span),
         })

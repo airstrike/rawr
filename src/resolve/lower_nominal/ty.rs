@@ -1733,9 +1733,69 @@ pub(super) fn host_type_name(proof: &HostTyProof, models: &Models) -> ImmutableS
             return public(&path).as_ref().into();
         }
     }
-    #[cfg(not(feature = "rust-import"))]
-    let _ = models;
-    public(&proof.definition.path()).as_ref().into()
+    let path = proof.definition.path();
+    if let Some(name) = std_type_name(path.as_str(), models) {
+        return name.into();
+    }
+    public(&path).as_ref().into()
+}
+
+thread_local! {
+    /// Whether a message names each std type by its name alone, as
+    /// rustc's E0308 labels do (`forced_trimmed`).
+    static FORCED_TRIMMED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `name()`, with each std type named by its name alone however many
+/// types share it, as rustc's `with_forced_trimmed_paths` names them:
+/// "expected `i32`, found `Alignment`".
+pub(super) fn forced_trimmed<T>(name: impl FnOnce() -> T) -> T {
+    let outer = FORCED_TRIMMED.replace(true);
+    let named = name();
+    FORCED_TRIMMED.set(outer);
+    named
+}
+
+/// `expected` and `actual` as rustc's E0308 label names them: each std
+/// type by its name alone (`forced_trimmed`), unless that names both
+/// alike, as `Alignment` would the program's own and std's; then each as
+/// any message names it, `std::fmt::Alignment` beside `Alignment`.
+pub(super) fn mismatched_names(
+    expected: &Ty,
+    actual: &Ty,
+    models: &Models,
+) -> (ImmutableString, ImmutableString) {
+    let trimmed = forced_trimmed(|| (expected.name(models), actual.name(models)));
+    if trimmed.0 == trimmed.1 {
+        (expected.name(models), actual.name(models))
+    } else {
+        trimmed
+    }
+}
+
+/// The type at the facade path `path`, when it is one of Rawr's std's, as
+/// rustc names std's own: by its name alone when no other type of std's
+/// crates nor of the program has it, else by its std path, as
+/// `std::fmt::Alignment` is beside `std::mem::Alignment`, and
+/// `std::path::PathBuf` beside the program's own `PathBuf`. `None` for
+/// any other type.
+pub(super) fn std_type_name(path: &str, models: &Models) -> Option<String> {
+    let rest = path
+        .strip_prefix(crate::std_facade::ROOT)?
+        .strip_prefix("::")?;
+    let name = rest.rsplit("::").next().unwrap_or(rest);
+    let sole = || {
+        crate::std_table::sole_type(name)
+            && !models
+                .by_definition
+                .values()
+                .any(|nominal| nominal.name() == name)
+    };
+    Some(if FORCED_TRIMMED.get() || sole() {
+        name.to_owned()
+    } else {
+        format!("std::{rest}")
+    })
 }
 
 pub(super) fn same_head(left: &Ty, right: &Ty) -> bool {
