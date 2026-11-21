@@ -75,13 +75,15 @@ impl Request {
     #[cfg(test)]
     pub(in crate::cargo) fn complete_harness_in(
         self,
+        lane: &mut cargo::Lane,
         cached: &cargo::CachedToolchain,
         layout: &layout::Layout,
         built: cargo::Built,
         limits: &Limits,
         cargo_limits: &Limits,
     ) -> Result<cargo::Resolution> {
-        let completed = self.complete_parts_in(cached, layout, built, limits, cargo_limits)?;
+        let completed =
+            self.complete_parts_in(lane, cached, layout, built, limits, cargo_limits)?;
         Ok(completed.into_resolution(self))
     }
 
@@ -89,6 +91,7 @@ impl Request {
     /// for subsequent current replay and graph validation.
     pub(in crate::cargo) fn complete_parts_in(
         &self,
+        lane: &mut cargo::Lane,
         cached: &cargo::CachedToolchain,
         layout: &layout::Layout,
         built: cargo::Built,
@@ -114,6 +117,7 @@ impl Request {
         let source = paths.source().to_path_buf();
         let lock = paths.lock().to_path_buf();
         self.complete_harness_parts(
+            lane,
             &native.production(),
             harness,
             build,

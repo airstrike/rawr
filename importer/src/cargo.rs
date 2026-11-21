@@ -77,9 +77,12 @@ static TEMPORARY_ID: AtomicU64 = AtomicU64::new(1);
 /// publication and runner build, so the borrow checker keeps a second
 /// operation of that owner from starting while one runs (#1824). Work of
 /// two owners, in two processes or on two threads, meets at the store's and
-/// the project's file leases instead.
+/// the project's file leases instead. The lane keeps what that work asked of
+/// the project's compiler, for as long as the owner holds it.
 #[derive(Default)]
-pub struct Lane(());
+pub struct Lane {
+    compilers: crate::runner::runtime::Compilers,
+}
 
 #[cfg(test)]
 std::thread_local! {
@@ -94,7 +97,14 @@ impl Lane {
     /// The lane of a new run owner.
     #[must_use]
     pub const fn new() -> Self {
-        Self(())
+        Self {
+            compilers: crate::runner::runtime::Compilers::new(),
+        }
+    }
+
+    /// What the owner's work asked of the project's compiler.
+    pub(crate) fn compilers(&mut self) -> &mut crate::runner::runtime::Compilers {
+        &mut self.compilers
     }
 }
 
@@ -1035,35 +1045,45 @@ impl Request {
     /// Prepare the complete semantic owner before extraction, reusing an
     /// attested bundle when all current inputs still agree.
     #[cfg(feature = "rustc-driver")]
-    pub fn prepare_cached(self, limits: &Limits) -> Result<Prepared> {
+    pub fn prepare_cached(self, lane: &mut Lane, limits: &Limits) -> Result<Prepared> {
         self.prepare_cached_in(
             limits,
             &crate::supervisor::snapshot::attempt::Scope::begin(),
+            lane,
             &mut resolution::Memos::default(),
         )
     }
 
     /// Prepare or fall back within the original reload attempt's cumulative
-    /// validation budget, including all prior resident snapshot checks. What
-    /// the owner's earlier preparations left in `memos` answers what they
-    /// answered, and this one leaves its own there for the next.
+    /// validation budget, including all prior resident snapshot checks, on
+    /// the owner's Cargo `lane`. What the owner's earlier preparations left
+    /// in `memos` answers what they answered, and this one leaves its own
+    /// there for the next.
     #[cfg(feature = "rustc-driver")]
     pub fn prepare_cached_in(
         self,
         limits: &Limits,
         scope: &crate::supervisor::snapshot::attempt::Scope,
+        lane: &mut Lane,
         memos: &mut resolution::Memos,
     ) -> Result<Prepared> {
         assert!(
             !self.inventory,
             "an intrinsic acquisition resolves uncached; demand replay is not complete"
         );
-        resolution::owner::prepare_cached_in(self, limits, scope, &crate::metrics::Current, memos)
-            .map(|owner| Prepared { owner })
-            .map_err(|source| Error::Node {
-                operation: "complete resolution owner",
-                source: Box::new(source),
-            })
+        resolution::owner::prepare_cached_in(
+            self,
+            limits,
+            scope,
+            &crate::metrics::Current,
+            lane,
+            memos,
+        )
+        .map(|owner| Prepared { owner })
+        .map_err(|source| Error::Node {
+            operation: "complete resolution owner",
+            source: Box::new(source),
+        })
     }
 
     /// Resolve through the shared toolchain node before any tool discovery or
@@ -1128,7 +1148,7 @@ impl Request {
 
     fn resolve_with(
         self,
-        _lane: &mut Lane,
+        lane: &mut Lane,
         native: &Native,
         limits: &Limits,
         cached: Option<&CachedToolchain>,
@@ -1144,14 +1164,14 @@ impl Request {
         let harness = self
             .prepare_harness(&native, limits, limits, cached)
             .map_err(|error| self.settle(limits, None, error))?;
-        self.resolve_under_epoch(&native, harness, limits)
+        self.resolve_under_epoch(lane, &native, harness, limits)
     }
 
     /// Enter the private nonpublishing lane while retaining production authority.
     #[cfg(feature = "rustc-driver")]
     pub(crate) fn resolve_evidence(
         self,
-        _lane: &mut Lane,
+        lane: &mut Lane,
         native: &Native,
         limits: &Limits,
         evidence: &process::EvidenceSession,
@@ -1166,7 +1186,7 @@ impl Request {
         let harness = self
             .prepare_harness(&native, limits, limits, None)
             .map_err(|error| self.settle(limits, None, error))?;
-        self.resolve_under_epoch(&native, harness, limits)
+        self.resolve_under_epoch(lane, &native, harness, limits)
     }
 
     fn prepare_harness<N: ToolPaths>(
@@ -1965,6 +1985,7 @@ impl Request {
 
     fn resolve_under_epoch<N: ProductionReplay>(
         self,
+        lane: &mut Lane,
         native: &N,
         harness: Harness,
         limits: &Limits,
@@ -2114,6 +2135,7 @@ impl Request {
         };
         let completed = self
             .complete_harness_parts(
+                lane,
                 native,
                 harness,
                 build,
@@ -2148,6 +2170,14 @@ impl Request {
     )]
     fn complete_harness_parts(
         &self,
+        #[cfg_attr(
+            not(feature = "rustc-driver"),
+            expect(
+                unused_variables,
+                reason = "only the binding capture asks the compiler from completion"
+            )
+        )]
+        lane: &mut Lane,
         #[cfg_attr(
             not(feature = "rustc-driver"),
             expect(
@@ -2285,9 +2315,12 @@ impl Request {
             }
         }
         #[cfg(feature = "rustc-driver")]
-        if let Some(current) =
-            crate::input::bindings::Current::capture(&self.project_root, &self.config, limits)
-        {
+        if let Some(current) = crate::input::bindings::Current::capture(
+            lane.compilers(),
+            &self.project_root,
+            &self.config,
+            limits,
+        ) {
             // One index of the build's inputs serves every table, so a
             // file many closures reach is observed once (#1846).
             let mut capture =

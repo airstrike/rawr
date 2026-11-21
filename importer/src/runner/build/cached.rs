@@ -58,7 +58,7 @@ pub(crate) use hot::fixture_build;
 
 pub(super) fn build<B>(
     mut manifest: super::super::Manifest<super::super::Generated, B>,
-    _lane: &mut crate::cargo::Lane,
+    lane: &mut crate::cargo::Lane,
     _cache: &crate::cache::Writer,
 ) -> Result<super::super::Manifest<super::super::Built, B>, super::Error> {
     let chain = manifest
@@ -97,6 +97,7 @@ pub(super) fn build<B>(
             &inputs,
             &context,
             parallelism,
+            lane,
             attempt,
             store.graph_budget(),
             || {
@@ -249,6 +250,7 @@ fn compile<B>(
     inputs: &Inputs,
     context: &crate::context::Context,
     parallelism: crate::process::parallelism::Proof,
+    lane: &mut crate::cargo::Lane,
     attempt: crate::store::bundle::Attempt,
     budget: &node::GraphBudget,
     before_cargo: impl FnOnce() -> Result<(), node::Error>,
@@ -326,7 +328,12 @@ fn compile<B>(
         .map_or(generated_manifest, str::as_bytes);
     // rawr's own runtime, compiled once per machine, unless this runner
     // can't link it (D620).
-    let mut runtime = crate::runner::runtime::prepare(context, generated_manifest, generated_lock)?;
+    let mut runtime = crate::runner::runtime::prepare(
+        lane.compilers(),
+        context,
+        generated_manifest,
+        generated_lock,
+    )?;
     let level = crate::runner::runtime::opt_level(context.environment())
         .map_err(|reason| node::Error::Transform(reason.into_boxed_str()))?;
     // The project's path packages keep their paths under the workspace root,
@@ -380,7 +387,7 @@ fn compile<B>(
     // to. The runner keeps the project's versions and revisions: linked to
     // the shared runtime, it adds none of rawr's graph; compiling rawr in
     // the project, it adds rawr's graph (#1914).
-    let stage = |runtime: Option<&crate::runner::runtime::Runtime>| {
+    let mut stage = |runtime: Option<&crate::runner::runtime::Runtime>| {
         let staged = sources(runtime);
         // The lock cargo settled this one to, at an earlier build.
         let settled = settled_lock(&work, &staged);
@@ -394,7 +401,7 @@ fn compile<B>(
             };
             let cargo = match runtime {
                 Some(runtime) => runtime.cargo().to_path_buf(),
-                None => crate::runner::runtime::project_cargo(context)?,
+                None => crate::runner::runtime::project_cargo(lane.compilers(), context)?,
             };
             crate::runner::runtime::settle_lock(
                 &cargo,

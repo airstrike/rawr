@@ -816,7 +816,7 @@ fn prepare_resolving(
             Some(kept) => kept.memos(),
             None => &mut own_memos,
         };
-        let mut prepared = match request.prepare_cached_in(&limits, scope, memos) {
+        let mut prepared = match request.prepare_cached_in(&limits, scope, cargo, memos) {
             Ok(prepared) => prepared,
             // A copy that holds a marked type by its handle fails where
             // native code began to open the type, as a native child module

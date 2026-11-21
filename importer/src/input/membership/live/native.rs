@@ -1,26 +1,43 @@
 use std::collections::BTreeMap;
 use std::ffi::CStr;
 use std::os::fd::{AsRawFd as _, OwnedFd};
-use std::sync::{Mutex, PoisonError};
 
 use rustix::fs::{self as stat, Mode, OFlags};
 
 use super::{canonical, discovery, file, git_read, Metadata, Stat};
 use crate::input::membership::{observed, Result};
 
-pub(super) struct System;
+/// The host's file system for one acquisition, with the descriptors it
+/// opened, by number. The `System` traits pass descriptor numbers; the owned
+/// descriptor stays here until `close`, or until the acquisition ends.
+#[derive(Default)]
+pub(super) struct System {
+    open: BTreeMap<i32, OwnedFd>,
+}
 
-/// The descriptors this module opened, by number. The `System` traits pass
-/// descriptor numbers; the owned descriptor stays here until `close`.
-static OPEN: Mutex<BTreeMap<i32, OwnedFd>> = Mutex::new(BTreeMap::new());
+impl System {
+    fn with<T>(
+        &self,
+        descriptor: i32,
+        operation: impl FnOnce(&OwnedFd) -> rustix::io::Result<T>,
+    ) -> std::result::Result<T, i32> {
+        let owned = self.open.get(&descriptor).ok_or(libc::EBADF)?;
+        raw(operation(owned))
+    }
+}
 
-fn with<T>(
-    descriptor: i32,
-    operation: impl FnOnce(&OwnedFd) -> rustix::io::Result<T>,
-) -> std::result::Result<T, i32> {
-    let open = OPEN.lock().unwrap_or_else(PoisonError::into_inner);
-    let owned = open.get(&descriptor).ok_or(libc::EBADF)?;
-    raw(operation(owned))
+/// Open `path` read-only as a descriptor its caller owns.
+pub(super) fn open_owned(path: &CStr) -> std::result::Result<OwnedFd, i32> {
+    raw(stat::open(
+        path,
+        OFlags::RDONLY | OFlags::CLOEXEC,
+        Mode::from_bits_truncate(0o666),
+    ))
+}
+
+/// The metadata of the file `owned` names.
+pub(super) fn fstat_owned(owned: &OwnedFd) -> Stat {
+    metadata(raw(stat::fstat(owned)))
 }
 
 impl canonical::System for System {
@@ -39,33 +56,23 @@ impl file::System for System {
     }
 
     fn open(&mut self, path: &CStr) -> std::result::Result<i32, i32> {
-        let owned = raw(stat::open(
-            path,
-            OFlags::RDONLY | OFlags::CLOEXEC,
-            Mode::from_bits_truncate(0o666),
-        ))?;
+        let owned = open_owned(path)?;
         let descriptor = owned.as_raw_fd();
-        OPEN.lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(descriptor, owned);
+        self.open.insert(descriptor, owned);
         Ok(descriptor)
     }
 
     fn fstat(&mut self, descriptor: i32) -> Result<Stat> {
-        Ok(metadata(with(descriptor, |owned| stat::fstat(owned))))
+        Ok(metadata(self.with(descriptor, |owned| stat::fstat(owned))))
     }
 
     fn read(&mut self, descriptor: i32, bytes: &mut [u8]) -> std::result::Result<usize, i32> {
-        with(descriptor, |owned| rustix::io::read(owned, bytes))
+        self.with(descriptor, |owned| rustix::io::read(owned, bytes))
     }
 
     fn close(&mut self, descriptor: i32) {
         // Match std's one-shot close/drop behavior: dropping closes once.
-        drop(
-            OPEN.lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .remove(&descriptor),
-        );
+        drop(self.open.remove(&descriptor));
     }
 }
 
@@ -90,7 +97,7 @@ impl discovery::System for System {
 impl git_read::System for System {
     fn position(&mut self, descriptor: i32) -> std::result::Result<u64, i32> {
         // Pinned File::stream_position is one lseek(SEEK_CUR), without retry.
-        with(descriptor, |owned| {
+        self.with(descriptor, |owned| {
             rustix::fs::seek(owned, rustix::fs::SeekFrom::Current(0))
         })
     }

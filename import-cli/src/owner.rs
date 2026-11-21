@@ -37,7 +37,7 @@ pub fn check(
     graph: Option<rawr::package::Graph>,
     profile: &dyn crate::Profile,
 ) -> Result<(PathBuf, rawr_import::bindings::Settlement), Unchecked> {
-    same_build(target)?;
+    same_build(target, &mut crate::project::Versions::default())?;
     let source = target.source().path().to_path_buf();
     let fallback = fallback(target)?;
     let revision = rawr_import::supervisor::Owner::new()
@@ -593,7 +593,7 @@ fn session(
     cells: &rawr::package::Cells,
     kept: &mut crate::Kept,
 ) -> Result<Ended, Unchecked> {
-    same_build(target)?;
+    same_build(target, kept.versions())?;
     // Each save that changes Rawr source reads the same API fragments.
     kept.memos().keep_reads();
     let source = fallback(target)?;
@@ -1683,11 +1683,14 @@ fn warn(warnings: Vec<rawr_watch::Error>) {
 
 /// A project that builds as Rawr builds it, or the error saying what to
 /// change.
-pub fn same_build(target: &rawr::project::Target) -> Result<(), diagnostic::Report> {
+pub fn same_build(
+    target: &rawr::project::Target,
+    versions: &mut crate::project::Versions,
+) -> Result<(), diagnostic::Report> {
     let Some(root) = project(target) else {
         return Ok(());
     };
-    crate::project::same_build(&root).map_err(|message| {
+    crate::project::same_build(&root, versions).map_err(|message| {
         diagnostic::Report::error(diagnostic::code::ENVIRONMENT_PROJECT_BUILD, message).finish()
     })?;
     crate::project::toolchain(&root).map_err(|message| {

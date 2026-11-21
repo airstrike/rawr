@@ -62,19 +62,24 @@ pub fn root() -> crate::Result<PathBuf> {
 /// The host is found or written once per process.
 #[cfg(feature = "embedded-host")]
 pub fn root() -> crate::Result<PathBuf> {
-    static ROOT: std::sync::OnceLock<Lease> = std::sync::OnceLock::new();
-    if let Some(lease) = ROOT.get() {
-        touch(&lease.root);
-        return Ok(lease.root.clone());
+    // Its lease file is named by this process, so the process holds one
+    // lease. The first caller takes it, a caller on another thread waits for
+    // that, and every later call reads what it found.
+    static ROOT: std::sync::OnceLock<Result<Lease, Box<str>>> = std::sync::OnceLock::new();
+    fn take() -> crate::Result<Lease> {
+        let hosts = crate::store::runtime_home(&cargo_home()?).join("hosts");
+        let lease = Lease::take(&hosts, &DIGEST, FILES).map_err(|source| crate::Error::Io {
+            operation: "write",
+            path: hosts.clone(),
+            source,
+        })?;
+        prune(&hosts, &[lease.root.as_path()], HOST_IDLE, HOSTS_KEPT);
+        Ok(lease)
     }
-    let hosts = crate::store::runtime_home(&cargo_home()?).join("hosts");
-    let lease = Lease::take(&hosts, &DIGEST, FILES).map_err(|source| crate::Error::Io {
-        operation: "write",
-        path: hosts.clone(),
-        source,
-    })?;
-    prune(&hosts, &[lease.root.as_path()], HOST_IDLE, HOSTS_KEPT);
-    Ok(ROOT.get_or_init(|| lease).root.clone())
+    let lease = ROOT.get_or_init(|| take().map_err(kept));
+    let lease = lease.as_ref().map_err(|reason| failed(reason))?;
+    touch(&lease.root);
+    Ok(lease.root.clone())
 }
 
 /// The root a resolution harness names Rawr's crate at: the host's Cargo
@@ -82,42 +87,45 @@ pub fn root() -> crate::Result<PathBuf> {
 /// view or host whose path [`relocated`] can't rewrite as text has no view
 /// apart from the host, so its harness names the host itself.
 pub(crate) fn cargo_root() -> crate::Result<PathBuf> {
-    static ROOT: std::sync::OnceLock<Option<Lease>> = std::sync::OnceLock::new();
-    // A lease file is one per process, so two threads taking it at once
-    // would each find the other's lock; the first taker leases for both.
-    static TAKING: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let reuse = |leased: &Option<Lease>| match leased {
+    // A lease file is one per process, so the first caller leases the view,
+    // a caller on another thread waits for that rather than meet its lock,
+    // and every later call reads what it found.
+    static ROOT: std::sync::OnceLock<Result<Option<Lease>, Box<str>>> = std::sync::OnceLock::new();
+    fn take() -> crate::Result<Option<Lease>> {
+        let host = root()?;
+        let view = View::of(&host_manifest(&host)?).ok_or_else(|| crate::Error::Request {
+            reason: "rawr's own Cargo.toml names no package version or edition".into(),
+        })?;
+        let views = crate::store::home(&cargo_home()?).join(VIEWS);
+        let lease = Lease::take(&views, &view.digest, &view.files()).map_err(|source| {
+            crate::Error::Io {
+                operation: "write",
+                path: views.clone(),
+                source,
+            }
+        })?;
+        prune(&views, &[lease.root.as_path()], HOST_IDLE, HOSTS_KEPT);
+        Ok((plain(&lease.root) && plain(&host)).then_some(lease))
+    }
+    let leased = ROOT.get_or_init(|| take().map_err(kept));
+    match leased.as_ref().map_err(|reason| failed(reason))? {
         Some(lease) => {
             touch(&lease.root);
             Ok(lease.root.clone())
         }
         None => root(),
-    };
-    if let Some(leased) = ROOT.get() {
-        return reuse(leased);
     }
-    let _taking = TAKING
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some(leased) = ROOT.get() {
-        return reuse(leased);
-    }
-    let host = root()?;
-    let view = View::of(&host_manifest(&host)?).ok_or_else(|| crate::Error::Request {
-        reason: "rawr's own Cargo.toml names no package version or edition".into(),
-    })?;
-    let views = crate::store::home(&cargo_home()?).join(VIEWS);
-    let lease =
-        Lease::take(&views, &view.digest, &view.files()).map_err(|source| crate::Error::Io {
-            operation: "write",
-            path: views.clone(),
-            source,
-        })?;
-    prune(&views, &[lease.root.as_path()], HOST_IDLE, HOSTS_KEPT);
-    let leased = ROOT.get_or_init(|| (plain(&lease.root) && plain(&host)).then_some(lease));
-    match leased {
-        Some(lease) => Ok(lease.root.clone()),
-        None => Ok(host),
+}
+
+/// What a once-per-process lease failed with, kept for each later caller.
+fn kept(error: crate::Error) -> Box<str> {
+    error.to_string().into_boxed_str()
+}
+
+/// The error a once-per-process lease failed with, again.
+fn failed(reason: &str) -> crate::Error {
+    crate::Error::Request {
+        reason: reason.into(),
     }
 }
 
