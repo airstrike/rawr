@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.86 (2026-11-21)
+
+- Read sets stay on the thread that owns them, and the compiler proves it: the importer's read-set validator is an Rc closure, and the resolution's capture, the owner's replay memos and the prepared closure's pins lose their locks. The background API rebuild and the classifier's workers take only the data they read. (#2405)
+
 ## 0.4.85 (2026-11-21)
 
 - Evaluating code while paused at a match arm's body without braces runs instead of failing to parse. (#2265)

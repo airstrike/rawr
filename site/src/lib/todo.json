@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-21",
-  "version": "0.4.85",
+  "version": "0.4.86",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.86",
+        "date": "2026-11-21",
+        "entries": [
+          {"text":"Read sets stay on the thread that owns them, and the compiler proves it: the importer's read-set validator is an Rc closure, and the resolution's capture, the owner's replay memos and the prepared closure's pins lose their locks. The background API rebuild and the classifier's workers take only the data they read.","issues":[2405]}
+        ]
+      },
       {
         "version": "0.4.85",
         "date": "2026-11-21",
@@ -5665,7 +5672,7 @@
     {"issue":2261,"title":"Rewind to a past state, and replay recorded turns under edited code","state":"open","category":"Health"},
     {"issue":2262,"title":"iced's own debug tools (comet, and its time machine where the program enables it) work under rawr run","state":"open","category":"Health"},
     {"issue":2263,"title":"eval in a caller's frame","state":"closed","category":"Health"},
-    {"issue":2264,"title":"eval in a program with Rust dependencies, end to end","state":"open","category":"Health"},
+    {"issue":2264,"title":"eval in a program with Rust dependencies, end to end","state":"closed","category":"Health"},
     {"issue":2265,"title":"eval paused at a match arm or another expression position fails to parse","state":"closed","category":"Health","release":"0.4.85"},
     {"issue":2266,"title":"A shell attaching to a plain `rawr run` restarts the program to register a debugger, losing its state","state":"closed","category":"Health","release":"0.4.29"},
     {"issue":2267,"title":"rawr mcp's `wait` returns a started program's output only with the next event","state":"open","category":"Health"},
@@ -5805,7 +5812,11 @@
     {"issue":2401,"title":"The engine's Cargo answer memos (DESCRIBED, BUILT) are process-wide statics","state":"open","category":"Health"},
     {"issue":2402,"title":"The bindings format root's process lease sits in a static table (format::OPENED)","state":"open","category":"Health"},
     {"issue":2403,"title":"The base-attach test leaves its `looping` program running after the test ends","state":"open","category":"Health"},
-    {"issue":2404,"title":"eval at a step inside a chain on a local runs against an empty scope","state":"open","category":"Health"}
+    {"issue":2404,"title":"eval at a step inside a chain on a local runs against an empty scope","state":"open","category":"Health"},
+    {"issue":2405,"title":"Read sets stay on the thread that owns them, and the compiler proves it: the importer's read-set…","state":"closed","category":"Health","release":"0.4.86"},
+    {"issue":2406,"title":"eval of a crate use the running build doesn't bind: a field the program never reads, or a generic at a new type","state":"open","category":"Health"},
+    {"issue":2407,"title":"The graph budget rides in plan::Plan and plan::Capture, so the account registry keeps two locks","state":"open","category":"Health"},
+    {"issue":2408,"title":"Importer integration fixtures extract once per test thread now that contracts are not Sync","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -8564,7 +8575,7 @@
             {"number":490,"title":"Evaluate Rust in a paused frame","state":"closed"},
             {"number":1207,"title":"rawr-repl drops a Drop value at the end of the line that bound it","state":"closed"},
             {"number":2263,"title":"eval in a caller's frame","state":"closed"},
-            {"number":2264,"title":"eval in a program with Rust dependencies, end to end","state":"open"},
+            {"number":2264,"title":"eval in a program with Rust dependencies, end to end","state":"closed"},
             {"number":2265,"title":"eval paused at a match arm or another expression position fails to parse","state":"closed"},
             {"number":2271,"title":"eval fails with E0308 on a view returning `impl Widget<Message>` built by `column![…]`","state":"closed"}
           ],
