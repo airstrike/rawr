@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-21",
-  "version": "0.4.88",
+  "version": "0.4.89",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.89",
+        "date": "2026-11-21",
+        "entries": [
+          {"text":"When a shell attaches to a run started at a terminal, `rawr mcp`'s `status` and `start` and `rawr dap`'s console say it hears rawr's prints but not what a dependency writes straight to the terminal; a run a shell starts sends that shell all of its output.","issues":[2411],"refs":[2320]}
+        ]
+      },
       {
         "version": "0.4.88",
         "date": "2026-11-21",
@@ -5836,7 +5843,7 @@
     {"issue":2408,"title":"Importer integration fixtures extract once per test thread now that contracts are not Sync","state":"open","category":"Health"},
     {"issue":2409,"title":"Bind the visible fields of the crate types a runner already crosses, so eval can read them without a rebuild","state":"open","category":"Health"},
     {"issue":2410,"title":"Offer to rebuild with an eval's missing use and re-run the program to the same pause","state":"open","category":"Health"},
-    {"issue":2411,"title":"The session's hello says which output it hears: the engine's at a terminal, all of it when a shell started the run","state":"open","category":"Health"}
+    {"issue":2411,"title":"The session's hello says which output it hears: the engine's at a terminal, all of it when a shell started the run","state":"closed","category":"Health","release":"0.4.89"}
   ],
   "groups": [
     {

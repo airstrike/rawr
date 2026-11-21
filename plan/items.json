@@ -2410,6 +2410,6 @@
     {"t":"T2408","issue":2408,"title":"T2408: Importer integration fixtures extract once per test thread now that contracts are not Sync","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T2409","issue":2409,"title":"T2409: Bind the visible fields of the crate types a runner already crosses, so eval can read them without a rebuild","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":["D1095"],"commit":null,"release":null},
     {"t":"T2410","issue":2410,"title":"T2410: Offer to rebuild with an eval's missing use and re-run the program to the same pause","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":["D1095"],"commit":null,"release":null},
-    {"t":"T2411","issue":2411,"title":"T2411: The session's hello says which output it hears: the engine's at a terminal, all of it when a shell started the run","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":["D1096"],"commit":null,"release":null}
+    {"t":"T2411","issue":2411,"title":"T2411: The session's hello says which output it hears: the engine's at a terminal, all of it when a shell started the run","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":["D1096"],"commit":"8730ee5f6","release":"0.4.89"}
   ]
 }

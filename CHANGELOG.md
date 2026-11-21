@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.89 (2026-11-21)
+
+- When a shell attaches to a run started at a terminal, `rawr mcp`'s `status` and `start` and `rawr dap`'s console say it hears rawr's prints but not what a dependency writes straight to the terminal; a run a shell starts sends that shell all of its output. (#2411; part of #2320)
+
 ## 0.4.88 (2026-11-21)
 
 - rawr mcp's `wait` returns when the started program prints, not only at its next event; rawr's own progress lines don't end it. (#2267)
