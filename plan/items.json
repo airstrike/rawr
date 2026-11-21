@@ -2429,8 +2429,9 @@
     {"t":"T2427","issue":2427,"title":"T2427: rawr run --features doesn't reach the harness's dependencies","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T2428","issue":2428,"title":"T2428: An unbuilt optional or dev path dependency panics the resolution universe","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T2429","issue":2429,"title":"T2429: Two rawr runs on one project or one target directory wait for each other as two Cargo runs do…","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":"0.4.101"},
-    {"t":"T2430","issue":2430,"title":"T2430: A second rawr run of one project can't host a session: its socket path already exists","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T2430","issue":2430,"title":"T2430: A second rawr run of one project can't host a session: its socket path already exists","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"4d5fd0976","release":"0.4.102"},
     {"t":"T2431","issue":2431,"title":"T2431: A wait for a project's store lease names no process","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T2432","issue":2432,"title":"T2432: A runner build can stall holding the shared build lock after cargo exits","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T2432","issue":2432,"title":"T2432: A runner build can stall holding the shared build lock after cargo exits","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"4d5fd0976","release":"0.4.102"},
+    {"t":"T2433","issue":2433,"title":"T2433: rawr mcp tools can pick only the newest of a program's several runs","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }

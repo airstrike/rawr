@@ -6,6 +6,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.102 (2026-11-21)
+
+- A build no longer stalls holding a shared target's build lock after cargo exits: a process cargo started that left its process group, such as a build script's daemon or a compiler cache client, no longer keeps the build waiting on cargo's output. (#2432)
+- Two rawr runs of one project each host a session shells can attach to: rawr tui, gui, mcp and dap attach to the newest and name the others, and rawr tui --pid, rawr gui --pid and DAP's processId pick another. A run that Ctrl-C, SIGTERM or SIGHUP ends removes its session's socket directory, and a dead run's leftover socket is cleaned up. (#2430)
+
 ## 0.4.101 (2026-11-21)
 
 - Two rawr runs on one project or one target directory wait for each other as two Cargo runs do: the second prints one line naming the lock, the holder's process and the project it builds, then goes on. A run no longer fails with "the build directory is locked by another build" or a busy runner cache, and a Cargo child's own wait for its build directory is printed. (#2429)

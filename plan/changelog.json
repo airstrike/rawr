@@ -8,6 +8,14 @@
   },
   "releases": [
     {
+      "version": "0.4.102",
+      "date": "2026-11-21",
+      "entries": [
+        {"text":"A build no longer stalls holding a shared target's build lock after cargo exits: a process cargo started that left its process group, such as a build script's daemon or a compiler cache client, no longer keeps the build waiting on cargo's output.","issues":[2432]},
+        {"text":"Two rawr runs of one project each host a session shells can attach to: rawr tui, gui, mcp and dap attach to the newest and name the others, and rawr tui --pid, rawr gui --pid and DAP's processId pick another. A run that Ctrl-C, SIGTERM or SIGHUP ends removes its session's socket directory, and a dead run's leftover socket is cleaned up.","issues":[2430]}
+      ]
+    },
+    {
       "version": "0.4.101",
       "date": "2026-11-21",
       "entries": [
