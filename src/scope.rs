@@ -1633,9 +1633,11 @@ pub fn lent_static(value: &crate::Dynamic) -> bool {
 /// which hold one string per text, so a view called again, or a reload
 /// that keeps a literal, pins nothing new.
 ///
-/// One lock guards what they hold. A runner's `static_pins` is a `static`,
-/// which must be `Sync`, and any program thread that calls a native
-/// function taking a `&'static str` reaches it.
+/// One lock guards what they hold. The process's [`lasting`] pins are a
+/// `static`, which must be `Sync`, and any program thread that calls a
+/// native function taking a `&'static str` reaches them. They also hold
+/// what the process leaks for good, once per content: the texts, bytes,
+/// slices and locations native code takes at `'static`.
 #[derive(Default)]
 pub struct Pins {
     held: std::sync::Mutex<Pinned>,
@@ -1658,6 +1660,8 @@ struct Pinned {
     values: std::collections::BTreeMap<usize, Vec<Kept>>,
     /// Slices of pinned strings ([`Pins::pin_strs`]).
     slices: std::collections::BTreeSet<&'static [&'static str]>,
+    /// What was leaked for good, which nothing lets go.
+    leaked: Leaked,
 }
 
 impl Pinned {
@@ -1667,8 +1671,50 @@ impl Pinned {
             strings: std::collections::BTreeMap::new(),
             values: std::collections::BTreeMap::new(),
             slices: std::collections::BTreeSet::new(),
+            leaked: Leaked::new(),
         }
     }
+}
+
+/// What [`Pins`] leaked for good, each once per content, so a value given
+/// again leaks nothing new.
+#[derive(Default)]
+struct Leaked {
+    /// Copies of texts ([`Pins::text`]).
+    texts: std::collections::BTreeSet<&'static str>,
+    /// Copies of texts each followed by a NUL byte, by their text
+    /// ([`Pins::terminated`]).
+    terminated: std::collections::BTreeMap<Box<str>, &'static str>,
+    /// Locations ([`Pins::location`]).
+    locations: std::collections::BTreeSet<&'static std::panic::Location<'static>>,
+    /// Byte slices ([`Pins::bytes`]).
+    bytes: std::collections::BTreeSet<&'static [u8]>,
+    /// Slices of scalars by their type and the hash of their bits, each a
+    /// `&'static [T]` ([`Pins::scalars`]).
+    scalars: std::collections::BTreeMap<(TypeId, u64), Vec<&'static (dyn Any + Send + Sync)>>,
+}
+
+impl Leaked {
+    const fn new() -> Self {
+        Self {
+            texts: std::collections::BTreeSet::new(),
+            terminated: std::collections::BTreeMap::new(),
+            locations: std::collections::BTreeSet::new(),
+            bytes: std::collections::BTreeSet::new(),
+            scalars: std::collections::BTreeMap::new(),
+        }
+    }
+}
+
+/// The pins that live as long as the process: what a call that takes a
+/// `&'static str` pins its text in, as iced's `Font::new` does, and what
+/// the process leaks for good.
+static LASTING: Pins = Pins::lasting();
+
+/// The process's [`Pins::lasting`] pins.
+#[must_use]
+pub fn lasting() -> &'static Pins {
+    &LASTING
 }
 
 /// How [`Pins`] find a string they hold: by where its text is, which is
@@ -1843,6 +1889,109 @@ impl Pins {
         let slice: &'static [&'static str] = Box::leak(pinned.into_boxed_slice());
         slices.insert(slice);
         slice
+    }
+
+    /// A copy of `text` kept for good: the one kept for every equal text.
+    pub fn text(&'static self, text: &str) -> &'static str {
+        let mut held = self.held();
+        let texts = &mut held.leaked.texts;
+        if let Some(kept) = texts.get(text) {
+            return kept;
+        }
+        let kept: &'static str = Box::leak(text.into());
+        texts.insert(kept);
+        kept
+    }
+
+    /// A copy of `text` kept for good with a NUL byte after it, as
+    /// `Location::file_as_c_str` reads a location's file name: the one
+    /// kept for every equal text.
+    pub fn terminated(&'static self, text: &str) -> &'static str {
+        let mut held = self.held();
+        let terminated = &mut held.leaked.terminated;
+        if let Some(kept) = terminated.get(text) {
+            return kept;
+        }
+        let leaked: &'static str = Box::leak(format!("{text}\0").into_boxed_str());
+        let kept = &leaked[..text.len()];
+        terminated.insert(text.into(), kept);
+        kept
+    }
+
+    /// Whether `text` is the copy [`Pins::terminated`] keeps of its text.
+    #[must_use]
+    pub fn is_terminated(&self, text: &str) -> bool {
+        self.held()
+            .leaked
+            .terminated
+            .get(text)
+            .is_some_and(|kept| std::ptr::eq(*kept, text))
+    }
+
+    /// A `&'static` borrow of `location`, as a crate's `&'static Location`
+    /// takes it: the one kept for every equal location.
+    pub fn location(
+        &'static self,
+        location: std::panic::Location<'static>,
+    ) -> &'static std::panic::Location<'static> {
+        let mut held = self.held();
+        let locations = &mut held.leaked.locations;
+        if let Some(kept) = locations.get(&location) {
+            return kept;
+        }
+        let kept: &'static std::panic::Location<'static> = Box::leak(Box::new(location));
+        locations.insert(kept);
+        kept
+    }
+
+    /// `bytes` kept for good, as a call that takes a `&'static [u8]` keeps
+    /// a font's: the slice kept for every equal content.
+    pub fn bytes(&'static self, bytes: Vec<u8>) -> &'static [u8] {
+        let mut held = self.held();
+        let kept = &mut held.leaked.bytes;
+        if let Some(found) = kept.get(bytes.as_slice()) {
+            return found;
+        }
+        let leaked: &'static [u8] = Box::leak(bytes.into_boxed_slice());
+        kept.insert(leaked);
+        leaked
+    }
+
+    /// `values` kept for good, as a struct's field borrows them for its
+    /// lifetime, as iced's `LineDash::segments: &'a [f32]`: the slice kept
+    /// for every one of the same bits, which `bits` gives each value, so a
+    /// float's `NaN` is the `NaN` it was given. Slices are found by their
+    /// type and the hash of their bits, so a slice given again is found
+    /// without looking at any other.
+    pub fn scalars<T: Copy + Send + Sync + 'static>(
+        &'static self,
+        values: Vec<T>,
+        bits: fn(T) -> u64,
+    ) -> &'static [T] {
+        let mut hasher = std::hash::DefaultHasher::new();
+        for value in &values {
+            std::hash::Hasher::write_u64(&mut hasher, bits(*value));
+        }
+        let key = (TypeId::of::<T>(), std::hash::Hasher::finish(&hasher));
+        let same = |kept: &[T]| {
+            kept.len() == values.len()
+                && kept
+                    .iter()
+                    .zip(&values)
+                    .all(|(kept, value)| bits(*kept) == bits(*value))
+        };
+        let mut held = self.held();
+        let bucket = held.leaked.scalars.entry(key).or_default();
+        if let Some(found) = bucket
+            .iter()
+            .filter_map(|kept| kept.downcast_ref::<&'static [T]>())
+            .find(|kept| same(kept))
+        {
+            return found;
+        }
+        let leaked: &'static [T] = Box::leak(values.into_boxed_slice());
+        bucket.push(Box::leak(Box::new(leaked)));
+        leaked
     }
 
     /// Lets go of the native value at `address` that [`Pins::hold`] keeps,
@@ -2872,6 +3021,32 @@ mod tests {
         pins.clear();
         assert!(pins.is_empty());
         assert_eq!(std::rc::Rc::try_unwrap(value).as_deref(), Ok("data"));
+    }
+
+    /// The lasting pins leak each content once: an equal text, byte slice
+    /// or slice of the same bits given again is the one leaked first, and a
+    /// terminated text has its NUL byte after it.
+    #[test]
+    fn lasting_pins_leak_each_content_once() {
+        let pins = super::lasting();
+        let text = pins.text("lasting text");
+        assert!(std::ptr::eq(pins.text(&String::from("lasting text")), text));
+        let bytes = pins.bytes(vec![1, 2, 3]);
+        assert!(std::ptr::eq(pins.bytes(vec![1, 2, 3]), bytes));
+        fn bits(value: f32) -> u64 {
+            u64::from(value.to_bits())
+        }
+        let nan = pins.scalars(vec![f32::NAN, 1.0], bits);
+        assert!(std::ptr::eq(pins.scalars(vec![f32::NAN, 1.0], bits), nan));
+        let file = pins.terminated("lasting/file.rs");
+        assert!(pins.is_terminated(file));
+        assert!(
+            !pins.is_terminated("lasting/file.rs"),
+            "only the kept copy is"
+        );
+        // SAFETY: the kept copy is followed by its NUL byte in one leak.
+        let after = unsafe { *file.as_ptr().add(file.len()) };
+        assert_eq!(after, 0);
     }
 
     /// Pins dropped on another thread leak a held value rather than touch

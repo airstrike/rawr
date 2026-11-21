@@ -2,12 +2,6 @@
 //! this process holds. Each text is copied once, the first time a read
 //! meets it, and held while the process runs: a program's types name few.
 
-use std::collections::BTreeSet;
-use std::sync::{Mutex, PoisonError};
-
-/// Each text a read met so far.
-static HELD: Mutex<BTreeSet<&'static str>> = Mutex::new(BTreeSet::new());
-
 pub(crate) fn serialize<S: serde::Serializer>(
     text: &&'static str,
     serializer: S,
@@ -38,11 +32,5 @@ pub(crate) fn deserialize_optional<'de, D: serde::Deserializer<'de>>(
 
 /// The copy of `text` this process holds.
 fn held(text: String) -> &'static str {
-    let mut held = HELD.lock().unwrap_or_else(PoisonError::into_inner);
-    if let Some(text) = held.get(text.as_str()) {
-        return text;
-    }
-    let text: &'static str = Box::leak(text.into_boxed_str());
-    held.insert(text);
-    text
+    crate::scope::lasting().text(&text)
 }

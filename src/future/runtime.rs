@@ -618,7 +618,7 @@ struct Stepper {
     program: Option<Program>,
 }
 
-struct Step {
+pub(crate) struct Step {
     /// The step function, with what the body captured; dropped when the
     /// body ends, as Rust drops a finished future's state.
     step: Option<item::Value>,
@@ -628,7 +628,8 @@ struct Step {
     input: Option<Dynamic>,
     state: State,
     waker: Option<Waker>,
-    /// Whether [`SUSPENDED`] lists it: from its first suspension on.
+    /// Whether the reload's live bodies list it (`reload::live`): from its
+    /// first suspension on.
     listed: bool,
 }
 
@@ -836,34 +837,20 @@ fn run(
     }
 }
 
-/// Each async body that has suspended, while its future lives: a reload
-/// that changed the function one waits in can't resume it (#2117).
-static SUSPENDED: Mutex<Vec<std::sync::Weak<Mutex<Step>>>> = Mutex::new(Vec::new());
-
-fn with_suspended<R>(work: impl FnOnce(&mut Vec<std::sync::Weak<Mutex<Step>>>) -> R) -> R {
-    work(&mut lock(&SUSPENDED))
-}
-
-/// List the body in `shared`, which suspended for the first time. A full
-/// list first lets go of the bodies that ended, so listing one costs a
-/// push.
+/// List the body in `shared`, which suspended for the first time, among
+/// the live bodies a reload checks: one that waits in a function the
+/// reload changed can't resume (#2117).
 fn suspend(shared: &Arc<Mutex<Step>>) {
-    with_suspended(|all| {
-        if all.len() == all.capacity() {
-            all.retain(|step| step.strong_count() > 0);
-        }
-        all.push(Arc::downgrade(shared));
-    });
+    crate::reload::live::live()
+        .suspended
+        .push(Arc::downgrade(shared));
 }
 
 /// The step function of each async body suspended now, with the hash of
 /// the body it waits in: it resumes only in a generation whose function
 /// has the same one.
 pub fn suspended() -> Vec<(item::Value, u64)> {
-    let steps: Vec<_> = with_suspended(|all| {
-        all.retain(|step| step.strong_count() > 0);
-        all.iter().filter_map(std::sync::Weak::upgrade).collect()
-    });
+    let steps = crate::reload::live::live().suspended.alive();
     steps
         .iter()
         .filter_map(|shared| {
@@ -1041,11 +1028,27 @@ thread_local! {
     static DEPTH: Cell<usize> = const { Cell::new(0) };
 }
 
-/// The latest generation offered to the thread that owns the program, as
-/// what admits it there. A newer offer replaces an older one.
-#[allow(clippy::type_complexity)]
-static OFFERED: Mutex<Option<Box<dyn FnOnce() + Send>>> = Mutex::new(None);
-/// Whether [`OFFERED`] holds an offer, read at each entry.
+/// What other threads hand the thread that owns the program: the
+/// generation the reload thread offered last (D553.3), and the jobs any
+/// thread sends an owner that drains them itself, as the thread running
+/// the runtime entry's `block_on` does in its own poll (D527), with what
+/// wakes it. They share one lock.
+struct Inbox {
+    /// The latest generation offered, as what admits it on the owner. A
+    /// newer offer replaces an older one.
+    offered: Option<Box<dyn FnOnce() + Send>>,
+    jobs: VecDeque<Job>,
+    /// What wakes the owner when a job arrives, once it polled.
+    waker: Option<Waker>,
+}
+
+static INBOX: Mutex<Inbox> = Mutex::new(Inbox {
+    offered: None,
+    jobs: VecDeque::new(),
+    waker: None,
+});
+
+/// Whether the [`INBOX`] holds an offer, read at each entry.
 static WAITING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// Whether this process has reached a point that admits a generation
 /// ([`admits`]).
@@ -1075,9 +1078,9 @@ pub fn admits() -> bool {
 /// to be admitted first.
 pub fn offer(admit: impl FnOnce() + Send + 'static) {
     let older = {
-        let mut offered = lock(&OFFERED);
+        let mut inbox = lock(&INBOX);
         WAITING.store(true, std::sync::atomic::Ordering::Release);
-        offered.replace(Box::new(admit))
+        inbox.offered.replace(Box::new(admit))
     };
     drop(older);
     crate::redraw::windows_after(admit_idle);
@@ -1140,9 +1143,9 @@ fn admit_waiting() {
         return;
     }
     let admit = {
-        let mut offered = lock(&OFFERED);
+        let mut inbox = lock(&INBOX);
         WAITING.store(false, std::sync::atomic::Ordering::Release);
-        offered.take()
+        inbox.offered.take()
     };
     // In a memoizing framework, such as Freya, nothing calls the new
     // generation until something marks a scope dirty: an edit shows at the
@@ -1220,69 +1223,40 @@ pub fn wait(duration: std::time::Duration) {
 }
 
 /// A callable native code holds, by its function and the program that
-/// made it. One a marked `main`'s own frame gave is in [`HELD`] too: `main`
-/// never runs again to make another, so a generation it can't run in
-/// restarts the program (D553.5).
+/// made it. One a marked `main`'s own frame gave is listed as held too:
+/// `main` never runs again to make another, so a generation it can't run
+/// in restarts the program (D553.5).
 pub struct Held {
     function: item::Value,
     program: Program,
 }
 
-/// Each callable a marked `main`'s own frame gave native code, while
-/// native code holds it.
-static HELD: Mutex<Vec<std::sync::Weak<Held>>> = Mutex::new(Vec::new());
-
-fn with_held<R>(work: impl FnOnce(&mut Vec<std::sync::Weak<Held>>) -> R) -> R {
-    work(&mut lock(&HELD))
-}
-
 /// Each callable a marked `main`'s own frame gave native code that native
 /// code still holds, with the program that made it.
 pub fn held() -> Vec<(item::Value, Program)> {
-    with_held(|held| {
-        held.retain(|held| held.strong_count() > 0);
-        held.iter()
-            .filter_map(std::sync::Weak::upgrade)
-            .map(|held| (held.function.clone(), held.program.clone()))
-            .collect()
-    })
+    let held = crate::reload::live::live().held.alive();
+    held.iter()
+        .map(|held| (held.function.clone(), held.program.clone()))
+        .collect()
 }
 
-/// Each callable script code gave native code, while native code holds
-/// it: code of the generation that made it, which runs when the callable
-/// doesn't rebind in a newer one (#1746).
-static KEPT: Mutex<Vec<std::sync::Weak<Held>>> = Mutex::new(Vec::new());
-
-fn with_kept<R>(work: impl FnOnce(&mut Vec<std::sync::Weak<Held>>) -> R) -> R {
-    work(&mut lock(&KEPT))
-}
-
-/// `function` of `program` as a callable native code holds, kept in
-/// [`KEPT`] while it is held. A full list first lets go of the callables
-/// native code dropped, so keeping one costs a push.
+/// `function` of `program` as a callable native code holds, among the
+/// live callables a reload checks while it is held (#1746).
 fn keep(function: &item::Value, program: &Program) -> Arc<Held> {
     let kept = Arc::new(Held {
         function: function.bind(Vec::new()),
         program: program.clone(),
     });
-    with_kept(|all| {
-        if all.len() == all.capacity() {
-            all.retain(|kept| kept.strong_count() > 0);
-        }
-        all.push(Arc::downgrade(&kept));
-    });
+    crate::reload::live::live().kept.push(Arc::downgrade(&kept));
     kept
 }
 
 /// Each callable native code holds, with the program that made it.
 pub fn kept() -> Vec<(item::Value, Program)> {
-    with_kept(|kept| {
-        kept.retain(|kept| kept.strong_count() > 0);
-        kept.iter()
-            .filter_map(std::sync::Weak::upgrade)
-            .map(|kept| (kept.function.clone(), kept.program.clone()))
-            .collect()
-    })
+    let kept = crate::reload::live::live().kept.alive();
+    kept.iter()
+        .map(|kept| (kept.function.clone(), kept.program.clone()))
+        .collect()
 }
 
 /// The program the process runs, for script values native code holds
@@ -1324,8 +1298,8 @@ pub(crate) fn clone_value(value: &Dynamic) -> Option<RawrResultOf<Dynamic>> {
 pub struct Callable {
     function: item::Value,
     program: Program,
-    /// What [`KEPT`] holds it by, and [`HELD`] too when a marked `main`'s
-    /// own frame made it.
+    /// What the reload's live callables hold it by (`reload::live`), as
+    /// kept, and as held too when a marked `main`'s own frame made it.
     _kept: Arc<Held>,
 }
 
@@ -1346,7 +1320,7 @@ impl Callable {
             here().ok_or_else(|| failure("rawr: no program runs closures on this thread"))?;
         let kept = keep(&function, &program);
         if outermost() {
-            with_held(|all| all.push(Arc::downgrade(&kept)));
+            crate::reload::live::live().held.push(Arc::downgrade(&kept));
         }
         Ok(Self {
             function,
@@ -1525,13 +1499,8 @@ impl Job {
 #[allow(clippy::type_complexity)]
 static FORWARD: OnceLock<Box<dyn Fn(Job) + Send + Sync>> = OnceLock::new();
 
-/// Jobs for an owner that drives them itself, as the thread running the
-/// runtime entry's `block_on` does (D527): it drains them in its own poll.
-static QUEUE: Mutex<VecDeque<Job>> = Mutex::new(VecDeque::new());
-/// What wakes that owner when a job arrives.
-static DRIVER: Mutex<Option<Waker>> = Mutex::new(None);
-/// Whether [`DRIVER`] was ever set: [`drive`] only ever sets it, so a
-/// thread asks this without the lock.
+/// Whether the [`INBOX`] ever had a waker: [`drive`] only ever sets it, so
+/// a thread asks this without the lock.
 static DRIVEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 thread_local! {
@@ -1543,14 +1512,14 @@ thread_local! {
 /// does each time it polls the program's `main`: jobs from other threads
 /// queue for [`drain`] and wake it (D527).
 pub fn drive(waker: &Waker) {
-    *lock(&DRIVER) = Some(waker.clone());
+    lock(&INBOX).waker = Some(waker.clone());
     DRIVEN.store(true, std::sync::atomic::Ordering::Release);
 }
 
 /// Run every job queued for the owner, in order, on this, the owner thread.
 pub fn drain() {
     loop {
-        let job = lock(&QUEUE).pop_front();
+        let job = lock(&INBOX).jobs.pop_front();
         match job {
             Some(job) => job.run(),
             None => break,
@@ -1674,10 +1643,15 @@ pub(crate) fn display(value: &Dynamic) -> Option<RawrResultOf<String>> {
 }
 
 fn send(job: Job) {
-    let driver = lock(&DRIVER).clone();
-    if let Some(driver) = driver {
-        lock(&QUEUE).push_back(job);
-        driver.wake();
+    if DRIVEN.load(std::sync::atomic::Ordering::Acquire) {
+        let waker = {
+            let mut inbox = lock(&INBOX);
+            inbox.jobs.push_back(job);
+            inbox.waker.clone()
+        };
+        if let Some(waker) = waker {
+            waker.wake();
+        }
         return;
     }
     match FORWARD.get() {
