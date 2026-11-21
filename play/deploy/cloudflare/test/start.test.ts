@@ -50,7 +50,7 @@ function fixture() {
   return {
     bot, ctx, values,
     at(time: number) { now = time; },
-    report(boot: number, version = "current") { values.set("stats", { status: { boot, version } }); },
+    report(boot: number, version = "current", seen = boot) { values.set("stats", { status: { boot, version, seen } }); },
     writes: () => writes,
     fail() { fail = true; },
     hold() { pending = new Promise<void>((done) => { release = done; }); },
@@ -110,4 +110,20 @@ test("a failed start releases the recording attempt so a retry gets its own boun
   await f.bot.start();
   assert.equal(f.writes(), 2);
   assert.equal(await f.bot.reportedImage(), null);
+});
+
+test("a start that leaves the running process in place accepts that process's later reports", async () => {
+  const f = fixture();
+  await f.bot.start();
+  f.report(100);
+  // The Durable Object loses the container's connection and starts it again,
+  // while the bot that booted at 100 keeps running and reporting.
+  f.ctx.container.running = false;
+  f.at(200);
+  await f.bot.start();
+  assert.equal(await f.bot.reportedImage(), null);
+  f.report(100, "current", 200);
+  assert.equal(await f.bot.reportedImage(), null);
+  f.report(100, "current", 260);
+  assert.equal(await f.bot.reportedImage(), "current");
 });

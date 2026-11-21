@@ -435,11 +435,18 @@ export class PlayBot extends Container<Env> {
     return `workers=${e.PLAY_WORKERS},memory=${e.PLAY_MEMORY_MB},timeout=${e.PLAY_TIMEOUT_MS},time=${e.PLAY_TIME_MS},max=${e.PLAY_MAX_MS}`;
   }
 
-  /** The image the bot reported since its container last started, or null before it reports. */
+  /**
+   * The image of the bot that reports since the last start attempt, or null
+   * before it reports. A report counts when its process booted at or after
+   * the attempt, or when the Durable Object received it after the attempt: a
+   * start that finds the container still running (after "Container
+   * connectivity was lost", say) leaves the process that booted before it,
+   * and only that process's later reports name the image that runs.
+   */
   async reportedImage(): Promise<string | null> {
     const status = (await this.ctx.storage.get<Stats>(STATS_KEY))?.status;
     const startedAt = (await this.ctx.storage.get<number>(STARTED_AT_KEY)) ?? 0;
-    return status && status.boot >= startedAt ? status.version : null;
+    return status && (status.boot >= startedAt || status.seen > startedAt) ? status.version : null;
   }
 
   /** /bot/health: whether the bot runs, the image it reported, and the Worker version this Durable Object runs. */
