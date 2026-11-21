@@ -19,7 +19,7 @@
 
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::OnceLock;
 use std::time::{Duration, SystemTime};
 
 use crate::extract::engine::home;
@@ -128,15 +128,14 @@ pub fn project(rawr: &Path, kept: Kept) -> PathBuf {
 /// stale digests file and retires, in the background, what no installed
 /// rawr reaches.
 fn current(directory: &Path, base: Base) -> PathBuf {
-    static OPENED: Mutex<Vec<(PathBuf, Option<home::Held>)>> = Mutex::new(Vec::new());
     let root = root(directory, crate::extract::protocol::SCHEMA);
-    let mut opened = OPENED
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if opened.iter().any(|(path, _)| *path == root) {
+    let Some(end) = OPENED.end(&root) else {
+        return root;
+    };
+    let lease = lease(&root);
+    if !end.record(&root, lease) {
         return root;
     }
-    let lease = lease(&root);
     if matches!(base, Base::Home) {
         let _ = fs::remove_file(directory.join(DIGESTS));
     }
@@ -144,8 +143,74 @@ fn current(directory: &Path, base: Base) -> PathBuf {
     let _ = std::thread::Builder::new()
         .name("rawr-format-cleanup".into())
         .spawn(move || retire(&directory, &keep, base));
-    opened.push((root.clone(), lease));
     root
+}
+
+/// Each format root this process opened, with the lease it holds for the
+/// process's life.
+///
+/// The lease belongs to the process, not to a run owner. Its shared lock on
+/// the format's lock file keeps every other rawr process from retiring the
+/// format while this one runs. The first open in the process retires the
+/// formats no installed rawr uses. The path helpers above reach it with no
+/// owner in hand, `rawr_import::bindings::format::project` among them.
+///
+/// The table only grows. Each open root is one node of a list whose links
+/// are `OnceLock`s, each set once and never changed, so a lookup walks the
+/// set links and takes no lock.
+static OPENED: Opened = Opened::new();
+
+/// A link of the open list: empty at the list's end, or the next open root.
+struct Opened(OnceLock<Box<Open>>);
+
+/// One open root and the link after it.
+struct Open {
+    root: PathBuf,
+    /// Held for its drop only, so the lease lasts as long as the process.
+    _lease: Option<home::Held>,
+    next: Opened,
+}
+
+impl Opened {
+    const fn new() -> Self {
+        Self(OnceLock::new())
+    }
+
+    /// The empty link at the list's end, or `None` when `root` is open.
+    fn end(&self, root: &Path) -> Option<&Self> {
+        let mut link = self;
+        while let Some(open) = link.0.get() {
+            if open.root == root {
+                return None;
+            }
+            link = &open.next;
+        }
+        Some(link)
+    }
+
+    /// Record `root` with its `lease` at the end reached from this link.
+    /// False when another thread recorded `root` first. Then `lease` drops,
+    /// and the lease that thread recorded keeps the format.
+    fn record(&self, root: &Path, lease: Option<home::Held>) -> bool {
+        let mut open = Box::new(Open {
+            root: root.to_path_buf(),
+            _lease: lease,
+            next: Self::new(),
+        });
+        let mut link = self;
+        loop {
+            match link.0.set(open) {
+                Ok(()) => return true,
+                Err(refused) => open = refused,
+            }
+            // Another thread linked a root here first. Walk past it to the
+            // new end, unless it is this root.
+            let Some(end) = link.end(root) else {
+                return false;
+            };
+            link = end;
+        }
+    }
 }
 
 /// Protocol `protocol`'s format under `directory`.
