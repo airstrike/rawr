@@ -51,16 +51,20 @@ const SCREEN: &str =
     pub fn ticks(&self) -> i64 { self.ticks }\n\
     }\n";
 
-/// What `engine`'s reveal of `snapshot`'s program finds: the instances and
-/// the items and methods it gives the program.
-fn revealed(engine: &Engine, snapshot: &package::snapshot::Snapshot) -> String {
+/// What `engine`'s reveal of `snapshot`'s program finds, lent `kept`: the
+/// instances and the items and methods it gives the program.
+fn revealed(
+    engine: &Engine,
+    kept: Option<&mut super::Lowerings>,
+    snapshot: &package::snapshot::Snapshot,
+) -> String {
     let mut allocation = host::TestImportAllocation::default();
-    let graph = engine.load_snapshot_kept(snapshot).unwrap();
+    let graph = package::Graph::load_snapshot(engine, snapshot).unwrap();
     let native = resolve::native::Capture::from_graph(&graph, &mut allocation).unwrap();
     let mut program =
         resolve::package::resolve_captured(graph, &engine.host_registry, native).unwrap();
     let host = engine.host_registry.share();
-    super::reveal(engine, &mut program, &host, &mut allocation)
+    super::reveal(engine, &mut program, &host, &mut allocation, kept)
         .unwrap_or_else(|_| panic!("the fixture reveals"));
     format!(
         "{:?}\n{:?}\n{:?}",
@@ -73,24 +77,24 @@ fn revealed(engine: &Engine, snapshot: &package::snapshot::Snapshot) -> String {
 /// widget's bodies, finds what a fresh compiler's finds.
 #[test]
 fn a_reveal_that_reuses_unchanged_bodies_finds_what_a_fresh_one_does() {
-    let mut keeping = compiler();
-    keeping.keep_lowerings();
+    let engine = compiler();
+    let mut kept = super::Lowerings::new();
     assert_eq!(
-        revealed(&keeping, &snapshot(SCREEN)),
-        revealed(&compiler(), &snapshot(SCREEN))
+        revealed(&engine, Some(&mut kept), &snapshot(SCREEN)),
+        revealed(&compiler(), None, &snapshot(SCREEN))
     );
     let saved = SCREEN
         .replace("ticks: i64 }", "ticks: i64, held: u32 }")
         .replace("ticks: 0 }", "ticks: 0, held: 0 }")
         .replace("self.ticks + 1", "self.ticks + 2");
     assert_eq!(
-        revealed(&keeping, &snapshot(&saved)),
-        revealed(&compiler(), &snapshot(&saved))
+        revealed(&engine, Some(&mut kept), &snapshot(&saved)),
+        revealed(&compiler(), None, &snapshot(&saved))
     );
     // And back, as a restore saves the text it had.
     assert_eq!(
-        revealed(&keeping, &snapshot(SCREEN)),
-        revealed(&compiler(), &snapshot(SCREEN))
+        revealed(&engine, Some(&mut kept), &snapshot(SCREEN)),
+        revealed(&compiler(), None, &snapshot(SCREEN))
     );
 }
 
@@ -99,7 +103,7 @@ fn a_reveal_that_reuses_unchanged_bodies_finds_what_a_fresh_one_does() {
 fn reads(snapshot: &package::snapshot::Snapshot, file: &str) -> ([u8; 32], [u8; 32]) {
     let engine = compiler();
     let mut allocation = host::TestImportAllocation::default();
-    let graph = engine.load_snapshot_kept(snapshot).unwrap();
+    let graph = package::Graph::load_snapshot(&engine, snapshot).unwrap();
     let native = resolve::native::Capture::from_graph(&graph, &mut allocation).unwrap();
     let program = resolve::package::resolve_captured(graph, &engine.host_registry, native).unwrap();
     let runtime =
@@ -164,12 +168,17 @@ fn a_private_field_a_lowering_asks_about_changes_what_another_module_reads() {
     assert_ne!(reads(&snapshot(&referent), "reader.rs").0, reader);
 }
 
-/// What `engine` lowers `snapshot`'s program to.
-fn lowered(engine: &Engine, snapshot: &package::snapshot::Snapshot) -> String {
+/// What `engine` lowers `snapshot`'s program to, lent `cache`.
+fn lowered(
+    engine: &Engine,
+    cache: Option<&mut package::import::resident::Cache>,
+    snapshot: &package::snapshot::Snapshot,
+) -> String {
     let output = package::compile::captured::Output::transform_plain(
         engine,
         snapshot,
         &mut host::TestImportAllocation::default(),
+        cache,
     )
     .unwrap_or_else(|_| panic!("the fixture compiles"));
     let (_, mut ast) = output.candidate.with_top_level();
@@ -191,21 +200,21 @@ fn lowered(engine: &Engine, snapshot: &package::snapshot::Snapshot) -> String {
 /// clone, its native call and its pattern by it.
 #[test]
 fn a_compile_that_reuses_another_state_s_module_lowers_what_a_fresh_one_does() {
-    let mut keeping = compiler();
-    keeping.keep_lowerings();
+    let engine = compiler();
+    let mut cache = package::import::resident::Cache::new();
     assert_eq!(
-        lowered(&keeping, &snapshot(SCREEN)),
-        lowered(&compiler(), &snapshot(SCREEN))
+        lowered(&engine, Some(&mut cache), &snapshot(SCREEN)),
+        lowered(&compiler(), None, &snapshot(SCREEN))
     );
     let saved = SCREEN
         .replace("ticks: i64 }", "ticks: i64, held: u32 }")
         .replace("ticks: 0 }", "ticks: 0, held: 0 }");
     assert_eq!(
-        lowered(&keeping, &snapshot(&saved)),
-        lowered(&compiler(), &snapshot(&saved))
+        lowered(&engine, Some(&mut cache), &snapshot(&saved)),
+        lowered(&compiler(), None, &snapshot(&saved))
     );
     assert_eq!(
-        lowered(&keeping, &snapshot(SCREEN)),
-        lowered(&compiler(), &snapshot(SCREEN))
+        lowered(&engine, Some(&mut cache), &snapshot(SCREEN)),
+        lowered(&compiler(), None, &snapshot(SCREEN))
     );
 }

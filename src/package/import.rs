@@ -168,7 +168,7 @@ impl crate::Engine {
         applications: &[rawr_import::surface::application::Application],
         facade: Option<&[u8]>,
         cells: Option<&super::Cells>,
-        kept: Option<&mut Kept>,
+        mut kept: Option<&mut Kept>,
     ) -> Result<CompiledImported, super::Error> {
         let mut step = crate::Instant::now();
         let mut steps = Vec::new();
@@ -224,7 +224,7 @@ impl crate::Engine {
         let paths = imported_paths(contract, &mut allocation).map_err(super::Error::import)?;
         // Every lowering below shares this one copy.
         let registry = self
-            .installed(contract, applications, &mut allocation, kept)
+            .installed(contract, applications, &mut allocation, kept.as_deref_mut())
             .map_err(super::Error::import)?;
         took("installing");
         // A dependency's macro called where an item goes expands first,
@@ -301,119 +301,115 @@ impl crate::Engine {
         // rustc resolves each macro a `use` binds by name with the calls the
         // pass finds, in one driver run (#2155).
         let unresolved = program.unresolved_crate_macros(&project);
-        let symbolic =
-            match crate::resolve::lower_imported(self, &mut program, &registry, &mut allocation) {
-                Ok(uses) => match unresolved_uses(&sources, &unresolved) {
-                    Some(error) => return Err(error),
-                    None => uses,
-                },
-                Err(crate::resolve::ImportedFailure::Surface(error)) => {
-                    return Err(super::Error::import(Error::Surface(error)));
+        let symbolic = match crate::resolve::lower_imported(
+            self,
+            &mut program,
+            &registry,
+            &mut allocation,
+            kept.map(Kept::lowerings),
+        ) {
+            Ok(uses) => match unresolved_uses(&sources, &unresolved) {
+                Some(error) => return Err(error),
+                None => uses,
+            },
+            Err(crate::resolve::ImportedFailure::Surface(error)) => {
+                return Err(super::Error::import(Error::Surface(error)));
+            }
+            Err(crate::resolve::ImportedFailure::Lowering(mut failure)) => {
+                // What the pass missed besides this failure, asked for
+                // with it (#662).
+                let unknowns = failure.take_unknowns();
+                let mut misses = unknowns
+                    .iter()
+                    .filter_map(|unknown| match rust_miss(contract, unknown) {
+                        Some(Miss::Demand(path, through_alias, member)) => {
+                            Some((path, through_alias, member))
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                for unknown in &unknowns {
+                    misses.extend(hidden_member_misses(contract, unknown));
                 }
-                Err(crate::resolve::ImportedFailure::Lowering(mut failure)) => {
-                    // What the pass missed besides this failure, asked for
-                    // with it (#662).
-                    let unknowns = failure.take_unknowns();
-                    let mut misses = unknowns
+                let (evidence, mut error) = failure.into_parts();
+                // rustc expands a crate macro's call first, with every
+                // other the pass found, and checking again reads their
+                // expansions (#1125, #2151). What the pass missed, the
+                // call's own macro among it (`rust_miss`), is demanded
+                // before that.
+                if let crate::ParseErrorType::Resolution(
+                    own @ crate::resolve::Error::MacroExpansionRequired { .. },
+                ) = error.err_type()
+                {
+                    if let Some(Miss::Demand(path, through_alias, member)) =
+                        rust_miss(contract, own)
+                    {
+                        misses.insert(0, (path, through_alias, member));
+                    }
+                    let calls = unknowns
                         .iter()
-                        .filter_map(|unknown| match rust_miss(contract, unknown) {
+                        .chain(unresolved.iter().map(|(_, error)| error))
+                        .filter_map(|unknown| match unknown {
+                            crate::resolve::Error::MacroExpansionRequired { call, .. } => {
+                                Some(call.clone())
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    return Err(super::Error::compilation(sources.clone(), evidence, error)
+                        .with_rust_macro_calls(calls)
+                        .with_rust_misses(misses));
+                }
+                // A miss a proof may settle is reported and demanded as
+                // the ordinary miss, carrying the call to prove first.
+                let mut proving = None;
+                if let crate::ParseErrorType::Resolution(
+                    crate::resolve::Error::ImportedApplicationRequired { call, miss, .. },
+                ) = error.err_type()
+                {
+                    let call = call.clone();
+                    match miss {
+                        None => {
+                            return Err(super::Error::compilation(
+                                sources.clone(),
+                                evidence,
+                                error,
+                            )
+                            .with_rust_application(call));
+                        }
+                        Some(miss) => {
+                            let miss = crate::ParseErrorType::Resolution((**miss).clone());
+                            error = crate::ParseError(
+                                Box::new(miss),
+                                error.position(),
+                                error.2.clone(),
+                            );
+                            proving = Some(call);
+                        }
+                    }
+                }
+                let proving = |error: super::Error| match &proving {
+                    Some(call) => error.with_rust_application(call.clone()),
+                    None => error,
+                };
+                if let crate::ParseErrorType::Resolution(resolution) = error.err_type() {
+                    misses.extend(hidden_member_misses(contract, resolution));
+                }
+                let demand = match error.err_type() {
+                    crate::ParseErrorType::Resolution(resolution) => {
+                        match rust_miss(contract, resolution) {
                             Some(Miss::Demand(path, through_alias, member)) => {
                                 Some((path, through_alias, member))
                             }
                             _ => None,
-                        })
-                        .collect::<Vec<_>>();
-                    for unknown in &unknowns {
-                        misses.extend(hidden_member_misses(contract, unknown));
-                    }
-                    let (evidence, mut error) = failure.into_parts();
-                    // rustc expands a crate macro's call first, with every
-                    // other the pass found, and checking again reads their
-                    // expansions (#1125, #2151). What the pass missed, the
-                    // call's own macro among it (`rust_miss`), is demanded
-                    // before that.
-                    if let crate::ParseErrorType::Resolution(
-                        own @ crate::resolve::Error::MacroExpansionRequired { .. },
-                    ) = error.err_type()
-                    {
-                        if let Some(Miss::Demand(path, through_alias, member)) =
-                            rust_miss(contract, own)
-                        {
-                            misses.insert(0, (path, through_alias, member));
-                        }
-                        let calls = unknowns
-                            .iter()
-                            .chain(unresolved.iter().map(|(_, error)| error))
-                            .filter_map(|unknown| match unknown {
-                                crate::resolve::Error::MacroExpansionRequired { call, .. } => {
-                                    Some(call.clone())
-                                }
-                                _ => None,
-                            })
-                            .collect();
-                        return Err(super::Error::compilation(sources.clone(), evidence, error)
-                            .with_rust_macro_calls(calls)
-                            .with_rust_misses(misses));
-                    }
-                    // A miss a proof may settle is reported and demanded as
-                    // the ordinary miss, carrying the call to prove first.
-                    let mut proving = None;
-                    if let crate::ParseErrorType::Resolution(
-                        crate::resolve::Error::ImportedApplicationRequired { call, miss, .. },
-                    ) = error.err_type()
-                    {
-                        let call = call.clone();
-                        match miss {
-                            None => {
-                                return Err(super::Error::compilation(
-                                    sources.clone(),
-                                    evidence,
-                                    error,
-                                )
-                                .with_rust_application(call));
-                            }
-                            Some(miss) => {
-                                let miss = crate::ParseErrorType::Resolution((**miss).clone());
-                                error = crate::ParseError(
-                                    Box::new(miss),
-                                    error.position(),
-                                    error.2.clone(),
-                                );
-                                proving = Some(call);
-                            }
                         }
                     }
-                    let proving = |error: super::Error| match &proving {
-                        Some(call) => error.with_rust_application(call.clone()),
-                        None => error,
-                    };
-                    if let crate::ParseErrorType::Resolution(resolution) = error.err_type() {
-                        misses.extend(hidden_member_misses(contract, resolution));
-                    }
-                    let demand = match error.err_type() {
-                        crate::ParseErrorType::Resolution(resolution) => {
-                            match rust_miss(contract, resolution) {
-                                Some(Miss::Demand(path, through_alias, member)) => {
-                                    Some((path, through_alias, member))
-                                }
-                                _ => None,
-                            }
-                        }
-                        _ => None,
-                    };
-                    if let Some(report) =
-                        imported_lowering_report(&evidence, &error, &sources, &paths)
-                            .map_err(super::Error::diagnostic)?
-                    {
-                        let error = super::Error::import_diagnostic(report);
-                        return Err(proving(match demand {
-                            Some((path, through_alias, member)) => error
-                                .with_rust_demand(&path, through_alias, member)
-                                .with_rust_misses(misses),
-                            None => error.with_rust_misses(misses),
-                        }));
-                    }
-                    let error = super::Error::compilation(sources.clone(), evidence, error);
+                    _ => None,
+                };
+                if let Some(report) = imported_lowering_report(&evidence, &error, &sources, &paths)
+                    .map_err(super::Error::diagnostic)?
+                {
+                    let error = super::Error::import_diagnostic(report);
                     return Err(proving(match demand {
                         Some((path, through_alias, member)) => error
                             .with_rust_demand(&path, through_alias, member)
@@ -421,7 +417,15 @@ impl crate::Engine {
                         None => error.with_rust_misses(misses),
                     }));
                 }
-            };
+                let error = super::Error::compilation(sources.clone(), evidence, error);
+                return Err(proving(match demand {
+                    Some((path, through_alias, member)) => error
+                        .with_rust_demand(&path, through_alias, member)
+                        .with_rust_misses(misses),
+                    None => error.with_rust_misses(misses),
+                }));
+            }
+        };
         took("lowering");
         let mut compiler = contract
             .compiler_with_allocation(Brand::mint(facade), imported_snapshot, limits, allocation)

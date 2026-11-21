@@ -124,7 +124,7 @@ fn snapshot_pass_retains_candidate_and_native_uses_together() {
     let text = source("Foo");
     let snapshot = snapshot(&text);
     let mut allocation = host::TestImportAllocation::default();
-    let output = Output::transform_plain(&engine, &snapshot, &mut allocation).unwrap();
+    let output = Output::transform_plain(&engine, &snapshot, &mut allocation, None).unwrap();
     assert_eq!(output.candidate.source().entry_source().text(), text);
     assert_eq!(output.imported.uses.len(), 1);
     let use_ = &output.imported.uses[0];
@@ -144,6 +144,7 @@ fn body_edit_keeps_native_requirements_but_retains_fresh_source() {
         &engine,
         &snapshot(&source("Foo")),
         &mut host::TestImportAllocation::default(),
+        None,
     )
     .unwrap();
     let edited = source("Bar");
@@ -151,6 +152,7 @@ fn body_edit_keeps_native_requirements_but_retains_fresh_source() {
         &engine,
         &snapshot(&edited),
         &mut host::TestImportAllocation::default(),
+        None,
     )
     .unwrap();
     assert_eq!(first.imported.uses, next.imported.uses);
@@ -165,6 +167,7 @@ fn resource_refusal_is_not_a_source_or_native_preparation_miss() {
         &engine,
         &snapshot(&source("Foo")),
         &mut host::TestImportAllocation::new(0, 0),
+        None,
     ) {
         Ok(_) => panic!("zero retained budget must refuse imported-use capture"),
         Err(error) => error,
@@ -180,6 +183,7 @@ fn type_error_keeps_the_actual_snapshot_diagnostic() {
         &engine,
         &snapshot(&text),
         &mut host::TestImportAllocation::default(),
+        None,
     ) {
         Ok(_) => panic!("bool cannot replace an i64 field"),
         Err(error) => error,

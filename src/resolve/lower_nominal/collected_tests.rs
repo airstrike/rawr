@@ -91,6 +91,7 @@ fn lower(
 ) -> Result<(crate::program::Executable, ImportedOutput), resolve::ImportedFailure> {
     resolve::lower_package_with_uses(
         engine,
+        None,
         program,
         allocation,
         None,
@@ -106,6 +107,7 @@ fn parity(engine: &Engine, source: &str) -> (crate::program::Executable, Importe
         &program,
         &engine.host_registry.share(),
         &mut symbolic_allocation,
+        None,
     )
     .unwrap_or_else(|failure| panic!("symbolic fixture: {}", failure.into_error()));
     let mut actual_allocation = host::TestImportAllocation::default();
@@ -565,6 +567,7 @@ fn collector_capacity_failures_remain_surface_allocation_errors() {
         let mut failure = None;
         let mut uses = Vec::new();
         let mut dependencies = std::collections::BTreeSet::new();
+        let mut reads = Vec::new();
         let mut parser = super::Parser::new_with_offset(
             &engine,
             "",
@@ -578,6 +581,7 @@ fn collector_capacity_failures_remain_surface_allocation_errors() {
                 source: program.source().entry(),
                 uses: &mut uses,
                 dependencies: &mut dependencies,
+                reads: &mut reads,
             }),
         );
         let result = match kind {
@@ -608,6 +612,7 @@ fn with_import_context<T>(
     let mut failure = None;
     let mut uses = Vec::new();
     let mut dependencies = std::collections::BTreeSet::new();
+    let mut reads = Vec::new();
     let output = action(&mut super::ImportedContext {
         native: None,
         allocation,
@@ -615,6 +620,7 @@ fn with_import_context<T>(
         source: crate::program::source::Id::from_index(0),
         uses: &mut uses,
         dependencies: &mut dependencies,
+        reads: &mut reads,
     });
     (output, failure)
 }

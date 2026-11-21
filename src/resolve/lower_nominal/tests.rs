@@ -32,6 +32,7 @@ fn symbolic_imported(
         program,
         &engine.host_registry.share(),
         &mut allocation,
+        None,
     )
     .map(|output| output.uses)
 }
@@ -218,6 +219,7 @@ fn fully_qualified_nested_imported_type_owner_remains_symbolic() {
     );
     let (executable, collected) = resolve::lower_package_with_uses(
         &engine,
+        None,
         program,
         &mut host::TestImportAllocation::default(),
         None,

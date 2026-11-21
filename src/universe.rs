@@ -209,7 +209,10 @@ fn compile(
     engine: &Shared<Engine>,
     snapshot: &package::snapshot::Snapshot,
 ) -> Result<crate::reload::Candidate, Error> {
-    match engine.compile_covered(snapshot).map_err(Error::compile)? {
+    match engine
+        .compile_covered(snapshot, None)
+        .map_err(Error::compile)?
+    {
         Ok(compiled) => {
             let (candidate, _, _) = compiled.into_parts();
             Ok(candidate)

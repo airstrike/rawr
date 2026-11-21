@@ -1,6 +1,6 @@
-//! A2: a runner's compile on save. The runner's compiler keeps its parses
-//! and lowerings for the next save behind two `Mutex`es on the shared
-//! `Engine`, where the fix has the runner lend them `&mut`.
+//! A2: a runner's compile on save. The runner keeps its compiler's parses
+//! and lowerings for the next save in a `resident::Cache` it owns and
+//! lends `&mut` to each compile, so a save takes no lock of them.
 //!
 //! This is the path a generated runner takes on each save
 //! (`Engine::compile_package_snapshot_resident_plain`), on a compiler
@@ -8,7 +8,7 @@
 //! save: one body edit of the entry, compiled against the kept parses and
 //! lowerings of the earlier saves.
 
-use rawr::package::import::resident::Outcome;
+use rawr::package::import::resident::{Cache, Outcome};
 use rawr::package::import::runner::account;
 use rawr::package::snapshot::Snapshot;
 use std::path::PathBuf;
@@ -99,8 +99,9 @@ pub fn workload() -> Workload {
         .retain_imported_native(native)
         .expect("a fresh engine retains no native account yet");
     // The first compile is the runner's start; each run after is a save.
+    let mut cache = Cache::new();
     let mut generation = 0;
-    compile(&engine, generation);
+    compile(&engine, &mut cache, generation);
     let about = About {
         name: NAME,
         smells: &["A2"],
@@ -109,14 +110,14 @@ pub fn workload() -> Workload {
     let fixture = format!("{MAIN}\n// model.rs\n{MODEL}");
     Workload::new(about, fixture, move || {
         generation += 1;
-        compile(&engine, generation);
+        compile(&engine, &mut cache, generation);
         Ran::default()
     })
 }
 
-fn compile(engine: &rawr::Engine, generation: u64) {
+fn compile(engine: &rawr::Engine, cache: &mut Cache, generation: u64) {
     let outcome = engine
-        .compile_package_snapshot_resident_plain(&saved(generation))
+        .compile_package_snapshot_resident_plain(&saved(generation), cache)
         .unwrap_or_else(|error| panic!("the saved program compiles: {error}"));
     assert!(
         matches!(outcome, Outcome::Compiled(_)),

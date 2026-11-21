@@ -246,10 +246,13 @@ impl Executable {
         .map(|(executable, ())| executable)
     }
 
-    /// Consume one resolved program into executable support and its native-use evidence.
+    /// Consume one resolved program into executable support and its
+    /// native-use evidence. A compile lent `kept`, a runner's lowerings,
+    /// reuses what they hold and keeps what it lowers in them.
     #[cfg(feature = "rust-import")]
     pub(crate) fn from_package_with_uses<A: host::ImportAllocation>(
         engine: &Engine,
+        mut kept: Option<&mut resolve::lower_nominal::Lowerings>,
         program: resolve::Program,
         allocation: &mut A,
         scope: Option<&Scope>,
@@ -261,11 +264,13 @@ impl Executable {
             &mut program,
             &engine.host_registry.share(),
             allocation,
+            kept.as_deref_mut(),
         )?;
         let owner = allocation.support_owner();
         let (mut executable, imported) = Self::from_lowering(engine, program, |program, model| {
             resolve::lower_nominal::with_uses(
                 engine,
+                kept,
                 program,
                 model,
                 allocation,

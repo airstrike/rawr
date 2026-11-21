@@ -5752,19 +5752,29 @@ fn prepare_engine(
     if let Some(inspector) = inspector {
         take_debugger(inspector, &engine);
     }
-    // Each source's lowering an earlier runner kept under the project's
-    // `target/rawr`, and the parses `rawr` kept there (#1638).
-    if let Some(directory) = std::env::var_os("RAWR_DIRECTORY") {
-        engine.keep_resident_in(std::path::Path::new(&directory));
-    }
     Ok((engine, bindings, application_contract))
 }
 
+/// What a new engine's compiles keep for its next compile: in memory, and
+/// under the project's `target/rawr`, where its first compile reads each
+/// source's lowering an earlier runner kept and the parses `rawr` kept
+/// (#1638).
+fn compile_cache() -> __rawr_internal::package::import::resident::Cache {
+    match std::env::var_os("RAWR_DIRECTORY") {
+        Some(directory) => __rawr_internal::package::import::resident::Cache::in_directory(
+            std::path::Path::new(&directory),
+        ),
+        None => __rawr_internal::package::import::resident::Cache::new(),
+    }
+}
+
+/// The program `input` holds, compiled on an engine of its own, with what
+/// its compile kept for the engine's next one.
 fn compile_program(
     input: &[u8],
     compilation: Compilation<'_>,
     progress: &mut impl FnMut(u8) -> std::io::Result<()>,
-) -> std::io::Result<Option<Program>> {
+) -> std::io::Result<Option<(Program, __rawr_internal::package::import::resident::Cache)>> {
     let (expected, input) = input
         .split_first_chunk::<32>()
         .ok_or_else(|| std::io::Error::other("application semantic"))?;
@@ -5775,12 +5785,13 @@ fn compile_program(
     compile_source(std::sync::Arc::new(source), compilation, progress).map(Some)
 }
 
-/// Compile `source` as a generation on an engine of its own.
+/// Compile `source` as a generation on an engine of its own, with what
+/// the compile kept for the engine's next one.
 fn compile_source(
     source: std::sync::Arc<__RawrSource>,
     compilation: Compilation<'_>,
     progress: &mut impl FnMut(u8) -> std::io::Result<()>,
-) -> std::io::Result<Program> {
+) -> std::io::Result<(Program, __rawr_internal::package::import::resident::Cache)> {
     let snapshot = &source.snapshot;
     let native = match compilation {
         Compilation::Initial => __rawr_internal::package::import::runner::account::Native::decode(GENERATED_MANIFEST),
@@ -5802,17 +5813,20 @@ fn compile_source(
     // `rawr run` runs the program as Cargo builds it: with everything.
     let (engine, bindings, application_contract) =
         prepare_engine(native, __rawr_internal::Access::all(), tests.as_ref(), &mut *progress)?;
+    let mut cache = compile_cache();
     let (candidate, ast) = __rawr_profile::compile_initial(
         &engine,
         snapshot,
+        &mut cache,
         &application_contract,
         &source.expected,
     )?;
     progress(4)?;
     progress(5)?;
     let marked_main = snapshot.marked_root();
-    Ok(Program { engine, ast: Some(ast), candidate, application_contract,
-        _bindings: bindings.into(), marked_main, tests, source })
+    let program = Program { engine, ast: Some(ast), candidate, application_contract,
+        _bindings: bindings.into(), marked_main, tests, source };
+    Ok((program, cache))
 }
 
 fn compile_live(
@@ -6088,18 +6102,19 @@ mod __rawr_profile {
     pub fn compile_initial(
         engine: &__rawr_internal::Engine,
         snapshot: &__rawr_internal::package::snapshot::Snapshot,
+        cache: &mut __rawr_internal::package::import::resident::Cache,
         _contract: &ApplicationContract,
         _expected: &[u8; 32],
     ) -> std::io::Result<(Option<__rawr_internal::reload::Candidate>, __rawr_internal::AST)> {
-        let compiled = engine.compile_package_snapshot_generation_with_top_level(snapshot);
+        let compiled = engine.compile_package_snapshot_generation_with_top_level(snapshot, Some(&mut *cache));
         // `RAWR_VERBOSE` says what the start's compile did, beside what an
         // earlier runner kept (#1638).
         if std::env::var_os("RAWR_VERBOSE").is_some_and(|value| !value.is_empty() && value != "0") {
             eprintln!(
                 "rawr runner: a start parsed {} sources, revealed {} files, lowered {} files",
-                engine.resident_parsed(),
-                engine.resident_revealed(),
-                engine.resident_lowered(),
+                cache.parsed(),
+                cache.revealed(),
+                cache.lowered(),
             );
         }
         compiled
@@ -6243,25 +6258,27 @@ mod __rawr_profile {
         Ok(None)
     }
     /// Compile the next generation once against the running program's
-    /// engine and its retained native surface (D355).
+    /// engine and its retained native surface (D355), reading and keeping
+    /// in `cache`, what that engine's compiles kept.
     pub fn compile_resident(
         engine: &__rawr_internal::Engine,
         snapshot: &__rawr_internal::package::snapshot::Snapshot,
+        cache: &mut __rawr_internal::package::import::resident::Cache,
         _contract: &ApplicationContract,
     ) -> Result<__rawr_internal::package::import::resident::Outcome, __rawr_internal::package::import::resident::Error> {
-        let parsed = engine.resident_parsed();
-        let lowered = engine.resident_lowered();
-        let revealed = engine.resident_revealed();
+        let parsed = cache.parsed();
+        let lowered = cache.lowered();
+        let revealed = cache.revealed();
         let registered = __rawr_internal::Engine::registered_facades();
-        let compiled = engine.compile_package_snapshot_resident_plain(snapshot);
+        let compiled = engine.compile_package_snapshot_resident_plain(snapshot, cache);
         // `RAWR_VERBOSE` says what the save's compile did again (#1604,
         // #1646).
         if std::env::var_os("RAWR_VERBOSE").is_some_and(|value| !value.is_empty() && value != "0") {
             eprintln!(
                 "rawr runner: a save parsed {} sources, revealed {} files, lowered {} files, registered {} facades",
-                engine.resident_parsed() - parsed,
-                engine.resident_revealed() - revealed,
-                engine.resident_lowered() - lowered,
+                cache.parsed() - parsed,
+                cache.revealed() - revealed,
+                cache.lowered() - lowered,
                 __rawr_internal::Engine::registered_facades() - registered,
             );
         }
@@ -6359,10 +6376,12 @@ fn exit(status: i32) -> ! {
 
 /// What the protocol thread keeps of a running marked `main`'s program to
 /// compile the next generation beside it (D553.3): the engine it compiles
-/// against, the generation it compares with and the application semantic
-/// the newest generation's sources had.
+/// against and what that engine's compiles kept, the generation it
+/// compares with and the application semantic the newest generation's
+/// sources had.
 struct Live {
     engine: __rawr_internal::Shared<__rawr_internal::Engine>,
+    cache: __rawr_internal::package::import::resident::Cache,
     generation: std::sync::Arc<__rawr_internal::reload::Generation>,
     bindings: std::sync::Arc<[__rawr_internal::host::facade::Definition]>,
     contract: __rawr_profile::ApplicationContract,
@@ -6371,10 +6390,18 @@ struct Live {
 
 /// Make `program`, compiled beside the running marked `main`, the
 /// generation the owner thread admits at its next call from native code
-/// (D553.3); a newer one offered before then replaces it.
-fn offer(live: &mut Live, mut program: Program) -> std::io::Result<()> {
+/// (D553.3); a newer one offered before then replaces it. `cache` is what
+/// its compile kept, when it compiled on an engine of its own.
+fn offer(
+    live: &mut Live,
+    mut program: Program,
+    cache: Option<__rawr_internal::package::import::resident::Cache>,
+) -> std::io::Result<()> {
     evaluate_program(&mut program)?;
     if let Some(next) = program.candidate.as_ref() {
+        if let Some(cache) = cache {
+            live.cache = cache;
+        }
         live.engine = program.engine.clone();
         live.generation = next.generation().clone();
         live.bindings = program._bindings.clone();
@@ -6414,10 +6441,12 @@ impl Hot {
 }
 
 /// What a resident compilation compiles against: the running program's
-/// engine and native surface, and the generation a running marked `main`
-/// runs, which the next one must be able to replace (D553.6).
+/// engine and native surface, what that engine's compiles kept, and the
+/// generation a running marked `main` runs, which the next one must be
+/// able to replace (D553.6).
 struct Resident<'a> {
     engine: &'a __rawr_internal::Shared<__rawr_internal::Engine>,
+    cache: &'a mut __rawr_internal::package::import::resident::Cache,
     bindings: &'a std::sync::Arc<[__rawr_internal::host::facade::Definition]>,
     contract: &'a __rawr_profile::ApplicationContract,
     running: Option<&'a std::sync::Arc<__rawr_internal::reload::Generation>>,
@@ -6442,11 +6471,11 @@ enum ResidentResult {
 /// preparation; a generation the running `main` can't take is refused
 /// with its reason.
 fn compile_resident(
-    resident: &Resident<'_>,
+    resident: &mut Resident<'_>,
     snapshot: __rawr_internal::package::snapshot::Snapshot,
 ) -> std::io::Result<ResidentResult> {
     use __rawr_internal::package::import::resident::{Error, Outcome};
-    let compiled = match __rawr_profile::compile_resident(resident.engine, &snapshot, resident.contract) {
+    let compiled = match __rawr_profile::compile_resident(resident.engine, &snapshot, resident.cache, resident.contract) {
         Ok(Outcome::Compiled(compiled)) => compiled,
         Ok(Outcome::NeedsPreparation) => return Ok(ResidentResult::Miss),
         Err(Error::Source(error)) => return Ok(ResidentResult::Diagnostic(error.reported().encode())),
@@ -6503,7 +6532,7 @@ fn serve_hot(
     key: &[u8; 32],
     hot: &mut Hot,
     pending: &mut Option<PendingProgram>,
-    resident: Option<Resident<'_>>,
+    mut resident: Option<Resident<'_>>,
 ) -> std::io::Result<bool> {
     match tag {
         29 if pending.is_none() && hot.begun.is_none() && payload.len() == 56 && payload[..32] == *key => {
@@ -6540,7 +6569,7 @@ fn serve_hot(
             let nonce: [u8; 16] = begun.identity[32..48].try_into()
                 .map_err(|_| std::io::Error::other("resident transition nonce"))?;
             send_progress(stream, key, &nonce, 3, 1, 1)?;
-            let output = match &resident {
+            let output = match resident.as_mut() {
                 Some(resident) => compile_resident(resident, snapshot),
                 None => Ok(ResidentResult::Miss),
             };
@@ -6549,7 +6578,8 @@ fn serve_hot(
             let (response, diagnostic) = match output {
                 ResidentResult::Compiled(program, semantic, carrier, coverage) => {
                     let compiled = attempt.compiled(carrier, coverage, semantic);
-                    *pending = Some(PendingProgram { key: compiled.key(), nonce, program: Some(program) });
+                    // It compiled on the running engine, whose cache it kept in.
+                    *pending = Some(PendingProgram { key: compiled.key(), nonce, program: Some(program), cache: None });
                     send_frame(stream, 38, compiled.encode())?;
                     return Ok(true);
                 }
@@ -6589,8 +6619,9 @@ fn serve_entry(
     let mut serve = || -> std::io::Result<()> {
         loop {
             let (tag, payload) = next_frame(&received)?;
-            let resident = live.as_ref().map(|running| Resident {
+            let resident = live.as_mut().map(|running| Resident {
                 engine: &running.engine,
+                cache: &mut running.cache,
                 bindings: &running.bindings,
                 contract: &running.contract,
                 running: Some(&running.generation),
@@ -6626,7 +6657,7 @@ fn serve_entry(
                     };
                     let compiled = compile_program(&payload[112..], Compilation::Live(&running.engine), &mut progress);
                     drop(progress);
-                    let candidate = compiled?;
+                    let (candidate, cache) = compiled?.unzip();
                     let refused = candidate
                         .as_ref()
                         .and_then(|program| program.candidate.as_ref())
@@ -6635,7 +6666,7 @@ fn serve_entry(
                         send_frame(&mut stream, 16, reason.as_bytes())?;
                         continue;
                     }
-                    pending = Some(PendingProgram { key: next, nonce, program: candidate });
+                    pending = Some(PendingProgram { key: next, nonce, program: candidate, cache });
                     hot.begun = None;
                     send_frame(&mut stream, 4, &response)?;
                 }
@@ -6655,7 +6686,7 @@ fn serve_entry(
                     }
                     let Some(running) = live.as_mut() else { unreachable!("matched above") };
                     if let Some(program) = candidate.program {
-                        offer(running, program)?;
+                        offer(running, program, candidate.cache)?;
                     }
                     key = next;
                     send_frame(&mut stream, 8, &payload)?;
@@ -6681,6 +6712,8 @@ struct PendingProgram {
     key: [u8; 32],
     nonce: [u8; 16],
     program: Option<Program>,
+    /// What its compile kept, when it compiled on an engine of its own.
+    cache: Option<__rawr_internal::package::import::resident::Cache>,
 }
 
 /// The protocol's opening, before any thread owns the program: connect,
@@ -6705,6 +6738,8 @@ fn run_protocol(
 ) -> std::io::Result<()> {
     install_arena(key);
     let mut program: Option<Program> = None;
+    // What the compiles on `program`'s engine kept for its next one.
+    let mut cache: Option<__rawr_internal::package::import::resident::Cache> = None;
     let mut pending: Option<PendingProgram> = None;
     let mut prepared = false;
     let mut admitted = false;
@@ -6725,8 +6760,9 @@ fn run_protocol(
             None => next_frame(&received)?,
         };
         if admitted {
-            let resident = program.as_ref().map(|program| Resident {
+            let resident = program.as_ref().zip(cache.as_mut()).map(|(program, cache)| Resident {
                 engine: &program.engine,
+                cache,
                 bindings: &program._bindings,
                 contract: &program.application_contract,
                 running: None,
@@ -6744,8 +6780,8 @@ fn run_protocol(
                     ordinal = ordinal.checked_add(1).ok_or_else(|| std::io::Error::other("progress ordinal"))?;
                     send_progress(&mut stream, &key, &nonce, 1, ordinal, stage)
                 };
-                program = match compile_program(&payload[48..], Compilation::Initial, &mut progress) {
-                    Ok(program) => program,
+                (program, cache) = match compile_program(&payload[48..], Compilation::Initial, &mut progress) {
+                    Ok(compiled) => compiled.unzip(),
                     Err(error) => {
                         drop(progress);
                         return Err(error);
@@ -6792,11 +6828,11 @@ fn run_protocol(
                 };
                 let compiled = compile_program(&payload[112..], Compilation::Replacement(&program), &mut progress);
                 drop(progress);
-                let candidate = compiled?;
+                let (candidate, next_cache) = compiled?.unzip();
                 let mut response = Vec::with_capacity(48);
                 response.extend_from_slice(&next);
                 response.extend_from_slice(&nonce);
-                pending = Some(PendingProgram { key: next, nonce, program: candidate });
+                pending = Some(PendingProgram { key: next, nonce, program: candidate, cache: next_cache });
                 hot.begun = None;
                 send_frame(&mut stream, 4, &response)?;
             }
@@ -6819,6 +6855,9 @@ fn run_protocol(
                 install_arena(next);
                 key = next;
                 program = candidate.program;
+                if let Some(next_cache) = candidate.cache {
+                    cache = Some(next_cache);
+                }
                 send_frame(&mut stream, 8, &payload)?;
             }
             26 if payload.len() == 48 => {
@@ -6866,8 +6905,9 @@ fn run_protocol(
                     exit(0);
                 };
                 let stream = stream.try_clone()?;
-                let live = running.candidate.as_ref().map(|candidate| Live {
+                let live = running.candidate.as_ref().zip(cache.take()).map(|(candidate, cache)| Live {
                     engine: running.engine.clone(),
+                    cache,
                     generation: candidate.generation().clone(),
                     bindings: running._bindings.clone(),
                     contract: running.application_contract.clone(),
@@ -7219,8 +7259,10 @@ fn run_protocol() -> std::io::Result<()> {
                     ordinal = ordinal.checked_add(1).ok_or_else(|| std::io::Error::other("progress ordinal"))?;
                     send_progress(&mut stream, &key, &nonce, 1, ordinal, stage)
                 };
+                // This runner compiles nothing beside the program, so
+                // nothing its compile kept is read again.
                 program = match compile_program(&payload[48..], Compilation::Initial, &mut progress) {
-                    Ok(program) => program,
+                    Ok(compiled) => compiled.map(|(program, _)| program),
                     Err(error) => {
                         drop(progress);
                         return Err(error);
@@ -7293,7 +7335,7 @@ fn run_protocol() -> std::io::Result<()> {
                 let next_receipt: [u8; 32] = payload[64..96].try_into().map_err(|_| std::io::Error::other("activation receipt"))?;
                 let compiled = compile_program(&payload[112..], Compilation::Replacement(&program), &mut progress);
                 drop(progress);
-                let candidate = compiled?;
+                let candidate = compiled?.map(|(program, _)| program);
                 let mut response = Vec::with_capacity(48);
                 response.extend_from_slice(&next);
                 response.extend_from_slice(&nonce);
@@ -7514,7 +7556,7 @@ fn resident_status(
 }
 
 fn prepare_resident(
-    engine: &__rawr_internal::Engine,
+    (engine, cache): (&__rawr_internal::Engine, &mut __rawr_internal::package::import::resident::Cache),
     contract: &__rawr_profile::ApplicationContract,
     transport: &__rawr_profile::Transport,
     installation: &__rawr_profile::PendingInstall,
@@ -7525,7 +7567,7 @@ fn prepare_resident(
     if let Some(status) = resident_status(transport, installation)? {
         return Ok(status);
     }
-    let output = match __rawr_profile::compile_resident(engine, snapshot, contract) {
+    let output = match __rawr_profile::compile_resident(engine, snapshot, cache, contract) {
         Ok(Outcome::Compiled(compiled)) => ResidentResult::Compiled(compiled),
         Ok(Outcome::NeedsPreparation) => ResidentResult::Miss,
         Err(Error::Source(error)) => ResidentResult::Diagnostic(error.reported().encode()),
@@ -7569,7 +7611,10 @@ fn live_protocol(
     mut stream: std::os::unix::net::UnixStream,
     mut key: [u8; 32],
     mut receipt: [u8; 32],
-    engine: __rawr_internal::Shared<__rawr_internal::Engine>,
+    (engine, mut cache): (
+        __rawr_internal::Shared<__rawr_internal::Engine>,
+        __rawr_internal::package::import::resident::Cache,
+    ),
     application_contract: __rawr_profile::ApplicationContract,
     transport: __rawr_profile::Transport,
 ) -> std::io::Result<()> {
@@ -7655,7 +7700,7 @@ fn live_protocol(
                 let output = (|| {
                     progress(1)?;
                     prepare_resident(
-                        &engine, &application_contract, &transport, &installation, &snapshot, &mut progress,
+                        (&engine, &mut cache), &application_contract, &transport, &installation, &snapshot, &mut progress,
                     )
                 })();
                 drop(progress);
@@ -7868,6 +7913,8 @@ fn run_protocol() -> std::io::Result<()> {
     let mut key = decode_hex(&std::env::var("RAWR_GENERATION_KEY").map_err(|_| std::io::Error::other("generation key"))?)?;
     install_arena(key);
     let mut program: Option<Program> = None;
+    // What the compiles on `program`'s engine kept for its next one.
+    let mut cache: Option<__rawr_internal::package::import::resident::Cache> = None;
     let root = std::env::var_os("RAWR_PROJECT_ROOT")
         .map(std::path::PathBuf::from)
         .ok_or_else(|| std::io::Error::other("project root"))?;
@@ -7894,8 +7941,8 @@ fn run_protocol() -> std::io::Result<()> {
                     ordinal = ordinal.checked_add(1).ok_or_else(|| std::io::Error::other("progress ordinal"))?;
                     send_progress(&mut stream, &key, &nonce, 1, ordinal, stage)
                 };
-                program = match compile_program(&payload[48..], Compilation::Initial, &mut progress) {
-                    Ok(program) => program,
+                (program, cache) = match compile_program(&payload[48..], Compilation::Initial, &mut progress) {
+                    Ok(compiled) => compiled.unzip(),
                     Err(error) => {
                         drop(progress);
                         return Err(error);
@@ -7967,15 +8014,16 @@ fn run_protocol() -> std::io::Result<()> {
                 let context = (|| {
                     let program = program.as_ref().ok_or_else(|| std::io::Error::other("generation program"))?;
                     let engine = program.engine.clone();
+                    let cache = cache.take().ok_or_else(|| std::io::Error::other("generation cache"))?;
                     let application_contract = program.application_contract.clone();
                     let receipt = receipt.ok_or_else(|| std::io::Error::other("activation receipt"))?;
-                    Ok::<_, std::io::Error>((engine, application_contract, receipt))
+                    Ok::<_, std::io::Error>(((engine, cache), application_contract, receipt))
                 })();
-                let (engine, application_contract, receipt) = context?;
+                let (compiler, application_contract, receipt) = context?;
                 let mut control = stream.try_clone()?;
                 let worker = std::thread::Builder::new()
                     .name("rawr-generated-protocol".to_owned())
-                    .spawn(move || live_protocol(stream, key, receipt, engine, application_contract, transport));
+                    .spawn(move || live_protocol(stream, key, receipt, compiler, application_contract, transport));
                 let worker = worker?;
                 send_frame(&mut control, 21, &key)?;
                 let result = running
@@ -30306,7 +30354,7 @@ mod tests {
                 "account::Native::decode(GENERATED_MANIFEST)",
                 "prepare_engine(native, __rawr_internal::Access::all(), tests.as_ref(), &mut *progress)?",
                 "__rawr_profile::compile_initial(",
-                "Ok(Program { engine,",
+                "let program = Program { engine,",
             ],
         );
         assert_eq!(compile.matches("Native::decode(").count(), 1);
@@ -30342,7 +30390,9 @@ mod tests {
         );
         assert!(!neutral.contains("runner::install("));
         assert!(
-            neutral.contains("engine.compile_package_snapshot_generation_with_top_level(snapshot)")
+            neutral.contains(
+                "engine.compile_package_snapshot_generation_with_top_level(snapshot, Some(&mut *cache))"
+            )
         );
         // A runner with no host profile starts its program by calling `main`
         // bound to the imported runtime.
@@ -30515,7 +30565,7 @@ mod tests {
         );
         let neutral =
             std::str::from_utf8(NEUTRAL_PROFILE_SOURCE).expect("neutral profile source is UTF-8");
-        assert!(neutral.contains("engine.compile_package_snapshot_resident_plain(snapshot)"));
+        assert!(neutral.contains("engine.compile_package_snapshot_resident_plain(snapshot, cache)"));
     }
 
     #[test]

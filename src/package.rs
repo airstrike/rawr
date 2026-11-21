@@ -20,7 +20,7 @@ pub mod snapshot;
 pub mod source;
 pub mod test;
 
-pub use cell::{Cells, Counts};
+pub use cell::{Cells, Counts, Parses};
 #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
 #[doc(hidden)]
 pub use rust::{compare_reads, Copies};

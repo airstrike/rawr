@@ -2408,7 +2408,7 @@ mod tests {
                     .unwrap();
             let engine = rawr::Engine::new();
             let (candidate, _ast) = engine
-                .compile_package_snapshot_generation_with_top_level(&snapshot)
+                .compile_package_snapshot_generation_with_top_level(&snapshot, None)
                 .unwrap();
             let source = candidate.source().entry_source().path().to_path_buf();
             let publication = Arc::new(rawr::reload::scheduler::publication::Slot::new(

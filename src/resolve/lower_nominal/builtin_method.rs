@@ -1712,7 +1712,7 @@ impl<'a> Parser<'a> {
                 {
                     // Reused only while its fields are as they were (#1885).
                     #[cfg(feature = "rust-import")]
-                    self.models.read_fields(definition);
+                    self.read_fields(definition);
                     let fields = item
                         .fields
                         .iter()

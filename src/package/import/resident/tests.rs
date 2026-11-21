@@ -1,4 +1,4 @@
-use super::{account, Error, Outcome};
+use super::{account, Cache, Error, Outcome};
 use crate::package::compile::captured::tests::{
     compiler, native_snapshot, preview_runtime, snapshot, source,
 };
@@ -27,8 +27,9 @@ fn has_own_support(ast: &crate::AST) -> bool {
 #[test]
 fn resident_compilation_requires_the_engines_retained_native_context() {
     let engine = compiler();
+    let mut cache = Cache::new();
     assert!(matches!(
-        engine.compile_package_snapshot_resident_plain(&snapshot(&source("Foo"))),
+        engine.compile_package_snapshot_resident_plain(&snapshot(&source("Foo")), &mut cache),
         Err(Error::Unowned)
     ));
 }
@@ -36,15 +37,16 @@ fn resident_compilation_requires_the_engines_retained_native_context() {
 #[test]
 fn native_miss_and_source_error_release_attempts_without_retry_classification() {
     let engine = retained();
+    let mut cache = Cache::new();
     let before = owners(&engine);
     assert!(matches!(
-        engine.compile_package_snapshot_resident_plain(&snapshot(&source("Foo"))),
+        engine.compile_package_snapshot_resident_plain(&snapshot(&source("Foo")), &mut cache),
         Ok(Outcome::NeedsPreparation)
     ));
     assert_eq!(owners(&engine), before);
     let invalid = source("Foo").replace("native::echo(7)", "true");
     assert!(matches!(
-        engine.compile_package_snapshot_resident_plain(&snapshot(&invalid)),
+        engine.compile_package_snapshot_resident_plain(&snapshot(&invalid), &mut cache),
         Err(Error::Source(_))
     ));
     assert_eq!(owners(&engine), before);
@@ -53,6 +55,7 @@ fn native_miss_and_source_error_release_attempts_without_retry_classification() 
 #[test]
 fn terminal_native_miss_releases_attempt_and_preserves_source_error_boundary() {
     let engine = retained();
+    let mut cache = Cache::new();
     let before = owners(&engine);
     for source in [
         "use native::new_function; pub fn sample() -> i64 { new_function() }",
@@ -60,15 +63,16 @@ fn terminal_native_miss_releases_attempt_and_preserves_source_error_boundary() {
         "pub fn sample(value: native::NewType) {}",
     ] {
         assert!(matches!(
-            engine.compile_package_snapshot_resident_plain(&native_snapshot(source)),
+            engine.compile_package_snapshot_resident_plain(&native_snapshot(source), &mut cache),
             Ok(Outcome::NeedsPreparation)
         ));
         assert_eq!(owners(&engine), before);
     }
     assert!(matches!(
-        engine.compile_package_snapshot_resident_plain(&native_snapshot(
-            "pub fn sample() -> i64 { misspelled() }"
-        )),
+        engine.compile_package_snapshot_resident_plain(
+            &native_snapshot("pub fn sample() -> i64 { misspelled() }"),
+            &mut cache
+        ),
         Err(Error::Source(_))
     ));
     assert_eq!(owners(&engine), before);
@@ -77,11 +81,12 @@ fn terminal_native_miss_releases_attempt_and_preserves_source_error_boundary() {
 #[test]
 fn resident_receipt_follows_executable_authority_after_generation_metadata_retires() {
     let engine = retained();
+    let mut cache = Cache::new();
     let before = owners(&engine);
     let pure =
         snapshot("#[preview] pub fn sample() -> iced::Element<()> { panic!(\"not invoked\") }");
     let Outcome::Compiled(compiled) = engine
-        .compile_package_snapshot_resident_plain(&pure)
+        .compile_package_snapshot_resident_plain(&pure, &mut cache)
         .unwrap()
     else {
         panic!("no native requirement needs preparation");
@@ -112,16 +117,17 @@ fn resident_receipt_follows_executable_authority_after_generation_metadata_retir
 #[test]
 fn initial_and_ordinary_generations_share_the_resident_account() {
     let engine = retained();
+    let mut cache = Cache::new();
     let baseline = owners(&engine);
     let pure =
         snapshot("#[preview] pub fn sample() -> iced::Element<()> { panic!(\"not invoked\") }");
     let (initial, ast) = engine
-        .compile_package_snapshot_generation_with_top_level(&pure)
+        .compile_package_snapshot_generation_with_top_level(&pure, Some(&mut cache))
         .unwrap();
     let live = owners(&engine);
     assert!(live > baseline);
     let ordinary = engine
-        .compile_package_snapshot_generation_with_top_level(&pure)
+        .compile_package_snapshot_generation_with_top_level(&pure, Some(&mut cache))
         .unwrap();
     let overlapping = owners(&engine);
     assert!(overlapping > live);
@@ -134,7 +140,8 @@ fn initial_and_ordinary_generations_share_the_resident_account() {
 
 mod top_level {
     use super::{
-        account, compiler, has_own_support, owners, preview_runtime, retained, snapshot, Outcome,
+        account, compiler, has_own_support, owners, preview_runtime, retained, snapshot, Cache,
+        Outcome,
     };
     use crate::{Dynamic, Engine, Shared, AST};
 
@@ -233,6 +240,7 @@ mod top_level {
     #[test]
     fn generated_top_level_retires_initial_support_with_its_last_executable() {
         let engine = retained();
+        let mut cache = Cache::new();
         let baseline = owners(&engine);
         let source = "struct State { value: i64 }\n\
             #[preview] pub fn sample() -> iced::Element<()> {\n\
@@ -240,7 +248,7 @@ mod top_level {
                 panic!(\"not invoked\");\n\
             }";
         let (initial, ast) = engine
-            .compile_package_snapshot_generation_with_top_level(&snapshot(source))
+            .compile_package_snapshot_generation_with_top_level(&snapshot(source), Some(&mut cache))
             .unwrap();
         assert!(has_own_support(&ast));
         let support = Shared::downgrade(ast.shared_support());
@@ -258,7 +266,10 @@ mod top_level {
         assert_eq!(owners(&engine), initial_owners);
 
         let Outcome::Compiled(resident) = engine
-            .compile_package_snapshot_resident_plain(&snapshot(&source.replace("7", "8")))
+            .compile_package_snapshot_resident_plain(
+                &snapshot(&source.replace("7", "8")),
+                &mut cache,
+            )
             .unwrap()
         else {
             panic!("the resident edit has no new native requirement");
@@ -319,6 +330,7 @@ mod top_level {
     #[test]
     fn escaped_callback_keeps_support_charged_and_observes_later_constants() {
         let engine = retained();
+        let mut cache = Cache::new();
         let baseline = owners(&engine);
         let source = "struct State { value: i64 }\n\
             #[preview] pub fn sample() -> iced::Element<()> {\n\
@@ -331,7 +343,7 @@ mod top_level {
             const LATER: i64 = 42;\n\
             callback";
         let (candidate, ast) = engine
-            .compile_package_snapshot_generation_with_top_level(&snapshot(source))
+            .compile_package_snapshot_generation_with_top_level(&snapshot(source), Some(&mut cache))
             .unwrap();
         assert!(has_own_support(&ast));
         let support = Shared::downgrade(ast.shared_support());
@@ -353,6 +365,7 @@ mod top_level {
     #[test]
     fn copied_support_functions_keep_one_receipt_after_ast_and_module_merges() {
         let engine = retained();
+        let mut cache = Cache::new();
         let baseline = owners(&engine);
         let source = "struct State { value: i64 }\n\
             #[preview] pub fn sample() -> iced::Element<()> {\n\
@@ -360,7 +373,7 @@ mod top_level {
                 panic!(\"not invoked\");\n\
             }";
         let (candidate, ast) = engine
-            .compile_package_snapshot_generation_with_top_level(&snapshot(source))
+            .compile_package_snapshot_generation_with_top_level(&snapshot(source), Some(&mut cache))
             .unwrap();
         assert!(has_own_support(&ast));
         let original = Shared::downgrade(ast.shared_support());
@@ -398,11 +411,15 @@ mod top_level {
     #[test]
     fn empty_support_receipt_retires_with_the_executable() {
         let engine = retained();
+        let mut cache = Cache::new();
         let baseline = owners(&engine);
         let (candidate, ast) = engine
-            .compile_package_snapshot_generation_with_top_level(&snapshot(
-                "#[preview] pub fn sample() -> iced::Element<()> { panic!(\"not invoked\") }",
-            ))
+            .compile_package_snapshot_generation_with_top_level(
+                &snapshot(
+                    "#[preview] pub fn sample() -> iced::Element<()> { panic!(\"not invoked\") }",
+                ),
+                Some(&mut cache),
+            )
             .unwrap();
         assert!(!has_own_support(&ast));
         assert!(owners(&engine) > baseline);
@@ -514,6 +531,7 @@ fn resident_actual_snapshot_matches_checked_generated_inventory_and_misses_chang
         .runner_image()
         .unwrap();
     let mut engine = compiler();
+    let mut cache = Cache::new();
     let _definitions =
         runner::install_retained(&mut engine, plan.leak(), &[], &mut native).unwrap();
     let engine = engine.retain_imported_native(native).unwrap();
@@ -521,7 +539,7 @@ fn resident_actual_snapshot_matches_checked_generated_inventory_and_misses_chang
     let mut candidates = Vec::new();
     for text in [original.to_owned(), original.replace("(7)", "(8)")] {
         let Outcome::Compiled(compiled) = engine
-            .compile_package_snapshot_resident_plain(&snapshot(&text))
+            .compile_package_snapshot_resident_plain(&snapshot(&text), &mut cache)
             .unwrap()
         else {
             panic!("the checked I32 native instance covers both actual snapshots");
@@ -545,7 +563,7 @@ fn resident_actual_snapshot_matches_checked_generated_inventory_and_misses_chang
     assert!(retained > before);
     let changed = original.replace("(7)", "(true)");
     assert!(matches!(
-        engine.compile_package_snapshot_resident_plain(&snapshot(&changed)),
+        engine.compile_package_snapshot_resident_plain(&snapshot(&changed), &mut cache),
         Ok(Outcome::NeedsPreparation)
     ));
     assert_eq!(owners(&engine), retained);
@@ -568,9 +586,13 @@ fn resident_actual_snapshot_matches_checked_generated_inventory_and_misses_chang
 #[test]
 fn plain_resident_compilation_takes_a_main_with_no_application_semantics() {
     let engine = retained();
+    let mut cache = Cache::new();
     let before = owners(&engine);
     let Outcome::Compiled(compiled) = engine
-        .compile_package_snapshot_resident_plain(&snapshot("fn main() { let value = 1 + 2; }"))
+        .compile_package_snapshot_resident_plain(
+            &snapshot("fn main() { let value = 1 + 2; }"),
+            &mut cache,
+        )
         .unwrap()
     else {
         panic!("a program with no native requirement needs no preparation");
@@ -589,16 +611,90 @@ fn plain_resident_compilation_takes_a_main_with_no_application_semantics() {
     // The same boundaries as a profile's: a native miss needs preparation,
     // and a source error is no miss.
     assert!(matches!(
-        engine.compile_package_snapshot_resident_plain(&native_snapshot(
-            "pub fn sample() -> i64 { native::new_function() }"
-        )),
+        engine.compile_package_snapshot_resident_plain(
+            &native_snapshot("pub fn sample() -> i64 { native::new_function() }"),
+            &mut cache
+        ),
         Ok(Outcome::NeedsPreparation)
     ));
     assert!(matches!(
-        engine.compile_package_snapshot_resident_plain(&native_snapshot(
-            "pub fn sample() -> i64 { misspelled() }"
-        )),
+        engine.compile_package_snapshot_resident_plain(
+            &native_snapshot("pub fn sample() -> i64 { misspelled() }"),
+            &mut cache
+        ),
         Err(Error::Source(_))
     ));
     assert_eq!(owners(&engine), before);
+}
+
+/// A two-source package, its entry `main`.
+fn package(main: &str) -> crate::package::snapshot::Snapshot {
+    let root = std::path::Path::new("/evaluated");
+    let entry = root.join("src/main.rs");
+    crate::package::snapshot::Snapshot::new(
+        entry.clone(),
+        vec![
+            (
+                root.join("Cargo.toml"),
+                "[package]\nname = \"evaluated\"\nversion = \"0.1.0\"\nedition = \"2024\"\n".into(),
+            ),
+            (entry, main.into()),
+            (
+                root.join("src/model.rs"),
+                "// rawr\npub fn value() -> i64 { 41 }\n".into(),
+            ),
+        ],
+    )
+    .unwrap()
+}
+
+/// Code a debugger evaluates in a paused generation compiles from the
+/// generation's parses and keeps nothing in the runner's cache: its
+/// compile parses, reveals and lowers nothing into it, and the save after
+/// it parses nothing again, as after no evaluation at all.
+#[test]
+fn an_evaluation_leaves_the_runner_s_cache_as_the_save_left_it() {
+    let engine = retained();
+    let mut cache = Cache::new();
+    let main = "// rawr\nmod model;\nfn main() {\n    let value = model::value();\n    \
+        println!(\"{value}\");\n}\n";
+    let saved = package(main);
+    let Outcome::Compiled(_) = engine
+        .compile_package_snapshot_resident_plain(&saved, &mut cache)
+        .unwrap()
+    else {
+        panic!("a program with no native requirement needs no preparation");
+    };
+    let counts = |cache: &Cache| (cache.parsed(), cache.revealed(), cache.lowered());
+    let after_save = counts(&cache);
+    assert_eq!(after_save.0, 2, "the start parses both sources");
+    let parses = cache
+        .parses()
+        .expect("a runner's cache remembers its parses");
+    // The code written before the paused statement, as an evaluation
+    // splices it into the paused file.
+    let spliced = saved
+        .with_text(
+            std::path::Path::new("/evaluated/src/main.rs"),
+            &main.replace("    println!", "    { let _ = value + 1; }\n    println!"),
+        )
+        .unwrap();
+    engine
+        .compile_package_snapshot_with_positions(&spliced, Some(&parses))
+        .unwrap_or_else(|error| panic!("the evaluated code compiles: {error}"));
+    assert_eq!(counts(&cache), after_save, "the evaluation keeps nothing");
+    let Outcome::Compiled(_) = engine
+        .compile_package_snapshot_resident_plain(&saved, &mut cache)
+        .unwrap()
+    else {
+        panic!("the same save compiles again");
+    };
+    // A runner's lowering keys read the facades registered in the process,
+    // which another test registering its own moves, so only the parses,
+    // keyed by text alone, are compared here.
+    assert_eq!(
+        cache.parsed(),
+        after_save.0,
+        "the save after the evaluation parses the paused file's text from its parse"
+    );
 }

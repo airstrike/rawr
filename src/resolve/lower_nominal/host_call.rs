@@ -3422,6 +3422,9 @@ pub(super) struct ImportedContext<'a> {
     pub(super) source: crate::program::source::Id,
     pub(super) uses: &'a mut Vec<ImportedUse>,
     pub(super) dependencies: &'a mut BTreeSet<crate::host::facade::Dependency>,
+    /// What the pass's lowering read outside the program (`kept::Read`),
+    /// which a pass that keeps what it lowers keeps with it.
+    pub(super) reads: &'a mut Vec<super::kept::Read>,
 }
 
 #[cfg(feature = "rust-import")]
@@ -3461,6 +3464,7 @@ impl ImportedContext<'_> {
             source,
             uses: self.uses,
             dependencies: self.dependencies,
+            reads: self.reads,
         }
     }
 }

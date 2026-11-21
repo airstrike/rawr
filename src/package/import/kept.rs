@@ -1,15 +1,18 @@
-//! What a check of the program keeps for the next check against the same
-//! API: the registry it installed the crates' facades in (#1755).
+//! What a check of the program keeps for the next check: the registry it
+//! installed the crates' facades in, for a check against the same API
+//! (#1755), and what each source's check found.
 
 use crate::{host, Shared};
 
 /// What a compiler's checks of a program keep from one to the next, as an
 /// owner that checks the program again on each save holds it. A check
 /// against the API the last one installed shares that registry, where it
-/// installed a thousand facades again.
+/// installed a thousand facades again, and lowers again only the sources
+/// whose check reads something a save changed.
 #[derive(Default)]
 pub struct Kept {
     installed: Option<Installed>,
+    lowerings: crate::resolve::lower_nominal::Lowerings,
 }
 
 /// One registry with a contract's facades installed.
@@ -25,6 +28,20 @@ struct Installed {
 }
 
 impl Kept {
+    /// How many sources its checks lowered so far, rather than reusing an
+    /// earlier check's lowering.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn checked_sources(&self) -> usize {
+        self.lowerings.checked()
+    }
+
+    /// What its checks keep of each source's check, which the next check
+    /// reuses.
+    pub(super) fn lowerings(&mut self) -> &mut crate::resolve::lower_nominal::Lowerings {
+        &mut self.lowerings
+    }
+
     /// The registry the last check installed `contract`'s facades in over
     /// `host`, and what installing it charged.
     pub(super) fn registry(

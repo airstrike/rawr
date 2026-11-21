@@ -413,20 +413,24 @@ impl<'a> Parser<'a> {
 
     /// A compile-time environment variable (`Place::variable`). A runner's
     /// compiler keeps it with the lowering that read it (#1646).
-    pub(super) fn environment_variable(&self, name: &str) -> Option<String> {
+    pub(super) fn environment_variable(&mut self, name: &str) -> Option<String> {
         let place = Place {
             file: self.source_file(),
             entry: self.entry_file(),
         };
         let value = place.variable(&self.models.access, name);
         #[cfg(feature = "rust-import")]
-        self.models
-            .read(super::kept::Read::variable(place, name, value.as_deref()));
+        self.read(super::kept::Read::variable(place, name, value.as_deref()));
         value
     }
 
     /// The bytes of the file `path` names, relative to this code's file.
-    pub(super) fn include(&self, macro_name: &str, path: &str, at: Span) -> Result<Vec<u8>, Error> {
+    pub(super) fn include(
+        &mut self,
+        macro_name: &str,
+        path: &str,
+        at: Span,
+    ) -> Result<Vec<u8>, Error> {
         let error = |reason: String| Error::InvalidHostOperation {
             item: format!("{macro_name}!").into(),
             reason: reason.into(),
@@ -450,7 +454,7 @@ impl<'a> Parser<'a> {
             .map_err(|failure| error(format!("couldn't read `{}`: {failure}", target.display())))?;
         // A runner's compiler keeps it with the lowering that read it.
         #[cfg(feature = "rust-import")]
-        self.models.read(super::kept::Read::file(target, &bytes));
+        self.read(super::kept::Read::file(target, &bytes));
         Ok(bytes)
     }
 

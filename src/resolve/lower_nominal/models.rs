@@ -48,9 +48,6 @@ pub(super) struct Tables {
     /// What the program may reach while it compiles: the files
     /// `include_str!` reads and the variables `env!` reads (D683.4).
     pub(super) access: crate::Access,
-    /// What the lowering read outside the program so far (`Models::read`).
-    #[cfg(feature = "rust-import")]
-    pub(super) reads: std::sync::Mutex<Vec<super::kept::Read>>,
     /// The features Cargo enables for the package: `cfg(feature = "..")`
     /// holds for each.
     pub(super) features: crate::project::cargo::features::Enabled,
@@ -927,8 +924,6 @@ impl Models {
             runtime,
             host,
             access: engine.access().clone(),
-            #[cfg(feature = "rust-import")]
-            reads: std::sync::Mutex::default(),
             features: program.features().clone(),
             imports,
             lexical: program.lexical.clone(),
