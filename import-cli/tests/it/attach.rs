@@ -96,7 +96,7 @@ fn a_shell_attached_to_a_terminal_run_with_a_dependency_hears_its_output() {
         std::thread::sleep(Duration::from_millis(20));
     }
 
-    let place = rawr_cli::events::session::Place::new(&root).unwrap();
+    let place = rawr_cli::events::session::Place::of(&root, child.id()).unwrap();
     let stream = UnixStream::connect(place.socket()).unwrap();
     let mut lines = BufReader::new(stream.try_clone().unwrap());
     let request = json!({ "jsonrpc": "2.0", "id": 1, "method": "hello", "params": {} });

@@ -38,7 +38,17 @@ impl Place {
     /// When the user's directory can't be made, or is another user's or
     /// open to others.
     pub fn new(root: &Path) -> std::io::Result<Self> {
-        let pid = std::process::id();
+        Self::of(root, std::process::id())
+    }
+
+    /// The place of the run of the program at `root` whose socket the
+    /// process `pid` bound: a terminal's `rawr run`, or the shell that
+    /// started the run.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::new`].
+    pub fn of(root: &Path, pid: u32) -> std::io::Result<Self> {
         Ok(Self {
             directory: program(root)?.join(pid.to_string()),
             pid,
@@ -316,11 +326,11 @@ mod tests {
     use std::path::Path;
     use std::process::{Command, Stdio};
 
-    use super::{program, Place, Runs};
+    use super::{Place, Runs};
 
     /// The place of the run of `root` whose socket the process `pid` bound.
     fn place_of(root: &Path, pid: u32) -> Place {
-        Place::at(&program(root).unwrap().join(pid.to_string())).unwrap()
+        Place::of(root, pid).unwrap()
     }
 
     /// A pid no process has now: a child's, once it ended.

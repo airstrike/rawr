@@ -115,7 +115,7 @@ fn a_shell_reads_a_running_base_program_without_restarting_it() {
     let pid = said.trim().to_owned();
     assert!(!pid.is_empty(), "the program says its pid");
 
-    let place = rawr_cli::events::session::Place::new(&file).unwrap();
+    let place = rawr_cli::events::session::Place::of(&file, child.id()).unwrap();
     let mut shell = Shell::connect(&place.socket());
     let hello = shell.call("hello", json!({}));
     let count: u64 = shell.read("count").parse().unwrap();
@@ -194,7 +194,7 @@ fn a_shell_attached_to_a_terminal_run_hears_its_output() {
         lines
     });
 
-    let place = rawr_cli::events::session::Place::new(&file).unwrap();
+    let place = rawr_cli::events::session::Place::of(&file, child.id()).unwrap();
     let mut shell = Shell::connect(&place.socket());
     let hello = shell.call("hello", json!({}));
     let kept: Vec<&str> = hello["output"]
