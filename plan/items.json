@@ -2445,6 +2445,7 @@
     {"t":"T2443","issue":2443,"title":"T2443: rawr mcp shows a started run as starting forever when the run closes its session before greeting","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T2444","issue":2444,"title":"T2444: A let r = &local binding reads as no binding","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T2445","issue":2445,"title":"T2445: The hover read tells std types apart by the shape of their Debug text","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":["D1102"],"commit":null,"release":null},
-    {"t":"T2446","issue":2446,"title":"T2446: rawr gui's inline values match bindings by name","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T2446","issue":2446,"title":"T2446: rawr gui's inline values match bindings by name","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T2447","issue":2447,"title":"T2447: `rawr tui` draws in `rawr gui`'s Oxocarbon colours: the paused line sits on a faint accent band…","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":"0.4.106"}
   ]
 }

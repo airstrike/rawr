@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.4.106",
+      "date": "2026-11-21",
+      "entries": [
+        {"text":"`rawr tui` draws in `rawr gui`'s Oxocarbon colours: the paused line sits on a faint accent band with the gutter marker in the accent, code takes the GUI's syntax colours in 24-bit colour or the nearest of 256, pane borders are quiet, and the status line reads like the GUI's.","issues":[2447]}
+      ]
+    },
+    {
       "version": "0.4.105",
       "date": "2026-11-21",
       "entries": [

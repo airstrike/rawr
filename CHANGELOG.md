@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.106 (2026-11-21)
+
+- `rawr tui` draws in `rawr gui`'s Oxocarbon colours: the paused line sits on a faint accent band with the gutter marker in the accent, code takes the GUI's syntax colours in 24-bit colour or the nearest of 256, pane borders are quiet, and the status line reads like the GUI's. (#2447)
+
 ## 0.4.105 (2026-11-21)
 
 - A hover in rawr dap, rawr gui and VS Code reads the whole place under the pointer, such as player.score or names[turn as usize % names.len()], and runs none of the program's code; a call says to evaluate it in the console. rawr dap no longer runs a selected call such as tick() when the editor hovers it, and rawr gui cuts an inline value with … at the pane's edge. (#2442)
