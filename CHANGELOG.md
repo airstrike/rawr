@@ -6,6 +6,12 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.85 (2026-11-21)
+
+- Evaluating code while paused at a match arm's body without braces runs instead of failing to parse. (#2265)
+- The debugger shows `self` at every step of an expression on it, such as `self.items[0] += 1`. (#2256)
+- The debugger no longer lists a binding the compiler made for an index, and keeps a function's locals listed at the steps inside an expression on one of them. (#2257)
+
 ## 0.4.84 (2026-11-21)
 
 - A save no longer fails with "the build directory is locked by another build" when two Cargo operations of one run meet: the run owner holds one Cargo lane and lends it to each resolution, publication and runner build. (#1824)

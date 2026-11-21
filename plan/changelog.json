@@ -8,6 +8,15 @@
   },
   "releases": [
     {
+      "version": "0.4.85",
+      "date": "2026-11-21",
+      "entries": [
+        {"text":"Evaluating code while paused at a match arm's body without braces runs instead of failing to parse.","issues":[2265]},
+        {"text":"The debugger shows `self` at every step of an expression on it, such as `self.items[0] += 1`.","issues":[2256]},
+        {"text":"The debugger no longer lists a binding the compiler made for an index, and keeps a function's locals listed at the steps inside an expression on one of them.","issues":[2257]}
+      ]
+    },
+    {
       "version": "0.4.84",
       "date": "2026-11-21",
       "entries": [

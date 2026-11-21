@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-21",
-  "version": "0.4.84",
+  "version": "0.4.85",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,15 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.85",
+        "date": "2026-11-21",
+        "entries": [
+          {"text":"Evaluating code while paused at a match arm's body without braces runs instead of failing to parse.","issues":[2265]},
+          {"text":"The debugger shows `self` at every step of an expression on it, such as `self.items[0] += 1`.","issues":[2256]},
+          {"text":"The debugger no longer lists a binding the compiler made for an index, and keeps a function's locals listed at the steps inside an expression on one of them.","issues":[2257]}
+        ]
+      },
       {
         "version": "0.4.84",
         "date": "2026-11-21",
@@ -5648,8 +5657,8 @@
     {"issue":2253,"title":"A cold iced emulator test spends about 10 minutes building the API","state":"open","category":"Health"},
     {"issue":2254,"title":"A test that panics in a dependency's code ends `rawr test` as a crash, where libtest reports it FAILED with a summary","state":"closed","category":"Divergences from rustc","release":"0.4.18"},
     {"issue":2255,"title":"rawr mcp input and screenshot say 'the program shows no window' when its only window is minimized","state":"open","category":"Health"},
-    {"issue":2256,"title":"inspect reads `self` deeper inside an expression on it","state":"open","category":"Health"},
-    {"issue":2257,"title":"inspect lists a compiler-made `i` binding and drops a moved parameter at some steps","state":"open","category":"Health"},
+    {"issue":2256,"title":"inspect reads `self` deeper inside an expression on it","state":"closed","category":"Health","release":"0.4.85"},
+    {"issue":2257,"title":"inspect lists a compiler-made `i` binding and drops a moved parameter at some steps","state":"closed","category":"Health","release":"0.4.85"},
     {"issue":2258,"title":"One debugger session per run that any number of shells attach to, with rawr mcp as its first shell","state":"closed","category":"Health","release":"0.4.22"},
     {"issue":2259,"title":"A terminal shell (TUI) on the shared debugger session","state":"closed","category":"Health","release":"0.4.24"},
     {"issue":2260,"title":"A window shell (GUI) in its own process on the shared debugger session","state":"closed","category":"Health","release":"0.4.24"},
@@ -5657,7 +5666,7 @@
     {"issue":2262,"title":"iced's own debug tools (comet, and its time machine where the program enables it) work under rawr run","state":"open","category":"Health"},
     {"issue":2263,"title":"eval in a caller's frame","state":"closed","category":"Health"},
     {"issue":2264,"title":"eval in a program with Rust dependencies, end to end","state":"open","category":"Health"},
-    {"issue":2265,"title":"eval paused at a match arm or another expression position fails to parse","state":"open","category":"Health"},
+    {"issue":2265,"title":"eval paused at a match arm or another expression position fails to parse","state":"closed","category":"Health","release":"0.4.85"},
     {"issue":2266,"title":"A shell attaching to a plain `rawr run` restarts the program to register a debugger, losing its state","state":"closed","category":"Health","release":"0.4.29"},
     {"issue":2267,"title":"rawr mcp's `wait` returns a started program's output only with the next event","state":"open","category":"Health"},
     {"issue":2268,"title":"The inspector runs in the browser universe behind a feature, with pauses suspended through JSPI","state":"closed","category":"Platforms","release":"0.4.37"},
@@ -5795,7 +5804,8 @@
     {"issue":2400,"title":"build_script's whole-tree test: a file outside the package's archive no longer changes the freshness fingerprint","state":"open","category":"Health"},
     {"issue":2401,"title":"The engine's Cargo answer memos (DESCRIBED, BUILT) are process-wide statics","state":"open","category":"Health"},
     {"issue":2402,"title":"The bindings format root's process lease sits in a static table (format::OPENED)","state":"open","category":"Health"},
-    {"issue":2403,"title":"The base-attach test leaves its `looping` program running after the test ends","state":"open","category":"Health"}
+    {"issue":2403,"title":"The base-attach test leaves its `looping` program running after the test ends","state":"open","category":"Health"},
+    {"issue":2404,"title":"eval at a step inside a chain on a local runs against an empty scope","state":"open","category":"Health"}
   ],
   "groups": [
     {
@@ -8506,8 +8516,8 @@
             {"number":541,"title":"inspect misses a receiver while it is lent to a method call on itself","state":"closed"},
             {"number":573,"title":"Debugger frames name methods by their internal symbol","state":"closed"},
             {"number":575,"title":"Say why a caller frame has no bindings to read","state":"closed"},
-            {"number":2256,"title":"inspect reads `self` deeper inside an expression on it","state":"open"},
-            {"number":2257,"title":"inspect lists a compiler-made `i` binding and drops a moved parameter at some steps","state":"open"},
+            {"number":2256,"title":"inspect reads `self` deeper inside an expression on it","state":"closed"},
+            {"number":2257,"title":"inspect lists a compiler-made `i` binding and drops a moved parameter at some steps","state":"closed"},
             {"number":2272,"title":"A step pauses on statements the lowering wrote: a `&mut` parameter's signature line, or the same line again","state":"closed"}
           ],
           "milestone": "0.5"
@@ -8555,7 +8565,7 @@
             {"number":1207,"title":"rawr-repl drops a Drop value at the end of the line that bound it","state":"closed"},
             {"number":2263,"title":"eval in a caller's frame","state":"closed"},
             {"number":2264,"title":"eval in a program with Rust dependencies, end to end","state":"open"},
-            {"number":2265,"title":"eval paused at a match arm or another expression position fails to parse","state":"open"},
+            {"number":2265,"title":"eval paused at a match arm or another expression position fails to parse","state":"closed"},
             {"number":2271,"title":"eval fails with E0308 on a view returning `impl Widget<Message>` built by `column![…]`","state":"closed"}
           ],
           "milestone": "0.5"
