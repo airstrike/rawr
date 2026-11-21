@@ -289,19 +289,14 @@ impl State {
         layer.boxed()
     }
 
-    /// What the paused program's hover read said of the expression under
-    /// the pointer: its value, or why a hover doesn't run it.
+    /// The value the paused program's hover read gave the expression under
+    /// the pointer; a call or anything else it doesn't read shows nothing.
     fn hover(&self) -> Element<'_, Message> {
         let shown = match self.hover.as_ref().map(Hover::said) {
             Some(Said::Value { expression, value }) => row![
                 code_text(expression.as_str()).style(theme::name),
                 code_text(" = "),
                 code_text(value.as_str()).style(move |theme| theme::value(theme, Ok(value))),
-            ],
-            Some(Said::Refused { expression, why }) => row![
-                code_text(expression.as_str()).style(theme::name),
-                code_text("  "),
-                code_text(why.as_str()).style(theme::faint),
             ],
             Some(Said::Waiting | Said::Nothing) | None => return space().boxed(),
         };

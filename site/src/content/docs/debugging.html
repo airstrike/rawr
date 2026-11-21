@@ -157,7 +157,7 @@ args = { program = "{0}" }</code></pre></div>
 <ul>
   <li>A hover reads a binding, a field such as <code>player.score</code>, a tuple item such as <code>pair.0</code>, a deref such as <code>*count</code>, and an index such as <code>names[2]</code> or <code>names[turn]</code>. It reads these from the binding&rsquo;s <code>{:?}</code> text and compiles nothing.</li>
   <li>A hover also reads casts, arithmetic and comparisons on numbers, an index into a <code>Vec</code>, an array or a map, and <code>len()</code> and <code>is_empty()</code>. So <code>names[turn as usize % names.len()]</code> shows one value. rawr evaluates these as the console does.</li>
-  <li>A hover refuses any other call, a macro, <code>?</code> and <code>.await</code>. It also refuses a <code>Deref</code> or an <code>Index</code> your program implements. The hover says to evaluate the code in the console instead.</li>
+  <li>A hover refuses any other call, a macro, <code>?</code> and <code>.await</code>. It also refuses a <code>Deref</code> or an <code>Index</code> your program implements. The hover shows nothing there; evaluate the code in the console instead.</li>
   <li>The hover reads the call the code under the pointer belongs to. A name in a caller reads that caller&rsquo;s binding. A name in a function that isn&rsquo;t on the stack shows nothing.</li>
   <li>A line you edited and haven&rsquo;t saved shows nothing, since the running program has another line there.</li>
 </ul>

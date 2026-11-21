@@ -26,9 +26,8 @@ pub enum Said {
     Waiting,
     /// Its value, as `{:?}` prints it.
     Value { expression: String, value: String },
-    /// It is code a hover doesn't run, and why.
-    Refused { expression: String, why: String },
-    /// Nothing there reads.
+    /// Nothing there reads, or it is code a hover doesn't run: the hover
+    /// shows nothing.
     Nothing,
 }
 
@@ -77,16 +76,12 @@ impl Hover {
             self.range = start..end;
         }
         let expression = answer["expression"].as_str().unwrap_or_default().to_owned();
-        self.said = match (answer["value"].as_str(), answer["refused"].as_str()) {
-            (Some(value), _) => Said::Value {
+        self.said = match answer["value"].as_str() {
+            Some(value) => Said::Value {
                 expression,
                 value: value.to_owned(),
             },
-            (None, Some(why)) => Said::Refused {
-                expression,
-                why: why.to_owned(),
-            },
-            (None, None) => Said::Nothing,
+            None => Said::Nothing,
         };
     }
 }
@@ -122,5 +117,16 @@ mod tests {
         );
         assert!(hover.covers(4, 8) && hover.covers(4, 19) && !hover.covers(4, 20));
         assert!(!hover.covers(5, 10));
+    }
+
+    #[test]
+    fn a_refused_hover_shows_nothing() {
+        let mut hover = Hover::asked(4, 18, 1);
+        let answer = json!({
+            "expression": "player.reset()",
+            "refused": "a hover doesn't run calls: evaluate it in the console",
+        });
+        hover.answered(1, &answer);
+        assert_eq!(hover.said(), &Said::Nothing);
     }
 }
