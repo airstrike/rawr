@@ -18,7 +18,7 @@
 //! Wayland, where a client can't place its window, adds none.
 
 #[cfg(target_os = "macos")]
-mod appkit;
+pub(crate) mod appkit;
 // The rule waits for its platform's module beside `appkit`.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod record;

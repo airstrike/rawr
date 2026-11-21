@@ -5486,8 +5486,9 @@ fn decode_snapshot(mut input: &[u8]) -> std::io::Result<__rawr_internal::package
 
 /// The socket the session named in `RAWR_MCP_INSPECT`, where a tool reads
 /// the running program's values (D675). Bound once; every engine this
-/// runner makes answers on it once its debugger is registered
-/// ([`__RawrDebuggee`]). A browser's has no socket.
+/// runner makes answers on it once its debugger is registered, which the
+/// inspector holds back for the first request that needs it when the
+/// session asks (#2308). A browser's has no socket.
 #[cfg(not(unix))]
 fn inspector() -> Option<&'static __rawr_internal::inspect::Inspector> {
     None
@@ -5512,65 +5513,15 @@ fn inspector() -> Option<&'static __rawr_internal::inspect::Inspector> {
                 .map_err(|error| eprintln!("rawr: values can't be read from this run: {error}"))
                 .ok()?;
             if std::env::var_os("RAWR_DEBUGGER_ON_REQUEST").is_some_and(|value| !value.is_empty()) {
-                // The request that registers it is answered once this
-                // returns, so the engine that runs reads every breakpoint
-                // set from that answer on at its next step (#2296, #2308).
-                let registering = inspector.clone();
-                inspector.register_on_request(move || register(&registering));
-            } else {
-                register(&inspector);
+                // The request that registers it is answered once the
+                // engines attached, so the engine that runs reads every
+                // breakpoint set from that answer on at its next step
+                // (#2296, #2308).
+                inspector.defer();
             }
             Some(inspector)
         })
         .as_ref()
-}
-
-/// What the inspector's debugger reaches once it is registered: until
-/// then, the engines this runner made and the generation that runs next,
-/// which a plain `rawr run` keeps nothing more of (#2308).
-struct __RawrDebuggee {
-    registered: bool,
-    /// Each engine made since the inspector bound, any of which may run
-    /// the program when the debugger registers: the one a marked `main`
-    /// runs, and those compiled beside it that it hasn't admitted yet.
-    engines: Vec<std::sync::Weak<__rawr_internal::Engine>>,
-    /// The generation that runs next, as [`place`] takes it.
-    next: Option<__RawrPlaced>,
-}
-
-/// A generation's steps and the files it compiled from, which a debugger
-/// registered after it compiled places and evaluates code in.
-struct __RawrPlaced {
-    located: std::sync::Arc<__rawr_internal::inspect::Located>,
-    /// Its functions, shared with the program's: its top-level statements
-    /// ran before the program did.
-    functions: __rawr_internal::AST,
-    source: std::sync::Arc<__RawrSource>,
-}
-
-static DEBUGGEE: std::sync::Mutex<__RawrDebuggee> =
-    std::sync::Mutex::new(__RawrDebuggee { registered: false, engines: Vec::new(), next: None });
-
-fn debuggee() -> std::sync::MutexGuard<'static, __RawrDebuggee> {
-    DEBUGGEE.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
-/// Register `inspector`'s debugger with every engine this runner made,
-/// which take it from their next step on (#2308): the one that runs keeps
-/// its state, its calls under way and its process. The generation that
-/// runs next is placed first, so a breakpoint the registering request sets
-/// is placed on its lines. Each engine made from now on takes the debugger
-/// before its program compiles.
-#[cfg(unix)]
-fn register(inspector: &__rawr_internal::inspect::Inspector) {
-    let mut debuggee = debuggee();
-    debuggee.registered = true;
-    if let Some(next) = debuggee.next.take() {
-        place(inspector, &next.located, &next.functions, &next.source);
-    }
-    for engine in debuggee.engines.drain(..).filter_map(|engine| engine.upgrade()) {
-        inspector.attach_running(&engine);
-    }
 }
 
 /// `engine`, just made and readied for the inspector, takes its debugger
@@ -5579,17 +5530,12 @@ fn take_debugger(
     inspector: &__rawr_internal::inspect::Inspector,
     engine: &__rawr_internal::Shared<__rawr_internal::Engine>,
 ) {
-    let mut debuggee = debuggee();
-    if debuggee.registered {
-        inspector.attach_running(engine);
-    } else {
-        debuggee.engines.retain(|engine| engine.strong_count() > 0);
-        debuggee.engines.push(std::sync::Arc::downgrade(engine));
-    }
+    inspector.adopt(engine);
 }
 
 /// Place the steps of `program`, which runs next, once a debugger is
-/// registered: now, or when it registers.
+/// registered: now, or when it registers. Code evaluated at a pause
+/// compiles into it (#490), and its breakpoints move to its lines (#489).
 fn locate(program: &Program) {
     let Some(inspector) = inspector() else { return };
     let (Some(located), Some(ast)) = (
@@ -5598,32 +5544,15 @@ fn locate(program: &Program) {
     ) else {
         return;
     };
-    let mut debuggee = debuggee();
-    if debuggee.registered {
-        place(inspector, located, ast, &program.source);
-    } else {
-        debuggee.next = Some(__RawrPlaced {
-            located: std::sync::Arc::clone(located),
-            functions: ast.clone_functions_only(),
-            source: std::sync::Arc::clone(&program.source),
-        });
-    }
-}
-
-/// The generation `located` places, compiled as `ast` from `source`, runs
-/// next: code evaluated at a pause compiles into it (#490), and its
-/// breakpoints move to its lines (#489).
-fn place(
-    inspector: &__rawr_internal::inspect::Inspector,
-    located: &std::sync::Arc<__rawr_internal::inspect::Located>,
-    ast: &__rawr_internal::AST,
-    source: &__RawrSource,
-) {
-    // One compiled on an engine with the debugger kept its files.
-    let evaluated = located.program().unwrap_or_else(|| located.program_from(source.snapshot.clone()));
-    let located = std::sync::Arc::clone(located);
-    inspector.place(Some(evaluated), move |position| located.line(position));
-    inspector.compiled(ast);
+    let evaluated = std::sync::Arc::clone(located);
+    let source = std::sync::Arc::clone(&program.source);
+    let lines = std::sync::Arc::clone(located);
+    inspector.next(
+        ast,
+        // One compiled on an engine with the debugger kept its files.
+        move || Some(evaluated.program().unwrap_or_else(|| evaluated.program_from(source.snapshot.clone()))),
+        move |position| lines.line(position),
+    );
 }
 
 enum Compilation<'a> {
@@ -30262,9 +30191,10 @@ mod tests {
     }
 
     /// A debugger registered at a shell's request, and each generation it
-    /// is placed on, compiles nothing (#2308): registration places the
-    /// generation that runs next and attaches the engines the runner made,
-    /// so a request never waits on a compile.
+    /// is placed on, compiles nothing (#2308): the runner hands the
+    /// inspector each engine it makes and the generation that runs next,
+    /// and the inspector holds them for the registering request in its
+    /// own state, so the runner keeps no lock of its own beside it.
     #[test]
     fn generated_debugger_registration_compiles_nothing() {
         let driver = std::str::from_utf8(DRIVER_SOURCE).expect("driver source is UTF-8");
@@ -30274,7 +30204,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("no `{name}` in the driver"));
             rest.split_once("\n}\n").expect("a function's end").0
         };
-        for name in ["register", "take_debugger", "locate", "place"] {
+        for name in ["take_debugger", "locate"] {
             let body = body(name);
             assert!(!body.contains("compile_"), "`{name}` compiles: {body}");
             assert!(
@@ -30282,8 +30212,13 @@ mod tests {
                 "`{name}` makes an engine: {body}"
             );
         }
-        assert!(body("register").contains("attach_running"));
-        assert!(body("take_debugger").contains("attach_running"));
+        assert!(body("take_debugger").contains("inspector.adopt("));
+        assert!(body("locate").contains("inspector.next("));
+        assert!(driver.contains("inspector.defer()"));
+        assert!(
+            !driver.contains("DEBUGGEE"),
+            "the runner keeps its own debuggee"
+        );
         // The runner main asks for no generation for the debugger.
         let runner = std::str::from_utf8(RUNNER_MAIN).expect("runner source is UTF-8");
         assert!(!runner.contains("register_on_request"), "{runner}");

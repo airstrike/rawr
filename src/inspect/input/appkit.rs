@@ -13,6 +13,7 @@
 //! time: a program that shows a window has loaded them, and one that
 //! hasn't shows no window.
 
+use std::cell::RefCell;
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -34,9 +35,15 @@ const CURSOR: &CStr = c"rawr-agent-cursor";
 /// About one frame at 60 Hz: the compositor shows a drawn frame by then.
 const FRAME: Duration = Duration::from_millis(17);
 
-/// How often input sent before the program's first window looks for that
-/// window, which AppKit tells no one of.
-const POLL: Duration = Duration::from_millis(50);
+/// The notifications after one of which a window may be the program's
+/// first one shown: those the frames observer takes a window's first show
+/// from, and a window's update, which AppKit posts for each visible window
+/// after the events of a turn of its loop.
+fn shows() -> impl Iterator<Item = &'static CStr> {
+    crate::frames::appkit::CHANGES
+        .into_iter()
+        .chain([c"NSWindowDidUpdateNotification"])
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -160,6 +167,9 @@ pub(in crate::inspect) struct Runtime {
     implement: unsafe extern "C" fn(*mut c_void, *const c_void) -> *const c_void,
     retain: unsafe extern "C" fn(Id) -> Id,
     unretain: unsafe extern "C" fn(Id),
+    allocate_class: unsafe extern "C" fn(Id, *const c_char, usize) -> Id,
+    add_method: unsafe extern "C" fn(Id, Sel, unsafe extern "C" fn(), *const c_char) -> bool,
+    register_class: unsafe extern "C" fn(Id),
     bitmap:
         unsafe extern "C" fn(*mut u8, usize, usize, usize, usize, *mut c_void, u32) -> *mut c_void,
     space: unsafe extern "C" fn(*const c_void) -> *mut c_void,
@@ -263,6 +273,9 @@ impl Runtime {
                 implement: function(c"method_setImplementation")?,
                 retain: function(c"objc_retain")?,
                 unretain: function(c"objc_release")?,
+                allocate_class: function(c"objc_allocateClassPair")?,
+                add_method: function(c"class_addMethod")?,
+                register_class: function(c"objc_registerClassPair")?,
                 bitmap: function(c"CGBitmapContextCreate")?,
                 space: function(c"CGColorSpaceCreateWithName")?,
                 srgb: {
@@ -450,20 +463,182 @@ static SHOWN: AtomicBool = AtomicBool::new(false);
 /// program without AppKit, which shows no window, or why the wait was given
 /// up (#1947). A program that shows a window opens it some turns of its
 /// event loop after it starts, its executor's threads taking part, so input
-/// sent in between waits for that window, looking each [`POLL`]. Once one
-/// was shown, a program with none takes no input, and the input says so at
-/// once.
+/// sent in between waits for that window: a main-thread job looks for one,
+/// and when there is none yet, a window's notification answers the wait
+/// once one shows. Once one was shown, a program with none takes no input,
+/// and the input says so at once.
 fn arrived(interrupted: &Interrupt) -> Option<Result<&'static Runtime, Error>> {
     let runtime = Runtime::get()?;
-    while !SHOWN.load(Ordering::Acquire) {
-        match main(interrupted, move || window(runtime, None).is_some()) {
-            Ok(true) => SHOWN.store(true, Ordering::Release),
-            Ok(false) if interrupted.is_fired() => return Some(Err(Error::Interrupted)),
-            Ok(false) => interrupted.rest(POLL),
-            Err(error) => return Some(Err(error)),
-        }
+    if SHOWN.load(Ordering::Acquire) {
+        return Some(Ok(runtime));
     }
-    Some(Ok(runtime))
+    let first = first_window(
+        &Queue::Main,
+        interrupted,
+        &SHOWN,
+        move || window(runtime, None).is_some(),
+        move || observe_shows(runtime),
+    );
+    Some(first.map(|()| runtime))
+}
+
+/// What waits on the main thread for the program's first window.
+#[derive(Default)]
+struct First {
+    /// Each input or capture sent before it, answered once it shows; one
+    /// whose wait was given up answers no one.
+    waiting: Vec<Done<()>>,
+    /// The observer of the [`shows`] notifications, while one is added.
+    observer: Option<Id>,
+}
+
+thread_local! {
+    /// The main thread's wait for the first window. Main-thread jobs and the
+    /// notifications AppKit posts on the main thread reach it, and nothing
+    /// else.
+    static FIRST: RefCell<First> = RefCell::new(First::default());
+}
+
+/// Wait on `queue`'s thread for a first window, until `interrupted` gives
+/// the wait up: at once when `shown` says one showed or `visible` finds
+/// one, or else once [`window_shown`] runs there, `observe` adding what
+/// runs it for the first wait. An observer that can't be added ends the
+/// wait at once, and the window lookup that follows finds none.
+fn first_window(
+    queue: &Queue,
+    interrupted: &Interrupt,
+    shown: &'static AtomicBool,
+    visible: impl FnOnce() -> bool + Send + 'static,
+    observe: impl FnOnce() -> Option<Id> + Send + 'static,
+) -> Result<(), Error> {
+    queue.answered(interrupted, move |done| {
+        if shown.load(Ordering::Acquire) || visible() {
+            shown.store(true, Ordering::Release);
+            done.send(());
+            return;
+        }
+        let waits = FIRST.with_borrow_mut(|first| {
+            if first.observer.is_none() {
+                first.observer = observe();
+            }
+            let waits = first.observer.is_some();
+            if waits {
+                first.waiting.push(done);
+                None
+            } else {
+                Some(done)
+            }
+        });
+        if let Some(done) = waits {
+            done.send(());
+        }
+    })
+}
+
+/// On the main thread, a window showed: answer each wait for the first
+/// one, and `unobserve` the observer that ran this, which nothing needs
+/// again. A notification while the wait's state is borrowed, or once the
+/// thread's locals are gone, does nothing: this runs inside a C callback,
+/// which must not panic.
+fn window_shown(shown: &AtomicBool, unobserve: impl FnOnce(Id)) {
+    shown.store(true, Ordering::Release);
+    let Some((waiting, observer)) = FIRST
+        .try_with(|first| {
+            let mut first = first.try_borrow_mut().ok()?;
+            Some((std::mem::take(&mut first.waiting), first.observer.take()))
+        })
+        .ok()
+        .flatten()
+    else {
+        return;
+    };
+    if let Some(observer) = observer {
+        unobserve(observer);
+    }
+    for done in waiting {
+        done.send(());
+    }
+}
+
+/// The name the first-window observer's class goes by.
+const OBSERVER: &CStr = c"RawrInspectFirstWindow";
+
+/// Add an observer of the [`shows`] notifications of every window to the default
+/// notification center, on the main thread: the observer, or `None` when
+/// its class can't be made.
+fn observe_shows(runtime: &'static Runtime) -> Option<Id> {
+    let class = observer_class(runtime)?;
+    let observer = msg!(runtime, Id; msg!(runtime, Id; class, "alloc"), "init");
+    if observer.is_null() {
+        return None;
+    }
+    let center = msg!(runtime, Id; runtime.class(c"NSNotificationCenter"), "defaultCenter");
+    for name in shows() {
+        // AppKit's notification names are `NSString *const` globals.
+        let name = symbol(name).cast::<Id>();
+        if name.is_null() {
+            continue;
+        }
+        // SAFETY: the global holds the notification's name, set once
+        // AppKit loaded.
+        let name = unsafe { name.read() };
+        msg!(runtime, (); center, "addObserver:selector:name:object:",
+            observer => Id,
+            runtime.selector("rawrWindowShows:\0") => Sel,
+            name => Id,
+            std::ptr::null_mut() => Id,
+        );
+    }
+    Some(observer)
+}
+
+/// The observer's class, made once per process: an `NSObject` whose one
+/// method takes a window's notification.
+fn observer_class(runtime: &Runtime) -> Option<Id> {
+    static MADE: Once = Once::new();
+    MADE.call_once(|| {
+        // SAFETY: each call reads NUL-terminated names; the method's C
+        // signature `v@:@` is `window_notified`'s, and the class is registered before
+        // its object is made.
+        unsafe {
+            let class = (runtime.allocate_class)(runtime.class(c"NSObject"), OBSERVER.as_ptr(), 0);
+            if class.is_null() {
+                return;
+            }
+            let method = std::mem::transmute::<
+                unsafe extern "C" fn(Id, Sel, Id),
+                unsafe extern "C" fn(),
+            >(window_notified);
+            (runtime.add_method)(
+                class,
+                runtime.selector("rawrWindowShows:\0"),
+                method,
+                c"v@:@".as_ptr(),
+            );
+            (runtime.register_class)(class);
+        }
+    });
+    let class = runtime.class(OBSERVER);
+    (!class.is_null()).then_some(class)
+}
+
+/// A window's notification, while something waits for the first window:
+/// once the program has a window input reaches, the wait ends, and the
+/// observer is removed from the notification center and let go.
+unsafe extern "C" fn window_notified(_observer: Id, _selector: Sel, _notification: Id) {
+    let Some(runtime) = Runtime::get() else {
+        return;
+    };
+    if window(runtime, None).is_none() {
+        return;
+    }
+    window_shown(&SHOWN, |observer| {
+        let center = msg!(runtime, Id; runtime.class(c"NSNotificationCenter"), "defaultCenter");
+        msg!(runtime, (); center, "removeObserver:", observer => Id);
+        // SAFETY: `observe_shows` made the observer with one retain, which
+        // the center doesn't hold.
+        unsafe { (runtime.unretain)(observer) };
+    });
 }
 
 /// An event and how long the cursor rests after it, before the next.
@@ -1996,7 +2171,7 @@ mod tests {
 
     /// Input sent before the program's first window waits for it instead
     /// of saying there is none (#1947): a test's main thread runs no event
-    /// loop, so the wait goes on until the caller gives it up.
+    /// loop, so the wait goes on till the caller gives it up.
     #[test]
     fn input_before_the_first_window_waits_for_it() {
         let _ = loaded();
@@ -2005,6 +2180,71 @@ mod tests {
         given_up.fire();
         assert_eq!(send(&move_to, None, &given_up), Err(Error::Interrupted));
         assert!(!SHOWN.load(Ordering::Acquire));
+    }
+
+    /// Input asked before the first window is answered once a window's
+    /// notification says one showed, with no clock: the look finds none,
+    /// adds the observer, and the notification ends the wait and removes
+    /// it. Asked after, it is answered at once and observes nothing. A
+    /// tool that leaves first ends its wait, and the notification after
+    /// answers no one.
+    #[test]
+    fn input_before_the_first_window_is_answered_when_a_window_shows() {
+        static SHOWN_HERE: AtomicBool = AtomicBool::new(false);
+        let (posting, jobs) = mpsc::channel();
+        let queue = Queue::Held(posting);
+        // An address that stands for the observer: nothing reads it.
+        let observer = std::ptr::dangling_mut::<c_void>();
+        let address = observer.addr();
+        let removed = std::cell::RefCell::new(Vec::new());
+        let interrupted = Interrupt::default();
+        let leaving = Interrupt::default();
+        std::thread::scope(|scope| {
+            // The tool leaves before the window shows.
+            let left = scope.spawn(|| {
+                first_window(
+                    &queue,
+                    &leaving,
+                    &SHOWN_HERE,
+                    || false,
+                    move || Some(std::ptr::without_provenance_mut(address)),
+                )
+            });
+            jobs.recv().unwrap()();
+            leaving.fire();
+            assert_eq!(left.join().unwrap(), Err(Error::Interrupted));
+
+            // An input waits on the observer that is there.
+            let waiting = scope.spawn(|| {
+                first_window(
+                    &queue,
+                    &interrupted,
+                    &SHOWN_HERE,
+                    || false,
+                    || panic!("one observer serves every wait"),
+                )
+            });
+            jobs.recv().unwrap()();
+            assert!(!waiting.is_finished());
+            window_shown(&SHOWN_HERE, |observer| removed.borrow_mut().push(observer));
+            assert_eq!(waiting.join().unwrap(), Ok(()));
+            assert_eq!(*removed.borrow(), [observer]);
+
+            // Once a window showed, an input is answered at once.
+            let after = scope.spawn(|| {
+                first_window(
+                    &queue,
+                    &interrupted,
+                    &SHOWN_HERE,
+                    || false,
+                    || panic!("nothing waits once a window showed"),
+                )
+            });
+            jobs.recv().unwrap()();
+            assert_eq!(after.join().unwrap(), Ok(()));
+        });
+        assert!(SHOWN_HERE.load(Ordering::Acquire));
+        assert!(FIRST.with_borrow(|first| first.waiting.is_empty() && first.observer.is_none()));
     }
 
     /// Typed text reaches the window in one turn of its loop, whatever its

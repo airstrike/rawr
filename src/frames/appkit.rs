@@ -23,8 +23,9 @@ type Class = *mut c_void;
 const LOADED: *mut c_void = -2_isize as *mut c_void;
 
 /// The notifications after which a window that is now visible has shown,
-/// or a window already shown has moved or resized.
-const CHANGES: [&CStr; 6] = [
+/// or a window already shown has moved or resized. The inspector's wait
+/// for the first window takes them too.
+pub(crate) const CHANGES: [&CStr; 6] = [
     c"NSWindowDidBecomeKeyNotification",
     c"NSWindowDidBecomeMainNotification",
     c"NSWindowDidChangeOcclusionStateNotification",
