@@ -274,16 +274,36 @@ fn settle_lock(directory: &Path) -> Result<(), Error> {
         .output()
         .map_err(|source| Error::Io {
             operation: "settle the generated runner's lockfile",
-            path: manifest,
+            path: manifest.clone(),
             source,
         })?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(Error::Lock(
+    if !output.status.success() {
+        return Err(Error::Lock(
             String::from_utf8_lossy(&output.stderr).trim().into(),
-        ))
+        ));
     }
+    // Cargo settled with every patch; the runner builds without the ones it
+    // left unused (`runner::patches`).
+    let lock = directory.join("Cargo.lock");
+    let read = |path: &Path| {
+        fs::read_to_string(path).map_err(|source| Error::Io {
+            operation: "read the settled generated runner",
+            path: path.to_path_buf(),
+            source,
+        })
+    };
+    if let Some((pruned_manifest, pruned_lock)) =
+        super::patches::pruned(&read(&manifest)?, &read(&lock)?)
+    {
+        for (path, text) in [(&manifest, pruned_manifest), (&lock, pruned_lock)] {
+            fs::write(path, text).map_err(|source| Error::Io {
+                operation: "write the settled generated runner",
+                path: path.clone(),
+                source,
+            })?;
+        }
+    }
+    Ok(())
 }
 
 fn cargo() -> PathBuf {
