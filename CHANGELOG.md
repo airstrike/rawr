@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.95 (2026-11-21)
+
+- The check's owner holds the list of kept macro expansions its checks read, not a process-wide global; a check that reuses a remembered lowering still keeps the expansions that lowering read. (#2387)
+
 ## 0.4.94 (2026-11-21)
 
 - The format directories' process leases are kept in a write-once list, so opening a bindings, inventory or project format path takes no lock. (#2402)

@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.4.95",
+      "date": "2026-11-21",
+      "entries": [
+        {"text":"The check's owner holds the list of kept macro expansions its checks read, not a process-wide global; a check that reuses a remembered lowering still keeps the expansions that lowering read.","issues":[2387]}
+      ]
+    },
+    {
       "version": "0.4.94",
       "date": "2026-11-21",
       "entries": [

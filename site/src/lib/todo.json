@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-21",
-  "version": "0.4.94",
+  "version": "0.4.95",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.95",
+        "date": "2026-11-21",
+        "entries": [
+          {"text":"The check's owner holds the list of kept macro expansions its checks read, not a process-wide global; a check that reuses a remembered lowering still keeps the expansions that lowering read.","issues":[2387]}
+        ]
+      },
       {
         "version": "0.4.94",
         "date": "2026-11-21",
@@ -5789,7 +5796,7 @@
     {"issue":2317,"title":"`rawr tui` reads bindings with their parts from the inspector, so a map opens to one row per…","state":"closed","category":"Health","release":"0.4.46"},
     {"issue":2318,"title":"Destructuring assignment and assignment to a parenthesized place are unsupported","state":"closed","category":"Divergences from rustc","release":"0.4.50"},
     {"issue":2319,"title":"A runner whose output is a terminal tells it to the session","state":"closed","category":"Health","release":"0.4.49"},
-    {"issue":2320,"title":"A dependency's own writes to a terminal reach the run's session","state":"open","category":"Health"},
+    {"issue":2320,"title":"A dependency's own writes to a terminal reach the run's session","state":"closed","category":"Health"},
     {"issue":2321,"title":"The home page shows the debugger in every shell (VS Code, `rawr gui`, `rawr tui`, the…","state":"closed","category":"Health","release":"0.4.50"},
     {"issue":2322,"title":"/play says why the browser universe did not load when it falls back to the server, skips the…","state":"closed","category":"Health","release":"0.4.50"},
     {"issue":2323,"title":"The home page shows the debugger's four shells with the same tabs as the libraries above them","state":"closed","category":"Health","release":"0.4.50"},
@@ -5856,7 +5863,7 @@
     {"issue":2384,"title":"Eval reads its paused generation's lowered parts, not only its parses","state":"open","category":"Health"},
     {"issue":2385,"title":"Three native-miss tests fail: an absent native import is reported as E0432","state":"closed","category":"Health","release":"0.4.82"},
     {"issue":2386,"title":"Prune old rawr-web sets from R2, and build modules on a push that bumps WEB_PROTOCOL","state":"open","category":"Platforms"},
-    {"issue":2387,"title":"The kept-expansion read log (expand::kept NAMED) is a process static the rawr engine writes","state":"open","category":"Health"},
+    {"issue":2387,"title":"The kept-expansion read log (expand::kept NAMED) is a process static the rawr engine writes","state":"closed","category":"Health","release":"0.4.95"},
     {"issue":2388,"title":"rawr-import's lib suite fails 36 tests on main, mostly hot runner builds with StaleReadSet","state":"closed","category":"Health"},
     {"issue":2389,"title":"rawr dap, rawr mcp, rawr gui, the reload stream and the --web page server each hand their state…","state":"closed","category":"Health","release":"0.4.81"},
     {"issue":2390,"title":"The engine drops locks one thread uses or nothing reads: the native account's baseline, the…","state":"closed","category":"Health","release":"0.4.81"},
@@ -8673,7 +8680,7 @@
             {"number":2308,"title":"A runner registers its debugger in its running engine, replacing the debugger generation","state":"closed"},
             {"number":2309,"title":"The debugger evaluates only in the innermost frame, even with another frame selected","state":"closed"},
             {"number":2319,"title":"A runner whose output is a terminal tells it to the session","state":"closed"},
-            {"number":2320,"title":"A dependency's own writes to a terminal reach the run's session","state":"open"}
+            {"number":2320,"title":"A dependency's own writes to a terminal reach the run's session","state":"closed"}
           ],
           "milestone": "0.5"
         },
