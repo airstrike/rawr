@@ -134,7 +134,7 @@ button.twisty:hover { color: var(--ink); }
 .console .fold { display: flex; flex: none; width: 100%; align-items: center; gap: 6px; padding: 2px 8px; line-height: 18px; background: none; border: 0; cursor: pointer; text-align: left; }
 .console .fold::after { content: ""; margin-left: auto; width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(45deg); }
 .console .fold[aria-expanded="false"]::after { transform: rotate(-45deg); }
-.console .pane-body { border-top: 1px solid var(--grid); overflow: auto; flex: 1; min-height: 0; font: 12px/18px var(--mono); }
+.console .pane-body { border-top: 1px solid var(--grid); overflow: auto; flex: 1; min-height: 0; font: 12px/18px var(--mono); scrollbar-width: thin; }
 @media (max-width: 767px) { .console .pane-body { max-height: 200px; } }
 .console .scrollback:empty { display: none; }
 .console .entry { border-bottom: 1px solid var(--grid); padding: 0 8px 0 22px; }
@@ -153,4 +153,6 @@ button.twisty:hover { color: var(--ink); }
 .console .prompt { display: flex; gap: 8px; padding: 1px 8px 2px; font: 12px/18px var(--mono); }
 .console .prompt .mark { color: var(--red); }
 .console .prompt .input { flex: 1; min-width: 0; }
+/* The prompt's red mark says where typing goes, so its text takes no ring. */
+.console .prompt :focus-visible { outline: none; }
 @media (max-width: 767px) { .console { margin-top: 12px; } }
