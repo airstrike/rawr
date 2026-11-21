@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-20",
-  "version": "0.4.77",
+  "version": "0.4.78",
   "examples": {
     "running": 56,
     "total": 56,
@@ -9,13 +9,17 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {
-      "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
-      "entries": [
-        {"text":"The bot's health check accepts the reports of a bot that kept running through a container start attempt, so a deploy after a connectivity blip no longer fails waiting for an image the running bot already reports.","issues":[2381]}
-      ]
-    },
+    "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.78",
+        "date": "2026-11-20",
+        "entries": [
+          {"text":"The bot's health check accepts the reports of a bot that kept running through a container start attempt, so a deploy after a connectivity blip no longer fails waiting for an image the running bot already reports.","issues":[2381]},
+          {"text":"A runner's parses and lowerings are a value its protocol loop owns and lends to each compile, so a save takes no lock of them (15 lock calls a save before, none now). Code a debugger evaluates compiles from its paused generation's parses and no longer evicts the paused file's parse and lowering, so the save after an evaluation parses nothing again.","issues":[2382],"refs":[1604,1646]},
+          {"text":"The playground's modules load from their own storage, so a new module build goes live without a site deploy, and a deploy never puts older site code over newer.","issues":[2383]}
+        ]
+      },
       {
         "version": "0.4.77",
         "date": "2026-11-20",
@@ -5724,7 +5728,12 @@
     {"issue":2378,"title":"/play's iced examples are iced's own counter, bezier_tool and styling, unchanged from iced, in…","state":"closed","category":"Platforms","release":"0.4.77"},
     {"issue":2379,"title":"A prebuilt runner can't expand a snippet's crate derives, so iced's todos can't run in /play or ?play","state":"open","category":"Platforms"},
     {"issue":2380,"title":"A prebuilt-runner snippet can't reach its example's other files (include_bytes!, mod files)","state":"open","category":"Platforms"},
-    {"issue":2381,"title":"The bot's health check accepts the reports of a bot that kept running through a container start…","state":"open","category":"Platforms"}
+    {"issue":2381,"title":"The bot's health check accepts the reports of a bot that kept running through a container start…","state":"closed","category":"Platforms","release":"0.4.78"},
+    {"issue":2382,"title":"A runner's parses and lowerings are a value its protocol loop owns and lends to each compile, so…","state":"closed","category":"Health","release":"0.4.78"},
+    {"issue":2383,"title":"The playground's modules load from their own storage, so a new module build goes live without a…","state":"closed","category":"Platforms","release":"0.4.78"},
+    {"issue":2384,"title":"Eval reads its paused generation's lowered parts, not only its parses","state":"open","category":"Health"},
+    {"issue":2385,"title":"Three native-miss tests fail: an absent native import is reported as E0432","state":"open","category":"Health"},
+    {"issue":2386,"title":"Prune old rawr-web sets from R2, and build modules on a push that bumps WEB_PROTOCOL","state":"open","category":"Platforms"}
   ],
   "groups": [
     {

@@ -5,7 +5,12 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
+
+## 0.4.78 (2026-11-20)
+
 - The bot's health check accepts the reports of a bot that kept running through a container start attempt, so a deploy after a connectivity blip no longer fails waiting for an image the running bot already reports. (#2381)
+- A runner's parses and lowerings are a value its protocol loop owns and lends to each compile, so a save takes no lock of them (15 lock calls a save before, none now). Code a debugger evaluates compiles from its paused generation's parses and no longer evicts the paused file's parse and lowering, so the save after an evaluation parses nothing again. (#2382; part of #1604, #1646)
+- The playground's modules load from their own storage, so a new module build goes live without a site deploy, and a deploy never puts older site code over newer. (#2383)
 
 ## 0.4.77 (2026-11-20)
 
