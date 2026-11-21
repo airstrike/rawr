@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],
+      "entries": [
+        {"text":"The bot's health check accepts the reports of a bot that kept running through a container start attempt, so a deploy after a connectivity blip no longer fails waiting for an image the running bot already reports.","issues":[2381]}
+      ]
+    },
     "releases": [
       {
         "version": "0.4.77",
@@ -5718,7 +5723,8 @@
     {"issue":2377,"title":"rawr no longer has a `sync` feature: values are always `Arc`/`RwLock`, so threads work in every…","state":"closed","category":"Health","release":"0.4.76"},
     {"issue":2378,"title":"/play's iced examples are iced's own counter, bezier_tool and styling, unchanged from iced, in…","state":"closed","category":"Platforms","release":"0.4.77"},
     {"issue":2379,"title":"A prebuilt runner can't expand a snippet's crate derives, so iced's todos can't run in /play or ?play","state":"open","category":"Platforms"},
-    {"issue":2380,"title":"A prebuilt-runner snippet can't reach its example's other files (include_bytes!, mod files)","state":"open","category":"Platforms"}
+    {"issue":2380,"title":"A prebuilt-runner snippet can't reach its example's other files (include_bytes!, mod files)","state":"open","category":"Platforms"},
+    {"issue":2381,"title":"The bot's health check accepts the reports of a bot that kept running through a container start…","state":"open","category":"Platforms"}
   ],
   "groups": [
     {
