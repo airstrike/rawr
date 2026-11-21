@@ -42,9 +42,18 @@ marked() {
   { echo "// rawr"; cat "$1"; } > "$2"
 }
 
-# One name per line; `#` starts a comment.
-sed -e 's/#.*//' -e 's/[[:space:]]//g' "$universe/examples.txt" | while read -r name; do
+# One name per line, then `native` for one the browser's universe leaves
+# out: its module is built only off wasm32. `#` starts a comment.
+sed -e 's/#.*//' "$universe/examples.txt" | while read -r name target; do
   [ -n "$name" ] || continue
+  case "$target" in
+    "") ;;
+    native) echo '#[cfg(not(target_arch = "wasm32"))]' >> "$universe/src/examples.rs" ;;
+    *)
+      echo "examples.sh: '$name' names no target '$target'" >&2
+      exit 1
+      ;;
+  esac
   source="$iced/examples/$name/src"
   if [ ! -f "$source/main.rs" ]; then
     echo "examples.sh: iced has no example '$name'" >&2

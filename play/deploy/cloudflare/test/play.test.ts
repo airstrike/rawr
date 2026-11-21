@@ -414,6 +414,20 @@ test("example slugs are stable, readable and unique", async () => {
   assert.equal(new Set(slugs).size, slugs.length);
 });
 
+test("each iced example is one the browser's universe holds", async () => {
+  const { readFileSync } = await import("node:fs");
+  const source = readFileSync(new URL("../src/examples.ts", import.meta.url), "utf8");
+  const examples = [...source.matchAll(/fixtures\/iced\/([a-z_]+)\.rs"/g)].map((m) => m[1]);
+  assert.ok(examples.includes("counter"));
+  // examples.txt: a name per line, then `native` for one the browser's universe leaves out.
+  const listed = readFileSync(new URL("../../../universe/examples.txt", import.meta.url), "utf8")
+    .split("\n")
+    .map((line) => line.replace(/#.*/, "").trim().split(/\s+/))
+    .filter(([name]) => name);
+  const browser = new Set(listed.filter(([, target]) => target === undefined).map(([name]) => name));
+  for (const name of examples) assert.ok(browser.has(name), `examples.txt names ${name} for the browser`);
+});
+
 test("rawr-web's files are served with types the edge compresses", () => {
   const headers = (path: string) => webHeaders(path, new Headers({ etag: "\"x\"", "content-type": "application/octet-stream" }));
   assert.equal(headers("/web/rawr_web_bg.wasm")?.get("content-type"), "application/wasm");

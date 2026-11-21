@@ -110,7 +110,8 @@ The image names a universe runner (`PLAY_UNIVERSE`, `/universe`), and then
 every snippet runs on it instead of the base language
 (`play/src/universe.rs`). `rawr-import` builds it once, in the image's
 `universe` stage, from `play/universe` with `RAWR_UNIVERSE_RUNNER=1`: the
-generated bindings of iced (at the pinned rev), iced_test, tokio and ratatui, and a
+generated bindings of iced (at the pinned rev), iced_test, tokio, ratatui,
+chrono and tracing-subscriber, and a
 runner that links them.
 
 The bot starts the runner once, as a server, with `RAWR_PLAY_ROOT` and
@@ -197,7 +198,12 @@ counts its script types from zero, as a snippet does. A snippet that is
 one of them, or makes the calls one of them makes, runs whatever its types
 are called. The list names each iced example that runs under `rawr run`
 and needs no files, no network and no crate beyond the universe's; add one
-to it as it starts to run.
+to it as it starts to run. `native` after a name keeps that example out of
+the browser's universe, where it can't run (stopwatch and clock, as
+`examples.txt` says why), so `examples.sh` writes its module under
+`#[cfg(not(target_arch = "wasm32"))]`. The playground's iced examples
+(`play/deploy/cloudflare/src/examples.ts`) are copies of the ones the
+browser's universe holds, unchanged.
 
 `RAWR_UNIVERSE_OUT` names the directory `rawr-import` writes the runner
 to, as `runner`, each time it builds or reuses one (#1752). The image

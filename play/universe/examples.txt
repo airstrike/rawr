@@ -2,8 +2,15 @@
 # pinned rev: each one that runs under `rawr run` and needs no files, no
 # network and no crate beyond the universe's own. examples.sh copies them
 # into the universe program, and a snippet that makes the native calls one
-# of them makes runs on the runner.
+# of them makes runs on the runner. `native` after a name keeps the example
+# out of the browser's universe, where it can't run: on wasm32 stopwatch's
+# `time::every` yields wasmtimer's `Instant` where its message takes
+# `iced::time::Instant`, web-time's, so it doesn't build, and clock's `fmt`
+# subscriber stamps each record with `SystemTime::now`, which panics there.
 arc
+bezier_tool
+clock native
 counter
 pick_list
+stopwatch native
 styling

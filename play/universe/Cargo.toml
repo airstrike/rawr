@@ -17,6 +17,10 @@ publish = false
 iced = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b", features = ["canvas", "tokio"] }
 iced_test = { git = "https://github.com/iced-rs/iced", rev = "be88873d38544455e26c7a104eb757da2cbbac6b" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
+# chrono gives iced's clock its local time, and tracing-subscriber the
+# `fmt` subscriber its `main` installs.
+chrono = "0.4"
+tracing-subscriber = "0.3"
 # The landing page's ratatui snippet (programs/ui.rs), at the version the
 # repository's examples/tui uses.
 ratatui = "0.30"
