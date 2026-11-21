@@ -58,6 +58,10 @@ struct Inner {
     /// The run's output reaches the session: a shell started the run, or
     /// its program or owner tells it.
     tells: bool,
+    /// The program's own connection told its output: its streams are the
+    /// terminal, which it writes to itself, so only what the engine prints
+    /// reaches the session and a dependency's own writes don't (#2411).
+    at_terminal: bool,
     inspector: Option<Served>,
     debugger: Debugger,
     /// The next program the owner starts waits at its start for the shell
@@ -489,7 +493,7 @@ impl Shared {
         if self.handed || inner.tells {
             capabilities.push("output");
         }
-        let result = json!({
+        let mut result = json!({
             "protocol": PROTOCOL,
             "capabilities": capabilities,
             "root": self.root,
@@ -498,6 +502,9 @@ impl Shared {
             "output": inner.output,
             "breakpoints": self.breakpoints(),
         });
+        if let Some(coverage) = self.coverage(&inner) {
+            result["coverage"] = json!(coverage);
+        }
         let _ = send.send(line(
             &json!({ "jsonrpc": "2.0", "id": id, "result": result }),
         ));
@@ -505,6 +512,21 @@ impl Shared {
             connection,
             send: send.clone(),
         });
+    }
+
+    /// How much of the run's output `hello` gives, once any reaches the
+    /// session: `all` when a shell that started the run tells it off
+    /// pipes, or the owner copies it off pipes, and `engine` when the
+    /// program writes to the terminal itself and tells only what the
+    /// engine prints (#2411).
+    fn coverage(&self, inner: &Inner) -> Option<&'static str> {
+        if self.handed {
+            Some("all")
+        } else if inner.at_terminal {
+            Some("engine")
+        } else {
+            inner.tells.then_some("all")
+        }
     }
 
     fn record(&self, event: Value) {
@@ -594,6 +616,7 @@ impl Shared {
     fn teller(&self, connection: u64, send: &mpsc::Sender<Arc<str>>) {
         let mut inner = self.inner();
         inner.tells = true;
+        inner.at_terminal = true;
         if inner.listening {
             let _ = send.send(asking());
         }
@@ -1195,6 +1218,27 @@ mod tests {
         let teller = program.join().unwrap();
         writeln!(&teller, "{}", piece("live\n")).unwrap();
         assert_eq!(shell.next()["params"]["text"], "live\n");
+        drop(host);
+    }
+
+    /// A program that writes to the terminal itself tells only what the
+    /// engine prints, and `hello` says so (#2411).
+    #[test]
+    fn hello_says_a_run_at_a_terminal_tells_the_engine_s_output() {
+        let (host, place) = host("coverage-engine", false);
+        let program = listened(teller(&host, &place), "kept\n");
+        let shell = Shell::connect(&place.socket());
+        assert_eq!(greeted(&shell)["coverage"], "engine");
+        drop((program.join().unwrap(), host));
+    }
+
+    /// A shell that started the run reads its streams off pipes, so
+    /// `hello` says the session tells all of its output (#2411).
+    #[test]
+    fn hello_says_a_run_a_shell_started_tells_all_its_output() {
+        let (host, place) = host("coverage-all", true);
+        let shell = Shell::connect(&place.socket());
+        assert_eq!(greeted(&shell)["coverage"], "all");
         drop(host);
     }
 

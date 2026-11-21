@@ -21,7 +21,12 @@
 //!   `breakpoints` event with no number and no place in the history:
 //!   `{"event": "breakpoints", "revision", "breakpoints": [..]}`, the list
 //!   the program's inspector keeps (#2278), its revision counting the
-//!   changes, so a shell takes only a newer list than it has.
+//!   changes, so a shell takes only a newer list than it has. Once output
+//!   reaches the session, `hello` lists `output` among its capabilities
+//!   and says its `coverage`: `all` when a shell or the owner reads the
+//!   program's streams off pipes, and `engine` when the program writes to
+//!   the terminal itself and tells only what the engine prints, so a
+//!   dependency's own writes never reach the session (#2411).
 //! - `program`: the inspector's request (see [`rawr::inspect`]), answered
 //!   with the inspector's answer once the program answers it, or the error
 //!   [`NOT_RUNNING`] with the session's `state` when no program will. A

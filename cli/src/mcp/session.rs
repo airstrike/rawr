@@ -96,7 +96,45 @@ struct Mirror {
     /// The newest breakpoints the session told, as its `breakpoints` event
     /// tells them (#2278).
     breakpoints: Value,
+    /// How much of the program's output the session tells, as `hello`
+    /// said: `None` before any reached it.
+    coverage: Option<Coverage>,
 }
+
+/// How much of a program's output its session tells (#2411).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Coverage {
+    /// The program writes to the terminal itself and tells what the engine
+    /// prints: a dependency's own writes reach only the terminal.
+    Engine,
+    /// A shell or the run's owner reads the program's streams off pipes.
+    All,
+}
+
+impl Coverage {
+    /// The coverage `hello` names, `engine` or `all`.
+    fn of(told: &Value) -> Option<Self> {
+        match told.as_str()? {
+            "engine" => Some(Self::Engine),
+            "all" => Some(Self::All),
+            _ => None,
+        }
+    }
+
+    /// The name `hello` gives it.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Engine => "engine",
+            Self::All => "all",
+        }
+    }
+}
+
+/// What a shell says of a run at a terminal, whose session hears only
+/// what the engine prints.
+pub const AT_TERMINAL: &str =
+    "this run was started at a terminal: shells hear rawr's prints, not a dependency's own writes";
 
 /// Why a request to the program has no answer.
 #[derive(Debug)]
@@ -571,6 +609,13 @@ impl Session {
         });
     }
 
+    /// How much of the program's output the session tells, as its `hello`
+    /// said.
+    #[must_use]
+    pub fn coverage(&self) -> Option<Coverage> {
+        self.look(|mirror| mirror.coverage).flatten()
+    }
+
     /// The newest breakpoints the session told: `{"event": "breakpoints",
     /// "revision", "breakpoints": [..]}`, or null before `hello`.
     #[must_use]
@@ -888,6 +933,7 @@ impl Owner {
             }
         }
         mirror.take_breakpoints(result["breakpoints"].clone());
+        mirror.coverage = Coverage::of(&result["coverage"]);
         if self.started.is_none() {
             mirror.pid = result["pid"]
                 .as_u64()

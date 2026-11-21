@@ -152,7 +152,7 @@ stop        {"path": "counter"}</code></pre></div>
 <ul>
   <li>A run started in a terminal registers no debugger, so it costs nothing extra. The first tool that asks the program for something restarts it once with a debugger, and <code>wait</code> says <code>restarting</code>.</li>
   <li>Several servers can attach to one run. Each server&rsquo;s <code>wait</code> returns every event from its own cursor. A pause that one server causes reaches the others.</li>
-  <li>The output of a run started in a terminal stays in that terminal. The output of a run that a server started reaches every server attached to it.</li>
+  <li>A server attached to a run started in a terminal hears what rawr prints for the program. Text that a Rust dependency writes straight to the terminal stays in that terminal, and <code>start</code> and <code>status</code> say so. A run that a server started sends all of its output to every server attached to it.</li>
   <li><code>stop</code> leaves a run started elsewhere running. The server only lets go of it.</li>
 </ul>
 

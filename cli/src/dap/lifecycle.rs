@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 
 use super::Adapter;
 use crate::mcp::options::Options;
-use crate::mcp::session::{Entry, Session, Wait};
+use crate::mcp::session::{Coverage, Entry, Session, Wait, AT_TERMINAL};
 use crate::mcp::tools;
 
 /// Why a second `launch` or `attach` is refused: a client debugs one
@@ -137,6 +137,9 @@ impl Adapter {
     pub(super) fn begin(&mut self, session: Arc<Session>) {
         self.beginning = false;
         self.following = super::follow::Following::of(&session);
+        if session.coverage() == Some(Coverage::Engine) {
+            self.output("console", &format!("rawr: {AT_TERMINAL}\n"));
+        }
         self.session = Some(session);
         self.out.event("initialized", json!({}));
         self.follow();
