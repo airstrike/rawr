@@ -1206,6 +1206,30 @@ fn main() {
         refused(&answers, &printed, "cell.0");
     }
 
+    /// A named field read through a local is refused naming the whole
+    /// read, though a field's name carries the span of its first
+    /// character (#2406).
+    #[cfg(feature = "rust-import")]
+    #[test]
+    fn a_refused_field_read_names_the_whole_read() {
+        let mut engine = crate::package::compile::captured::tests::compiler();
+        crate::package::compile::captured::native_tests::structure(&mut engine);
+        let (answers, printed) = evaluated_in_runner(
+            engine,
+            ECHOED,
+            4,
+            &["count += 1; \
+               let read = |held: structure::Meter| { let meter = held; meter.count * 10 };"],
+        );
+        refused(&answers, &printed, "meter.count");
+        let error = answers[0]["error"].as_str().unwrap();
+        assert_eq!(
+            error.lines().next(),
+            Some("error: the running build has no binding for `meter.count`"),
+            "{error}"
+        );
+    }
+
     /// A crate's generic function at a type the running build has no
     /// instance of is refused before any of the code runs, not when the
     /// call is reached (#2406).

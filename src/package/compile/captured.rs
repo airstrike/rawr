@@ -428,15 +428,24 @@ impl Matched {
     }
 }
 
-/// The code `span` covers in `source`, its end column included, on one
-/// line: `None` when it covers nothing.
+/// The code `span` covers in `source`, on one line: `None` when it covers
+/// nothing. A span's end is where its last token starts: a call's `)`, or
+/// a field's name, whose span is the point it starts at (`meter.count`
+/// ends at `c`). The code goes on to that token's end.
 fn written(source: &diagnostic::Source, span: Span) -> Option<&str> {
     let text = source.text();
-    let byte = |at: crate::Position, after: usize| {
-        let column = at.position().unwrap_or(1) + after;
-        diagnostic::offset(text, at.line().unwrap_or(1), column)
+    let byte = |at: crate::Position| {
+        diagnostic::offset(text, at.line().unwrap_or(1), at.position().unwrap_or(1))
     };
-    let start = byte(span.start(), 0);
-    let code = text.get(start..byte(span.end(), 1).max(start))?.trim();
+    let start = byte(span.start());
+    let last = byte(span.end()).max(start);
+    let rest = text.get(last..)?;
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    let token = match rest.chars().next() {
+        Some(first) if word(first) => rest.find(|c: char| !word(c)).unwrap_or(rest.len()),
+        Some(first) => first.len_utf8(),
+        None => 0,
+    };
+    let code = text.get(start..last + token)?.trim();
     (!code.is_empty() && !code.contains('\n')).then_some(code)
 }
