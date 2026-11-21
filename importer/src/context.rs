@@ -1,8 +1,9 @@
 //! One sealed import context captured before shared-store or process work.
 
+use std::cell::OnceCell;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::rc::Rc;
 
 use sha2::{Digest as _, Sha256};
 
@@ -33,7 +34,7 @@ pub struct Context {
     limits: cargo::Limits,
     digest: [u8; 32],
     graph_budget: crate::node::GraphBudget,
-    toolchain: Arc<OnceLock<Arc<crate::node::Validated<cargo::toolchain::Attestation>>>>,
+    toolchain: Rc<OnceCell<Rc<crate::node::Validated<cargo::toolchain::Attestation>>>>,
 }
 
 impl Context {
@@ -92,7 +93,7 @@ impl Context {
             limits: *limits,
             digest,
             graph_budget: graph_budget.clone(),
-            toolchain: Arc::new(OnceLock::new()),
+            toolchain: Rc::new(OnceCell::new()),
         })
     }
 
@@ -235,15 +236,15 @@ impl Context {
 
     pub(crate) fn cached_toolchain(
         &self,
-    ) -> Option<Arc<crate::node::Validated<cargo::toolchain::Attestation>>> {
+    ) -> Option<Rc<crate::node::Validated<cargo::toolchain::Attestation>>> {
         self.toolchain.get().cloned()
     }
 
     pub(crate) fn retain_toolchain(
         &self,
-        toolchain: Arc<crate::node::Validated<cargo::toolchain::Attestation>>,
-    ) -> Arc<crate::node::Validated<cargo::toolchain::Attestation>> {
-        match self.toolchain.set(Arc::clone(&toolchain)) {
+        toolchain: Rc<crate::node::Validated<cargo::toolchain::Attestation>>,
+    ) -> Rc<crate::node::Validated<cargo::toolchain::Attestation>> {
+        match self.toolchain.set(Rc::clone(&toolchain)) {
             Ok(()) => toolchain,
             Err(_) => self.toolchain.get().cloned().unwrap_or(toolchain),
         }
@@ -262,7 +263,7 @@ impl Context {
             limits: self.limits,
             digest: self.digest,
             graph_budget: self.graph_budget.clone(),
-            toolchain: Arc::new(OnceLock::new()),
+            toolchain: Rc::new(OnceCell::new()),
         }
     }
 }

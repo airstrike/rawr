@@ -410,7 +410,7 @@ fn protected_owner_rebuild(registry: usize, limits: &Limits) -> Measured {
     )
     .unwrap();
     let action = cold.node().receipt().action();
-    let prepared = node::Chain::validated(context.clone(), cold.node())
+    let mut prepared = node::Chain::validated(context.clone(), cold.node())
         .prepare_read_set()
         .unwrap();
     prepared.pin_live_last_good().unwrap();

@@ -1,5 +1,7 @@
 //! Internal pure composition without current-parent or execution authority.
 
+use std::sync::Arc;
+
 use super::content::Edge;
 use super::replay::Staged;
 use super::{Chain, Direct, Error, Evaluator, Lookup, Miss, Parent, Validated, Value};
@@ -61,6 +63,14 @@ impl<K: Value> Owned<K> {
         match self {
             Self::Current(value) => value.value(),
             Self::Staged(value) => value.value(),
+        }
+    }
+
+    /// The value alone, shared, without the read set that proves it.
+    pub(crate) fn value_arc(&self) -> Arc<K> {
+        match self {
+            Self::Current(value) => value.value_arc(),
+            Self::Staged(value) => value.value_arc(),
         }
     }
 

@@ -62,7 +62,7 @@ fn current(store: &Store, inputs: &[u8]) -> Validated<Owned> {
         .unwrap();
     let mut fragment = current.receipt().read_set().clone();
     for witness in &mut fragment.witnesses {
-        witness.current = Arc::new(NeverCurrent);
+        witness.current = std::rc::Rc::new(NeverCurrent);
     }
     let receipt = Receipt::new(
         current.receipt().action(),
@@ -892,7 +892,7 @@ fn scopes_survive_union_dedup_and_complete_every_admission_boundary() {
     let reject_complete = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let mut fragment = value.receipt().read_set().clone();
     let entry = fragment.entries[0];
-    fragment.witnesses[0].current = Arc::new(Counted {
+    fragment.witnesses[0].current = std::rc::Rc::new(Counted {
         entry,
         scopes: scopes.clone(),
         reject_complete: reject_complete.clone(),
@@ -902,7 +902,7 @@ fn scopes_survive_union_dedup_and_complete_every_admission_boundary() {
     assert_eq!(*scopes.lock().unwrap(), [Scope::Consumer]);
     scopes.lock().unwrap().clear();
     // A runner's union seals with no walk: its admission walks it (#1760).
-    let prepared = Prepared::seal_union(context, [fragment.clone(), fragment]).unwrap();
+    let mut prepared = Prepared::seal_union(context, [fragment.clone(), fragment]).unwrap();
     assert_eq!(*scopes.lock().unwrap(), []);
     scopes.lock().unwrap().clear();
     prepared.revalidate().unwrap();

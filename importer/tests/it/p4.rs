@@ -3,7 +3,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::OnceLock;
 
 use rawr_import::cargo::config::{Dependency, Environment};
 use rawr_import::cargo::{Limits, Request};
@@ -22,10 +21,17 @@ impl Drop for Project {
 }
 
 /// The generic fixture's contract, extracted and classified once per
-/// process, for tests that only read it.
+/// test thread, for tests that only read it.
 pub fn shared() -> &'static rawr_import::Contract<rawr_import::Classified> {
-    static CONTRACT: OnceLock<rawr_import::Contract<rawr_import::Classified>> = OnceLock::new();
-    CONTRACT.get_or_init(|| contract().1)
+    // It holds read sets, whose validators stay on the thread that made
+    // them, so each test thread makes its own, once.
+    thread_local! {
+        static CONTRACT: &'static rawr_import::Contract<rawr_import::Classified> = {
+            let value = contract().1;
+            Box::leak(Box::new(value))
+        };
+    }
+    CONTRACT.with(|value| *value)
 }
 
 /// A contract of its own, for a test that consumes it into a native proof.

@@ -5,7 +5,6 @@
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::OnceLock;
 
 use rawr_import::api::identity::Definition as Id;
 use rawr_import::api::ledger::Lookup;
@@ -324,10 +323,17 @@ fn definition<'a>(graph: &'a Graph, id: &Id) -> &'a model::Definition {
 }
 
 /// The fixture with only `widget::Button` demanded, extracted once per
-/// process.
+/// test thread.
 fn button() -> &'static Graph {
-    static GRAPH: OnceLock<Graph> = OnceLock::new();
-    GRAPH.get_or_init(|| extract(&Project::new(), &[&["app", "widget", "Button"]]))
+    // It holds read sets, whose validators stay on the thread that made
+    // them, so each test thread makes its own, once.
+    thread_local! {
+        static GRAPH: &'static Graph = {
+            let value = extract(&Project::new(), &[&["app", "widget", "Button"]]);
+            Box::leak(Box::new(value))
+        };
+    }
+    GRAPH.with(|value| *value)
 }
 
 fn extract(project: &Project, demand: &[&[&str]]) -> Graph {

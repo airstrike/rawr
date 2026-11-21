@@ -1,6 +1,7 @@
 //! Typed content-addressed importer transformations.
 
 use std::marker::PhantomData;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use sha2::{Digest as _, Sha256};
@@ -723,7 +724,7 @@ impl<'store> Evaluator<'store> {
     pub fn discover<K>(
         &self,
         recipe: &Discoverable<K>,
-        validate: impl Fn(&K) -> Result<Box<[u8]>, Error> + Send + Sync + 'static,
+        validate: impl Fn(&K) -> Result<Box<[u8]>, Error> + 'static,
         execute: impl FnOnce() -> Result<K, Error>,
     ) -> Result<Validated<K>, Error>
     where
@@ -735,14 +736,14 @@ impl<'store> Evaluator<'store> {
     pub(crate) fn discover_budgeted<K>(
         &self,
         recipe: &Discoverable<K>,
-        validate: impl Fn(&K, &GraphBudget) -> Result<Box<[u8]>, Error> + Send + Sync + 'static,
+        validate: impl Fn(&K, &GraphBudget) -> Result<Box<[u8]>, Error> + 'static,
         execute: impl FnOnce() -> Result<K, Error>,
     ) -> Result<Validated<K>, Error>
     where
         K: Value + Send + Sync + 'static,
     {
         let validate: read_set::ScopedValidator<K> =
-            Arc::new(move |value, budget, _| validate(value, budget));
+            Rc::new(move |value, budget, _| validate(value, budget));
         let budget = self.store.graph_budget();
         // Candidates found stale stay stale for this evaluation: the rechecks
         // under the leases look only for a concurrently published one.
@@ -853,7 +854,7 @@ impl<'store> Evaluator<'store> {
     pub(crate) fn discover_bundled<K>(
         &self,
         recipe: &Discoverable<K>,
-        validate: impl Fn(&K) -> Result<Box<[u8]>, Error> + Send + Sync + 'static,
+        validate: impl Fn(&K) -> Result<Box<[u8]>, Error> + 'static,
         execute: impl FnOnce(crate::store::bundle::Attempt) -> Result<Bundled<K>, Error>,
     ) -> Result<Validated<K>, Error>
     where
@@ -865,7 +866,7 @@ impl<'store> Evaluator<'store> {
     pub(crate) fn discover_bundled_budgeted<K>(
         &self,
         recipe: &Discoverable<K>,
-        validate: impl Fn(&K, &GraphBudget) -> Result<Box<[u8]>, Error> + Send + Sync + 'static,
+        validate: impl Fn(&K, &GraphBudget) -> Result<Box<[u8]>, Error> + 'static,
         execute: impl FnOnce(crate::store::bundle::Attempt) -> Result<Bundled<K>, Error>,
     ) -> Result<Validated<K>, Error>
     where
@@ -886,7 +887,7 @@ impl<'store> Evaluator<'store> {
         &self,
         recipe: &Discoverable<K>,
         retention: &read_set::Retention,
-        validate: impl Fn(&K, &GraphBudget) -> Result<Box<[u8]>, Error> + Send + Sync + 'static,
+        validate: impl Fn(&K, &GraphBudget) -> Result<Box<[u8]>, Error> + 'static,
         execute: impl FnOnce(crate::store::bundle::Attempt) -> Result<Bundled<K>, Error>,
     ) -> Result<Validated<K>, Error>
     where
@@ -905,16 +906,13 @@ impl<'store> Evaluator<'store> {
         &self,
         recipe: &Discoverable<K>,
         retention: Option<&read_set::Retention>,
-        validate: impl Fn(&K, &GraphBudget, read_set::Scope) -> Result<Box<[u8]>, Error>
-            + Send
-            + Sync
-            + 'static,
+        validate: impl Fn(&K, &GraphBudget, read_set::Scope) -> Result<Box<[u8]>, Error> + 'static,
         execute: impl FnOnce(crate::store::bundle::Attempt) -> Result<Bundled<K>, Error>,
     ) -> Result<Validated<K>, Error>
     where
         K: Value + Send + Sync + 'static,
     {
-        let validate: read_set::ScopedValidator<K> = Arc::new(validate);
+        let validate: read_set::ScopedValidator<K> = Rc::new(validate);
         // Candidates found stale stay stale for this evaluation: the rechecks
         // under the leases look only for a concurrently published one.
         let mut stale = Vec::new();
@@ -1053,9 +1051,9 @@ impl<'store> Evaluator<'store> {
     where
         K: Value + Send + Sync + 'static,
     {
-        let validate = Arc::clone(validate);
+        let validate = Rc::clone(validate);
         let scoped: read_set::ScopedValidator<K> =
-            Arc::new(move |value, budget, _| validate(value, budget));
+            Rc::new(move |value, budget, _| validate(value, budget));
         self.lookup_discoverable_scoped(recipe, &scoped, &mut Vec::new())
     }
 
@@ -1153,9 +1151,9 @@ impl<'store> Evaluator<'store> {
     where
         K: Value + Send + Sync + 'static,
     {
-        let validate = Arc::clone(validate);
+        let validate = Rc::clone(validate);
         let scoped: read_set::ScopedValidator<K> =
-            Arc::new(move |value, budget, _| validate(value, budget));
+            Rc::new(move |value, budget, _| validate(value, budget));
         self.replay_discovered_scoped_exact(recipe, &scoped, action)
     }
 
@@ -1211,7 +1209,7 @@ impl<'store> Evaluator<'store> {
         let witness = read_set::Witness::discovered_scoped(
             recipe,
             inspected.value_arc(),
-            Arc::clone(validate),
+            Rc::clone(validate),
             &complete,
             content,
             inspected.bundled(),

@@ -21,7 +21,7 @@ pub(super) struct Application<'graph> {
     lifetime: model::Lifetime,
 }
 
-impl<P: api::Phase> Context<'_, P> {
+impl Context<'_> {
     /// The application of `blanket`, an impl of the trait `target` over its
     /// own parameter `I`, to slices: its bound `&'a I: Other` and the one
     /// impl of `Other` for `&[T]` in the graph. `None` for any other impl,

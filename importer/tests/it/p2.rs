@@ -3,7 +3,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::OnceLock;
 
 use rawr_import::cargo::config::{Dependency, Environment};
 use rawr_import::cargo::{Limits, Request};
@@ -21,19 +20,26 @@ impl Drop for Project {
 }
 
 /// The symbolic fixture's contract, extracted and classified once per
-/// process; its raw graph is [`rawr_import::Contract::raw_graph`].
+/// test thread; its raw graph is [`rawr_import::Contract::raw_graph`].
 pub fn contract() -> &'static rawr_import::Contract<rawr_import::Classified> {
-    static CONTRACT: OnceLock<rawr_import::Contract<rawr_import::Classified>> = OnceLock::new();
-    CONTRACT.get_or_init(|| {
-        graphs(1)
-            .pop()
-            .expect("one requested real P2 graph is returned")
-            .classify(
-                &rawr_import::classify::Policy::standard(),
-                &Limits::standard(),
-            )
-            .expect("the real P2 graph classifies")
-    })
+    // It holds read sets, whose validators stay on the thread that made
+    // them, so each test thread makes its own, once.
+    thread_local! {
+        static CONTRACT: &'static rawr_import::Contract<rawr_import::Classified> = {
+            let value = {
+                graphs(1)
+                    .pop()
+                    .expect("one requested real P2 graph is returned")
+                    .classify(
+                        &rawr_import::classify::Policy::standard(),
+                        &Limits::standard(),
+                    )
+                    .expect("the real P2 graph classifies")
+            };
+            Box::leak(Box::new(value))
+        };
+    }
+    CONTRACT.with(|value| *value)
 }
 
 pub fn graphs(count: usize) -> Vec<rawr_import::api::Graph<rawr_import::api::Extracted>> {

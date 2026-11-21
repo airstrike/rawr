@@ -1,7 +1,6 @@
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use super::{Executable, Proof, Requirement, Schemas};
 use crate::node::{self, Value as _};
@@ -29,7 +28,7 @@ struct FileEvidence {
 pub fn cached(
     context: &Context,
     sink: &dyn metrics::Sink,
-) -> Result<Arc<node::Validated<Attestation>>, node::Error> {
+) -> Result<std::rc::Rc<node::Validated<Attestation>>, node::Error> {
     if let Some(toolchain) = context.cached_toolchain() {
         return Ok(toolchain);
     }
@@ -43,7 +42,7 @@ pub fn cached(
         move |candidate, budget| candidate.revalidate(&selected, budget),
         || Attestation::discover(context, &limits),
     )?;
-    Ok(context.retain_toolchain(Arc::new(toolchain)))
+    Ok(context.retain_toolchain(std::rc::Rc::new(toolchain)))
 }
 
 impl Attestation {
@@ -64,7 +63,7 @@ impl Attestation {
                 },
             )
             .expect("fixture toolchain revalidates in its new graph without a child");
-        context.retain_toolchain(Arc::new(validated));
+        context.retain_toolchain(std::rc::Rc::new(validated));
     }
 
     #[cfg(test)]
@@ -79,7 +78,7 @@ impl Attestation {
                 || Ok(attestation),
             )
             .expect("the fixture toolchain validates without a child");
-        context.retain_toolchain(Arc::new(validated));
+        context.retain_toolchain(std::rc::Rc::new(validated));
     }
 
     fn discover(context: &Context, limits: &crate::cargo::Limits) -> Result<Self, node::Error> {
@@ -778,7 +777,7 @@ mod tests {
                 || Ok(attestation),
             )
             .expect("the fixture toolchain node publishes");
-        let retained = context.retain_toolchain(Arc::new(validated));
+        let retained = context.retain_toolchain(std::rc::Rc::new(validated));
         let before = (
             counts.hit.load(Ordering::Relaxed),
             counts.miss.load(Ordering::Relaxed),
@@ -787,7 +786,7 @@ mod tests {
             counts.processes.load(Ordering::Relaxed),
         );
         let repeated = cached(&context, &counts).expect("the launch-local toolchain is reused");
-        assert!(Arc::ptr_eq(&retained, &repeated));
+        assert!(std::rc::Rc::ptr_eq(&retained, &repeated));
         assert_eq!(
             (
                 counts.hit.load(Ordering::Relaxed),

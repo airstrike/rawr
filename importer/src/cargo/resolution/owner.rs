@@ -44,8 +44,10 @@ impl node::Value for Product {
     }
 }
 
+use std::cell::RefCell;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::rc::Rc;
+use std::sync::Arc;
 
 use super::watched::Recorded;
 use super::{bundle, cold, layout, replay};
@@ -66,7 +68,7 @@ pub(in crate::cargo) use memos::Replays;
 pub(crate) struct Ready {
     node: node::Validated<Product>,
     replay: replay::Replay,
-    evaluation: Arc<Evaluation>,
+    evaluation: Rc<Evaluation>,
     /// The shared tables its cold extraction left.
     settled: Vec<crate::bindings::Settled>,
     /// The registry and git packages of that extraction's resolution whose
@@ -167,7 +169,7 @@ impl Ready {
         // The graph rebuild owns its observations so a resolved warm launch
         // can skip it entirely (see `api::retained::Lazy`).
         let decoded = Arc::clone(&replay.decoded);
-        let source = Arc::clone(&evaluation);
+        let rebuild = Rebuild::of(&evaluation);
         let universe = replay.completion.proof();
         let capture = replay.capture;
         let owned_limits = *limits;
@@ -212,14 +214,14 @@ impl Ready {
                     &decoded.metadata,
                     &decoded.graph,
                     &decoded.selected,
-                    source.cached.attestation.value().proof(),
-                    &source.request.target,
-                    &source.request.profile,
+                    &rebuild.toolchain,
+                    &rebuild.target,
+                    &rebuild.profile,
                     universe,
                     capture,
-                    &source.request.policy,
+                    &rebuild.policy,
                     &owned_limits,
-                    source.reading.as_ref(),
+                    rebuild.reading.as_ref(),
                 )
             },
         )
@@ -398,12 +400,12 @@ struct Evaluation {
     /// build (`cargo::semantic_request_identity`).
     semantic: cargo::Digest,
     accounts: node::account::Key<Accounts>,
-    captured: Mutex<Captured>,
+    captured: RefCell<Captured>,
     /// The request's authority as shared bindings check it, captured once
     /// for every replay of this evaluation.
     current: Option<input::bindings::Current>,
     /// What the owner's replays staged, compared and recorded.
-    replays: Arc<Mutex<Replays>>,
+    replays: Rc<RefCell<Replays>>,
     /// What the owner's API reads kept, lent to this evaluation's
     /// canonicalizations.
     reading: Option<crate::extract::Reading>,
@@ -433,6 +435,29 @@ struct Built {
     wire: [u8; BYTES],
     root: Box<Path>,
     decoded: Arc<replay::Decoded>,
+}
+
+/// What a deferred API graph rebuild reads of its evaluation. The rebuild
+/// may run on `api::Kept`'s background thread, so it takes these copies in
+/// place of the evaluation, whose read sets stay on the owner thread.
+struct Rebuild {
+    toolchain: cargo::toolchain::Proof,
+    target: Box<str>,
+    profile: Box<str>,
+    policy: crate::extract::Policy,
+    reading: Option<crate::extract::Reading>,
+}
+
+impl Rebuild {
+    fn of(evaluation: &Evaluation) -> Self {
+        Self {
+            toolchain: evaluation.cached.attestation.value().proof().clone(),
+            target: evaluation.request.target.clone(),
+            profile: evaluation.request.profile.clone(),
+            policy: evaluation.request.policy.clone(),
+            reading: evaluation.reading.clone(),
+        }
+    }
 }
 
 struct Preflight {
@@ -584,7 +609,7 @@ pub(in crate::cargo) fn evaluate_scripted(
 
 fn evaluate(
     preflight: Preflight,
-    attestation: Arc<node::Validated<cargo::toolchain::Attestation>>,
+    attestation: Rc<node::Validated<cargo::toolchain::Attestation>>,
     limits: &Limits,
     sink: &dyn metrics::Sink,
     lane: &mut cargo::Lane,
@@ -623,7 +648,7 @@ fn evaluate(
         &request.config,
         limits,
     );
-    let state = Arc::new(Evaluation {
+    let state = Rc::new(Evaluation {
         request,
         cached,
         limits: *limits,
@@ -633,14 +658,14 @@ fn evaluate(
         accounts,
         #[cfg(test)]
         script,
-        captured: Mutex::new(Captured {
+        captured: RefCell::new(Captured {
             enabled: true,
             replay: None,
             current: None,
             built: None,
         }),
         current,
-        replays: Arc::clone(&memos.replays),
+        replays: Rc::clone(&memos.replays),
         reading: memos.reading(),
     });
     // A shared resolution whose request, toolchain, files and entries are
@@ -660,7 +685,7 @@ fn evaluate(
             parts: Parts::Remembered(Box::new(remembered)),
         })));
     }
-    let validator = Arc::clone(&state);
+    let validator = Rc::clone(&state);
     let mut left = Left::default();
     let node = match node::Evaluator::new(&store, sink).discover_bundled_budgeted(
         &recipe,
@@ -678,10 +703,7 @@ fn evaluate(
             };
         }
     };
-    let mut captured = state
-        .captured
-        .lock()
-        .map_err(|_| node::Error::State("resolution replay capture was poisoned"))?;
+    let mut captured = state.captured.borrow_mut();
     captured.enabled = false;
     let (wire, replay) = captured.replay.take().ok_or(node::Error::State(
         "admitted resolution lacks its successful replay",
@@ -706,7 +728,7 @@ fn evaluate(
 }
 
 /// The shared resolution `parts` gave, remembered for the next run (`memo`).
-fn remembered(state: Arc<Evaluation>, parts: Shared, attestation: &[u8; 32]) -> Resolved {
+fn remembered(state: Rc<Evaluation>, parts: Shared, attestation: &[u8; 32]) -> Resolved {
     memo::remember(
         state.cached.context.rawr(),
         &memo::Resolution {
@@ -771,10 +793,7 @@ impl Evaluation {
         graph: &node::GraphBudget,
     ) -> Result<Box<[u8]>, node::Error> {
         let built = {
-            let mut captured = self
-                .captured
-                .lock()
-                .map_err(|_| node::Error::State("resolution replay capture was poisoned"))?;
+            let mut captured = self.captured.borrow_mut();
             if !captured.enabled
                 && captured.current.as_ref().is_some_and(|current| {
                     current.wire == value.wire() && current.watched.unchanged()
@@ -850,10 +869,7 @@ impl Evaluation {
                 || Recorded::of(replay.decoded.entries(), bundle),
             );
         }
-        let mut captured = self
-            .captured
-            .lock()
-            .map_err(|_| node::Error::State("resolution replay capture was poisoned"))?;
+        let mut captured = self.captured.borrow_mut();
         captured.current = Some(Current {
             wire: value.wire(),
             watched: std::mem::take(&mut replay.watched),
@@ -885,9 +901,9 @@ impl Evaluation {
         let lock_commitment = observed.commitment(paths.final_form().lock())?;
         let receipt_commitment = observed.commitment(paths.receipt())?;
         let record_commitment = observed.commitment(paths.record())?;
-        // The stage is looked up and written under its lock, and the files
-        // are read with it released.
-        let staged_lock = Replays::lock(&self.replays)
+        // The stage is looked up and written while it is borrowed, and the
+        // files are read once the borrow has ended.
+        let staged_lock = Replays::borrow(&self.replays)
             .stage
             .lock
             .as_ref()
@@ -904,11 +920,11 @@ impl Evaluation {
                 let lock_bytes = read(paths.final_form().lock())?;
                 observed.require_bytes(paths.final_form().lock(), &lock_bytes)?;
                 let lock = definition.candidate(lock_bytes.into_boxed_slice())?;
-                Replays::lock(&self.replays).stage.lock = Some((self.limits, lock.clone()));
+                Replays::borrow(&self.replays).stage.lock = Some((self.limits, lock.clone()));
                 lock
             }
         };
-        let staged_receipt = Replays::lock(&self.replays)
+        let staged_receipt = Replays::borrow(&self.replays)
             .stage
             .receipt
             .as_ref()
@@ -927,7 +943,7 @@ impl Evaluation {
                 let receipt_bytes = read(paths.receipt())?;
                 observed.require_bytes(paths.receipt(), &receipt_bytes)?;
                 let receipt = cargo::universe::Receipt::parse(&receipt_bytes, definition)?;
-                Replays::lock(&self.replays).stage.receipt = Some(StagedReceipt {
+                Replays::borrow(&self.replays).stage.receipt = Some(StagedReceipt {
                     limits: self.limits,
                     universe: *definition.identity(),
                     commitment: receipt_commitment,
@@ -966,7 +982,7 @@ impl Evaluation {
             record: record_commitment,
             context,
         };
-        let kept = Replays::lock(&self.replays).stage.record(
+        let kept = Replays::borrow(&self.replays).stage.record(
             &key,
             paths.root(),
             &self.request.target,
@@ -1012,7 +1028,7 @@ impl Evaluation {
             .map_err(error)?;
         crate::progress::timed("the resolution's bundle was replayed", replaying.elapsed());
         if let Some((root, target, profile)) = fresh {
-            Replays::lock(&self.replays)
+            Replays::borrow(&self.replays)
                 .stage
                 .keep_record(StagedRecord {
                     key,
@@ -1213,13 +1229,11 @@ impl Evaluation {
             bundle: stored.encode(),
             complete,
         };
-        if let Ok(mut captured) = self.captured.lock() {
-            captured.built = Some(Built {
-                wire: product.wire(),
-                root,
-                decoded,
-            });
-        }
+        self.captured.borrow_mut().built = Some(Built {
+            wire: product.wire(),
+            root,
+            decoded,
+        });
         let bundled = node::Bundled::validate(product, pending, |value, _| value.completed())?;
         accounts.refused = false;
         let attestation = self.cached.attestation.content().digest();
@@ -1509,7 +1523,7 @@ impl Evaluation {
 
 /// Shared bindings ready for the API (`Resolved::Shared`).
 pub(crate) struct SharedReady {
-    evaluation: Arc<Evaluation>,
+    evaluation: Rc<Evaluation>,
     parts: Parts,
 }
 
@@ -1600,11 +1614,11 @@ impl SharedReady {
         request.update(Sha256::digest(&semantic));
         let request: [u8; 32] = request.finalize().into();
         let owned_limits = *limits;
-        let source = Arc::clone(&evaluation);
+        let rebuild = Rebuild::of(&evaluation);
         crate::extract::retain_shared(
             &evaluation.cached.context,
             &request,
-            Arc::clone(&evaluation.cached.attestation),
+            Rc::clone(&evaluation.cached.attestation),
             proof,
             &evaluation.request.policy,
             limits,
@@ -1621,9 +1635,9 @@ impl SharedReady {
                     &materials.document,
                     materials.external,
                     &materials.context,
-                    &source.request.policy,
+                    &rebuild.policy,
                     &owned_limits,
-                    source.reading.as_ref(),
+                    rebuild.reading.as_ref(),
                 )
             },
         )

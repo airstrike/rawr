@@ -232,11 +232,11 @@ impl<'items> Check<'items> {
 
     /// An earlier record of the definition `id`, whose own digest is `own`,
     /// whose every key reads the same in `context`.
-    pub(super) fn definition<P: api::Phase>(
+    pub(super) fn definition(
         &self,
         id: &api::identity::Definition,
         own: Digest,
-        context: &Context<'_, P>,
+        context: &Context<'_>,
     ) -> Option<Carried<'items, Definition>> {
         self.sources
             .iter()
@@ -251,11 +251,11 @@ impl<'items> Check<'items> {
 
     /// An earlier record of the export `export`, whose own digest is `own`,
     /// whose every key reads the same in `context`.
-    pub(super) fn export<P: api::Phase>(
+    pub(super) fn export(
         &self,
         export: &api::identity::Export,
         own: Digest,
-        context: &Context<'_, P>,
+        context: &Context<'_>,
     ) -> Option<Carried<'items, Export>> {
         self.sources
             .iter()
@@ -276,12 +276,7 @@ impl<'items> Check<'items> {
 
 /// Whether every one of `premises`, keys of `items`, reads the same in
 /// `context`, each asked once (`holds`).
-fn hold<P: api::Phase>(
-    items: &Items,
-    holds: &[OnceLock<bool>],
-    premises: &[u32],
-    context: &Context<'_, P>,
-) -> bool {
+fn hold(items: &Items, holds: &[OnceLock<bool>], premises: &[u32], context: &Context<'_>) -> bool {
     premises.iter().all(|index| {
         let index = *index as usize;
         *holds[index].get_or_init(|| {
@@ -474,7 +469,7 @@ impl Gathered {
 
     /// The items, each fresh key's digest read in `context`, the graph and
     /// shared answers every item was classified against.
-    pub(super) fn finish<P: api::Phase>(self, context: &Context<'_, P>) -> Items {
+    pub(super) fn finish(self, context: &Context<'_>) -> Items {
         Items {
             keys: self
                 .keys

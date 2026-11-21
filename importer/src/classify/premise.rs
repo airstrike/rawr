@@ -120,7 +120,7 @@ pub(super) fn encoded<T: Serialize + ?Sized>(value: &T) -> Digest {
     .into()
 }
 
-impl<P: api::Phase> Context<'_, P> {
+impl Context<'_> {
     /// What this classification's graph and shared answers give `key`.
     pub(super) fn digest(&self, key: &Key) -> Digest {
         let graph = self.graph;

@@ -325,8 +325,11 @@ fn arithmetic() -> Error {
     Error::Allocation
 }
 
-struct Context<'graph, P: api::Phase = api::Extracted> {
-    graph: &'graph api::Graph<P>,
+/// A context reads its graph through a [`api::Captured`] view that shares
+/// the graph's ledgers but not its read set, so workers on other threads
+/// share it while the read set stays on the thread that owns the graph.
+struct Context<'graph> {
+    graph: &'graph api::Graph<api::Captured>,
     support: SupportLedger,
     item_limit: usize,
     byte_limit: usize,
@@ -427,14 +430,14 @@ struct Definitions<'items> {
 
 /// What makes a [`Context`] that classifies items of a graph beside others
 /// (`Context::worker`), on any thread.
-struct Seed<'graph, P: api::Phase> {
-    graph: &'graph api::Graph<P>,
+struct Seed<'graph> {
+    graph: &'graph api::Graph<api::Captured>,
     authority: Authority,
     shared: std::sync::Arc<Shared<'graph>>,
 }
 
-impl<'graph, P: api::Phase> Seed<'graph, P> {
-    fn context(&self) -> Context<'graph, P> {
+impl<'graph> Seed<'graph> {
+    fn context(&self) -> Context<'graph> {
         Context::worker(
             self.graph,
             self.authority,
@@ -914,8 +917,8 @@ impl From<Error> for Failure {
     }
 }
 
-impl<'graph, P: api::Phase> Context<'graph, P> {
-    fn new(graph: &'graph api::Graph<P>, authority: Authority) -> Result<Self, Error> {
+impl<'graph> Context<'graph> {
+    fn new(graph: &'graph api::Graph<api::Captured>, authority: Authority) -> Result<Self, Error> {
         let mut context = Self::worker(graph, authority, std::sync::Arc::default());
         context.retained_items.set(graph.allocation().items);
         context.retained_bytes.set(graph.allocation().bytes);
@@ -941,7 +944,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
     /// `shared`, retaining nothing yet: what it retains is added to the
     /// classification's (`absorb`), and it holds no support ledger.
     fn worker(
-        graph: &'graph api::Graph<P>,
+        graph: &'graph api::Graph<api::Captured>,
         authority: Authority,
         shared: std::sync::Arc<Shared<'graph>>,
     ) -> Self {
@@ -973,7 +976,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
     }
 
     /// What makes a worker beside this context (`worker`).
-    fn seed(&self) -> Seed<'graph, P> {
+    fn seed(&self) -> Seed<'graph> {
         Seed {
             graph: self.graph,
             authority: Authority {
@@ -3949,7 +3952,7 @@ impl<'graph, P: api::Phase> Context<'graph, P> {
     fn core_implementations(
         &self,
         name: &str,
-    ) -> impl Iterator<Item = &'graph model::Implementation> + use<'graph, '_, P> {
+    ) -> impl Iterator<Item = &'graph model::Implementation> + use<'graph, '_> {
         let graph = self.graph;
         premise::note(|| premise::Memo::Core(name.into()));
         let traits = self.shared.core_traits.get_or_init(|| {
@@ -4847,7 +4850,8 @@ impl<P: api::Phase> api::Graph<P> {
         earlier: &[&items::Items],
     ) -> Result<(ClassifiedParts, usize, items::Items), Error> {
         let semantic_api = *self.semantic_fingerprint().as_bytes();
-        let context = Context::new(self, authority)?;
+        let graph = self.share();
+        let context = Context::new(&graph, authority)?;
         let check = (!earlier.is_empty()).then(|| items::Check::new(earlier));
         let mut gathered = items::Gathered::default();
         let result = (|| {
@@ -5495,10 +5499,7 @@ struct Names<'graph> {
 }
 
 impl<'names> Names<'names> {
-    fn new<'graph: 'names>(
-        context: &Context<'graph, impl api::Phase>,
-        plans: &'names [DefinitionPlan],
-    ) -> Self {
+    fn new<'graph: 'names>(context: &Context<'graph>, plans: &'names [DefinitionPlan]) -> Self {
         let graph: &'names api::Graph<_> = context.graph;
         let models = graph
             .definitions()
@@ -5531,10 +5532,7 @@ impl<'names> Names<'names> {
 /// built. A field's type is nameable when every definition in it is an
 /// exported struct or enum, so the verdict does not lean on fields. Gives,
 /// for each plan, the position of each field it lost.
-fn drop_unnameable_fields(
-    context: &Context<'_, impl api::Phase>,
-    plans: &mut [DefinitionPlan],
-) -> Vec<Vec<u32>> {
+fn drop_unnameable_fields(context: &Context<'_>, plans: &mut [DefinitionPlan]) -> Vec<Vec<u32>> {
     let graph = context.graph;
     use representability::Representability as R;
     let mut exported = std::collections::BTreeSet::new();
@@ -5839,7 +5837,7 @@ fn field_type_nameable(
 }
 
 fn enforce_nameability(
-    context: &Context<'_, impl api::Phase>,
+    context: &Context<'_>,
     plans: &[DefinitionPlan],
     outcomes: &mut [OutcomeRecord],
 ) -> Result<Vec<Vec<u32>>, Error> {
@@ -5868,7 +5866,7 @@ fn enforce_nameability(
 /// counts the outcomes met, the outcome first and then each associated one
 /// in order.
 fn enforce_outcome_nameability(
-    context: &Context<'_, impl api::Phase>,
+    context: &Context<'_>,
     names: &mut Names<'_>,
     outcome: &mut OutcomeRecord,
     place: &mut u32,
@@ -6151,7 +6149,7 @@ impl OutcomeRecord {
     }
 }
 
-impl<'graph, P: api::Phase> Context<'graph, P> {
+impl<'graph> Context<'graph> {
     fn classify(
         &self,
         path: &ledger::Path,
@@ -18659,7 +18657,8 @@ mod tests {
 
         let graph = crate::test_fixture::graph();
         let limits = crate::limits::Limits::standard();
-        let context = super::Context::new(&graph, super::Authority::production(&limits))
+        let shared = graph.share();
+        let context = super::Context::new(&shared, super::Authority::production(&limits))
             .expect("fixture context is bounded");
         let definition = graph
             .definitions()
@@ -19217,7 +19216,8 @@ mod tests {
 
         let graph = crate::test_fixture::graph();
         let limits = crate::limits::Limits::standard();
-        let context = super::Context::new(&graph, super::Authority::production(&limits))
+        let shared = graph.share();
+        let context = super::Context::new(&shared, super::Authority::production(&limits))
             .expect("fixture context is bounded");
         let definition = graph
             .definitions()
@@ -19320,7 +19320,8 @@ mod tests {
 
         let graph = crate::test_fixture::classification_implementation_outcomes();
         let limits = crate::limits::Limits::standard();
-        let context = super::Context::new(&graph, super::Authority::production(&limits))
+        let shared = graph.share();
+        let context = super::Context::new(&shared, super::Authority::production(&limits))
             .expect("fixture context is bounded");
         let target = graph.definitions().next().unwrap().id();
         let trait_id = identity::Definition::new(
@@ -19415,7 +19416,8 @@ mod tests {
 
         let graph = crate::test_fixture::graph();
         let limits = crate::limits::Limits::standard();
-        let context = super::Context::new(&graph, super::Authority::production(&limits))
+        let shared = graph.share();
+        let context = super::Context::new(&shared, super::Authority::production(&limits))
             .expect("fixture context is bounded");
         let definition = graph
             .definitions()
@@ -19474,7 +19476,8 @@ mod tests {
 
         let graph = crate::test_fixture::graph();
         let limits = crate::limits::Limits::standard();
-        let context = super::Context::new(&graph, super::Authority::production(&limits))
+        let shared = graph.share();
+        let context = super::Context::new(&shared, super::Authority::production(&limits))
             .expect("fixture context is bounded");
         let definition = graph
             .definitions()
@@ -19713,7 +19716,8 @@ mod tests {
         assert_eq!(authority.bytes, 671_088_640);
 
         let graph = crate::test_fixture::graph();
-        let context = super::Context::new(&graph, authority).expect("fixture context is bounded");
+        let shared = graph.share();
+        let context = super::Context::new(&shared, authority).expect("fixture context is bounded");
         let remaining_items = authority.items - context.retained_items.get();
         context
             .retain_items(remaining_items)
@@ -19721,7 +19725,8 @@ mod tests {
         let retained_items = context.retained_items.get();
         assert_eq!(retained_items, 6_500_000);
 
-        let context = super::Context::new(&graph, authority).expect("fixture context is bounded");
+        let shared = graph.share();
+        let context = super::Context::new(&shared, authority).expect("fixture context is bounded");
         let remaining_bytes = authority.bytes - context.retained_bytes.get();
         context
             .retain(0, remaining_bytes)
@@ -19915,7 +19920,8 @@ mod tests {
         const BINDINGS: usize = 30;
         let (graph, shape, out) = crate::test_fixture::projected_implementations(TYPES);
         let limits = crate::limits::Limits::standard();
-        let context = super::Context::new(&graph, super::Authority::production(&limits))
+        let shared = graph.share();
+        let context = super::Context::new(&shared, super::Authority::production(&limits))
             .expect("fixture context is bounded");
         let owner = definition_in(&graph, "Shape");
         let span = model::Span::new("fixture/lib.rs".into(), 0, 1, 1, 0, 1, 1);
@@ -19977,7 +19983,8 @@ mod tests {
         const TYPES: u32 = 40;
         let (graph, _, _) = crate::test_fixture::projected_implementations(TYPES);
         let limits = crate::limits::Limits::standard();
-        let context = super::Context::new(&graph, super::Authority::production(&limits))
+        let shared = graph.share();
+        let context = super::Context::new(&shared, super::Authority::production(&limits))
             .expect("fixture context is bounded");
         let types = (0..TYPES)
             .map(|index| super::representability::convert::Type::Nominal {
@@ -20058,8 +20065,9 @@ mod tests {
             panic!("`wait` gives an opaque type");
         };
         let classify = |order: &[usize]| {
+            let shared = graph.share();
             let context =
-                super::Context::new(&graph, authority).expect("the fixture context is bounded");
+                super::Context::new(&shared, authority).expect("the fixture context is bounded");
             let super::Definitions { plans, .. } = context
                 .classify_definitions(1, order, None)
                 .expect("the fixture's definitions classify");

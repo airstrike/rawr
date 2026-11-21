@@ -1145,7 +1145,8 @@ fn discoverable_and_final_union_validation_share_exact_work_caps_and_reuse_uncha
     let recipe = context
         .discover::<Artifact>(b"discovered-union-budget")
         .unwrap();
-    let validate: super::read_set::Validator<Artifact> = Arc::new(|value, _| value.encode());
+    let validate: super::read_set::Validator<Artifact> =
+        std::rc::Rc::new(|value, _| value.encode());
     let counts = Counts::default();
     let evaluator = Evaluator::new(&store, &counts);
     let value = evaluator
@@ -1261,7 +1262,7 @@ fn discoverable_and_final_validation_precharge_metadata_before_corrupt_payload_h
         let fresh = fixture_context(&root).open_store().unwrap();
         let proof = if final_union {
             let validate: super::read_set::Validator<Artifact> =
-                Arc::new(|value, _| value.encode());
+                std::rc::Rc::new(|value, _| value.encode());
             let counts = Counts::default();
             let evaluator = Evaluator::new(&fresh, &counts);
             let value = evaluator
@@ -1496,21 +1497,22 @@ fn bundled_discoverable_and_final_replay_charge_controls_and_every_repeated_walk
         .discover::<BundleValue>(b"bundled-validation-budget")
         .unwrap();
     let bundle_store = store.root().to_path_buf();
-    let validate: super::read_set::Validator<BundleValue> = Arc::new(move |value, budget| {
-        let canonical = value.encode()?;
-        crate::store::bundle::validate_complete(
-            &bundle_store,
-            value.reference,
-            BundleValue::KIND,
-            BundleValue::SCHEMA,
-            super::content_digest::<BundleValue>(&canonical),
-            value.seal_length,
-            value.seal_digest,
-            budget,
-        )?;
-        Ok(canonical)
-    });
-    let callback = Arc::clone(&validate);
+    let validate: super::read_set::Validator<BundleValue> =
+        std::rc::Rc::new(move |value, budget| {
+            let canonical = value.encode()?;
+            crate::store::bundle::validate_complete(
+                &bundle_store,
+                value.reference,
+                BundleValue::KIND,
+                BundleValue::SCHEMA,
+                super::content_digest::<BundleValue>(&canonical),
+                value.seal_length,
+                value.seal_digest,
+                budget,
+            )?;
+            Ok(canonical)
+        });
+    let callback = std::rc::Rc::clone(&validate);
     let counts = Counts::default();
     let evaluator = Evaluator::new(&store, &counts);
     let value = evaluator
@@ -1624,7 +1626,7 @@ fn existing_pin_roles_preserve_unrelated_orphans_above_recovery_cap() {
         let value = Evaluator::new(&store, &Counts::default())
             .direct(&recipe, || Ok(Artifact(Box::from(b"healthy".as_slice()))))
             .unwrap();
-        let retained = super::Chain::validated(context, &value)
+        let mut retained = super::Chain::validated(context, &value)
             .prepare_read_set()
             .unwrap();
         retained
@@ -1648,7 +1650,7 @@ fn existing_pin_roles_preserve_unrelated_orphans_above_recovery_cap() {
             })
             .unwrap();
         assert_eq!(hit.content().digest(), value.content().digest());
-        let prepared = super::Chain::validated(fresh, &hit)
+        let mut prepared = super::Chain::validated(fresh, &hit)
             .prepare_read_set()
             .unwrap();
         prepared
@@ -1685,7 +1687,7 @@ fn existing_pin_roles_leave_a_journaled_retirement_for_miss_side_recovery() {
         .direct(&recipe, || Ok(Artifact(Box::from(b"retained".as_slice()))))
         .unwrap();
     let runner_recipe = context.discover::<BundleValue>(b"retired-runner").unwrap();
-    let prepared = super::Chain::validated(context, &value)
+    let mut prepared = super::Chain::validated(context, &value)
         .prepare_read_set()
         .unwrap();
     prepared.pin_prepared().unwrap();
@@ -1717,7 +1719,7 @@ fn existing_pin_roles_leave_a_journaled_retirement_for_miss_side_recovery() {
             panic!("the retained graph remains a read-only hit")
         })
         .unwrap();
-    let rebound = super::Chain::validated(fresh, &hit)
+    let mut rebound = super::Chain::validated(fresh, &hit)
         .prepare_read_set()
         .unwrap();
     rebound.pin_prepared().unwrap();
@@ -1843,9 +1845,14 @@ fn direct_after_lease_recheck_spends_the_same_graph_budget_without_fallback() {
             .with_ownership(|ownership| {
                 store.with_action_lease(recipe.action(), || {
                     let worker = scope.spawn(|| {
-                        Evaluator::new(&contender, &paused).direct(&recipe, || {
-                            panic!("a contender must reuse its winner or reject its budget")
-                        })
+                        let recipe = fixture_context(&root)
+                            .direct::<Artifact>(b"direct-lease-budget")
+                            .unwrap();
+                        Evaluator::new(&contender, &paused)
+                            .direct(&recipe, || {
+                                panic!("a contender must reuse its winner or reject its budget")
+                            })
+                            .map(drop)
                     });
                     ready
                         .recv()
@@ -2539,8 +2546,9 @@ fn discoverable_oversized_historical_files_miss_while_exact_reads_refuse() {
             .set_len(length)
             .unwrap();
         let fresh = fixture_context(&root).open_store().unwrap();
-        let validate: super::read_set::Validator<Derived> =
-            Arc::new(|_, _| panic!("oversized historical files cannot reach semantic replay"));
+        let validate: super::read_set::Validator<Derived> = std::rc::Rc::new(|_, _| {
+            panic!("oversized historical files cannot reach semantic replay")
+        });
         let counts = Counts::default();
         let discovery = Evaluator::new(&fresh, &counts)
             .lookup_discoverable(&recipe, &validate)
@@ -3182,7 +3190,7 @@ fn prepared_chain_pins_its_final_transitive_closure_across_admission_failure() {
         })
         .expect("the final node validates");
     let final_action = validated.receipt().action();
-    let prepared = super::Chain::validated(context, &validated)
+    let mut prepared = super::Chain::validated(context, &validated)
         .prepare_read_set()
         .expect("the final transitive closure seals");
     assert_eq!(prepared.proof().len(), 1);
@@ -3216,7 +3224,7 @@ fn prepared_chain_repeated_live_callbacks_keep_the_publication_boundary() {
     let root = temporary("prepared-repeat-promotion");
     let context = prepare_fixture(&root);
     let store = context.open_store().expect("the promotion store opens");
-    let prepared = super::Chain::fixture(context)
+    let mut prepared = super::Chain::fixture(context)
         .expect("the fixture chain validates")
         .prepare_read_set()
         .expect("the current union seals");
@@ -3269,7 +3277,7 @@ fn prepared_chain_promotes_live_and_last_good_as_one_exact_closure() {
             ))
         })
         .expect("the promotion node validates");
-    let prepared = super::Chain::validated(context, &validated)
+    let mut prepared = super::Chain::validated(context, &validated)
         .prepare_read_set()
         .expect("the promotion read set seals");
 
@@ -3620,40 +3628,26 @@ fn fresh_bundled_build_replaces_a_stale_entry_at_its_action() {
 #[test]
 fn same_discoverable_key_contenders_execute_and_publish_exactly_once() {
     let root = temporary("discoverable-contenders");
-    let first_context = prepare_fixture(&root);
-    let second_context = fixture_context(&root);
-    let first_store = first_context
+    let first_store = prepare_fixture(&root)
         .open_store()
         .expect("the first contender store opens");
-    let second_store = second_context
+    let second_store = fixture_context(&root)
         .open_store()
         .expect("the second contender store opens");
     let counts = Counts::default();
     let executions = AtomicUsize::new(0);
 
     std::thread::scope(|scope| {
-        let first = scope.spawn(|| {
-            evaluate_discoverable_contender(&first_context, &first_store, &counts, &executions)
-        });
-        let second = scope.spawn(|| {
-            evaluate_discoverable_contender(&second_context, &second_store, &counts, &executions)
-        });
+        let first = scope
+            .spawn(|| evaluate_discoverable_contender(&root, &first_store, &counts, &executions));
+        let second = scope
+            .spawn(|| evaluate_discoverable_contender(&root, &second_store, &counts, &executions));
         assert_eq!(
-            first
-                .join()
-                .expect("the first contender joins")
-                .value()
-                .0
-                .as_ref(),
+            first.join().expect("the first contender joins").as_ref(),
             b"discovered-once"
         );
         assert_eq!(
-            second
-                .join()
-                .expect("the second contender joins")
-                .value()
-                .0
-                .as_ref(),
+            second.join().expect("the second contender joins").as_ref(),
             b"discovered-once"
         );
     });
@@ -3678,14 +3672,15 @@ fn same_bundled_key_contenders_allocate_execute_and_publish_once() {
     let counts = Counts::default();
     let executions = AtomicUsize::new(0);
     let results = RwLock::new(Vec::new());
-    let graph_contexts = [fixture_context(&root), fixture_context(&root)];
 
     std::thread::scope(|scope| {
-        for context in graph_contexts {
+        for _ in 0..2 {
             let results = &results;
             let counts = &counts;
             let executions = &executions;
+            let root = &root;
             scope.spawn(move || {
+                let context = fixture_context(root);
                 let recipe = context
                     .discover::<BundleValue>(b"bundled-contender")
                     .expect("the bundled contender recipe seals");
@@ -4740,13 +4735,15 @@ fn corrupt_bundled_candidate_repairs_once_and_then_reuses_the_repair() {
     fs::remove_dir_all(root).expect("the bundled repair fixture retires");
 }
 
-fn evaluate_discoverable_contender<'store>(
-    context: &Context,
-    store: &'store crate::store::Store,
-    counts: &'store Counts,
+/// One contender's discovered bytes. A contender is a process of its own,
+/// so it seals its recipe from a context of its own.
+fn evaluate_discoverable_contender(
+    root: &Path,
+    store: &crate::store::Store,
+    counts: &Counts,
     executions: &AtomicUsize,
-) -> super::Validated<Derived> {
-    let recipe = context
+) -> Box<[u8]> {
+    let recipe = fixture_context(root)
         .discover::<Derived>(b"discoverable-contender")
         .expect("the discoverable contender recipe seals");
     Evaluator::new(store, counts)
@@ -4760,6 +4757,9 @@ fn evaluate_discoverable_contender<'store>(
             },
         )
         .expect("the discoverable contender validates")
+        .value()
+        .0
+        .clone()
 }
 
 #[test]
@@ -5038,7 +5038,7 @@ fn replay_tells_ordinary_input_changes_from_damaged_entries() {
     let evaluator = Evaluator::new(&fresh, &counts);
     // An input change rejects the candidate quietly: no damage variant.
     let changed: super::read_set::ScopedValidator<Artifact> =
-        Arc::new(|_, _, _| Err(Error::Codec("fixture input changed")));
+        std::rc::Rc::new(|_, _, _| Err(Error::Codec("fixture input changed")));
     assert!(matches!(
         evaluator.replay_discovered(&recipe, &changed, action),
         Err(Error::Codec("fixture input changed"))
@@ -5050,7 +5050,7 @@ fn replay_tells_ordinary_input_changes_from_damaged_entries() {
     )
     .unwrap();
     let current: super::read_set::ScopedValidator<Artifact> =
-        Arc::new(|value, _, _| value.encode());
+        std::rc::Rc::new(|value, _, _| value.encode());
     assert!(matches!(
         evaluator.replay_discovered(&recipe, &current, action),
         Err(Error::Corrupt { .. })

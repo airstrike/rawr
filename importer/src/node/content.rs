@@ -365,6 +365,11 @@ impl<K> Validated<K> {
         self.value.as_ref()
     }
 
+    /// Share the validated typed output without its receipt.
+    pub(crate) fn value_arc(&self) -> Arc<K> {
+        Arc::clone(&self.value)
+    }
+
     /// Borrow its typed semantic content identity.
     #[must_use]
     pub const fn content(&self) -> ContentRef<K> {

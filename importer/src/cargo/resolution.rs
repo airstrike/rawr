@@ -1247,6 +1247,7 @@ mod tests {
             let result = store
                 .with_heavy_lease(|| {
                     threads.spawn(|| {
+                        let warm = locked_context(&fixture);
                         let result = cached_locked(
                             &warm,
                             authority,

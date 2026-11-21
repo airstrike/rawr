@@ -2,7 +2,6 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 
 use rawr_import::cargo::config::{Dependency, Environment};
 use rawr_import::classify::representability::Representability;
@@ -14,15 +13,21 @@ use rawr_import::surface::{Origin, Snapshot};
 const SNAPSHOT_ENTRY: &str = "application.rs";
 const SNAPSHOT_SOURCE: &[u8] = b"exact p3 surface";
 
-/// The symbolic fixture's generated runner, generated once per process for
+/// The symbolic fixture's generated runner, generated once per test thread for
 /// tests that only read it.
 pub fn generated() -> &'static rawr_import::runner::Manifest<rawr_import::runner::Generated, ()> {
-    static MANIFEST: OnceLock<rawr_import::runner::Manifest<rawr_import::runner::Generated, ()>> =
-        OnceLock::new();
-    MANIFEST.get_or_init(|| {
-        let project = rawr_import::store::TestProject::new("rawr-p3-generate");
-        generated_at(project.path())
-    })
+    // It holds read sets, whose validators stay on the thread that made
+    // them, so each test thread makes its own, once.
+    thread_local! {
+        static MANIFEST: &'static rawr_import::runner::Manifest<rawr_import::runner::Generated, ()> = {
+            let value = {
+                let project = rawr_import::store::TestProject::new("rawr-p3-generate");
+                generated_at(project.path())
+            };
+            Box::leak(Box::new(value))
+        };
+    }
+    MANIFEST.with(|value| *value)
 }
 
 pub fn generated_at(

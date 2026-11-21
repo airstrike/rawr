@@ -64,7 +64,7 @@ mod phase {
 /// A closed compiler-evidence phase used by [`Graph`].
 pub trait Phase: phase::Sealed {
     #[doc(hidden)]
-    type Evidence: Send + Sync;
+    type Evidence;
 }
 
 impl phase::Sealed for Captured {}
@@ -942,13 +942,14 @@ impl Fingerprint {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-impl Graph<Captured> {
-    /// This captured graph again, sharing its ledgers, its stored bytes and
-    /// its lookup: a long-running owner hands each save the graph it kept
-    /// without copying it (`retained::Kept`, #1822).
-    pub(crate) fn share(&self) -> Self {
-        Self {
+impl<P: Phase> Graph<P> {
+    /// This graph as captured, sharing its ledgers, its stored bytes and
+    /// its lookup, without its phase's evidence: a long-running owner hands
+    /// each save the graph it kept without copying it (`retained::Kept`,
+    /// #1822), and classification's workers share it while the evidence's
+    /// read set stays on the owner's thread.
+    pub(crate) fn share(&self) -> Graph<Captured> {
+        Graph {
             invocations: Arc::clone(&self.invocations),
             definitions: Arc::clone(&self.definitions),
             exports: Arc::clone(&self.exports),
@@ -969,7 +970,10 @@ impl Graph<Captured> {
             lookup: Arc::clone(&self.lookup),
         }
     }
+}
 
+#[cfg(not(target_arch = "wasm32"))]
+impl Graph<Captured> {
     #[cfg(test)]
     pub(crate) fn raw(canonical: Vec<u8>, universe: Option<[u8; 32]>) -> Raw {
         Raw {

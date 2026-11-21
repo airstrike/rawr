@@ -432,7 +432,7 @@ fn downstream_rebuilds_evicted_demand_and_reuses_surviving_generated_output() {
         |contract, _, _| Ok::<_, ()>((demand(contract, source, &limits), Checked)),
     )
     .expect("checked prefix");
-    let prepared = prefix
+    let mut prepared = prefix
         .checked
         .node_chain()
         .prepare_read_set()

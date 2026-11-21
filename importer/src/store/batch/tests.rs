@@ -56,7 +56,6 @@ fn batch_and_two_legacy_contenders_serialize_while_another_project_progresses() 
     let retained = crate::node::read_set::Retention::from_validated(&owner, None).unwrap();
     let recipe =
         Direct::<Owned>::capture([3; 32], b"shared-child", &[Parent::validated(&owner)]).unwrap();
-    let independent = Direct::<Owned>::capture([4; 32], b"independent", &[]).unwrap();
     let start = Barrier::new(4);
     let calls = AtomicUsize::new(0);
     let (done, completed) = mpsc::channel();
@@ -66,22 +65,36 @@ fn batch_and_two_legacy_contenders_serialize_while_another_project_progresses() 
         for _ in 0..2 {
             let done = done.clone();
             let store = &store;
-            let recipe = &recipe;
             let start = &start;
             let calls = &calls;
             scope.spawn(move || {
                 start.wait();
-                let result = Evaluator::new(store, &crate::metrics::Current).direct(recipe, || {
-                    calls.fetch_add(1, Ordering::SeqCst);
-                    Ok(Owned)
-                });
+                let evaluator = Evaluator::new(store, &crate::metrics::Current);
+                let result = Direct::<Owned>::capture([3; 32], b"seed", &[])
+                    .and_then(|seed| evaluator.direct(&seed, || Ok(Owned)))
+                    .and_then(|owner| {
+                        Direct::<Owned>::capture(
+                            [3; 32],
+                            b"shared-child",
+                            &[Parent::validated(&owner)],
+                        )
+                    })
+                    .and_then(|recipe| {
+                        evaluator.direct(&recipe, || {
+                            calls.fetch_add(1, Ordering::SeqCst);
+                            Ok(Owned)
+                        })
+                    });
                 done.send(result.is_ok()).unwrap();
             });
         }
         scope.spawn(|| {
             start.wait();
             let result =
-                Evaluator::new(&other, &crate::metrics::Current).direct(&independent, || Ok(Owned));
+                Direct::<Owned>::capture([4; 32], b"independent", &[]).and_then(|independent| {
+                    Evaluator::new(&other, &crate::metrics::Current)
+                        .direct(&independent, || Ok(Owned))
+                });
             progress.send(result.is_ok()).unwrap();
         });
         store
