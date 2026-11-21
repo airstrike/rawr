@@ -2394,6 +2394,8 @@
     {"t":"T2392","issue":2392,"title":"T2392: Two node tests expect projects that share a target to share one store, which #1934 retired","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T2393","issue":2393,"title":"T2393: Two classify tests disagree with how future and lent-lifetime signatures classify now","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T2394","issue":2394,"title":"T2394: extract::plan::validation's corruption test sees Changed on the dependency's rmeta","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T2395","issue":2395,"title":"T2395: Two hot runner tests fail only when rawr-import's whole lib suite runs in parallel","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T2395","issue":2395,"title":"T2395: Two hot runner tests fail only when rawr-import's whole lib suite runs in parallel","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T2396","issue":2396,"title":"T2396: rawr mcp's main loop owns its checks, and a call waits on one channel for its result or its cancel","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":"0.4.83"},
+    {"t":"T2397","issue":2397,"title":"T2397: rawr mcp: Cancel.wakes goes once mcp sessions have an owner loop","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }

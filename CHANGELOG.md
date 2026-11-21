@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.83 (2026-11-21)
+
+- rawr mcp's main loop owns its checks, and a call waits on one channel for its result or its cancel. A run waits for its child's exit in the kernel in place of a 10 ms poll, and ends the child's process group before reaping it. Five locks and a condvar are gone. (#2396)
+
 ## 0.4.82 (2026-11-20)
 
 - An absent native import, as `use native::new_function`, requests a native build again instead of failing with E0432. (#2385)

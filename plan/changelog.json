@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.4.83",
+      "date": "2026-11-21",
+      "entries": [
+        {"text":"rawr mcp's main loop owns its checks, and a call waits on one channel for its result or its cancel. A run waits for its child's exit in the kernel in place of a 10 ms poll, and ends the child's process group before reaping it. Five locks and a condvar are gone.","issues":[2396]}
+      ]
+    },
+    {
       "version": "0.4.82",
       "date": "2026-11-20",
       "entries": [
