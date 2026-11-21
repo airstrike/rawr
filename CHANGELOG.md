@@ -6,6 +6,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.79 (2026-11-20)
+
+- A `rawr run` that waits for a save no longer wakes on a clock: file events reach the owner on a channel, the program's end wakes it, and the only timed wait left is the 30 ms debounce after a save. (#1828)
+- A long-running `rawr run` holds what each save leaves for the next and lends it to the save, and a background API read and a save no longer take each other's kept fragment reads. (#1825)
+
 ## 0.4.78 (2026-11-20)
 
 - The bot's health check accepts the reports of a bot that kept running through a container start attempt, so a deploy after a connectivity blip no longer fails waiting for an image the running bot already reports. (#2381)

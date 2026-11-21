@@ -8,6 +8,14 @@
   },
   "releases": [
     {
+      "version": "0.4.79",
+      "date": "2026-11-20",
+      "entries": [
+        {"text":"A `rawr run` that waits for a save no longer wakes on a clock: file events reach the owner on a channel, the program's end wakes it, and the only timed wait left is the 30 ms debounce after a save.","issues":[1828]},
+        {"text":"A long-running `rawr run` holds what each save leaves for the next and lends it to the save, and a background API read and a save no longer take each other's kept fragment reads.","issues":[1825]}
+      ]
+    },
+    {
       "version": "0.4.78",
       "date": "2026-11-20",
       "entries": [
