@@ -8,6 +8,16 @@
   },
   "releases": [
     {
+      "version": "0.4.74",
+      "date": "2026-11-20",
+      "entries": [
+        {"text":"A program's `Mutex` hands its lock to a waiting thread as soon as the guard ends, with no 1 ms poll: a handoff takes about 3 µs where it took about 1.2 ms, and a contended workload runs 22% faster.","issues":[2371],"refs":[1828]},
+        {"text":"`drop(guard)` of a `Mutex`, `RefCell` or `Cell` borrow ends it there, and a later use of the guard is rustc's E0382.","issues":[2352]},
+        {"text":"A read through a lock's temporary guard (`*m.lock().unwrap()`, a method call on it, a `match` on it) waits for the lock another thread holds.","issues":[2357]},
+        {"text":"The debugger reads a generation's lines, eval program and files together, so a request during a reload no longer pairs one generation's program with another's lines.","issues":[2372]}
+      ]
+    },
+    {
       "version": "0.4.73",
       "date": "2026-11-20",
       "entries": [

@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-20",
-  "version": "0.4.73",
+  "version": "0.4.74",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,16 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.74",
+        "date": "2026-11-20",
+        "entries": [
+          {"text":"A program's `Mutex` hands its lock to a waiting thread as soon as the guard ends, with no 1 ms poll: a handoff takes about 3 µs where it took about 1.2 ms, and a contended workload runs 22% faster.","issues":[2371],"refs":[1828]},
+          {"text":"`drop(guard)` of a `Mutex`, `RefCell` or `Cell` borrow ends it there, and a later use of the guard is rustc's E0382.","issues":[2352]},
+          {"text":"A read through a lock's temporary guard (`*m.lock().unwrap()`, a method call on it, a `match` on it) waits for the lock another thread holds.","issues":[2357]},
+          {"text":"The debugger reads a generation's lines, eval program and files together, so a request during a reload no longer pairs one generation's program with another's lines.","issues":[2372]}
+        ]
+      },
       {
         "version": "0.4.73",
         "date": "2026-11-20",
@@ -5658,12 +5668,12 @@
     {"issue":2349,"title":"`f.align()` needs `fmt::Alignment`, and unbound `Reverse(1)` or `PhantomData` lack rustc's import help","state":"closed","category":"Health","release":"0.4.72"},
     {"issue":2350,"title":"The VS Code debugger can't set a variable: `rawr dap` has no setVariable","state":"closed","category":"Health","release":"0.4.65"},
     {"issue":2351,"title":"Every iced project rebuilds its bindings: build scripts differ under rawr's nightly, and the run prints why in red","state":"open","category":"Health"},
-    {"issue":2352,"title":"A script Mutex guard passed to drop() never releases the lock","state":"open","category":"Health"},
+    {"issue":2352,"title":"A script Mutex guard passed to drop() never releases the lock","state":"closed","category":"Health","release":"0.4.74"},
     {"issue":2353,"title":"Playground console eval: `x = 1` fails inside `format!`, and `x = 1;` runs outside the paused frame","state":"closed","category":"Health","release":"0.4.66"},
     {"issue":2354,"title":"The playground's bindings panel edits a value in place","state":"closed","category":"Health","release":"0.4.66"},
     {"issue":2355,"title":"Run's \"A native main\" opens with a native main.rs and a marked module, then a table of what each…","state":"closed","category":"Health","release":"0.4.67"},
     {"issue":2356,"title":"An islands test for marked code calling a native trait's &self method on a Box<dyn Trait> it holds","state":"open","category":"Health"},
-    {"issue":2357,"title":"A script Mutex read through a temporary guard takes no lock","state":"open","category":"Health"},
+    {"issue":2357,"title":"A script Mutex read through a temporary guard takes no lock","state":"closed","category":"Health","release":"0.4.74"},
     {"issue":2358,"title":"A `?play` snippet in Discord can start with a cargo-script frontmatter block that declares its…","state":"closed","category":"Platforms","release":"0.4.67"},
     {"issue":2359,"title":"The playground at /play runs every snippet in the browser","state":"closed","category":"Platforms","release":"0.4.67"},
     {"issue":2360,"title":"A frontmatter snippet's run shares the bot's user and network","state":"open","category":"Health"},
@@ -5676,7 +5686,11 @@
     {"issue":2367,"title":"Under rawr dap, rawr's own progress lines go to stderr and show red in VS Code","state":"closed","category":"Health","release":"0.4.71"},
     {"issue":2368,"title":"A module that a glob of the parent's `use` imports is not followed in an impl's trait path","state":"closed","category":"Health","release":"0.4.72"},
     {"issue":2369,"title":"A match on a std enum rawr's std holds as a value needs a `_` arm that rustc doesn't","state":"closed","category":"Health","release":"0.4.73"},
-    {"issue":2370,"title":"std's `io::SeekFrom` variants are unbound, and notes write std types by full path where rustc writes the name","state":"open","category":"Health"}
+    {"issue":2370,"title":"std's `io::SeekFrom` variants are unbound, and notes write std types by full path where rustc writes the name","state":"open","category":"Health"},
+    {"issue":2371,"title":"A program's `Mutex` hands its lock to a waiting thread as soon as the guard ends, with no 1 ms…","state":"closed","category":"Health","release":"0.4.74"},
+    {"issue":2372,"title":"The debugger reads a generation's lines, eval program and files together, so a request during a…","state":"closed","category":"Health","release":"0.4.74"},
+    {"issue":2373,"title":"A read through a RefCell's borrow_mut() temporary isn't checked against a borrow already held","state":"open","category":"Health"},
+    {"issue":2374,"title":"Three owner-harness tests fail with \"Overlay must reuse content\"","state":"open","category":"Health"}
   ],
   "groups": [
     {

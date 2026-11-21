@@ -6,6 +6,13 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.74 (2026-11-20)
+
+- A program's `Mutex` hands its lock to a waiting thread as soon as the guard ends, with no 1 ms poll: a handoff takes about 3 µs where it took about 1.2 ms, and a contended workload runs 22% faster. (#2371; part of #1828)
+- `drop(guard)` of a `Mutex`, `RefCell` or `Cell` borrow ends it there, and a later use of the guard is rustc's E0382. (#2352)
+- A read through a lock's temporary guard (`*m.lock().unwrap()`, a method call on it, a `match` on it) waits for the lock another thread holds. (#2357)
+- The debugger reads a generation's lines, eval program and files together, so a request during a reload no longer pairs one generation's program with another's lines. (#2372)
+
 ## 0.4.73 (2026-11-20)
 
 - A `match` on `fmt::Alignment`, `mpsc::TryRecvError` or `mpsc::RecvTimeoutError` with an arm for each variant is accepted, as rustc accepts it, and E0004 names the variants it misses as rustc does. A `#[non_exhaustive]` enum such as `IntErrorKind` or `io::ErrorKind` still needs `_`, and E0004 reports only `_` with rustc's note. Every stable `io::ErrorKind` variant can now be named. (#2369)
