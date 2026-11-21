@@ -337,11 +337,14 @@ fn compile<B>(
     let level = crate::runner::runtime::opt_level(context.environment())
         .map_err(|reason| node::Error::Transform(reason.into_boxed_str()))?;
     // The project's path packages keep their paths under the workspace root,
-    // so Cargo hashes them as the project's `cargo build` does (T277).
+    // so Cargo hashes them as the project's `cargo build` does (T277), and
+    // under the project's key in a shared target, so they hash apart from
+    // every other project's there (#2423).
     let workspace = rawr_location::workspace_root(context.project());
+    let key = crate::runner::mirror::key(context.rawr(), context.project());
     let mirrored = std::str::from_utf8(generated_manifest)
         .ok()
-        .map(|text| crate::runner::mirror::mirror(&workspace, &work, text));
+        .map(|text| crate::runner::mirror::mirror(&workspace, &work, key.as_deref(), text));
     let version = runner_version(context);
     // The project's own lock, which the runner starts from (#1912, #2142),
     // and rawr's, whose floors a runner that compiles rawr raises it to

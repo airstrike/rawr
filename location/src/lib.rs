@@ -238,7 +238,7 @@ pub fn rawr_directory_in(target: &Path, project: &Path) -> PathBuf {
         target.join("rawr").join(PROJECTS).join(project_key(&root))
     };
     match member_path(project) {
-        Some(member) => rawr.join("members").join(member),
+        Some(member) => rawr.join(MEMBERS).join(member),
         None => rawr,
     }
 }
@@ -250,19 +250,29 @@ pub fn rawr_directory_in(target: &Path, project: &Path) -> PathBuf {
 ///
 /// Cargo hashes a path package by its path under its workspace root, and
 /// each project's runner roots a workspace of its own laid out alike, so
-/// this is what keeps their units apart (#1984).
+/// this is what keeps their units apart (#1984). A member's in a shared
+/// target is its whole path there, so it differs from the same member's in
+/// another worktree of its repository (#2423).
 #[must_use]
 pub fn shared_path(rawr: &Path, project: &Path) -> Option<PathBuf> {
     let member = member_path(project);
     let keyed = Path::new(PROJECTS)
         .join(project_key(&physical(&workspace_root(project))))
-        .join(member.as_deref().unwrap_or(Path::new("")));
+        .join(
+            member
+                .as_deref()
+                .map_or_else(PathBuf::new, |member| Path::new(MEMBERS).join(member)),
+        );
     if rawr.ends_with(&keyed) {
         Some(keyed)
     } else {
         member
     }
 }
+
+/// The directory under a Rawr directory that holds each member's products
+/// ([`rawr_directory_in`]).
+const MEMBERS: &str = "members";
 
 /// The directory under `<target>/rawr` that holds each workspace's products
 /// when the target directory is not the workspace's own.
@@ -532,6 +542,15 @@ mod tests {
                 &root.join("examples/game")
             ),
             Some(Path::new("examples/game").to_path_buf())
+        );
+        // In a shared target, a member's is its whole path there (#2423).
+        let target = root.with_extension("shared");
+        let environment =
+            |key: &str| (key == "CARGO_TARGET_DIR").then_some(target.to_str().unwrap());
+        let shared = rawr_directory(&root.join("examples/game"), environment, None);
+        assert_eq!(
+            shared_path(&shared, &root.join("examples/game")).as_deref(),
+            shared.strip_prefix(target.join("rawr")).ok()
         );
         assert_eq!(member_path(&root), None);
         assert_eq!(
