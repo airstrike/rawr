@@ -593,8 +593,8 @@ fn new(
     }
     command.current_dir(&server.root);
     let finished = process::run(&mut command, None, cancel).map_err(|error| error.to_string())?;
-    let (stdout, _) = finished.stdout.text();
-    let (stderr, _) = finished.stderr.text();
+    let (stdout, _) = finished.stdout.finish();
+    let (stderr, _) = finished.stderr.finish();
     if !finished.status.is_some_and(|status| status.success()) {
         return Err(format!("{}{}", stdout, stderr).trim_end().to_owned());
     }
@@ -657,8 +657,8 @@ fn run(place: &Place, arguments: &[String], stdin: Option<&str>, cancel: &Cancel
         Ok(finished) => finished,
         Err(error) => return content::failure(format!("cannot run rawr: {error}")),
     };
-    let (stdout, stdout_cut) = finished.stdout.text();
-    let (stderr, stderr_cut) = finished.stderr.text();
+    let (stdout, stdout_cut) = finished.stdout.finish();
+    let (stderr, stderr_cut) = finished.stderr.finish();
     let status = finished.status.map(process::code);
     let structured = json!({
         "status": status,

@@ -5,7 +5,9 @@
 //! program's environment. Each connection hears every event the owner
 //! emits from then on, one JSON object per line, the same lines a
 //! supervising `rawr mcp` reads. A restarted program's connections first
-//! hear `restarted` with the reason. A connection is written to from a
+//! hear `restarted` with the reason. One thread owns the connections and
+//! the greeting, and every line, greeting and new connection reaches it
+//! on one channel, in the order sent. A connection is written to from a
 //! thread of its own, so a program that connects late, never reads or
 //! never connects holds up nothing. What a connection writes is emitted
 //! in turn, and comes back on that connection too: the runner says
@@ -16,7 +18,7 @@ use std::io::{BufRead as _, BufReader, Write as _};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{mpsc, Arc, OnceLock};
 
 use serde_json::{json, Value};
 
@@ -30,10 +32,19 @@ struct Shared {
     directory: PathBuf,
     socket: PathBuf,
     open: AtomicBool,
-    listeners: Mutex<Vec<mpsc::Sender<Arc<str>>>>,
-    /// What each new connection hears first: `restarted`, while the
-    /// program is one a save restarted.
-    greeting: Mutex<Option<Arc<str>>>,
+    /// The broadcaster's inbox.
+    inbox: mpsc::Sender<Message>,
+}
+
+/// What the broadcaster hears.
+enum Message {
+    /// A line, ending in a newline, for every connection.
+    Line(Arc<str>),
+    /// What each new connection hears first from now on: `restarted`,
+    /// while the program is one a save restarted.
+    Greeting(Option<Arc<str>>),
+    /// A new connection's writer.
+    Connection(mpsc::Sender<Arc<str>>),
 }
 
 /// The owner's reload stream, removed from the file system on drop.
@@ -56,17 +67,20 @@ impl Stream {
         let listener = UnixListener::bind(&socket).inspect_err(|_| {
             let _ = std::fs::remove_dir(&directory);
         })?;
+        let (inbox, heard) = mpsc::channel();
         let shared = Shared {
             directory,
             socket,
             open: AtomicBool::new(true),
-            listeners: Mutex::new(Vec::new()),
-            greeting: Mutex::new(None),
+            inbox,
         };
         if SHARED.set(shared).is_err() {
             return Err(std::io::Error::from(std::io::ErrorKind::AlreadyExists));
         }
         let shared = SHARED.get().expect("the stream was just set");
+        std::thread::Builder::new()
+            .name("rawr-reload-broadcast".into())
+            .spawn(move || broadcaster(&heard))?;
         std::thread::Builder::new()
             .name("rawr-reload-accept".into())
             .spawn(move || accept(&listener, shared))?;
@@ -88,11 +102,7 @@ impl Stream {
             line.push('\n');
             Arc::from(line)
         });
-        *self
-            .0
-            .greeting
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = greeting;
+        let _ = self.0.inbox.send(Message::Greeting(greeting));
     }
 }
 
@@ -118,12 +128,28 @@ pub(super) fn broadcast(line: &str) {
     let Some(shared) = SHARED.get() else {
         return;
     };
-    let line: Arc<str> = Arc::from(line);
-    shared
-        .listeners
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .retain(|listener| listener.send(Arc::clone(&line)).is_ok());
+    let _ = shared.inbox.send(Message::Line(Arc::from(line)));
+}
+
+/// Own the connections' writers and the greeting: send each line to every
+/// connection still open, and a new connection the greeting first.
+fn broadcaster(heard: &mpsc::Receiver<Message>) {
+    let mut listeners: Vec<mpsc::Sender<Arc<str>>> = Vec::new();
+    let mut greeting: Option<Arc<str>> = None;
+    for message in heard {
+        match message {
+            Message::Line(line) => {
+                listeners.retain(|listener| listener.send(Arc::clone(&line)).is_ok());
+            }
+            Message::Greeting(next) => greeting = next,
+            Message::Connection(listener) => {
+                if let Some(greeting) = &greeting {
+                    let _ = listener.send(Arc::clone(greeting));
+                }
+                listeners.push(listener);
+            }
+        }
+    }
 }
 
 fn accept(listener: &UnixListener, shared: &'static Shared) {
@@ -135,19 +161,7 @@ fn accept(listener: &UnixListener, shared: &'static Shared) {
             continue;
         };
         let (send, receive) = mpsc::channel();
-        let greeting = shared
-            .greeting
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone();
-        if let Some(greeting) = greeting {
-            let _ = send.send(greeting);
-        }
-        shared
-            .listeners
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push(send);
+        let _ = shared.inbox.send(Message::Connection(send));
         let _ = std::thread::Builder::new()
             .name("rawr-reload-write".into())
             .spawn(move || write(connection, &receive));

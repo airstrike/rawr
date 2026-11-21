@@ -131,14 +131,15 @@ struct Cancel {
 type Requests = Arc<Mutex<HashMap<String, Arc<Cancel>>>>;
 
 /// Host the session of the program at `root` until the host drops: on the
-/// listener a shell handed this run, or on a socket at the root's place.
+/// listener a shell handed this run, `handed`, or on a socket at the
+/// root's place.
 /// `None` when another run of the program hosts it, which shells reach
 /// instead, or, with a line on stderr, when the socket can't be made; the
 /// program runs as it would without one.
-pub fn open(root: &Path) -> Option<Host> {
+pub fn open(root: &Path, handed: Option<handover::Handed>) -> Option<Host> {
     let opened = Place::new(root).and_then(|place| {
-        let listener = match handover::take() {
-            Some(listener) => listener,
+        let listener = match handed {
+            Some(handed) => handed.into_listener(),
             None => {
                 place.make()?;
                 match listen(&place.socket())? {

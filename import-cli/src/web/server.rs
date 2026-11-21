@@ -2,13 +2,16 @@
 //! page's files and the program's package, streams what the page must do
 //! (take a save's files, or load a new runner) as server-sent events, and
 //! hears what the page reports: what each reload did and what the program
-//! wrote. A connection is served on a thread of its own.
+//! wrote. A connection is served on a thread of its own. One thread owns
+//! the program `program.json` gives and the pages listening for events:
+//! the session, the builder and the connections send it what changes and
+//! ask it for the program, in turn.
 
 use std::io::{BufRead as _, BufReader, Read as _, Write as _};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::Arc;
 
 use serde_json::Value;
 
@@ -42,23 +45,37 @@ pub(super) enum Report {
 /// The page's server, listening.
 pub(super) struct Server {
     listener: TcpListener,
-    shared: Arc<Shared>,
+    site: Arc<Path>,
+    /// The program as `program.json` gives it, until the owner starts.
+    program: Value,
+    reports: mpsc::Sender<Report>,
+    inbox: mpsc::Sender<Message>,
+    heard: mpsc::Receiver<Message>,
 }
 
-/// What the server's connections share.
-struct Shared {
-    site: PathBuf,
-    /// The program as `program.json` gives it.
-    program: Mutex<Value>,
-    /// The pages listening for events.
-    listeners: Mutex<Vec<TcpStream>>,
+/// What the owner of the program and the listening pages hears.
+enum Message {
+    /// The program `program.json` gives from now on.
+    Program(Value),
+    /// An event, as the stream frames it, for every page listening.
+    Event(String),
+    /// A page's `/events` stream, its response's head written.
+    Listen(TcpStream),
+    /// A connection's ask for `program.json`'s text.
+    Ask(mpsc::Sender<String>),
+}
+
+/// One connection's view of the server.
+struct Connection {
+    site: Arc<Path>,
     reports: mpsc::Sender<Report>,
+    inbox: mpsc::Sender<Message>,
 }
 
 /// What tells the page what to do while the server serves it.
 #[derive(Clone)]
 pub(super) struct Handle {
-    shared: Arc<Shared>,
+    inbox: mpsc::Sender<Message>,
 }
 
 impl Server {
@@ -80,14 +97,14 @@ impl Server {
             address: address(port.unwrap_or(PORT)).to_string(),
             source,
         })?;
+        let (inbox, heard) = mpsc::channel();
         Ok(Self {
             listener,
-            shared: Arc::new(Shared {
-                site,
-                program: Mutex::new(program),
-                listeners: Mutex::new(Vec::new()),
-                reports,
-            }),
+            site: Arc::from(site),
+            program,
+            reports,
+            inbox,
+            heard,
         })
     }
 
@@ -102,26 +119,58 @@ impl Server {
     /// What tells the page what to do.
     pub(super) fn handle(&self) -> Handle {
         Handle {
-            shared: Arc::clone(&self.shared),
+            inbox: self.inbox.clone(),
         }
     }
 
-    /// Serve connections on threads of their own, for as long as the
-    /// process runs.
+    /// Start the owner, and serve connections on threads of their own, for
+    /// as long as the process runs.
     pub(super) fn spawn(self) {
+        let Self {
+            listener,
+            site,
+            program,
+            reports,
+            inbox,
+            heard,
+        } = self;
+        std::thread::spawn(move || own(program, &heard));
         std::thread::spawn(move || {
-            for stream in self.listener.incoming().flatten() {
-                let shared = Arc::clone(&self.shared);
-                std::thread::spawn(move || shared.serve(stream));
+            for stream in listener.incoming().flatten() {
+                let connection = Connection {
+                    site: Arc::clone(&site),
+                    reports: reports.clone(),
+                    inbox: inbox.clone(),
+                };
+                std::thread::spawn(move || connection.serve(stream));
             }
         });
+    }
+}
+
+/// Own the program and the pages listening: take each change, write each
+/// event to every page still listening, and answer each ask for the
+/// program.
+fn own(mut program: Value, heard: &mpsc::Receiver<Message>) {
+    let mut listeners: Vec<TcpStream> = Vec::new();
+    for message in heard {
+        match message {
+            Message::Program(next) => program = next,
+            Message::Event(event) => {
+                listeners.retain_mut(|listener| listener.write_all(event.as_bytes()).is_ok());
+            }
+            Message::Listen(stream) => listeners.push(stream),
+            Message::Ask(reply) => {
+                let _ = reply.send(program.to_string());
+            }
+        }
     }
 }
 
 impl Handle {
     /// The program `program.json` gives from now on.
     pub(super) fn set_program(&self, program: Value) {
-        *lock(&self.shared.program) = program;
+        let _ = self.inbox.send(Message::Program(program));
     }
 
     /// Tell every page listening `event`.
@@ -131,12 +180,11 @@ impl Handle {
             Event::Reload => "event: reload\ndata: {}\n\n".to_owned(),
             Event::Unbuilt => "event: unbuilt\ndata: {}\n\n".to_owned(),
         };
-        lock(&self.shared.listeners)
-            .retain_mut(|listener| listener.write_all(message.as_bytes()).is_ok());
+        let _ = self.inbox.send(Message::Event(message));
     }
 }
 
-impl Shared {
+impl Connection {
     /// Serve one connection's request.
     fn serve(&self, stream: TcpStream) {
         let Ok(reading) = stream.try_clone() else {
@@ -154,12 +202,14 @@ impl Shared {
                       Cache-Control: no-store\r\n\r\n",
                 );
                 if opened.is_ok() {
-                    lock(&self.listeners).push(stream);
+                    let _ = self.inbox.send(Message::Listen(stream));
                 }
                 return;
             }
             ("GET", "/program.json") => {
-                let program = lock(&self.program).to_string();
+                let (reply, answer) = mpsc::channel();
+                let _ = self.inbox.send(Message::Ask(reply));
+                let program = answer.recv().unwrap_or_default();
                 respond(
                     &mut stream,
                     "200 OK",
@@ -266,8 +316,4 @@ fn respond(stream: &mut TcpStream, status: &str, kind: &str, body: &[u8]) -> std
         body.len()
     )?;
     stream.write_all(body)
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }

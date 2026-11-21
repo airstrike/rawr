@@ -4,13 +4,14 @@
 //! Three threads share the work. This one waits for saves and sends the
 //! package's new files to the page. The builder builds the runner again
 //! when a save uses an API the running one doesn't cover, or when no
-//! runner built yet, and tells the page to load the new one. The reporter
-//! says in the terminal what the page reported.
+//! runner built yet, and tells the page to load the new one; it hears the
+//! package's features from this thread when a save changes them. The
+//! reporter says in the terminal what the page reported.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex, PoisonError};
+use std::sync::{mpsc, Arc};
 
 use rawr::project::cargo::features::Enabled;
 
@@ -33,15 +34,36 @@ pub(super) struct Session {
     /// The program's crate root.
     entry: PathBuf,
     graph: rawr::package::Graph,
-    /// What the package's `cfg(..)`s read as Cargo builds it for the page,
-    /// which the builder reads too.
-    features: Arc<Mutex<Enabled>>,
+    /// What the package's `cfg(..)`s read as Cargo builds it for the page.
+    /// The builder hears each change.
+    features: Enabled,
     package: Package,
     handle: Handle,
     /// Whether the page has a runner: a build succeeded.
     built: Arc<AtomicBool>,
-    /// Asks the builder for a build.
-    builds: mpsc::Sender<()>,
+    /// Asks the builder for a build, and tells it the features.
+    builds: mpsc::Sender<Ask>,
+}
+
+/// What the builder hears.
+enum Ask {
+    /// Build the runner again.
+    Build,
+    /// The package's features from now on.
+    Features(Enabled),
+}
+
+impl Ask {
+    /// Whether this asks for a build. Features it gives replace `held`.
+    fn take(self, held: &mut Enabled) -> bool {
+        match self {
+            Self::Build => true,
+            Self::Features(features) => {
+                *held = features;
+                false
+            }
+        }
+    }
 }
 
 impl Session {
@@ -104,11 +126,10 @@ impl Session {
         let handle = server.handle();
         server.spawn();
         let built = Arc::new(AtomicBool::new(built));
-        let features = Arc::new(Mutex::new(features));
         let builds = builder(
             build,
             entry.clone(),
-            Arc::clone(&features),
+            features.clone(),
             handle.clone(),
             Arc::clone(&built),
         );
@@ -142,14 +163,18 @@ impl Session {
             {
                 self.graph = loaded.graph;
                 match features(&self.graph) {
-                    Ok(features) => *lock(&self.features) = features,
+                    Ok(features) if features != self.features => {
+                        self.features = features;
+                        let _ = self.builds.send(Ask::Features(self.features.clone()));
+                    }
+                    Ok(_) => {}
                     Err(error) => eprintln!(
                         "{}: {error}",
                         rawr_cli::color::label(rawr_cli::color::Level::Error)
                     ),
                 }
             }
-            let read = Package::read(&self.entry, &lock(&self.features));
+            let read = Package::read(&self.entry, &self.features);
             let package = match read {
                 Ok(package) => package,
                 Err(error) => {
@@ -177,7 +202,7 @@ impl Session {
             } else if built {
                 self.handle.send(&Event::Files(self.package.files()));
             } else {
-                let _ = self.builds.send(());
+                let _ = self.builds.send(Ask::Build);
             }
         }
     }
@@ -193,21 +218,40 @@ fn program(package: &Package, built: bool) -> Value {
 
 /// Start the thread that builds the runner again each time it is asked,
 /// once for all the asks that came while it built, and tells the page to
-/// load a runner that changed.
+/// load a runner that changed. It reads the package with `features`, and
+/// with each change it hears.
 fn builder(
     mut build: Build,
     entry: PathBuf,
-    features: Arc<Mutex<Enabled>>,
+    mut features: Enabled,
     handle: Handle,
     built: Arc<AtomicBool>,
-) -> mpsc::Sender<()> {
-    let (builds, asked) = mpsc::channel::<()>();
+) -> mpsc::Sender<Ask> {
+    let (builds, asked) = mpsc::channel::<Ask>();
     std::thread::spawn(move || {
-        while asked.recv().is_ok() {
-            while asked.try_recv().is_ok() {}
+        let mut wanted = false;
+        loop {
+            if !wanted {
+                match asked.recv() {
+                    Ok(ask) => wanted = ask.take(&mut features),
+                    Err(mpsc::RecvError) => return,
+                }
+            }
+            while let Ok(ask) = asked.try_recv() {
+                wanted |= ask.take(&mut features);
+            }
+            if !wanted {
+                continue;
+            }
+            wanted = false;
             match build.run() {
                 Ok(Built::Packed) => {
-                    let read = Package::read(&entry, &lock(&features));
+                    // Features a save changed while it built count, and a
+                    // build asked for meanwhile runs next.
+                    while let Ok(ask) = asked.try_recv() {
+                        wanted |= ask.take(&mut features);
+                    }
+                    let read = Package::read(&entry, &features);
                     if let Ok(package) = read {
                         handle.set_program(program(&package, true));
                     }
@@ -241,14 +285,10 @@ fn features(graph: &rawr::package::Graph) -> Result<Enabled, Error> {
         .map_err(|error| Error::Cargo(error.to_string()))
 }
 
-fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
 /// Start the thread that says in the terminal what the page reported, as
 /// `rawr run` says what a program it runs did, and asks for a build when
 /// a save needs one.
-fn reporter(heard: mpsc::Receiver<Report>, builds: mpsc::Sender<()>) {
+fn reporter(heard: mpsc::Receiver<Report>, builds: mpsc::Sender<Ask>) {
     std::thread::spawn(move || {
         for report in heard {
             match report {
@@ -259,7 +299,7 @@ fn reporter(heard: mpsc::Receiver<Report>, builds: mpsc::Sender<()>) {
                 } => print!("{text}"),
                 Report::Answer(answer) => {
                     if said(&answer) {
-                        let _ = builds.send(());
+                        let _ = builds.send(Ask::Build);
                     }
                 }
             }

@@ -5,7 +5,7 @@
 use std::io::Write as _;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 /// How long a group gets between SIGTERM and SIGKILL.
@@ -128,45 +128,126 @@ pub fn kill_group(group: u32) {
     let _ = group;
 }
 
-/// A stream read as it arrives, keeping its last [`KEPT`] bytes.
-#[derive(Clone, Debug, Default)]
-pub struct Tail(Arc<Mutex<(Vec<u8>, bool)>>);
+/// A stream read on a thread of its own as it arrives, keeping its last
+/// [`KEPT`] bytes. [`Tail::finish`] joins the thread.
+///
+/// The thread reads until the pipe closes or `finish` tells it the child
+/// is done. A process that left the child's group can keep the pipe open
+/// after the group ended, and the thread then stops once the pipe holds
+/// nothing more to read, so the join waits on the child, not on that
+/// process.
+#[derive(Debug, Default)]
+pub struct Tail {
+    reading: Option<Reading>,
+}
+
+#[derive(Debug)]
+struct Reading {
+    thread: std::thread::JoinHandle<Kept>,
+    /// Dropped by `finish`: its read end then reports a hang-up, which
+    /// tells the thread the child is done.
+    #[cfg(unix)]
+    done: std::io::PipeWriter,
+}
+
+/// A stream's last bytes, and whether its start was dropped.
+#[derive(Debug, Default)]
+struct Kept {
+    bytes: Vec<u8>,
+    cut: bool,
+}
+
+impl Kept {
+    fn push(&mut self, bytes: &[u8]) {
+        self.bytes.extend_from_slice(bytes);
+        if self.bytes.len() > KEPT {
+            let excess = self.bytes.len() - KEPT;
+            self.bytes.drain(..excess);
+            self.cut = true;
+        }
+    }
+}
 
 impl Tail {
-    /// Read `pipe` on a thread until it closes.
-    pub fn read(pipe: impl std::io::Read + Send + 'static) -> Self {
-        let tail = Self::default();
-        let filling = tail.clone();
-        let _ = std::thread::Builder::new()
+    /// Read `pipe` on a thread.
+    #[cfg(unix)]
+    pub fn read(pipe: impl std::io::Read + std::os::fd::AsFd + Send + 'static) -> Self {
+        let Ok((told, done)) = std::io::pipe() else {
+            return Self::default();
+        };
+        let spawned = std::thread::Builder::new()
             .name("rawr-mcp-output".into())
-            .spawn(move || {
-                let mut pipe = pipe;
-                let mut buffer = [0_u8; 8192];
-                while let Ok(read) = pipe.read(&mut buffer) {
-                    if read == 0 {
-                        break;
-                    }
-                    filling.push(&buffer[..read]);
-                }
-            });
-        tail
-    }
-
-    fn push(&self, bytes: &[u8]) {
-        let mut kept = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        kept.0.extend_from_slice(bytes);
-        if kept.0.len() > KEPT {
-            let excess = kept.0.len() - KEPT;
-            kept.0.drain(..excess);
-            kept.1 = true;
+            .spawn(move || keep(pipe, &told));
+        Self {
+            reading: spawned.ok().map(|thread| Reading { thread, done }),
         }
     }
 
-    /// What arrived so far, and whether its start was dropped.
+    /// Read `pipe` on a thread until it closes.
+    #[cfg(not(unix))]
+    pub fn read(pipe: impl std::io::Read + Send + 'static) -> Self {
+        let spawned = std::thread::Builder::new()
+            .name("rawr-mcp-output".into())
+            .spawn(move || {
+                let mut pipe = pipe;
+                let mut kept = Kept::default();
+                let mut buffer = [0_u8; 8192];
+                while let Ok(read @ 1..) = pipe.read(&mut buffer) {
+                    kept.push(&buffer[..read]);
+                }
+                kept
+            });
+        Self {
+            reading: spawned.ok().map(|thread| Reading { thread }),
+        }
+    }
+
+    /// What the stream held once the child is done, and whether its start
+    /// was dropped. Called after the child exited and its group ended: the
+    /// thread reads what the pipe still holds and ends.
     #[must_use]
-    pub fn text(&self) -> (String, bool) {
-        let kept = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        (String::from_utf8_lossy(&kept.0).into_owned(), kept.1)
+    pub fn finish(self) -> (String, bool) {
+        let Some(reading) = self.reading else {
+            return (String::new(), false);
+        };
+        #[cfg(unix)]
+        drop(reading.done);
+        let kept = reading.thread.join().unwrap_or_default();
+        (String::from_utf8_lossy(&kept.bytes).into_owned(), kept.cut)
+    }
+}
+
+/// Keep what `pipe` gives until it closes, or until `told` hangs up and
+/// the pipe holds nothing more to read.
+#[cfg(unix)]
+fn keep(mut pipe: impl std::io::Read + std::os::fd::AsFd, told: &std::io::PipeReader) -> Kept {
+    use nix::poll::{poll, PollFd, PollFlags};
+
+    let mut kept = Kept::default();
+    let mut buffer = [0_u8; 8192];
+    loop {
+        let readable = {
+            let mut fds = [
+                PollFd::new(&pipe, PollFlags::POLLIN),
+                PollFd::new(told, PollFlags::POLLIN),
+            ];
+            match poll(&mut fds, -1) {
+                Ok(_) => {}
+                Err(nix::errno::Errno::EINTR) => continue,
+                Err(_) => return kept,
+            }
+            // A pipe whose writers are gone reports a hang-up, and reads
+            // its end of file.
+            fds[0].revents().is_some_and(|events| !events.is_empty())
+        };
+        if !readable {
+            // The child is done and the pipe holds nothing more.
+            return kept;
+        }
+        match pipe.read(&mut buffer) {
+            Ok(0) | Err(_) => return kept,
+            Ok(read) => kept.push(&buffer[..read]),
+        }
     }
 }
 
@@ -230,9 +311,6 @@ pub fn run(
         kill_group(group);
     }
     cancel.release(group);
-    // The readers finish once every writer is gone; a moment covers the
-    // last bytes in flight.
-    std::thread::sleep(Duration::from_millis(20));
     Ok(Finished {
         status,
         stdout,
@@ -255,4 +333,26 @@ pub fn code(status: ExitStatus) -> i32 {
         }
     }
     1
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write as _;
+
+    use super::Tail;
+
+    /// A writer that outlives the child, as a process that left its group
+    /// keeps the pipe open, holds up no `finish`: it gets what the pipe
+    /// held once the child was done.
+    #[cfg(unix)]
+    #[test]
+    fn a_pipe_held_open_past_the_child_still_finishes() {
+        let (pipe, mut writer) = std::io::pipe().unwrap();
+        let tail = Tail::read(pipe);
+        writer.write_all(b"last words\n").unwrap();
+        let (text, cut) = tail.finish();
+        assert_eq!(text, "last words\n");
+        assert!(!cut);
+        drop(writer);
+    }
 }

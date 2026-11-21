@@ -19,7 +19,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::Write as _;
-use std::sync::{Mutex, Once, OnceLock};
+use std::sync::{Once, OnceLock};
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -28,6 +28,14 @@ use serde_json::{json, Value};
 pub mod reload;
 #[cfg(unix)]
 pub mod session;
+
+#[cfg(unix)]
+pub use session::Handed;
+
+/// The listener a shell hands a run: on Unix alone, so none here.
+#[cfg(not(unix))]
+#[derive(Debug)]
+pub enum Handed {}
 
 /// A file a `rawr run` appends its events to.
 pub const EVENTS: &str = "RAWR_MCP_EVENTS";
@@ -65,16 +73,13 @@ pub const PROGRAM_STDERR: &str = "RAWR_SESSION_PROGRAM_STDERR";
 /// How often a watched process looks at its parent.
 const WATCH: Duration = Duration::from_millis(100);
 
-fn file() -> Option<&'static Mutex<File>> {
-    static FILE: OnceLock<Option<Mutex<File>>> = OnceLock::new();
+/// The events file, opened to append: each line is one `write` at the
+/// file's end, so lines from any thread never interleave.
+fn file() -> Option<&'static File> {
+    static FILE: OnceLock<Option<File>> = OnceLock::new();
     FILE.get_or_init(|| {
         let path = std::env::var_os(EVENTS)?;
-        OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-            .ok()
-            .map(Mutex::new)
+        OpenOptions::new().create(true).append(true).open(path).ok()
     })
     .as_ref()
 }
@@ -96,10 +101,7 @@ pub fn supervised() -> bool {
 pub fn emit(event: &Value) {
     let mut line = event.to_string();
     line.push('\n');
-    if let Some(file) = file() {
-        let mut file = file
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(mut file) = file() {
         let _ = file.write_all(line.as_bytes());
     }
     #[cfg(unix)]
