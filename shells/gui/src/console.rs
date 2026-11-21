@@ -141,6 +141,7 @@ impl State {
         .padding([2, 8])
         .align_y(iced::Center);
         scrollable(column(entries).push(prompt.boxed()))
+            .direction(theme::scrollbar())
             .anchor_bottom()
             .height(Fill)
             .width(Fill)

@@ -20,7 +20,6 @@ use serde_json::{json, Value};
 use crate::bindings;
 use crate::console;
 use crate::control::{Control, Shortcut};
-use crate::home;
 use crate::session::{self, Client, Incoming, Link, Phase, Stop};
 use crate::source;
 use crate::theme;
@@ -154,9 +153,9 @@ pub enum Message {
 impl Default for Splits {
     fn default() -> Self {
         Self {
-            output: 0.84,
-            columns: 0.6,
-            console: 0.74,
+            output: 0.86,
+            columns: 0.64,
+            console: 0.72,
             frame: 0.36,
             frames: 0.34,
         }
@@ -192,7 +191,7 @@ impl App {
     pub fn new(socket: PathBuf) -> Self {
         let capture = socket.with_file_name(format!("gui-{}.png", std::process::id()));
         Self {
-            root: socket.display().to_string(),
+            root: String::new(),
             socket,
             capture,
             captures: 0,
@@ -230,8 +229,13 @@ impl App {
     }
 
     #[must_use]
+    /// The window's title: the program's name, its crate's directory or
+    /// its file, once the session says it, and rawr's.
     pub fn title(&self) -> String {
-        format!("rawr gui: {}", home::shorten(&self.root))
+        match std::path::Path::new(&self.root).file_name() {
+            Some(program) => format!("{} — rawr", program.to_string_lossy()),
+            None => "rawr".to_owned(),
+        }
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
@@ -241,6 +245,9 @@ impl App {
             keyboard::listen()
                 .filter_map(Shortcut::of)
                 .map(Message::Shortcut),
+            keyboard::listen()
+                .filter_map(source::saving)
+                .map(Message::Source),
         ])
     }
 
@@ -262,8 +269,9 @@ impl App {
                     if event["event"] == "paused" {
                         self.inspected = None;
                     }
+                    let reread = self.source.told(&event).map(Message::Source);
                     let phase = self.phase.after(&event);
-                    self.moved(phase)
+                    Task::batch([self.moved(phase), reread])
                 }
                 Some(Incoming::Output { text, .. }) => {
                     self.heard(&text);
@@ -333,7 +341,6 @@ impl App {
             }
             Message::Mode(mode) => {
                 self.light = mode == Mode::Light;
-                self.source.follow(self.light);
                 Task::none()
             }
         }
@@ -642,10 +649,17 @@ impl App {
             |at| Message::Split(Split::Console, at),
         ));
         let stack = theme::split(horizontal_split(
-            pane("Call stack", scrollable(self.frames()).height(Fill)),
+            pane(
+                "Call stack",
+                scrollable(self.frames())
+                    .direction(theme::scrollbar())
+                    .height(Fill),
+            ),
             pane(
                 "Bindings",
-                scrollable(self.bindings.view().map(Message::Bindings)).height(Fill),
+                scrollable(self.bindings.view().map(Message::Bindings))
+                    .direction(theme::scrollbar())
+                    .height(Fill),
             ),
             self.splits.frames,
             |at| Message::Split(Split::Frames, at),
@@ -668,11 +682,12 @@ impl App {
                 .font(Font::MONOSPACE)
                 .size(theme::SIZE),
         )
+        .direction(theme::scrollbar())
         .anchor_bottom()
         .width(Fill)
         .height(Fill);
         column![
-            self.toolbar(),
+            container(self.toolbar()).style(theme::side),
             rule::horizontal(1),
             theme::split(horizontal_split(
                 panes,
@@ -700,33 +715,69 @@ impl App {
                 );
             theme::tipped(press, control.tip(), tooltip::Position::Bottom)
         });
-        let phase = match &self.phase {
-            Phase::Building { stage, percent } => format!("building: {stage} {percent}%"),
-            Phase::Paused(stop) => format!(
-                "paused ({}) at line {}",
-                stop.reason,
-                stop.line
-                    .map_or_else(|| "?".to_owned(), |line| line.to_string())
-            ),
-            Phase::Ended(status) => format!("ended with status {status}"),
-            other => other.name().to_owned(),
-        };
         let note = match &self.note {
-            Some(note) => text(note.as_str()).style(text::danger),
+            Some(note) => text(note.as_str()).style(theme::error),
             None => text(""),
         };
         row![
             row(controls).spacing(1),
             rule::vertical(1),
-            text(phase).font(Font::MONOSPACE).size(theme::SIZE),
+            self.status(),
             note.size(theme::SIZE)
                 .wrapping(Wrapping::None)
                 .ellipsis(Ellipsis::Start)
+                .align_x(iced::Right)
                 .width(Fill),
         ]
-        .spacing(8)
-        .height(28)
-        .padding([2, 6])
+        .spacing(10)
+        .height(32)
+        .padding([0, 8])
+        .align_y(iced::Center)
+        .boxed()
+    }
+
+    /// Where the program is, as a status: a lamp in the phase's tone, the
+    /// phase, and where or how far, quiet.
+    fn status(&self) -> Element<'_, Message> {
+        let (tone, word, detail) = match &self.phase {
+            Phase::Starting => (theme::Tone::Quiet, "Starting", String::new()),
+            Phase::Building { stage, percent } => (
+                theme::Tone::Quiet,
+                "Building",
+                format!("{stage} {percent}%"),
+            ),
+            Phase::Running => (theme::Tone::Good, "Running", String::new()),
+            Phase::Paused(stop) => {
+                let place = match (&stop.line, &stop.function) {
+                    (Some(line), Some(function)) => format!("line {line} in {function}"),
+                    (Some(line), None) => format!("line {line}"),
+                    (None, Some(function)) => format!("in {function}"),
+                    (None, None) => String::new(),
+                };
+                (
+                    theme::Tone::Accent,
+                    "Paused",
+                    format!("{place} · {}", stop.reason),
+                )
+            }
+            Phase::Restarting => (theme::Tone::Quiet, "Restarting", String::new()),
+            Phase::Failed => (
+                theme::Tone::Bad,
+                "Failed",
+                "a save that fixes it starts it".to_owned(),
+            ),
+            Phase::Ended(status) => (theme::Tone::Quiet, "Ended", format!("status {status}")),
+            Phase::Closed => (theme::Tone::Bad, "Closed", String::new()),
+        };
+        row![
+            theme::lamp(tone),
+            text(word).size(theme::SIZE).font(theme::STRONG),
+            text(detail)
+                .size(theme::SIZE)
+                .style(theme::faint)
+                .wrapping(Wrapping::None),
+        ]
+        .spacing(7)
         .align_y(iced::Center)
         .boxed()
     }
@@ -738,10 +789,17 @@ impl App {
             .filter(|(file, _)| Some(file.as_str()) == self.source.file())
             .map(|(_, line)| *line)
             .collect();
-        let file = self.source.file().map(source::short_path);
+        // The values shown in the code are the frame's whose line is
+        // marked, in the file it is in.
+        let values: Vec<(&str, &str)> = match self.stack.get(self.selected) {
+            Some(frame) if frame.file.as_deref() == self.source.file() => {
+                self.bindings.values().collect()
+            }
+            _ => Vec::new(),
+        };
         container(column![
-            theme::heading("Source", file),
-            self.source.view(&breakpoints).map(Message::Source),
+            self.source.heading().map(Message::Source),
+            self.source.view(&breakpoints, &values).map(Message::Source),
         ])
         .width(Fill)
         .height(Fill)
@@ -759,7 +817,7 @@ impl App {
             button(content)
                 .width(width)
                 .padding([0, 6])
-                .style(theme::item(index == self.selected))
+                .style(move |theme, status| theme::item(theme, status, index == self.selected))
                 .on_press(Message::Select(index))
                 .boxed()
         };
@@ -818,9 +876,9 @@ fn frame_pane(frame: Option<&image::Handle>) -> Element<'_, Message> {
 
 /// A pane under its section bar, on the window's background.
 fn pane<'a>(label: &str, content: impl Widget<Message> + 'a) -> Element<'a, Message> {
-    container(column![theme::heading(label, None), content])
+    container(column![theme::heading(label), content])
         .width(Fill)
         .height(Fill)
-        .style(theme::pane)
+        .style(theme::side)
         .boxed()
 }
