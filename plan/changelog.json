@@ -8,6 +8,14 @@
   },
   "releases": [
     {
+      "version": "0.4.90",
+      "date": "2026-11-21",
+      "entries": [
+        {"text":"rawr mcp's screenshot takes a `region` in the window's points and a `scale` in pixels a point, cropped and resampled by the program itself; a bad scale or a region outside the window is refused with a message.","issues":[2009],"refs":[1993]},
+        {"text":"The session a run hosts keeps its state on one thread: shells, the program and the run's owner send it messages and each answer comes back on its own channel. A request whose shell closes ends at once and passes the control turn on, and a shell's hello never gives older breakpoints than a list it already heard. Five locks go.","issues":[2412]}
+      ]
+    },
+    {
       "version": "0.4.89",
       "date": "2026-11-21",
       "entries": [

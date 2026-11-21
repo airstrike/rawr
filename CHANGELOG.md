@@ -6,6 +6,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.90 (2026-11-21)
+
+- rawr mcp's screenshot takes a `region` in the window's points and a `scale` in pixels a point, cropped and resampled by the program itself; a bad scale or a region outside the window is refused with a message. (#2009; part of #1993)
+- The session a run hosts keeps its state on one thread: shells, the program and the run's owner send it messages and each answer comes back on its own channel. A request whose shell closes ends at once and passes the control turn on, and a shell's hello never gives older breakpoints than a list it already heard. Five locks go. (#2412)
+
 ## 0.4.89 (2026-11-21)
 
 - When a shell attaches to a run started at a terminal, `rawr mcp`'s `status` and `start` and `rawr dap`'s console say it hears rawr's prints but not what a dependency writes straight to the terminal; a run a shell starts sends that shell all of its output. (#2411; part of #2320)
