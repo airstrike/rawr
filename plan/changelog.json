@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.4.101",
+      "date": "2026-11-21",
+      "entries": [
+        {"text":"Two rawr runs on one project or one target directory wait for each other as two Cargo runs do: the second prints one line naming the lock, the holder's process and the project it builds, then goes on. A run no longer fails with \"the build directory is locked by another build\" or a busy runner cache, and a Cargo child's own wait for its build directory is printed.","issues":[2429]}
+      ]
+    },
+    {
       "version": "0.4.100",
       "date": "2026-11-21",
       "entries": [

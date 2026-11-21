@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.101 (2026-11-21)
+
+- Two rawr runs on one project or one target directory wait for each other as two Cargo runs do: the second prints one line naming the lock, the holder's process and the project it builds, then goes on. A run no longer fails with "the build directory is locked by another build" or a busy runner cache, and a Cargo child's own wait for its build directory is printed. (#2429)
+
 ## 0.4.100 (2026-11-21)
 
 - A runner whose program turns on a feature that reaches a patched package, such as iced_test through a project feature, settles its lock again: the runner keeps every project patch while Cargo settles it, then leaves out only the patches the settled lock lists as unused. (#2426)

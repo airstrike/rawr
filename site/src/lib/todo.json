@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-21",
-  "version": "0.4.100",
+  "version": "0.4.101",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.101",
+        "date": "2026-11-21",
+        "entries": [
+          {"text":"Two rawr runs on one project or one target directory wait for each other as two Cargo runs do: the second prints one line naming the lock, the holder's process and the project it builds, then goes on. A run no longer fails with \"the build directory is locked by another build\" or a busy runner cache, and a Cargo child's own wait for its build directory is printed.","issues":[2429]}
+        ]
+      },
       {
         "version": "0.4.100",
         "date": "2026-11-21",
@@ -5939,7 +5946,11 @@
     {"issue":2425,"title":"Shells order inspector answers by the pause count","state":"open","category":"Health"},
     {"issue":2426,"title":"A runner whose program turns on a feature that reaches a patched package, such as iced_test…","state":"closed","category":"Health","release":"0.4.100"},
     {"issue":2427,"title":"rawr run --features doesn't reach the harness's dependencies","state":"open","category":"Health"},
-    {"issue":2428,"title":"An unbuilt optional or dev path dependency panics the resolution universe","state":"open","category":"Health"}
+    {"issue":2428,"title":"An unbuilt optional or dev path dependency panics the resolution universe","state":"open","category":"Health"},
+    {"issue":2429,"title":"Two rawr runs on one project or one target directory wait for each other as two Cargo runs do…","state":"closed","category":"Health","release":"0.4.101"},
+    {"issue":2430,"title":"A second rawr run of one project can't host a session: its socket path already exists","state":"open","category":"Health"},
+    {"issue":2431,"title":"A wait for a project's store lease names no process","state":"open","category":"Health"},
+    {"issue":2432,"title":"A runner build can stall holding the shared build lock after cargo exits","state":"open","category":"Health"}
   ],
   "groups": [
     {
