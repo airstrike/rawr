@@ -84,6 +84,12 @@
 //! (#490, see [`evaluate`]); `{"error": "not paused"}` on a program that
 //! isn't. `frame` picks the call it runs in, as a read's does (#2309).
 //!
+//! A request asked while the program is paused belongs to that pause. A
+//! resume that ends the pause before the pause answered it answers it at
+//! once, with `"resumed": true`: an eval as `{"error": .., "resumed":
+//! true, "paused": null}` and a read as `{"reached": false, "resumed":
+//! true, "paused": null}`. It never runs at a later pause.
+//!
 //! A pause and its end are also told as `paused` (with the file, line,
 //! function and reason) and `resumed` events where [`EVENTS`] says, so
 //! every shell attached to the run hears them (#535): the run's session
@@ -784,8 +790,28 @@ struct Request {
     frame: usize,
     /// Code to evaluate where the program is paused (#490).
     code: Option<String>,
+    /// The pause it was asked in, by its count, when the program was
+    /// paused: only that pause answers it, and its end retires it
+    /// (D1097.4).
+    asked: Option<u64>,
     shape: Shape,
     reply: Reply,
+}
+
+impl Request {
+    /// The answer to a request whose pause ended before it was answered:
+    /// the program went on, and its next pause is at another place.
+    fn retired(&self) -> Value {
+        if self.code.is_some() {
+            json!({
+                "error": "the program went on before this was evaluated",
+                "resumed": true,
+                "paused": null,
+            })
+        } else {
+            json!({ "reached": false, "resumed": true, "paused": null })
+        }
+    }
 }
 
 /// How a paused program goes on.
@@ -921,6 +947,20 @@ struct State {
 }
 
 impl State {
+    /// Answer each request asked in a pause as resumed: the pause ended,
+    /// and a later one is at another place (D1063.2). A request asked of
+    /// the running program stays for its next matching step.
+    fn retire(&mut self) {
+        let (asked, running): (Vec<Request>, Vec<Request>) = std::mem::take(&mut self.pending)
+            .into_iter()
+            .partition(|request| request.asked.is_some());
+        self.pending = running;
+        for request in asked {
+            let answer = request.retired();
+            request.reply.send(answer);
+        }
+    }
+
     /// Answer each host's step the program moved past.
     fn settle_steps(&mut self) {
         let (settled, waiting): (Vec<Stepped>, Vec<Stepped>) = std::mem::take(&mut self.steps)
@@ -1557,6 +1597,7 @@ impl Shared {
             reply.send(json!({ "error": "not paused" }));
             return None;
         }
+        let asked = state.paused.is_some().then_some(state.pauses);
         state.pending.push(Request {
             id,
             name: text("name"),
@@ -1567,6 +1608,7 @@ impl Shared {
                 .and_then(|frame| usize::try_from(frame).ok())
                 .unwrap_or(0),
             code: text("code"),
+            asked,
             shape: Shape::of(request),
             reply,
         });
@@ -1707,8 +1749,12 @@ impl Shared {
         let step = matches!(resume, Resume::Step(_));
         state.resume = Some(resume);
         // The program runs on from now: a request after this one is the
-        // running program's, which the pause no longer answers.
+        // running program's, which the pause no longer answers. One the
+        // paused thread hasn't taken yet is answered here, under the lock
+        // the pause takes its requests under, so the pause never sees it.
         state.paused = None;
+        state.retire();
+        self.rouse(&state);
         self.notify();
         if !step {
             return Ok(json!({ "paused": null }));
@@ -1964,10 +2010,13 @@ impl Shared {
                 let pending = std::mem::take(&mut state.pending);
                 self.rouse(&state);
                 let paused = state.paused.clone();
+                let pauses = state.pauses;
                 drop(state);
                 ANSWERING.set(true);
                 for request in pending {
-                    let answer = if let Some(code) = &request.code {
+                    let answer = if request.asked.is_some_and(|asked| asked != pauses) {
+                        request.retired()
+                    } else if let Some(code) = &request.code {
                         self.evaluated(context, &request, code, position)
                     } else if self.matches(context, &request, position) {
                         self.read_at(context, &request, position)
@@ -1995,6 +2044,10 @@ impl Shared {
             }
         };
         state.paused = None;
+        // A host that couldn't suspend the program ends the pause without
+        // a resume: its requests are retired here.
+        state.retire();
+        self.rouse(&state);
         self.emit(&match gave_up {
             Some(reason) => json!({ "event": "resumed", "error": reason }),
             None => json!({ "event": "resumed" }),
@@ -2025,7 +2078,10 @@ impl Shared {
             let pending = &mut state.pending;
             let mut index = 0;
             while index < pending.len() {
-                if self.matches(context, &pending[index], position) {
+                // A request asked in a pause reads only that pause.
+                if pending[index].asked.is_none()
+                    && self.matches(context, &pending[index], position)
+                {
                     matched.push(pending.swap_remove(index));
                 } else {
                     index += 1;
@@ -3630,7 +3686,7 @@ mod tests {
     /// [`LOOPING`] compiled on an engine a hosted inspector answers for,
     /// through `host`; what it tells goes to the receiver.
     fn hosted(
-        host: Arc<Suspending>,
+        host: impl super::Host + 'static,
         going: &Arc<AtomicBool>,
     ) -> (
         super::Inspector,
@@ -3754,6 +3810,157 @@ mod tests {
             .map(|event| event["event"].clone())
             .collect();
         assert!(told.contains(&json!("resumed")), "{told:?}");
+    }
+
+    /// A host whose wait the test holds: while it is held, a wake doesn't
+    /// end the wait, so requests queue behind a pause the program hasn't
+    /// woken to.
+    struct Gated {
+        gate: Mutex<Gate>,
+        changed: std::sync::Condvar,
+    }
+
+    #[derive(Default)]
+    struct Gate {
+        held: bool,
+        woken: bool,
+        /// The program is in a wait, which ends only once the gate opens.
+        waiting: bool,
+    }
+
+    impl Gated {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                gate: Mutex::new(Gate::default()),
+                changed: std::sync::Condvar::new(),
+            })
+        }
+
+        /// Hold the gate, and wait for the paused program to wait behind
+        /// it: no request reaches the pause before [`Self::open`].
+        fn hold(&self) {
+            let mut gate = self.gate.lock().unwrap();
+            gate.held = true;
+            drop(self.changed.wait_while(gate, |gate| !gate.waiting).unwrap());
+        }
+
+        fn open(&self) {
+            let mut gate = self.gate.lock().unwrap();
+            gate.held = false;
+            gate.woken = true;
+            self.changed.notify_all();
+        }
+    }
+
+    impl super::Host for Arc<Gated> {
+        fn can_wait(&self) -> bool {
+            true
+        }
+
+        fn wait(&self) -> Result<(), String> {
+            let mut gate = self.gate.lock().unwrap();
+            gate.waiting = true;
+            self.changed.notify_all();
+            let mut gate = self
+                .changed
+                .wait_while(gate, |gate| gate.held || !gate.woken)
+                .unwrap();
+            gate.waiting = false;
+            gate.woken = false;
+            Ok(())
+        }
+
+        fn wake(&self) {
+            self.gate.lock().unwrap().woken = true;
+            self.changed.notify_all();
+        }
+    }
+
+    /// Opens a [`Gated`] host once its test is done, a failed one too, so
+    /// the program's pause goes on.
+    struct Opened<'a>(&'a Gated);
+
+    impl Drop for Opened<'_> {
+        fn drop(&mut self) {
+            self.0.open();
+        }
+    }
+
+    /// The program's next `paused` event.
+    fn next_pause(events: &std::sync::mpsc::Receiver<serde_json::Value>) -> serde_json::Value {
+        events
+            .iter()
+            .find(|event| event["event"] == "paused")
+            .unwrap()
+    }
+
+    /// An eval and a read asked at a pause that a continue ends before the
+    /// paused program woke are answered as resumed at once, never at the
+    /// next pause; a continue first leaves nothing to evaluate in. The host
+    /// holds the paused program's wake, so each order is forced (D1100.3).
+    #[test]
+    fn a_request_a_continue_overtakes_is_answered_as_resumed_in_either_order() {
+        use serde_json::json;
+        let going = Arc::new(AtomicBool::new(true));
+        let gate = Gated::new();
+        let (inspector, engine, ast, events) = hosted(Arc::clone(&gate), &going);
+        asked(&inspector, &json!({ "op": "break", "function": "inner" }))
+            .recv()
+            .unwrap();
+        std::thread::scope(|scope| {
+            let ending = Ending(&inspector, &going);
+            let opened = Opened(&gate);
+            let running = scope.spawn(|| {
+                engine
+                    .call_fn::<i64>(&mut crate::Scope::new(), &ast, "run", ())
+                    .unwrap_or_else(|error| panic!("{error}"))
+            });
+
+            // The eval and the read first, then the continue.
+            next_pause(&events);
+            gate.hold();
+            let eval = asked(&inspector, &json!({ "op": "eval", "code": "depth" }));
+            let read = asked(&inspector, &json!({ "frame": 1 }));
+            let continued = asked(&inspector, &json!({ "op": "continue" }))
+                .recv()
+                .unwrap();
+            assert_eq!(continued, json!({ "paused": null }));
+            let evaluated = eval.try_recv().unwrap();
+            assert_eq!(evaluated["resumed"], true, "{evaluated}");
+            assert!(evaluated["error"].is_string(), "{evaluated}");
+            assert_eq!(
+                read.try_recv().unwrap(),
+                json!({ "reached": false, "resumed": true, "paused": null })
+            );
+            gate.open();
+
+            // The continue first, then the eval.
+            next_pause(&events);
+            gate.hold();
+            let continued = asked(&inspector, &json!({ "op": "continue" }))
+                .recv()
+                .unwrap();
+            assert_eq!(continued, json!({ "paused": null }));
+            let evaluated = asked(&inspector, &json!({ "op": "eval", "code": "depth" }))
+                .try_recv()
+                .unwrap();
+            assert_eq!(evaluated, json!({ "error": "not paused" }));
+            gate.open();
+
+            // The next pause answers what is asked in it: this host keeps
+            // no files to compile code from, which the pause says.
+            let paused = next_pause(&events);
+            assert_eq!(paused["line"], 2, "{paused}");
+            let evaluated = asked(&inspector, &json!({ "op": "eval", "code": "depth" }))
+                .recv()
+                .unwrap();
+            assert!(evaluated.get("resumed").is_none(), "{evaluated}");
+            assert!(evaluated["error"].is_string(), "{evaluated}");
+            going.store(false, Ordering::Release);
+            drop(opened);
+            drop(ending);
+            assert!(running.join().unwrap() >= 3);
+        });
     }
 
     /// A step a hosted inspector can't wait at goes on without pausing, and

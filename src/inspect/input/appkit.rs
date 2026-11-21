@@ -94,6 +94,45 @@ enum Motion {
     Dragged,
 }
 
+/// What an event holds down until a later event lets it go.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Pressed {
+    Button(Button),
+    Key(u16),
+    Modifier(u16),
+}
+
+/// Whether an event presses what it touches or lets it go.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Hold {
+    Down,
+    Up,
+}
+
+/// Work for the main thread.
+type Job = Box<dyn FnOnce() + Send>;
+
+/// Where main-thread work runs, one job after another in the order it was
+/// posted.
+#[derive(Clone)]
+enum Queue {
+    /// AppKit's main queue, which the program's event loop runs.
+    Main,
+    /// A test's: each job waits in the channel for the test to run it.
+    #[cfg(test)]
+    Held(mpsc::Sender<Job>),
+}
+
+/// Where a main-thread job's value goes, once: the wait for it, or nowhere
+/// once the wait was given up.
+struct Done<T>(mpsc::Sender<Option<T>>);
+
+impl<T> Done<T> {
+    fn send(self, value: T) {
+        let _ = self.0.send(Some(value));
+    }
+}
+
 /// The functions an input calls, found in the process. rawr's menu bar
 /// items call them too (#1990).
 pub(in crate::inspect) struct Runtime {
@@ -137,8 +176,18 @@ unsafe extern "C" {
         context: *mut c_void,
         work: unsafe extern "C" fn(*mut c_void),
     );
+    fn dispatch_after_f(
+        when: u64,
+        queue: *const c_void,
+        context: *mut c_void,
+        work: unsafe extern "C" fn(*mut c_void),
+    );
+    fn dispatch_time(when: u64, delta: i64) -> u64;
     static _dispatch_main_q: u8;
 }
+
+/// `DISPATCH_TIME_NOW`.
+const NOW: u64 = 0;
 
 /// `dlsym`'s handle for every image the process has loaded.
 const LOADED: *mut c_void = -2_isize as *mut c_void;
@@ -321,23 +370,13 @@ pub(super) fn send(
     let owned = title.map(str::to_owned);
     let (rest, size) =
         main(interrupted, move || resting(runtime, owned.as_deref()))?.ok_or_else(missing)?;
-    let mut sent = None;
-    for Turn { events, pause } in turns(events(gesture, rest, size.width, size.height)) {
-        let title = title.map(str::to_owned);
-        sent = Some(
-            main(interrupted, move || {
-                let mut sent = None;
-                for event in &events {
-                    sent = Some(deliver(runtime, event, title.as_deref())?);
-                }
-                sent
-            })?
-            .ok_or_else(missing)?,
-        );
-        if !pause.is_zero() {
-            std::thread::sleep(pause);
-        }
-    }
+    let owned = title.map(str::to_owned);
+    let sent = turned(
+        &Queue::Main,
+        interrupted,
+        turns(events(gesture, rest, size.width, size.height)),
+        move |event| deliver(runtime, event, owned.as_deref()),
+    )?;
     // A redraw the events asked for runs before the loop waits again: two
     // more turns of it see one drawn, and the compositor shows it a frame
     // later.
@@ -345,6 +384,63 @@ pub(super) fn send(
     main(interrupted, || ())?;
     std::thread::sleep(FRAME);
     sent.ok_or_else(missing)
+}
+
+/// Deliver each of `turns` on `queue`'s thread, one after the last was
+/// delivered and its cursor rested, unless `interrupted` gives them up:
+/// the last event's `Sent`, `None` once a turn found no window. A gesture
+/// stopped part way still lets go of what it pressed. The events of the
+/// rest that release it go to the thread as one more turn, which nothing
+/// waits for, so it runs after every turn posted before it: a turn the
+/// wait gave up still runs when the thread takes it.
+fn turned<D>(
+    queue: &Queue,
+    interrupted: &Interrupt,
+    turns: Vec<Turn>,
+    deliver: D,
+) -> Result<Option<Sent>, Error>
+where
+    D: Fn(&Event) -> Option<Sent> + Clone + Send + 'static,
+{
+    // Every event posted to the thread, which runs it whatever the wait
+    // does.
+    let mut posted: Vec<Event> = Vec::new();
+    let mut last = None;
+    let mut turns = turns.into_iter();
+    while let Some(Turn { events, pause }) = turns.next() {
+        let answered = if interrupted.is_fired() {
+            Err(Error::Interrupted)
+        } else {
+            posted.extend(events.iter().cloned());
+            let delivering = deliver.clone();
+            queue.run(interrupted, move || {
+                let mut sent = None;
+                for event in &events {
+                    sent = Some(delivering(event)?);
+                }
+                sent
+            })
+        };
+        match answered {
+            Ok(Some(sent)) => last = Some(sent),
+            stopped => {
+                let left: Vec<Event> = turns.flat_map(|turn| turn.events).collect();
+                let releases = releases(&posted, &left);
+                if !releases.is_empty() {
+                    queue.post(Box::new(move || {
+                        for event in &releases {
+                            let _ = deliver(event);
+                        }
+                    }));
+                }
+                return stopped.map(|_| None);
+            }
+        }
+        if !pause.is_zero() {
+            std::thread::sleep(pause);
+        }
+    }
+    Ok(last)
 }
 
 /// Whether the program has shown a window since it started.
@@ -535,6 +631,65 @@ fn events(gesture: &Gesture, rest: Option<Point>, width: f64, height: f64) -> Ve
     }
 }
 
+impl Event {
+    /// What this event presses or lets go of, with `held` held before it:
+    /// a modifier's event presses it unless it is held.
+    fn pressed(&self, held: &[Pressed]) -> Option<(Pressed, Hold)> {
+        match self {
+            Self::Pointer {
+                motion: Motion::Down,
+                button,
+                ..
+            } => Some((Pressed::Button(*button), Hold::Down)),
+            Self::Pointer {
+                motion: Motion::Up,
+                button,
+                ..
+            } => Some((Pressed::Button(*button), Hold::Up)),
+            Self::Key { down, key, .. } => Some((
+                Pressed::Key(key.code),
+                if *down { Hold::Down } else { Hold::Up },
+            )),
+            Self::Flags { code, .. } => {
+                let pressed = Pressed::Modifier(*code);
+                Some((
+                    pressed,
+                    if held.contains(&pressed) {
+                        Hold::Up
+                    } else {
+                        Hold::Down
+                    },
+                ))
+            }
+            Self::Pointer { .. } | Self::Scroll { .. } => None,
+        }
+    }
+}
+
+/// The events of `left` that let go of what `sent` leaves held, in the
+/// order the gesture has them: a button's up, a key's up and a modifier's
+/// release, each once.
+fn releases(sent: &[Event], left: &[Event]) -> Vec<Event> {
+    let mut held: Vec<Pressed> = Vec::new();
+    for event in sent {
+        match event.pressed(&held) {
+            Some((pressed, Hold::Down)) => held.push(pressed),
+            Some((pressed, Hold::Up)) => held.retain(|was| *was != pressed),
+            None => {}
+        }
+    }
+    let mut releases = Vec::new();
+    for event in left {
+        if let Some((pressed, Hold::Up)) = event.pressed(&held)
+            && held.contains(&pressed)
+        {
+            held.retain(|was| *was != pressed);
+            releases.push(event.clone());
+        }
+    }
+    releases
+}
+
 impl Modifiers {
     /// Each modifier held: its key code and its `NSEventModifierFlags` bit.
     fn held(self) -> Vec<(u16, usize)> {
@@ -557,29 +712,114 @@ pub(in crate::inspect) fn main<T: Send + 'static>(
     interrupted: &Interrupt,
     work: impl FnOnce() -> T + Send + 'static,
 ) -> Result<T, Error> {
-    unsafe extern "C" fn run(context: *mut c_void) {
-        // SAFETY: `context` is the box `main` leaked for this one call.
-        let work = unsafe { Box::from_raw(context.cast::<Box<dyn FnOnce() + Send>>()) };
-        work();
+    Queue::Main.run(interrupted, work)
+}
+
+impl Queue {
+    /// Run `job` on the queue's thread after the jobs posted before it,
+    /// without waiting for it.
+    fn post(&self, job: Job) {
+        match self {
+            Self::Main => {
+                let context = Box::into_raw(Box::new(job)).cast::<c_void>();
+                // SAFETY: the main queue runs `job_entry` once with
+                // `context`, which owns the job.
+                unsafe {
+                    dispatch_async_f((&raw const _dispatch_main_q).cast(), context, job_entry)
+                };
+            }
+            #[cfg(test)]
+            Self::Held(jobs) => {
+                let _ = jobs.send(job);
+            }
+        }
     }
-    let (done, finished) = mpsc::channel();
-    let giving_up = done.clone();
-    let work: Box<dyn FnOnce() + Send> = Box::new(move || {
-        let _ = done.send(Some(work()));
-    });
-    let context = Box::into_raw(Box::new(work)).cast::<c_void>();
-    // SAFETY: the main queue runs `run` once with `context`, which owns
-    // the work; a reply after the wait was given up goes to a dropped
-    // receiver.
-    unsafe { dispatch_async_f((&raw const _dispatch_main_q).cast(), context, run) };
-    interrupted.on_fire(move || {
-        let _ = giving_up.send(None);
-    });
-    match finished.recv() {
-        Ok(Some(value)) => Ok(value),
-        Ok(None) => Err(Error::Interrupted),
-        Err(mpsc::RecvError) => Err(Error::Ended),
+
+    /// Run `job` on the queue's thread once `wait` has passed.
+    fn post_after(&self, wait: Duration, job: Job) {
+        match self {
+            Self::Main => {
+                let context = Box::into_raw(Box::new(job)).cast::<c_void>();
+                let delta = i64::try_from(wait.as_nanos()).unwrap_or(i64::MAX);
+                // SAFETY: as for `post`; `dispatch_time` only adds to the
+                // clock's now.
+                unsafe {
+                    dispatch_after_f(
+                        dispatch_time(NOW, delta),
+                        (&raw const _dispatch_main_q).cast(),
+                        context,
+                        job_entry,
+                    );
+                }
+            }
+            #[cfg(test)]
+            Self::Held(jobs) => {
+                let _ = jobs.send(job);
+            }
+        }
     }
+
+    /// Run `work` on the queue's thread and wait for its value until
+    /// `interrupted` gives it up.
+    fn run<T: Send + 'static>(
+        &self,
+        interrupted: &Interrupt,
+        work: impl FnOnce() -> T + Send + 'static,
+    ) -> Result<T, Error> {
+        self.answered(interrupted, move |done| done.send(work()))
+    }
+
+    /// Run `work` on the queue's thread, and wait for the value it hands
+    /// `Done`, which a job it posts may hand over later, until
+    /// `interrupted` gives it up. A value after the wait was given up goes
+    /// to a dropped receiver.
+    fn answered<T: Send + 'static>(
+        &self,
+        interrupted: &Interrupt,
+        work: impl FnOnce(Done<T>) + Send + 'static,
+    ) -> Result<T, Error> {
+        let (done, finished) = mpsc::channel();
+        let giving_up = done.clone();
+        self.post(Box::new(move || work(Done(done))));
+        interrupted.on_fire(move || {
+            let _ = giving_up.send(None);
+        });
+        match finished.recv() {
+            Ok(Some(value)) => Ok(value),
+            Ok(None) => Err(Error::Interrupted),
+            Err(mpsc::RecvError) => Err(Error::Ended),
+        }
+    }
+
+    /// Run `first` on the queue's thread, then `then` with its value a
+    /// frame later as a job that thread posts itself, and wait for the end
+    /// until `interrupted` gives it up. Both run whatever the wait does, so
+    /// what `first` changes `then` changes back. An error from `first`
+    /// ends it there.
+    fn chained<A, T, E>(
+        &self,
+        interrupted: &Interrupt,
+        first: impl FnOnce() -> Result<A, E> + Send + 'static,
+        then: impl FnOnce(A) -> Result<T, E> + Send + 'static,
+    ) -> Result<Result<T, E>, Error>
+    where
+        A: Send + 'static,
+        T: Send + 'static,
+        E: Send + 'static,
+    {
+        let following = self.clone();
+        self.answered(interrupted, move |done| match first() {
+            Ok(value) => following.post_after(FRAME, Box::new(move || done.send(then(value)))),
+            Err(error) => done.send(Err(error)),
+        })
+    }
+}
+
+/// The main queue's entry for one posted [`Job`].
+unsafe extern "C" fn job_entry(context: *mut c_void) {
+    // SAFETY: `context` is the box `Queue::post` leaked for this one call.
+    let job = unsafe { Box::from_raw(context.cast::<Job>()) };
+    job();
 }
 
 /// Hand `event` to the window titled `title`, or the front one: what it
@@ -1105,16 +1345,19 @@ pub(in crate::inspect) fn capture(
     };
     let runtime = runtime.map_err(lost)?;
     let wanted = title.map(str::to_owned);
-    let drawn = main(interrupted, move || draw(runtime, wanted.as_deref())).map_err(lost)??;
-    // The renderer committed its frame as it drew; the GPU finishes it
-    // within a frame.
-    std::thread::sleep(FRAME);
     let file = file.to_owned();
     let framing = *framing;
-    main(interrupted, move || {
-        compose(runtime, &drawn, &file, &framing)
-    })
-    .map_err(lost)?
+    // The renderer committed its frame as it drew, and the GPU finishes it
+    // within the frame `chained` waits. The main thread composes on its
+    // own, so the layer gets its settings back when the wait is given up
+    // between the two.
+    Queue::Main
+        .chained(
+            interrupted,
+            move || draw(runtime, wanted.as_deref()),
+            move |drawn| compose(runtime, &drawn, &file, &framing),
+        )
+        .map_err(lost)?
 }
 
 /// Draw a frame of the window titled `title`, or the front one, with its
@@ -1800,6 +2043,144 @@ mod tests {
             .flat_map(|character| [(true, character.into()), (false, character.into())])
             .collect();
         assert_eq!(typed, expected);
+    }
+
+    /// Run each job the test's queue holds, those they post too.
+    fn drain(jobs: &mpsc::Receiver<Job>) {
+        while let Ok(job) = jobs.try_recv() {
+            job();
+        }
+    }
+
+    /// Run a request on its own thread against a queue the test holds:
+    /// `ran` of its jobs run, then, with the next one taken but not run,
+    /// the request is given up. Each job left runs after the request
+    /// answered, as the main thread runs them once a pause ends.
+    fn given_up<T: Send>(ran: usize, request: impl FnOnce(&Queue, &Interrupt) -> T + Send) -> T {
+        let (posting, jobs) = mpsc::channel();
+        let queue = Queue::Held(posting);
+        let interrupted = Interrupt::default();
+        std::thread::scope(|scope| {
+            let asking = scope.spawn(|| request(&queue, &interrupted));
+            for _ in 0..ran {
+                jobs.recv().unwrap()();
+            }
+            let taken = jobs.recv().unwrap();
+            interrupted.fire();
+            let answer = asking.join().unwrap();
+            taken();
+            drain(&jobs);
+            answer
+        })
+    }
+
+    /// A drag given up part way still lets its button go: before its
+    /// press nothing follows, and after the press, taken up or not, the
+    /// release comes after every event sent before it (D1100.4).
+    #[test]
+    fn a_gesture_given_up_part_way_lets_go_of_what_it_pressed() {
+        let at = Point { x: 10.0, y: 10.0 };
+        let pointer = |motion| Event::Pointer {
+            motion,
+            at,
+            button: Button::Left,
+            clicks: 1,
+        };
+        let drag = || -> Vec<Turn> {
+            [Motion::Moved, Motion::Down, Motion::Dragged, Motion::Up]
+                .into_iter()
+                .map(|motion| Turn {
+                    events: vec![pointer(motion)],
+                    pause: Duration::ZERO,
+                })
+                .collect()
+        };
+        let delivered = |ran: usize| -> Vec<Motion> {
+            let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let seeing = std::sync::Arc::clone(&seen);
+            let deliver = move |event: &Event| {
+                if let Event::Pointer { motion, .. } = event {
+                    seeing.lock().unwrap().push(*motion);
+                }
+                Some(Sent {
+                    title: String::new(),
+                    width: 100.0,
+                    height: 100.0,
+                    cursor: None,
+                })
+            };
+            let answer = given_up(ran, |queue, interrupted| {
+                turned(queue, interrupted, drag(), deliver)
+            });
+            assert_eq!(answer, Err(Error::Interrupted));
+            seen.lock().unwrap().clone()
+        };
+        assert_eq!(delivered(0), [Motion::Moved]);
+        assert_eq!(delivered(1), [Motion::Moved, Motion::Down, Motion::Up]);
+        assert_eq!(
+            delivered(2),
+            [Motion::Moved, Motion::Down, Motion::Dragged, Motion::Up]
+        );
+    }
+
+    /// What a release turn takes from the rest of a gesture: only what the
+    /// events sent hold, a modifier by its second event.
+    #[test]
+    fn a_release_lets_go_only_of_what_is_held() {
+        let key = Key::named("a").unwrap();
+        let pressed = [
+            Event::Flags {
+                code: 56,
+                flags: 1 << 17,
+            },
+            Event::Key {
+                down: true,
+                key: key.clone(),
+                flags: 1 << 17,
+            },
+        ];
+        let left = [
+            Event::Key {
+                down: false,
+                key: key.clone(),
+                flags: 1 << 17,
+            },
+            Event::Flags { code: 56, flags: 0 },
+        ];
+        assert_eq!(releases(&pressed, &left).len(), 2);
+        assert!(matches!(
+            releases(&pressed[..1], &left)[..],
+            [Event::Flags { code: 56, .. }]
+        ));
+        assert!(releases(&[], &left).is_empty());
+    }
+
+    /// A capture's second step runs on the main thread whatever its wait
+    /// does: given up before the draw ran, between the draw and the
+    /// compose, or not at all, the layer is restored once (D1100.4).
+    #[test]
+    fn a_capture_given_up_between_its_steps_still_restores_the_layer() {
+        let steps = |ran: usize| -> (Vec<&'static str>, bool) {
+            let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let (drawing, composing) = (std::sync::Arc::clone(&seen), std::sync::Arc::clone(&seen));
+            let answer = given_up(ran, move |queue, interrupted| {
+                queue.chained(
+                    interrupted,
+                    move || -> Result<(), ()> {
+                        drawing.lock().unwrap().push("draw");
+                        Ok(())
+                    },
+                    move |()| {
+                        composing.lock().unwrap().push("restore");
+                        Ok(())
+                    },
+                )
+            });
+            let steps = seen.lock().unwrap().clone();
+            (steps, answer == Err(Error::Interrupted))
+        };
+        assert_eq!(steps(0), (vec!["draw", "restore"], true));
+        assert_eq!(steps(1), (vec!["draw", "restore"], true));
     }
 
     #[test]
