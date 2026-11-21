@@ -3255,6 +3255,77 @@ fn assert_refused<T>(result: Result<T>) {
     );
 }
 
+/// Canonicalizations lent one reading each read the bodies and the
+/// settlement it holds, which neither takes from the other, and the reading
+/// lent after them holds what they sent (#1825).
+#[cfg(feature = "rustc-driver")]
+#[test]
+fn canonicalizations_lent_one_reading_each_find_its_kept_reads() {
+    let mut root = fragment("root 0.1.0 (path+file:///root)", "root", Some("root"));
+    root["definitions"] = json!([module_definition(
+        "root 0.1.0 (path+file:///root)",
+        "root",
+        "33333333333333333333333333333333",
+        ["hidden"]
+    )]);
+    let fragments = [
+        root,
+        fragment("support 0.1.0 (path+file:///support)", "support", None),
+    ];
+    let bytes = document(&fragments);
+    let limits = cargo::Limits::standard();
+    let context = api::Context::fixture();
+    let read = |reading: &Reading| {
+        let Invocations {
+            authority,
+            mut allocation,
+        } = expected(&fragments, &limits);
+        let document = protocol::decode_accounted(&bytes, &limits, &mut allocation)
+            .expect("the fixture decodes");
+        let fragments = correlate(document.fragments, &authority, &mut allocation)
+            .expect("the fixture's fragments are the expected units");
+        let catalog = Catalog::from_fragments(&fragments, &authority, &mut allocation)
+            .expect("the fixture's units are distinct");
+        let keys = fragment::keys(&fragments).expect("a selected fragment has a read key");
+        let graph = canonicalize_fragments(
+            fragments,
+            authority,
+            &Policy::empty(),
+            &context,
+            &limits,
+            &mut allocation,
+            SealMode::Direct,
+            Some(reading),
+        )
+        .expect("the fixture canonicalizes");
+        (graph, catalog, keys)
+    };
+    let policy = Policy::empty()
+        .cache_identity()
+        .expect("an empty policy has an identity");
+    let mut reads = Reads::default();
+    let (fresh, catalog, keys) = read(&reads.reading());
+    let reading = reads.reading();
+    assert!(reading
+        .bodies(&catalog, &limits)
+        .is_some_and(|bodies| bodies.len() == keys.len()));
+    let (first, ..) = read(&reading);
+    let (second, ..) = read(&reading);
+    assert!(
+        reading.bodies(&catalog, &limits).is_some(),
+        "a canonicalization takes no body from its reading"
+    );
+    assert!(reading.settled(&keys, &catalog, &limits, &policy).is_some());
+    for graph in [first, second] {
+        assert_eq!(graph.canonical_bytes(), fresh.canonical_bytes());
+        assert_eq!(graph.fingerprint(), fresh.fingerprint());
+    }
+    assert!(reads
+        .reading()
+        .settled(&keys, &catalog, &limits, &policy)
+        .is_some());
+}
+
 /// `canonicalize` with the canonical account returned beside the graph, so a
 /// test can read the usage the transaction charged.
 fn canonicalize_recorded(
@@ -3279,6 +3350,7 @@ fn canonicalize_recorded(
         limits,
         &mut allocation,
         SealMode::Direct,
+        None,
     )?;
     Ok((graph, allocation))
 }

@@ -825,7 +825,7 @@ mod tests {
                 semantic,
                 Some(universe),
                 None,
-                super::super::selected::Places::default(),
+                std::sync::Arc::default(),
             ),
             &mut allocation,
         )

@@ -592,7 +592,7 @@ fn session(
 ) -> Result<Ended, Unchecked> {
     same_build(target)?;
     // Each save that changes Rawr source reads the same API fragments.
-    rawr_import::extract::keep_fragment_reads();
+    kept.memos().keep_reads();
     let source = fallback(target)?;
     let root = project(target).ok_or_else(|| {
         framework(

@@ -113,6 +113,7 @@ fn snapshot(root: &Path) -> BTreeMap<PathBuf, (Vec<u8>, std::time::SystemTime, b
 
 #[test]
 fn complete_owner_node_reuses_without_children_or_mutating_bundle() {
+    let mut memos = owner::Memos::default();
     let Fixture {
         root,
         mut request,
@@ -133,9 +134,15 @@ fn complete_owner_node_reuses_without_children_or_mutating_bundle() {
     let universe = request.universe.clone();
     let cold_metrics = crate::metrics::recorder::Recorder::transform(1000).unwrap();
     let scope = cold_metrics.scope().unwrap();
-    let cold =
-        owner::evaluate_scripted(request, cached(), &limits, &crate::metrics::Current, script)
-            .expect("actual semantic node cold publication");
+    let cold = owner::evaluate_scripted(
+        request,
+        cached(),
+        &limits,
+        &crate::metrics::Current,
+        &mut memos,
+        script,
+    )
+    .expect("actual semantic node cold publication");
     let cold_identity = *cold.node().value().completed_identity();
     let cold_action = cold.node().receipt().action();
     let cold_content = cold.node().content().digest();
@@ -167,6 +174,7 @@ fn complete_owner_node_reuses_without_children_or_mutating_bundle() {
             cached(),
             &limits,
             &crate::metrics::Current,
+            &mut memos,
             no_cold,
         )
         .expect("warm semantic node validates");
@@ -201,6 +209,7 @@ fn complete_owner_node_reuses_without_children_or_mutating_bundle() {
         cached(),
         &limits,
         &crate::metrics::Current,
+        &mut memos,
         no_cold,
     )
     .unwrap();
@@ -220,6 +229,7 @@ fn complete_owner_node_reuses_without_children_or_mutating_bundle() {
         cached(),
         &limits,
         &crate::metrics::Current,
+        &mut memos,
         no_cold,
     )
     .unwrap();
@@ -252,6 +262,7 @@ fn complete_owner_node_reuses_without_children_or_mutating_bundle() {
         cached(),
         &limits,
         &crate::metrics::Current,
+        &mut memos,
         no_cold,
     )
     .unwrap();
@@ -369,6 +380,7 @@ fn profile(registry: usize, limits: &Limits) -> std::thread::Result<Measured> {
 fn protected_owner_rebuild(registry: usize, limits: &Limits) -> Measured {
     use std::os::unix::fs::PermissionsExt as _;
 
+    let mut memos = owner::Memos::default();
     REGISTRY.set(registry);
     let Fixture {
         root,
@@ -382,8 +394,15 @@ fn protected_owner_rebuild(registry: usize, limits: &Limits) -> Measured {
         context: context.clone(),
         attestation: context.cached_toolchain().unwrap(),
     };
-    let cold = owner::evaluate_scripted(request, cached, &limits, &crate::metrics::Current, script)
-        .unwrap();
+    let cold = owner::evaluate_scripted(
+        request,
+        cached,
+        &limits,
+        &crate::metrics::Current,
+        &mut memos,
+        script,
+    )
+    .unwrap();
     let action = cold.node().receipt().action();
     let prepared = node::Chain::validated(context.clone(), cold.node())
         .prepare_read_set()
@@ -443,9 +462,15 @@ fn protected_owner_rebuild(registry: usize, limits: &Limits) -> Measured {
         (fresh, request, cached)
     };
     let (repair_context, request, cached) = reopen();
-    let repaired =
-        owner::evaluate_scripted(request, cached, &limits, &crate::metrics::Current, script)
-            .expect("protected predecessor cannot block the distinct completed action");
+    let repaired = owner::evaluate_scripted(
+        request,
+        cached,
+        &limits,
+        &crate::metrics::Current,
+        &mut memos,
+        script,
+    )
+    .expect("protected predecessor cannot block the distinct completed action");
     let repair_action = repaired.node().receipt().action();
     let repair_content = repaired.node().content().digest();
     let repair_completion = *repaired.node().value().completed_identity();
@@ -530,9 +555,15 @@ fn protected_owner_rebuild(registry: usize, limits: &Limits) -> Measured {
 
     owner::REPLAYS.with(|replays| replays.set(0));
     let (warm_context, request, cached) = reopen();
-    let warm =
-        owner::evaluate_scripted(request, cached, &limits, &crate::metrics::Current, no_cold)
-            .unwrap();
+    let warm = owner::evaluate_scripted(
+        request,
+        cached,
+        &limits,
+        &crate::metrics::Current,
+        &mut memos,
+        no_cold,
+    )
+    .unwrap();
     assert_eq!(warm.node().receipt().action(), repair_action);
     assert_eq!(warm.node().content().digest(), repair_content);
     assert_eq!(warm.node().value().completed_identity(), &repair_completion);
@@ -596,6 +627,7 @@ fn protected_owner_rebuild(registry: usize, limits: &Limits) -> Measured {
 #[cfg(unix)]
 #[test]
 fn staged_owner_replay_reuses_exact_controls_and_refuses_bundle_drift() {
+    let mut memos = owner::Memos::default();
     use std::os::unix::fs::PermissionsExt as _;
 
     let Fixture {
@@ -609,8 +641,15 @@ fn staged_owner_replay_reuses_exact_controls_and_refuses_bundle_drift() {
         context: context.clone(),
         attestation: context.cached_toolchain().unwrap(),
     };
-    let cold = owner::evaluate_scripted(request, cached, &limits, &crate::metrics::Current, script)
-        .unwrap();
+    let cold = owner::evaluate_scripted(
+        request,
+        cached,
+        &limits,
+        &crate::metrics::Current,
+        &mut memos,
+        script,
+    )
+    .unwrap();
     let hits = || owner::STAGE_HITS.with(std::cell::Cell::get);
     owner::REPLAYS.with(|replays| replays.set(0));
     let before = hits();
@@ -678,6 +717,7 @@ fn consume<K: node::Value>(
 #[cfg(unix)]
 #[test]
 fn changed_inputs_recapture_the_stored_resolution() {
+    let mut memos = owner::Memos::default();
     let Fixture {
         root,
         request,
@@ -690,8 +730,15 @@ fn changed_inputs_recapture_the_stored_resolution() {
         context: context.clone(),
         attestation: context.cached_toolchain().unwrap(),
     };
-    let cold = owner::evaluate_scripted(request, cached, &limits, &crate::metrics::Current, script)
-        .unwrap();
+    let cold = owner::evaluate_scripted(
+        request,
+        cached,
+        &limits,
+        &crate::metrics::Current,
+        &mut memos,
+        script,
+    )
+    .unwrap();
     let action = cold.node().receipt().action();
     drop(cold);
     let source = root.join("rawr-iced/src/lib.rs");
@@ -719,9 +766,15 @@ fn changed_inputs_recapture_the_stored_resolution() {
     };
     change(b"// changed before the run\n");
     let (first, request, cached) = reopen();
-    let rebuilt =
-        owner::evaluate_scripted(request, cached, &limits, &crate::metrics::Current, script)
-            .expect("a changed input is a miss, rebuilt");
+    let rebuilt = owner::evaluate_scripted(
+        request,
+        cached,
+        &limits,
+        &crate::metrics::Current,
+        &mut memos,
+        script,
+    )
+    .expect("a changed input is a miss, rebuilt");
     assert_ne!(rebuilt.node().receipt().action(), action);
     let action = rebuilt.node().receipt().action();
     // The input changes again after this run's replay and before its result
@@ -734,9 +787,15 @@ fn changed_inputs_recapture_the_stored_resolution() {
     assert!(stale.is_stale(), "{stale:?}");
     drop(first);
     let (second, request, cached) = reopen();
-    let again =
-        owner::evaluate_scripted(request, cached, &limits, &crate::metrics::Current, script)
-            .expect("the run started again rebuilds the entry");
+    let again = owner::evaluate_scripted(
+        request,
+        cached,
+        &limits,
+        &crate::metrics::Current,
+        &mut memos,
+        script,
+    )
+    .expect("the run started again rebuilds the entry");
     assert_ne!(again.node().receipt().action(), action);
     again
         .publish(&limits)
@@ -754,6 +813,7 @@ fn changed_inputs_recapture_the_stored_resolution() {
 #[cfg(unix)]
 #[test]
 fn staged_owner_record_and_comparison_are_kept_across_graphs_until_a_stamp_moves() {
+    let mut memos = owner::Memos::default();
     let Fixture {
         root,
         request,
@@ -768,8 +828,15 @@ fn staged_owner_record_and_comparison_are_kept_across_graphs_until_a_stamp_moves
     };
     owner::REPLAYS.with(|replays| replays.set(0));
     let hits = || owner::STAGE_HITS.with(Cell::get);
-    let cold = owner::evaluate_scripted(request, cached, &limits, &crate::metrics::Current, script)
-        .unwrap();
+    let cold = owner::evaluate_scripted(
+        request,
+        cached,
+        &limits,
+        &crate::metrics::Current,
+        &mut memos,
+        script,
+    )
+    .unwrap();
     let cold_validates = validates();
     let before = hits();
     let prepared = consume(&context, cold.node()).unwrap();
@@ -802,7 +869,7 @@ fn staged_owner_record_and_comparison_are_kept_across_graphs_until_a_stamp_moves
     // A fresh Context opens a fresh graph, as each check of a running owner
     // does. What this process kept answers its replays: no record is decoded
     // and no input read again (#1759).
-    let warm = |universe: &Option<cargo::universe::Catalog>| {
+    let mut warm = |universe: &Option<cargo::universe::Catalog>| {
         let mut request = Fixture::request(&root, context.environment().clone());
         request.universe = universe.clone();
         let fresh = crate::context::Context::capture_config(
@@ -820,9 +887,15 @@ fn staged_owner_record_and_comparison_are_kept_across_graphs_until_a_stamp_moves
         let first = validates();
         let before = hits();
         let views = crate::cargo::resolution::replay::VIEWS.with(Cell::get);
-        let warm =
-            owner::evaluate_scripted(request, cached, &limits, &crate::metrics::Current, no_cold)
-                .unwrap();
+        let warm = owner::evaluate_scripted(
+            request,
+            cached,
+            &limits,
+            &crate::metrics::Current,
+            &mut memos,
+            no_cold,
+        )
+        .unwrap();
         drop(warm);
         drop(fresh);
         let after = crate::cargo::resolution::replay::VIEWS.with(Cell::get);
@@ -874,6 +947,7 @@ fn staged_owner_record_and_comparison_are_kept_across_graphs_until_a_stamp_moves
 #[cfg(unix)]
 #[test]
 fn staged_owner_built_record_is_the_build_s_own_and_matches_its_decode() {
+    let mut memos = owner::Memos::default();
     let Fixture {
         root,
         request,
@@ -892,11 +966,19 @@ fn staged_owner_built_record_is_the_build_s_own_and_matches_its_decode() {
         [0, 1, 2].map(|view| after[view] - before[view])
     };
     let before = views();
-    let cold = owner::evaluate_scripted(request, cached, &limits, &crate::metrics::Current, script)
-        .unwrap();
+    let cold = owner::evaluate_scripted(
+        request,
+        cached,
+        &limits,
+        &crate::metrics::Current,
+        &mut memos,
+        script,
+    )
+    .unwrap();
     assert_eq!(since(before), [0, 1, 0], "parsed, compared, kept");
 
-    owner::unstage();
+    // A new owner, as a new process starts, has staged nothing.
+    let mut memos = owner::Memos::default();
     let mut request = Fixture::request(&root, context.environment().clone());
     request.universe = universe;
     let fresh = crate::context::Context::capture_config(
@@ -912,9 +994,15 @@ fn staged_owner_built_record_is_the_build_s_own_and_matches_its_decode() {
         context: fresh.clone(),
     };
     let before = views();
-    let decoded =
-        owner::evaluate_scripted(request, cached, &limits, &crate::metrics::Current, no_cold)
-            .unwrap();
+    let decoded = owner::evaluate_scripted(
+        request,
+        cached,
+        &limits,
+        &crate::metrics::Current,
+        &mut memos,
+        no_cold,
+    )
+    .unwrap();
     assert_eq!(since(before)[0], 1, "nothing staged: the record is decoded");
     assert_eq!(
         cold.node().receipt().action(),
@@ -939,6 +1027,7 @@ fn staged_owner_built_record_is_the_build_s_own_and_matches_its_decode() {
 #[cfg(unix)]
 #[test]
 fn staged_owner_record_refuses_record_drift_between_replays() {
+    let mut memos = owner::Memos::default();
     use std::os::unix::fs::PermissionsExt as _;
 
     type Drift = fn(&mut Vec<u8>);
@@ -964,9 +1053,15 @@ fn staged_owner_record_refuses_record_drift_between_replays() {
             attestation: context.cached_toolchain().unwrap(),
         };
         let hits = || owner::STAGE_HITS.with(Cell::get);
-        let cold =
-            owner::evaluate_scripted(request, cached, &limits, &crate::metrics::Current, script)
-                .unwrap();
+        let cold = owner::evaluate_scripted(
+            request,
+            cached,
+            &limits,
+            &crate::metrics::Current,
+            &mut memos,
+            script,
+        )
+        .unwrap();
         let before = hits();
         let prepared = consume(&context, cold.node()).unwrap();
         assert_eq!(
@@ -1312,6 +1407,7 @@ fn api_source(limits: &Limits) -> crate::surface::Snapshot {
 
 #[test]
 fn retained_api_composes_actual_owner_then_reuses_without_children() {
+    let mut memos = owner::Memos::default();
     let Fixture {
         root,
         request,
@@ -1324,11 +1420,17 @@ fn retained_api_composes_actual_owner_then_reuses_without_children() {
         context: context.clone(),
         attestation: context.cached_toolchain().unwrap(),
     };
-    let api =
-        owner::evaluate_scripted(request, cached(), &limits, &crate::metrics::Current, script)
-            .unwrap()
-            .retain_api(&limits)
-            .unwrap();
+    let api = owner::evaluate_scripted(
+        request,
+        cached(),
+        &limits,
+        &crate::metrics::Current,
+        &mut memos,
+        script,
+    )
+    .unwrap()
+    .retain_api(&limits)
+    .unwrap();
     assert!(
         matches!(&api.product, node::staging::Owned::Staged(_)),
         "cold API does not promote before classification"
@@ -1368,6 +1470,7 @@ fn retained_api_composes_actual_owner_then_reuses_without_children() {
             cached(),
             &limits,
             &crate::metrics::Current,
+            &mut memos,
             no_cold,
         )
         .unwrap()
@@ -1404,6 +1507,7 @@ fn retained_api_composes_actual_owner_then_reuses_without_children() {
 
 #[test]
 fn resolved_warm_launch_equals_cold_without_the_api_graph() {
+    let mut memos = owner::Memos::default();
     let Fixture {
         root,
         request,
@@ -1428,11 +1532,18 @@ fn resolved_warm_launch_equals_cold_without_the_api_graph() {
             .seal()
             .unwrap()
     };
-    let retain = |request, script| {
-        owner::evaluate_scripted(request, cached(), &limits, &crate::metrics::Current, script)
-            .unwrap()
-            .retain_api(&limits)
-            .unwrap()
+    let mut retain = |request, script| {
+        owner::evaluate_scripted(
+            request,
+            cached(),
+            &limits,
+            &crate::metrics::Current,
+            &mut memos,
+            script,
+        )
+        .unwrap()
+        .retain_api(&limits)
+        .unwrap()
     };
     // The closure passes on resolve_api_semantic's result, whose Err is the unresolved API itself.
     #[allow(clippy::result_large_err)]
@@ -1538,6 +1649,7 @@ fn resolved_warm_launch_equals_cold_without_the_api_graph() {
 /// launch panics naming the invariant, as the full path does (D1045).
 #[test]
 fn a_forged_stale_profile_entry_panics_in_the_warm_launch() {
+    let mut memos = owner::Memos::default();
     use crate::node::staging::{Input, Outcome, Owned, Recipe};
     use crate::node::Value as _;
 
@@ -1556,11 +1668,18 @@ fn a_forged_stale_profile_entry_panics_in_the_warm_launch() {
     let policy = crate::classify::Policy::standard();
     let adapter = api_adapter();
     let source = api_source(&limits);
-    let retain = |request, script| {
-        owner::evaluate_scripted(request, cached(), &limits, &crate::metrics::Current, script)
-            .unwrap()
-            .retain_api(&limits)
-            .unwrap()
+    let mut retain = |request, script| {
+        owner::evaluate_scripted(
+            request,
+            cached(),
+            &limits,
+            &crate::metrics::Current,
+            &mut memos,
+            script,
+        )
+        .unwrap()
+        .retain_api(&limits)
+        .unwrap()
     };
     let complete = |api| {
         crate::composition::evaluate_api_semantic(
@@ -1660,6 +1779,7 @@ fn a_forged_stale_profile_entry_panics_in_the_warm_launch() {
 
 #[test]
 fn retained_api_rejects_owner_drift_before_source_callback() {
+    let mut memos = owner::Memos::default();
     let Fixture {
         root,
         request,
@@ -1671,10 +1791,17 @@ fn retained_api_rejects_owner_drift_before_source_callback() {
         context: context.clone(),
         attestation: context.cached_toolchain().unwrap(),
     };
-    let api = owner::evaluate_scripted(request, cached, &limits, &crate::metrics::Current, script)
-        .unwrap()
-        .retain_api(&limits)
-        .unwrap();
+    let api = owner::evaluate_scripted(
+        request,
+        cached,
+        &limits,
+        &crate::metrics::Current,
+        &mut memos,
+        script,
+    )
+    .unwrap()
+    .retain_api(&limits)
+    .unwrap();
     fs::write(
         root.join("authority/.cargo/config.toml"),
         b"[net]\noffline = false\n",
@@ -1698,6 +1825,7 @@ fn retained_api_rejects_owner_drift_before_source_callback() {
 
 #[test]
 fn retained_api_rejects_foreign_composition_context() {
+    let mut memos = owner::Memos::default();
     let Fixture {
         root,
         request,
@@ -1710,11 +1838,17 @@ fn retained_api_rejects_foreign_composition_context() {
         context: context.clone(),
         attestation: context.cached_toolchain().unwrap(),
     };
-    let mut api =
-        owner::evaluate_scripted(request, cached, &limits, &crate::metrics::Current, script)
-            .unwrap()
-            .retain_api(&limits)
-            .unwrap();
+    let mut api = owner::evaluate_scripted(
+        request,
+        cached,
+        &limits,
+        &crate::metrics::Current,
+        &mut memos,
+        script,
+    )
+    .unwrap()
+    .retain_api(&limits)
+    .unwrap();
     api.publication.context = other.context.clone();
     assert!(crate::composition::evaluate_api(
         api,

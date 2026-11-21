@@ -1,5 +1,5 @@
-//! A candidate settled under a policy, and the one the last canonicalization
-//! in this process settled, kept for the next one whose fragments all have
+//! A candidate settled under a policy, and the one an owner's last
+//! canonicalization settled, kept for the next one whose fragments all have
 //! the same bodies (#1786).
 //!
 //! Settling a candidate (its raw body's encoding, its fixed closure and its
@@ -10,7 +10,7 @@
 //! under a new build's invocations, and its canonicalization frames the
 //! kept settlement with them.
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 
 use crate::api;
 use crate::api::ledger;
@@ -22,13 +22,12 @@ use super::{raw_pair, Allocation, Catalog, EvidenceCategory, SealMode};
 
 /// What a candidate's graph holds beside its invocations, and the encoding
 /// of its raw body, which the context and the invocations frame. Its parts
-/// are shared: the settlement kept for the next canonicalization and the
+/// are shared: the settlement kept for the next canonicalization and each
 /// graph sealed from it hold the same ones.
-#[derive(Clone)]
 pub(super) struct Settled {
     pub(super) body: Arc<[u8]>,
     /// Where the selected ledgers sit in the body.
-    pub(super) places: api::selected::Places,
+    pub(super) places: Arc<api::selected::Places>,
     pub(super) definitions: Arc<[model::Definition]>,
     pub(super) paths: Arc<[ledger::Path]>,
     pub(super) implementations: Arc<[model::Implementation]>,
@@ -39,9 +38,10 @@ pub(super) struct Settled {
 }
 
 impl Settled {
-    /// The graph of these parts run as `invocations` under `context`.
+    /// The graph of these parts run as `invocations` under `context`, which
+    /// shares them.
     pub(super) fn seal(
-        self,
+        &self,
         invocations: Vec<api::Invocation>,
         context: &api::Context,
         allocation: &mut Allocation,
@@ -56,7 +56,7 @@ impl Settled {
             semantic,
             context.resolution_universe(),
             Some(head),
-            self.places,
+            Arc::clone(&self.places),
         );
         allocation.category(EvidenceCategory::Graph);
         allocation.final_graph(
@@ -70,13 +70,13 @@ impl Settled {
         let seal_graph = || {
             api::Graph::seal_with_raw(
                 invocations,
-                self.definitions,
-                self.paths,
-                self.implementations,
-                self.scalar_predicate_proofs,
-                self.support,
-                self.anonymous,
-                self.index,
+                Arc::clone(&self.definitions),
+                Arc::clone(&self.paths),
+                Arc::clone(&self.implementations),
+                Arc::clone(&self.scalar_predicate_proofs),
+                Arc::clone(&self.support),
+                Arc::clone(&self.anonymous),
+                Arc::clone(&self.index),
                 raw,
                 allocation,
             )
@@ -95,7 +95,7 @@ impl Settled {
 }
 
 /// One settlement, with what it is a function of beside the bodies.
-struct Kept {
+pub(super) struct Kept {
     catalog: Catalog,
     limits: cargo::Limits,
     policy: [u8; 32],
@@ -104,42 +104,39 @@ struct Kept {
     settled: Settled,
 }
 
-static KEPT: Mutex<Option<Kept>> = Mutex::new(None);
+impl Kept {
+    /// `settled`, of the fragments whose read keys are `keys`, under this
+    /// catalog, these limits and the policy whose identity is `policy`.
+    pub(super) fn new(
+        keys: Vec<[u8; 32]>,
+        catalog: &Catalog,
+        limits: &cargo::Limits,
+        policy: [u8; 32],
+        settled: Settled,
+    ) -> Self {
+        Self {
+            catalog: catalog.clone(),
+            limits: *limits,
+            policy,
+            keys,
+            settled,
+        }
+    }
 
-/// The settlement of the fragments whose read keys are `keys`, in order,
-/// when the last one kept was made of them under this catalog, these limits
-/// and the policy whose identity is `policy`.
-pub(super) fn take(
-    keys: &[[u8; 32]],
-    catalog: &Catalog,
-    limits: &cargo::Limits,
-    policy: &[u8; 32],
-) -> Option<Settled> {
-    let kept = KEPT.lock().unwrap_or_else(PoisonError::into_inner);
-    kept.as_ref()
-        .filter(|kept| {
-            kept.keys == keys
-                && kept.policy == *policy
-                && kept.limits == *limits
-                && kept.catalog == *catalog
-        })
-        .map(|kept| kept.settled.clone())
-}
-
-/// Keep `settled`, of the fragments whose read keys are `keys`, in place of
-/// whatever was kept before.
-pub(super) fn keep(
-    keys: Vec<[u8; 32]>,
-    catalog: &Catalog,
-    limits: &cargo::Limits,
-    policy: [u8; 32],
-    settled: Settled,
-) {
-    *KEPT.lock().unwrap_or_else(PoisonError::into_inner) = Some(Kept {
-        catalog: catalog.clone(),
-        limits: *limits,
-        policy,
-        keys,
-        settled,
-    });
+    /// The settlement, when it was made of the fragments whose read keys are
+    /// `keys`, in order, under this catalog, these limits and the policy
+    /// whose identity is `policy`.
+    pub(super) fn of(
+        &self,
+        keys: &[[u8; 32]],
+        catalog: &Catalog,
+        limits: &cargo::Limits,
+        policy: &[u8; 32],
+    ) -> Option<&Settled> {
+        (self.keys == keys
+            && self.policy == *policy
+            && self.limits == *limits
+            && self.catalog == *catalog)
+            .then_some(&self.settled)
+    }
 }

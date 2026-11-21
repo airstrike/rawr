@@ -704,6 +704,9 @@ fn prepare_resolving(
     // owner keeps it: a round classifies only the items its demand
     // changed (#1618).
     let mut own_classification = rawr_import::classify::Kept::default();
+    // What each round's resolution leaves for the next, when no owner
+    // keeps it: a demand round carries its build's probe (#1618).
+    let mut own_memos = rawr_import::cargo::resolution::Memos::default();
     // A cache entry that goes stale while this run uses it is `Error::Stale`,
     // and `Plain::prepare` starts the run again, whose lookup rebuilds it.
     let (demand, profile_contract, cached, native) = loop {
@@ -781,7 +784,11 @@ fn prepare_resolving(
             None => request,
         };
         rawr_import::progress::phase("resolving");
-        let mut prepared = match request.prepare_cached_in(&limits, scope) {
+        let memos = match kept.as_deref_mut() {
+            Some(kept) => kept.memos(),
+            None => &mut own_memos,
+        };
+        let mut prepared = match request.prepare_cached_in(&limits, scope, memos) {
             Ok(prepared) => prepared,
             // A copy that holds a marked type by its handle fails where
             // native code began to open the type, as a native child module

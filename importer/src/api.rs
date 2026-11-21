@@ -396,7 +396,7 @@ pub(crate) struct Raw {
     universe: Option<[u8; 32]>,
     head: Option<frame::Head>,
     /// Where the selected ledgers sit in the body.
-    places: selected::Places,
+    places: Arc<selected::Places>,
 }
 
 /// Capability-free graph bytes retained by the content store.
@@ -557,7 +557,7 @@ enum Semantic {
     /// body.
     Captured {
         semantic: Vec<u8>,
-        places: selected::Places,
+        places: Arc<selected::Places>,
     },
     Replayed(Fingerprint),
 }
@@ -977,7 +977,7 @@ impl Graph<Captured> {
             canonical,
             universe,
             head: None,
-            places: selected::Places::default(),
+            places: Arc::default(),
         }
     }
 
@@ -990,7 +990,7 @@ impl Graph<Captured> {
         semantic: Vec<u8>,
         universe: Option<[u8; 32]>,
         head: Option<frame::Head>,
-        places: selected::Places,
+        places: Arc<selected::Places>,
     ) -> Raw {
         Raw {
             canonical,
@@ -1139,12 +1139,12 @@ impl Graph<Captured> {
             .close(&keyed::Tables::default(), &mut semantic)
             .map_err(encoding)?;
         semantic::admit(semantic.len(), allocation)?;
-        let places = selected::Places::whole(
+        let places = Arc::new(selected::Places::whole(
             tables,
             definitions.len(),
             implementations.len(),
             exports.len(),
-        )?;
+        )?);
         Self::seal_canonical(
             invocations,
             definitions.into(),

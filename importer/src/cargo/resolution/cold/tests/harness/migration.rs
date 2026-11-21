@@ -64,6 +64,7 @@ fn exercise() {
                     &limits,
                     &limits,
                     unit::Allocation::begin(&limits),
+                    &mut crate::cargo::resolution::remembered::Remembered::default(),
                 )
             })
             .unwrap()?;
@@ -156,6 +157,7 @@ fn exercise() {
                     &limits,
                     &limits,
                     unit::Allocation::begin(&limits),
+                    &mut crate::cargo::resolution::remembered::Remembered::default(),
                 )
             })
             .unwrap()?;

@@ -23,31 +23,15 @@ mod fragment;
 #[cfg(feature = "rustc-driver")]
 pub(crate) mod plan;
 pub(crate) mod protocol;
+mod reads;
 mod settled;
 #[cfg(feature = "rustc-driver")]
 pub(crate) mod shared;
 pub(crate) mod sidecar;
 
-/// Whether this process keeps what it reads of each API fragment for its
-/// next save ([`keep_fragment_reads`]).
+pub(crate) use reads::Reading;
 #[cfg(feature = "rustc-driver")]
-static KEEP_FRAGMENT_READS: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
-/// Keep what this process reads of each API fragment, and the settlement
-/// it made of them, for its next save (#1776). A `rawr run` owner
-/// canonicalizes the same fragments on each save that changes only Rawr
-/// source.
-#[cfg(feature = "rustc-driver")]
-pub fn keep_fragment_reads() {
-    KEEP_FRAGMENT_READS.store(true, std::sync::atomic::Ordering::Relaxed);
-}
-
-/// Whether this process keeps its fragment reads ([`keep_fragment_reads`]).
-#[cfg(feature = "rustc-driver")]
-fn keeps_fragment_reads() -> bool {
-    KEEP_FRAGMENT_READS.load(std::sync::atomic::Ordering::Relaxed)
-}
+pub(crate) use reads::Reads;
 
 #[cfg(feature = "rustc-driver")]
 pub(crate) struct DirectPublication {
@@ -131,6 +115,7 @@ pub(crate) fn from_owner_parts(
     input: crate::input::stored::Completed,
     policy: &Policy,
     limits: &cargo::Limits,
+    reading: Option<&Reading>,
 ) -> Result<api::Graph<api::Extracted>> {
     let policy_identity = policy.cache_identity()?;
     let (product, graph) = api::cached::evaluate_owner(
@@ -152,7 +137,15 @@ pub(crate) fn from_owner_parts(
                 capture.allocation_mut(),
             )?;
             let (document, invocations) = capture.into_parts(limits)?;
-            materialize_document(stored, document, invocations, policy, &context, limits)
+            materialize_document(
+                stored,
+                document,
+                invocations,
+                policy,
+                &context,
+                limits,
+                reading,
+            )
         },
     )
     .map_err(|source| Error::Node {
@@ -195,6 +188,7 @@ pub(crate) fn materialize_owner(
     mut capture: plan::Capture,
     policy: &Policy,
     limits: &cargo::Limits,
+    reading: Option<&Reading>,
 ) -> Result<api::Graph<api::Captured>> {
     let context = api::Context::from_resolution_parts(
         metadata,
@@ -216,7 +210,15 @@ pub(crate) fn materialize_owner(
         }
     }
     let (document, invocations) = capture.into_parts(limits)?;
-    materialize_document(basis, document, invocations, policy, &context, limits)
+    materialize_document(
+        basis,
+        document,
+        invocations,
+        policy,
+        &context,
+        limits,
+        reading,
+    )
 }
 
 /// Retain the API from the owner; a current API hit defers `materialize`.
@@ -264,12 +266,21 @@ pub(crate) fn materialize_shared(
     context: &api::Context,
     policy: &Policy,
     limits: &cargo::Limits,
+    reading: Option<&Reading>,
 ) -> Result<api::Graph<api::Captured>> {
     let mut allocation = Allocation::new(limits);
     let document = protocol::decode_accounted(document, limits, &mut allocation)?;
     let invocations = Invocations::seal_document_with_allocation(&document, allocation)?
         .bind_external(external)?;
-    materialize_document(basis, document, invocations, policy, context, limits)
+    materialize_document(
+        basis,
+        document,
+        invocations,
+        policy,
+        context,
+        limits,
+        reading,
+    )
 }
 
 /// The API context of a run that replayed shared bindings, from its
@@ -922,7 +933,17 @@ impl Publication {
             &policy.cache_identity()?,
             &dag.build,
             &crate::metrics::Current,
-            |stored| materialize_document(stored, document, invocations, &policy, &context, limits),
+            |stored| {
+                materialize_document(
+                    stored,
+                    document,
+                    invocations,
+                    &policy,
+                    &context,
+                    limits,
+                    None,
+                )
+            },
         )
         .map_err(|source| Error::Node {
             operation: "captured API graph",
@@ -2642,11 +2663,14 @@ pub(crate) fn canonicalize(
         limits,
         &mut allocation,
         SealMode::Direct,
+        None,
     )
 }
 
 /// Both paths consume the same verified document and original transaction.
 /// Stored bodies carry no authority for the exact current compiler header.
+/// An owner's `reading` holds the bodies and the settlement its last
+/// canonicalizations kept.
 #[cfg(feature = "rustc-driver")]
 fn materialize_document(
     basis: api::retained::Basis<'_>,
@@ -2655,11 +2679,19 @@ fn materialize_document(
     policy: &Policy,
     context: &api::Context,
     limits: &cargo::Limits,
+    reading: Option<&Reading>,
 ) -> Result<api::Graph<api::Captured>> {
     let resolved;
     let stored = match basis {
         api::retained::Basis::Sidecars => {
-            return canonicalize_document_borrowed(document, invocations, policy, context, limits);
+            return canonicalize_document_borrowed(
+                document,
+                invocations,
+                policy,
+                context,
+                limits,
+                reading,
+            );
         }
         api::retained::Basis::Stored(stored) => stored,
         api::retained::Basis::Kept { product, .. } => {
@@ -2683,18 +2715,17 @@ fn materialize_document(
     }
     allocation.sort_keys(current.len());
     current.sort_unstable();
-    if !keeps_fragment_reads() {
+    let Some(reading) = reading else {
         let graph = stored.replay(context, current, limits, &mut allocation)?;
         crate::progress::read(graph.definitions().len());
         return Ok(graph);
-    }
-    // Fragments with the bodies the last settlement in this process was
-    // made of: it is their API, and no stored definition is decoded
-    // (#1786).
+    };
+    // Fragments with the bodies the owner's last settlement was made of:
+    // it is their API, and no stored definition is decoded (#1786).
     if let Some(keys) = fragment::keys(&document.fragments) {
         let catalog = Catalog::from_fragments(&document.fragments, &authority, &mut allocation)?;
         let identity = policy.cache_identity()?;
-        if let Some(settled) = settled::take(&keys, &catalog, limits, &identity) {
+        if let Some(settled) = reading.settled(&keys, &catalog, limits, &identity) {
             return settled.seal(current, context, &mut allocation, SealMode::Direct);
         }
     }
@@ -2702,16 +2733,20 @@ fn materialize_document(
     crate::progress::read(graph.definitions().len());
     let limits = *limits;
     let policy = policy.clone();
+    let reading = reading.clone();
     std::thread::spawn(move || {
         let began = std::time::Instant::now();
-        crate::progress::uncounted(|| keep_reads(document.fragments, &authority, &policy, &limits));
+        crate::progress::uncounted(|| {
+            keep_reads(document.fragments, &authority, &policy, &limits, &reading);
+        });
         crate::progress::kept_reads(began.elapsed());
     });
     Ok(graph)
 }
 
 /// Read each fragment of a replayed API, and settle them under `policy`,
-/// for the next canonicalization in this process to take (#1776, #1786).
+/// and send both to `reading` for the owner's next canonicalization to take
+/// (#1776, #1786).
 /// The replay read none, so the save after a launch that replayed its API
 /// would read every crate's fragment again, and settle them all, though
 /// only one crate changed or none did. It runs off the thread that
@@ -2722,6 +2757,7 @@ fn keep_reads(
     authority: &InvocationAuthority,
     policy: &Policy,
     limits: &cargo::Limits,
+    reading: &Reading,
 ) {
     let mut allocation = Allocation::new(limits);
     let Ok(catalog) = Catalog::from_fragments(&fragments, authority, &mut allocation) else {
@@ -2732,21 +2768,24 @@ fn keep_reads(
         .iter()
         .map(|(key, _)| *key)
         .collect::<Option<Vec<_>>>();
-    let Ok((reads, _, kept, _)) = Candidate::read_kept(keyed, &catalog, limits, &mut allocation)
+    let Ok((reads, _, kept, _)) =
+        Candidate::read_kept(keyed, &catalog, limits, &mut allocation, reading)
     else {
         return;
     };
     if reads.iter().any(|read| read.failure.is_some()) {
         return;
     }
-    kept.publish();
+    reading.keep_bodies(kept);
     let (Some(keys), Ok(identity)) = (keys, policy.cache_identity()) else {
         return;
     };
     let settled = Candidate::join(reads, &mut allocation)
         .and_then(|candidate| candidate.settle(policy, limits, &mut allocation));
     if let Ok((settled, _)) = settled {
-        settled::keep(keys, &catalog, limits, identity, settled);
+        reading.keep_settled(settled::Kept::new(
+            keys, &catalog, limits, identity, settled,
+        ));
     }
 }
 
@@ -2821,7 +2860,7 @@ fn canonicalize_document(
     context: &api::Context,
     limits: &cargo::Limits,
 ) -> Result<api::Graph<api::Captured>> {
-    canonicalize_document_borrowed(document, invocations, &policy, context, limits)
+    canonicalize_document_borrowed(document, invocations, &policy, context, limits, None)
 }
 
 fn canonicalize_document_borrowed(
@@ -2830,6 +2869,7 @@ fn canonicalize_document_borrowed(
     policy: &Policy,
     context: &api::Context,
     limits: &cargo::Limits,
+    reading: Option<&Reading>,
 ) -> Result<api::Graph<api::Captured>> {
     let Invocations {
         authority,
@@ -2844,6 +2884,7 @@ fn canonicalize_document_borrowed(
         limits,
         &mut allocation,
         SealMode::Direct,
+        reading,
     )
 }
 
@@ -2874,6 +2915,7 @@ fn canonicalize_evidence_document(
                 limits,
                 &mut allocation,
                 SealMode::Evidence(session),
+                None,
             )
         },
     );
@@ -2897,6 +2939,10 @@ fn canonicalize_evidence_document(
     })
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one canonicalization binds the document's fragments, its accounts, its seal and the owner's kept reads"
+)]
 fn canonicalize_fragments(
     fragments: Vec<protocol::Fragment>,
     authority: InvocationAuthority,
@@ -2905,24 +2951,22 @@ fn canonicalize_fragments(
     limits: &cargo::Limits,
     allocation: &mut Allocation,
     seal: SealMode<'_>,
+    reading: Option<&Reading>,
 ) -> Result<api::Graph<api::Captured>> {
     let result = (|| {
         allocation.category(EvidenceCategory::Candidate);
         validate_resolution_context(&fragments, context, allocation)?;
         let catalog = Catalog::from_fragments(&fragments, &authority, allocation)?;
-        // Only a process that canonicalizes again keeps what it read, and
+        // Only an owner that canonicalizes again keeps what it read, and
         // an evidence measurement reads every fragment itself.
-        #[cfg(feature = "rustc-driver")]
-        let kept = matches!(seal, SealMode::Direct) && keeps_fragment_reads();
-        #[cfg(not(feature = "rustc-driver"))]
-        let kept = false;
-        if !kept {
+        let reading = reading.filter(|_| matches!(seal, SealMode::Direct));
+        let Some(reading) = reading else {
             crate::progress::canonicalized(fragments.len());
             let candidate = Candidate::from_fragments(fragments, &catalog, limits, allocation)?;
             let graph = candidate.finish(policy, context, limits, allocation, seal)?;
             crate::progress::read(graph.definitions().len());
             return Ok(graph);
-        }
+        };
         let keyed = fragment::keyed(fragments);
         let keys = keyed
             .iter()
@@ -2933,7 +2977,7 @@ fn canonicalize_fragments(
         // are read, and no definition (#1786).
         if let Some(settled) = keys
             .as_deref()
-            .and_then(|keys| settled::take(keys, &catalog, limits, &identity))
+            .and_then(|keys| reading.settled(keys, &catalog, limits, &identity))
         {
             let mut invocations = Vec::new();
             allocation.reserve(&mut invocations, keyed.len())?;
@@ -2942,12 +2986,16 @@ fn canonicalize_fragments(
             }
             return settled.seal(invocations, context, allocation, seal);
         }
-        let candidate = Candidate::from_kept_fragments(keyed, &catalog, limits, allocation)?;
+        let candidate =
+            Candidate::from_kept_fragments(keyed, &catalog, limits, allocation, reading)?;
         let (settled, invocations) = candidate.settle(policy, limits, allocation)?;
+        let graph = settled.seal(invocations, context, allocation, seal);
         if let Some(keys) = keys {
-            settled::keep(keys, &catalog, limits, identity, settled.clone());
+            reading.keep_settled(settled::Kept::new(
+                keys, &catalog, limits, identity, settled,
+            ));
         }
-        let graph = settled.seal(invocations, context, allocation, seal)?;
+        let graph = graph?;
         crate::progress::read(graph.definitions().len());
         Ok(graph)
     })();
@@ -3616,46 +3664,50 @@ impl Candidate {
         joined
     }
 
-    /// [`Self::from_fragments`], each fragment whose body the last
-    /// canonicalization in this process read under this catalog and these
-    /// limits taking that read; every other fragment is read anew and
-    /// counted. The reads are kept for the next canonicalization once they
-    /// join: after an edit to one crate, only its fragment is read again
-    /// (#1776).
+    /// [`Self::from_fragments`], each fragment whose body `reading` kept
+    /// under this catalog and these limits taking that read; every other
+    /// fragment is read anew and counted. The reads are sent to `reading`
+    /// for the next canonicalization once they join: after an edit to one
+    /// crate, only its fragment is read again (#1776).
     fn from_kept_fragments(
         keyed: Vec<(Option<[u8; 32]>, protocol::Fragment)>,
         catalog: &Catalog,
         limits: &cargo::Limits,
         allocation: &mut Allocation,
+        reading: &Reading,
     ) -> Result<Self> {
-        let (reads, accounts, next, anew) = Self::read_kept(keyed, catalog, limits, allocation)?;
+        let (reads, accounts, next, anew) =
+            Self::read_kept(keyed, catalog, limits, allocation, reading)?;
         crate::progress::canonicalized(anew);
         let joined = Self::join(reads, allocation);
         for worker in accounts {
             allocation.absorb(worker)?;
         }
         if joined.is_ok() {
-            next.publish();
+            reading.keep_bodies(next);
         }
         joined
     }
 
-    /// Each fragment's read: the one the last canonicalization in this
-    /// process kept for its body under this catalog and these limits, or
-    /// one read anew. With each worker's account, the reads to keep, and
-    /// how many fragments were read anew.
+    /// Each fragment's read: the one `reading` kept for its body under this
+    /// catalog and these limits, or one read anew. With each worker's
+    /// account, the reads to keep, and how many fragments were read anew.
     fn read_kept(
         keyed: Vec<(Option<[u8; 32]>, protocol::Fragment)>,
         catalog: &Catalog,
         limits: &cargo::Limits,
         allocation: &mut Allocation,
+        reading: &Reading,
     ) -> Result<(Vec<fragment::Read>, Vec<Allocation>, fragment::Kept, usize)> {
         let workers = crate::parallel::workers();
-        let mut kept = fragment::Kept::take(catalog, limits);
+        let kept = reading.bodies(catalog, limits);
         let fragments = keyed
             .into_iter()
             .map(|(key, fragment)| {
-                let body = key.and_then(|key| kept.remove(&key));
+                let body = key
+                    .zip(kept)
+                    .and_then(|(key, kept)| kept.get(&key))
+                    .map(std::sync::Arc::clone);
                 (fragment, key, body)
             })
             .collect::<Vec<_>>();
@@ -3666,18 +3718,16 @@ impl Candidate {
             || account.worker(),
             |worker, (fragment, key, body)| match body {
                 Some(body) => {
-                    let read = fragment::Read::kept(&fragment, body.clone(), worker);
+                    let read = fragment::Read::kept(&fragment, &body, worker);
                     (key, Some(body), read, false)
                 }
                 None => {
                     let read = fragment::Read::new(fragment, catalog, limits, worker);
-                    let body = key.and_then(|_| read.body());
+                    let body = key.and_then(|_| read.body()).map(std::sync::Arc::new);
                     (key, body, read, true)
                 }
             },
         );
-        // The bodies no fragment took are gone before any is kept again.
-        drop(kept);
         let mut next = fragment::Kept::empty(catalog, limits);
         let mut anew = 0_usize;
         let mut joining = Vec::new();
@@ -4113,7 +4163,7 @@ impl Candidate {
         anonymous.extend(self.anonymous);
         let settled = settled::Settled {
             body: body.bytes.into(),
-            places,
+            places: std::sync::Arc::new(places),
             definitions: definitions.into(),
             paths: paths.into(),
             implementations: implementations.into(),

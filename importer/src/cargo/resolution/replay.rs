@@ -1,9 +1,10 @@
 //! Complete retained-record interpretation without execution or publication.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use super::layout;
+use super::owner::Replays;
 use crate::cargo::{self, internal, unit, universe, Limits, Request, Selection};
 use crate::extract::plan::{namespace, Capture, Plan};
 use crate::input::{build, stored};
@@ -111,6 +112,7 @@ impl Request {
         context: universe::ContextProof,
         receipt: Option<universe::Receipt>,
         staged: Option<Arc<Decoded>>,
+        replays: &Mutex<Replays>,
         limits: &Limits,
         cargo_limits: &Limits,
         cargo_allocation: &mut unit::Allocation,
@@ -137,7 +139,8 @@ impl Request {
                 }
             };
             self.replay_decoded_in(
-                cached, &paths, cargo_home, decoded, view, request, inventory, limits, budget,
+                cached, &paths, cargo_home, decoded, view, request, inventory, replays, limits,
+                budget,
             )
         })();
         result.map_err(|error| budget.failure(error))
@@ -248,9 +251,10 @@ impl Request {
     /// borrows the owner's already-acquired normalized home for this Request's
     /// captured environment; replay does not acquire ambient path authority.
     /// The comparison of the recorded inputs and its completion are taken from
-    /// this process's last replay of the same interpretation under the same
-    /// request while every stamp that replay took still holds (`Kept`); else
-    /// the inputs are compared, and `view` says what this replay did.
+    /// the owner's last replay of the same interpretation under the same
+    /// request, which `replays` holds, while every stamp that replay took
+    /// still holds (`Kept`); else the inputs are compared, and `view` says
+    /// what this replay did.
     #[allow(
         clippy::too_many_arguments,
         reason = "one replay binds the complete owner inputs and original allocation accounts"
@@ -264,6 +268,7 @@ impl Request {
         view: View,
         request: cargo::Digest,
         inventory: super::bundle::Inventory<'_>,
+        replays: &Mutex<Replays>,
         limits: &Limits,
         budget: &mut stored::Budget<'_>,
     ) -> stored::Result<Replay> {
@@ -280,7 +285,7 @@ impl Request {
             manifest,
             source,
         };
-        let kept = Kept::current(&against);
+        let kept = Compared::current(replays, &against);
         let watched = match &kept {
             Some(kept) => kept.watched.clone(),
             None => super::watched::Watched::observe(
@@ -316,7 +321,7 @@ impl Request {
                 input: kept.input.completed(budget.graph()),
                 watched,
             };
-            kept.keep();
+            Compared::keep(replays, kept);
             return Ok(replay);
         }
         count(view);
@@ -351,12 +356,15 @@ impl Request {
             compared,
             limits,
         )?;
-        Kept::keep(Kept {
-            against,
-            watched: watched.clone(),
-            completion: completion.clone(),
-            input: input.kept(),
-        });
+        Compared::keep(
+            replays,
+            Kept {
+                against,
+                watched: watched.clone(),
+                completion: completion.clone(),
+                input: input.kept(),
+            },
+        );
         Ok(Replay {
             decoded,
             capture,
@@ -411,35 +419,25 @@ struct Kept {
     input: stored::Kept,
 }
 
-/// The comparison this process kept last. One is enough: it names the
-/// interpretation the owner's stage holds, the only one a later replay
-/// takes from it.
-#[cfg(not(test))]
-static KEPT: std::sync::Mutex<Option<Kept>> = std::sync::Mutex::new(None);
+/// The comparison an owner kept last. One is enough: it names the
+/// interpretation the owner's stage holds, the only one a later replay takes
+/// from it.
+#[derive(Default)]
+pub(in crate::cargo) struct Compared(Option<Kept>);
 
-#[cfg(test)]
-thread_local! {
-    /// A test thread keeps its comparison as a process would.
-    static KEPT: std::cell::RefCell<Option<Kept>> = const { std::cell::RefCell::new(None) };
-}
-
-/// Run `with` over this process's kept comparison.
-fn kept<T>(with: impl FnOnce(&mut Option<Kept>) -> T) -> Option<T> {
-    #[cfg(test)]
-    return Some(KEPT.with_borrow_mut(with));
-    #[cfg(not(test))]
-    KEPT.lock().ok().map(|mut kept| with(&mut kept))
-}
-
-impl Kept {
+impl Compared {
     /// The kept comparison made `against` the same, while its stamps hold.
-    fn current(against: &Against) -> Option<Self> {
-        let found = kept(|kept| kept.take_if(|kept| kept.against == *against))??;
+    /// The stamps are taken with the lock released.
+    fn current(replays: &Mutex<Replays>, against: &Against) -> Option<Kept> {
+        let found = Replays::lock(replays)
+            .compared
+            .0
+            .take_if(|kept| kept.against == *against)?;
         found.watched.unchanged().then_some(found)
     }
 
-    /// Keep `self` in place of the comparison kept before.
-    fn keep(self) {
-        kept(|kept| *kept = Some(self));
+    /// Keep `kept` in place of the comparison kept before.
+    fn keep(replays: &Mutex<Replays>, kept: Kept) {
+        Replays::lock(replays).compared.0 = Some(kept);
     }
 }

@@ -3,12 +3,12 @@
 //! cores and join the candidate in their own order.
 //!
 //! A read is a function of the fragment's body, its handshake's semantic
-//! fields, the catalog and the limits, so a process that canonicalizes
+//! fields, the catalog and the limits, so an owner that canonicalizes
 //! again keeps each body's read ([`Kept`]): after an edit to one crate,
 //! only that crate's fragment is read again (#1776).
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Mutex, PoisonError};
+use std::sync::Arc;
 
 use sha2::{Digest as _, Sha256};
 
@@ -53,15 +53,13 @@ pub(super) struct Body {
     edges: usize,
 }
 
-/// The bodies the last canonicalization in this process read, by their
-/// fragments' read keys, under the catalog and limits it read them against.
+/// The bodies a canonicalization read, by their fragments' read keys, under
+/// the catalog and limits it read them against.
 pub(super) struct Kept {
     catalog: Catalog,
     limits: cargo::Limits,
-    bodies: BTreeMap<[u8; 32], Body>,
+    bodies: BTreeMap<[u8; 32], Arc<Body>>,
 }
-
-static KEPT: Mutex<Option<Kept>> = Mutex::new(None);
 
 /// What a read of `fragment` is kept under: its body, its root's aliases
 /// and its own crate, which are all reading it depends on beside the
@@ -125,25 +123,19 @@ impl std::hash::Hasher for Digest {
 }
 
 impl Kept {
-    /// The bodies the last canonicalization kept, by read key, when it read
-    /// against `catalog` and `limits`; none otherwise. Taken: the next
-    /// keeps its own.
-    pub(super) fn take(catalog: &Catalog, limits: &cargo::Limits) -> BTreeMap<[u8; 32], Body> {
-        let kept = KEPT.lock().unwrap_or_else(PoisonError::into_inner).take();
-        kept.filter(|kept| kept.catalog == *catalog && kept.limits == *limits)
-            .map(|kept| kept.bodies)
-            .unwrap_or_default()
+    /// These bodies, by read key, when they were read against `catalog` and
+    /// `limits`.
+    pub(super) fn of(
+        &self,
+        catalog: &Catalog,
+        limits: &cargo::Limits,
+    ) -> Option<&BTreeMap<[u8; 32], Arc<Body>>> {
+        (self.catalog == *catalog && self.limits == *limits).then_some(&self.bodies)
     }
 
     /// Keep `body` under `key`.
-    pub(super) fn insert(&mut self, key: [u8; 32], body: Body) {
+    pub(super) fn insert(&mut self, key: [u8; 32], body: Arc<Body>) {
         self.bodies.insert(key, body);
-    }
-
-    /// Keep these bodies for the next canonicalization, in place of
-    /// whatever another kept since.
-    pub(super) fn publish(self) {
-        *KEPT.lock().unwrap_or_else(PoisonError::into_inner) = Some(self);
     }
 
     /// An empty set of bodies read against `catalog` and `limits`.
@@ -224,7 +216,7 @@ impl Read {
     /// body gave ([`Kept`]): only its invocation is read.
     pub(super) fn kept(
         fragment: &protocol::Fragment,
-        body: Body,
+        body: &Body,
         allocation: &mut Allocation,
     ) -> Self {
         let Body {
@@ -234,7 +226,7 @@ impl Read {
             implementations,
             proofs,
             edges,
-        } = body;
+        } = body.clone();
         let (invocation, failure) = match super::invocation(fragment, allocation) {
             Ok(invocation) => (
                 Some(Invocation {
