@@ -1,14 +1,26 @@
 //! The session an owner hosts: the program's state as the owner's events
 //! tell it, the connections that hear them, and the requests it forwards
 //! to the program's inspector.
+//!
+//! One thread owns the session ([`Session`]): the state, the output kept,
+//! the connections that hear, the requests in flight and the control turn.
+//! Each connection's reader, each request's thread, the owner's events and
+//! its copy of the program's output send to its inbox, and it takes each
+//! message in the order sent. A `hello` that waits for the output the
+//! program kept, and a request that waits for an inspector or for its
+//! turn, park a reply on the owner. The owner looks at every parked reply
+//! after each message, so none waits on something already true, and one
+//! ends when what it waits for comes, when its request is cancelled or
+//! when the connection that asked closes.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::io::{BufRead as _, BufReader, Write as _};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::mpsc;
+use std::sync::Arc;
+use std::sync::OnceLock;
 
 use serde_json::{json, Value};
 
@@ -26,25 +38,134 @@ pub const NOT_RUNNING: i64 = -32001;
 /// The error a cancelled request ends with.
 pub const CANCELLED: i64 = -32800;
 
-/// The session this process hosts, while its owner holds it.
-static OPEN: Mutex<Option<Arc<Shared>>> = Mutex::new(None);
+/// The inbox of the session this process hosts for its run, once [`open`]
+/// made it. The owner's events, its copy of the program's output and its
+/// program's start reach the session through it from free functions any
+/// thread calls. A process hosts one session, so it is set once.
+static OPEN: OnceLock<Inbox> = OnceLock::new();
 
 /// A session an owner hosts, which leaves its place when dropped.
-pub struct Host(Arc<Shared>);
+pub struct Host(Inbox);
 
-struct Shared {
-    root: PathBuf,
+/// The inbox of a session's owner thread, and what stays the same while
+/// the session serves.
+#[derive(Clone)]
+struct Inbox {
+    send: mpsc::Sender<Message>,
     place: Place,
     /// A shell started the run: it tells the run's output.
     handed: bool,
-    inner: Mutex<Inner>,
-    changed: Condvar,
-    /// Held by the control request that reaches the program now.
-    control: Mutex<()>,
+    /// The shell that started the run reads its stderr as rawr's own
+    /// lines, so the program's stderr reaches it through the session
+    /// instead ([`PROGRAM_STDERR`](crate::events::PROGRAM_STDERR)).
+    program_stderr: bool,
 }
 
-#[derive(Default)]
-struct Inner {
+/// What a run's environment says of its session as it opens.
+#[derive(Clone, Copy, Debug, Default)]
+struct Opening {
+    /// A shell started the run.
+    handed: bool,
+    /// The run's first program waits at its start for the shell that
+    /// started the run (#2274).
+    hold: bool,
+    /// The program's stderr reaches the shell through the session (#2367).
+    program_stderr: bool,
+}
+
+/// What the session's owner thread hears.
+enum Message {
+    /// A shell on `connection` said `hello` as request `id`. The owner
+    /// answers on `send`, then drops `greeted`, which the connection's
+    /// reader waits for before it reads on.
+    Hello {
+        connection: u64,
+        id: Value,
+        send: mpsc::Sender<Arc<str>>,
+        greeted: mpsc::Sender<()>,
+    },
+    /// Connection `connection` is the program's, which tells its output.
+    Tell {
+        connection: u64,
+        send: mpsc::Sender<Arc<str>>,
+    },
+    /// The program on `connection` told the output it kept.
+    Told { connection: u64 },
+    /// The program's inspector listens on `socket` while `connection`
+    /// stays open.
+    Serve { connection: u64, socket: PathBuf },
+    /// An event, which takes the next number and stays in the history.
+    Record(Value),
+    /// An event that says what is so now: the `breakpoints` list.
+    Now(Value),
+    /// Output the shell on `from` read, for the other connections.
+    Output { from: u64, piece: Value },
+    /// Output the owner copied from the program's streams.
+    Copied(Value),
+    /// The owner starts a program: the reply says what its command takes.
+    Start(mpsc::Sender<Start>),
+    /// Request `ticket`, whose JSON id is `id`, is in flight: a `control`
+    /// one takes the turn.
+    Asked {
+        ticket: Ticket,
+        id: String,
+        control: bool,
+    },
+    /// Request `ticket` waits for an inspector other than the one on
+    /// connection `gone`. The reply comes once one serves, and the request
+    /// has the turn if it is a control request.
+    Reach {
+        ticket: Ticket,
+        gone: Option<u64>,
+        debugs: bool,
+        reply: mpsc::Sender<Reached>,
+    },
+    /// Request `ticket` talks to the inspector on `stream`, which a cancel
+    /// shuts.
+    Exchange { ticket: Ticket, stream: UnixStream },
+    /// Request `ticket` is over.
+    Finished(Ticket),
+    /// The shell on `connection` cancelled its request `id`.
+    Cancel { connection: u64, id: String },
+    /// Connection `connection` closed.
+    Left(u64),
+    /// A test waits for the session to reach a state.
+    #[cfg(test)]
+    Wait(Wait),
+}
+
+/// A test's wait: the owner replies once `met` holds of the session.
+#[cfg(test)]
+struct Wait {
+    met: Box<dyn Fn(&Session) -> bool + Send>,
+    reply: mpsc::Sender<()>,
+}
+
+/// What a program the owner starts takes in its command.
+#[derive(Clone, Copy, Debug, Default)]
+struct Start {
+    /// It waits at its start: it is the run's first.
+    hold: bool,
+    /// It registers its debugger at a shell's first request for one.
+    on_request: bool,
+}
+
+/// One `program` request: the connection that asked it and its number
+/// there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Ticket {
+    connection: u64,
+    number: u64,
+}
+
+/// The answer to a [`Message::Reach`].
+type Reached = Result<Served, Refusal>;
+
+/// The session, as its owner thread holds it.
+struct Session {
+    root: PathBuf,
+    place: Place,
+    handed: bool,
     state: State,
     output: VecDeque<Value>,
     output_bytes: usize,
@@ -68,16 +189,31 @@ struct Inner {
     /// that started the run (#2274): only the first, as a program started
     /// again has the breakpoints from its start.
     hold: bool,
-    /// The shell that started the run reads its stderr as rawr's own
-    /// lines, so the program's stderr reaches it through the session
-    /// instead ([`PROGRAM_STDERR`](crate::events::PROGRAM_STDERR)).
-    program_stderr: bool,
+    /// The newest `breakpoints` list the inspector told. `hello` gives it
+    /// when it is newer than the list in the inspector's file.
+    breakpoints: Option<Value>,
+    /// The `hello`s waiting for the output the program kept.
+    greetings: Vec<Greeting>,
+    /// The `program` requests in flight, oldest first.
+    requests: Vec<Request>,
+    /// The control request that reaches the program now.
+    turn: Option<Ticket>,
+    #[cfg(test)]
+    waits: Vec<Wait>,
 }
 
 /// A connection that said `hello`, and hears what happens from then on.
 struct Listener {
     connection: u64,
     send: mpsc::Sender<Arc<str>>,
+}
+
+/// A `hello` the owner answers once the program told what it kept.
+struct Greeting {
+    connection: u64,
+    id: Value,
+    send: mpsc::Sender<Arc<str>>,
+    greeted: mpsc::Sender<()>,
 }
 
 /// The program's connection that tells its output (`rawr::teller::open`): it
@@ -91,9 +227,32 @@ struct Teller {
 
 /// The program's inspector, listening on `socket` while its connection
 /// `connection` stays open.
+#[derive(Clone, Debug)]
 struct Served {
     connection: u64,
     socket: PathBuf,
+}
+
+/// A `program` request in flight, as the owner keeps it.
+struct Request {
+    ticket: Ticket,
+    /// Its JSON id, as text, which a `cancel` names.
+    id: String,
+    /// It takes the turn: control requests reach the program one at a
+    /// time.
+    control: bool,
+    cancelled: bool,
+    /// Its socket to the inspector now, which a cancel shuts.
+    exchange: Option<UnixStream>,
+    /// Its reply while it waits for an inspector or for its turn.
+    parked: Option<Parked>,
+}
+
+/// A request's [`Message::Reach`] the owner hasn't answered yet.
+struct Parked {
+    gone: Option<u64>,
+    debugs: bool,
+    reply: mpsc::Sender<Reached>,
 }
 
 /// When the programs the owner starts register a debugger. Each serves
@@ -109,30 +268,11 @@ enum Debugger {
 }
 
 /// Why a `program` request has no answer.
+#[derive(Debug)]
 enum Refusal {
     NotRunning(Phase),
     Cancelled,
 }
-
-/// How one exchange with the inspector went.
-enum Asked {
-    Answered(Value),
-    /// Nothing listens on the socket: the program that served it is gone.
-    Refused,
-    /// The connection ended before an answer: the program ended.
-    Ended,
-    Cancelled,
-}
-
-/// A `program` request's cancellation, which shuts its exchange with the
-/// inspector.
-#[derive(Default)]
-struct Cancel {
-    cancelled: AtomicBool,
-    stream: Mutex<Option<UnixStream>>,
-}
-
-type Requests = Arc<Mutex<HashMap<String, Arc<Cancel>>>>;
 
 /// Host the session of the program at `root` until the host drops: on the
 /// listener a shell handed this run, `handed`, or on a socket at the
@@ -141,6 +281,13 @@ type Requests = Arc<Mutex<HashMap<String, Arc<Cancel>>>>;
 /// instead, or, with a line on stderr, when the socket can't be made; the
 /// program runs as it would without one.
 pub fn open(root: &Path, handed: Option<handover::Handed>) -> Option<Host> {
+    let set = |name| std::env::var_os(name).is_some_and(|value| !value.is_empty());
+    let started = handover::handed();
+    let opening = Opening {
+        handed: started,
+        hold: set(crate::events::HOLD),
+        program_stderr: started && set(crate::events::PROGRAM_STDERR),
+    };
     let opened = Place::new(root).and_then(|place| {
         let listener = match handed {
             Some(handed) => handed.into_listener(),
@@ -152,16 +299,12 @@ pub fn open(root: &Path, handed: Option<handover::Handed>) -> Option<Host> {
                 }
             }
         };
-        Host::serve(root, place, listener, handover::handed()).map(Some)
+        Host::serve(root, place, listener, opening).map(Some)
     });
     match opened {
         Ok(Some(host)) => {
-            let set = |name| std::env::var_os(name).is_some_and(|value| !value.is_empty());
-            let mut inner = host.0.inner();
-            inner.hold = set(crate::events::HOLD);
-            inner.program_stderr = host.0.handed && set(crate::events::PROGRAM_STDERR);
-            drop(inner);
-            *open_session() = Some(Arc::clone(&host.0));
+            // A second session in one process hears only its connections.
+            let _ = OPEN.set(host.0.clone());
             Some(host)
         }
         Ok(None) => None,
@@ -173,10 +316,11 @@ pub fn open(root: &Path, handed: Option<handover::Handed>) -> Option<Host> {
 }
 
 /// Record `event` in the session this process hosts, and tell it to every
-/// connection.
+/// connection. It reaches the owner's inbox before this returns, so a
+/// message sent after it sees it.
 pub fn record(event: &Value) {
-    if let Some(shared) = current() {
-        shared.record(event.clone());
+    if let Some(inbox) = OPEN.get() {
+        let _ = inbox.send.send(Message::Record(event.clone()));
     }
 }
 
@@ -188,7 +332,7 @@ pub fn record(event: &Value) {
 /// run's stderr as rawr's own: that the session takes in place of the
 /// owner's stderr, and this answers `true`.
 pub fn output(stream: rawr::Output, bytes: &[u8]) -> bool {
-    current().is_some_and(|shared| shared.copied(stream, bytes))
+    OPEN.get().is_some_and(|inbox| inbox.copied(stream, bytes))
 }
 
 /// Whether the session takes the program's stderr in place of this
@@ -196,7 +340,7 @@ pub fn output(stream: rawr::Output, bytes: &[u8]) -> bool {
 /// stderr then gives the program a pipe of its own and copies it.
 #[must_use]
 pub fn takes_stderr() -> bool {
-    current().is_some_and(|shared| shared.inner().program_stderr)
+    OPEN.get().is_some_and(|inbox| inbox.program_stderr)
 }
 
 /// Ready `command`, which starts the program, for the session: never the
@@ -213,40 +357,9 @@ pub fn prepare(command: &mut Command) {
         .env_remove(crate::events::HOLD)
         .env_remove(crate::events::PROGRAM_STDERR)
         .env_remove(crate::events::OUTPUT);
-    if let Some(shared) = current() {
-        ready(&shared, command);
+    if let Some(inbox) = OPEN.get() {
+        inbox.ready(command);
     }
-}
-
-/// Ready `command` for the session `shared`, as [`prepare`] does.
-fn ready(shared: &Shared, command: &mut Command) {
-    if !shared.handed {
-        command.env(crate::events::OUTPUT, shared.place.socket());
-    }
-    let mut inner = shared.inner();
-    hold(&mut inner, command);
-    if inner.debugger == Debugger::OnRequest {
-        command.env(crate::events::DEBUGGER_ON_REQUEST, "1");
-    }
-    command
-        .env(crate::events::INSPECT, shared.place.inspector())
-        .env(crate::events::DEBUG_EVENTS, shared.place.socket());
-}
-
-/// Hold the program `command` starts at its start when it is the run's
-/// first; no other has the variable.
-fn hold(inner: &mut Inner, command: &mut Command) {
-    if std::mem::take(&mut inner.hold) {
-        command.env(crate::events::HOLD, "1");
-    }
-}
-
-fn open_session() -> MutexGuard<'static, Option<Arc<Shared>>> {
-    OPEN.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
-fn current() -> Option<Arc<Shared>> {
-    open_session().clone()
 }
 
 /// A listener on `socket`, in place of a stale one: `None` when a run
@@ -266,73 +379,115 @@ fn listen(socket: &Path) -> std::io::Result<Option<UnixListener>> {
 
 impl Host {
     /// Serve the session of the program at `root` on `listener`, at
-    /// `place`; `handed` when a shell started the run.
+    /// `place`, as `opening` says.
     fn serve(
         root: &Path,
         place: Place,
         listener: UnixListener,
-        handed: bool,
+        opening: Opening,
     ) -> std::io::Result<Self> {
         place.clear();
-        let shared = Arc::new(Shared {
-            root: root.to_path_buf(),
-            place,
-            handed,
-            inner: Mutex::new(Inner {
-                debugger: if handed {
-                    Debugger::On
-                } else {
-                    Debugger::OnRequest
-                },
-                ..Inner::default()
-            }),
-            changed: Condvar::new(),
-            control: Mutex::new(()),
-        });
-        let accepting = Arc::clone(&shared);
+        let (send, inbox) = mpsc::channel();
+        let session = Session::new(root, place.clone(), opening);
+        std::thread::Builder::new()
+            .name("rawr-session".into())
+            .spawn(move || session.own(&inbox))?;
+        let accepting = send.clone();
         std::thread::Builder::new()
             .name("rawr-session-accept".into())
-            .spawn(move || accepting.accept(&listener))?;
-        Ok(Self(shared))
+            .spawn(move || accept(&accepting, &listener))?;
+        Ok(Self(Inbox {
+            send,
+            place,
+            handed: opening.handed,
+            program_stderr: opening.program_stderr,
+        }))
     }
 }
 
 impl Drop for Host {
     fn drop(&mut self) {
-        let mut open = open_session();
-        if open
-            .as_ref()
-            .is_some_and(|shared| Arc::ptr_eq(shared, &self.0))
-        {
-            *open = None;
-        }
-        drop(open);
         self.0.place.remove();
     }
 }
 
-impl Shared {
-    fn inner(&self) -> MutexGuard<'_, Inner> {
-        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    fn accept(self: &Arc<Self>, listener: &UnixListener) {
-        let mut next = 0;
-        for stream in listener.incoming() {
-            let Ok(stream) = stream else {
-                continue;
-            };
-            next += 1;
-            let connection = next;
-            let shared = Arc::clone(self);
-            let _ = std::thread::Builder::new()
-                .name("rawr-session-read".into())
-                .spawn(move || shared.converse(connection, &stream));
+impl Inbox {
+    /// Tell `bytes` the owner copied from the program's `stream`, unless a
+    /// shell that started the run holds that output. Whether the session
+    /// took them in place of the owner's own stream: the program's stderr,
+    /// for a shell that reads the run's stderr as rawr's own.
+    fn copied(&self, stream: rawr::Output, bytes: &[u8]) -> bool {
+        let takes = self.program_stderr && matches!(stream, rawr::Output::Stderr);
+        if self.handed && !takes {
+            return false;
         }
+        let stream = match stream {
+            rawr::Output::Stderr => "stderr",
+            _ => "stdout",
+        };
+        let text = String::from_utf8_lossy(bytes);
+        let _ = self
+            .send
+            .send(Message::Copied(json!({ "stream": stream, "text": text })));
+        takes
     }
 
-    /// Read `stream`'s messages until it closes, then cancel what it asked.
-    fn converse(self: &Arc<Self>, connection: u64, stream: &UnixStream) {
+    /// Ready `command` for the session, as [`prepare`] does. The owner's
+    /// reply says whether the program holds at its start and when it
+    /// registers its debugger.
+    fn ready(&self, command: &mut Command) {
+        if !self.handed {
+            command.env(crate::events::OUTPUT, self.place.socket());
+        }
+        let (reply, started) = mpsc::channel();
+        let start = match self.send.send(Message::Start(reply)) {
+            Ok(()) => started.recv().unwrap_or_default(),
+            Err(_) => Start::default(),
+        };
+        if start.hold {
+            command.env(crate::events::HOLD, "1");
+        }
+        if start.on_request {
+            command.env(crate::events::DEBUGGER_ON_REQUEST, "1");
+        }
+        command
+            .env(crate::events::INSPECT, self.place.inspector())
+            .env(crate::events::DEBUG_EVENTS, self.place.socket());
+    }
+}
+
+/// Read each connection `listener` accepts on a thread of its own.
+fn accept(inbox: &mpsc::Sender<Message>, listener: &UnixListener) {
+    let mut next = 0;
+    for stream in listener.incoming() {
+        let Ok(stream) = stream else {
+            continue;
+        };
+        next += 1;
+        let connection = Connection {
+            inbox: inbox.clone(),
+            number: next,
+            asked: 0,
+        };
+        let _ = std::thread::Builder::new()
+            .name("rawr-session-read".into())
+            .spawn(move || connection.converse(&stream));
+    }
+}
+
+/// One connection's reader: it turns each line into a message to the
+/// owner.
+struct Connection {
+    inbox: mpsc::Sender<Message>,
+    number: u64,
+    /// The `program` requests it read so far, which number its tickets.
+    asked: u64,
+}
+
+impl Connection {
+    /// Read `stream`'s messages until it closes, then tell the owner, which
+    /// cancels what it asked.
+    fn converse(mut self, stream: &UnixStream) {
         let Ok(writing) = stream.try_clone() else {
             return;
         };
@@ -343,135 +498,424 @@ impl Shared {
         if spawned.is_err() {
             return;
         }
-        let requests = Requests::default();
         for line in BufReader::new(stream).lines() {
             let Ok(line) = line else {
                 break;
             };
             if let Ok(message) = serde_json::from_str::<Value>(&line) {
-                self.take(connection, message, &send, &requests);
+                self.take(message, &send);
             }
         }
-        let asked: Vec<Arc<Cancel>> = requests
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .drain()
-            .map(|(_, cancel)| cancel)
-            .collect();
-        for cancel in asked {
-            cancel.cancel(self);
-        }
-        self.left(connection);
+        let _ = self.inbox.send(Message::Left(self.number));
     }
 
-    /// One message from connection `connection`.
-    fn take(
-        self: &Arc<Self>,
-        connection: u64,
-        mut message: Value,
-        send: &mpsc::Sender<Arc<str>>,
-        requests: &Requests,
-    ) {
+    /// One message from the connection, whose lines go to `send`.
+    fn take(&mut self, mut message: Value, send: &mpsc::Sender<Arc<str>>) {
+        let connection = self.number;
         let params = message["params"].take();
         let id = message.get("id").cloned();
-        match (message["method"].as_str(), id) {
-            (Some("hello"), Some(id)) => self.greet(connection, &id, send),
+        let told = match (message["method"].as_str(), id) {
+            (Some("hello"), Some(id)) => {
+                let (greeted, greeting) = mpsc::channel();
+                let hello = Message::Hello {
+                    connection,
+                    id,
+                    send: send.clone(),
+                    greeted,
+                };
+                // What the connection says next waits for the answer, as
+                // the shell reads it.
+                if self.inbox.send(hello).is_ok() {
+                    let _ = greeting.recv();
+                }
+                return;
+            }
             (Some("program"), Some(id)) => {
-                let key = id.to_string();
-                let cancel = Arc::new(Cancel::default());
-                requests
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .insert(key.clone(), Arc::clone(&cancel));
-                let shared = Arc::clone(self);
-                let send = send.clone();
-                let requests = Arc::clone(requests);
-                let _ = std::thread::Builder::new()
-                    .name("rawr-session-program".into())
-                    .spawn(move || {
-                        let reply = match shared.forward(&params, &cancel) {
-                            Ok(answer) => json!({ "jsonrpc": "2.0", "id": id, "result": answer }),
-                            Err(Refusal::NotRunning(phase)) => json!({
-                                "jsonrpc": "2.0",
-                                "id": id,
-                                "error": {
-                                    "code": NOT_RUNNING,
-                                    "message": "the program isn't running",
-                                    "data": { "state": phase.name() },
-                                },
-                            }),
-                            Err(Refusal::Cancelled) => json!({
-                                "jsonrpc": "2.0",
-                                "id": id,
-                                "error": { "code": CANCELLED, "message": "cancelled" },
-                            }),
-                        };
-                        requests
-                            .lock()
-                            .unwrap_or_else(PoisonError::into_inner)
-                            .remove(&key);
-                        let _ = send.send(line(&reply));
-                    });
+                self.ask(id, params, send);
+                return;
             }
-            (Some("cancel"), None) => {
-                let cancel = requests
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .get(&params["id"].to_string())
-                    .cloned();
-                if let Some(cancel) = cancel {
-                    cancel.cancel(self);
-                }
-            }
+            (Some("cancel"), None) => Message::Cancel {
+                connection,
+                id: params["id"].to_string(),
+            },
             (Some("serve"), None) => {
-                if let Some(socket) = params["socket"].as_str() {
-                    self.inner().inspector = Some(Served {
-                        connection,
-                        socket: PathBuf::from(socket),
-                    });
-                    self.changed.notify_all();
+                let Some(socket) = params["socket"].as_str() else {
+                    return;
+                };
+                Message::Serve {
+                    connection,
+                    socket: PathBuf::from(socket),
                 }
             }
-            (Some("emit"), None) if params["event"] == "breakpoints" => self.tell(&params),
-            (Some("emit"), None) if params.is_object() => self.record(params),
-            (Some("output"), None) => self.output(connection, params),
-            (Some("tell"), None) => self.teller(connection, send),
-            (Some("told"), None) => {
-                if let Some(teller) = self.inner().teller.as_mut()
-                    && teller.connection == connection
-                {
-                    teller.told = true;
-                }
-                self.changed.notify_all();
-            }
+            (Some("emit"), None) if params["event"] == "breakpoints" => Message::Now(params),
+            (Some("emit"), None) if params.is_object() => Message::Record(params),
+            (Some("output"), None) => Message::Output {
+                from: connection,
+                piece: params,
+            },
+            (Some("tell"), None) => Message::Tell {
+                connection,
+                send: send.clone(),
+            },
+            (Some("told"), None) => Message::Told { connection },
             (Some(method), Some(id)) => {
                 let _ = send.send(line(&json!({
                     "jsonrpc": "2.0",
                     "id": id,
                     "error": { "code": -32601, "message": format!("unknown method `{method}`") },
                 })));
+                return;
             }
-            _ => {}
+            _ => return,
+        };
+        let _ = self.inbox.send(told);
+    }
+
+    /// Forward `request`, the `program` request `id`, on a thread of its
+    /// own, which answers on `send`. The owner hears of it first, so a
+    /// `cancel` read after it finds it.
+    fn ask(&mut self, id: Value, request: Value, send: &mpsc::Sender<Arc<str>>) {
+        self.asked += 1;
+        let ticket = Ticket {
+            connection: self.number,
+            number: self.asked,
+        };
+        let control = matches!(
+            request["op"].as_str(),
+            Some("break" | "clear" | "step" | "eval" | "input")
+        );
+        let asked = Message::Asked {
+            ticket,
+            id: id.to_string(),
+            control,
+        };
+        if self.inbox.send(asked).is_err() {
+            return;
+        }
+        // The request ends when this drops, on the thread or with the
+        // closure a failed spawn drops.
+        let over = Over {
+            inbox: self.inbox.clone(),
+            ticket,
+        };
+        let send = send.clone();
+        let _ = std::thread::Builder::new()
+            .name("rawr-session-program".into())
+            .spawn(move || {
+                let reply = match forward(&over.inbox, ticket, &request) {
+                    Ok(answer) => json!({ "jsonrpc": "2.0", "id": id, "result": answer }),
+                    Err(Refusal::NotRunning(phase)) => json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "error": {
+                            "code": NOT_RUNNING,
+                            "message": "the program isn't running",
+                            "data": { "state": phase.name() },
+                        },
+                    }),
+                    Err(Refusal::Cancelled) => json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "error": { "code": CANCELLED, "message": "cancelled" },
+                    }),
+                };
+                let _ = send.send(line(&reply));
+                drop(over);
+            });
+    }
+}
+
+/// Tells the owner a request is over when dropped, so its turn passes on
+/// even when its thread panics or never starts.
+struct Over {
+    inbox: mpsc::Sender<Message>,
+    ticket: Ticket,
+}
+
+impl Drop for Over {
+    fn drop(&mut self) {
+        let _ = self.inbox.send(Message::Finished(self.ticket));
+    }
+}
+
+/// The answer to `request` from the program's inspector. A program that
+/// ends while it holds the request leaves it to the next one. Control
+/// requests take turns; `pause` and `continue` go at once, as they end a
+/// step that waits for a pause the program may never reach.
+fn forward(
+    inbox: &mpsc::Sender<Message>,
+    ticket: Ticket,
+    request: &Value,
+) -> Result<Value, Refusal> {
+    // Window input, screenshots and menus need no debugger.
+    let debugs = !matches!(
+        request["op"].as_str(),
+        Some("input" | "screenshot" | "menu")
+    );
+    let mut gone = None;
+    loop {
+        let (reply, reached) = mpsc::channel();
+        let reach = Message::Reach {
+            ticket,
+            gone,
+            debugs,
+            reply,
+        };
+        if inbox.send(reach).is_err() {
+            return Err(Refusal::Cancelled);
+        }
+        // The owner answers every parked reach before it drops it.
+        let served = reached.recv().unwrap_or(Err(Refusal::Cancelled))?;
+        match ask(inbox, ticket, &served.socket, request) {
+            Some(answer) => return Ok(answer),
+            None => gone = Some(served.connection),
+        }
+    }
+}
+
+/// One request and its answer on the inspector at `socket`. `None` when
+/// the exchange ends before an answer: nothing listens, the process that
+/// read it ended, as a restart retires it (#1964), or a cancel shut it.
+/// The next reach tells these apart.
+fn ask(
+    inbox: &mpsc::Sender<Message>,
+    ticket: Ticket,
+    socket: &Path,
+    request: &Value,
+) -> Option<Value> {
+    let stream = UnixStream::connect(socket).ok()?;
+    if let Ok(held) = stream.try_clone() {
+        let _ = inbox.send(Message::Exchange {
+            ticket,
+            stream: held,
+        });
+    }
+    writeln!(&stream, "{request}").ok()?;
+    let mut answer = String::new();
+    BufReader::new(&stream).read_line(&mut answer).ok()?;
+    if !answer.ends_with('\n') {
+        return None;
+    }
+    serde_json::from_str(&answer).ok()
+}
+
+impl Session {
+    fn new(root: &Path, place: Place, opening: Opening) -> Self {
+        Self {
+            root: root.to_path_buf(),
+            place,
+            handed: opening.handed,
+            state: State::default(),
+            output: VecDeque::new(),
+            output_bytes: 0,
+            listeners: Vec::new(),
+            teller: None,
+            listening: false,
+            tells: false,
+            at_terminal: false,
+            inspector: None,
+            debugger: if opening.handed {
+                Debugger::On
+            } else {
+                Debugger::OnRequest
+            },
+            hold: opening.hold,
+            breakpoints: None,
+            greetings: Vec::new(),
+            requests: Vec::new(),
+            turn: None,
+            #[cfg(test)]
+            waits: Vec::new(),
         }
     }
 
-    /// Answer `hello`: the events so far and the output kept, and from now
-    /// on every event and piece of output. The first `hello` of a run whose
-    /// program tells its output waits for the last of what it wrote before.
-    fn greet(&self, connection: u64, id: &Value, send: &mpsc::Sender<Arc<str>>) {
-        let mut inner = self.inner();
-        if !std::mem::replace(&mut inner.listening, true)
-            && let Some(teller) = &inner.teller
+    /// Take each message until every sender is gone, answering what each
+    /// one lets go.
+    fn own(mut self, inbox: &mpsc::Receiver<Message>) {
+        for message in inbox {
+            self.take(message);
+            self.settle();
+        }
+    }
+
+    fn take(&mut self, message: Message) {
+        match message {
+            Message::Hello {
+                connection,
+                id,
+                send,
+                greeted,
+            } => {
+                if !std::mem::replace(&mut self.listening, true)
+                    && let Some(teller) = &self.teller
+                {
+                    let _ = teller.send.send(asking());
+                }
+                self.greetings.push(Greeting {
+                    connection,
+                    id,
+                    send,
+                    greeted,
+                });
+            }
+            Message::Tell { connection, send } => self.teller(connection, send),
+            Message::Told { connection } => {
+                if let Some(teller) = self.teller.as_mut()
+                    && teller.connection == connection
+                {
+                    teller.told = true;
+                }
+            }
+            Message::Serve { connection, socket } => {
+                self.inspector = Some(Served { connection, socket });
+            }
+            Message::Record(event) => self.record(event),
+            Message::Now(event) => self.now(event),
+            Message::Output { from, piece } => self.output(from, piece),
+            Message::Copied(piece) => {
+                self.tells = true;
+                self.output(0, piece);
+            }
+            Message::Start(reply) => {
+                let _ = reply.send(Start {
+                    hold: std::mem::take(&mut self.hold),
+                    on_request: self.debugger == Debugger::OnRequest,
+                });
+            }
+            Message::Asked {
+                ticket,
+                id,
+                control,
+            } => self.requests.push(Request {
+                ticket,
+                id,
+                control,
+                cancelled: false,
+                exchange: None,
+                parked: None,
+            }),
+            Message::Reach {
+                ticket,
+                gone,
+                debugs,
+                reply,
+            } => match self.request(ticket) {
+                Some(request) => {
+                    request.exchange = None;
+                    request.parked = Some(Parked {
+                        gone,
+                        debugs,
+                        reply,
+                    });
+                }
+                None => {
+                    let _ = reply.send(Err(Refusal::Cancelled));
+                }
+            },
+            Message::Exchange { ticket, stream } => match self.request(ticket) {
+                Some(request) if !request.cancelled => request.exchange = Some(stream),
+                _ => {
+                    let _ = stream.shutdown(std::net::Shutdown::Both);
+                }
+            },
+            Message::Finished(ticket) => {
+                self.requests.retain(|request| request.ticket != ticket);
+                if self.turn == Some(ticket) {
+                    self.turn = None;
+                }
+            }
+            Message::Cancel { connection, id } => {
+                let asked = self
+                    .requests
+                    .iter_mut()
+                    .filter(|request| request.ticket.connection == connection && request.id == id);
+                for request in asked {
+                    request.cancel();
+                }
+            }
+            Message::Left(connection) => self.left(connection),
+            #[cfg(test)]
+            Message::Wait(wait) => self.waits.push(wait),
+        }
+    }
+
+    fn request(&mut self, ticket: Ticket) -> Option<&mut Request> {
+        self.requests
+            .iter_mut()
+            .find(|request| request.ticket == ticket)
+    }
+
+    /// Answer each parked reply whose wait is over: the `hello`s once the
+    /// program told what it kept, then each request in the order asked.
+    fn settle(&mut self) {
+        if self.teller.as_ref().is_none_or(|teller| teller.told) {
+            for greeting in std::mem::take(&mut self.greetings) {
+                self.greet(greeting);
+            }
+        }
+        for index in 0..self.requests.len() {
+            if let Some(reached) = self.reached(index)
+                && let Some(parked) = self.requests[index].parked.take()
+            {
+                let _ = parked.reply.send(reached);
+            }
+        }
+        #[cfg(test)]
         {
-            let _ = teller.send.send(asking());
+            let waits = std::mem::take(&mut self.waits);
+            for wait in waits {
+                if (wait.met)(self) {
+                    let _ = wait.reply.send(());
+                } else {
+                    self.waits.push(wait);
+                }
+            }
         }
-        while inner.teller.as_ref().is_some_and(|teller| !teller.told) {
-            inner = self
-                .changed
-                .wait(inner)
-                .unwrap_or_else(PoisonError::into_inner);
+    }
+
+    /// The answer to request `index`'s parked reach, once it has one: the
+    /// inspector, once the program serves one, not while it starts or
+    /// restarts, not the one on the connection that reach named gone, and
+    /// for a control request once the turn is its own. A program
+    /// registers its debugger at the request that debugs, and the programs
+    /// started after it have one from their start.
+    fn reached(&mut self, index: usize) -> Option<Reached> {
+        let request = &self.requests[index];
+        let parked = request.parked.as_ref()?;
+        if request.cancelled {
+            return Some(Err(Refusal::Cancelled));
         }
-        let events: Vec<Value> = inner
+        let (ticket, control, gone, debugs) =
+            (request.ticket, request.control, parked.gone, parked.debugs);
+        if control && self.turn.is_some_and(|turn| turn != ticket) {
+            return None;
+        }
+        let phase = self.state.phase();
+        if let Some(served) = &self.inspector
+            && !phase.is_pending()
+            && gone != Some(served.connection)
+        {
+            let served = served.clone();
+            if debugs && self.debugger == Debugger::OnRequest {
+                self.debugger = Debugger::On;
+            }
+            if control {
+                self.turn = Some(ticket);
+            }
+            return Some(Ok(served));
+        }
+        if !phase.is_live() && !phase.is_pending() {
+            return Some(Err(Refusal::NotRunning(phase.clone())));
+        }
+        None
+    }
+
+    /// Answer `hello`: the events so far and the output kept, and from now
+    /// on every event and piece of output. The answer and the connection's
+    /// place among the listeners come in one step, so each event reaches
+    /// it once, in the answer or after it.
+    fn greet(&mut self, greeting: Greeting) {
+        let events: Vec<Value> = self
             .state
             .events()
             .iter()
@@ -490,7 +934,7 @@ impl Shared {
             "screenshot",
             "menu",
         ];
-        if self.handed || inner.tells {
+        if self.handed || self.tells {
             capabilities.push("output");
         }
         let mut result = json!({
@@ -499,19 +943,21 @@ impl Shared {
             "root": self.root,
             "pid": std::process::id(),
             "events": events,
-            "output": inner.output,
+            "output": self.output,
             "breakpoints": self.breakpoints(),
         });
-        if let Some(coverage) = self.coverage(&inner) {
+        if let Some(coverage) = self.coverage() {
             result["coverage"] = json!(coverage);
         }
-        let _ = send.send(line(
-            &json!({ "jsonrpc": "2.0", "id": id, "result": result }),
+        let _ = greeting.send.send(line(
+            &json!({ "jsonrpc": "2.0", "id": greeting.id, "result": result }),
         ));
-        inner.listeners.push(Listener {
-            connection,
-            send: send.clone(),
+        self.listeners.push(Listener {
+            connection: greeting.connection,
+            send: greeting.send,
         });
+        // The connection's reader goes on once this closes.
+        drop(greeting.greeted);
     }
 
     /// How much of the run's output `hello` gives, once any reaches the
@@ -519,92 +965,77 @@ impl Shared {
     /// pipes, or the owner copies it off pipes, and `engine` when the
     /// program writes to the terminal itself and tells only what the
     /// engine prints (#2411).
-    fn coverage(&self, inner: &Inner) -> Option<&'static str> {
+    fn coverage(&self) -> Option<&'static str> {
         if self.handed {
             Some("all")
-        } else if inner.at_terminal {
+        } else if self.at_terminal {
             Some("engine")
         } else {
-            inner.tells.then_some("all")
+            self.tells.then_some("all")
         }
     }
 
-    fn record(&self, event: Value) {
-        let mut inner = self.inner();
-        let seq = inner.state.next_number();
+    fn record(&mut self, event: Value) {
+        let seq = self.state.next_number();
         let told = line(&json!({
             "jsonrpc": "2.0",
             "method": "event",
             "params": numbered(seq, &event),
         }));
-        inner.state.record(seq, event);
-        inner
-            .listeners
+        self.state.record(seq, event);
+        self.listeners
             .retain(|listener| listener.send.send(Arc::clone(&told)).is_ok());
-        drop(inner);
-        self.changed.notify_all();
     }
 
     /// Tell every connection `event`, which says what is so now rather
     /// than what happened: it takes no number and stays in no history, as
-    /// `hello` says the same.
-    fn tell(&self, event: &Value) {
+    /// `hello` says the same. The newest list is kept for `hello`.
+    fn now(&mut self, event: Value) {
         let told = line(&json!({ "jsonrpc": "2.0", "method": "event", "params": event }));
-        self.inner()
-            .listeners
+        if self
+            .breakpoints
+            .as_ref()
+            .is_none_or(|kept| revision(kept) <= revision(&event))
+        {
+            self.breakpoints = Some(event);
+        }
+        self.listeners
             .retain(|listener| listener.send.send(Arc::clone(&told)).is_ok());
     }
 
-    /// The breakpoints as the program's inspector keeps them in its file,
-    /// told as its `breakpoints` event tells them: none before it kept
-    /// any.
+    /// The breakpoints as told in their `breakpoints` event: the newer of
+    /// the list in the inspector's file and the last list it told, so a
+    /// file read before a write never takes back a list a shell already
+    /// heard. None before it kept any.
     fn breakpoints(&self) -> Value {
-        let mut told = std::fs::read(self.place.breakpoints())
+        let kept = std::fs::read(self.place.breakpoints())
             .ok()
             .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
             .filter(Value::is_object)
             .unwrap_or_else(|| json!({ "revision": 0, "breakpoints": [] }));
-        told["event"] = json!("breakpoints");
-        told
-    }
-
-    /// Tell `bytes` the owner copied from the program's `stream`, unless a
-    /// shell that started the run holds that output. Whether the session
-    /// took them in place of the owner's own stream: the program's stderr,
-    /// for a shell that reads the run's stderr as rawr's own.
-    fn copied(&self, stream: rawr::Output, bytes: &[u8]) -> bool {
-        let mut inner = self.inner();
-        let takes = inner.program_stderr && matches!(stream, rawr::Output::Stderr);
-        if self.handed && !takes {
-            return false;
-        }
-        inner.tells = true;
-        drop(inner);
-        let stream = match stream {
-            rawr::Output::Stderr => "stderr",
-            _ => "stdout",
+        let mut newest = match &self.breakpoints {
+            Some(told) if revision(told) > revision(&kept) => told.clone(),
+            _ => kept,
         };
-        let text = String::from_utf8_lossy(bytes);
-        self.output(0, json!({ "stream": stream, "text": text }));
-        takes
+        newest["event"] = json!("breakpoints");
+        newest
     }
 
     /// Keep output the shell on `from` read, and tell the others.
-    fn output(&self, from: u64, piece: Value) {
+    fn output(&mut self, from: u64, piece: Value) {
         let Some(bytes) = piece["text"].as_str().map(str::len) else {
             return;
         };
         let told = line(&json!({ "jsonrpc": "2.0", "method": "output", "params": piece }));
-        let mut inner = self.inner();
-        inner.output_bytes += bytes;
-        inner.output.push_back(piece);
-        while inner.output_bytes > OUTPUT {
-            let Some(dropped) = inner.output.pop_front() else {
+        self.output_bytes += bytes;
+        self.output.push_back(piece);
+        while self.output_bytes > OUTPUT {
+            let Some(dropped) = self.output.pop_front() else {
                 break;
             };
-            inner.output_bytes -= dropped["text"].as_str().map_or(0, str::len);
+            self.output_bytes -= dropped["text"].as_str().map_or(0, str::len);
         }
-        for listener in &inner.listeners {
+        for listener in &self.listeners {
             if listener.connection != from {
                 let _ = listener.send.send(Arc::clone(&told));
             }
@@ -613,159 +1044,65 @@ impl Shared {
 
     /// Connection `connection` is the program's, which tells its output. A
     /// program started after a shell said `hello` tells it at once.
-    fn teller(&self, connection: u64, send: &mpsc::Sender<Arc<str>>) {
-        let mut inner = self.inner();
-        inner.tells = true;
-        inner.at_terminal = true;
-        if inner.listening {
+    fn teller(&mut self, connection: u64, send: mpsc::Sender<Arc<str>>) {
+        self.tells = true;
+        self.at_terminal = true;
+        if self.listening {
             let _ = send.send(asking());
         }
-        inner.teller = Some(Teller {
+        self.teller = Some(Teller {
             connection,
-            send: send.clone(),
+            send,
             told: false,
         });
-        drop(inner);
-        self.changed.notify_all();
     }
 
-    /// Connection `connection` closed: it hears nothing more, and an
-    /// inspector it served, or output it told, is gone.
-    fn left(&self, connection: u64) {
-        let mut inner = self.inner();
-        inner
-            .listeners
+    /// Connection `connection` closed: it hears nothing more, an inspector
+    /// it served, or output it told, is gone, and its requests are
+    /// cancelled.
+    fn left(&mut self, connection: u64) {
+        self.listeners
             .retain(|listener| listener.connection != connection);
-        if inner
+        self.greetings
+            .retain(|greeting| greeting.connection != connection);
+        if self
             .inspector
             .as_ref()
             .is_some_and(|served| served.connection == connection)
         {
-            inner.inspector = None;
+            self.inspector = None;
         }
-        if inner
+        if self
             .teller
             .as_ref()
             .is_some_and(|teller| teller.connection == connection)
         {
-            inner.teller = None;
+            self.teller = None;
         }
-        drop(inner);
-        self.changed.notify_all();
-    }
-
-    /// The answer to `request` from the program's inspector. A program
-    /// that ends while it holds the request leaves it to the next one.
-    /// Control requests take turns; `pause` and `continue` go at once, as
-    /// they end a step that waits for a pause the program may never reach.
-    fn forward(&self, request: &Value, cancel: &Cancel) -> Result<Value, Refusal> {
-        let op = request["op"].as_str();
-        let control = matches!(op, Some("break" | "clear" | "step" | "eval" | "input"));
-        // Window input, screenshots and menus need no debugger.
-        let debugs = !matches!(op, Some("input" | "screenshot" | "menu"));
-        let _turn = control.then(|| self.control.lock().unwrap_or_else(PoisonError::into_inner));
-        let mut gone = None;
-        loop {
-            let (connection, socket) = self.reachable(cancel, gone, debugs)?;
-            match ask(&socket, request, cancel) {
-                Asked::Answered(answer) => return Ok(answer),
-                Asked::Refused | Asked::Ended => gone = Some(connection),
-                Asked::Cancelled => return Err(Refusal::Cancelled),
-            }
-        }
-    }
-
-    /// The inspector a request goes to once the program serves one: not
-    /// while it starts or restarts, and not the one on connection `gone`.
-    /// A program registers its debugger at the request that `debugs`, and
-    /// the programs started after it have one from their start.
-    fn reachable(
-        &self,
-        cancel: &Cancel,
-        gone: Option<u64>,
-        debugs: bool,
-    ) -> Result<(u64, PathBuf), Refusal> {
-        let mut inner = self.inner();
-        loop {
-            if cancel.cancelled.load(Ordering::Acquire) {
-                return Err(Refusal::Cancelled);
-            }
-            let phase = inner.state.phase();
-            if let Some(served) = &inner.inspector
-                && !phase.is_pending()
-                && gone != Some(served.connection)
-            {
-                let reached = (served.connection, served.socket.clone());
-                if debugs && inner.debugger == Debugger::OnRequest {
-                    inner.debugger = Debugger::On;
-                }
-                return Ok(reached);
-            }
-            if !phase.is_live() && !phase.is_pending() {
-                return Err(Refusal::NotRunning(phase.clone()));
-            }
-            inner = self
-                .changed
-                .wait(inner)
-                .unwrap_or_else(PoisonError::into_inner);
+        let asked = self
+            .requests
+            .iter_mut()
+            .filter(|request| request.ticket.connection == connection);
+        for request in asked {
+            request.cancel();
         }
     }
 }
 
-impl Cancel {
-    /// Hold `stream` for a cancel to shut: `false` when cancelled already.
-    fn hold(&self, stream: &UnixStream) -> bool {
-        let mut held = self.stream.lock().unwrap_or_else(PoisonError::into_inner);
-        if self.cancelled.load(Ordering::Acquire) {
-            return false;
-        }
-        *held = stream.try_clone().ok();
-        true
-    }
-
-    fn cancel(&self, shared: &Shared) {
-        self.cancelled.store(true, Ordering::Release);
-        let held = self
-            .stream
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take();
-        if let Some(stream) = held {
+impl Request {
+    /// End the request: its exchange with the inspector shuts, and its
+    /// next reach is answered as cancelled.
+    fn cancel(&mut self) {
+        self.cancelled = true;
+        if let Some(stream) = self.exchange.take() {
             let _ = stream.shutdown(std::net::Shutdown::Both);
         }
-        // A wait in `reachable` looks at the flag under this lock.
-        drop(shared.inner());
-        shared.changed.notify_all();
     }
 }
 
-/// One request and its answer on the inspector at `socket`: the program
-/// answers every request it reads, so the end before an answer is the end
-/// of the process that read it, as a restart retires it (#1964).
-fn ask(socket: &Path, request: &Value, cancel: &Cancel) -> Asked {
-    let Ok(stream) = UnixStream::connect(socket) else {
-        return Asked::Refused;
-    };
-    if !cancel.hold(&stream) {
-        return Asked::Cancelled;
-    }
-    let ended = || {
-        if cancel.cancelled.load(Ordering::Acquire) {
-            Asked::Cancelled
-        } else {
-            Asked::Ended
-        }
-    };
-    if writeln!(&stream, "{request}").is_err() {
-        return ended();
-    }
-    let mut answer = String::new();
-    match BufReader::new(&stream).read_line(&mut answer) {
-        Ok(_) if answer.ends_with('\n') => {
-            serde_json::from_str(&answer).map_or_else(|_| ended(), Asked::Answered)
-        }
-        _ => ended(),
-    }
+/// A `breakpoints` list's revision, which counts its changes.
+fn revision(list: &Value) -> u64 {
+    list["revision"].as_u64().unwrap_or(0)
 }
 
 /// Write each line to the connection until it goes away.
@@ -804,7 +1141,7 @@ mod tests {
 
     use serde_json::{json, Value};
 
-    use super::{Host, Place, CANCELLED};
+    use super::{Host, Message, Opening, Place, Session, Wait, CANCELLED, NOT_RUNNING};
 
     /// A connection to a session, reading its messages on a thread.
     struct Shell {
@@ -837,8 +1174,7 @@ mod tests {
         }
 
         /// The answer to request `id`, past the events and output told
-        /// before it: a test that emits while another test's session is
-        /// the process's open one records into that session.
+        /// before it.
         fn answer(&self, id: u64) -> Value {
             loop {
                 let message = self.next();
@@ -855,16 +1191,52 @@ mod tests {
             let answer = self.answer(0);
             answer["result"]["events"].as_array().unwrap().clone()
         }
+
+        /// Close the connection both ways, as a shell that goes away does:
+        /// the reading thread's copy of the socket closes with it.
+        fn close(self) {
+            self.stream.shutdown(std::net::Shutdown::Both).unwrap();
+        }
     }
 
     fn host(name: &str, handed: bool) -> (Host, Place) {
+        opened(
+            name,
+            Opening {
+                handed,
+                ..Opening::default()
+            },
+        )
+    }
+
+    fn opened(name: &str, opening: Opening) -> (Host, Place) {
         let root = format!("/rawr-session-test/{name}/{}", std::process::id());
         let place = Place::new(Path::new(&root)).unwrap();
         place.make().unwrap();
         let _ = std::fs::remove_file(place.socket());
         let listener = UnixListener::bind(place.socket()).unwrap();
-        let host = Host::serve(Path::new(&root), place.clone(), listener, handed).unwrap();
+        let host = Host::serve(Path::new(&root), place.clone(), listener, opening).unwrap();
         (host, place)
+    }
+
+    impl Host {
+        /// Record `event`, as the owner's `emit` does.
+        fn record(&self, event: Value) {
+            self.0.send.send(Message::Record(event)).unwrap();
+        }
+
+        /// Wait for `met` to hold of the session.
+        fn reaches(&self, met: impl Fn(&Session) -> bool + Send + 'static) {
+            let (reply, done) = mpsc::channel();
+            self.0
+                .send
+                .send(Message::Wait(Wait {
+                    met: Box::new(met),
+                    reply,
+                }))
+                .unwrap();
+            done.recv().unwrap();
+        }
     }
 
     /// The program's inspector says where it serves on a connection of its
@@ -876,12 +1248,19 @@ mod tests {
         told
     }
 
+    /// The line one exchange with the inspector carries.
+    fn read(stream: &UnixStream) -> String {
+        let mut line = String::new();
+        BufReader::new(stream).read_line(&mut line).unwrap();
+        line
+    }
+
     /// A program that ends while it holds a request, as a restart retires
     /// it, leaves the request to the program that serves next (#1964).
     #[test]
     fn a_request_the_ending_program_held_goes_to_the_next_one() {
         let (host, place) = host("retire", true);
-        host.0.record(json!({ "event": "running" }));
+        host.record(json!({ "event": "running" }));
         let inspector = UnixListener::bind(place.inspector()).unwrap();
         let ending = serve(&place);
         let shell = Shell::connect(&place.socket());
@@ -890,15 +1269,13 @@ mod tests {
         shell.send(&json!({ "jsonrpc": "2.0", "id": 1, "method": "program", "params": request }));
         // The retiring program reads the request and ends.
         let (held, _) = inspector.accept().unwrap();
-        let mut line = String::new();
-        BufReader::new(&held).read_line(&mut line).unwrap();
+        let line = read(&held);
         drop(held);
         drop(ending);
         // The next one serves and answers it.
         let _next = serve(&place);
         let (next, _) = inspector.accept().unwrap();
-        let mut again = String::new();
-        BufReader::new(&next).read_line(&mut again).unwrap();
+        let again = read(&next);
         writeln!(&next, "{}", json!({ "answered": again.trim() })).unwrap();
         let answer = shell.next();
         assert_eq!(
@@ -915,7 +1292,7 @@ mod tests {
     #[test]
     fn a_continue_reaches_the_program_while_a_step_waits() {
         let (host, place) = host("continue", true);
-        host.0.record(json!({ "event": "running" }));
+        host.record(json!({ "event": "running" }));
         let inspector = UnixListener::bind(place.inspector()).unwrap();
         let _told = serve(&place);
         let shell = Shell::connect(&place.socket());
@@ -924,16 +1301,12 @@ mod tests {
             "jsonrpc": "2.0", "id": 1, "method": "program", "params": { "op": "step" }
         }));
         let (step, _) = inspector.accept().unwrap();
-        let mut line = String::new();
-        let mut held = BufReader::new(&step);
-        held.read_line(&mut line).unwrap();
+        read(&step);
         shell.send(&json!({
             "jsonrpc": "2.0", "id": 2, "method": "program", "params": { "op": "continue" }
         }));
         let (go, _) = inspector.accept().unwrap();
-        line.clear();
-        BufReader::new(&go).read_line(&mut line).unwrap();
-        assert_eq!(line.trim(), json!({ "op": "continue" }).to_string());
+        assert_eq!(read(&go).trim(), json!({ "op": "continue" }).to_string());
         writeln!(&go, "{}", json!({ "paused": null })).unwrap();
         writeln!(&step, "{}", json!({ "paused": null })).unwrap();
         let mut answered = [shell.next()["id"].clone(), shell.next()["id"].clone()];
@@ -958,9 +1331,7 @@ mod tests {
     fn answered(shell: &Shell, inspector: &UnixListener, id: u64, request: &Value) {
         shell.send(&json!({ "jsonrpc": "2.0", "id": id, "method": "program", "params": request }));
         let (asked, _) = inspector.accept().unwrap();
-        let mut line = String::new();
-        BufReader::new(&asked).read_line(&mut line).unwrap();
-        assert_eq!(line.trim(), request.to_string());
+        assert_eq!(read(&asked).trim(), request.to_string());
         writeln!(&asked, "{}", json!({ "answered": id })).unwrap();
         assert_eq!(shell.answer(id)["result"]["answered"], id);
     }
@@ -972,11 +1343,10 @@ mod tests {
     #[test]
     fn a_program_registers_its_debugger_at_the_first_request_that_needs_one() {
         let (host, place) = host("on-request", false);
-        *super::open_session() = Some(std::sync::Arc::clone(&host.0));
         let mut started = std::process::Command::new("true");
-        super::prepare(&mut started);
+        host.0.ready(&mut started);
         assert!(on_request(&started));
-        host.0.record(json!({ "event": "running" }));
+        host.record(json!({ "event": "running" }));
         let inspector = UnixListener::bind(place.inspector()).unwrap();
         let _told = serve(&place);
         let shell = Shell::connect(&place.socket());
@@ -984,15 +1354,14 @@ mod tests {
         // A screenshot needs no debugger.
         answered(&shell, &inspector, 1, &json!({ "op": "screenshot" }));
         let mut again = std::process::Command::new("true");
-        super::prepare(&mut again);
+        host.0.ready(&mut again);
         assert!(on_request(&again));
         // A read does: the program registers it.
         answered(&shell, &inspector, 2, &json!({ "name": "count" }));
         let mut restarted = std::process::Command::new("true");
-        super::prepare(&mut restarted);
+        host.0.ready(&mut restarted);
         assert!(!on_request(&restarted));
         drop(host);
-        assert!(super::current().is_none());
     }
 
     /// A run whose shell holds its start holds only the first program the
@@ -1006,15 +1375,19 @@ mod tests {
                 .and_then(|(_, value)| value)
                 .is_some()
         };
-        let mut inner = super::Inner {
-            hold: true,
-            ..super::Inner::default()
-        };
+        let (host, _) = opened(
+            "hold",
+            Opening {
+                handed: true,
+                hold: true,
+                ..Opening::default()
+            },
+        );
         let mut first = std::process::Command::new("true");
-        super::hold(&mut inner, &mut first);
+        host.0.ready(&mut first);
         assert!(held(&first));
         let mut again = std::process::Command::new("true");
-        super::hold(&mut inner, &mut again);
+        host.0.ready(&mut again);
         assert!(!held(&again));
     }
 
@@ -1024,7 +1397,7 @@ mod tests {
     #[test]
     fn a_breakpoint_one_shell_sets_reaches_the_others() {
         let (host, place) = host("breakpoints", true);
-        host.0.record(json!({ "event": "running" }));
+        host.record(json!({ "event": "running" }));
         let inspector = UnixListener::bind(place.inspector()).unwrap();
         let told = serve(&place);
         let setting = Shell::connect(&place.socket());
@@ -1043,8 +1416,7 @@ mod tests {
         // The program's inspector keeps the list and tells it, as
         // `rawr::inspect` does, then answers.
         let (asked, _) = inspector.accept().unwrap();
-        let mut request = String::new();
-        BufReader::new(&asked).read_line(&mut request).unwrap();
+        read(&asked);
         let kept = json!({
             "revision": 1,
             "breakpoints": [{ "file": "/p/src/main.rs", "line": 4, "text": "tick();" }],
@@ -1076,15 +1448,65 @@ mod tests {
         drop(host);
     }
 
+    /// `hello` gives the newer of the inspector's file and the list it
+    /// last told, whichever was written last: a list a shell heard is
+    /// never taken back by an older file, and a newer file wins over an
+    /// older told list.
+    #[test]
+    fn hello_gives_the_newest_breakpoints_whichever_reached_the_session_first() {
+        let (host, place) = host("breakpoints-order", true);
+        let told = serve(&place);
+        let list = |revision: u64, line: u64| {
+            json!({
+                "event": "breakpoints",
+                "revision": revision,
+                "breakpoints": [{ "file": "/p/src/main.rs", "line": line }],
+            })
+        };
+        // The told list is newer than the file.
+        std::fs::write(place.breakpoints(), list(1, 4).to_string()).unwrap();
+        let emit = json!({ "jsonrpc": "2.0", "method": "emit", "params": list(2, 5) });
+        writeln!(&told, "{emit}").unwrap();
+        host.reaches(|session| session.breakpoints.is_some());
+        let shell = Shell::connect(&place.socket());
+        shell.send(&json!({ "jsonrpc": "2.0", "id": 0, "method": "hello" }));
+        assert_eq!(shell.answer(0)["result"]["breakpoints"], list(2, 5));
+        // The file is newer than the told list.
+        std::fs::write(place.breakpoints(), list(3, 6).to_string()).unwrap();
+        let late = Shell::connect(&place.socket());
+        late.send(&json!({ "jsonrpc": "2.0", "id": 0, "method": "hello" }));
+        assert_eq!(late.answer(0)["result"]["breakpoints"], list(3, 6));
+        drop(host);
+    }
+
+    /// An event the session records before a `hello` is in its answer and
+    /// not told again; one recorded after it is told once, numbered on.
+    #[test]
+    fn each_event_reaches_a_shell_once_whether_it_comes_before_or_after_hello() {
+        let (host, place) = host("hello-order", false);
+        host.record(json!({ "event": "running" }));
+        let shell = Shell::connect(&place.socket());
+        assert_eq!(shell.hello(), [json!({ "event": "running", "seq": 1 })]);
+        host.record(json!({ "event": "swapped" }));
+        host.record(json!({ "event": "queued" }));
+        let heard: Vec<Value> = [shell.next(), shell.next()]
+            .into_iter()
+            .map(|message| message["params"].clone())
+            .collect();
+        assert_eq!(
+            heard,
+            [
+                json!({ "event": "swapped", "seq": 2 }),
+                json!({ "event": "queued", "seq": 3 }),
+            ]
+        );
+        drop(host);
+    }
+
     /// The `hello` answer, past the notifications before it.
     fn greeted(shell: &Shell) -> Value {
         shell.send(&json!({ "jsonrpc": "2.0", "id": 0, "method": "hello" }));
-        loop {
-            let message = shell.next();
-            if message["id"] == 0 {
-                return message["result"].clone();
-            }
-        }
+        shell.answer(0)["result"].clone()
     }
 
     fn says_output(hello: &Value) -> bool {
@@ -1122,17 +1544,17 @@ mod tests {
     /// owner tells none of it, and its program isn't asked to.
     #[test]
     fn a_run_a_shell_started_tells_no_output_of_its_own() {
-        let tells = |shared: &super::Shared| {
+        let tells = |host: &Host| {
             let mut command = std::process::Command::new("true");
-            super::ready(shared, &mut command);
+            host.0.ready(&mut command);
             command
                 .get_envs()
                 .any(|(name, value)| name == crate::events::OUTPUT && value.is_some())
         };
         let (plain, _) = host("tells-plain", false);
-        assert!(tells(&plain.0));
+        assert!(tells(&plain));
         let (handed, place) = host("tells-handed", true);
-        assert!(!tells(&handed.0));
+        assert!(!tells(&handed));
         handed.0.copied(rawr::Output::Stdout, b"twice\n");
         let shell = Shell::connect(&place.socket());
         assert_eq!(greeted(&shell)["output"], json!([]));
@@ -1145,8 +1567,14 @@ mod tests {
     /// shell's (#2367).
     #[test]
     fn a_shell_that_reads_rawr_s_lines_hears_the_program_s_stderr_from_the_session() {
-        let (handed, place) = host("program-stderr", true);
-        handed.0.inner().program_stderr = true;
+        let (handed, place) = opened(
+            "program-stderr",
+            Opening {
+                handed: true,
+                program_stderr: true,
+                ..Opening::default()
+            },
+        );
         let shell = Shell::connect(&place.socket());
         greeted(&shell);
         assert!(!handed.0.copied(rawr::Output::Stdout, b"out\n"));
@@ -1168,10 +1596,7 @@ mod tests {
     fn teller(host: &Host, place: &Place) -> UnixStream {
         let teller = UnixStream::connect(place.socket()).unwrap();
         writeln!(&teller, "{}", json!({ "jsonrpc": "2.0", "method": "tell" })).unwrap();
-        let mut inner = host.0.inner();
-        while inner.teller.is_none() {
-            inner = host.0.changed.wait(inner).unwrap();
-        }
+        host.reaches(|session| session.teller.is_some());
         teller
     }
 
@@ -1186,11 +1611,7 @@ mod tests {
     /// `told`.
     fn listened(teller: UnixStream, kept: &'static str) -> JoinHandle<UnixStream> {
         std::thread::spawn(move || {
-            let mut asked = String::new();
-            BufReader::new(teller.try_clone().unwrap())
-                .read_line(&mut asked)
-                .unwrap();
-            let asked: Value = serde_json::from_str(&asked).unwrap();
+            let asked: Value = serde_json::from_str(&read(&teller)).unwrap();
             assert_eq!(asked["method"], "listen", "{asked}");
             writeln!(&teller, "{}", piece(kept)).unwrap();
             writeln!(&teller, "{}", json!({ "jsonrpc": "2.0", "method": "told" })).unwrap();
@@ -1218,6 +1639,22 @@ mod tests {
         let teller = program.join().unwrap();
         writeln!(&teller, "{}", piece("live\n")).unwrap();
         assert_eq!(shell.next()["params"]["text"], "live\n");
+        drop(host);
+    }
+
+    /// A `hello` waiting for the output the program kept is answered when
+    /// the program's connection closes before it says `told`.
+    #[test]
+    fn a_hello_waiting_for_kept_output_is_answered_when_the_program_goes() {
+        let (host, place) = host("teller-gone", false);
+        let teller = teller(&host, &place);
+        let shell = Shell::connect(&place.socket());
+        shell.send(&json!({ "jsonrpc": "2.0", "id": 0, "method": "hello" }));
+        let asked: Value = serde_json::from_str(&read(&teller)).unwrap();
+        assert_eq!(asked["method"], "listen", "{asked}");
+        host.reaches(|session| !session.greetings.is_empty());
+        drop(teller);
+        assert_eq!(shell.answer(0)["result"]["output"], json!([]));
         drop(host);
     }
 
@@ -1259,7 +1696,7 @@ mod tests {
         let (host, place) = host("cursors", false);
         let first = Shell::connect(&place.socket());
         assert_eq!(first.hello(), Vec::<Value>::new());
-        host.0.record(json!({ "event": "running" }));
+        host.record(json!({ "event": "running" }));
         assert_eq!(
             first.next()["params"],
             json!({ "event": "running", "seq": 1 })
@@ -1269,7 +1706,7 @@ mod tests {
         // what happens next, numbered on.
         let second = Shell::connect(&place.socket());
         assert_eq!(second.hello(), [json!({ "event": "running", "seq": 1 })]);
-        host.0.record(json!({ "event": "swapped" }));
+        host.record(json!({ "event": "swapped" }));
         for shell in [&first, &second] {
             assert_eq!(
                 shell.next()["params"],
@@ -1278,10 +1715,100 @@ mod tests {
         }
     }
 
+    /// A shell that closes while its control request holds the program
+    /// ends that request: its exchange with the inspector shuts, and the
+    /// turn passes to the next shell's control request.
+    #[test]
+    fn a_shell_that_closes_mid_request_passes_the_turn_on() {
+        let (host, place) = host("close-turn", true);
+        host.record(json!({ "event": "running" }));
+        let inspector = UnixListener::bind(place.inspector()).unwrap();
+        let _told = serve(&place);
+        let leaving = Shell::connect(&place.socket());
+        leaving.hello();
+        leaving.send(&json!({
+            "jsonrpc": "2.0", "id": 1, "method": "program", "params": { "op": "step" }
+        }));
+        let (held, _) = inspector.accept().unwrap();
+        let mut reader = BufReader::new(&held);
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        leaving.close();
+        // The program sees its exchange end.
+        line.clear();
+        assert_eq!(reader.read_line(&mut line).unwrap(), 0);
+        let staying = Shell::connect(&place.socket());
+        staying.hello();
+        answered(
+            &staying,
+            &inspector,
+            2,
+            &json!({ "op": "break", "line": 3 }),
+        );
+        drop(host);
+    }
+
+    /// A request waiting for its program to start ends with its cancel,
+    /// and one waiting when its shell closes ends too, leaving the turn
+    /// free.
+    #[test]
+    fn a_request_waiting_for_its_program_ends_at_a_cancel_or_a_close() {
+        let (host, place) = host("close-parked", true);
+        let shell = Shell::connect(&place.socket());
+        shell.hello();
+        shell.send(&json!({
+            "jsonrpc": "2.0", "id": 1, "method": "program", "params": { "op": "step" }
+        }));
+        host.reaches(|session| {
+            session
+                .requests
+                .first()
+                .is_some_and(|request| request.parked.is_some())
+        });
+        shell.send(&json!({ "jsonrpc": "2.0", "method": "cancel", "params": { "id": 1 } }));
+        assert_eq!(shell.answer(1)["error"]["code"], CANCELLED);
+        shell.send(&json!({
+            "jsonrpc": "2.0", "id": 2, "method": "program", "params": { "op": "step" }
+        }));
+        host.reaches(|session| {
+            session
+                .requests
+                .iter()
+                .any(|request| request.ticket.number == 2 && request.parked.is_some())
+        });
+        shell.close();
+        host.reaches(|session| session.requests.is_empty() && session.turn.is_none());
+        drop(host);
+    }
+
+    /// A request whose program ends while it holds it, with no program to
+    /// follow, ends as not running.
+    #[test]
+    fn a_request_whose_program_ends_is_answered_not_running() {
+        let (host, place) = host("ended", true);
+        host.record(json!({ "event": "running" }));
+        let inspector = UnixListener::bind(place.inspector()).unwrap();
+        let told = serve(&place);
+        let shell = Shell::connect(&place.socket());
+        shell.hello();
+        shell.send(&json!({
+            "jsonrpc": "2.0", "id": 1, "method": "program", "params": { "name": "count" }
+        }));
+        let (held, _) = inspector.accept().unwrap();
+        read(&held);
+        host.record(json!({ "event": "ended", "status": 0 }));
+        drop(told);
+        drop(held);
+        let answer = shell.answer(1);
+        assert_eq!(answer["error"]["code"], NOT_RUNNING, "{answer}");
+        assert_eq!(answer["error"]["data"]["state"], "ended", "{answer}");
+        drop(host);
+    }
+
     #[test]
     fn a_pause_one_shell_asks_for_reaches_the_other_and_a_cancel_ends_only_its_request() {
         let (host, place) = host("pause", true);
-        host.0.record(json!({ "event": "running" }));
+        host.record(json!({ "event": "running" }));
         let inspector = UnixListener::bind(place.inspector()).unwrap();
         // The program's inspector tells the session where it paused, as
         // `rawr::inspect` does.
@@ -1289,8 +1816,7 @@ mod tests {
         let (holding, held) = mpsc::channel();
         let program = std::thread::spawn(move || {
             let (step, _) = inspector.accept().unwrap();
-            let mut request = String::new();
-            BufReader::new(&step).read_line(&mut request).unwrap();
+            read(&step);
             let at = json!({ "file": "/p/src/main.rs", "line": 3, "reason": "step" });
             let mut paused = at.clone();
             paused["event"] = json!("paused");
