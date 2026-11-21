@@ -34,6 +34,9 @@ body.play { font-size: var(--fs-base); line-height: 1.5; }
   outline-offset: -1px;
 }
 .out.framed pre { padding: 0 16px 16px; }
+/* A frame that shows takes the pane's free height, and what the program */
+/* printed sits under it. */
+.out.framed:has(> .frames > iframe.universe:not([hidden], [data-blank])) { grid-template-rows: minmax(360px, 1fr); align-content: stretch; }
 /* The output fits what the run shows: a frame whose program ended without */
 /* drawing (universe.ts's data-blank) folds away, and what the program */
 /* printed sits at the top. */
