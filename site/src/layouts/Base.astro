@@ -6,6 +6,8 @@ import Header from "../components/Header.astro";
 import { SITE } from "../lib/docs.ts";
 import { CHROME, FONT_GATE, THEME_INIT } from "../lib/theme-init.ts";
 import "../styles/global.css";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 
 interface Props {
   title: string;
@@ -24,6 +26,9 @@ interface Props {
 }
 const { title, description, path, markdown, current, drawer = false, og = {}, icon = "/favicon.svg", bodyClass } = Astro.props;
 const url = `${SITE}${path}`;
+// The icon's URL names its bytes, so a changed icon is a new URL that
+// browsers fetch rather than one their icon cache keeps.
+const iconHref = `${icon}?v=${createHash("sha256").update(readFileSync(`${process.cwd()}/public${icon}`)).digest("hex").slice(0, 8)}`;
 const image = og.image ?? `${SITE}/og/card.png`;
 const alt = og.alt ?? "rawr is rust augmented with rust: a Rust interpreter for your dev builds. The same src/main.rs is compiled by Cargo and interpreted by rawr, and both print total: 27.";
 ---
@@ -51,7 +56,7 @@ const alt = og.alt ?? "rawr is rust augmented with rust: a Rust interpreter for 
 {og.twitter && <meta name="twitter:image:alt" content={alt}>}
 <link rel="canonical" href={url}>
 {markdown && <link rel="alternate" type="text/markdown" href={markdown}>}
-<link rel="icon" href={icon} type="image/svg+xml">
+<link rel="icon" href={iconHref} type="image/svg+xml">
 <link rel="preconnect" href="https://abitaro-sans.pages.dev" crossorigin>
 <link rel="stylesheet" href="https://abitaro-sans.pages.dev/abitaro-sans.css?v=0.300">
 <script is:inline set:html={FONT_GATE} />
