@@ -300,7 +300,9 @@ pub fn run_program(
     // program runs without it when it can't be made.
     let reload = rawr_cli::events::reload::Stream::open()
         .inspect_err(|error| {
-            eprintln!("rawr: the program won't hear its reload outcomes: {error}");
+            rawr_import::process::say(format_args!(
+                "rawr: the program won't hear its reload outcomes: {error}"
+            ));
         })
         .ok();
     // A program whose profile has `panic = "abort"` ends a panic, which the
@@ -365,7 +367,9 @@ pub fn run_program(
                 Ok(Ended::Exit(code)) if !interactive || code == 0 || code == INTERRUPTED => {
                     return Ok(code);
                 }
-                Ok(_) => eprintln!("rawr: the program ended; a save runs it again"),
+                Ok(_) => rawr_import::process::say(format_args!(
+                    "rawr: the program ended; a save runs it again"
+                )),
                 Err(report) if !interactive || watcher.is_none() => return Err(report),
                 Err(Some(report)) => {
                     rawr_import::process::say(rawr_cli::diagnostic::render(&report))
@@ -400,10 +404,10 @@ pub fn run_program(
         let parsed = cells.counts().parsed;
         let graph = load(&next, &cells).ok();
         if rawr_cli::cells::verbose() {
-            eprintln!(
+            rawr_import::process::say(format_args!(
                 "rawr-import: a new session's load parsed {} sources",
                 cells.counts().parsed - parsed
-            );
+            ));
         }
         if let Some(next) = graph.as_ref().and_then(rawr_cli::supervise::Watcher::open) {
             watcher = Some(next);
@@ -1046,10 +1050,10 @@ fn session(
                             })
                             .inspect(|_| {
                                 if rawr_cli::cells::verbose() {
-                                    eprintln!(
+                                    rawr_import::process::say(format_args!(
                                         "rawr-import: a new runner started, read-set walks {}",
                                         rawr_import::progress::read_set_walks() - walks
-                                    );
+                                    ));
                                 }
                             })
                     }
@@ -1057,10 +1061,10 @@ fn session(
                 // What the save's store work came to, each cost that grows
                 // with the whole store (#1843, #1844).
                 if rawr_cli::cells::verbose() {
-                    eprintln!(
+                    rawr_import::process::say(format_args!(
                         "rawr-import: a save's store work: {}",
                         rawr_import::progress::store_work().since(store_work)
-                    );
+                    ));
                 }
                 match admitted {
                     Ok(crate::native::Watched::Installed) => {
@@ -1201,10 +1205,10 @@ fn respawned(
     match save.start(lane, unchanged) {
         Ok(_) => {
             if rawr_cli::cells::verbose() {
-                eprintln!(
+                rawr_import::process::say(format_args!(
                     "rawr-import: a restart respawned its runner with no check, read-set walks {}",
                     rawr_import::progress::read_set_walks() - walks
-                );
+                ));
             }
             rawr_cli::events::running();
             true
@@ -1223,7 +1227,9 @@ fn respawned(
                     }
                     cause = next.source();
                 }
-                eprintln!("rawr-import: a restart couldn't respawn its runner: {reason}");
+                rawr_import::process::say(format_args!(
+                    "rawr-import: a restart couldn't respawn its runner: {reason}"
+                ));
             }
             false
         }
@@ -1527,7 +1533,9 @@ fn prepare_on_lane(
         let prepared = match prepared.take() {
             Some(prepared) => {
                 if rawr_cli::cells::verbose() {
-                    eprintln!("rawr-import: a start used the preparation its restart made");
+                    rawr_import::process::say(format_args!(
+                        "rawr-import: a start used the preparation its restart made"
+                    ));
                 }
                 Ok(*prepared)
             }

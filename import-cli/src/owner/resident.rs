@@ -299,11 +299,11 @@ impl Start {
         }
         let rounds = rawr_import::progress::rounds();
         for (index, round) in rounds.iter().enumerate().skip(self.rounds) {
-            eprintln!("rawr-import: a save's round: {round}");
-            eprintln!(
+            rawr_import::process::say(format_args!("rawr-import: a save's round: {round}"));
+            rawr_import::process::say(format_args!(
                 "rawr-import: the round's phases took: {}",
                 rawr_import::progress::phases(index)
-            );
+            ));
         }
     }
 
@@ -316,7 +316,7 @@ impl Start {
         let api = rawr_import::progress::work();
         let rounds = rawr_import::progress::rounds();
         let rounds = rounds.get(self.rounds..).unwrap_or_default();
-        eprintln!(
+        rawr_import::process::say(format_args!(
             "rawr-import: a start ran Cargo resolutions {}, nightly builds {}, probes {}, runner builds {}, rounds {}, read-set walks {}",
             api.resolved() - self.api.resolved(),
             api.built() - self.api.built(),
@@ -324,13 +324,13 @@ impl Start {
             rawr_import::progress::runner_builds() - self.runner_builds,
             rounds.len(),
             rawr_import::progress::read_set_walks() - self.walks,
-        );
+        ));
         for (index, round) in rounds.iter().enumerate() {
-            eprintln!("rawr-import: a start's round: {round}");
-            eprintln!(
+            rawr_import::process::say(format_args!("rawr-import: a start's round: {round}"));
+            rawr_import::process::say(format_args!(
                 "rawr-import: the start's round's phases took: {}",
                 rawr_import::progress::phases(self.rounds + index)
-            );
+            ));
         }
     }
 }
@@ -370,12 +370,12 @@ impl Work {
         if !rawr_cli::cells::verbose() {
             return;
         }
-        eprintln!(
+        rawr_import::process::say(format_args!(
             "rawr-import: a save compare-read {} copies, loaded the program {} times, resolved the Rawr directory {} times",
             rawr::package::compare_reads() - self.compared,
             rawr::package::Graph::loads() - self.loads,
             rawr_import::location::resolutions() - self.resolved,
-        );
+        ));
     }
 
     /// With `RAWR_VERBOSE`, say what the save since `self` did.
@@ -384,14 +384,14 @@ impl Work {
             return;
         }
         let now = Self::now(cells);
-        eprintln!(
+        rawr_import::process::say(format_args!(
             "rawr-import: a save parsed {} sources, Cargo resolutions {}, API tables loaded {}, facades registered {}, watch roots staged {}",
             now.parsed - self.parsed,
             now.api.resolved() - self.api.resolved(),
             now.api.loaded() - self.api.loaded(),
             now.registered - self.registered,
             now.roots - self.roots,
-        );
+        ));
         self.tell_reads();
     }
 }
