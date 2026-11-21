@@ -99,8 +99,7 @@ pub const NAMESPACE_SEPARATOR: &str = Token::DoubleColon.literal_syntax();
 ///
 /// [`Engine`] is re-entrant.
 ///
-/// Currently, [`Engine`] is neither [`Send`] nor [`Sync`].
-/// Use the `sync` feature to make it [`Send`] `+` [`Sync`].
+/// [`Engine`] is [`Send`] `+` [`Sync`].
 ///
 /// # Example
 ///

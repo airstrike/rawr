@@ -42,7 +42,6 @@ static MOVE: OnceLock<Move> = OnceLock::new();
 
 /// The generation that calls from threads that don't own the program run
 /// in, with what they look up in it.
-#[cfg(feature = "sync")]
 static ELSEWHERE: std::sync::RwLock<Option<(Arc<Calls>, Arc<Shared>)>> =
     std::sync::RwLock::new(None);
 
@@ -303,8 +302,7 @@ fn in_place(value: &Dynamic, pins: Option<&crate::scope::Pins>) -> Result<Box<dy
 
 /// `text`, pinned for as long as the runner lives, once per text.
 fn lasting_text(text: ImmutableString) -> &'static str {
-    // Per thread, since without the `sync` feature the text is an `Rc` and
-    // pins of it can't be shared; the interpreter's thread is one.
+    // Per thread: the interpreter's thread is the one that pins texts.
     thread_local! {
         static TEXTS: &'static crate::scope::Pins =
             Box::leak(Box::new(crate::scope::Pins::constant()));
@@ -490,44 +488,25 @@ enum Borrow {
     Mutable,
 }
 
-#[cfg(feature = "sync")]
 static KEPT: Mutex<Option<Kept>> = Mutex::new(None);
-
-#[cfg(not(feature = "sync"))]
-thread_local! {
-    static KEPT: RefCell<Option<Kept>> = const { RefCell::new(None) };
-}
 
 /// `change` of the kept program values, or `None` while they are busy, as
 /// they are when a value a change drops drops a marked value (#1492).
 fn try_kept<R>(change: impl FnOnce(&mut Kept) -> R) -> Option<R> {
-    #[cfg(feature = "sync")]
-    {
-        let mut kept = match KEPT.try_lock() {
-            Ok(kept) => kept,
-            Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
-            Err(std::sync::TryLockError::WouldBlock) => return None,
-        };
-        Some(change(kept.get_or_insert_with(Kept::default)))
-    }
-    #[cfg(not(feature = "sync"))]
-    KEPT.with(|kept| {
-        let mut kept = kept.try_borrow_mut().ok()?;
-        Some(change(kept.get_or_insert_with(Kept::default)))
-    })
+    let mut kept = match KEPT.try_lock() {
+        Ok(kept) => kept,
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+        Err(std::sync::TryLockError::WouldBlock) => return None,
+    };
+    Some(change(kept.get_or_insert_with(Kept::default)))
 }
 
 /// `change` of the kept program values.
 fn kept<R>(change: impl FnOnce(&mut Kept) -> R) -> R {
-    #[cfg(feature = "sync")]
-    {
-        let mut kept = KEPT
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        change(kept.get_or_insert_with(Kept::default))
-    }
-    #[cfg(not(feature = "sync"))]
-    KEPT.with_borrow_mut(|kept| change(kept.get_or_insert_with(Kept::default)))
+    let mut kept = KEPT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    change(kept.get_or_insert_with(Kept::default))
 }
 
 /// Register the makers of a crate's stand-ins, each by its type's path
@@ -779,7 +758,6 @@ pub fn __rawr_island_trait_v1(owner: &str, op: u8, handle: u64, other: u64) -> V
             return caught.reply(reply);
         }
     }
-    #[cfg(feature = "sync")]
     if let Some((calls, shared)) = elsewhere() {
         let _entry = crate::future::entry();
         let caught = panic::Caught::default();
@@ -823,7 +801,6 @@ pub fn __rawr_island_next_v1(handle: u64, natives: &mut Natives) -> Vec<u8> {
             return caught.reply(reply);
         }
     }
-    #[cfg(feature = "sync")]
     if let Some((calls, shared)) = elsewhere() {
         let _entry = crate::future::entry();
         let _arena = ARENA.get().map(|arena| arena());
@@ -914,7 +891,6 @@ pub fn __rawr_island_call_v4(
             return current.answer(path, arguments, given, &lent, natives);
         }
     }
-    #[cfg(feature = "sync")]
     if let Some((calls, shared)) = elsewhere() {
         let _entry = crate::future::entry();
         // The call's native values live in an arena of its own, which
@@ -986,7 +962,6 @@ pub fn __rawr_scope_release_v1(nonce: u64, shared: bool) {
 /// which owns the program from now on, and on every other thread. Async
 /// steps run in it too (D513.3).
 pub fn publish(bootstrap: Bootstrap) {
-    #[cfg(feature = "sync")]
     MOVED.set(None);
     install(Current::new(bootstrap));
 }
@@ -1012,28 +987,23 @@ fn install(current: Current) {
     }
     let current = Rc::new(current);
     crate::future::serve(current.clone());
-    #[cfg(feature = "sync")]
-    {
-        crate::future::publish(current.shared.clone());
-        *ELSEWHERE
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) =
-            Some((current.calls.clone(), current.shared.clone()));
-    }
+    crate::future::publish(current.shared.clone());
+    *ELSEWHERE
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) =
+        Some((current.calls.clone(), current.shared.clone()));
     CURRENT.with(|slot| *slot.borrow_mut() = Some(current));
 }
 
 /// A generation installed while a marked `main`'s own frame may run on, as
 /// a `main` that loops in script code does: the libraries its calls ran
 /// with, and the ones and the runtime they run with now.
-#[cfg(feature = "sync")]
 struct Moved {
     from: [crate::SharedModule; 2],
     to: [crate::SharedModule; 2],
     runtime: crate::Shared<crate::host::runtime::Registry>,
 }
 
-#[cfg(feature = "sync")]
 thread_local! {
     /// The generation installed last, until a marked `main`'s own frame
     /// follows it.
@@ -1046,7 +1016,6 @@ thread_local! {
 /// entries (D553.1), so a `main` that loops in script code calls the new
 /// code from its next statement on, its locals as they were. Its own body
 /// is the same text, or the save restarted it.
-#[cfg(feature = "sync")]
 pub(crate) fn follow(
     global: &mut crate::eval::GlobalRuntimeState,
     caches: &mut crate::eval::Caches,
@@ -1098,13 +1067,11 @@ fn cargo_named(
 
 /// The future of the program's async `main`, which its runtime's entry
 /// awaits (`__rawr_island_main_v1`).
-#[cfg(feature = "sync")]
 static MAIN: Mutex<Option<crate::future::Future>> = Mutex::new(None);
 
 /// Hold `future`, the Rawr `main`'s, for the native entry its runtime's
 /// attribute carries (D513.4). The runner then runs that entry, from
 /// [`take_entry`].
-#[cfg(feature = "sync")]
 pub fn await_main(future: crate::future::Future) {
     if let Ok(mut main) = MAIN.lock() {
         *main = Some(future);
@@ -1114,7 +1081,6 @@ pub fn await_main(future: crate::future::Future) {
 /// The Rawr `main`'s future as the native entry awaits it: its status is
 /// the process's, as `main`'s output gives Rust's (0, or 1 for an `Err`),
 /// and 101 when it fails.
-#[cfg(feature = "sync")]
 #[unsafe(no_mangle)]
 pub fn __rawr_island_main_v1() -> std::pin::Pin<Box<dyn std::future::Future<Output = i32> + Send>> {
     let Some(future) = MAIN.lock().ok().and_then(|mut main| main.take()) else {
@@ -1159,7 +1125,6 @@ pub fn main_failure(error: &program::Error) -> String {
 
 /// Write `text`, what an async `main` ended with, to stderr, which the
 /// run's session hears too when stderr is a terminal (#2319).
-#[cfg(feature = "sync")]
 fn main_stderr(text: &str) {
     eprint!("{text}");
     #[cfg(unix)]
@@ -1436,7 +1401,6 @@ fn with_types<R>(
             &current.calls.types,
         );
     }
-    #[cfg(feature = "sync")]
     if let Some((calls, shared)) = elsewhere() {
         return read(shared.authority.model(), &calls.types);
     }
@@ -1483,7 +1447,7 @@ fn current() -> Option<Rc<Current>> {
 
 /// The free function at `path` of the generation published on this
 /// thread, as a callable native code holds, for a test.
-#[cfg(all(test, feature = "sync"))]
+#[cfg(test)]
 pub(crate) fn callable(path: &str) -> Option<crate::future::Callable> {
     let current = current()?;
     let function = current.calls.items.get(&(false, path.to_owned()))?.clone();
@@ -1503,7 +1467,6 @@ fn failure(message: &str) -> Vec<u8> {
 /// One published generation, on the thread that owns the program.
 struct Current {
     bootstrap: Bootstrap,
-    #[cfg(feature = "sync")]
     shared: Arc<Shared>,
     calls: Arc<Calls>,
 }
@@ -1543,7 +1506,6 @@ impl crate::future::Host for Current {
             .map_err(runtime_error)
     }
 
-    #[cfg(feature = "sync")]
     fn share(&self) -> Option<crate::future::Program> {
         Some(self.shared.clone() as crate::future::Program)
     }
@@ -1551,7 +1513,7 @@ impl crate::future::Host for Current {
 
 /// `authority` with `runtime` as any thread may use it, with each script
 /// type's own `Clone` found once, as a test calls it.
-#[cfg(all(test, feature = "sync"))]
+#[cfg(test)]
 pub(crate) fn shared(
     authority: program::Authority,
     runtime: crate::Shared<crate::host::runtime::Registry>,
@@ -1561,7 +1523,6 @@ pub(crate) fn shared(
 
 /// `authority` with `runtime` as any thread may use it, with each script
 /// type's own `Clone` found once.
-#[cfg(feature = "sync")]
 fn share(
     authority: program::Authority,
     runtime: crate::Shared<crate::host::runtime::Registry>,
@@ -1631,7 +1592,6 @@ fn share(
 }
 
 /// The script type of `value`, a script struct or enum.
-#[cfg(feature = "sync")]
 fn script_identity(value: &Dynamic) -> Option<&type_def::Identity> {
     match &value.0 {
         crate::types::dynamic::Union::Struct(value, ..) => Some(value.identity()),
@@ -1643,7 +1603,6 @@ fn script_identity(value: &Dynamic) -> Option<&type_def::Identity> {
 /// The function that writes a lifted closure, by its path, or a method's
 /// owner and name: its closures are named `{name}{closure#N}`. `None` for
 /// any other item.
-#[cfg(feature = "sync")]
 fn enclosing(key: &item::Key) -> Option<String> {
     let mut path = key.to_string();
     let at = path.find("{closure#")?;
@@ -1653,7 +1612,6 @@ fn enclosing(key: &item::Key) -> Option<String> {
 
 /// The closures each function writes, in key order, found once for a
 /// generation.
-#[cfg(feature = "sync")]
 fn layouts<'a>(
     items: impl Iterator<Item = &'a item::Value>,
 ) -> HashMap<String, Box<[item::Value]>> {
@@ -1676,7 +1634,6 @@ fn layouts<'a>(
 /// same keys, each with the same signature and captures (D553.5). A
 /// closure inserted before another renumbers it, and the other's body
 /// would run a sibling's.
-#[cfg(feature = "sync")]
 fn same_closures(one: Option<&[item::Value]>, other: Option<&[item::Value]>) -> bool {
     match (one, other) {
         (Some(one), Some(other)) => {
@@ -1690,7 +1647,6 @@ fn same_closures(one: Option<&[item::Value]>, other: Option<&[item::Value]>) -> 
 /// comments and with each run of whitespace one space: an edit that only
 /// moves or reflows it changes nothing. The closures it writes are part of
 /// it, so an edit to one restarts too. `None` without a `fn main`.
-#[cfg(feature = "sync")]
 fn main_text(text: &str) -> Option<String> {
     let bytes = text.as_bytes();
     let is_ident = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
@@ -1796,7 +1752,6 @@ fn main_text(text: &str) -> Option<String> {
 /// - An async function a suspended future waits in, whose body changed:
 ///   its frame can't resume in the new body, and runs it from its start
 ///   only in a fresh program (#2117).
-#[cfg(feature = "sync")]
 #[must_use]
 pub fn refusal(
     current: &crate::reload::Generation,
@@ -1864,7 +1819,6 @@ pub fn refusal(
 /// `async fn` writes it. Of the bodies that changed, it names the
 /// innermost: a body another awaits first suspends after the one awaiting
 /// it.
-#[cfg(feature = "sync")]
 fn suspension(
     machine_body: impl Fn(&crate::item::Key) -> Option<u64>,
     in_async_fn: impl Fn(&crate::item::Key) -> bool,
@@ -1892,7 +1846,6 @@ fn suspension(
 
 /// What still depends on a script type a save removed or changed the
 /// fields of (#1746).
-#[cfg(feature = "sync")]
 enum Hold {
     /// A value of it lives.
     Value,
@@ -1906,7 +1859,6 @@ enum Hold {
 /// depends on it: given the type and its schema in `next`. A removed type
 /// is named first, as a type whose fields hold it changed only because it
 /// went. `None` when nothing depends on any.
-#[cfg(feature = "sync")]
 fn departure(
     current: &program::schema::Manifest,
     next: &program::schema::Manifest,
@@ -1990,7 +1942,6 @@ pub enum Admission {
 /// new fields (#2026), or the generation is refused when one can't be. A
 /// future that suspended since the compile is checked too: it can't
 /// resume in a body that changed (#2117).
-#[cfg(feature = "sync")]
 pub fn admit(bootstrap: Bootstrap) -> Admission {
     let next = Current::new(bootstrap);
     let mut migrated = None;
@@ -2044,7 +1995,6 @@ pub fn admit(bootstrap: Bootstrap) -> Admission {
 /// Note that `next` replaces `running`, for a marked `main`'s own frame
 /// to follow ([`follow`]). A frame that hasn't followed the generation
 /// before runs with the libraries of the one it followed last.
-#[cfg(feature = "sync")]
 fn replaced(running: &Current, next: &Current) {
     let libraries = |current: &Current| {
         current
@@ -2069,7 +2019,6 @@ fn replaced(running: &Current, next: &Current) {
 /// code holds by their handle and those in the cells a runner's proxies
 /// hold, every one the census counts. `Ok` says what it did, `Err` why it
 /// can't, and nothing is rewritten then.
-#[cfg(feature = "sync")]
 fn migrate(
     running: &Current,
     next: &Current,
@@ -2149,7 +2098,6 @@ fn migrate(
 /// The published program as any thread may use it (D490): calls with an
 /// evaluation of their own, checks of values native code gives, and each
 /// script type's own `Clone`.
-#[cfg(feature = "sync")]
 struct Shared {
     authority: program::Authority,
     runtime: crate::Shared<crate::host::runtime::Registry>,
@@ -2168,7 +2116,6 @@ struct Shared {
     layouts: HashMap<String, Box<[item::Value]>>,
 }
 
-#[cfg(feature = "sync")]
 impl crate::future::Remote for Shared {
     fn invoke(
         &self,
@@ -2283,14 +2230,12 @@ impl Current {
     fn new(bootstrap: Bootstrap) -> Self {
         let authority = bootstrap.catalog().authority();
         let calls = Arc::new(Calls::new(authority, bootstrap.catalog().runtime()));
-        #[cfg(feature = "sync")]
         let shared = {
             let (authority, runtime) = bootstrap.catalog().shared();
             share(authority, runtime)
         };
         Self {
             bootstrap,
-            #[cfg(feature = "sync")]
             shared,
             calls,
         }
@@ -2324,7 +2269,6 @@ impl Current {
 
 /// The calls from threads that don't own the program, in the generation
 /// published last.
-#[cfg(feature = "sync")]
 fn elsewhere() -> Option<(Arc<Calls>, Arc<Shared>)> {
     ELSEWHERE.read().ok()?.clone()
 }
@@ -3028,20 +2972,10 @@ enum Answer {
 
 /// The derived `Default` of the script type at `owner`.
 fn derived_default(model: &program::model::Model, owner: &str) -> Result<Dynamic, String> {
-    #[cfg(feature = "sync")]
-    {
-        model
-            .default_by_path(owner)
-            .ok_or_else(|| format!("rawr: the running program has no type `{owner}`"))?
-            .map_err(|error| format!("rawr: `{owner}`'s `Default`: {error}"))
-    }
-    #[cfg(not(feature = "sync"))]
-    {
-        let _ = model;
-        Err(format!(
-            "rawr: `{owner}`'s derived `Default` needs the runner"
-        ))
-    }
+    model
+        .default_by_path(owner)
+        .ok_or_else(|| format!("rawr: the running program has no type `{owner}`"))?
+        .map_err(|error| format!("rawr: `{owner}`'s `Default`: {error}"))
 }
 
 /// End each stand-in's receiver's borrow in `values` (`put_kept`).
@@ -3053,7 +2987,7 @@ fn restore(held: &[(usize, u64, Borrow)], values: &mut [Dynamic]) {
     }
 }
 
-#[cfg(all(test, feature = "sync"))]
+#[cfg(test)]
 mod tests {
     use crate::{host, Dynamic, Engine, Shared};
 
@@ -3206,7 +3140,7 @@ mod tests {
 /// any depth, the one value and not a copy, and taken by a `&mut self`
 /// call only while none runs; a `&mut self` call beside another call is
 /// rustc's borrow conflict (#1302).
-#[cfg(all(test, feature = "sync"))]
+#[cfg(test)]
 #[test]
 fn shared_calls_share_a_kept_value_and_a_mutable_one_takes_it() {
     let handle = keep(Dynamic::from(1_i64));
@@ -3237,7 +3171,7 @@ fn shared_calls_share_a_kept_value_and_a_mutable_one_takes_it() {
 /// pinned with the value in place, once however often it is read, and let
 /// go when the value is next taken `&mut`: a page whose label is read and
 /// renamed in a loop pins one string, never one per call (#1322, #1321).
-#[cfg(all(test, feature = "sync"))]
+#[cfg(test)]
 #[test]
 fn a_kept_value_s_pins_stay_flat_and_go_at_its_next_mutable_take() {
     let pinned = |handle: u64| {
@@ -3266,7 +3200,7 @@ fn a_kept_value_s_pins_stay_flat_and_go_at_its_next_mutable_take() {
 /// A generation compiled on the protocol thread is admitted on the thread
 /// that owns the program (D553.9, check 2): what a compiled program holds
 /// moves between threads.
-#[cfg(all(test, feature = "sync"))]
+#[cfg(test)]
 #[test]
 fn a_compiled_program_moves_to_the_owner_thread() {
     fn moves<T: Send>() {}
@@ -3279,7 +3213,7 @@ fn a_compiled_program_moves_to_the_owner_thread() {
 
 /// What of `main` a running program compares: its text without comments
 /// or layout, strings and characters as written, up to its closing brace.
-#[cfg(all(test, feature = "sync"))]
+#[cfg(test)]
 #[test]
 fn main_text_ignores_layout_and_comments_and_stops_at_its_brace() {
     let one = "// rawr\nuse x::y;\n\nfn main() {\n    // a comment\n    let s = \"}\";\n    let c = '}';\n    run(|t| { t + 1 }, 40);\n}\n\nfn step() {}\n";

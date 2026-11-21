@@ -14,7 +14,7 @@ use std::{
 ///
 /// # Thread Safety
 ///
-/// Currently, [`AST`] is neither `Send` nor `Sync`. Turn on the `sync` feature to make it `Send + Sync`.
+/// [`AST`] is `Send + Sync`.
 #[derive(Clone)]
 pub struct AST {
     /// Source of the [`AST`].

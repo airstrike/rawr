@@ -9,7 +9,7 @@ repository = "https://github.com/airstrike/rawr"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-rawr = { path = "..", features = ["sync", "debugging", "syntax"] }
+rawr = { path = "..", features = ["debugging", "syntax"] }
 rawr-location = { path = "../location" }
 # Cargo's coloured rendering of rustc's errors, stripped for a pipe.
 anstream = { version = "1.0.0", default-features = false }

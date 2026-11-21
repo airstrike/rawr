@@ -9,7 +9,6 @@ pub(crate) mod machine;
 pub(crate) mod stack;
 mod stmt;
 mod target;
-#[cfg(feature = "sync")]
 pub(crate) mod threads;
 
 #[allow(unused_imports)]

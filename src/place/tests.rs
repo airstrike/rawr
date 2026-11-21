@@ -273,9 +273,7 @@ fn shared_claim_cleanup_survives_unwind_and_does_not_cross_threads() {
             Operation::Element { mutable: false },
             &mut [Dynamic::from_int(0)],
             &mut |_| {
-                // Without `sync`, a handle is not Send at all; with it, another
-                // thread still cannot find this thread's shared claim.
-                #[cfg(feature = "sync")]
+                // Another thread cannot find this thread's shared claim.
                 assert!(std::thread::spawn({
                     let alias = alias.clone();
                     move || alias.invoke(Operation::Len, &mut []).is_err()

@@ -1,12 +1,8 @@
-#[cfg(not(feature = "sync"))]
 use rawr::{AST, EvalAltResult};
 use rawr::{Engine, FnPtr, INT, Scope};
 use std::any::TypeId;
-#[cfg(not(feature = "sync"))]
-use std::cell::{OnceCell, RefCell};
 use std::mem::take;
-#[cfg(not(feature = "sync"))]
-use std::rc::Rc;
+use std::sync::{Arc, OnceLock, RwLock};
 
 /// A closure that calls another closure is passed to a native, which calls it.
 #[test]
@@ -194,16 +190,15 @@ fn test_closures_external() {
 }
 
 #[test]
-#[cfg(not(feature = "sync"))]
 fn test_closures_callback() {
-    type SingleNode = Rc<dyn Node>;
+    type SingleNode = Arc<dyn Node + Send + Sync>;
 
     trait Node {
         fn run(&self, x: INT) -> Result<INT, Box<EvalAltResult>>;
     }
 
     struct PhaserNode {
-        func: Box<dyn Fn(INT) -> Result<INT, Box<EvalAltResult>>>,
+        func: Box<dyn Fn(INT) -> Result<INT, Box<EvalAltResult>> + Send + Sync>,
     }
 
     impl Node for PhaserNode {
@@ -212,7 +207,7 @@ fn test_closures_callback() {
         }
     }
 
-    fn phaser(callback: impl Fn(INT) -> Result<INT, Box<EvalAltResult>> + 'static) -> impl Node {
+    fn phaser(callback: impl Fn(INT) -> Result<INT, Box<EvalAltResult>> + Send + Sync + 'static) -> impl Node + Send + Sync {
         PhaserNode { func: Box::new(callback) }
     }
 
@@ -220,9 +215,9 @@ fn test_closures_callback() {
 
     // The script is compiled after `phaser` is registered, so the check knows
     // the name. The callback reads the compiled script from this cell.
-    let ast: Rc<OnceCell<AST>> = Rc::new(OnceCell::new());
+    let ast: Arc<OnceLock<AST>> = Arc::new(OnceLock::new());
 
-    let shared_engine = Rc::new(RefCell::new(Engine::new_raw()));
+    let shared_engine = Arc::new(RwLock::new(Engine::new_raw()));
     let engine2 = shared_engine.clone();
     let ast2 = ast.clone();
 
@@ -230,9 +225,9 @@ fn test_closures_callback() {
         let engine = engine2.clone();
         let ast = ast2.clone();
 
-        let callback = Box::new(move |x: INT| fp.call(&engine.borrow(), ast.get().unwrap(), (x,)));
+        let callback = Box::new(move |x: INT| fp.call(&engine.read().unwrap(), ast.get().unwrap(), (x,)));
 
-        Rc::new(phaser(callback)) as SingleNode
+        Arc::new(phaser(callback)) as SingleNode
     });
 
     let compiled = engine
@@ -245,9 +240,9 @@ fn test_closures_callback() {
         .unwrap();
     let _ = ast.set(compiled);
 
-    *shared_engine.borrow_mut() = engine;
+    *shared_engine.write().unwrap() = engine;
 
-    let cb = shared_engine.borrow().eval_ast::<SingleNode>(ast.get().unwrap()).unwrap();
+    let cb = shared_engine.read().unwrap().eval_ast::<SingleNode>(ast.get().unwrap()).unwrap();
 
     assert_eq!(cb.run(21).unwrap(), 42);
 }

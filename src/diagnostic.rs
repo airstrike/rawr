@@ -15,7 +15,6 @@ mod view;
 pub mod wire;
 
 pub use crate::types::Rendered;
-#[cfg(any(feature = "sync", feature = "rust-import"))]
 pub(crate) use panic::located;
 pub use panic::{hooked, locate_panics_with, note, panic, panic_message, panicked, BACKTRACE_NOTE};
 pub(crate) use render::offset;

@@ -97,7 +97,7 @@ impl Key {
 
     /// Whether `closure` is one of the closures this callable writes, as
     /// [`Self::closure`] keys them.
-    #[cfg(all(feature = "rust-import", feature = "sync"))]
+    #[cfg(feature = "rust-import")]
     pub(crate) fn writes(&self, closure: &Self) -> bool {
         closure.package() == self.package()
             && closure.modules() == self.modules()

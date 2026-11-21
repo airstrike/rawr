@@ -17,7 +17,6 @@ proc-macro = true
 
 [features]
 default = []
-sync = []
 metadata = []
 
 [dependencies]

@@ -17,37 +17,6 @@ mod private {
 /// Exported under the `internals` feature only.
 ///
 /// This trait is sealed and cannot be implemented.
-///
-/// Currently, [`Variant`] is not [`Send`] nor [`Sync`], so it can practically be any type.
-/// Turn on the `sync` feature to restrict it to only types that implement [`Send`] `+` [`Sync`].
-#[cfg(not(feature = "sync"))]
-pub trait Variant: Any + private::Sealed {
-    /// Convert this [`Variant`] trait object to [`&dyn Any`][Any].
-    #[must_use]
-    fn as_any(&self) -> &dyn Any;
-
-    /// Convert this [`Variant`] trait object to [`&mut dyn Any`][Any].
-    #[must_use]
-    fn as_any_mut(&mut self) -> &mut dyn Any;
-
-    /// Convert this [`Variant`] trait object to [`Box<dyn Any>`][Any].
-    #[must_use]
-    fn as_boxed_any(self: Box<Self>) -> Box<dyn Any>;
-
-    /// Get the name of this type.
-    #[must_use]
-    fn type_name(&self) -> &'static str;
-
-    /// Clone this [`Variant`] trait object.
-    #[must_use]
-    fn clone_object(&self) -> Box<dyn Variant>;
-}
-
-/// _(internals)_ Trait to represent any type.
-/// Exported under the `internals` feature only.
-///
-/// This trait is sealed and cannot be implemented.
-#[cfg(feature = "sync")]
 pub trait Variant: Any + Send + Sync + private::Sealed {
     /// Convert this [`Variant`] trait object to [`&dyn Any`][Any].
     #[must_use]

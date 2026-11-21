@@ -1251,8 +1251,7 @@ impl Dynamic {
         ))
     }
     /// Turn the [`Dynamic`] value into a shared [`Dynamic`] value backed by an
-    /// [`Rc<RefCell<Dynamic>>`][std::rc::Rc] or [`Arc<RwLock<Dynamic>>`][std::sync::Arc]
-    /// depending on the `sync` feature.
+    /// [`Arc<RwLock<Dynamic>>`][std::sync::Arc].
     ///
     /// Shared [`Dynamic`] values are relatively cheap to clone as they simply increment the
     /// reference counts.
@@ -1448,8 +1447,7 @@ impl Dynamic {
     /// If the [`Dynamic`] is a _shared_ value, it returns the shared value if there are no
     /// outstanding references, or a cloned copy otherwise.
     ///
-    /// Under the `sync` feature, a _shared_ value may deadlock.
-    /// Otherwise, the data may currently be borrowed for write (so its type cannot be determined).
+    /// A _shared_ value may deadlock.
     ///
     /// Under these circumstances, the _shared_ value is simply cloned, which means that the returned
     /// value is also shared.
@@ -1496,8 +1494,7 @@ impl Dynamic {
     ///
     /// If the [`Dynamic`] is a _shared_ value, a cloned copy of the shared value is returned.
     ///
-    /// Under the `sync` feature, a _shared_ value may deadlock.
-    /// Otherwise, the data may currently be borrowed for write (so its type cannot be determined).
+    /// A _shared_ value may deadlock.
     ///
     /// Under these circumstances, the _shared_ value is simply cloned.
     ///
@@ -1526,8 +1523,7 @@ impl Dynamic {
     ///
     /// # Shared Value
     ///
-    /// Under the `sync` feature, a _shared_ value may deadlock.
-    /// Otherwise, the data may currently be borrowed for write (so its type cannot be determined).
+    /// A _shared_ value may deadlock.
     ///
     /// Under these circumstances, the _shared_ value is simply cloned.
     ///
@@ -1550,8 +1546,7 @@ impl Dynamic {
     ///
     /// # Shared Value
     ///
-    /// Under the `sync` feature, a _shared_ value may deadlock.
-    /// Otherwise, the data may currently be borrowed for write (so its type cannot be determined).
+    /// A _shared_ value may deadlock.
     ///
     /// Under these circumstances, the _shared_ value is simply cloned, meaning that the result
     /// value will also be _shared_.
@@ -1562,9 +1557,6 @@ impl Dynamic {
         match self.0 {
             Union::Shared(cell, tag, access) => match crate::func::native::shared_try_take(cell) {
                 // If there are no outstanding references, consume the shared value and return it
-                #[cfg(not(feature = "sync"))]
-                Ok(value) => value.into_inner().flatten(),
-                #[cfg(feature = "sync")]
                 Ok(value) => value.into_inner().unwrap().flatten(),
                 // If there are outstanding references, return a cloned copy
                 Err(cell) => {
@@ -1581,19 +1573,12 @@ impl Dynamic {
     ///
     /// ## Note
     ///
-    /// Under the `sync` feature, shared values use [`RwLock`][std::sync::RwLock] and they are never locked.
+    /// Shared values use [`RwLock`][std::sync::RwLock] and they are never locked.
     /// Access just waits until the [`RwLock`][std::sync::RwLock] is released.
-    /// So this method always returns [`false`] under [`Sync`].
+    /// So this method always returns [`false`].
     #[inline]
     #[must_use]
-    pub fn is_locked(&self) -> bool {
-        if let Union::Shared(ref _cell, ..) = self.0 {
-            #[cfg(not(feature = "sync"))]
-            return _cell.try_borrow().is_err();
-            #[cfg(feature = "sync")]
-            return false;
-        }
-
+    pub const fn is_locked(&self) -> bool {
         false
     }
     /// Get a reference of a specific type to the [`Dynamic`].
@@ -1920,9 +1905,6 @@ impl Dynamic {
             unreachable!("checked shared");
         };
         *self = match crate::func::native::shared_try_take(cell) {
-            #[cfg(not(feature = "sync"))]
-            Ok(value) => value.into_inner(),
-            #[cfg(feature = "sync")]
             Ok(value) => value.into_inner().unwrap(),
             Err(cell) => Self(Union::Shared(cell, tag, access)),
         };

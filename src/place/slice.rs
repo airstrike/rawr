@@ -186,10 +186,7 @@ fn reach_at<E: Policy>(
 /// How a slice a native method lends from its receiver is reached: claim
 /// the receiver, call the method again, and hand its slice to the visitor
 /// for one operation.
-#[cfg(feature = "sync")]
 type Lend<T> = dyn Fn(&mut dyn FnMut(&[T]) -> RawrResult) -> RawrResult + Send + Sync;
-#[cfg(not(feature = "sync"))]
-type Lend<T> = dyn Fn(&mut dyn FnMut(&[T]) -> RawrResult) -> RawrResult;
 
 /// A shared slice a native method lends from its receiver, as iced's
 /// `combo_box::State::options(&self) -> &[T]` does (#687). The place holds
@@ -210,10 +207,7 @@ struct Lending<E: Policy> {
 /// it: the receiver shared from where it is, in the runner's arena (the
 /// `dyn Any` it takes), which the method lends the slice from
 /// ([`SliceHold`]).
-#[cfg(feature = "sync")]
 type Hold<T> = dyn Fn(&mut dyn Any) -> RawrResultOf<SliceHold<T>> + Send + Sync;
-#[cfg(not(feature = "sync"))]
-type Hold<T> = dyn Fn(&mut dyn Any) -> RawrResultOf<SliceHold<T>>;
 
 /// A receiver shared from where it is, and the method that lends a slice
 /// of it ([`Hold`]): the slice is borrowed for as long as the pins that
@@ -460,7 +454,6 @@ pub fn lasting_of<E: Policy>(place: &Place) -> Option<&'static [E::Value]> {
 /// that `reach` hands to its visitor at each operation, through `root`,
 /// cut to `range`, so no element is copied and the root's own loan or
 /// lender bounds the window's life.
-#[cfg(feature = "sync")]
 fn window<E: Policy>(
     root: &Place,
     range: Range<usize>,
@@ -481,32 +474,9 @@ fn window<E: Policy>(
     )
 }
 
-/// The elements `range` of the slice `root` (`Place::window`): a slice
-/// that `reach` hands to its visitor at each operation, through `root`,
-/// cut to `range`, so no element is copied and the root's own loan or
-/// lender bounds the window's life.
-#[cfg(not(feature = "sync"))]
-fn window<E: Policy>(
-    root: &Place,
-    range: Range<usize>,
-    reach: impl Fn(&Place, &mut dyn FnMut(&[E::Value]) -> RawrResult) -> RawrResult + 'static,
-) -> RawrResult {
-    let held = root.clone();
-    lending::<E>(
-        &root.witness,
-        Box::new(move |visit| {
-            reach(&held, &mut |value| {
-                visit(value.get(range.clone()).ok_or_else(out_of_bounds)?)
-            })
-        }),
-        None,
-    )
-}
-
 /// The shared slice a native method lends from its receiver (#687), reached
 /// through `lend` at each operation: `lend` claims the receiver, calls the
 /// method and hands its slice to the visitor it takes.
-#[cfg(feature = "sync")]
 pub fn lent_by<E: Policy>(
     witness: &Witness,
     lend: impl Fn(&mut dyn FnMut(&[E::Value]) -> RawrResult) -> RawrResult + Send + Sync + 'static,
@@ -514,37 +484,13 @@ pub fn lent_by<E: Policy>(
     lending::<E>(witness, Box::new(lend), None)
 }
 
-/// The shared slice a native method lends from its receiver (#687), reached
-/// through `lend` at each operation: `lend` claims the receiver, calls the
-/// method and hands its slice to the visitor it takes.
-#[cfg(not(feature = "sync"))]
-pub fn lent_by<E: Policy>(
-    witness: &Witness,
-    lend: impl Fn(&mut dyn FnMut(&[E::Value]) -> RawrResult) -> RawrResult + 'static,
-) -> RawrResult {
-    lending::<E>(witness, Box::new(lend), None)
-}
-
 /// [`lent_by`], whose slice `hold` also borrows past one operation
 /// ([`held`]): it shares the receiver from where it is in the runner's
 /// arena, which it takes as a `dyn Any`.
-#[cfg(feature = "sync")]
 pub fn lent_by_holding<E: Policy>(
     witness: &Witness,
     lend: impl Fn(&mut dyn FnMut(&[E::Value]) -> RawrResult) -> RawrResult + Send + Sync + 'static,
     hold: impl Fn(&mut dyn Any) -> RawrResultOf<SliceHold<E::Value>> + Send + Sync + 'static,
-) -> RawrResult {
-    lending::<E>(witness, Box::new(lend), Some(Box::new(hold)))
-}
-
-/// [`lent_by`], whose slice `hold` also borrows past one operation
-/// ([`held`]): it shares the receiver from where it is in the runner's
-/// arena, which it takes as a `dyn Any`.
-#[cfg(not(feature = "sync"))]
-pub fn lent_by_holding<E: Policy>(
-    witness: &Witness,
-    lend: impl Fn(&mut dyn FnMut(&[E::Value]) -> RawrResult) -> RawrResult + 'static,
-    hold: impl Fn(&mut dyn Any) -> RawrResultOf<SliceHold<E::Value>> + 'static,
 ) -> RawrResult {
     lending::<E>(witness, Box::new(lend), Some(Box::new(hold)))
 }

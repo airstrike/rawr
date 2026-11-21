@@ -19,9 +19,6 @@
 
 use super::*;
 
-#[cfg(not(feature = "sync"))]
-type WeakShared<T> = std::rc::Weak<T>;
-#[cfg(feature = "sync")]
 type WeakShared<T> = std::sync::Weak<T>;
 
 /// What a runner reads of a crate's own `Rc` or `Arc` that a rawr `Rc` or
@@ -123,7 +120,6 @@ pub(crate) fn new(value: Dynamic) -> Dynamic {
 
 /// A new `Rc` or `Arc` of `value`, a crate value's handle, standing for
 /// the crate's own pointer `link` reads.
-#[cfg(feature = "sync")]
 pub(crate) fn native(value: Dynamic, link: Link) -> Dynamic {
     let counted = Counted::new(value);
     let _ = counted.0.native.set(link);
@@ -132,7 +128,6 @@ pub(crate) fn native(value: Dynamic, link: Link) -> Dynamic {
 
 /// The value the `Rc` or `Arc` `value` points to, rawr's strong count of
 /// it, and whether `value` is rawr's only pointer to it, strong or weak.
-#[cfg(feature = "sync")]
 pub(crate) fn pointee(value: &Dynamic) -> Option<(Dynamic, usize, bool)> {
     with_counted(value, |pointer| {
         let strong = crate::Shared::strong_count(&pointer.0);
@@ -143,7 +138,6 @@ pub(crate) fn pointee(value: &Dynamic) -> Option<(Dynamic, usize, bool)> {
 
 /// Link the `Rc` or `Arc` `value` to the crate's own pointer `link` reads,
 /// once.
-#[cfg(feature = "sync")]
 pub(crate) fn link(value: &Dynamic, link: Link) {
     with_counted(value, |pointer| {
         let _ = pointer.0.native.set(link);

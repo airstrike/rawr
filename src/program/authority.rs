@@ -58,21 +58,21 @@ impl Authority {
 
     /// The body hash of the async function `key` names, as its state
     /// machine has it.
-    #[cfg(all(feature = "rust-import", feature = "sync"))]
+    #[cfg(feature = "rust-import")]
     pub(crate) fn machine_body(&self, key: &item::Key) -> Option<u64> {
         self.executable.machine_body(key)
     }
 
     /// Whether an `async fn` or method of this generation writes the
     /// closure `step` names.
-    #[cfg(all(feature = "rust-import", feature = "sync"))]
+    #[cfg(feature = "rust-import")]
     pub(crate) fn in_async_fn(&self, step: &item::Key) -> bool {
         self.executable.in_async_fn(step)
     }
 
     /// The libraries a call of this generation's functions runs with: its
     /// script functions, and the compiler's support for them.
-    #[cfg(all(feature = "rust-import", feature = "sync"))]
+    #[cfg(feature = "rust-import")]
     pub(crate) fn libraries(&self) -> [&crate::SharedModule; 2] {
         let ast = self.executable.ast();
         [ast.shared_lib(), ast.shared_support()]
@@ -126,7 +126,7 @@ impl Authority {
     /// Evaluate the program's top level against `runtime`, as its calls
     /// run: a snippet's statements outside any function call std and the
     /// crates through the same bindings its functions do (#1460).
-    #[cfg(all(feature = "rust-import", feature = "sync"))]
+    #[cfg(feature = "rust-import")]
     pub(crate) fn evaluate_top_level(
         &self,
         runtime: Shared<crate::host::runtime::Registry>,

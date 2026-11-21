@@ -21,7 +21,7 @@ default = ["counters"]
 counters = ["rawr/lock-counters"]
 
 [dependencies]
-rawr = { path = "../..", features = ["sync", "rust-import"] }
+rawr = { path = "../..", features = ["rust-import"] }
 rawr_import = { package = "rawr-import", path = "../../importer", features = ["test-fixtures"] }
 serde_json = "1.0.45"
 sha2 = "0.10.9"

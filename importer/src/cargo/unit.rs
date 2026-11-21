@@ -1518,13 +1518,12 @@ mod feature_authority_tests {
 
     #[test]
     fn borrowed_feature_scratch_succeeds_at_the_existing_string_cap_and_releases() {
-        let value = json!(["default", "rust-import", "std", "sync"]);
+        let value = json!(["default", "rust-import", "std"]);
         let features = value.as_array().expect("feature fixture is an array");
         let expected = [
             Box::<str>::from("default"),
             Box::<str>::from("rust-import"),
             Box::<str>::from("std"),
-            Box::<str>::from("sync"),
         ];
         let limits = crate::cargo::Limits::standard();
         let mut allocation = super::JsonAllocation::empty();

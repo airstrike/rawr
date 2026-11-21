@@ -22,9 +22,6 @@ use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 
-#[cfg(not(feature = "sync"))]
-type Weak<T> = std::rc::Weak<T>;
-#[cfg(feature = "sync")]
 type Weak<T> = std::sync::Weak<T>;
 
 /// A compiled script, whose functions an app calls through typed handles.
@@ -798,7 +795,6 @@ mod tests {
         assert_eq!(double.call(1.5).unwrap(), 3.0);
     }
 
-    #[cfg(feature = "sync")]
     #[test]
     fn a_reload_reads_the_file_only_once_it_holds_the_reload_lock() {
         let file = File::new("threads", "fn version() -> i64 { 1 }");

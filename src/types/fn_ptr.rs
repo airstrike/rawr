@@ -15,9 +15,6 @@ use std::{
     ops::{Index, IndexMut},
 };
 
-#[cfg(not(feature = "sync"))]
-type NativeFn = dyn Fn(NativeCallContext, &mut FnCallArgs) -> RawrResult + 'static;
-#[cfg(feature = "sync")]
 type NativeFn = dyn Fn(NativeCallContext, &mut FnCallArgs) -> RawrResult + Send + Sync + 'static;
 
 /// Function pointer type.
@@ -110,12 +107,7 @@ impl FnPtr {
     #[inline(always)]
     pub fn from_fn(
         name: impl Into<ImmutableString>,
-        #[cfg(not(feature = "sync"))] func: impl Fn(NativeCallContext, &mut FnCallArgs) -> RawrResult
-            + 'static,
-        #[cfg(feature = "sync")] func: impl Fn(NativeCallContext, &mut FnCallArgs) -> RawrResult
-            + Send
-            + Sync
-            + 'static,
+        func: impl Fn(NativeCallContext, &mut FnCallArgs) -> RawrResult + Send + Sync + 'static,
     ) -> RawrResultOf<Self> {
         #[allow(deprecated)]
         Self::from_dyn_fn(name, Box::new(func))

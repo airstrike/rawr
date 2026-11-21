@@ -18,7 +18,7 @@ impl super::Host for Program {
             .map_err(|error| super::error(error.to_string()))
     }
 
-    #[cfg(all(feature = "sync", feature = "rust-import"))]
+    #[cfg(feature = "rust-import")]
     fn share(&self) -> Option<super::Program> {
         Some(crate::island::shared(
             self.authority.clone(),
@@ -145,7 +145,7 @@ fn try_join_is_not_yet_in_a_program_without_iced() {
 }
 
 /// Poll `script` to its end on this thread, parking between wakes.
-#[cfg(feature = "sync")]
+#[cfg(feature = "rust-import")]
 fn block_on_here(script: super::Script) -> crate::Value {
     struct Unpark(std::thread::Thread);
     impl std::task::Wake for Unpark {
@@ -165,16 +165,16 @@ fn block_on_here(script: super::Script) -> crate::Value {
 }
 
 /// A value whose copies are counted while they live.
-#[cfg(feature = "sync")]
+#[cfg(feature = "rust-import")]
 #[derive(Debug)]
 struct Token;
 
-#[cfg(feature = "sync")]
+#[cfg(feature = "rust-import")]
 static LIVE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-#[cfg(feature = "sync")]
+#[cfg(feature = "rust-import")]
 static STEPS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-#[cfg(feature = "sync")]
+#[cfg(feature = "rust-import")]
 impl Token {
     fn new() -> Self {
         LIVE.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -182,14 +182,14 @@ impl Token {
     }
 }
 
-#[cfg(feature = "sync")]
+#[cfg(feature = "rust-import")]
 impl Clone for Token {
     fn clone(&self) -> Self {
         Self::new()
     }
 }
 
-#[cfg(feature = "sync")]
+#[cfg(feature = "rust-import")]
 impl Drop for Token {
     fn drop(&mut self) {
         LIVE.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
@@ -199,7 +199,7 @@ impl Drop for Token {
 /// A host for the owner-queue tests: `testing::step()` counts the steps that
 /// ran, `testing::boom()` panics, `testing::pending()` is a future that never
 /// ends, and `testing::token()` makes a counted value.
-#[cfg(feature = "sync")]
+#[cfg(feature = "rust-import")]
 fn testing() -> (host::facade::Definition, host::runtime::Facade) {
     use host::{facade, item, signature, type_ref};
     let core = super::facade::definition().unwrap();
@@ -251,7 +251,7 @@ fn testing() -> (host::facade::Definition, host::runtime::Facade) {
 
 /// The futures of `functions` in `source`, compiled with the core future and
 /// the testing host, whose program this thread then owns.
-#[cfg(feature = "sync")]
+#[cfg(feature = "rust-import")]
 fn futures_with_testing(source: &str, functions: &[&str]) -> Vec<super::Future> {
     let (definition, runtime) = testing();
     let mut engine = Engine::new();
@@ -294,7 +294,7 @@ fn futures_with_testing(source: &str, functions: &[&str]) -> Vec<super::Future> 
 /// thread that polls it, and a body dropped on another thread drops what
 /// it holds on the owner. One test, since the owner's queue is the
 /// process's.
-#[cfg(all(feature = "sync", feature = "rust-import"))]
+#[cfg(feature = "rust-import")]
 #[test]
 fn steps_polled_elsewhere_queue_for_the_owner_which_drains_them() {
     use std::sync::atomic::Ordering::SeqCst;

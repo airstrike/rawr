@@ -283,7 +283,7 @@ fn captured_locals_are_read_without_a_copy() {
 /// From script code, `view(&state)` copies `state` (a shared borrow is a
 /// copy) and so does every field read in either body, crossing or not:
 /// those are open items of their own, so these bodies read no field.
-#[cfg(feature = "sync")]
+#[cfg(feature = "rust-import")]
 #[test]
 fn a_proxy_lends_its_state_to_script_functions_without_a_copy() {
     use crate::Dynamic;

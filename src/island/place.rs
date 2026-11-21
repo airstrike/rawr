@@ -26,10 +26,7 @@ pub enum Access<'a> {
 }
 
 /// The generated runner's access to the target.
-#[cfg(feature = "sync")]
 type Accessor = dyn Fn(Access<'_>) -> Result<Dynamic, Box<EvalAltResult>> + Send + Sync;
-#[cfg(not(feature = "sync"))]
-type Accessor = dyn Fn(Access<'_>) -> Result<Dynamic, Box<EvalAltResult>>;
 
 /// A guard's place: what an access of it calls.
 #[derive(Clone)]
@@ -37,17 +34,8 @@ pub struct Place(crate::Shared<Accessor>);
 
 impl Place {
     /// A place whose accesses go through `access`.
-    #[cfg(feature = "sync")]
     pub fn new(
         access: impl Fn(Access<'_>) -> Result<Dynamic, Box<EvalAltResult>> + Send + Sync + 'static,
-    ) -> Self {
-        Self(crate::Shared::new(access))
-    }
-
-    /// A place whose accesses go through `access`.
-    #[cfg(not(feature = "sync"))]
-    pub fn new(
-        access: impl Fn(Access<'_>) -> Result<Dynamic, Box<EvalAltResult>> + 'static,
     ) -> Self {
         Self(crate::Shared::new(access))
     }

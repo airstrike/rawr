@@ -2641,7 +2641,6 @@ mod tests {
     }
 
     /// A frame a value carried to another thread doesn't open there.
-    #[cfg(feature = "sync")]
     #[test]
     fn an_opening_opens_only_on_its_own_thread() {
         use super::Opening;
@@ -2886,7 +2885,6 @@ mod tests {
 
     /// Pins dropped on another thread leak a held value rather than touch
     /// its count there.
-    #[cfg(feature = "sync")]
     #[test]
     fn pins_dropped_on_another_thread_leak_what_they_hold() {
         let value = std::rc::Rc::new(7_u8);

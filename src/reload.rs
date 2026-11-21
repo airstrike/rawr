@@ -132,7 +132,7 @@ impl Candidate {
     }
 
     /// The items this candidate declares, lifted closures among them.
-    #[cfg(all(feature = "rust-import", feature = "sync"))]
+    #[cfg(feature = "rust-import")]
     pub(crate) fn items(&self) -> impl ExactSizeIterator<Item = &crate::item::Value> {
         self.catalog.items()
     }
@@ -140,14 +140,14 @@ impl Candidate {
     /// The body hash of the async function `key` names, as its state
     /// machine has it: a frame suspended in another body can't resume in
     /// this generation.
-    #[cfg(all(feature = "rust-import", feature = "sync"))]
+    #[cfg(feature = "rust-import")]
     pub(crate) fn machine_body(&self, key: &crate::item::Key) -> Option<u64> {
         self.catalog.machine_body(key)
     }
 
     /// Whether the closure `step` names is written by an `async fn` or
     /// method of this generation.
-    #[cfg(all(feature = "rust-import", feature = "sync"))]
+    #[cfg(feature = "rust-import")]
     pub(crate) fn in_async_fn(&self, step: &crate::item::Key) -> bool {
         self.catalog.in_async_fn(step)
     }

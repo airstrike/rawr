@@ -827,7 +827,7 @@ impl Engine {
 
         // A marked `main` that loops in script code goes on in the
         // generation a reload installed.
-        #[cfg(all(feature = "rust-import", feature = "sync"))]
+        #[cfg(feature = "rust-import")]
         crate::island::follow(global, caches);
 
         #[cfg(feature = "debugging")]

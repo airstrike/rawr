@@ -111,7 +111,6 @@ pub(crate) struct Error(Place);
 #[derive(Clone)]
 enum Place {
     Owned(Arc<Mutex<Option<Arc<std::io::Error>>>>),
-    #[cfg(feature = "sync")]
     Borrowed(crate::crossing::Borrow<std::io::Error>),
 }
 
@@ -125,7 +124,6 @@ impl Error {
     fn with<R>(&self, visit: impl FnOnce(&std::io::Error) -> R) -> R {
         match &self.0 {
             Place::Owned(place) => visit(&owned(place)),
-            #[cfg(feature = "sync")]
             Place::Borrowed(borrow) => visit(&borrow(None).unwrap_or_else(|reason| {
                 panic!("rawr: a borrowed `std::io::Error` can't be read: {reason}")
             })),
@@ -142,7 +140,6 @@ fn owned(place: &Mutex<Option<Arc<std::io::Error>>>) -> Arc<std::io::Error> {
         .unwrap_or_else(|| panic!("rawr: a moved `std::io::Error` was read"))
 }
 
-#[cfg(feature = "sync")]
 impl crate::crossing::Std for std::io::Error {
     type Lent = crate::crossing::Shared<Self>;
 

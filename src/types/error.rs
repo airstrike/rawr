@@ -14,16 +14,11 @@ use std::fmt;
 ///
 /// # Thread Safety
 ///
-/// Currently, [`EvalAltResult`] is neither [`Send`] nor [`Sync`].
-/// Turn on the `sync` feature to make it [`Send`] `+` [`Sync`].
+/// [`EvalAltResult`] is [`Send`] `+` [`Sync`].
 #[non_exhaustive]
 #[must_use]
 pub enum EvalAltResult {
     /// System error. Wrapped values are the error message and the internal error.
-    #[cfg(not(feature = "sync"))]
-    ErrorSystem(String, Box<dyn Error>),
-    /// System error. Wrapped values are the error message and the internal error.
-    #[cfg(feature = "sync")]
     ErrorSystem(String, Box<dyn Error + Send + Sync>),
 
     /// Syntax error.

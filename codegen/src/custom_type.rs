@@ -159,27 +159,24 @@ pub fn derive_custom_type_impl(input: DeriveInput) -> TokenStream {
             .bounds
             .push(Lifetime::new("'static", Span::call_site()).into());
 
-        #[cfg(feature = "sync")]
-        {
-            param.bounds.push(
-                TraitBound {
-                    paren_token: None,
-                    modifier: syn::TraitBoundModifier::None,
-                    lifetimes: None,
-                    path: syn::parse("Send".parse().unwrap()).unwrap(),
-                }
-                .into(),
-            );
-            param.bounds.push(
-                TraitBound {
-                    paren_token: None,
-                    modifier: syn::TraitBoundModifier::None,
-                    lifetimes: None,
-                    path: syn::parse("Sync".parse().unwrap()).unwrap(),
-                }
-                .into(),
-            );
-        }
+        param.bounds.push(
+            TraitBound {
+                paren_token: None,
+                modifier: syn::TraitBoundModifier::None,
+                lifetimes: None,
+                path: syn::parse("Send".parse().unwrap()).unwrap(),
+            }
+            .into(),
+        );
+        param.bounds.push(
+            TraitBound {
+                paren_token: None,
+                modifier: syn::TraitBoundModifier::None,
+                lifetimes: None,
+                path: syn::parse("Sync".parse().unwrap()).unwrap(),
+            }
+            .into(),
+        );
     }
 
     quote! {

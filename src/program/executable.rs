@@ -59,8 +59,8 @@ pub(crate) struct Callable {
     helper: bool,
     /// An `async fn` or method: its body runs as an async block, one of
     /// its closures, as Rust desugars it.
-    // Only a reload's refusal reads it, in a rust-import sync build.
-    #[cfg_attr(not(all(feature = "rust-import", feature = "sync")), allow(dead_code))]
+    // Only a reload's refusal reads it, in a rust-import build.
+    #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
     asynchronous: bool,
 }
 
@@ -401,7 +401,7 @@ impl Executable {
     /// The body hash of the async function `key` names, lowered into a
     /// state machine: `None` for a function that never awaits, or one this
     /// program doesn't have.
-    #[cfg(all(feature = "rust-import", feature = "sync"))]
+    #[cfg(feature = "rust-import")]
     pub(crate) fn machine_body(&self, key: &item::Key) -> Option<u64> {
         let callable = self.callables.get(key)?;
         let Dispatch::Function(name) = &callable.dispatch else {
@@ -414,7 +414,7 @@ impl Executable {
 
     /// Whether the closure `step` names is written by an `async fn` or
     /// method of this program: its body, or an async block inside it.
-    #[cfg(all(feature = "rust-import", feature = "sync"))]
+    #[cfg(feature = "rust-import")]
     pub(crate) fn in_async_fn(&self, step: &item::Key) -> bool {
         self.callables
             .iter()
