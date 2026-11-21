@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-21",
-  "version": "0.4.97",
+  "version": "0.4.98",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.98",
+        "date": "2026-11-21",
+        "entries": [
+          {"text":"`rawr gui` and `rawr tui` show a program under the home directory as `~/…` in the window title and the header. The GUI names the program once, in its title, and its toolbar keeps that space for the last error.","issues":[2422]}
+        ]
+      },
       {
         "version": "0.4.97",
         "date": "2026-11-21",
@@ -5911,7 +5918,8 @@
     {"issue":2418,"title":"Importer lib tests leave thousands of rawr-* temp directories behind","state":"open","category":"Health"},
     {"issue":2419,"title":"An eval or a read asked at a pause that a continue or step ends first is answered at once as…","state":"closed","category":"Health","release":"0.4.97"},
     {"issue":2420,"title":"The input and screenshot waits for the compositor are 17 ms waits","state":"open","category":"Health"},
-    {"issue":2421,"title":"A window closed between a capture's draw and its compose","state":"open","category":"Health"}
+    {"issue":2421,"title":"A window closed between a capture's draw and its compose","state":"open","category":"Health"},
+    {"issue":2422,"title":"`rawr gui` and `rawr tui` show a program under the home directory as `~/…` in the window title…","state":"closed","category":"Health","release":"0.4.98"}
   ],
   "groups": [
     {

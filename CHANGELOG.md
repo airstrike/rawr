@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.98 (2026-11-21)
+
+- `rawr gui` and `rawr tui` show a program under the home directory as `~/…` in the window title and the header. The GUI names the program once, in its title, and its toolbar keeps that space for the last error. (#2422)
+
 ## 0.4.97 (2026-11-21)
 
 - An eval or a read asked at a pause that a continue or step ends first is answered at once as resumed, and never runs at the program's next pause. A screenshot given up while the window draws still gives the window's layer its settings back, and a click, drag or key press a pause interrupts still lets go of its button or key. (#2419)

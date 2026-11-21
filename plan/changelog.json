@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.4.98",
+      "date": "2026-11-21",
+      "entries": [
+        {"text":"`rawr gui` and `rawr tui` show a program under the home directory as `~/…` in the window title and the header. The GUI names the program once, in its title, and its toolbar keeps that space for the last error.","issues":[2422]}
+      ]
+    },
+    {
       "version": "0.4.97",
       "date": "2026-11-21",
       "entries": [
