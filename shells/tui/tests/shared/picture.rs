@@ -2,7 +2,8 @@
 //! cell's background filled, then its symbol in a monospace face, bold
 //! cells in the bold face. A colour the shell leaves to the terminal
 //! (`Reset`) and the terminal's sixteen named colours take a dark
-//! terminal's palette. The pictures go to `target/screens`.
+//! terminal's palette. The pictures go to `target/screens`, each beside a
+//! text of its rows and the colours of each run of cells.
 
 use std::path::{Path, PathBuf};
 
@@ -31,8 +32,10 @@ const CELL_WIDTH: f32 = 16.0;
 /// The space around the cells, as a terminal window's padding.
 const MARGIN: u32 = 12;
 
-const FOREGROUND: Rgb = [0xc0, 0xc5, 0xce];
-const BACKGROUND: Rgb = [0x1e, 0x21, 0x28];
+/// The terminal's own text and background: the shell's, `rawr gui`'s
+/// Oxocarbon, so the margin reads as the shell's.
+const FOREGROUND: Rgb = [0xd0, 0xd0, 0xd0];
+const BACKGROUND: Rgb = [0x1d, 0x1d, 0x1d];
 
 /// The named colours, in the order of their ANSI numbers.
 const NAMED: [Rgb; 16] = [
@@ -56,7 +59,8 @@ const NAMED: [Rgb; 16] = [
 
 type Rgb = [u8; 3];
 
-/// Save `buffer` as `target/screens/{name}`, and return where it went.
+/// Save `buffer` as `target/screens/{name}`, and its text with its
+/// colours beside it, and return where the picture went.
 pub fn save(buffer: &Buffer, name: &str) -> PathBuf {
     let screens = Path::new(env!("CARGO_TARGET_TMPDIR"))
         .parent()
@@ -72,7 +76,52 @@ pub fn save(buffer: &Buffer, name: &str) -> PathBuf {
     let mut writer = encoder.write_header().unwrap();
     writer.write_image_data(&pixels).unwrap();
     writer.finish().unwrap();
+    std::fs::write(path.with_extension("txt"), describe(buffer)).unwrap();
     path
+}
+
+/// Each row's text, then each run of its cells that share a style: the
+/// run's columns, its text, its colours and its modifiers. A run on the
+/// terminal's own colours and no modifier is left out.
+fn describe(buffer: &Buffer) -> String {
+    let mut text = String::new();
+    for y in 0..buffer.area.height {
+        let cells: Vec<_> = (0..buffer.area.width)
+            .filter_map(|x| buffer.cell((x, y)))
+            .collect();
+        let row: String = cells.iter().map(|cell| cell.symbol()).collect();
+        text.push_str(&format!("{y:>3} │{}\n", row.trim_end()));
+        let mut start = 0;
+        while start < cells.len() {
+            let style = |cell: &ratatui::buffer::Cell| (cell.fg, cell.bg, cell.modifier);
+            let end = start
+                + cells[start..]
+                    .iter()
+                    .take_while(|cell| style(cell) == style(cells[start]))
+                    .count();
+            let (fg, bg, modifier) = style(cells[start]);
+            let run: String = cells[start..end].iter().map(|cell| cell.symbol()).collect();
+            if !run.trim().is_empty() || bg != Color::Reset {
+                let hex = |colour: Color, default: Rgb| {
+                    let [red, green, blue] = rgb(colour, default);
+                    format!("#{red:02x}{green:02x}{blue:02x}")
+                };
+                text.push_str(&format!(
+                    "      {start:>3}..{end:<3} fg {} bg {}{} {:?}\n",
+                    hex(fg, FOREGROUND),
+                    hex(bg, BACKGROUND),
+                    if modifier.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" {modifier:?}")
+                    },
+                    run.trim_end(),
+                ));
+            }
+            start = end;
+        }
+    }
+    text
 }
 
 /// The picture's width, height and RGB rows. Every background is filled

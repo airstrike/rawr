@@ -20,5 +20,5 @@ pub mod shell;
 mod terminal;
 pub mod value;
 
-pub use shell::{Flow, Input, Shell, Stream};
+pub use shell::{Depth, Flow, Input, Shell, Stream};
 pub use terminal::{run, Session};

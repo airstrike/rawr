@@ -4,6 +4,7 @@
 
 mod bindings;
 mod colours;
+mod palette;
 mod update;
 mod view;
 
@@ -15,6 +16,9 @@ use crossterm::event::KeyEvent;
 use crate::client::{Client, Message};
 use crate::phase::Phase;
 use crate::value::Node;
+
+pub use palette::Depth;
+use palette::Palette;
 
 /// What the shell takes, in the order it came.
 #[derive(Debug)]
@@ -89,6 +93,7 @@ pub struct Shell {
     prompt: Option<Prompt>,
     /// The last thing the shell has to say, such as a refused request.
     status: Option<String>,
+    palette: Palette,
 }
 
 /// A request the shell waits on the answer to.
@@ -201,9 +206,18 @@ impl Shell {
             focus: Focus::default(),
             prompt: None,
             status: None,
+            palette: Palette::new(Depth::default()),
         };
         shell.show(&source, 1);
         shell.send("hello", serde_json::Value::Null, Pending::Hello);
         shell
+    }
+
+    /// The shell drawn in the colours a terminal of `depth` draws: 24-bit
+    /// colour unless this says otherwise.
+    #[must_use]
+    pub fn with_depth(mut self, depth: Depth) -> Self {
+        self.palette = Palette::new(depth);
+        self
     }
 }
