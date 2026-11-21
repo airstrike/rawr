@@ -785,6 +785,10 @@ fn start(
             "A `rawr run` started elsewhere serves this program, so `start` attached to it. That run keeps its own arguments, features, environment and input.\n",
         );
     }
+    if session.coverage() == Some(session::Coverage::Engine) {
+        summary.push_str(session::AT_TERMINAL);
+        summary.push('\n');
+    }
     Ok(content::success(answer.structured, summary, Vec::new()))
 }
 
@@ -821,6 +825,7 @@ fn status(server: &Server, path: Option<&str>, call: &Call) -> Value {
                 "pid": session.pid(),
                 "state": session.phase().name(),
                 "paused": session.paused(),
+                "output": session.coverage().map(session::Coverage::name),
             })
         })
         .collect();
@@ -838,6 +843,9 @@ fn status(server: &Server, path: Option<&str>, call: &Call) -> Value {
                     line.push_str(&format!(" {}", session::pause_text(paused)));
                 }
                 line.push_str(&format!(" (pid {})", entry["pid"]));
+                if entry["output"] == session::Coverage::Engine.name() {
+                    line.push_str(&format!("\n{}", session::AT_TERMINAL));
+                }
                 line
             })
             .collect::<Vec<_>>()
