@@ -1,15 +1,15 @@
 //! What gives up a request the program answers later: its tool went away,
 //! or, for one its event loop answers, the program paused, which holds that
-//! loop. A wait for the answer blocks until one or the other.
+//! loop. A wait for the answer blocks on a channel, which the answer ends,
+//! or a wake registered here.
 
-use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
-use std::time::Duration;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
-/// One request's interruption: fired once, it wakes each wait on it.
+/// One request's interruption: fired once, it runs each wake registered
+/// on it.
 #[derive(Default)]
 pub struct Interrupt {
     state: Mutex<Fired>,
-    changed: Condvar,
 }
 
 #[derive(Default)]
@@ -33,7 +33,6 @@ impl Interrupt {
             state.fired = true;
             std::mem::take(&mut state.wakes)
         };
-        self.changed.notify_all();
         for wake in wakes {
             wake();
         }
@@ -53,14 +52,6 @@ impl Interrupt {
             wake();
         } else {
             state.wakes.push(Box::new(wake));
-        }
-    }
-
-    /// Wait `duration`, or less once the request is given up.
-    pub fn rest(&self, duration: Duration) {
-        let state = self.state();
-        if !state.fired {
-            let _ = self.changed.wait_timeout(state, duration);
         }
     }
 }
