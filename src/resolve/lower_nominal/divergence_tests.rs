@@ -1282,3 +1282,207 @@ main();
 "#;
     assert_eq!(printed(source), "(300, 200) (101, 411) (311, 211) 11\n");
 }
+
+/// rustc's resolver puts the trait an impl implements in scope inside
+/// that impl, for any receiver (#2458): `Tri.area()` in `impl m::Shape for
+/// Sq` needs no `use m::Shape`. Outside the impl it does (E0599). The
+/// output is rustc's build of the same program.
+#[test]
+fn the_trait_an_impl_implements_is_in_scope_inside_it() {
+    let source = r#"
+mod m {
+    pub trait Shape {
+        fn area(&self) -> i32;
+        fn twice(&self) -> i32;
+    }
+}
+struct Sq(i32);
+struct Tri;
+impl m::Shape for Tri {
+    fn area(&self) -> i32 { 7 }
+    fn twice(&self) -> i32 { 14 }
+}
+impl m::Shape for Sq {
+    fn area(&self) -> i32 { self.0 * self.0 }
+    fn twice(&self) -> i32 { self.area() * 2 + Tri.area() }
+}
+fn main() {
+    println!("{}", m::Shape::twice(&Sq(3)));
+}
+main();
+"#;
+    assert_eq!(printed(source), "25\n");
+    let report = refused(
+        r#"
+mod m { pub trait Shape { fn area(&self) -> i32; } }
+struct Sq(i32);
+impl m::Shape for Sq { fn area(&self) -> i32 { self.0 } }
+impl Sq { fn go(&self) -> i32 { self.area() } }
+fn main() { println!("{}", Sq(2).go()); }
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0599]: no method named `area` found for reference `&Sq`"),
+        "{report}"
+    );
+}
+
+/// Two traits in scope giving a type the same method at the same probe
+/// step is rustc's E0034. With one of them out of scope, as a glob import
+/// of one module brings only its trait, the other is the method (#767).
+#[test]
+fn two_traits_in_scope_with_one_method_are_e0034() {
+    let report = refused(
+        r#"
+trait Left { fn choose(&self) -> i32; }
+trait Right { fn choose(&self) -> i32; }
+struct Both;
+impl Left for Both { fn choose(&self) -> i32 { 1 } }
+impl Right for Both { fn choose(&self) -> i32 { 2 } }
+fn main() { println!("{}", Both.choose()); }
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0034]: multiple applicable items in scope"),
+        "{report}"
+    );
+    let source = r#"
+mod a { pub trait Size { fn size(&self) -> i32; } }
+mod b { pub trait Size { fn size(&self) -> i32; } }
+struct Line;
+impl a::Size for Line { fn size(&self) -> i32 { 1 } }
+impl b::Size for Line { fn size(&self) -> i32 { 2 } }
+use b::*;
+fn main() { println!("{}", Line.size()); }
+main();
+"#;
+    assert_eq!(printed(source), "2\n");
+    // Inside `impl Display` only `Display` is in scope, so `self.0.fmt(f)`
+    // is its `fmt` and not `Debug`'s.
+    let source = r#"
+use std::fmt;
+#[derive(Debug)]
+struct Inner(i32);
+impl fmt::Display for Inner {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { write!(f, "in{}", self.0) }
+}
+struct Outer(Inner);
+impl fmt::Display for Outer {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { self.0.fmt(f) }
+}
+impl fmt::Debug for Outer {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { fmt::Debug::fmt(&self.0, f) }
+}
+fn main() { println!("{} {:?}", Outer(Inner(1)), Outer(Inner(2))); }
+main();
+"#;
+    assert_eq!(printed(source), "in1 Inner(2)\n");
+}
+
+/// `(*w).push(1)` on a program type is `DerefMut::deref_mut(&mut w)`'s
+/// place, as rustc's `convert_place_derefs_to_mutable` makes it, and
+/// `(*get(&mut v)).push(1)` changes `v` (#873). With `Deref` alone it is
+/// rustc's E0596. The output is rustc's build of the same program.
+#[test]
+fn a_place_deref_a_mut_method_is_called_on_goes_through_deref_mut() {
+    let source = r#"
+use std::ops::{Deref, DerefMut};
+struct W(Vec<i32>);
+impl Deref for W {
+    type Target = Vec<i32>;
+    fn deref(&self) -> &Vec<i32> { println!("deref"); &self.0 }
+}
+impl DerefMut for W {
+    fn deref_mut(&mut self) -> &mut Vec<i32> { println!("deref_mut"); &mut self.0 }
+}
+fn get(v: &mut Vec<i32>) -> &mut Vec<i32> { v }
+fn main() {
+    let mut w = W(vec![]);
+    (*w).push(1);
+    w.push(2);
+    println!("{}", (*w).len());
+    println!("{:?}", w.0);
+    let mut v = vec![];
+    (get(&mut v)).push(1);
+    (*get(&mut v)).push(2);
+    println!("{:?}", v);
+}
+main();
+"#;
+    assert_eq!(
+        printed(source),
+        "deref_mut\nderef_mut\nderef\n2\n[1, 2]\n[1, 2]\n"
+    );
+    let report = refused(
+        r#"
+use std::ops::Deref;
+struct W(Vec<i32>);
+impl Deref for W { type Target = Vec<i32>; fn deref(&self) -> &Vec<i32> { &self.0 } }
+fn main() { let mut w = W(vec![1]); (*w).push(1); println!("{}", w.len()); }
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0596]: cannot borrow data in dereference of `W` as mutable"),
+        "{report}"
+    );
+}
+
+/// `w[i]` of a program type with no `Index` impl indexes its `Deref`
+/// target, and `w[i] = x` its `DerefMut` target, as rustc's index
+/// auto-derefs (#817). With `Deref` alone the assignment is rustc's E0596.
+/// The output is rustc's build of the same program.
+#[test]
+fn an_index_goes_through_a_program_s_deref() {
+    let source = r#"
+use std::ops::{Deref, DerefMut};
+struct W(Vec<i32>);
+impl Deref for W { type Target = Vec<i32>; fn deref(&self) -> &Vec<i32> { &self.0 } }
+impl DerefMut for W { fn deref_mut(&mut self) -> &mut Vec<i32> { &mut self.0 } }
+fn main() {
+    let mut w = W(vec![1, 2]);
+    w[0] = 5;
+    w[1] += 1;
+    println!("{} {} {:?}", w[0], w[1], &w[..]);
+}
+main();
+"#;
+    assert_eq!(printed(source), "5 3 [5, 3]\n");
+    let report = refused(
+        r#"
+use std::ops::Deref;
+struct W(Vec<i32>);
+impl Deref for W { type Target = Vec<i32>; fn deref(&self) -> &Vec<i32> { &self.0 } }
+fn main() { let mut w = W(vec![1]); w[0] = 5; println!("{}", w[0]); }
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0596]: cannot borrow data in dereference of `W` as mutable"),
+        "{report}"
+    );
+}
+
+/// `&mut w` where `&mut Vec<i64>` is taken coerces through the program's
+/// `DerefMut`, and the callee changes `w` (#816). The output is rustc's
+/// build of the same program.
+#[test]
+fn a_mut_reference_coerces_through_a_program_s_deref_mut() {
+    let source = r#"
+use std::ops::{Deref, DerefMut};
+struct W(Vec<i64>);
+impl Deref for W { type Target = Vec<i64>; fn deref(&self) -> &Vec<i64> { &self.0 } }
+impl DerefMut for W { fn deref_mut(&mut self) -> &mut Vec<i64> { &mut self.0 } }
+fn push_through(v: &mut Vec<i64>) { v.push(9); }
+fn main() {
+    let mut w = W(vec![]);
+    push_through(&mut w);
+    push_through(w.deref_mut());
+    println!("{:?}", w.0);
+}
+main();
+"#;
+    assert_eq!(printed(source), "[9, 9]\n");
+}

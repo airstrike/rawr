@@ -1532,8 +1532,11 @@ impl<'a> Parser<'a> {
                     value = self.operator_expr(text, Ty::String, span(value.span.start(), end));
                     continue;
                 }
-                if let Some(error) =
-                    self.unscoped_method(definition_id, &member, &value.ty, member_span)
+                if let Some(error) = self
+                    .unscoped_method(definition_id, &member, &value.ty, member_span)
+                    .or_else(|| {
+                        self.ambiguous_method(definition_id, &member, &value.ty, member_span)
+                    })
                 {
                     return Err(error);
                 }
@@ -2178,6 +2181,7 @@ impl<'a> Parser<'a> {
 
     /// `value[index]` on an array, `Vec` or slice.
     pub(super) fn parse_index(&mut self, mut value: ParsedExpr) -> Result<ParsedExpr, Error> {
+        value = self.index_derefs(value)?;
         // `rc[i]` indexes the value, through std's `Deref`.
         let mut pointer = self.inference.resolve(&value.ty);
         while let Ty::Reference { target, .. } = pointer {
@@ -2208,6 +2212,84 @@ impl<'a> Parser<'a> {
             }
         };
         self.index_into(value, index, end)
+    }
+
+    /// `w[i]` of a program type with no `Index` impl, through its `Deref`
+    /// as rustc's index auto-derefs: `w` becomes what its `deref` returns,
+    /// or its `deref_mut` where an assignment follows the index
+    /// (`w[0] = 5`, `w[1] += 1`), each step until a type indexes.
+    fn index_derefs(&mut self, mut value: ParsedExpr) -> Result<ParsedExpr, Error> {
+        let assigned = self.assigned_after_index();
+        for _ in 0..std_impl::DEPTH {
+            let mut owner = self.inference.resolve(&value.ty);
+            while let Ty::Reference { target, .. } = owner {
+                owner = self.inference.resolve(&target);
+            }
+            let Ty::Script(id, _) = owner else {
+                return Ok(value);
+            };
+            if self
+                .models
+                .trait_methods
+                .contains_key(&(id, "index".into()))
+            {
+                return Ok(value);
+            }
+            let Some((_, std_impl::DerefCall::Program(_))) = self.deref_target(&owner, false)
+            else {
+                return Ok(value);
+            };
+            let name: ImmutableString = self.models.definition(id).name().into();
+            if assigned && self.deref_target(&owner, true).is_none() {
+                return Err(Error::BorrowConflict {
+                    code: "E0596",
+                    message: format!("cannot borrow data in dereference of `{name}` as mutable")
+                        .into(),
+                    access: value.span,
+                    borrow: Span::NONE,
+                });
+            }
+            let member = if assigned { "deref_mut" } else { "deref" };
+            let at = value.span;
+            value = match self.call_owner_method(
+                value,
+                id,
+                name,
+                &member.into(),
+                at,
+                Vec::new(),
+                at.end(),
+            )? {
+                Ok(called) => called,
+                Err(_) => unreachable!("`Deref` has `deref` and `DerefMut` `deref_mut`"),
+            };
+        }
+        Ok(value)
+    }
+
+    /// Whether an assignment follows the index the next token opens.
+    fn assigned_after_index(&mut self) -> bool {
+        if self.split_angle.is_some() {
+            return false;
+        }
+        let mut ahead = self.input.clone();
+        let mut depth = 0usize;
+        while let Some((token, _)) = ahead.next() {
+            match token {
+                Token::LeftBracket | Token::LeftParen | Token::LeftBrace => depth += 1,
+                Token::RightBracket | Token::RightParen | Token::RightBrace => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return ahead
+                            .next()
+                            .is_some_and(|(token, _)| assignment_token(&token));
+                    }
+                }
+                Token::EOF => return false,
+                _ => {}
+            }
+        }
+        false
     }
 
     /// An expression, or the bounds of a range (`a..b`, `a..=b`, `a..`,

@@ -593,7 +593,96 @@ impl<'a> Parser<'a> {
         {
             return Some(definition.clone());
         }
-        self.models.method(owner, member).cloned()
+        self.models
+            .method(owner, member)
+            .or_else(|| self.scoped_trait_method(owner, member))
+            .cloned()
+    }
+
+    /// The one trait function `member` of `owner` whose trait is in scope,
+    /// where traits out of scope have it too: `line.size()` with `b::*`
+    /// imported and `a::Size` not, as rustc's probe passes `a::Size` by.
+    fn scoped_trait_method(
+        &self,
+        owner: type_def::Id,
+        member: &str,
+    ) -> Option<&method::Definition> {
+        let mut scoped = self
+            .models
+            .trait_methods
+            .get(&(owner, member.into()))?
+            .iter()
+            .filter(|definition| self.trait_in_scope(definition));
+        let definition = scoped.next()?;
+        scoped.next().is_none().then_some(definition)
+    }
+
+    /// rustc's E0034 for `value.member(..)` on `receiver`, of `owner`, where
+    /// two traits in scope give `member` at the first step of the probe that
+    /// finds it, and no inherent function comes at that step or before. A
+    /// std trait counts as in scope everywhere here (`trait_in_scope`), so
+    /// only the program's and crates' traits are weighed: `self.0.fmt(f)`
+    /// in an `impl Display` is not ambiguous with `Debug`'s, as rustc has
+    /// only the impl's trait in scope there.
+    pub(super) fn ambiguous_method(
+        &self,
+        owner: type_def::Id,
+        member: &str,
+        receiver: &Ty,
+        member_span: Span,
+    ) -> Option<Error> {
+        let receiver = self.inference.resolve(receiver);
+        let rank = |definition: &method::Definition| {
+            definition
+                .receiver()
+                .map(|mode| probe_rank(&receiver, mode))
+        };
+        let scoped = self
+            .models
+            .trait_methods
+            .get(&(owner, member.into()))?
+            .iter()
+            .filter(|definition| self.trait_in_scope(definition))
+            .filter(|definition| {
+                definition
+                    .trait_name()
+                    .is_some_and(|name| !self.scoped_everywhere(name))
+            })
+            .filter_map(|definition| Some((rank(definition)?, definition)))
+            .collect::<Vec<_>>();
+        let first = scoped.iter().map(|(rank, _)| *rank).min()?;
+        let inherent = self
+            .models
+            .methods
+            .get(&(owner, member.into()))
+            .filter(|inherent| self.models.sees(inherent))
+            .and_then(rank);
+        if inherent.is_some_and(|inherent| inherent <= first) {
+            return None;
+        }
+        let traits = scoped
+            .iter()
+            .filter(|(rank, _)| *rank == first)
+            .filter_map(|(_, definition)| definition.trait_name())
+            .collect::<BTreeSet<_>>();
+        (traits.len() > 1).then(|| Error::StdPath {
+            code: "E0034",
+            message: "multiple applicable items in scope".into(),
+            label: Some(format!("multiple `{member}` found").into()),
+            note: None,
+            reference: Span::new(member_span.start(), text_end(member_span.start(), member)),
+        })
+    }
+
+    /// Whether `trait_in_scope` counts the trait `name` in scope
+    /// everywhere, as it does std's.
+    fn scoped_everywhere(&self, name: &str) -> bool {
+        self.models.std_traits.contains(name)
+            || self
+                .models
+                .traits
+                .get(name)
+                .is_some_and(|(_, declared)| declared.std.is_some())
     }
 
     /// `receiver_method` in Rust's probe order for a receiver of type

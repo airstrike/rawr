@@ -998,6 +998,7 @@ impl<'a> Parser<'a> {
         while self.element_left_out()? {
             left_out = true;
         }
+        let deref = matches!(self.peek(), Token::Multiply);
         let mut value = self.parse_expr()?;
         // `(x += 1)`: an assignment is an expression of type `()`, and
         // parentheses take any expression.
@@ -1024,8 +1025,14 @@ impl<'a> Parser<'a> {
             value.span = span(open, end);
             // `(x) = 1` and `(*r) += 1` assign the place inside, and `&mut
             // (x)` borrows it, as rustc does; elsewhere the lowering reads it
-            // as a value.
-            if !assignment_token(&self.peek()) && self.lent_mut_field != Some(open) {
+            // as a value. `(*r).push(1)` and `(f(&mut v)).push(1)` change
+            // the place `*r` or the `&mut` output is, as a `deref_mut`'s.
+            let lent_mut = matches!(
+                self.inference.resolve(&value.ty),
+                Ty::Reference { mutable: true, .. }
+            );
+            let place_used = (deref || lent_mut) && matches!(self.peek(), Token::Period);
+            if !assignment_token(&self.peek()) && self.lent_mut_field != Some(open) && !place_used {
                 value.lvalue = None;
             }
             value.source.cover(value.span);

@@ -31,7 +31,7 @@ pub(super) type Unmet = (Ty, Option<Ty>);
 
 /// How deep where-clauses are proven before giving up, as rustc's
 /// recursion limit does.
-const DEPTH: usize = 16;
+pub(super) const DEPTH: usize = 16;
 
 /// The std definition the native type `ty` stands for, with its type
 /// arguments: `alloc::string::String`, `alloc::vec::Vec` of a `Vec<T>`,
@@ -1024,7 +1024,8 @@ impl Parser<'_> {
 
     /// `*value` of a program type with `Deref`: `value` becomes the
     /// reference its `deref` returns, or its `deref_mut` (a place below
-    /// `value`) when an assignment follows, as rustc's place deref is
+    /// `value`) when an assignment follows or a `&mut self` method is
+    /// called on it (`(*w).push(1)`), as rustc's place deref is
     /// `*Deref::deref(&value)` or `*DerefMut::deref_mut(&mut value)`, with
     /// the type's name; `value` itself for another type.
     pub(super) fn program_deref(
@@ -1035,23 +1036,32 @@ impl Parser<'_> {
         let Ty::Script(id, _) = ty else {
             return Ok((value, None));
         };
-        if !matches!(
-            self.deref_target(&ty, false),
-            Some((_, DerefCall::Program(_)))
-        ) {
+        let Some((target, DerefCall::Program(_))) = self.deref_target(&ty, false) else {
             return Ok((value, None));
-        }
+        };
         let name: ImmutableString = self.models.definition(id).name().into();
         let assigned = assignment_token(&self.peek());
-        if assigned && self.deref_target(&ty, true).is_none() {
+        let mutated = assigned || self.mutable_method_ahead(&target);
+        if mutated && self.deref_target(&ty, true).is_none() {
+            let (code, message) = if assigned {
+                (
+                    "E0594",
+                    format!("cannot assign to data in dereference of `{name}`"),
+                )
+            } else {
+                (
+                    "E0596",
+                    format!("cannot borrow data in dereference of `{name}` as mutable"),
+                )
+            };
             return Err(Error::BorrowConflict {
-                code: "E0594",
-                message: format!("cannot assign to data in dereference of `{name}`").into(),
+                code,
+                message: message.into(),
                 access: value.span,
                 borrow: Span::NONE,
             });
         }
-        let member = if assigned { "deref_mut" } else { "deref" };
+        let member = if mutated { "deref_mut" } else { "deref" };
         let at = value.span;
         match self.call_owner_method(
             value,
@@ -1065,6 +1075,23 @@ impl Parser<'_> {
             Ok(called) => Ok((called, Some(name))),
             Err(_) => unreachable!("`Deref` has `deref` and `DerefMut` `deref_mut`"),
         }
+    }
+
+    /// Whether `(*w)` is followed by a call of a `&mut self` method of
+    /// `target`, as in `(*w).push(1)`: rustc's `convert_place_derefs_to_
+    /// mutable` makes such a place deref `DerefMut`'s.
+    fn mutable_method_ahead(&mut self, target: &Ty) -> bool {
+        if self.split_angle.is_some() {
+            return false;
+        }
+        let mut ahead = self.input.clone();
+        let tokens = [ahead.next(), ahead.next(), ahead.next(), ahead.next()];
+        let [Some((Token::RightParen, _)), Some((Token::Period, _)), Some((Token::Identifier(member), _)), Some((Token::LeftParen | Token::Unit, _))] =
+            tokens
+        else {
+            return false;
+        };
+        self.member_receiver(target, &member) == Some(receiver::Mode::Mutable)
     }
 
     /// One deref step of the reference `reference`: `&Target` of `&T`,
@@ -1162,6 +1189,27 @@ impl Parser<'_> {
         for call in calls {
             match call {
                 DerefCall::Value => {}
+                // A `deref_mut` is called on the place, whose part its
+                // output is: `push(&mut w)` changes `w`.
+                DerefCall::Program(call)
+                    if call.receiver() == Some(receiver::Mode::Mutable)
+                        && let Some(id) = self.referent_owner(&value.ty) =>
+                {
+                    let name = self.models.definition(id).name().into();
+                    let at = value.span;
+                    *value = match self.call_owner_method(
+                        value.clone(),
+                        id,
+                        name,
+                        &"deref_mut".into(),
+                        at,
+                        Vec::new(),
+                        at.end(),
+                    )? {
+                        Ok(called) => called,
+                        Err(_) => unreachable!("`DerefMut` has `deref_mut`"),
+                    };
+                }
                 DerefCall::Program(call) => {
                     value.source = Self::std_call(&call, value.rendered_source(), &[]);
                     value.prelude = origin::Fragment::default();
@@ -1185,6 +1233,18 @@ impl Parser<'_> {
         }
         value.ty = ty;
         Ok(())
+    }
+
+    /// The program type `ty` is, or refers to through its references.
+    fn referent_owner(&self, ty: &Ty) -> Option<type_def::Id> {
+        let mut ty = self.inference.resolve(ty);
+        while let Ty::Reference { target, .. } = ty {
+            ty = self.inference.resolve(&target);
+        }
+        match ty {
+            Ty::Script(id, _) => Some(id),
+            _ => None,
+        }
     }
 
     /// The method probe's deref steps, as rustc's probe takes them: while
