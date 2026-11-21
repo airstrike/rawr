@@ -19,6 +19,8 @@ pub mod mirror;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod overlay;
 #[cfg(not(target_arch = "wasm32"))]
+mod patches;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod runtime;
 
 #[cfg(not(target_arch = "wasm32"))]

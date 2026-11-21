@@ -7,14 +7,12 @@ use toml_edit::{DocumentMut, Item};
 
 use super::request;
 
-/// The locked packages and the patches the lock lists as unused.
+/// The locked packages.
 pub(super) struct Locked {
     packages: Vec<Package>,
     /// Each package's index by its name with every `-` as `_`, as a
     /// macro's `$crate` segment spells it.
     by_crate: BTreeMap<String, Vec<usize>>,
-    /// The packages of `[[patch.unused]]`.
-    unused: Vec<String>,
 }
 
 /// One `[[package]]` of the lock.
@@ -63,19 +61,7 @@ impl Locked {
                 .or_default()
                 .push(index);
         }
-        let unused = document
-            .get("patch")
-            .and_then(|patch| patch.get("unused"))
-            .and_then(Item::as_array_of_tables)
-            .into_iter()
-            .flatten()
-            .filter_map(|entry| text(entry, "name"))
-            .collect();
-        Ok(Self {
-            packages,
-            by_crate,
-            unused,
-        })
+        Ok(Self { packages, by_crate })
     }
 
     pub(super) fn packages(&self) -> &[Package] {
@@ -98,11 +84,6 @@ impl Locked {
             .of_crate(&spelled)
             .filter(|package| package.name == name);
         named.next().is_some() && named.next().is_none()
-    }
-
-    /// The packages `[[patch.unused]]` names.
-    pub(super) fn unused_patches(&self) -> impl Iterator<Item = &str> {
-        self.unused.iter().map(String::as_str)
     }
 }
 

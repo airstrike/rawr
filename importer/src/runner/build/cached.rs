@@ -362,15 +362,25 @@ fn compile<B>(
             },
         )
     };
-    // The sources, with `settled` in place of their lock, and the carrier.
+    // The sources, with `settled` in place of their lock and without the
+    // patches it leaves unused (`runner::patches`), and the carrier.
     let sync = |sources: &[(&str, std::borrow::Cow<'_, [u8]>)], settled: Option<&str>| {
         let files = sources.len() + 1;
+        let pruned = settled.and_then(|settled| {
+            let manifest = sources
+                .iter()
+                .find(|(path, _)| *path == "Cargo.toml")
+                .and_then(|(_, bytes)| std::str::from_utf8(bytes).ok())?;
+            crate::runner::patches::pruned(manifest, settled)
+        });
         crate::bridge::generate::sync_sources(
             &work,
             sources
                 .iter()
-                .map(|(path, bytes)| match (*path, settled) {
-                    ("Cargo.lock", Some(settled)) => (*path, settled.as_bytes()),
+                .map(|(path, bytes)| match (*path, settled, &pruned) {
+                    ("Cargo.toml", _, Some((manifest, _))) => (*path, manifest.as_bytes()),
+                    ("Cargo.lock", _, Some((_, lock))) => (*path, lock.as_bytes()),
+                    ("Cargo.lock", Some(settled), None) => (*path, settled.as_bytes()),
                     _ => (*path, bytes.as_ref()),
                 })
                 .chain([("rawr-generated-manifest.carrier", carrier.as_ref())]),
@@ -390,7 +400,7 @@ fn compile<B>(
         let staged = sources(runtime);
         // The lock cargo settled this one to, at an earlier build.
         let settled = settled_lock(&work, &staged);
-        let written = sync(&staged, settled.as_deref())?;
+        let (mut written, files) = sync(&staged, settled.as_deref())?;
         if settled.is_none() {
             let file = |name: &str| {
                 staged
@@ -410,8 +420,12 @@ fn compile<B>(
                 file("Cargo.toml"),
                 file("Cargo.lock"),
             )?;
+            // Cargo settled with every patch; the runner builds without the
+            // ones it left unused.
+            let settled = settled_lock(&work, &staged);
+            written += sync(&staged, settled.as_deref())?.0;
         }
-        Ok::<_, node::Error>(written)
+        Ok::<_, node::Error>((written, files))
     };
     let (written, files) = stage(runtime.as_ref())?;
     // Settled from the project's lock, the runner must build each package
