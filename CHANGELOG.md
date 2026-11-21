@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.93 (2026-11-21)
+
+- Cargo's answers about a project (its targets, features and build units) are kept by the run, the runner or the command that asked, instead of in a process-wide lock; a save asks Cargo again only when the files it read changed. (#2401)
+
 ## 0.4.92 (2026-11-21)
 
 - rawr's lines about a program that ended, a restart and a save's or start's round wait while the program holds the terminal raw, like every other rawr line. (#2415)

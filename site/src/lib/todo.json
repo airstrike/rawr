@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-21",
-  "version": "0.4.92",
+  "version": "0.4.93",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.93",
+        "date": "2026-11-21",
+        "entries": [
+          {"text":"Cargo's answers about a project (its targets, features and build units) are kept by the run, the runner or the command that asked, instead of in a process-wide lock; a save asks Cargo again only when the files it read changed.","issues":[2401]}
+        ]
+      },
       {
         "version": "0.4.92",
         "date": "2026-11-21",
@@ -5855,7 +5862,7 @@
     {"issue":2398,"title":"rawr mcp's start, run and check take a package's bin, features and environment, as rawr run does","state":"closed","category":"Health","release":"0.4.87"},
     {"issue":2399,"title":"The store's heavy lease, the owner lease and a nested with_heavy deadlock remain after the Cargo lane token","state":"open","category":"Health"},
     {"issue":2400,"title":"build_script's whole-tree test: a file outside the package's archive no longer changes the freshness fingerprint","state":"open","category":"Health"},
-    {"issue":2401,"title":"The engine's Cargo answer memos (DESCRIBED, BUILT) are process-wide statics","state":"open","category":"Health"},
+    {"issue":2401,"title":"The engine's Cargo answer memos (DESCRIBED, BUILT) are process-wide statics","state":"closed","category":"Health","release":"0.4.93"},
     {"issue":2402,"title":"The bindings format root's process lease sits in a static table (format::OPENED)","state":"open","category":"Health"},
     {"issue":2403,"title":"The base-attach test leaves its `looping` program running after the test ends","state":"open","category":"Health"},
     {"issue":2404,"title":"eval at a step inside a chain on a local runs against an empty scope","state":"open","category":"Health"},
@@ -5869,7 +5876,9 @@
     {"issue":2412,"title":"The session a run hosts keeps its state on one thread: shells, the program and the run's owner…","state":"closed","category":"Health","release":"0.4.90"},
     {"issue":2413,"title":"rawr mcp screenshot renders the window at a scale above its backing scale, for 2x detail on a 1x display","state":"open","category":"Health"},
     {"issue":2414,"title":"rawr's status line, the lines above it and the lines held while a program has the terminal are…","state":"closed","category":"Health","release":"0.4.91"},
-    {"issue":2415,"title":"Some of the owner's rawr: lines skip the hold while a program has the terminal raw","state":"closed","category":"Health","release":"0.4.92"}
+    {"issue":2415,"title":"Some of the owner's rawr: lines skip the hold while a program has the terminal raw","state":"closed","category":"Health","release":"0.4.92"},
+    {"issue":2416,"title":"Debugger evaluations ask cargo metadata on each evaluation","state":"open","category":"Health"},
+    {"issue":2417,"title":"rawr-cli's marked-library test sees no island shape","state":"open","category":"Health"}
   ],
   "groups": [
     {
