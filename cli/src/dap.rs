@@ -33,7 +33,7 @@ mod lifecycle;
 mod place;
 mod serve;
 mod values;
-mod wire;
+pub(crate) mod wire;
 
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;

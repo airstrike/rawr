@@ -1,5 +1,7 @@
 //! The Debug Adapter Protocol's framing: each message is a JSON object
-//! after a `Content-Length` header and a blank line, both ways.
+//! after a `Content-Length` header and a blank line, both ways. The
+//! Language Server Protocol frames its messages the same way, and
+//! `rawr lsp` reads and writes them here too.
 
 use std::io::{BufRead, Write};
 use std::sync::mpsc;
@@ -39,6 +41,19 @@ pub fn read(input: &mut impl BufRead) -> std::io::Result<Option<Value>> {
             return Ok(Some(message));
         }
     }
+}
+
+/// Write `message` to `stream` behind its `Content-Length` header, and
+/// flush it.
+///
+/// # Errors
+///
+/// When `stream` can't be written.
+pub fn frame(stream: &mut impl Write, message: &Value) -> std::io::Result<()> {
+    let body = message.to_string();
+    let framed = format!("Content-Length: {}\r\n\r\n{body}", body.len());
+    stream.write_all(framed.as_bytes())?;
+    stream.flush()
 }
 
 /// Where the adapter writes: each message numbered in the order sent,
@@ -118,12 +133,7 @@ fn write(mut stream: impl Write, messages: &mpsc::Receiver<Out>) {
             Out::Message(mut message) if open => {
                 seq += 1;
                 message["seq"] = json!(seq);
-                let body = message.to_string();
-                let framed = format!("Content-Length: {}\r\n\r\n{body}", body.len());
-                open = stream
-                    .write_all(framed.as_bytes())
-                    .and_then(|()| stream.flush())
-                    .is_ok();
+                open = frame(&mut stream, &message).is_ok();
             }
             Out::Message(_) => {}
             Out::Flush(written) => {

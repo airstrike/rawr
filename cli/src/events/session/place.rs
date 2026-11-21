@@ -196,6 +196,18 @@ impl Runs {
         })
     }
 
+    /// The directory the runs of the program at `root` sit in, each in a
+    /// directory of its own named by its pid, in the user's directory,
+    /// which is made when it isn't there: a shell that waits for a run
+    /// watches for a session socket there.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::of`].
+    pub fn directory(root: &Path) -> std::io::Result<PathBuf> {
+        program(root)
+    }
+
     /// Connect to the run whose pid is `pid`, or to the newest that takes
     /// the connection. `None` when none does.
     #[must_use]

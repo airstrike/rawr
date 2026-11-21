@@ -7,6 +7,7 @@
   <li><a href="#window"><code>rawr gui</code></a> opens a window.</li>
   <li><a href="#terminal"><code>rawr tui</code></a> runs in a terminal.</li>
   <li><a href="#what"><code>rawr dap</code></a> serves editors over the Debug Adapter Protocol.</li>
+  <li><a href="#editors"><code>rawr lsp</code></a> shows values and rawr&rsquo;s errors in an editor beside rust-analyzer.</li>
   <li><a href="/docs/agents"><code>rawr mcp</code></a> serves coding agents.</li>
 </ul>
 <p>Several shells can attach to the same run. The <a href="#playground">playground</a> has a separate debugger that runs in the browser.</p>
@@ -123,6 +124,27 @@ args = { program = "{0}" }</code></pre></div>
   { "label": "rawr run", "adapter": "rawr", "request": "launch", "program": "$ZED_WORKTREE_ROOT" },
   { "label": "rawr attach", "adapter": "rawr", "request": "attach", "program": "$ZED_WORKTREE_ROOT" }
 ]</code></pre></div>
+
+<h2 id="editors">Editors</h2>
+<p><code>rawr lsp</code> is a small language server on stdio. It runs beside rust-analyzer, which keeps types, completion and navigation. It attaches to the newest run of each program you open a file of, wherever the run was started. With no run going it stays up and shows nothing. It attaches when a run starts.</p>
+<ul>
+  <li>While the program is paused, a hover shows the value under the pointer, as <a href="#hovers">Hovers</a> describes. While it runs, the hover is rust-analyzer&rsquo;s alone.</li>
+  <li>While the program is paused, inlay hints show each binding of the paused call at the end of the last line above the pause that names it.</li>
+  <li>A save that doesn&rsquo;t reload the program shows rawr&rsquo;s errors under the code, with the source <code>rawr</code>. They go when a save reloads it. rustc&rsquo;s errors are left to rust-analyzer.</li>
+</ul>
+<p>In Neovim 0.11:</p>
+<div class="block"><pre><code>vim.lsp.config("rawr", { cmd = { "rawr", "lsp" }, filetypes = { "rust" }, root_markers = { "Cargo.toml" } })
+vim.lsp.enable("rawr")
+vim.lsp.inlay_hint.enable()</code></pre></div>
+<p>In Helix, list it after rust-analyzer in <code>.helix/languages.toml</code>. Helix asks the first server in the list that offers a feature, so rawr adds its diagnostics there.</p>
+<div class="block"><pre><code>[language-server.rawr]
+command = "rawr"
+args = ["lsp"]
+
+[[language]]
+name = "rust"
+language-servers = ["rust-analyzer", "rawr"]</code></pre></div>
+<p>VS Code and Zed start a language server through an extension. The Rawr extension doesn&rsquo;t start <code>rawr lsp</code> yet. In VS Code, the debugger&rsquo;s hovers read the same values while a <code>rawr</code> debug session is paused.</p>
 
 <h2 id="playground">In the playground</h2>
 <p>The <a href="/play">playground</a>&rsquo;s debugger runs in the browser. Click the bug icon next to Share to turn it on. The first time, the page downloads a debugger build of its WebAssembly module. Then the program runs again from the start under the debugger. A debugger panel opens to the right of the output. A console opens under the code. Click the bug icon again to turn the debugger off.</p>
