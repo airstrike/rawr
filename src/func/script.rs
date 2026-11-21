@@ -94,22 +94,14 @@ impl Engine {
         // Merge in encapsulated environment, if any
         let orig_fn_resolution_caches_len = caches.fn_resolution_caches_len();
 
-        let orig_constants = _env.map(
-            |EncapsulatedEnviron {
-                 lib,
-                 imports,
-                 constants,
-             }| {
-                imports
-                    .iter()
-                    .cloned()
-                    .for_each(|(n, m)| global.push_import(n, m));
+        if let Some(EncapsulatedEnviron { lib, imports }) = _env {
+            imports
+                .iter()
+                .cloned()
+                .for_each(|(n, m)| global.push_import(n, m));
 
-                global.lib.extend(lib.clone());
-
-                std::mem::replace(&mut global.constants, constants.clone())
-            },
-        );
+            global.lib.extend(lib.clone());
+        }
 
         // The frame stays until the call ends, below, even when the
         // debugger fails here: the frame points into this call.
@@ -210,11 +202,6 @@ impl Engine {
         global.truncate_imports(orig_imports_len);
         if !this_shared && let Some(this) = this_ptr {
             this.unshare_if_unique();
-        }
-
-        // Restore constants
-        if let Some(constants) = orig_constants {
-            global.constants = constants;
         }
 
         // Restore state

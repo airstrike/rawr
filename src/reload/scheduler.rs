@@ -4,8 +4,6 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-pub mod publication;
-
 /// One debounce and latest-revision admission boundary, owned by the one
 /// thread that observes events and admits work.
 ///

@@ -1065,38 +1065,18 @@ impl Engine {
         for op in &block.ops {
             match op {
                 Op::Run(statement) => {
-                    let _ = self.eval_stmt(
-                        global,
-                        caches,
-                        scope,
-                        this_ptr.as_deref_mut(),
-                        statement,
-                        true,
-                    )?;
+                    let _ =
+                        self.eval_stmt(global, caches, scope, this_ptr.as_deref_mut(), statement)?;
                 }
                 Op::Let(name, statement) => {
                     let value = self
-                        .eval_stmt(
-                            global,
-                            caches,
-                            scope,
-                            this_ptr.as_deref_mut(),
-                            statement,
-                            true,
-                        )?
+                        .eval_stmt(global, caches, scope, this_ptr.as_deref_mut(), statement)?
                         .flatten();
                     scope.push_entry(name.clone(), AccessMode::ReadWrite, value);
                 }
                 Op::Set(name, statement) => {
                     let value = self
-                        .eval_stmt(
-                            global,
-                            caches,
-                            scope,
-                            this_ptr.as_deref_mut(),
-                            statement,
-                            true,
-                        )?
+                        .eval_stmt(global, caches, scope, this_ptr.as_deref_mut(), statement)?
                         .flatten();
                     *scope.get_mut(name).ok_or_else(|| missing(name))? = value;
                 }

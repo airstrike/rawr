@@ -27,6 +27,5 @@ pub(crate) use debugger::{FrameBindings, Held};
 pub use eval_context::{EvalContext, EvalContextFrameGuard};
 
 pub use global_state::GlobalRuntimeState;
-pub use global_state::SharedGlobalConstants;
 pub use target::calc_offset_len;
 pub use target::{calc_index, Target};

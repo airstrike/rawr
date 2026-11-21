@@ -893,23 +893,20 @@ impl<'r> Region<'r> {
             return;
         }
         let kept = KeptRegion::new(self, site);
-        let mut regions = pins
-            .regions
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut held = pins.held();
         // What the site kept before ends once the lock is let go, so its
         // values' drops can keep regions of their own.
         let ended = if pins.lasting {
-            let (ended, held) = std::mem::take(&mut *regions)
+            let (ended, others) = std::mem::take(&mut held.regions)
                 .into_iter()
                 .partition::<Vec<_>, _>(|held| std::ptr::eq(held.site, site));
-            *regions = held;
+            held.regions = others;
             ended
         } else {
             Vec::new()
         };
-        regions.push(kept);
-        drop(regions);
+        held.regions.push(kept);
+        drop(held);
         drop(ended);
     }
 
@@ -1635,22 +1632,43 @@ pub fn lent_static(value: &crate::Dynamic) -> bool {
 /// pins of its own that live as long as the runner ([`Pins::constant`]),
 /// which hold one string per text, so a view called again, or a reload
 /// that keeps a literal, pins nothing new.
+///
+/// One lock guards what they hold. A runner's `static_pins` is a `static`,
+/// which must be `Sync`, and any program thread that calls a native
+/// function taking a `&'static str` reaches it.
 #[derive(Default)]
 pub struct Pins {
-    /// The regions of the calls lent these pins, kept past each call
-    /// ([`Region::keep`]). First, so they drop before what they borrow.
-    regions: std::sync::Mutex<Vec<KeptRegion>>,
-    /// The strings held, by the address of their text, or by their text
-    /// where a string equal to one held is that one.
-    strings: std::sync::Mutex<std::collections::BTreeMap<StringKey, crate::ImmutableString>>,
-    /// The native values held, by the address of each.
-    values: std::sync::Mutex<std::collections::BTreeMap<usize, Vec<Kept>>>,
-    /// Slices of pinned strings ([`Pins::pin_strs`]).
-    slices: std::sync::Mutex<std::collections::BTreeSet<&'static [&'static str]>>,
+    held: std::sync::Mutex<Pinned>,
     /// Whether a string equal to one held is that one ([`Pins::constant`]).
     by_text: bool,
     /// Whether they are never let go ([`Pins::lasting`]).
     lasting: bool,
+}
+
+/// What [`Pins`] hold, under their one lock.
+#[derive(Default)]
+struct Pinned {
+    /// The regions of the calls lent these pins, kept past each call
+    /// ([`Region::keep`]). First, so they drop before what they borrow.
+    regions: Vec<KeptRegion>,
+    /// The strings held, by the address of their text, or by their text
+    /// where a string equal to one held is that one.
+    strings: std::collections::BTreeMap<StringKey, crate::ImmutableString>,
+    /// The native values held, by the address of each.
+    values: std::collections::BTreeMap<usize, Vec<Kept>>,
+    /// Slices of pinned strings ([`Pins::pin_strs`]).
+    slices: std::collections::BTreeSet<&'static [&'static str]>,
+}
+
+impl Pinned {
+    const fn new() -> Self {
+        Self {
+            regions: Vec::new(),
+            strings: std::collections::BTreeMap::new(),
+            values: std::collections::BTreeMap::new(),
+            slices: std::collections::BTreeSet::new(),
+        }
+    }
 }
 
 /// How [`Pins`] find a string they hold: by where its text is, which is
@@ -1708,13 +1726,18 @@ impl Pins {
 
     const fn made(by_text: bool, lasting: bool) -> Self {
         Self {
-            regions: std::sync::Mutex::new(Vec::new()),
-            strings: std::sync::Mutex::new(std::collections::BTreeMap::new()),
-            values: std::sync::Mutex::new(std::collections::BTreeMap::new()),
-            slices: std::sync::Mutex::new(std::collections::BTreeSet::new()),
+            held: std::sync::Mutex::new(Pinned::new()),
             by_text,
             lasting,
         }
+    }
+
+    /// What these pins hold. A thread that panicked while it held the lock
+    /// left the maps whole, as each change to them is one insert or remove.
+    fn held(&self) -> std::sync::MutexGuard<'_, Pinned> {
+        self.held
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// `text`, borrowed for as long as these pins are, or native code's
@@ -1732,18 +1755,14 @@ impl Pins {
             // native code holds no longer than its text.
             return unsafe { &*native };
         }
-        let mut pinned = self
-            .strings
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let key = if self.by_text {
             StringKey::Text(text.clone())
         } else {
             StringKey::Address(text.as_str().as_ptr().addr())
         };
-        let text: *const str = pinned.entry(key).or_insert(text).as_str();
+        let text: *const str = self.held().strings.entry(key).or_insert(text).as_str();
         // SAFETY: the text lives in the string's shared allocation, which a
-        // handle in `pinned` keeps alive until `clear` takes `&mut self`
+        // handle in `strings` keeps alive until `clear` takes `&mut self`
         // or the pins drop, and neither can happen while `&self` is
         // borrowed. Moving a handle within the map doesn't move the
         // allocation. Nothing writes a held string in place: only this
@@ -1760,11 +1779,8 @@ impl Pins {
     pub fn hold<T: 'static>(&self, value: std::rc::Rc<T>) -> &T {
         let thread = std::thread::current().id();
         let pointer: *const T = std::rc::Rc::as_ptr(&value);
-        let mut kept = self
-            .values
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let held = kept.entry(pointer.addr()).or_default();
+        let mut kept = self.held();
+        let held = kept.values.entry(pointer.addr()).or_default();
         if !held.iter().any(|held| held.thread == thread) {
             held.push(Kept {
                 thread,
@@ -1790,11 +1806,9 @@ impl Pins {
     /// once however often it is kept.
     pub fn keep(&self, keeper: std::rc::Rc<dyn std::any::Any>) {
         let thread = std::thread::current().id();
-        let mut kept = self
-            .values
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut kept = self.held();
         let held = kept
+            .values
             .entry(std::rc::Rc::as_ptr(&keeper).cast::<()>().addr())
             .or_default();
         if !held.iter().any(|held| held.thread == thread) {
@@ -1819,10 +1833,8 @@ impl Pins {
             .into_iter()
             .map(|text| self.pin(text))
             .collect::<Vec<&'static str>>();
-        let mut slices = self
-            .slices
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut held = self.held();
+        let slices = &mut held.slices;
         // A slice of equal texts is the one held: every string it points
         // to stays pinned, as these pins never let go.
         if let Some(held) = slices.get(pinned.as_slice()) {
@@ -1840,60 +1852,39 @@ impl Pins {
     /// as long as the runner hold such a value for a view the program
     /// calls itself, out of any slot whose pins its next `&mut` clears.
     pub fn release(&self, address: usize) {
-        let released = self
-            .values
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(&address);
+        // The value drops once the lock is let go, so its drop can pin.
+        let released = self.held().values.remove(&address);
         drop(released);
     }
 
     /// Let everything pinned go.
     pub fn clear(&mut self) {
+        let held = self
+            .held
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         // The regions first: their values borrow what else is pinned.
-        self.regions
-            .get_mut()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clear();
-        self.slices
-            .get_mut()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clear();
-        self.strings
-            .get_mut()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clear();
-        self.values
-            .get_mut()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clear();
+        held.regions.clear();
+        held.slices.clear();
+        held.strings.clear();
+        held.values.clear();
     }
 
     /// How many strings and values are pinned.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.strings
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .len()
-            + self
-                .values
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .values()
-                .map(Vec::len)
-                .sum::<usize>()
+        Self::count(&self.held())
+    }
+
+    fn count(held: &Pinned) -> usize {
+        held.strings.len() + held.values.values().map(Vec::len).sum::<usize>()
     }
 
     /// Whether nothing is pinned, and no region is kept in them.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.len() == 0
-            && self
-                .regions
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .is_empty()
+        let held = self.held();
+        Self::count(&held) == 0 && held.regions.is_empty()
     }
 }
 

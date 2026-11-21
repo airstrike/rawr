@@ -1072,13 +1072,6 @@ impl Builder {
         self.type_::<T>(path, parameters, capabilities)
     }
 
-    /// Let a State holding `T` values carry them into the next runner
-    /// process after a `.rs` edit, as the bytes `T` writes.
-    pub fn carried<T: host::value::Carry>(&mut self) -> &mut Self {
-        host::value::register_carry::<T>();
-        self
-    }
-
     /// Declare a host type whose values must not be silently discarded.
     pub fn required_type<T: 'static>(
         &mut self,

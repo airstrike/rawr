@@ -10,9 +10,10 @@
 
 use super::record::{Frame, Record};
 use super::session::{Session, Window};
+use std::cell::RefCell;
 use std::ffi::{c_char, c_void, CStr};
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 
 type Id = *mut c_void;
 type Sel = *const c_void;
@@ -42,7 +43,11 @@ struct Kept {
     file: PathBuf,
 }
 
-static KEPT: OnceLock<Mutex<Kept>> = OnceLock::new();
+thread_local! {
+    /// The main thread's session. `keep` runs on the main thread, and AppKit
+    /// posts window notifications there, so no other thread reaches it.
+    static KEPT: RefCell<Option<Kept>> = const { RefCell::new(None) };
+}
 
 /// A `CGRect`, as AppKit passes an `NSRect`.
 #[repr(C)]
@@ -257,8 +262,15 @@ pub(super) fn keep(file: PathBuf) {
         return;
     };
     let runtime = RUNTIME.get_or_init(|| runtime);
-    let session = Session::new(Record::read(&file));
-    if KEPT.set(Mutex::new(Kept { session, file })).is_err() {
+    let kept = KEPT.with_borrow_mut(|kept| match kept {
+        Some(_) => false,
+        None => {
+            let session = Session::new(Record::read(&file));
+            *kept = Some(Kept { session, file });
+            true
+        }
+    });
+    if !kept {
         return;
     }
     // SAFETY: the pool is pushed and popped on this thread around the
@@ -338,10 +350,10 @@ fn observer(runtime: &Runtime) -> Option<Id> {
 
 /// A window showed, moved or resized. The first notification of a window
 /// that is visible is its first show: it is given the frame the person
-/// left it in, when the session has one, after the session's lock is let
-/// go, since the move it makes notifies again.
+/// left it in, when the session has one, after the session's borrow ends,
+/// since the move it makes notifies again.
 unsafe extern "C" fn changed(_observer: Id, _selector: Sel, notification: Id) {
-    let (Some(runtime), Some(kept)) = (RUNTIME.get(), KEPT.get()) else {
+    let Some(runtime) = RUNTIME.get() else {
         return;
     };
     let window = runtime.object(notification, c"object");
@@ -349,11 +361,7 @@ unsafe extern "C" fn changed(_observer: Id, _selector: Sel, notification: Id) {
         return;
     }
     let handle = Window::new(window as usize);
-    let restored = {
-        let Ok(mut kept) = kept.lock() else {
-            return;
-        };
-        let Kept { session, file } = &mut *kept;
+    let restored = with_kept(|Kept { session, file }| {
         let frame = runtime.frame(window);
         let restored = if session.knows(handle) {
             session.moved(handle, frame);
@@ -362,25 +370,35 @@ unsafe extern "C" fn changed(_observer: Id, _selector: Sel, notification: Id) {
             let name = runtime.text(runtime.object(window, c"identifier"));
             session.show(handle, name.as_deref(), frame, &runtime.screens())
         } else {
-            return;
+            return None;
         };
         let _ = session.record().write(file);
         restored
-    };
-    if let Some(frame) = restored {
+    });
+    if let Some(frame) = restored.flatten() {
         runtime.set_frame(window, frame);
     }
 }
 
 /// A window is closing.
 unsafe extern "C" fn closed(_observer: Id, _selector: Sel, notification: Id) {
-    let (Some(runtime), Some(kept)) = (RUNTIME.get(), KEPT.get()) else {
+    let Some(runtime) = RUNTIME.get() else {
         return;
     };
     let window = runtime.object(notification, c"object");
-    if let Ok(mut kept) = kept.lock() {
-        kept.session.closed(Window::new(window as usize));
-    }
+    with_kept(|kept| kept.session.closed(Window::new(window as usize)));
+}
+
+/// Run `f` on the main thread's session, if `keep` made one. A notification
+/// posted while the session is borrowed, or after the thread's locals are
+/// gone, finds none: these callbacks are C functions and must not panic.
+fn with_kept<T>(f: impl FnOnce(&mut Kept) -> T) -> Option<T> {
+    KEPT.try_with(|kept| {
+        let mut kept = kept.try_borrow_mut().ok()?;
+        kept.as_mut().map(f)
+    })
+    .ok()
+    .flatten()
 }
 
 /// # Safety

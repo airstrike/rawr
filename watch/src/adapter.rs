@@ -76,7 +76,11 @@ struct Watch {
 }
 
 enum Filter {
-    Publication(Arc<rawr::reload::scheduler::publication::Slot>),
+    /// One run's whole graph, fixed for the watcher's life: rawr-cli's
+    /// watcher restarts the program at each relevant save. A save is
+    /// source-only when every path it names is either no input or a Rawr
+    /// source with no input or recursive root beneath it.
+    Graph(rawr::reload::source::Inputs),
     Direct(Direct),
 }
 
@@ -850,12 +854,23 @@ fn existing_directory(path: &Path) -> Result<PathBuf, Error> {
     })
 }
 
+/// Whether a graph filter's `inputs` give `path` only a Rawr source role:
+/// it is an input, a source alone, and no input or recursive root lies
+/// beneath it.
+fn graph_source_only(inputs: &rawr::reload::source::Inputs, path: &Path) -> bool {
+    inputs.contains(path)
+        && inputs.is_source_only(path)
+        && !inputs
+            .paths()
+            .iter()
+            .any(|input| input.as_path() != path && input.starts_with(path))
+        && !inputs.trees().iter().any(|tree| tree.starts_with(path))
+}
+
 impl Filter {
     fn graph(graph: &rawr::reload::source::Graph) -> Self {
         let inputs = rawr::reload::source::Inputs::from_graph(graph);
-        Self::Publication(Arc::new(rawr::reload::scheduler::publication::Slot::new(
-            inputs,
-        )))
+        Self::Graph(inputs)
     }
 
     fn direct(inputs: rawr::reload::source::Inputs) -> Self {
@@ -873,9 +888,8 @@ impl Filter {
 
     fn classify(&self, change: &input::Change) -> (bool, bool) {
         match self {
-            Self::Publication(publication) => {
-                let inputs = publication.read();
-                let relevant = change.relevant(&inputs)
+            Self::Graph(inputs) => {
+                let relevant = change.relevant(inputs)
                     || match change {
                         input::Change::Tree(paths) | input::Change::Unknown(paths) => paths
                             .iter()
@@ -889,12 +903,12 @@ impl Filter {
                                 inputs.contains(path)
                             }
                             input::Change::Tree(_) => {
-                                inputs.affects(path)
+                                input::affects(inputs, path)
                                     || inputs.trees().iter().any(|tree| tree.starts_with(path))
                             }
                             _ => false,
                         };
-                        !relevant || inputs.is_source_only(path)
+                        !relevant || graph_source_only(inputs, path)
                     })
                 });
                 (relevant, source_only)
@@ -934,10 +948,7 @@ impl Filter {
     fn wanted(&self) -> Wanted {
         let mut wanted = Wanted::default();
         match self {
-            Self::Publication(publication) => {
-                let read = publication.read();
-                wanted.add_paths(&read.paths(), &read.trees(), &read.unwatched());
-            }
+            Self::Graph(inputs) => wanted.add(inputs),
             Self::Direct(state) => {
                 for inputs in std::iter::once(&state.current)
                     .chain(state.staged.iter().map(|entry| &entry.inputs))
@@ -959,16 +970,13 @@ impl Filter {
                 .any(|directory| path.starts_with(directory))
         };
         match self {
-            Self::Publication(publication) => {
-                let read = publication.read();
-                let unwatched = read.unwatched();
-                read.paths()
-                    .into_vec()
-                    .into_iter()
-                    .chain(read.trees().into_vec())
-                    .filter(|path| kept(&unwatched, path))
-                    .collect()
-            }
+            Self::Graph(inputs) => inputs
+                .paths()
+                .iter()
+                .chain(inputs.trees())
+                .filter(|path| kept(inputs.unwatched(), path))
+                .cloned()
+                .collect(),
             Self::Direct(state) => {
                 let inputs = || {
                     std::iter::once(&state.current)
@@ -989,10 +997,15 @@ impl Filter {
     /// Every non-source input path and recursive root, current and staged.
     fn native(&self) -> (Box<[PathBuf]>, Box<[PathBuf]>) {
         match self {
-            Self::Publication(publication) => {
-                let read = publication.read();
-                (read.native_paths(), read.trees())
-            }
+            Self::Graph(inputs) => (
+                inputs
+                    .paths()
+                    .iter()
+                    .filter(|path| !inputs.is_source_only(path))
+                    .cloned()
+                    .collect(),
+                inputs.trees().into(),
+            ),
             Self::Direct(state) => {
                 let mut paths = BTreeSet::new();
                 let mut trees = BTreeSet::new();
@@ -1154,7 +1167,7 @@ mod tests {
     #[test]
     fn unchanged_roots_do_not_construct_a_successor() {
         let fixture = Fixture::new("unchanged-successor");
-        let mut adapter = transport(fixture.publication.read().current().clone(), true);
+        let mut adapter = transport(fixture.inputs.clone(), true);
         let watch = &mut adapter.watch;
         let exact = adapter.filter.watched();
         let desired = watch.roots.clone();
@@ -1168,7 +1181,7 @@ mod tests {
     #[test]
     fn failed_successor_preserves_incumbent_roots() {
         let fixture = Fixture::new("failed-successor");
-        let mut adapter = transport(fixture.publication.read().current().clone(), true);
+        let mut adapter = transport(fixture.inputs.clone(), true);
         let exact = adapter.filter.watched();
         let watch = &mut adapter.watch;
         let original = watch.roots.clone();
@@ -1191,7 +1204,7 @@ mod tests {
     #[test]
     fn direct_filter_observes_the_staged_union_until_abort_or_commit() {
         let fixture = Fixture::new("staged-union");
-        let current = fixture.publication.read().current().clone();
+        let current = fixture.inputs.clone();
         let candidate_root = fixture.root.join("candidate");
         fs::create_dir_all(&candidate_root).expect("candidate directory opens");
         let candidate_root =
@@ -1231,7 +1244,7 @@ mod tests {
     #[test]
     fn relevant_event_revokes_before_the_owner_admits() {
         let fixture = Fixture::new("revocation");
-        let mut adapter = transport(fixture.publication.read().current().clone(), true);
+        let mut adapter = transport(fixture.inputs.clone(), true);
         let now = Instant::now();
         adapter.gate.observe(now).unwrap();
         let obsolete = adapter.gate.start(now).unwrap().complete("obsolete");
@@ -1253,7 +1266,7 @@ mod tests {
     #[test]
     fn a_wake_without_a_change_starts_nothing() {
         let fixture = Fixture::new("nudge");
-        let mut adapter = transport(fixture.publication.read().current().clone(), true);
+        let mut adapter = transport(fixture.inputs.clone(), true);
         adapter.waker().wake();
         assert!(adapter.wait().is_ok());
         assert!(adapter.start(Instant::now()).is_none());
@@ -1262,7 +1275,7 @@ mod tests {
     #[test]
     fn access_stays_quiet_and_backend_failure_wakes_the_owner_once() {
         let fixture = Fixture::new("failure");
-        let mut adapter = transport(fixture.publication.read().current().clone(), true);
+        let mut adapter = transport(fixture.inputs.clone(), true);
         let now = Instant::now();
 
         adapter.handle_at(
@@ -1294,9 +1307,7 @@ mod tests {
         let root = fs::canonicalize(&fixture.root).unwrap();
         let missing = root.join("absent/config.toml");
         let inputs = fixture
-            .publication
-            .read()
-            .current()
+            .inputs
             .clone()
             .with_imported([rawr_import::input::proof::Watch::Exact(missing)]);
 
@@ -1309,7 +1320,7 @@ mod tests {
     #[test]
     fn staged_transport_is_retained_until_abort_or_commit() {
         let fixture = Fixture::new("staged-transport");
-        let current = fixture.publication.read().current().clone();
+        let current = fixture.inputs.clone();
         let root = fs::canonicalize(&fixture.root).unwrap();
         let first = root.join("first");
         let second = root.join("second");
@@ -1398,12 +1409,7 @@ mod tests {
             Watch::Tree(target.join("debug/build/app-1/out")),
         ])
         .outside(std::slice::from_ref(&target));
-        let inputs = fixture
-            .publication
-            .read()
-            .current()
-            .clone()
-            .with_native(&native);
+        let inputs = fixture.inputs.clone().with_native(&native);
         let adapter = Adapter::open_inputs(inputs, Duration::ZERO).unwrap();
 
         let watched = adapter.filter.watched();
@@ -1568,9 +1574,7 @@ mod tests {
         let root = fs::canonicalize(&fixture.root).unwrap();
         let config = root.join(".cargo/nested/config.toml");
         let inputs = fixture
-            .publication
-            .read()
-            .current()
+            .inputs
             .clone()
             .with_imported([rawr_import::input::proof::Watch::Exact(config.clone())]);
         assert!(inputs.contains(&config));
@@ -1627,9 +1631,7 @@ mod tests {
         let root = fs::canonicalize(&fixture.root).unwrap();
         let tree = root.join("generated/tree");
         let inputs = fixture
-            .publication
-            .read()
-            .current()
+            .inputs
             .clone()
             .with_imported([rawr_import::input::proof::Watch::Tree(tree.clone())]);
         let mut adapter = direct(inputs.clone());
@@ -1646,9 +1648,8 @@ mod tests {
         assert!(adapter.changed());
         assert!(adapter.start(now).is_some());
         assert_eq!(adapter.watch.roots.get(&tree), Some(&true));
-        // Publication filters also retain ancestor relevance for tree inputs.
-        let publication = Arc::new(rawr::reload::scheduler::publication::Slot::new(inputs));
-        let filter = Filter::Publication(publication);
+        // Graph filters also retain ancestor relevance for tree inputs.
+        let filter = Filter::Graph(inputs);
         assert!(filter.relevant(&super::input::Change::Tree(Box::from([
             root.join("generated")
         ]))));
@@ -1659,9 +1660,13 @@ mod tests {
         let fixture = Fixture::new("publication-parent");
         let root = fs::canonicalize(&fixture.root).unwrap();
         let parent = root.join(".cargo/nested");
-        let inputs = fixture.publication.read().current().clone().with_imported([
-            rawr_import::input::proof::Watch::Exact(parent.join("config.toml")),
-        ]);
+        let inputs =
+            fixture
+                .inputs
+                .clone()
+                .with_imported([rawr_import::input::proof::Watch::Exact(
+                    parent.join("config.toml"),
+                )]);
         let mut adapter = transport(inputs, true);
         assert!(adapter.filter.wanted().directories.contains_key(&parent));
         assert_eq!(adapter.watch.roots.get(&root), Some(&false));
@@ -1684,7 +1689,7 @@ mod tests {
     #[test]
     fn resident_source_edit_stays_eligible_but_revokes_the_original_request() {
         let fixture = Fixture::new("resident-source");
-        let mut adapter = direct(fixture.publication.read().current().clone());
+        let mut adapter = direct(fixture.inputs.clone());
         let baseline = adapter.native_baseline();
         let now = Instant::now();
         adapter.gate.observe(now).unwrap();
@@ -1695,7 +1700,7 @@ mod tests {
             adapter.admit_current(candidate, |_| panic!("source event must revoke")),
             rawr::reload::scheduler::Admission::Obsolete(())
         ));
-        let mut foreign = direct(fixture.publication.read().current().clone());
+        let mut foreign = direct(fixture.inputs.clone());
         assert!(!foreign.resident_eligible(&baseline));
     }
 
@@ -1705,9 +1710,7 @@ mod tests {
         let fixture = Fixture::new("resident-watermark");
         let native = fixture.source.with_file_name("native.rs");
         let inputs = fixture
-            .publication
-            .read()
-            .current()
+            .inputs
             .clone()
             .with_imported([Watch::Exact(native.clone())]);
         let mut adapter = direct(inputs.clone());
@@ -1750,9 +1753,7 @@ mod tests {
         let cache = fixture.source.parent().unwrap().join("registry");
         let native = cache.join("src/crate/lib.rs");
         let inputs = fixture
-            .publication
-            .read()
-            .current()
+            .inputs
             .clone()
             .with_imported([Watch::Exact(native.clone())]);
         let mut adapter = direct(inputs);
@@ -1776,7 +1777,7 @@ mod tests {
     #[test]
     fn resident_unknown_pathless_rescan_and_ancestor_events_fail_closed() {
         let fixture = Fixture::new("resident-unknown");
-        let mut adapter = direct(fixture.publication.read().current().clone());
+        let mut adapter = direct(fixture.inputs.clone());
         let now = Instant::now();
         // Dropped-event rescans re-stamp the untouched native inputs instead
         // of assuming a change; every uncertain event still revokes the request.
@@ -1830,7 +1831,7 @@ mod tests {
     fn resident_staged_source_role_cannot_hide_current_or_staged_native_overlap() {
         use rawr_import::input::proof::Watch;
         let fixture = Fixture::new("resident-overlap");
-        let source = fixture.publication.read().current().clone();
+        let source = fixture.inputs.clone();
         let native = source
             .clone()
             .with_imported([Watch::Exact(fixture.source.clone())]);
@@ -1839,12 +1840,6 @@ mod tests {
             let mut direct = Filter::direct(current.clone());
             direct.stage(Arc::new(candidate.clone())).unwrap();
             assert_eq!(direct.classify(&change), (true, false));
-            let publication = Arc::new(rawr::reload::scheduler::publication::Slot::new(current));
-            let _staged = publication.register(candidate);
-            assert_eq!(
-                Filter::Publication(publication).classify(&change),
-                (true, false)
-            );
         }
     }
 
@@ -1852,7 +1847,7 @@ mod tests {
     fn resident_rename_ignores_unrelated_save_temp_paths_in_both_filters() {
         let fixture = Fixture::new("resident-save-temp");
         for published in [false, true] {
-            let mut adapter = transport(fixture.publication.read().current().clone(), published);
+            let mut adapter = transport(fixture.inputs.clone(), published);
             let baseline = adapter.native_baseline();
             let now = Instant::now();
             adapter.gate.observe(now).unwrap();
@@ -1881,18 +1876,21 @@ mod tests {
     fn resident_rename_keeps_mixed_native_paths_dirty_in_both_filters() {
         use rawr_import::input::proof::Watch;
         let fixture = Fixture::new("resident-mixed-rename");
-        let current = fixture.publication.read().current().clone();
+        let current = fixture.inputs.clone();
         let native = fixture.source.with_file_name("native");
         for published in [false, true] {
-            let mut adapter = transport(current.clone(), published);
             let inputs = current.clone().with_imported([
                 Watch::Exact(native.join("exact.rs")),
                 Watch::Tree(native.join("tree")),
             ]);
-            let (_observation, _staged) = if published {
-                (Some(publication(&adapter).register(inputs)), None)
+            // A graph filter is fixed, so it holds the native inputs from
+            // the start; a direct one stages them.
+            let (mut adapter, _staged) = if published {
+                (transport(inputs, true), None)
             } else {
-                (None, Some(adapter.prepare_inputs(inputs).unwrap()))
+                let mut adapter = transport(current.clone(), false);
+                let staged = adapter.prepare_inputs(inputs).unwrap();
+                (adapter, Some(staged))
             };
             // Exact native files, recursive members, and ancestors of a staged
             // native root all remain relevant even alongside a Rawr endpoint.
@@ -1934,9 +1932,7 @@ mod tests {
             for target in [&fixture.source, &unrelated] {
                 fs::write(&native, "native").unwrap();
                 let inputs = fixture
-                    .publication
-                    .read()
-                    .current()
+                    .inputs
                     .clone()
                     .with_imported([Watch::Exact(native.clone())]);
                 let mut adapter = transport(inputs, published);
@@ -1991,9 +1987,7 @@ mod tests {
                 fs::create_dir(&directory).unwrap();
                 fs::write(&native, "native").unwrap();
                 let inputs = fixture
-                    .publication
-                    .read()
-                    .current()
+                    .inputs
                     .clone()
                     .with_imported([Watch::Exact(native.clone())]);
                 let mut adapter = transport(inputs, published);
@@ -2042,9 +2036,7 @@ mod tests {
                 fs::create_dir(&directory).unwrap();
                 fs::write(&native, "native").unwrap();
                 let inputs = fixture
-                    .publication
-                    .read()
-                    .current()
+                    .inputs
                     .clone()
                     .with_imported([Watch::Exact(native.clone())]);
                 let mut adapter = transport(inputs, published);
@@ -2095,15 +2087,13 @@ mod tests {
             .add_path(fixture.source.parent().unwrap().to_path_buf()),
         );
         assert!(matches!(change, super::input::Change::Metadata(_)));
-        let publication = Filter::Publication(Arc::clone(&fixture.publication));
-        assert_eq!(publication.classify(&change), (false, true));
+        let graph = Filter::Graph(fixture.inputs.clone());
+        assert_eq!(graph.classify(&change), (false, true));
     }
 
     fn transport(inputs: rawr::reload::source::Inputs, published: bool) -> super::Adapter {
         let filter = if published {
-            Filter::Publication(Arc::new(rawr::reload::scheduler::publication::Slot::new(
-                inputs,
-            )))
+            Filter::Graph(inputs)
         } else {
             Filter::direct(inputs)
         };
@@ -2111,19 +2101,12 @@ mod tests {
         Adapter::with_filter(filter, Duration::ZERO, false).unwrap()
     }
 
-    fn publication(adapter: &Adapter) -> Arc<rawr::reload::scheduler::publication::Slot> {
-        match &adapter.filter {
-            Filter::Publication(publication) => Arc::clone(publication),
-            Filter::Direct(_) => panic!("a published transport has a publication filter"),
-        }
-    }
-
     const MAIN: &str = "// rawr\nfn main() {\n    println!(\"watch\");\n}\n";
 
     struct Fixture {
         root: std::path::PathBuf,
         source: std::path::PathBuf,
-        publication: Arc<rawr::reload::scheduler::publication::Slot>,
+        inputs: rawr::reload::source::Inputs,
     }
 
     impl Fixture {
@@ -2146,13 +2129,11 @@ mod tests {
                 .compile_package_snapshot_generation_with_top_level(&snapshot, None)
                 .unwrap();
             let source = candidate.source().entry_source().path().to_path_buf();
-            let publication = Arc::new(rawr::reload::scheduler::publication::Slot::new(
-                rawr::reload::source::Inputs::from_graph(candidate.source()),
-            ));
+            let inputs = rawr::reload::source::Inputs::from_graph(candidate.source());
             Self {
                 root,
                 source,
-                publication,
+                inputs,
             }
         }
     }

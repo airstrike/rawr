@@ -3,10 +3,6 @@
 use crate::{expose_under_internals, Dynamic, Engine, ImmutableString};
 use std::fmt;
 
-/// Collection of globally-defined constants.
-pub type SharedGlobalConstants =
-    crate::Shared<crate::Locked<std::collections::BTreeMap<ImmutableString, Dynamic>>>;
-
 /// _(internals)_ Global runtime states.
 /// Exported under the `internals` feature only.
 //
@@ -52,10 +48,6 @@ pub struct GlobalRuntimeState {
     ///
     /// When that happens, this flag is turned on.
     pub always_search_scope: bool,
-    /// Cache of globally-defined constants.
-    ///
-    /// Interior mutability is needed because it is shared in order to aid in cloning.
-    pub constants: Option<SharedGlobalConstants>,
     /// Custom state that can be used by the external host.
     pub tag: Dynamic,
     /// The debugger's state for this evaluation. It is always here, so an
@@ -84,7 +76,6 @@ impl Engine {
             scope_level: 0,
             level: 0,
             always_search_scope: false,
-            constants: None,
 
             tag: self.default_tag().clone(),
 
@@ -273,8 +264,6 @@ impl fmt::Debug for GlobalRuntimeState {
             .field("level", &self.level)
             .field("scope_level", &self.scope_level)
             .field("always_search_scope", &self.always_search_scope);
-
-        f.field("constants", &self.constants);
 
         f.field("tag", &self.tag);
 

@@ -893,15 +893,12 @@ impl ASTNode<'_> {
 ///
 /// 1) stack of scripted functions defined
 /// 2) the stack of imported [modules][crate::Module]
-/// 3) global constants
 #[derive(Debug, Clone)]
 pub struct EncapsulatedEnviron {
     /// Stack of loaded [modules][crate::Module] containing script-defined functions.
     pub lib: crate::StaticVec<crate::SharedModule>,
     /// Imported [modules][crate::Module].
     pub imports: crate::ThinVec<(ImmutableString, crate::SharedModule)>,
-    /// Globally-defined constants.
-    pub constants: Option<crate::eval::SharedGlobalConstants>,
 }
 
 impl From<&crate::eval::GlobalRuntimeState> for EncapsulatedEnviron {
@@ -912,7 +909,6 @@ impl From<&crate::eval::GlobalRuntimeState> for EncapsulatedEnviron {
                 .iter_imports_raw()
                 .map(|(n, m)| (n.clone(), m.clone()))
                 .collect(),
-            constants: value.constants.clone(),
         }
     }
 }

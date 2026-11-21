@@ -1,33 +1,23 @@
 //! What Rawr runs on a facade's host values natively: `==` by the type's own
 //! `PartialEq` ([`facade::Builder::value_type`](super::facade::Builder::value_type)),
-//! and the bytes that carry one into the next runner process
-//! ([`facade::Builder::carried`](super::facade::Builder::carried)).
+//! ordering, `Default`, `Debug` and `Display`.
 //!
-//! A host value is an opaque Rust value inside a `Dynamic`, so both are the
-//! functions compiled for its type, looked up by `TypeId` (or, for carried
-//! bytes, by the type's name) when used. What a type declared for `==`,
-//! ordering, `Default`, `Debug` and `Display` is one row of one table.
+//! A host value is an opaque Rust value inside a `Dynamic`, so each is the
+//! function compiled for its type, looked up by `TypeId` when used. What a
+//! type declared is one row of one table. An imported type's `Default` is
+//! looked up by the type's identity in the same table's second map.
+//!
+//! Registration has no fixed end: a runner registers at its start, facade
+//! builders register as bindings load, lowering registers during a compile
+//! and some types register at first use. So the table stays behind one
+//! `RwLock`, which every host value's `==`, `<`, `Debug`, `Display` and
+//! `Default` reads on any thread.
 
 use crate::Dynamic;
 use std::any::{Any, TypeId};
 use std::{collections::BTreeMap, sync::RwLock};
 
-/// How a host value type whose values are plain data is carried into the
-/// next runner process: the bytes of a value, and the value they encode.
-/// A facade implements it on a type of its own, so it can carry a type of
-/// another crate's.
-pub trait Carry: 'static {
-    /// The carried host value type.
-    type Value: Clone + crate::func::SendSync + 'static;
-    /// Append the bytes of `value`.
-    fn encode(value: &Self::Value, out: &mut Vec<u8>);
-    /// The value `bytes` encode, or `None` when they are malformed.
-    fn decode(bytes: &[u8]) -> Option<Self::Value>;
-}
-
 type Equal = fn(&Dynamic, &Dynamic) -> Option<bool>;
-type Encode = fn(&Dynamic, &mut Vec<u8>) -> Option<()>;
-type Decode = fn(&[u8]) -> Option<Dynamic>;
 type Compare = fn(&Dynamic, &Dynamic) -> Option<std::cmp::Ordering>;
 /// The text of a value of the row's type, `None` for a value of another.
 pub(super) type Text = fn(&dyn Any) -> Option<String>;
@@ -42,22 +32,31 @@ pub(super) struct Declared {
     default: Option<fn() -> Dynamic>,
 }
 
-/// Each host value type's declarations, one row per type.
-static DECLARED: RwLock<BTreeMap<TypeId, Declared>> = RwLock::new(BTreeMap::new());
+type MakeDefault = std::sync::Arc<dyn Fn() -> Dynamic + Send + Sync>;
 
-static ENCODERS: RwLock<BTreeMap<TypeId, (&'static str, Encode)>> = RwLock::new(BTreeMap::new());
-static DECODERS: RwLock<BTreeMap<&'static str, Decode>> = RwLock::new(BTreeMap::new());
+/// Every host value type's declarations.
+struct Table {
+    /// One row per host value type.
+    declared: BTreeMap<TypeId, Declared>,
+    /// Imported types' `Default`, by the type's identity.
+    imported_defaults: BTreeMap<[u8; 32], MakeDefault>,
+}
+
+static TABLE: RwLock<Table> = RwLock::new(Table {
+    declared: BTreeMap::new(),
+    imported_defaults: BTreeMap::new(),
+});
 
 /// Change the row of `ty` with `declare`.
 pub(super) fn declare(ty: TypeId, declare: impl FnOnce(&mut Declared)) {
-    if let Ok(mut declared) = DECLARED.write() {
-        declare(declared.entry(ty).or_default());
+    if let Ok(mut table) = TABLE.write() {
+        declare(table.declared.entry(ty).or_default());
     }
 }
 
 /// The row of `ty`, when it declared anything.
 pub(super) fn declared(ty: TypeId) -> Option<Declared> {
-    DECLARED.read().ok()?.get(&ty).copied()
+    TABLE.read().ok()?.declared.get(&ty).copied()
 }
 
 /// Let a derived `Default` build a host value field by the type's own
@@ -73,10 +72,6 @@ pub(crate) fn host_default(ty: TypeId) -> Option<Dynamic> {
     declared(ty)?.default.map(|default| default())
 }
 
-type MakeDefault = std::sync::Arc<dyn Fn() -> Dynamic + Send + Sync>;
-
-static IMPORTED_DEFAULTS: RwLock<BTreeMap<[u8; 32], MakeDefault>> = RwLock::new(BTreeMap::new());
-
 /// Let a derived `Default` build a field of the imported type `identity`
 /// by the crate's own `Default`, as a generated runner calls it with the
 /// `Default` rustc proved for the type.
@@ -85,15 +80,19 @@ pub fn register_imported_default(
     identity: [u8; 32],
     default: impl Fn() -> Dynamic + Send + Sync + 'static,
 ) {
-    if let Ok(mut defaults) = IMPORTED_DEFAULTS.write() {
-        defaults.insert(identity, std::sync::Arc::new(default));
+    if let Ok(mut table) = TABLE.write() {
+        table
+            .imported_defaults
+            .insert(identity, std::sync::Arc::new(default));
     }
 }
 
 /// The `Default` value of the imported type `identity`, when a runner
 /// registered one.
 pub(crate) fn imported_default(identity: &[u8; 32]) -> Option<Dynamic> {
-    let default = std::sync::Arc::clone(IMPORTED_DEFAULTS.read().ok()?.get(identity)?);
+    // The lock is let go before the default runs, so a default that
+    // builds a host value can read the table again.
+    let default = std::sync::Arc::clone(TABLE.read().ok()?.imported_defaults.get(identity)?);
     Some(default())
 }
 
@@ -106,15 +105,6 @@ fn compare<T: PartialOrd + Clone + 'static>(
     rhs: &Dynamic,
 ) -> Option<std::cmp::Ordering> {
     lhs.read_lock::<T>()?.partial_cmp(&*rhs.read_lock::<T>()?)
-}
-
-fn encode<T: Carry>(value: &Dynamic, out: &mut Vec<u8>) -> Option<()> {
-    T::encode(&*value.read_lock::<T::Value>()?, out);
-    Some(())
-}
-
-fn decode<T: Carry>(bytes: &[u8]) -> Option<Dynamic> {
-    T::decode(bytes).map(Dynamic::from)
 }
 
 pub(crate) fn register_equality<T: PartialEq + Clone + 'static>() {
@@ -153,14 +143,6 @@ pub(crate) fn host_compare(lhs: &Dynamic, rhs: &Dynamic) -> Option<std::cmp::Ord
             return None;
         }
         declared(ty)?.compare?(lhs, rhs)
-    }
-}
-
-pub(crate) fn register_carry<T: Carry>() {
-    if let (Ok(mut encoders), Ok(mut decoders)) = (ENCODERS.write(), DECODERS.write()) {
-        let name = std::any::type_name::<T::Value>();
-        encoders.insert(TypeId::of::<T::Value>(), (name, encode::<T>));
-        decoders.insert(name, decode::<T>);
     }
 }
 

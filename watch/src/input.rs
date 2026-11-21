@@ -64,7 +64,9 @@ impl Change {
         }
     }
 
-    pub(super) fn relevant(&self, inputs: &rawr::reload::scheduler::publication::Read<'_>) -> bool {
+    /// Whether a graph filter's `inputs` see this change: an exact input,
+    /// or for a tree change an input or an ancestor removed with one.
+    pub(super) fn relevant(&self, inputs: &rawr::reload::source::Inputs) -> bool {
         match self {
             Self::Irrelevant => false,
             Self::Rescan => true,
@@ -72,7 +74,7 @@ impl Change {
                 paths.iter().any(|path| inputs.contains(path))
             }
             Self::Tree(paths) | Self::Unknown(paths) => {
-                paths.iter().any(|path| inputs.affects(path))
+                paths.iter().any(|path| affects(inputs, path))
             }
         }
     }
@@ -92,6 +94,11 @@ impl Change {
             }),
         }
     }
+}
+
+/// Whether `path` names one of `inputs` or an ancestor removed with one.
+pub(super) fn affects(inputs: &rawr::reload::source::Inputs, path: &Path) -> bool {
+    inputs.contains(path) || inputs.paths().iter().any(|input| input.starts_with(path))
 }
 
 fn retain_event_paths(path: &Path, paths: &mut Vec<PathBuf>) -> Option<bool> {
