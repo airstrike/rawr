@@ -1119,7 +1119,9 @@ impl Proof {
     pub(crate) fn runner_path_packages(&self) -> Vec<(String, String)> {
         let harness = self.harness_directory();
         let mut packages = self.path_packages();
-        packages.retain(|(_, directory)| Some(Path::new(directory)) != harness);
+        // A package id writes its directory as a URL path, so a directory
+        // holding `{` or a space is percent-encoded there and not here.
+        packages.retain(|(_, directory)| Some(url_path(directory).as_path()) != harness);
         packages
     }
 
@@ -1254,6 +1256,31 @@ impl Proof {
             })?,
         })
     }
+}
+
+/// The file path a `path+file://` URL's path names: each `%XX` is the byte
+/// `XX`. A `%` without two hex digits stays as written.
+fn url_path(path: &str) -> PathBuf {
+    let hex = |byte: u8| {
+        char::from(byte)
+            .to_digit(16)
+            .and_then(|digit| u8::try_from(digit).ok())
+    };
+    let mut bytes = Vec::with_capacity(path.len());
+    let mut rest = path.as_bytes();
+    while let Some((&byte, tail)) = rest.split_first() {
+        rest = tail;
+        if byte == b'%'
+            && let [high, low, tail @ ..] = rest
+            && let (Some(high), Some(low)) = (hex(*high), hex(*low))
+        {
+            rest = tail;
+            bytes.push(high << 4 | low);
+        } else {
+            bytes.push(byte);
+        }
+    }
+    PathBuf::from(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 pub(super) fn protected_digest_accounted(
