@@ -14,20 +14,26 @@
 //! own frame view, above the content, and the agent cursor where the last
 //! input put it. Its size is the window's in logical points, title bar
 //! included, the space the input tools take positions in, at the window's
-//! backing scale.
+//! backing scale. A request's `region` and `scale` crop it to a part of the
+//! window and resample it (#2009, see [`Framing`]).
 //!
 //! The answer comes once the PNG is written to `file`: `{"title": ..,
-//! "width": .., "height": .., "scale": .., "windows": [..]}`, `windows`
-//! being every window's title, front first; or `{"error": ..}`.
+//! "width": .., "height": .., "scale": .., "backing": .., "region": {..},
+//! "pixels": {..}, "windows": [..]}`, `width` and `height` being the
+//! window's points, `scale` the PNG's pixels a point, `backing` the
+//! window's, `region` the points the PNG shows and `windows` every
+//! window's title, front first; or `{"error": ..}`.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
+use crate::inspect::framing::{self, Fit, Framing};
 use crate::inspect::Interrupt;
 
-/// A written capture: the window it shows and the program's windows.
+/// A written capture: the window it shows, the part of it and the scale
+/// the PNG shows it at, and the program's windows.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Shot {
     /// The window's title.
@@ -35,17 +41,19 @@ pub(super) struct Shot {
     /// The window's size in logical points, title bar included.
     pub(super) width: f64,
     pub(super) height: f64,
-    /// Pixels per point.
-    pub(super) scale: f64,
+    /// The region and scale the PNG shows.
+    pub(super) fit: Fit,
     /// Every window's title, front first.
     pub(super) windows: Vec<String>,
 }
 
 /// Why a capture wasn't written.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(super) enum Error {
     /// The request names no file to write.
     File,
+    /// The request's `region` or `scale` was refused.
+    Framing(framing::Error),
     /// The program shows no window, or none with that title, after it
     /// showed its first: `shown` are the titles it shows.
     Window {
@@ -74,6 +82,7 @@ impl fmt::Display for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::File => formatter.write_str("a screenshot needs a `file` to write"),
+            Self::Framing(error) => error.fmt(formatter),
             Self::Window { title, shown } => {
                 match title {
                     Some(title) => {
@@ -115,26 +124,31 @@ impl Shot {
             "title": self.title,
             "width": self.width,
             "height": self.height,
-            "scale": self.scale,
+            "scale": self.fit.scale(),
+            "backing": self.fit.backing(),
+            "region": self.fit.region(),
+            "pixels": { "width": self.fit.width(), "height": self.fit.height() },
             "windows": self.windows,
         })
     }
 }
 
-/// Capture the window titled `title`, or the front one, into `file`, for
-/// the socket or for rawr's Take Screenshot item (#1990).
+/// Capture `framing`'s part of the window titled `title`, or the front
+/// one, into `file`, for the socket or for rawr's Take Screenshot item
+/// (#1990).
 pub(super) fn capture(
     title: Option<&str>,
     file: &Path,
+    framing: &Framing,
     interrupted: &Interrupt,
 ) -> Result<Shot, Error> {
     #[cfg(target_os = "macos")]
     {
-        super::input::capture(title, file, interrupted)
+        super::input::capture(title, file, framing, interrupted)
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (title, file, interrupted);
+        let _ = (title, file, framing, interrupted);
         Err(Error::Unsupported)
     }
 }
@@ -146,9 +160,10 @@ pub(super) fn answer(request: &Value, interrupted: &Interrupt) -> Option<Value> 
         .get("file")
         .and_then(Value::as_str)
         .map(PathBuf::from);
-    let shot = file
-        .ok_or(Error::File)
-        .and_then(|file| capture(title, &file, interrupted));
+    let shot = file.ok_or(Error::File).and_then(|file| {
+        let framing = Framing::new(request).map_err(Error::Framing)?;
+        capture(title, &file, &framing, interrupted)
+    });
     match shot {
         Ok(shot) => Some(shot.to_json()),
         Err(Error::Interrupted) => None,
@@ -173,6 +188,15 @@ mod tests {
         assert_eq!(
             answer(&json!({ "title": "x" }), &Interrupt::default()).unwrap()["error"],
             "a screenshot needs a `file` to write"
+        );
+    }
+
+    #[test]
+    fn a_refused_region_is_answered_before_any_capture() {
+        let request = json!({ "file": "/nowhere.png", "scale": 0 });
+        assert_eq!(
+            answer(&request, &Interrupt::default()).unwrap()["error"],
+            "`scale` is 0: it must be a number of pixels a point more than 0 and at most 4"
         );
     }
 }

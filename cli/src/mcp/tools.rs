@@ -207,12 +207,29 @@ pub fn list() -> Vec<Value> {
         }),
         json!({
             "name": "screenshot",
-            "description": "Capture the started program's window alone and return the PNG. The program draws the capture itself, so it shows the window as it is while another window covers it, it is off screen or the session is locked, and it needs no Screen Recording permission. The PNG is the window's size in points, title bar included, at its backing scale: the input tools take positions in those points.",
+            "description": "Capture the started program's window alone and return the PNG. The program draws the capture itself, so it shows the window as it is while another window covers it, it is off screen or the session is locked, and it needs no Screen Recording permission. The PNG is the window's size in points, title bar included, at its backing scale: the input tools take positions in those points. `region` cuts it to a part of the window and `scale` sets its pixels a point, both in the program's own capture.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "path": path_schema(),
                     "title": { "type": "string", "description": "The window's title, when the program has several" },
+                    "region": {
+                        "type": "object",
+                        "description": "The part of the window to capture, in the points the input tools take, from its top-left corner, title bar included. A region that runs past the window is cut to it.",
+                        "properties": {
+                            "x": { "type": "number" },
+                            "y": { "type": "number" },
+                            "width": { "type": "number", "exclusiveMinimum": 0 },
+                            "height": { "type": "number", "exclusiveMinimum": 0 },
+                        },
+                        "required": ["x", "y", "width", "height"],
+                    },
+                    "scale": {
+                        "type": "number",
+                        "exclusiveMinimum": 0,
+                        "maximum": 4,
+                        "description": "The PNG's pixels a point; the window's backing scale by default. The window draws at its backing scale, so a larger scale enlarges those pixels and adds no detail.",
+                    },
                 },
             },
         }),
@@ -610,7 +627,7 @@ pub fn call(server: &Server, params: &Value, call: &Call) -> Value {
             call,
         ),
         "break" | "step" | "continue" | "clear" => debug(server, name, &arguments, call),
-        "screenshot" => screenshot(server, text("path"), text("title"), call, &progress),
+        "screenshot" => screenshot(server, text("path"), &arguments, call, &progress),
         "move" | "click" | "drag" | "scroll" | "key" | "type" => {
             input(server, name, &arguments, call)
         }
@@ -1213,7 +1230,7 @@ fn ask(
 fn screenshot(
     server: &Server,
     path: Option<&str>,
-    title: Option<&str>,
+    arguments: &Value,
     call: &Call,
     progress: &Progress<'_>,
 ) -> Result<Value, String> {
@@ -1221,9 +1238,13 @@ fn screenshot(
     let session = sessions::get(server, &place.root, call);
     let installed = layer::installed();
     let mut reasons = Vec::new();
+    let title = arguments.get("title").and_then(Value::as_str);
+    // The program checks `region` and `scale` and answers a refusal.
+    let region = arguments.get("region").cloned().unwrap_or(Value::Null);
+    let scale = arguments.get("scale").cloned().unwrap_or(Value::Null);
     if let Some(offered) = extension::find(&installed, "screenshot") {
         let asked = content::Call {
-            arguments: json!({ "title": title }),
+            arguments: json!({ "title": title, "region": region, "scale": scale }),
             root: place.root.clone(),
             target_dir: place.target_dir.clone(),
             pid: session.as_ref().map(|session| session.pid()),
@@ -1249,7 +1270,13 @@ fn screenshot(
     if let Some(parent) = file.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
-    let request = json!({ "op": "screenshot", "title": title, "file": file });
+    let request = json!({
+        "op": "screenshot",
+        "title": title,
+        "file": file,
+        "region": region,
+        "scale": scale,
+    });
     let (answer, _) = ask(&session, &request, call)?;
     match answer["error"].as_str() {
         Some("paused") => {
@@ -1276,12 +1303,7 @@ fn screenshot(
         Some("") | None => "the untitled window".to_owned(),
         Some(title) => format!("`{title}`"),
     };
-    let summary = format!(
-        "{shown}: {}\n{} × {} points: `click` and the other input tools take positions in these points, from the top-left corner, title bar included",
-        file.display(),
-        answer["width"],
-        answer["height"]
-    );
+    let summary = format!("{shown}: {}\n{}", file.display(), framed(&answer));
     Ok(content::success(
         json!({
             "file": file,
@@ -1289,11 +1311,44 @@ fn screenshot(
             "pid": session.pid(),
             "points": { "width": answer["width"], "height": answer["height"] },
             "scale": answer["scale"],
+            "backing": answer["backing"],
+            "region": answer["region"],
+            "pixels": answer["pixels"],
             "windows": answer["windows"],
         }),
         summary,
         vec![content::png(&bytes)],
     ))
+}
+
+/// How a capture's pixels map to the window's points, from the program's
+/// answer: the whole window is in points as the PNG shows it, and a region
+/// or a scale says how its pixels map to them.
+fn framed(answer: &Value) -> String {
+    let region = &answer["region"];
+    let whole = region["x"].as_f64() == Some(0.0)
+        && region["y"].as_f64() == Some(0.0)
+        && region["width"] == answer["width"]
+        && region["height"] == answer["height"];
+    if whole && answer["scale"] == answer["backing"] {
+        return format!(
+            "{} × {} points: `click` and the other input tools take positions in these points, from the top-left corner, title bar included",
+            answer["width"], answer["height"]
+        );
+    }
+    format!(
+        "{} × {} points at {}, {} of the window's {} × {}, at {} pixels a point: the PNG's pixel `px`, `py` is the window's point `{} + px / {scale}`, `{} + py / {scale}`, where `click` and the other input tools take positions",
+        region["width"],
+        region["height"],
+        region["x"],
+        region["y"],
+        answer["width"],
+        answer["height"],
+        answer["scale"],
+        region["x"],
+        region["y"],
+        scale = answer["scale"],
+    )
 }
 
 fn relay(progress: &Progress<'_>, record: &Value) {
@@ -1346,4 +1401,26 @@ fn extension_call(
         call,
         |record| relay(progress, record),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    #[test]
+    fn a_region_says_how_its_pixels_map_to_the_windows_points() {
+        let whole = json!({
+            "width": 400.0, "height": 300.0, "scale": 2.0, "backing": 2.0,
+            "region": { "x": 0.0, "y": 0.0, "width": 400.0, "height": 300.0 },
+        });
+        assert!(super::framed(&whole).starts_with("400.0 × 300.0 points: `click`"));
+        let region = json!({
+            "width": 400.0, "height": 300.0, "scale": 2.0, "backing": 1.0,
+            "region": { "x": 10.0, "y": 20.0, "width": 50.0, "height": 40.0 },
+        });
+        assert_eq!(
+            super::framed(&region),
+            "50.0 × 40.0 points at 10.0, 20.0 of the window's 400.0 × 300.0, at 2.0 pixels a point: the PNG's pixel `px`, `py` is the window's point `10.0 + px / 2.0`, `20.0 + py / 2.0`, where `click` and the other input tools take positions"
+        );
+    }
 }

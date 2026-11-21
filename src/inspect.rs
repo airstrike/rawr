@@ -71,8 +71,9 @@
 //! made it pause.
 //!
 //! It captures the program's window too (#1989), with `{"op":
-//! "screenshot", "title": .., "file": ..}`: the window draws a frame
-//! through its own renderer, written as a PNG to `file` (see
+//! "screenshot", "title": .., "file": .., "region": .., "scale": ..}`: the
+//! window draws a frame through its own renderer, cut to `region` and
+//! resampled to `scale` (see [`framing`]), written as a PNG to `file` (see
 //! [`screenshot`]); `{"error": "paused", ..}` while it is paused.
 //!
 //! And it reads the program's menu bar, or chooses one of rawr's own
@@ -122,6 +123,7 @@
 
 // What it compiles code with is shared between threads.
 mod evaluate;
+mod framing;
 mod host;
 mod input;
 mod interrupt;
