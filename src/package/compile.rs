@@ -84,14 +84,20 @@ pub(crate) fn snapshot(
 /// The program `snapshot` holds, compiled as a runner compiles its start
 /// ([`snapshot_generation_plain`]), with the [`program::Positions`] that
 /// place its steps in its files: code a debugger evaluates checks in the
-/// program as the run checked it (#2292). A source whose text `parses`
-/// holds the parse of is read from it; nothing the compile does is kept.
+/// program as the run checked it (#2292). On a compiler that retains a
+/// native surface, that is a save's covered compile, so a use the
+/// runner's build lacks is refused where it is written (#2406). A source
+/// whose text `parses` holds the parse of is read from it; nothing the
+/// compile does is kept.
 #[cfg(feature = "rust-import")]
 pub(crate) fn snapshot_with_positions(
     engine: &Engine,
     snapshot: &super::snapshot::Snapshot,
     parses: Option<&super::Parses>,
 ) -> Result<(crate::AST, program::Positions), Error> {
+    if let Some(native) = &engine.imported_native {
+        return captured::positioned(engine, native, snapshot, parses);
+    }
     let reuse = parses.map_or(Reuse::Fresh, Reuse::Read);
     snapshot_program(engine, snapshot, reuse, |_| ())
         .map(|(executable, ())| executable.into_ast_with_positions())

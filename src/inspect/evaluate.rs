@@ -11,6 +11,13 @@
 //! Its tail's value is answered as `{:?}` prints it, through a borrow, so
 //! reading a binding doesn't move it.
 //!
+//! A runner's code compiles as a save compiles against the paused build's
+//! native carrier, and binds against the paused generation's registry, so
+//! a use of a crate the build was never compiled with (a field the program
+//! never reads, a generic at a new type) is refused where it is written,
+//! before any statement runs (#2406). The paused process gains no native
+//! code; a save that writes the use rebuilds the runner with it.
+//!
 //! The block is the code's scope: a binding it makes ends with it. A
 //! mutation Rust allows at that line changes the frame's value, and the
 //! program goes on with it.
@@ -379,8 +386,9 @@ fn evaluate(
         .with_text(std::path::Path::new(&identity), splice.spliced.text())
         .ok_or_else(|| format!("{identity} isn't one of the program's files"))?;
     // The run's own compiler compiles it as it compiled the run: a crate's
-    // generic call takes the types the run's lowering revealed. It reads
-    // the generation's parses and keeps nothing in the run's caches.
+    // generic call takes the types the run's lowering revealed, and a use
+    // the runner's build lacks is refused where it is written (#2406). It
+    // reads the generation's parses and keeps nothing in the run's caches.
     let compiled = context
         .engine()
         .compile_package_snapshot_with_positions(&snapshot, program.parses.as_ref());
@@ -424,6 +432,17 @@ fn evaluate(
     }
 
     let (engine, global, caches, scope, this) = context.parts();
+    // The paused generation's registry binds the code's requirements as a
+    // run's binds the program's (`Hosted::bind`): one it lacks is refused
+    // before any statement runs, not when its call is reached.
+    if let (Some(registry), Some(hosted)) = (global.host_runtime.as_deref(), ast.host()) {
+        hosted.validate(registry).map_err(|error| {
+            format!(
+                "error: {error}: the running build was not compiled with this use\n  \
+                 = note: writing this use in the program and saving it rebuilds the runner with it"
+            )
+        })?;
+    }
     let libraries = global.lib.len();
     global.lib.push(ast.shared_lib().clone());
     global.lib.push(ast.shared_support().clone());
@@ -1012,7 +1031,6 @@ fn main() {
     #[cfg(feature = "rust-import")]
     #[test]
     fn code_checks_in_a_program_whose_crate_call_takes_an_instance_type() {
-        use crate::package::import::runner::account;
         let program = "// rawr
 fn shown<T: Clone>(value: T) -> T { native::echo(value) }
 fn echoed() -> i64 { shown(7i64) }
@@ -1024,9 +1042,8 @@ fn main() {
         let (answers, printed) = evaluated_on(
             crate::package::compile::captured::tests::compiler(),
             |engine| {
-                let native = account::Native::transform(account::tests::carrier());
                 engine
-                    .retain_imported_native(native)
+                    .retain_imported_native(echo_native())
                     .expect("a fresh compiler retains a native surface")
             },
             program,
@@ -1037,27 +1054,53 @@ fn main() {
         assert_eq!(printed, "3\n");
     }
 
-    /// Code evaluated in a generation bound to a runner's native runtime
-    /// calls a crate's item through the adapters that generation's calls
-    /// reach (#2264).
+    /// The selector of the `native` crate's `echo`.
     #[cfg(feature = "rust-import")]
-    #[test]
-    fn code_calls_a_crates_item_through_the_runners_bindings() {
-        use crate::package::compile::captured::tests::{compiler, native_facade};
-        use crate::package::import::runner::account;
-        use rawr_import::classify::representability::convert::{Builtin, Type};
+    fn echo() -> rawr_import::surface::identity::Selector {
         use rawr_import::surface::identity::{Definition, Selector};
-        let program = "// rawr
-fn main() {
-    let count: i64 = native::echo(3);
-    println!(\"{count}\");
-}
-";
-        let mut engine = compiler();
-        let probe = Probe::register(&mut engine, (4, 0), &["native::echo(count) + 1"]);
-        let native = account::Native::transform(account::tests::carrier());
+        Selector::Function {
+            item: Definition::authenticated([41; 32]),
+        }
+    }
+
+    /// A runner's native account whose build was compiled with one use of
+    /// a crate, `native::echo::<i64>`: its carrier covers that use alone.
+    #[cfg(feature = "rust-import")]
+    fn echo_native() -> crate::package::import::runner::account::Native {
+        use rawr_import::classify::representability::convert::{Builtin, Type};
+        use rawr_import::runner::manifest::{self, coverage};
+        let selector = echo();
+        let used = coverage::Use {
+            path: "native::echo",
+            selector: &selector,
+            endpoint: None,
+            types: &[Type::Builtin(Builtin::I64)],
+            constants: &[],
+            slots: &[],
+            impls: &[],
+        };
+        let carrier = manifest::carrier_fixture_covering(&[([42; 32], [43; 32], 1)], &[(0, used)]);
+        crate::package::import::runner::account::Native::transform(
+            manifest::Carrier::transform(&carrier).expect("the fixture's carrier reads"),
+        )
+    }
+
+    /// [`evaluated`] on `engine` as a runner runs `program`: its compiler
+    /// retains [`echo_native`], and the program runs bound to a runtime
+    /// whose one adapter is `echo::<i64>`'s, as the runner's build was
+    /// compiled.
+    #[cfg(feature = "rust-import")]
+    fn evaluated_in_runner(
+        mut engine: crate::Engine,
+        program: &str,
+        line: usize,
+        codes: &[&str],
+    ) -> (Vec<Value>, String) {
+        use crate::package::compile::captured::tests::native_facade;
+        use rawr_import::classify::representability::convert::{Builtin, Type};
+        let probe = Probe::register(&mut engine, (line, 0), codes);
         let engine = engine
-            .retain_imported_native(native)
+            .retain_imported_native(echo_native())
             .expect("a fresh compiler retains a native surface");
         let snapshot = Snapshot::new(FILE.into(), vec![(FILE.into(), program.into())]).unwrap();
         let (candidate, ast) = engine
@@ -1072,12 +1115,7 @@ fn main() {
         let stops = Stops::of(&ast, &move |position| lines.line(position));
         let program = located.program().expect("a debugger's run keeps its files");
         *probe.shared.lock().unwrap() = Some((program, stops));
-        // The runner's adapter of `echo::<i64>`, the one instance it was
-        // built with.
         let mut runtime = crate::host::runtime::Builder::new(native_facade());
-        let echo = Selector::Function {
-            item: Definition::authenticated([41; 32]),
-        };
         let instance = rawr_import::surface::instance::key_with_items(
             &[Type::Builtin(Builtin::I64)],
             &[],
@@ -1085,7 +1123,7 @@ fn main() {
             &[],
         );
         runtime
-            .bind_imported_instance(echo.fingerprint(), instance, "native::echo", |_, args| {
+            .bind_imported_instance(echo().fingerprint(), instance, "native::echo", |_, args| {
                 Ok(args[0].take())
             })
             .unwrap();
@@ -1098,8 +1136,88 @@ fn main() {
             .invoke_main()
             .expect("the program has a `fn main`")
             .unwrap_or_else(|error| panic!("{error}"));
-        let (answers, printed) = probe.finish();
+        probe.finish()
+    }
+
+    /// A runner's program that echoes a count and prints it, paused at
+    /// line 4, before it prints.
+    #[cfg(feature = "rust-import")]
+    const ECHOED: &str = "// rawr
+fn main() {
+    let mut count: i64 = native::echo(3);
+    println!(\"{count}\");
+}
+";
+
+    /// Code evaluated in a generation bound to a runner's native runtime
+    /// calls a crate's item through the adapters that generation's calls
+    /// reach (#2264).
+    #[cfg(feature = "rust-import")]
+    #[test]
+    fn code_calls_a_crates_item_through_the_runners_bindings() {
+        let (answers, printed) = evaluated_in_runner(
+            crate::package::compile::captured::tests::compiler(),
+            ECHOED,
+            4,
+            &["native::echo(count) + 1"],
+        );
         assert_eq!(answers, [json!({ "value": "4" })]);
         assert_eq!(printed, "3\n");
+    }
+
+    /// The error of code refused before it ran, which names the use the
+    /// running build lacks, and what the program printed after it.
+    #[cfg(feature = "rust-import")]
+    fn refused(answers: &[Value], printed: &str, named: &str) {
+        let [answer] = answers else {
+            panic!("one code answers once: {answers:?}");
+        };
+        let error = answer["error"]
+            .as_str()
+            .unwrap_or_else(|| panic!("the code is refused: {answer}"));
+        assert!(
+            error.contains(&format!("the running build has no binding for `{named}`")),
+            "{error}"
+        );
+        assert!(
+            error.contains("saving it rebuilds the runner with it"),
+            "{error}"
+        );
+        assert!(!error.contains("not supported in Rawr yet"), "{error}");
+        // The code's first statement didn't run: the count is the one the
+        // program echoed.
+        assert_eq!(printed, "3\n");
+    }
+
+    /// A field the program never reads has no adapter in the running
+    /// build: code that reads it is refused before it runs, naming the
+    /// read, not as a read rawr can't make (#2406).
+    #[cfg(feature = "rust-import")]
+    #[test]
+    fn code_reading_a_field_the_program_never_reads_is_refused_before_it_runs() {
+        let mut engine = crate::package::compile::captured::tests::compiler();
+        crate::package::compile::captured::native_tests::structure(&mut engine);
+        let (answers, printed) = evaluated_in_runner(
+            engine,
+            ECHOED,
+            4,
+            &["count += 1; let read = |cell: structure::Cell| cell.0;"],
+        );
+        refused(&answers, &printed, "cell.0");
+    }
+
+    /// A crate's generic function at a type the running build has no
+    /// instance of is refused before any of the code runs, not when the
+    /// call is reached (#2406).
+    #[cfg(feature = "rust-import")]
+    #[test]
+    fn code_calling_a_generic_at_a_type_the_build_lacks_is_refused_before_it_runs() {
+        let (answers, printed) = evaluated_in_runner(
+            crate::package::compile::captured::tests::compiler(),
+            ECHOED,
+            4,
+            &["count += 1; native::echo(true)"],
+        );
+        refused(&answers, &printed, "native::echo(true)");
     }
 }
