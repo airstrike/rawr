@@ -1,8 +1,9 @@
 //! The debugger session a run's owner hosts (D1053.2): one per `rawr run`,
 //! which any number of shells attach to, `rawr mcp` among them.
 //!
-//! The owner listens on a socket at its project's [`Place`], where a shell
-//! finds it from the project's root. A shell that starts a run binds that
+//! The owner listens on a socket at its run's [`Place`], one per run, where
+//! a shell finds it from the project's root: the run it names by pid, or
+//! the newest ([`Runs`]). A shell that starts a run binds that
 //! socket itself and hands its listener to the run ([`handover`]), so it
 //! can connect before the run is ready. The program's in-process inspector
 //! ([`rawr::inspect`]) stays the agent that reads values: the session
@@ -68,7 +69,7 @@ mod state;
 
 pub use handover::{adopt, handed, Handed, LISTENER};
 pub use host::{open, output, prepare, record, takes_stderr, Host, CANCELLED, NOT_RUNNING};
-pub use place::{root, Place};
+pub use place::{root, Place, Reached, Runs};
 pub use state::{Phase, State};
 
 pub(crate) use handover::{hand, pass_on};

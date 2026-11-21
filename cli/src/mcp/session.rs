@@ -254,6 +254,9 @@ enum Inbox {
     Stop,
 }
 
+/// How a shell picks another of a program's runs than the newest.
+const PICK: &str = "`rawr tui --pid <pid>` and `rawr gui --pid <pid>` reach another, and so does `rawr dap`'s `attach` with its `processId`.";
+
 /// One program the server reaches: a handle on its owner thread.
 #[derive(Debug)]
 pub struct Session {
@@ -266,6 +269,9 @@ pub struct Session {
     /// Whether the server started the run, rather than one started
     /// elsewhere.
     started: bool,
+    /// What the server tells of the program's other runs, when it attached
+    /// to the newest of several.
+    others: Option<String>,
     inbox: mpsc::Sender<Inbox>,
 }
 
@@ -378,7 +384,7 @@ impl Session {
         let mut child = process::spawn(&mut command)?;
         drop(listener);
         // The kernel holds the connection until the run accepts it.
-        let session = Self::open(
+        let session = Arc::new(Self::open(
             root,
             path,
             arguments,
@@ -387,7 +393,7 @@ impl Session {
                 place,
             }),
             UnixStream::connect(&socket)?,
-        )?;
+        )?);
         // The program reads what the agent gave, then end of input.
         if let Some(mut pipe) = child.stdin.take() {
             let text = stdin.unwrap_or_default().to_owned();
@@ -447,7 +453,7 @@ impl Session {
         arguments: &[String],
         started: Option<Started>,
         stream: UnixStream,
-    ) -> std::io::Result<Arc<Self>> {
+    ) -> std::io::Result<Self> {
         let reading = stream.try_clone()?;
         let mut writing = stream.try_clone()?;
         let (out, lines) = mpsc::channel::<String>();
@@ -484,30 +490,41 @@ impl Session {
         std::thread::Builder::new()
             .name("rawr-mcp-session-read".into())
             .spawn(move || listen(reading, &listening))?;
-        Ok(Arc::new(Self {
+        Ok(Self {
             root: root.to_path_buf(),
             path: path.to_path_buf(),
             arguments: arguments.to_vec(),
             started: is_started,
+            others: None,
             inbox,
-        }))
+        })
     }
 
-    /// The session of a run started elsewhere that serves `root`, not yet
-    /// greeted: `None` when no run serves it there. Its greeting ends a
-    /// [`Wait::Greeting`], and [`Self::reached`] then says whether it came.
+    /// The session of a run started elsewhere that serves `root`, the one
+    /// whose pid is `pid` or the newest, not yet greeted: `None` when no
+    /// such run serves it there. Its greeting ends a [`Wait::Greeting`],
+    /// and [`Self::reached`] then says whether it came.
     #[must_use]
-    pub fn reach(root: &Path) -> Option<Arc<Self>> {
-        let socket = session::Place::new(root).ok()?.socket();
-        let stream = UnixStream::connect(socket).ok()?;
-        Self::open(root, root, &[], None, stream).ok()
+    pub fn reach(root: &Path, pid: Option<u32>) -> Option<Arc<Self>> {
+        let reached = session::Runs::of(root).ok()?.connect(pid)?;
+        let others = reached.notice(PICK);
+        let mut session = Self::open(root, root, &[], None, reached.stream).ok()?;
+        session.others = others;
+        Some(Arc::new(session))
+    }
+
+    /// What the server tells of the program's other runs, when it attached
+    /// to the newest of several.
+    #[must_use]
+    pub fn others(&self) -> Option<&str> {
+        self.others.as_deref()
     }
 
     /// The session of a run started elsewhere that serves `root`, once it
     /// greeted the server: `None` when no run serves it there, or `call`
     /// was cancelled first.
     pub fn attach(root: &Path, call: &Call) -> Option<Arc<Self>> {
-        let session = Self::reach(root)?;
+        let session = Self::reach(root, None)?;
         let greeted = session.wait_for(call, Wait::Greeting, |told| {
             matches!(told, Told::Done).then_some(())
         });
@@ -523,7 +540,8 @@ impl Session {
     #[cfg(test)]
     pub fn running_at(phase: Phase) -> (Arc<Self>, UnixStream) {
         let (stream, other) = UnixStream::pair().unwrap();
-        let session = Self::open(Path::new("/p"), Path::new("/p"), &[], None, stream).unwrap();
+        let session =
+            Arc::new(Self::open(Path::new("/p"), Path::new("/p"), &[], None, stream).unwrap());
         session.change(move |mirror| {
             mirror.greeted = true;
             match phase {

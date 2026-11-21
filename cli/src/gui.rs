@@ -23,8 +23,8 @@ const WINDOW: &str = "rawr-gui";
 /// Open the window on the run of the program at `path`, or the current
 /// directory's.
 #[must_use]
-pub fn open(path: Option<&PathBuf>) -> ExitCode {
-    match run(path) {
+pub fn open(path: Option<&PathBuf>, pid: Option<u32>) -> ExitCode {
+    match run(path, pid) {
         Ok(code) => code,
         Err(error) => {
             eprintln!(
@@ -36,7 +36,7 @@ pub fn open(path: Option<&PathBuf>) -> ExitCode {
     }
 }
 
-fn run(path: Option<&PathBuf>) -> Result<ExitCode, String> {
+fn run(path: Option<&PathBuf>, pid: Option<u32>) -> Result<ExitCode, String> {
     let target = crate::base::discover(path, &mut rawr::project::cargo::Answers::new()).map_err(
         |report| {
             let here = std::env::current_dir().unwrap_or_default();
@@ -44,7 +44,7 @@ fn run(path: Option<&PathBuf>) -> Result<ExitCode, String> {
         },
     )?;
     let root = session::root(&target);
-    let place = session::Place::new(&root).map_err(|error| error.to_string())?;
+    let runs = session::Runs::of(&root).map_err(|error| error.to_string())?;
     let rawr = std::env::current_exe().map_err(|error| error.to_string())?;
     let window = rawr.with_file_name(WINDOW);
     if !window.is_file() {
@@ -53,10 +53,19 @@ fn run(path: Option<&PathBuf>) -> Result<ExitCode, String> {
             window.display()
         ));
     }
-    let socket = place.socket();
-    if UnixStream::connect(&socket).is_ok() {
-        return status(Command::new(&window).arg(&socket));
+    if let Some(reached) = runs.connect(pid) {
+        if let Some(notice) = reached.notice("Pick one with `rawr gui --pid <pid>`.") {
+            eprintln!("{notice}");
+        }
+        let socket = reached.socket();
+        drop(reached);
+        return status(Command::new(&window).arg(socket));
     }
+    if let Some(pid) = pid {
+        return Err(runs.unserved(pid).to_string());
+    }
+    let place = session::Place::new(&root).map_err(|error| error.to_string())?;
+    let socket = place.socket();
 
     // No run serves the program: start one, as a shell does.
     place.make().map_err(|error| error.to_string())?;

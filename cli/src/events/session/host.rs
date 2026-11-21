@@ -275,11 +275,11 @@ enum Refusal {
 }
 
 /// Host the session of the program at `root` until the host drops: on the
-/// listener a shell handed this run, `handed`, or on a socket at the
-/// root's place.
-/// `None` when another run of the program hosts it, which shells reach
-/// instead, or, with a line on stderr, when the socket can't be made; the
-/// program runs as it would without one.
+/// listener a shell handed this run, `handed`, or on a socket at this
+/// process's place for the root, beside any other run's.
+/// `None` when this process hosts that place's session already, or, with a
+/// line on stderr, when the socket can't be made; the program runs as it
+/// would without one.
 pub fn open(root: &Path, handed: Option<handover::Handed>) -> Option<Host> {
     let set = |name| std::env::var_os(name).is_some_and(|value| !value.is_empty());
     let started = handover::handed();
@@ -288,19 +288,23 @@ pub fn open(root: &Path, handed: Option<handover::Handed>) -> Option<Host> {
         hold: set(crate::events::HOLD),
         program_stderr: started && set(crate::events::PROGRAM_STDERR),
     };
-    let opened = Place::new(root).and_then(|place| {
-        let listener = match handed {
-            Some(handed) => handed.into_listener(),
+    let opened = (|| {
+        let (place, listener) = match handed {
+            Some(handed) => {
+                let listener = handed.into_listener();
+                (Place::bound(&listener)?, listener)
+            }
             None => {
+                let place = Place::new(root)?;
                 place.make()?;
                 match listen(&place.socket())? {
-                    Some(listener) => listener,
+                    Some(listener) => (place, listener),
                     None => return Ok(None),
                 }
             }
         };
         Host::serve(root, place, listener, opening).map(Some)
-    });
+    })();
     match opened {
         Ok(Some(host)) => {
             // A second session in one process hears only its connections.
@@ -362,8 +366,8 @@ pub fn prepare(command: &mut Command) {
     }
 }
 
-/// A listener on `socket`, in place of a stale one: `None` when a run
-/// hosts a session there.
+/// A listener on `socket`, in place of a stale one: `None` when a session
+/// listens there.
 fn listen(socket: &Path) -> std::io::Result<Option<UnixListener>> {
     match UnixListener::bind(socket) {
         Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {

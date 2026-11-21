@@ -66,7 +66,7 @@ impl Adapter {
             .map(str::to_owned)
             .collect();
         self.beginning = true;
-        let Some(reached) = Session::reach(&place.root) else {
+        let Some(reached) = Session::reach(&place.root, None) else {
             return self.spawn(&request, &place, &program);
         };
         let greeting = Arc::clone(&reached);
@@ -75,6 +75,7 @@ impl Adapter {
                 reached.stop();
                 return adapter.spawn(&request, &place, &program);
             }
+            adapter.others(&reached);
             adapter.begin(reached);
             adapter.output(
                 "console",
@@ -107,23 +108,31 @@ impl Adapter {
         }
     }
 
-    /// `attach`: reach the `rawr run` that serves the `program` path.
+    /// `attach`: reach the `rawr run` that serves the `program` path, the
+    /// one whose pid is `processId` or the newest.
     pub(super) fn attach(&mut self, request: Value) {
         let place = match self.program(&request["arguments"]) {
             Ok(place) => place,
             Err(refusal) => return self.out.respond(&request, Err(refusal)),
         };
-        let none = format!(
-            "no `rawr run` serves {}: start one in a terminal, or launch it",
-            place.root.display()
-        );
-        let Some(reached) = Session::reach(&place.root) else {
+        let pid = request["arguments"]["processId"]
+            .as_u64()
+            .and_then(|pid| u32::try_from(pid).ok());
+        let none = match pid {
+            Some(pid) => format!("no `rawr run` of pid {pid} serves {}", place.root.display()),
+            None => format!(
+                "no `rawr run` serves {}: start one in a terminal, or launch it",
+                place.root.display()
+            ),
+        };
+        let Some(reached) = Session::reach(&place.root, pid) else {
             return self.out.respond(&request, Err(none));
         };
         self.beginning = true;
         let greeting = Arc::clone(&reached);
         self.park(&greeting, Wait::Greeting, move |adapter, _| {
             if reached.reached() {
+                adapter.others(&reached);
                 adapter.begin(reached);
                 adapter.out.respond(&request, Ok(json!({})));
             } else {
@@ -132,6 +141,14 @@ impl Adapter {
                 adapter.out.respond(&request, Err(none));
             }
         });
+    }
+
+    /// Tell the client of the program's other runs, when the adapter
+    /// attached to the newest of several.
+    fn others(&self, session: &Session) {
+        if let Some(others) = session.others() {
+            self.output("console", &format!("{others}\n"));
+        }
     }
 
     /// Debug `session`'s program: tell its events from now on, and let the
