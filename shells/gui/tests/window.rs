@@ -344,7 +344,10 @@ fn the_console_evaluates_where_the_program_is_paused_and_a_step_moves_the_stop()
     let eval = script.request("eval");
     assert_eq!(eval["params"]["code"], "count + 1");
     reply(&mut app, &eval, json!({ "value": "3" }));
-    assert!(shows(&app, "> count + 1"));
+    assert!(
+        shows(&app, "count + 1"),
+        "the console shows the code evaluated"
+    );
     assert!(shows(&app, "3"), "the console shows the answer");
     snapshot(&app, "eval.png");
 
@@ -358,7 +361,7 @@ fn the_console_evaluates_where_the_program_is_paused_and_a_step_moves_the_stop()
         &step,
         json!({ "paused": { "file": FILE, "line": 6, "function": "p::tick", "reason": "step" } }),
     );
-    assert!(shows(&app, "paused (step) at line 6"));
+    assert!(shows(&app, "line 6 in p::tick · step"));
     // The new stop's frame is read.
     assert_eq!(script.inspect()["params"]["frame"], 0);
 }
@@ -559,7 +562,7 @@ fn each_pause_reads_its_frame_and_shows_only_the_newest_answer() {
             ],
         }),
     );
-    assert!(shows(&app, "paused (pause) at line 10"));
+    assert!(shows(&app, "line 10 in p::main · pause"));
     assert!(shows(&app, "total"), "the newest pause's bindings show");
     assert!(shows(&app, "11"));
     assert!(!shows(&app, "next"), "an earlier pause's bindings are gone");

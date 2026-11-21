@@ -151,7 +151,7 @@ fn name<'a, Message: Clone + 'a>(
     .align_y(iced::Center);
     button(label)
         .padding(0)
-        .style(theme::item(false))
+        .style(|theme, status| theme::item(theme, status, false))
         .on_press_maybe((!row.parts.is_empty()).then(|| toggle(row.place.clone())))
         .boxed()
 }
@@ -166,7 +166,7 @@ fn value<'a, Message: 'a>(value: Result<&'a str, &'a str>) -> Element<'a, Messag
         .wrapping(Wrapping::None)
         .ellipsis(Ellipsis::End)
         .width(Fill)
-        .style(theme::value(value));
+        .style(move |theme| theme::value(theme, value));
     if shown.chars().count() > LONG {
         theme::tipped(line, shown, tooltip::Position::Bottom)
     } else {

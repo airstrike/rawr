@@ -59,6 +59,13 @@ impl State {
         self.unread = unread;
     }
 
+    /// Each binding's name and value, for those with one.
+    pub fn values(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.bindings
+            .iter()
+            .filter_map(|binding| Some((binding.name.as_str(), binding.value.as_deref().ok()?)))
+    }
+
     pub fn update(&mut self, message: Message) {
         match message {
             Message::Toggle(place) => {
