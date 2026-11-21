@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-20",
-  "version": "0.4.76",
+  "version": "0.4.77",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.77",
+        "date": "2026-11-20",
+        "entries": [
+          {"text":"/play's iced examples are iced's own counter, bezier_tool and styling, unchanged from iced, in place of the cut-down to-do list, pick list and arc. ?play also runs iced's bezier_tool, clock and stopwatch as iced writes them.","issues":[2378]}
+        ]
+      },
       {
         "version": "0.4.76",
         "date": "2026-11-20",
@@ -5708,7 +5715,10 @@
     {"issue":2374,"title":"Three owner-harness tests fail with \"Overlay must reuse content\"","state":"open","category":"Health"},
     {"issue":2375,"title":"A full std path to a missing item is E0433 where rustc gives E0599, and std type naming ignores dependency types","state":"open","category":"Health"},
     {"issue":2376,"title":"/play clears the debugger's breakpoints when you pick a different snippet, keeps an example's…","state":"closed","category":"Health","release":"0.4.76"},
-    {"issue":2377,"title":"rawr no longer has a `sync` feature: values are always `Arc`/`RwLock`, so threads work in every…","state":"closed","category":"Health","release":"0.4.76"}
+    {"issue":2377,"title":"rawr no longer has a `sync` feature: values are always `Arc`/`RwLock`, so threads work in every…","state":"closed","category":"Health","release":"0.4.76"},
+    {"issue":2378,"title":"/play's iced examples are iced's own counter, bezier_tool and styling, unchanged from iced, in…","state":"closed","category":"Platforms","release":"0.4.77"},
+    {"issue":2379,"title":"A prebuilt runner can't expand a snippet's crate derives, so iced's todos can't run in /play or ?play","state":"open","category":"Platforms"},
+    {"issue":2380,"title":"A prebuilt-runner snippet can't reach its example's other files (include_bytes!, mod files)","state":"open","category":"Platforms"}
   ],
   "groups": [
     {

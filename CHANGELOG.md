@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.77 (2026-11-20)
+
+- /play's iced examples are iced's own counter, bezier_tool and styling, unchanged from iced, in place of the cut-down to-do list, pick list and arc. ?play also runs iced's bezier_tool, clock and stopwatch as iced writes them. (#2378)
+
 ## 0.4.76 (2026-11-20)
 
 - /play clears the debugger's breakpoints when you pick a different snippet, keeps an example's #anchor while you edit it, and shows a program that only prints without an empty frame above its text. (#2376)

@@ -2376,6 +2376,9 @@
     {"t":"T2374","issue":2374,"title":"T2374: Three owner-harness tests fail with \"Overlay must reuse content\"","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T2375","issue":2375,"title":"T2375: A full std path to a missing item is E0433 where rustc gives E0599, and std type naming ignores dependency types","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T2376","issue":2376,"title":"T2376: /play clears the debugger's breakpoints when you pick a different snippet, keeps an example's…","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":"0.4.76"},
-    {"t":"T2377","issue":2377,"title":"T2377: rawr no longer has a `sync` feature: values are always `Arc`/`RwLock`, so threads work in every…","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":"0.4.76"}
+    {"t":"T2377","issue":2377,"title":"T2377: rawr no longer has a `sync` feature: values are always `Arc`/`RwLock`, so threads work in every…","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":"0.4.76"},
+    {"t":"T2378","issue":2378,"title":"T2378: /play's iced examples are iced's own counter, bezier_tool and styling, unchanged from iced, in…","state":"closed","category":"Platforms","labels":["platform","playground"],"gantt":null,"decisions":[],"commit":null,"release":"0.4.77"},
+    {"t":"T2379","issue":2379,"title":"T2379: A prebuilt runner can't expand a snippet's crate derives, so iced's todos can't run in /play or ?play","state":"open","category":"Platforms","labels":["platform","playground"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T2380","issue":2380,"title":"T2380: A prebuilt-runner snippet can't reach its example's other files (include_bytes!, mod files)","state":"open","category":"Platforms","labels":["platform","playground"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }

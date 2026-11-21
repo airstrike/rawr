@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.4.77",
+      "date": "2026-11-20",
+      "entries": [
+        {"text":"/play's iced examples are iced's own counter, bezier_tool and styling, unchanged from iced, in place of the cut-down to-do list, pick list and arc. ?play also runs iced's bezier_tool, clock and stopwatch as iced writes them.","issues":[2378]}
+      ]
+    },
+    {
       "version": "0.4.76",
       "date": "2026-11-20",
       "entries": [
