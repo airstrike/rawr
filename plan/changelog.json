@@ -8,6 +8,14 @@
   },
   "releases": [
     {
+      "version": "0.4.82",
+      "date": "2026-11-20",
+      "entries": [
+        {"text":"An absent native import, as `use native::new_function`, requests a native build again instead of failing with E0432.","issues":[2385]},
+        {"text":"A project under a path Cargo percent-encodes, as one holding `{` or a space, keeps its runner's sources across saves instead of rendering them again.","issues":[2374]}
+      ]
+    },
+    {
       "version": "0.4.81",
       "date": "2026-11-20",
       "entries": [

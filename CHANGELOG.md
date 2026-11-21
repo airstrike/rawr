@@ -6,6 +6,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.82 (2026-11-20)
+
+- An absent native import, as `use native::new_function`, requests a native build again instead of failing with E0432. (#2385)
+- A project under a path Cargo percent-encodes, as one holding `{` or a space, keeps its runner's sources across saves instead of rendering them again. (#2374)
+
 ## 0.4.81 (2026-11-20)
 
 - rawr dap, rawr mcp, rawr gui, the reload stream and the --web page server each hand their state to one owner thread, which removes 15 locks. rawr mcp no longer sleeps 20 ms after each child, and a pipe a process outside the child's group holds open no longer delays a call's output. (#2389)
