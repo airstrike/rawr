@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-21",
-  "version": "0.4.90",
+  "version": "0.4.91",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.91",
+        "date": "2026-11-21",
+        "entries": [
+          {"text":"rawr's status line, the lines above it and the lines held while a program has the terminal are written by one printer thread: a line is on stderr when the call returns, the last line is flushed at exit, on a panic and after Ctrl-C or a kill, and a cold launch no longer starts a ticker thread. Four locks go.","issues":[2414]}
+        ]
+      },
       {
         "version": "0.4.90",
         "date": "2026-11-21",
@@ -5853,7 +5860,9 @@
     {"issue":2410,"title":"Offer to rebuild with an eval's missing use and re-run the program to the same pause","state":"open","category":"Health"},
     {"issue":2411,"title":"The session's hello says which output it hears: the engine's at a terminal, all of it when a shell started the run","state":"closed","category":"Health","release":"0.4.89"},
     {"issue":2412,"title":"The session a run hosts keeps its state on one thread: shells, the program and the run's owner…","state":"closed","category":"Health","release":"0.4.90"},
-    {"issue":2413,"title":"rawr mcp screenshot renders the window at a scale above its backing scale, for 2x detail on a 1x display","state":"open","category":"Health"}
+    {"issue":2413,"title":"rawr mcp screenshot renders the window at a scale above its backing scale, for 2x detail on a 1x display","state":"open","category":"Health"},
+    {"issue":2414,"title":"rawr's status line, the lines above it and the lines held while a program has the terminal are…","state":"closed","category":"Health","release":"0.4.91"},
+    {"issue":2415,"title":"Some of the owner's rawr: lines skip the hold while a program has the terminal raw","state":"open","category":"Health"}
   ],
   "groups": [
     {

@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.4.91",
+      "date": "2026-11-21",
+      "entries": [
+        {"text":"rawr's status line, the lines above it and the lines held while a program has the terminal are written by one printer thread: a line is on stderr when the call returns, the last line is flushed at exit, on a panic and after Ctrl-C or a kill, and a cold launch no longer starts a ticker thread. Four locks go.","issues":[2414]}
+      ]
+    },
+    {
       "version": "0.4.90",
       "date": "2026-11-21",
       "entries": [

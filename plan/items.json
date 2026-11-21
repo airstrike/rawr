@@ -2412,6 +2412,8 @@
     {"t":"T2410","issue":2410,"title":"T2410: Offer to rebuild with an eval's missing use and re-run the program to the same pause","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":["D1095"],"commit":null,"release":null},
     {"t":"T2411","issue":2411,"title":"T2411: The session's hello says which output it hears: the engine's at a terminal, all of it when a shell started the run","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":["D1096"],"commit":"8730ee5f6","release":"0.4.89"},
     {"t":"T2412","issue":2412,"title":"T2412: The session a run hosts keeps its state on one thread: shells, the program and the run's owner…","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":"0.4.90"},
-    {"t":"T2413","issue":2413,"title":"T2413: rawr mcp screenshot renders the window at a scale above its backing scale, for 2x detail on a 1x display","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T2413","issue":2413,"title":"T2413: rawr mcp screenshot renders the window at a scale above its backing scale, for 2x detail on a 1x display","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T2414","issue":2414,"title":"T2414: rawr's status line, the lines above it and the lines held while a program has the terminal are…","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":"0.4.91"},
+    {"t":"T2415","issue":2415,"title":"T2415: Some of the owner's rawr: lines skip the hold while a program has the terminal raw","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":["D534"],"commit":null,"release":null}
   ]
 }
