@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.99 (2026-11-21)
+
+- The debugger's inspector keeps one generation's stops, lines and program in one state, and only the program's threads wait on its pause. Input sent before a program's first window is answered when the window shows, with no 50 ms poll, and every pause carries its count in its events and answers. (#2424)
+
 ## 0.4.98 (2026-11-21)
 
 - `rawr gui` and `rawr tui` show a program under the home directory as `~/…` in the window title and the header. The GUI names the program once, in its title, and its toolbar keeps that space for the last error. (#2422)

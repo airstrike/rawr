@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.4.99",
+      "date": "2026-11-21",
+      "entries": [
+        {"text":"The debugger's inspector keeps one generation's stops, lines and program in one state, and only the program's threads wait on its pause. Input sent before a program's first window is answered when the window shows, with no 50 ms poll, and every pause carries its count in its events and answers.","issues":[2424]}
+      ]
+    },
+    {
       "version": "0.4.98",
       "date": "2026-11-21",
       "entries": [

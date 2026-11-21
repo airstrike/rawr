@@ -2421,6 +2421,9 @@
     {"t":"T2419","issue":2419,"title":"T2419: An eval or a read asked at a pause that a continue or step ends first is answered at once as…","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":"0.4.97"},
     {"t":"T2420","issue":2420,"title":"T2420: The input and screenshot waits for the compositor are 17 ms waits","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T2421","issue":2421,"title":"T2421: A window closed between a capture's draw and its compose","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T2422","issue":2422,"title":"T2422: `rawr gui` and `rawr tui` show a program under the home directory as `~/…` in the window title…","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":"0.4.98"}
+    {"t":"T2422","issue":2422,"title":"T2422: `rawr gui` and `rawr tui` show a program under the home directory as `~/…` in the window title…","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":"0.4.98"},
+    {"t":"T2423","issue":2423,"title":"T2423: Worktrees of one repo sharing a CARGO_TARGET_DIR build a path crate from another worktree's stale sources","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T2424","issue":2424,"title":"T2424: The debugger's inspector keeps one generation's stops, lines and program in one state, and only…","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":"0.4.99"},
+    {"t":"T2425","issue":2425,"title":"T2425: Shells order inspector answers by the pause count","state":"open","category":"Health","labels":["health","playground"],"gantt":null,"decisions":["D1097","D1100"],"commit":null,"release":null}
   ]
 }
