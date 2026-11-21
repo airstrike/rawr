@@ -30,11 +30,12 @@ pub enum Error {
 impl Inputs {
     pub fn capture(
         request: cargo::Request,
+        lane: &mut cargo::Lane,
         native: &process::Native,
         limits: &cargo::Limits,
     ) -> Result<Self> {
-        let resolution = request.native_inputs(native, limits)?;
-        resolution.publication(native, limits, |resolution| {
+        let resolution = request.native_inputs(lane, native, limits)?;
+        resolution.publication(lane, native, limits, |resolution| {
             resolution.into_native_inputs(limits)
         })
     }

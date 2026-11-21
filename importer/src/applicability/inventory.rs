@@ -113,12 +113,13 @@ impl Acquired {
     /// There is no constructor from caller-provided facts.
     pub fn capture(
         request: cargo::Request,
+        lane: &mut cargo::Lane,
         native: &crate::process::Native,
         limits: &cargo::Limits,
     ) -> Result<Self> {
-        let mut resolution = request.resolve(native, limits)?;
+        let mut resolution = request.resolve(lane, native, limits)?;
         let scripts = resolution.take_nightly_scripts();
-        let mut acquired = resolution.publication(native, limits, |resolution| {
+        let mut acquired = resolution.publication(lane, native, limits, |resolution| {
             let active = crate::extract::plan::active(resolution.harness_root());
             let acquired = resolution
                 .into_extraction_uncached(limits)?

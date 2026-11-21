@@ -4,9 +4,12 @@
 //! statement the program is paused at, in the program as it was compiled:
 //! the program's compiler checks it there, with the frame's bindings in
 //! scope, so its types, borrows and errors are those of the same code
-//! written at that line. The block's own statements then run in the paused
-//! frame, against the values it holds. Its tail's value is answered as
-//! `{:?}` prints it, through a borrow, so reading a binding doesn't move it.
+//! written at that line. Where that statement is written as an expression
+//! (a match arm's body without braces), the code's block and the
+//! expression go in a block of their own (#2265). The block's own
+//! statements then run in the paused frame, against the values it holds.
+//! Its tail's value is answered as `{:?}` prints it, through a borrow, so
+//! reading a binding doesn't move it.
 //!
 //! The block is the code's scope: a binding it makes ends with it. A
 //! mutation Rust allows at that line changes the frame's value, and the
@@ -343,10 +346,25 @@ fn evaluate(
     let mut spliced = Spliced::default();
     spliced.copy(0, 0, &text[..at]);
     let code_split = splice::split(context.engine(), code);
+    // Where the paused statement is written as an expression, a match
+    // arm's or a closure's body without braces, a block statement before
+    // it isn't Rust: the code's block and the expression go in a block of
+    // their own there, whose value is the expression's.
+    let expression = expression_end(context.engine(), text, span);
+    if expression.is_some() {
+        spliced.write(0, at, "{ ");
+    }
     let start = spliced
         .frame(1, 0, &code_split, true)
         .map_or(Position::NONE, |start| spliced.position(start));
-    spliced.copy(0, at, &text[at..]);
+    match expression {
+        Some(end) => {
+            spliced.copy(0, at, &text[at..end]);
+            spliced.write(0, end, " }");
+            spliced.copy(0, end, &text[end..]);
+        }
+        None => spliced.copy(0, at, &text[at..]),
+    }
     let shown = [
         file.clone(),
         Source::new(IDENTITY, code).map_err(|error| error.to_string())?,
@@ -488,6 +506,33 @@ fn evaluate(
             ))
         }
     }
+}
+
+/// Where the statement written at `span` of `text` ends, when it is
+/// written where Rust takes an expression rather than a statement: the
+/// token before it is none of those a statement follows (`{`, `}`, `;`,
+/// an attribute's `]`), such as a match arm's `=>` or a closure's `|`.
+fn expression_end(engine: &crate::Engine, text: &str, span: crate::Span) -> Option<usize> {
+    use crate::tokenizer::Token;
+    let start = span.start();
+    let (before, _) = crate::resolve::lower_nominal::lex_rust(engine, text)
+        .into_iter()
+        .take_while(|(token, position)| *token != Token::EOF && *position < start)
+        .last()?;
+    if matches!(
+        before,
+        Token::LeftBrace | Token::RightBrace | Token::SemiColon | Token::RightBracket
+    ) {
+        return None;
+    }
+    // The span ends at its last character.
+    let end = span.end();
+    if end < start {
+        return None;
+    }
+    let last = diagnostic::offset(text, end.line()?, end.position()?);
+    let width = text[last..].chars().next()?.len_utf8();
+    Some(last + width)
 }
 
 /// The `{:?}` text of the code's tail, which its frame keeps in
@@ -861,6 +906,23 @@ fn main() {
         assert!(errors[1].contains("<eval>:1:1"), "{}", errors[1]);
         assert!(errors[1].contains("main.rs:6"), "{}", errors[1]);
         assert!(!errors[1].contains("__rawr"), "{}", errors[1]);
+    }
+
+    #[test]
+    fn code_runs_where_the_program_is_paused_at_a_match_arms_expression() {
+        let program = "// rawr
+fn main() {
+    let n: u64 = 2;
+    let m = match n {
+        1 => 10,
+        _ => n * 3,
+    };
+    println!(\"{m}\");
+}
+";
+        let (answers, printed) = evaluated(program, 6, &["n + 1", "let k = n; k * 10"]);
+        assert_eq!(answers, [json!({ "value": "3" }), json!({ "value": "20" })]);
+        assert_eq!(printed, "6\n");
     }
 
     /// A caller that keeps a local, `turn`, and calls `inner` with a copy

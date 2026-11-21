@@ -49,10 +49,12 @@ pub fn contract() -> (
     let project = Project(fs::canonicalize(root).expect("the P4 project is canonical"));
     let limits = Limits::standard();
     let native = Native::pinned().expect("the pinned driver toolchain is installed");
-    let lane = crate::shared::lane();
+    let mut lane = crate::shared::lane();
     let graph = request(&project.0, &limits)
-        .resolve(&native, &limits)
-        .and_then(|resolution| rawr_import::extract::from_resolution(resolution, &native, &limits))
+        .resolve(&mut lane, &native, &limits)
+        .and_then(|resolution| {
+            rawr_import::extract::from_resolution(resolution, &mut lane, &native, &limits)
+        })
         .expect("real generic API evidence canonicalizes");
     drop(lane);
     let contract = graph

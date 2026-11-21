@@ -108,6 +108,7 @@ pub(crate) fn opt_level(environment: &crate::cargo::config::Environment) -> Resu
 /// `lock` are given, compiling it first on a miss. `None` when this runner
 /// links rawr from the project's build instead, which has said why.
 pub(crate) fn prepare(
+    compilers: &mut Compilers,
     context: &crate::context::Context,
     manifest: &[u8],
     lock: &[u8],
@@ -162,7 +163,7 @@ pub(crate) fn prepare(
         }
         let _ = fs::remove_file(&marker);
     }
-    let Some(toolchain) = Toolchain::for_context(context)? else {
+    let Some(toolchain) = Toolchain::for_context(compilers, context)? else {
         crate::progress::note(
             "runtime-local",
             "rawr: the project's compiler was not recorded; building rawr's runtime in this project",
@@ -188,7 +189,7 @@ pub fn warm(directory: &Path) -> Result<bool, node::Error> {
         crate::process::parallelism::Proof::discover()?,
         &limits,
     )?;
-    let toolchain = Toolchain::query_program(
+    let toolchain = Compilers::default().query(
         directory,
         provenance.environment(),
         provenance
@@ -453,8 +454,11 @@ pub(crate) fn settle_lock(
 
 /// The cargo the project's `cargo build` runs, which settles a runner's
 /// lockfile that compiles rawr in the project.
-pub(crate) fn project_cargo(context: &crate::context::Context) -> Result<PathBuf, node::Error> {
-    Ok(Toolchain::for_context(context)?
+pub(crate) fn project_cargo(
+    compilers: &mut Compilers,
+    context: &crate::context::Context,
+) -> Result<PathBuf, node::Error> {
+    Ok(Toolchain::for_context(compilers, context)?
         .map_or_else(|| PathBuf::from("cargo"), |toolchain| toolchain.cargo))
 }
 
@@ -701,41 +705,44 @@ struct Toolchain {
 /// The compiler the project's own Cargo build selects, including rustup's
 /// directory override. Shared binding replay binds this before using an API.
 pub(crate) fn compiler_identity(
+    compilers: &mut Compilers,
     project: &Path,
     config: &crate::cargo::config::Provenance,
 ) -> Result<String, node::Error> {
-    Toolchain::query_program(
-        project,
-        config.environment(),
-        config.compiler(project).configured().map(Path::to_path_buf),
-    )
-    .map(|toolchain| toolchain.version)
+    compilers
+        .query(
+            project,
+            config.environment(),
+            config.compiler(project).configured().map(Path::to_path_buf),
+        )
+        .map(|toolchain| toolchain.version)
 }
 
-impl Toolchain {
-    fn for_context(context: &crate::context::Context) -> Result<Option<Self>, node::Error> {
-        context
-            .compiler()
-            .map(|compiler| {
-                Self::query_program(
-                    context.project(),
-                    context.environment(),
-                    compiler.configured().map(Path::to_path_buf),
-                )
-            })
-            .transpose()
+/// What a project's compiler, as the project and environment select it,
+/// was asked to be.
+type Asked = (PathBuf, Vec<(String, String)>, Option<PathBuf>);
+
+/// The compiler each project and environment a run owner's work asked about
+/// selects. The owner's Cargo lane holds it and lends it to each
+/// preparation and runner build: a run's demand rounds and its runner
+/// build all ask, and the answer can't change while the run lasts (#663).
+#[derive(Default)]
+pub(crate) struct Compilers(Vec<(Asked, Toolchain)>);
+
+impl Compilers {
+    /// Nothing asked yet.
+    pub(crate) const fn new() -> Self {
+        Self(Vec::new())
     }
 
     /// The compiler `project`'s build selects with `environment`, asked
-    /// once per process: a run's demand rounds and its runner build all
-    /// ask, and the answer can't change while the run lasts (#663).
-    fn query_program(
+    /// only the first time.
+    fn query(
+        &mut self,
         project: &Path,
         environment: &crate::cargo::config::Environment,
         configured: Option<PathBuf>,
-    ) -> Result<Self, node::Error> {
-        type Asked = (PathBuf, Vec<(String, String)>, Option<PathBuf>);
-        static ASKED: std::sync::Mutex<Vec<(Asked, Toolchain)>> = std::sync::Mutex::new(Vec::new());
+    ) -> Result<Toolchain, node::Error> {
         let asked: Asked = (
             project.to_path_buf(),
             environment
@@ -744,17 +751,30 @@ impl Toolchain {
                 .collect(),
             configured.clone(),
         );
-        // Held while the compiler answers, so concurrent askers wait for
-        // that answer instead of asking again.
-        let mut answers = ASKED
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some((_, toolchain)) = answers.iter().find(|(known, _)| *known == asked) {
+        if let Some((_, toolchain)) = self.0.iter().find(|(known, _)| *known == asked) {
             return Ok(toolchain.clone());
         }
-        let toolchain = Self::ask(project, environment, configured)?;
-        answers.push((asked, toolchain.clone()));
+        let toolchain = Toolchain::ask(project, environment, configured)?;
+        self.0.push((asked, toolchain.clone()));
         Ok(toolchain)
+    }
+}
+
+impl Toolchain {
+    fn for_context(
+        compilers: &mut Compilers,
+        context: &crate::context::Context,
+    ) -> Result<Option<Self>, node::Error> {
+        context
+            .compiler()
+            .map(|compiler| {
+                compilers.query(
+                    context.project(),
+                    context.environment(),
+                    compiler.configured().map(Path::to_path_buf),
+                )
+            })
+            .transpose()
     }
 
     fn ask(
@@ -1229,11 +1249,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
         )
         .unwrap();
         assert!(context.compiler().unwrap().configured().is_none());
-        let toolchain = super::Toolchain::for_context(&context).unwrap().unwrap();
+        let mut compilers = super::Compilers::new();
+        let toolchain = super::Toolchain::for_context(&mut compilers, &context)
+            .unwrap()
+            .unwrap();
         assert!(toolchain.rustc.is_absolute(), "{:?}", toolchain.rustc);
         assert_eq!(
             toolchain.version,
-            super::compiler_identity(&project, &provenance).unwrap()
+            super::compiler_identity(&mut compilers, &project, &provenance).unwrap()
         );
         let run = |program: &std::path::Path| {
             let output = Command::new(program)

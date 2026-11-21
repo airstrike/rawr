@@ -372,12 +372,12 @@ fn extract_selecting(project: &Project, selected: &[(&str, &str)], demand: &[&[&
     for path in demand {
         request = request.demand(path.iter().copied());
     }
-    let _lane = crate::shared::lane();
+    let mut lane = crate::shared::lane();
     let resolution = request
         .build()
         .expect("the on-demand request seals")
-        .resolve(&native, &limits)
+        .resolve(&mut lane, &native, &limits)
         .expect("the on-demand fixture extraction seals");
-    rawr_import::extract::from_resolution(resolution, &native, &limits)
+    rawr_import::extract::from_resolution(resolution, &mut lane, &native, &limits)
         .expect("the fixture compiler evidence canonicalizes")
 }

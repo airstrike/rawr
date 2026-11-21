@@ -41,16 +41,16 @@ impl Project {
 
 #[test]
 fn reexports_keep_alias_evidence_while_sysroot_support_stays_leaf_only() {
-    let _lane = crate::shared::lane();
+    let mut lane = crate::shared::lane();
     let project = Project::new();
     let limits = Limits::standard();
     let native = Native::pinned().expect("the pinned driver toolchain is installed");
     let resolution = request(&project, &limits)
-        .resolve(&native, &limits)
+        .resolve(&mut lane, &native, &limits)
         .expect("the one-pass fixture extraction seals");
     let compiler_commit = resolution.toolchain().rustc_commit().to_owned();
     let selected_target = resolution.target().to_owned();
-    let graph = rawr_import::extract::from_resolution(resolution, &native, &limits)
+    let graph = rawr_import::extract::from_resolution(resolution, &mut lane, &native, &limits)
         .expect("the fixture compiler evidence canonicalizes");
 
     let point = imported(&graph, "geometry", &["Point"]);

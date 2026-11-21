@@ -40,7 +40,7 @@ impl Project {
 
 #[test]
 fn real_pinned_cargo_seals_final_form_resolution_without_mutating_import() {
-    let _lane = crate::shared::lane();
+    let mut lane = crate::shared::lane();
     let project = Project::new("native");
     let fixture = fixture();
     let before = fixture_bytes(&fixture);
@@ -49,7 +49,7 @@ fn real_pinned_cargo_seals_final_form_resolution_without_mutating_import() {
     let native = Native::pinned().expect("the crate-owned nightly is installed");
 
     let resolution = request
-        .resolve(&native, &limits)
+        .resolve(&mut lane, &native, &limits)
         .expect("the real pinned Cargo Build and direct probe preserve one universe");
 
     assert_eq!(

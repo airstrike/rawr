@@ -3,7 +3,7 @@
 //!
 //! Files gate themselves with an inner `#![cfg]` where they need a feature.
 //! Tests that reach the importer's native Cargo lane hold
-//! `rawr_import::store::test_turn()`: the lane admits one owner per process.
+//! `rawr_import::store::test_lane()`, the suite's one lane, and lend it.
 
 mod access;
 mod arrays;

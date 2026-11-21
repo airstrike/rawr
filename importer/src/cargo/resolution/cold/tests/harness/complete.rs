@@ -213,8 +213,14 @@ fn exercise(outcome: Outcome) {
                     .expect("current catalog")
                     .current()
                     .clone();
-                let result =
-                    request.complete_harness_in(&cached, layout, built, &limits, &cargo_limits);
+                let result = request.complete_harness_in(
+                    &mut crate::cargo::Lane::new(),
+                    &cached,
+                    layout,
+                    built,
+                    &limits,
+                    &cargo_limits,
+                );
                 assert!(Path::new(layout.extraction().plan()).is_file());
                 match outcome {
                     Outcome::Success => {

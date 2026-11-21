@@ -15,9 +15,10 @@ use rawr_import::cargo::config::Environment;
 /// sets a profile for the `rawr` crate is refused, since Cargo cannot
 /// combine it with the one Rawr's runner sets. A member of a workspace
 /// rooted elsewhere takes its config from that workspace, so only its
-/// toolchain is asked about.
-pub fn same_build(root: &Path) -> Result<(), String> {
-    let active = active_version(root);
+/// toolchain is asked about. The compiler's version comes from `versions`,
+/// the owner's answers, and is asked only for a root they lack.
+pub fn same_build(root: &Path, versions: &mut Versions) -> Result<(), String> {
+    let active = versions.active(root);
     let required = required_version();
     let overrides = if rawr_import::location::member_path(root).is_some() {
         Vec::new()
@@ -39,30 +40,31 @@ pub fn toolchain(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// The version of the Rust compiler the project at `root` builds with, as
-/// `rustc --version` prints it there: rustup picks the toolchain from the
-/// directory (`RUSTUP_TOOLCHAIN`, an override, a `rust-toolchain.toml`
-/// above it, or the default). `None` when it cannot tell. Asked once per
-/// process for each root: every session of a run checks it, and the
-/// answer can't change while the run lasts, as the runner build's own
-/// question of its compiler (#663).
-fn active_version(root: &Path) -> Option<String> {
-    static ASKED: std::sync::Mutex<Vec<(PathBuf, Option<String>)>> =
-        std::sync::Mutex::new(Vec::new());
-    // Held while rustc answers, so a concurrent asker waits for that
-    // answer instead of asking again.
-    let mut answers = ASKED
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some((_, version)) = answers.iter().find(|(known, _)| known == root) {
-        return version.clone();
+/// What `rustc --version` printed at each project root a run owner asked
+/// about. The owner holds one for as long as it runs and lends it to each
+/// check of its build: every session of a run checks it, and the answer
+/// can't change while the run lasts, as the runner build's own question of
+/// its compiler (#663).
+#[derive(Default)]
+pub struct Versions(Vec<(PathBuf, Option<String>)>);
+
+impl Versions {
+    /// The version of the Rust compiler the project at `root` builds with,
+    /// as `rustc --version` prints it there: rustup picks the toolchain from
+    /// the directory (`RUSTUP_TOOLCHAIN`, an override, a
+    /// `rust-toolchain.toml` above it, or the default). `None` when it
+    /// cannot tell.
+    fn active(&mut self, root: &Path) -> Option<String> {
+        if let Some((_, version)) = self.0.iter().find(|(known, _)| known == root) {
+            return version.clone();
+        }
+        let version = ask_version(root);
+        self.0.push((root.to_path_buf(), version.clone()));
+        version
     }
-    let version = ask_version(root);
-    answers.push((root.to_path_buf(), version.clone()));
-    version
 }
 
-/// `rustc --version` at `root`, as [`active_version`] reads it.
+/// `rustc --version` at `root`, as [`Versions::active`] reads it.
 fn ask_version(root: &Path) -> Option<String> {
     let output = std::process::Command::new("rustc")
         .arg("--version")

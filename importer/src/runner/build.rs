@@ -19,34 +19,25 @@ impl<B> super::Manifest<super::Generated, B> {
         cached::replay_hot(self, live)
     }
 
-    /// Build once under the sole Cargo owner or revalidate a complete warm hit.
+    /// Reuse a complete local or shared artifact, or build one on the run
+    /// owner's Cargo `lane`.
     pub fn build(
         self,
-        cargo: &crate::cargo::Owner,
-        cache: &crate::cache::Writer,
-    ) -> Result<super::Manifest<super::Built, B>, Error> {
-        self.build_with_owner(Some(cargo), cache)
-            .inspect(|_| crate::progress::stage(4))
-    }
-
-    /// Reuse a complete local/shared artifact before acquiring the sole Cargo
-    /// owner. A true miss acquires that owner only for the compile transform.
-    pub fn build_on_demand(
-        self,
+        lane: &mut crate::cargo::Lane,
         cache: &crate::cache::Writer,
     ) -> Result<super::Manifest<super::Built, B>, Error> {
         // A launch with its runner built, or found built, is starting it.
-        self.build_with_owner(None, cache)
+        self.build_on(lane, cache)
             .inspect(|_| crate::progress::stage(4))
     }
 
-    fn build_with_owner(
+    fn build_on(
         self,
-        cargo: Option<&crate::cargo::Owner>,
+        lane: &mut crate::cargo::Lane,
         cache: &crate::cache::Writer,
     ) -> Result<super::Manifest<super::Built, B>, Error> {
         if self.chain.is_some() || self.profile.node_chain().is_some() {
-            return cached::build(self, cargo, cache);
+            return cached::build(self, lane, cache);
         }
         let mut lease = cache.lease()?;
         let _writer = lease.try_write().map_err(|source| {
@@ -92,14 +83,8 @@ impl<B> super::Manifest<super::Generated, B> {
             crate::metrics::NodeEvent::ExecutedMiss,
         );
 
-        let acquired = if cargo.is_none() {
-            Some(crate::cargo::Owner::acquire()?)
-        } else {
-            None
-        };
         let entry = crate::cache::entry::prepare(cache, key, incoming)?;
         let result = self.cold(&entry);
-        drop(acquired);
         if result.is_ok() {
             crate::metrics::record_node(
                 crate::metrics::NodeKind::Runner,

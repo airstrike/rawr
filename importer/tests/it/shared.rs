@@ -1,11 +1,11 @@
-//! What the suite's tests share: the process's native Cargo lane, one Cargo
+//! What the suite's tests share: one native Cargo lane, one Cargo
 //! build directory, and the builds of generated crates.
 //!
-//! The lane admits one owner per process and refuses a second outright, so a
-//! test holds [`lane`] around each call that takes it (resolution,
-//! extraction, a runner build, `cargo::Owner::acquire`) and nothing else.
-//! A test never holds the lane while it asks for a shared fixture: the
-//! fixture takes the lane itself the first time it is built.
+//! The suite holds one Cargo lane, as a run owner does, and a test takes
+//! [`lane`] around each call that runs Cargo (resolution, extraction, a
+//! runner build) and lends it to that call. A test never holds the lane
+//! while it asks for a shared fixture: the fixture takes the lane itself the
+//! first time it is built.
 
 #![cfg_attr(not(feature = "test-fixtures"), allow(unused_imports))]
 
@@ -14,9 +14,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::{MutexGuard, OnceLock};
 
-/// This test's turn on the process's native Cargo lane.
-pub fn lane() -> MutexGuard<'static, ()> {
-    rawr_import::store::test_turn()
+/// The suite's native Cargo lane, this test's while it holds the guard.
+pub fn lane() -> MutexGuard<'static, rawr_import::cargo::Lane> {
+    rawr_import::store::test_lane()
 }
 
 /// The Cargo build directory every runner and generated-crate build in the

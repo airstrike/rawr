@@ -10,15 +10,15 @@ use crate::process::{test_launch, Native};
 
 #[test]
 fn independent_facts_prove_closed_obligations_without_any_child_process() {
-    let _turn = crate::store::test_turn();
+    let mut lane = crate::store::test_lane();
     crate::store::isolate_for_tests();
     let limits = Limits::standard();
     let native = Native::pinned().expect("the pinned driver toolchain is installed");
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/tmp/independent-proof");
     std::fs::create_dir_all(&root).unwrap();
     let inventories = [
-        capture(&root.join("ab"), &["a", "b"], &native, &limits),
-        capture(&root.join("cb"), &["c", "b"], &native, &limits),
+        capture(&mut lane, &root.join("ab"), &["a", "b"], &native, &limits),
+        capture(&mut lane, &root.join("cb"), &["c", "b"], &native, &limits),
     ];
     for (name, inventory) in ["ab", "cb"].into_iter().zip(&inventories) {
         std::fs::write(
@@ -320,6 +320,7 @@ fn chosen_fingerprint(catalog: &Catalog<'_>) -> [u8; 32] {
 }
 
 pub(super) fn capture(
+    lane: &mut crate::cargo::Lane,
     root: &Path,
     selected: &[&str],
     native: &Native,
@@ -347,7 +348,7 @@ pub(super) fn capture(
                 .unwrap(),
         );
     }
-    inventory::Acquired::capture(builder.build().unwrap(), native, limits)
+    inventory::Acquired::capture(builder.build().unwrap(), lane, native, limits)
         .expect("the independent intrinsic domain authenticates")
 }
 
@@ -356,13 +357,13 @@ pub(super) fn capture(
 /// capture saw lands in exactly one entry.
 #[test]
 fn a_capture_splits_its_exports_into_one_entry_per_crate() {
-    let _turn = crate::store::test_turn();
+    let mut lane = crate::store::test_lane();
     crate::store::isolate_for_tests();
     let limits = Limits::standard();
     let native = Native::pinned().expect("the pinned driver toolchain is installed");
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/tmp/split-entries");
     std::fs::create_dir_all(&root).unwrap();
-    let acquired = capture(&root.join("ab"), &["a", "b"], &native, &limits);
+    let acquired = capture(&mut lane, &root.join("ab"), &["a", "b"], &native, &limits);
     let roots = acquired
         .exports()
         .map(|(key, _)| key.root_alias())
@@ -408,12 +409,12 @@ fn a_capture_splits_its_exports_into_one_entry_per_crate() {
 /// dependency keeps that trait's declarations in its entry.
 #[test]
 fn a_capture_keeps_signed_constants_and_lists_unread_implementations_as_unsupported() {
-    let _turn = crate::store::test_turn();
+    let mut lane = crate::store::test_lane();
     crate::store::isolate_for_tests();
     let limits = Limits::standard();
     let native = Native::pinned().expect("the pinned driver toolchain is installed");
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/tmp/constant-headers");
-    let acquired = capture(&root, &["b", "d", "e"], &native, &limits);
+    let acquired = capture(&mut lane, &root, &["b", "d", "e"], &native, &limits);
     let partition = acquired
         .facts()
         .partitions
@@ -476,15 +477,15 @@ fn a_capture_keeps_signed_constants_and_lists_unread_implementations_as_unsuppor
 fn lowering_calls_prove_from_their_lexical_import_paths() {
     use crate::surface::application::Call;
 
-    let _turn = crate::store::test_turn();
+    let mut lane = crate::store::test_lane();
     crate::store::isolate_for_tests();
     let limits = Limits::standard();
     let native = Native::pinned().expect("the pinned driver toolchain is installed");
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/tmp/lexical-calls");
     std::fs::create_dir_all(&root).unwrap();
     let inventories = [
-        capture(&root.join("ab"), &["a", "b"], &native, &limits),
-        capture(&root.join("cb"), &["c", "b"], &native, &limits),
+        capture(&mut lane, &root.join("ab"), &["a", "b"], &native, &limits),
+        capture(&mut lane, &root.join("cb"), &["c", "b"], &native, &limits),
     ];
     let script = test_launch::Script::new(
         std::fs::canonicalize(&root).unwrap(),
@@ -576,13 +577,13 @@ fn lowering_calls_prove_from_their_lexical_import_paths() {
 /// project's entry once rawr's home holds it under its machine-wide key.
 #[test]
 fn a_capture_and_a_promotion_leave_one_copy_of_each_entry() {
-    let _turn = crate::store::test_turn();
+    let mut lane = crate::store::test_lane();
     crate::store::isolate_for_tests();
     let limits = Limits::standard();
     let native = Native::pinned().expect("the pinned driver toolchain is installed");
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/tmp/one-copy");
     let _ = std::fs::remove_dir_all(&root);
-    let acquired = capture(&root, &["a"], &native, &limits);
+    let acquired = capture(&mut lane, &root, &["a"], &native, &limits);
     let resolution = std::fs::canonicalize(&root)
         .unwrap()
         .join("target/rawr/cache/resolution");

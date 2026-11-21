@@ -144,15 +144,18 @@ pub fn isolate_for_tests() -> PathBuf {
         .clone()
 }
 
-/// One test's turn on this process's native Cargo lane.
+/// The test suite's one native Cargo lane, lent to one test at a time.
 ///
-/// The lane admits one owner per process and refuses a second outright
-/// ("process busy") rather than waiting, so tests sharing a binary hold a turn
-/// around each call that takes the lane and wait for each other instead.
+/// Tests of one binary run on threads of their own and share this store and
+/// their fixture projects, whose leases refuse a second taker rather than
+/// wait. So the suite holds one lane, as a run owner does, and each test
+/// that runs Cargo waits here for it. The lock stays because the lane moves
+/// between those threads.
 #[doc(hidden)]
-pub fn test_turn() -> std::sync::MutexGuard<'static, ()> {
-    static TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    TURN.lock()
+pub fn test_lane() -> std::sync::MutexGuard<'static, crate::cargo::Lane> {
+    static LANE: std::sync::Mutex<crate::cargo::Lane> =
+        std::sync::Mutex::new(crate::cargo::Lane::new());
+    LANE.lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 

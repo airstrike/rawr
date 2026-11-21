@@ -74,7 +74,13 @@ fn expand_in(root: &Path) {
         .unwrap()
         .expect("the fixture has dependencies");
     let native = request.pinned_native(&limits).unwrap();
-    let basis = Basis::capture(request, &native, &limits).unwrap();
+    let basis = Basis::capture(
+        request,
+        &mut rawr_import::store::test_lane(),
+        &native,
+        &limits,
+    )
+    .unwrap();
     let item = Item {
         path: "Task".to_owned(),
         text: "#[derive(Debug, Clone, Serialize, Deserialize)]\nstruct Task {\n    \

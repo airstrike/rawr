@@ -530,6 +530,7 @@ pub(in crate::cargo) fn prepare_cached_in(
     limits: &Limits,
     scope: &crate::supervisor::snapshot::attempt::Scope,
     sink: &dyn metrics::Sink,
+    lane: &mut cargo::Lane,
     memos: &mut Memos,
 ) -> Result<Resolved, node::Error> {
     let context = scoped_context(&request, limits, scope)?;
@@ -540,6 +541,7 @@ pub(in crate::cargo) fn prepare_cached_in(
         attestation,
         limits,
         sink,
+        lane,
         memos,
         #[cfg(test)]
         None,
@@ -579,6 +581,7 @@ pub(in crate::cargo) fn evaluate_scripted(
     cached: cargo::CachedToolchain,
     limits: &Limits,
     sink: &dyn metrics::Sink,
+    lane: &mut cargo::Lane,
     memos: &mut Memos,
     script: ScriptFactory,
 ) -> Result<Ready, node::Error> {
@@ -594,6 +597,7 @@ pub(in crate::cargo) fn evaluate_scripted(
         cached.attestation,
         limits,
         sink,
+        lane,
         memos,
         Some(script),
     )? {
@@ -608,6 +612,7 @@ fn evaluate(
     attestation: Rc<node::Validated<cargo::toolchain::Attestation>>,
     limits: &Limits,
     sink: &dyn metrics::Sink,
+    lane: &mut cargo::Lane,
     memos: &mut Memos,
     #[cfg(test)] script: Option<ScriptFactory>,
 ) -> Result<Resolved, node::Error> {
@@ -637,7 +642,12 @@ fn evaluate(
     )?;
     // One capture of the request's authority answers every shared replay
     // of this evaluation: it runs the compiler for its identity.
-    let current = input::bindings::Current::capture(&request.project_root, &request.config, limits);
+    let current = input::bindings::Current::capture(
+        lane.compilers(),
+        &request.project_root,
+        &request.config,
+        limits,
+    );
     let state = Rc::new(Evaluation {
         request,
         cached,
@@ -680,7 +690,7 @@ fn evaluate(
     let node = match node::Evaluator::new(&store, sink).discover_bundled_budgeted(
         &recipe,
         move |value, graph| validator.validate(value, graph),
-        |attempt| state.execute(attempt, &mut left, memos),
+        |attempt| state.execute(attempt, &mut left, lane, memos),
     ) {
         Ok(node) => node,
         Err(error) => {
@@ -1035,6 +1045,7 @@ impl Evaluation {
         &self,
         attempt: store::bundle::Attempt,
         left: &mut Left,
+        lane: &mut cargo::Lane,
         memos: &mut Memos,
     ) -> Result<node::Bundled<Product>, node::Error> {
         let graph = self.store.graph_budget();
@@ -1082,7 +1093,7 @@ impl Evaluation {
                         memos.remembered = super::remembered::Remembered::default();
                     }
                     let run = || {
-                        self.execute_in(layout, cargo_account, accounts, tables, left, memos)
+                        self.execute_in(layout, cargo_account, accounts, tables, left, lane, memos)
                             .map_err(|error| self.settle(error))
                     };
                     #[cfg(test)]
@@ -1107,6 +1118,10 @@ impl Evaluation {
         }
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one cold attempt's layout and accounts, with the owner's lane and memos"
+    )]
     fn execute_in(
         &self,
         layout: layout::Layout,
@@ -1114,6 +1129,7 @@ impl Evaluation {
         accounts: &mut Accounts,
         mut tables: crate::extract::plan::replayed::Tables,
         left: &mut Left,
+        lane: &mut cargo::Lane,
         memos: &mut Memos,
     ) -> Result<node::Bundled<Product>, node::Error> {
         let graph = self.store.graph_budget();
@@ -1179,6 +1195,7 @@ impl Evaluation {
             }
         }
         let mut completed = self.request.complete_parts_in(
+            lane,
             &self.cached,
             &layout,
             built,

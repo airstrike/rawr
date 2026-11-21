@@ -40,6 +40,7 @@ impl Current {
     }
 
     pub(crate) fn capture(
+        compilers: &mut crate::runner::runtime::Compilers,
         project: &Path,
         config: &cargo::config::Provenance,
         limits: &cargo::Limits,
@@ -47,7 +48,7 @@ impl Current {
         config.revalidate(limits, "shared binding replay").ok()?;
         Some(Self {
             project: project.canonicalize().ok()?,
-            compiler: crate::runner::runtime::compiler_identity(project, config).ok()?,
+            compiler: crate::runner::runtime::compiler_identity(compilers, project, config).ok()?,
             config: *config.universe_context().as_bytes(),
             projection: config
                 .projection()

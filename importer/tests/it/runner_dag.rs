@@ -244,6 +244,8 @@ fn execute_runner(project: &std::path::Path, snapshot: u8, start: bool) -> Count
     let chain = rawr_import::node::Chain::fixture(context(project))
         .expect("the runner DAG fixture parent validates");
     let cache = rawr_import::cache::Writer::new(project).expect("the runner cache binds");
+    // The worker is a process of its own, so its own run owner and lane.
+    let mut lane = rawr_import::cargo::Lane::new();
     let mut supervisor = rawr_import::supervisor::Owner::new();
     let counts = Arc::new(Counts::default());
     let scope = rawr_import::metrics::Scope::transform_at(
@@ -262,7 +264,15 @@ fn execute_runner(project: &std::path::Path, snapshot: u8, start: bool) -> Count
             &rawr_import::cargo::Limits::standard(),
         )
         .expect("the lifecycle-owner fixture request seals");
-        execute_request(request, transport, project, &cache, &mut supervisor, true);
+        execute_request(
+            request,
+            transport,
+            project,
+            &mut lane,
+            &cache,
+            &mut supervisor,
+            true,
+        );
     } else {
         let (snapshot, transport) = runner_snapshot(project, snapshot);
         let request = rawr_import::bridge::fixture_generation(
@@ -273,7 +283,15 @@ fn execute_runner(project: &std::path::Path, snapshot: u8, start: bool) -> Count
             &rawr_import::cargo::Limits::standard(),
         )
         .expect("the generated-owner fixture request seals");
-        execute_request(request, transport, project, &cache, &mut supervisor, false);
+        execute_request(
+            request,
+            transport,
+            project,
+            &mut lane,
+            &cache,
+            &mut supervisor,
+            false,
+        );
     }
     drop(scope);
     Arc::into_inner(counts).expect("the runner count scope retires")
@@ -283,6 +301,7 @@ fn execute_request<B: rawr_import::surface::Runner>(
     request: rawr_import::bridge::GenerationRequestKey<B>,
     transport: rawr_import::supervisor::snapshot::Bytes,
     project: &std::path::Path,
+    lane: &mut rawr_import::cargo::Lane,
     cache: &rawr_import::cache::Writer,
     supervisor: &mut rawr_import::supervisor::Owner,
     start: bool,
@@ -291,7 +310,7 @@ fn execute_request<B: rawr_import::surface::Runner>(
         .generate()
         .expect("the generated-owner fixture materializes");
     let built = manifest
-        .build_on_demand(cache)
+        .build(lane, cache)
         .expect("the runner artifact seals or restores");
     let process = rawr_import::process::Owner::for_lifecycle(
         project,
@@ -651,7 +670,7 @@ fn identical_or_rawr_edited_fresh_runner_process_reuses_without_transform_or_car
 
 #[test]
 fn rawr_only_hot_edit_reuses_one_admitted_owner_without_build_work() {
-    let _lane = crate::shared::lane();
+    let mut lane = crate::shared::lane();
     let guard = rawr_import::store::TestProject::new("rawr-runner-hot-edit-dag");
     let project = guard.path().to_path_buf();
     prepare_runner_harness(&project);
@@ -685,7 +704,7 @@ fn rawr_only_hot_edit_reuses_one_admitted_owner_without_build_work() {
         .generate()
         .expect("the cold generated-owner fixture materializes");
     let built = generated
-        .build_on_demand(&cache)
+        .build(&mut lane, &cache)
         .expect("the cold runner artifact seals");
     let process = rawr_import::process::Owner::new(&project)
         .expect("the generated-owner process socket seals");
@@ -783,7 +802,7 @@ fn rawr_only_hot_edit_reuses_one_admitted_owner_without_build_work() {
 
 #[test]
 fn identical_runner_restores_from_shared_node_without_cargo() {
-    let _lane = crate::shared::lane();
+    let mut lane = crate::shared::lane();
     let guard = rawr_import::store::TestProject::new("rawr-runner-dag");
     let project = guard.path().to_path_buf();
     let context = context(&project);
@@ -806,11 +825,9 @@ fn identical_runner_restores_from_shared_node_without_cargo() {
         supervisor.revision().expect("the cold revision seals"),
     );
     let key = cold.generated_manifest().build_request_key();
-    let cargo = rawr_import::cargo::Owner::acquire().expect("the cold Cargo lane acquires");
     let cold = cold
-        .build(&cargo, &cache)
+        .build(&mut lane, &cache)
         .expect("the cold runner artifact seals");
-    drop(cargo);
     cold.artifact()
         .revalidate()
         .expect("the cold runner artifact revalidates");
@@ -841,12 +858,9 @@ fn identical_runner_restores_from_shared_node_without_cargo() {
         supervisor.revision().expect("the warm revision seals"),
     );
     assert_eq!(warm.generated_manifest().build_request_key(), key);
-    let cargo = rawr_import::cargo::Owner::acquire()
-        .expect("the unrelated Cargo lane remains held across the warm lookup");
     let warm = warm
-        .build_on_demand(&cache)
-        .expect("the warm runner restores without acquiring the held Cargo lane");
-    drop(cargo);
+        .build(&mut lane, &cache)
+        .expect("the warm runner restores from the shared store");
     warm.artifact()
         .revalidate()
         .expect("the restored runner artifact revalidates");
@@ -871,54 +885,4 @@ fn identical_runner_restores_from_shared_node_without_cargo() {
     store
         .retire_fixture()
         .expect("the immutable shared runner store retires as one fixture");
-}
-
-#[test]
-fn cold_on_demand_busy_owner_leaves_no_runner_materialization() {
-    let _lane = crate::shared::lane();
-    let guard = rawr_import::store::TestProject::new("rawr-runner-busy-owner-dag");
-    let project = guard.path().to_path_buf();
-    let context = context(&project);
-    let store = context
-        .open_store()
-        .expect("the busy-owner shared store opens for fixture retirement");
-    let chain = rawr_import::node::Chain::fixture(context)
-        .expect("the busy-owner fixture parent validates");
-    let cache = rawr_import::cache::Writer::new(&project).expect("the runner cache binds");
-    let mut supervisor = rawr_import::supervisor::Owner::new();
-    let generated = rawr_import::runner::fixture(
-        chain.clone(),
-        supervisor.revision().expect("the busy revision seals"),
-    );
-    let key = generated.generated_manifest().build_request_key();
-    let held = rawr_import::cargo::Owner::acquire().expect("the unrelated Cargo lane acquires");
-    assert!(
-        generated.build_on_demand(&cache).is_err(),
-        "a true cold miss cannot build while the sole Cargo lane is held"
-    );
-    assert!(
-        cache
-            .inspect()
-            .expect("the failed cold cache inspects")
-            .is_empty(),
-        "the failed owner acquisition must not prepare a runner entry"
-    );
-    drop(held);
-
-    let generated = rawr_import::runner::fixture(
-        chain,
-        supervisor.revision().expect("the recovered revision seals"),
-    );
-    assert_eq!(generated.generated_manifest().build_request_key(), key);
-    let built = generated
-        .build_on_demand(&cache)
-        .expect("the cold runner builds after the Cargo lane is released");
-    built
-        .artifact()
-        .revalidate()
-        .expect("the recovered runner artifact revalidates");
-    drop(built);
-    store
-        .retire_fixture()
-        .expect("the busy-owner shared store retires as one fixture");
 }

@@ -7,7 +7,6 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, TryLockError};
 
 use sha2::Digest as _;
 use sha2::Sha256;
@@ -70,11 +69,18 @@ fn versioned_target_directory(harness_root: &Path) -> PathBuf {
 }
 
 static TEMPORARY_ID: AtomicU64 = AtomicU64::new(1);
-static HEAVY_OWNER: Mutex<()> = Mutex::new(());
 
-/// Sole in-process authority for one heavyweight native Cargo operation.
-pub struct Owner {
-    _guard: std::sync::MutexGuard<'static, ()>,
+/// The native Cargo lane: the right to run one heavyweight Cargo operation.
+///
+/// A run owner makes one lane and lends it `&mut` to each resolution,
+/// publication and runner build, so the borrow checker keeps a second
+/// operation of that owner from starting while one runs (#1824). Work of
+/// two owners, in two processes or on two threads, meets at the store's and
+/// the project's file leases instead. The lane keeps what that work asked of
+/// the project's compiler, for as long as the owner holds it.
+#[derive(Default)]
+pub struct Lane {
+    compilers: crate::runner::runtime::Compilers,
 }
 
 #[cfg(test)]
@@ -86,10 +92,18 @@ std::thread_local! {
 #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Digest([u8; 32]);
 
-impl Owner {
-    /// Try to acquire the one native Cargo lane without waiting.
-    pub fn acquire() -> Result<Self> {
-        acquire_process_owner().map(|guard| Self { _guard: guard })
+impl Lane {
+    /// The lane of a new run owner.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            compilers: crate::runner::runtime::Compilers::new(),
+        }
+    }
+
+    /// What the owner's work asked of the project's compiler.
+    pub(crate) fn compilers(&mut self) -> &mut crate::runner::runtime::Compilers {
+        &mut self.compilers
     }
 }
 
@@ -848,20 +862,25 @@ impl Request {
     }
 
     /// Consume the sealed request into one exact Cargo resolution proof.
-    pub fn resolve(self, native: &Native, limits: &Limits) -> Result<Resolution> {
-        self.resolve_with(native, limits, None)
+    pub fn resolve(self, lane: &mut Lane, native: &Native, limits: &Limits) -> Result<Resolution> {
+        self.resolve_with(lane, native, limits, None)
     }
 
     /// Capture only normal-build input authority for a consuming application.
     /// No metadata probe is scheduled and this result cannot publish an API.
     #[cfg(feature = "rustc-driver")]
-    pub(crate) fn native_inputs(mut self, native: &Native, limits: &Limits) -> Result<Resolution> {
+    pub(crate) fn native_inputs(
+        mut self,
+        lane: &mut Lane,
+        native: &Native,
+        limits: &Limits,
+    ) -> Result<Resolution> {
         assert!(
             !self.inventory && self.demand.is_empty(),
             "native input capture never also captures API facts"
         );
         self.inputs_only = true;
-        self.resolve(native, limits)
+        self.resolve(lane, native, limits)
     }
 
     /// Every library crate this request's build reaches, as an exact
@@ -873,11 +892,11 @@ impl Request {
     /// entry before any nightly build (D609.3). This runs the normal
     /// resolution only: no metadata probe.
     #[cfg(feature = "rustc-driver")]
-    pub fn closure(mut self, native: &Native, limits: &Limits) -> Result<Closure> {
+    pub fn closure(mut self, lane: &mut Lane, native: &Native, limits: &Limits) -> Result<Closure> {
         self.inventory = false;
         self.demand = Box::default();
         self.inputs_only = true;
-        let resolution = self.resolve(native, limits)?;
+        let resolution = self.resolve(lane, native, limits)?;
         let metadata = &resolution.metadata;
         let declared = metadata.declared_packages();
         let root = metadata.root_package_id();
@@ -1025,40 +1044,50 @@ impl Request {
     /// Prepare the complete semantic owner before extraction, reusing an
     /// attested bundle when all current inputs still agree.
     #[cfg(feature = "rustc-driver")]
-    pub fn prepare_cached(self, limits: &Limits) -> Result<Prepared> {
+    pub fn prepare_cached(self, lane: &mut Lane, limits: &Limits) -> Result<Prepared> {
         self.prepare_cached_in(
             limits,
             &crate::supervisor::snapshot::attempt::Scope::begin(),
+            lane,
             &mut resolution::Memos::default(),
         )
     }
 
     /// Prepare or fall back within the original reload attempt's cumulative
-    /// validation budget, including all prior resident snapshot checks. What
-    /// the owner's earlier preparations left in `memos` answers what they
-    /// answered, and this one leaves its own there for the next.
+    /// validation budget, including all prior resident snapshot checks, on
+    /// the owner's Cargo `lane`. What the owner's earlier preparations left
+    /// in `memos` answers what they answered, and this one leaves its own
+    /// there for the next.
     #[cfg(feature = "rustc-driver")]
     pub fn prepare_cached_in(
         self,
         limits: &Limits,
         scope: &crate::supervisor::snapshot::attempt::Scope,
+        lane: &mut Lane,
         memos: &mut resolution::Memos,
     ) -> Result<Prepared> {
         assert!(
             !self.inventory,
             "an intrinsic acquisition resolves uncached; demand replay is not complete"
         );
-        resolution::owner::prepare_cached_in(self, limits, scope, &crate::metrics::Current, memos)
-            .map(|owner| Prepared { owner })
-            .map_err(|source| Error::Node {
-                operation: "complete resolution owner",
-                source: Box::new(source),
-            })
+        resolution::owner::prepare_cached_in(
+            self,
+            limits,
+            scope,
+            &crate::metrics::Current,
+            lane,
+            memos,
+        )
+        .map(|owner| Prepared { owner })
+        .map_err(|source| Error::Node {
+            operation: "complete resolution owner",
+            source: Box::new(source),
+        })
     }
 
     /// Resolve through the shared toolchain node before any tool discovery or
     /// version child is launched. Evidence-only callers retain [`Self::resolve`].
-    pub fn resolve_cached(self, limits: &Limits) -> Result<Resolution> {
+    pub fn resolve_cached(self, lane: &mut Lane, limits: &Limits) -> Result<Resolution> {
         assert!(
             !self.inventory,
             "an intrinsic acquisition resolves uncached; demand replay is not complete"
@@ -1090,7 +1119,7 @@ impl Request {
             context,
             attestation,
         };
-        self.resolve_with(&native, limits, Some(&cached))
+        self.resolve_with(lane, &native, limits, Some(&cached))
     }
 
     /// The pinned native toolchain this request's project uses, through the
@@ -1118,13 +1147,13 @@ impl Request {
 
     fn resolve_with(
         self,
+        lane: &mut Lane,
         native: &Native,
         limits: &Limits,
         cached: Option<&CachedToolchain>,
     ) -> Result<Resolution> {
         crate::progress::resolved();
         let native = native.production();
-        let _process_owner = acquire_process_owner()?;
         let mut lease = open_lease(&self)?;
         let _lease_owner = acquire_lease(
             &mut lease,
@@ -1134,19 +1163,19 @@ impl Request {
         let harness = self
             .prepare_harness(&native, limits, limits, cached)
             .map_err(|error| self.settle(limits, None, error))?;
-        self.resolve_under_epoch(&native, harness, limits)
+        self.resolve_under_epoch(lane, &native, harness, limits)
     }
 
     /// Enter the private nonpublishing lane while retaining production authority.
     #[cfg(feature = "rustc-driver")]
     pub(crate) fn resolve_evidence(
         self,
+        lane: &mut Lane,
         native: &Native,
         limits: &Limits,
         evidence: &process::EvidenceSession,
     ) -> Result<Resolution> {
         let native = native.evidence(evidence);
-        let _process_owner = acquire_process_owner()?;
         let mut lease = open_lease(&self)?;
         let _lease_owner = acquire_lease(
             &mut lease,
@@ -1156,7 +1185,7 @@ impl Request {
         let harness = self
             .prepare_harness(&native, limits, limits, None)
             .map_err(|error| self.settle(limits, None, error))?;
-        self.resolve_under_epoch(&native, harness, limits)
+        self.resolve_under_epoch(lane, &native, harness, limits)
     }
 
     fn prepare_harness<N: ToolPaths>(
@@ -1955,6 +1984,7 @@ impl Request {
 
     fn resolve_under_epoch<N: ProductionReplay>(
         self,
+        lane: &mut Lane,
         native: &N,
         harness: Harness,
         limits: &Limits,
@@ -2104,6 +2134,7 @@ impl Request {
         };
         let completed = self
             .complete_harness_parts(
+                lane,
                 native,
                 harness,
                 build,
@@ -2138,6 +2169,14 @@ impl Request {
     )]
     fn complete_harness_parts(
         &self,
+        #[cfg_attr(
+            not(feature = "rustc-driver"),
+            expect(
+                unused_variables,
+                reason = "only the binding capture asks the compiler from completion"
+            )
+        )]
+        lane: &mut Lane,
         #[cfg_attr(
             not(feature = "rustc-driver"),
             expect(
@@ -2275,9 +2314,12 @@ impl Request {
             }
         }
         #[cfg(feature = "rustc-driver")]
-        if let Some(current) =
-            crate::input::bindings::Current::capture(&self.project_root, &self.config, limits)
-        {
+        if let Some(current) = crate::input::bindings::Current::capture(
+            lane.compilers(),
+            &self.project_root,
+            &self.config,
+            limits,
+        ) {
             // One index of the build's inputs serves every table, so a
             // file many closures reach is observed once (#1846).
             let mut capture =
@@ -2779,11 +2821,11 @@ impl Resolution {
     #[cfg(feature = "rustc-driver")]
     pub(crate) fn publication<T>(
         mut self,
+        _lane: &mut Lane,
         native: &Native,
         limits: &Limits,
         publish: impl FnOnce(Self) -> Result<T>,
     ) -> Result<T> {
-        let _process_owner = acquire_process_owner()?;
         let mut lease = open_lease_at(&self.project_root, &self.cache_root)?;
         let _lease_owner = lease.try_write().map_err(|source| {
             if source.kind() == std::io::ErrorKind::WouldBlock {
@@ -3061,16 +3103,6 @@ impl Authority {
 
 fn open_lease(request: &Request) -> Result<fd_lock::RwLock<File>> {
     open_lease_at(&request.project_root, &request.cache_root)
-}
-
-fn acquire_process_owner() -> Result<std::sync::MutexGuard<'static, ()>> {
-    match HEAVY_OWNER.try_lock() {
-        Ok(owner) => Ok(owner),
-        Err(TryLockError::WouldBlock) => Err(Error::Owner),
-        // The gate guards no data, so a panic while another build held it
-        // leaves nothing to repair.
-        Err(TryLockError::Poisoned(owner)) => Ok(owner.into_inner()),
-    }
 }
 
 fn acquire_lease<'lease>(
@@ -5721,14 +5753,11 @@ mod epoch_tests {
     }
 
     #[test]
-    fn production_epoch_holds_process_and_file_ownership_across_a_barrier() {
+    fn production_epoch_holds_file_ownership_across_threads_and_processes() {
         let project = fixture("production-barrier");
         let root = project.path();
         let cache = root.join("cache");
         fs::create_dir(&cache).expect("cache fixture can be created");
-        // The lane admits one owner per process: this test's turn on it.
-        let _turn = crate::store::test_turn();
-        let _process_owner = acquire_process_owner().expect("fixture owns the process epoch");
         let mut lease = open_lease_at(root, &cache).expect("fixture opens the cache lease");
         let _lease_owner = acquire_lease(&mut lease, &cache.join(LEASE_FILE), "test lease")
             .expect("fixture owns the cache epoch");
@@ -5737,7 +5766,13 @@ mod epoch_tests {
             let contender_barrier = Arc::clone(&barrier);
             scope.spawn(move || {
                 contender_barrier.wait();
-                assert!(matches!(acquire_process_owner(), Err(Error::Owner)));
+                // A second owner in this process opens the lease again, and
+                // the held lock refuses it as it refuses another process.
+                let mut lease = open_lease_at(root, &cache).expect("contender opens the lease");
+                assert!(matches!(
+                    acquire_lease(&mut lease, &cache.join(LEASE_FILE), "test lease"),
+                    Err(Error::Owner)
+                ));
                 contender_barrier.wait();
             });
             barrier.wait();

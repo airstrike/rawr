@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.4.84",
+      "date": "2026-11-21",
+      "entries": [
+        {"text":"A save no longer fails with \"the build directory is locked by another build\" when two Cargo operations of one run meet: the run owner holds one Cargo lane and lends it to each resolution, publication and runner build.","issues":[1824]}
+      ]
+    },
+    {
       "version": "0.4.83",
       "date": "2026-11-21",
       "entries": [

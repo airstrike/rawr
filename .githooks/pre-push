@@ -28,9 +28,15 @@ check_rust --workspace || exit 1
 # before it deploys, so a failing one stops here rather than the deploy.
 if printf '%s\n' "$changed" | grep -qE '^(site|play/deploy)/'; then
     root=$(git rev-parse --show-toplevel)
+    # Git sets GIT_DIR and friends for a hook; the deploy script's tests run
+    # git in their own fixture repositories, which those would redirect.
+    unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_QUARANTINE_PATH
     echo "Running the site's and the Worker's tests..."
-    npm --prefix "$root/site" test >/dev/null 2>&1 || { echo "ERROR: npm --prefix site test failed"; exit 1; }
-    (cd "$root/play/deploy/cloudflare" && node build.mjs >/dev/null 2>&1 && npm test >/dev/null 2>&1) \
-        || { echo "ERROR: the Worker's tests failed: cd play/deploy/cloudflare && node build.mjs && npm test"; exit 1; }
+    log="$root/target/logs/pre-push-site.log"; mkdir -p "$root/target/logs"
+    npm --prefix "$root/site" test >"$log" 2>&1 || { tail -30 "$log"; echo "ERROR: npm --prefix site test failed (log: $log)"; exit 1; }
+    # The Worker's build and its page tests (links, the injected data). The
+    # deploy script's own tests stub the shell's tools on PATH and run in CI.
+    (cd "$root/play/deploy/cloudflare" && node build.mjs && node --test test/play.test.ts) >"$log" 2>&1 \
+        || { tail -30 "$log"; echo "ERROR: the Worker's tests failed (log: $log)"; exit 1; }
 fi
 exit 0

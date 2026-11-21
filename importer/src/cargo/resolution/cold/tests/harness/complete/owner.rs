@@ -139,6 +139,7 @@ fn complete_owner_node_reuses_without_children_or_mutating_bundle() {
         cached(),
         &limits,
         &crate::metrics::Current,
+        &mut crate::cargo::Lane::new(),
         &mut memos,
         script,
     )
@@ -174,6 +175,7 @@ fn complete_owner_node_reuses_without_children_or_mutating_bundle() {
             cached(),
             &limits,
             &crate::metrics::Current,
+            &mut crate::cargo::Lane::new(),
             &mut memos,
             no_cold,
         )
@@ -209,6 +211,7 @@ fn complete_owner_node_reuses_without_children_or_mutating_bundle() {
         cached(),
         &limits,
         &crate::metrics::Current,
+        &mut crate::cargo::Lane::new(),
         &mut memos,
         no_cold,
     )
@@ -229,6 +232,7 @@ fn complete_owner_node_reuses_without_children_or_mutating_bundle() {
         cached(),
         &limits,
         &crate::metrics::Current,
+        &mut crate::cargo::Lane::new(),
         &mut memos,
         no_cold,
     )
@@ -262,6 +266,7 @@ fn complete_owner_node_reuses_without_children_or_mutating_bundle() {
         cached(),
         &limits,
         &crate::metrics::Current,
+        &mut crate::cargo::Lane::new(),
         &mut memos,
         no_cold,
     )
@@ -399,6 +404,7 @@ fn protected_owner_rebuild(registry: usize, limits: &Limits) -> Measured {
         cached,
         &limits,
         &crate::metrics::Current,
+        &mut crate::cargo::Lane::new(),
         &mut memos,
         script,
     )
@@ -467,6 +473,7 @@ fn protected_owner_rebuild(registry: usize, limits: &Limits) -> Measured {
         cached,
         &limits,
         &crate::metrics::Current,
+        &mut crate::cargo::Lane::new(),
         &mut memos,
         script,
     )
@@ -560,6 +567,7 @@ fn protected_owner_rebuild(registry: usize, limits: &Limits) -> Measured {
         cached,
         &limits,
         &crate::metrics::Current,
+        &mut crate::cargo::Lane::new(),
         &mut memos,
         no_cold,
     )
@@ -646,6 +654,7 @@ fn staged_owner_replay_reuses_exact_controls_and_refuses_bundle_drift() {
         cached,
         &limits,
         &crate::metrics::Current,
+        &mut crate::cargo::Lane::new(),
         &mut memos,
         script,
     )
@@ -735,6 +744,7 @@ fn changed_inputs_recapture_the_stored_resolution() {
         cached,
         &limits,
         &crate::metrics::Current,
+        &mut crate::cargo::Lane::new(),
         &mut memos,
         script,
     )
@@ -771,6 +781,7 @@ fn changed_inputs_recapture_the_stored_resolution() {
         cached,
         &limits,
         &crate::metrics::Current,
+        &mut crate::cargo::Lane::new(),
         &mut memos,
         script,
     )
@@ -792,6 +803,7 @@ fn changed_inputs_recapture_the_stored_resolution() {
         cached,
         &limits,
         &crate::metrics::Current,
+        &mut crate::cargo::Lane::new(),
         &mut memos,
         script,
     )
@@ -833,6 +845,7 @@ fn staged_owner_record_and_comparison_are_kept_across_graphs_until_a_stamp_moves
         cached,
         &limits,
         &crate::metrics::Current,
+        &mut crate::cargo::Lane::new(),
         &mut memos,
         script,
     )
@@ -892,6 +905,7 @@ fn staged_owner_record_and_comparison_are_kept_across_graphs_until_a_stamp_moves
             cached,
             &limits,
             &crate::metrics::Current,
+            &mut crate::cargo::Lane::new(),
             &mut memos,
             no_cold,
         )
@@ -971,6 +985,7 @@ fn staged_owner_built_record_is_the_build_s_own_and_matches_its_decode() {
         cached,
         &limits,
         &crate::metrics::Current,
+        &mut crate::cargo::Lane::new(),
         &mut memos,
         script,
     )
@@ -999,6 +1014,7 @@ fn staged_owner_built_record_is_the_build_s_own_and_matches_its_decode() {
         cached,
         &limits,
         &crate::metrics::Current,
+        &mut crate::cargo::Lane::new(),
         &mut memos,
         no_cold,
     )
@@ -1058,6 +1074,7 @@ fn staged_owner_record_refuses_record_drift_between_replays() {
             cached,
             &limits,
             &crate::metrics::Current,
+            &mut crate::cargo::Lane::new(),
             &mut memos,
             script,
         )
@@ -1425,6 +1442,7 @@ fn retained_api_composes_actual_owner_then_reuses_without_children() {
         cached(),
         &limits,
         &crate::metrics::Current,
+        &mut crate::cargo::Lane::new(),
         &mut memos,
         script,
     )
@@ -1470,6 +1488,7 @@ fn retained_api_composes_actual_owner_then_reuses_without_children() {
             cached(),
             &limits,
             &crate::metrics::Current,
+            &mut crate::cargo::Lane::new(),
             &mut memos,
             no_cold,
         )
@@ -1538,6 +1557,7 @@ fn resolved_warm_launch_equals_cold_without_the_api_graph() {
             cached(),
             &limits,
             &crate::metrics::Current,
+            &mut crate::cargo::Lane::new(),
             &mut memos,
             script,
         )
@@ -1674,6 +1694,7 @@ fn a_forged_stale_profile_entry_panics_in_the_warm_launch() {
             cached(),
             &limits,
             &crate::metrics::Current,
+            &mut crate::cargo::Lane::new(),
             &mut memos,
             script,
         )
@@ -1796,6 +1817,7 @@ fn retained_api_rejects_owner_drift_before_source_callback() {
         cached,
         &limits,
         &crate::metrics::Current,
+        &mut crate::cargo::Lane::new(),
         &mut memos,
         script,
     )
@@ -1843,6 +1865,7 @@ fn retained_api_rejects_foreign_composition_context() {
         cached,
         &limits,
         &crate::metrics::Current,
+        &mut crate::cargo::Lane::new(),
         &mut memos,
         script,
     )

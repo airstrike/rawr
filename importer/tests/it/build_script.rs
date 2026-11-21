@@ -39,14 +39,14 @@ impl Drop for Project {
 
 #[test]
 fn declared_build_inputs_and_default_fallback_publish_deterministically() {
-    let _lane = crate::shared::lane();
+    let mut lane = crate::shared::lane();
     let project = Project::new("determinism");
     let fixtures = fixture_files();
     let limits = Limits::standard();
     let native = Native::pinned().expect("the pinned driver toolchain is installed");
-    let first = extract(&native, &project, environment("set"), &limits)
+    let first = extract(&mut lane, &native, &project, environment("set"), &limits)
         .expect("the first freshness graph publishes");
-    let second = extract(&native, &project, environment("set"), &limits)
+    let second = extract(&mut lane, &native, &project, environment("set"), &limits)
         .expect("the repeated freshness graph publishes");
 
     assert_canonical_equal(first.canonical_bytes(), second.canonical_bytes());
@@ -56,10 +56,22 @@ fn declared_build_inputs_and_default_fallback_publish_deterministically() {
         second.freshness_fingerprint()
     );
 
-    let changed = extract(&native, &project, environment("changed"), &limits)
-        .expect("a changed declared environment publishes a new graph");
-    let unset = extract(&native, &project, environment_without_freshness(), &limits)
-        .expect("an unset declared environment publishes a new graph");
+    let changed = extract(
+        &mut lane,
+        &native,
+        &project,
+        environment("changed"),
+        &limits,
+    )
+    .expect("a changed declared environment publishes a new graph");
+    let unset = extract(
+        &mut lane,
+        &native,
+        &project,
+        environment_without_freshness(),
+        &limits,
+    )
+    .expect("an unset declared environment publishes a new graph");
     assert_ne!(first.fingerprint(), changed.fingerprint());
     assert_ne!(changed.fingerprint(), unset.fingerprint());
     assert_ne!(
@@ -80,7 +92,7 @@ fn declared_build_inputs_and_default_fallback_publish_deterministically() {
 
 #[test]
 fn authoritative_build_captures_out_dir_semantics_once_and_never_reuses_sidecars() {
-    let _lane = crate::shared::lane();
+    let mut lane = crate::shared::lane();
     let project = Project::new("authoritative-build");
     let copied = project.0.join("freshness-copy");
     copy_directory(&fixture("freshness-api"), &copied);
@@ -96,9 +108,16 @@ fn authoritative_build_captures_out_dir_semantics_once_and_never_reuses_sidecars
     let environment = dependency_environment(&copied, "set")
         .setting("FRESH_EMBED_OUT_DIR", "1")
         .expect("the generated OUT_DIR semantic seam is sealed");
-    let first = extract_dependency(&native, &project, &copied, environment.clone(), &limits)
-        .expect("the authoritative Build publishes direct and generated OUT_DIR semantics");
-    let second = extract_dependency(&native, &project, &copied, environment, &limits)
+    let first = extract_dependency(
+        &mut lane,
+        &native,
+        &project,
+        &copied,
+        environment.clone(),
+        &limits,
+    )
+    .expect("the authoritative Build publishes direct and generated OUT_DIR semantics");
+    let second = extract_dependency(&mut lane, &native, &project, &copied, environment, &limits)
         .expect("a fresh authoritative Build republishes every required sidecar");
 
     assert_eq!(first.invocation_count(), 1);
@@ -120,13 +139,14 @@ fn authoritative_build_captures_out_dir_semantics_once_and_never_reuses_sidecars
 
 #[test]
 fn declared_path_shapes_each_change_the_freshness_fingerprint() {
-    let _lane = crate::shared::lane();
+    let mut lane = crate::shared::lane();
     let project = Project::new("path-shapes");
     let copied = project.0.join("freshness-copy");
     copy_directory(&fixture("freshness-api"), &copied);
     let limits = Limits::standard();
     let native = Native::pinned().expect("the pinned driver toolchain is installed");
     let mut previous = extract_dependency(
+        &mut lane,
         &native,
         &project,
         &copied,
@@ -146,6 +166,7 @@ fn declared_path_shapes_each_change_the_freshness_fingerprint() {
     ] {
         fs::write(copied.join(path), contents).expect("the copied declared input can mutate");
         let current = extract_dependency(
+            &mut lane,
             &native,
             &project,
             &copied,
@@ -164,6 +185,7 @@ fn declared_path_shapes_each_change_the_freshness_fingerprint() {
 
     fs::create_dir(copied.join("watched/empty")).expect("an empty declared directory can be added");
     let current = extract_dependency(
+        &mut lane,
         &native,
         &project,
         &copied,
@@ -180,7 +202,7 @@ fn declared_path_shapes_each_change_the_freshness_fingerprint() {
 
 #[test]
 fn generated_out_directory_mutation_cannot_construct_extracted_graph() {
-    let _lane = crate::shared::lane();
+    let mut lane = crate::shared::lane();
     let project = Project::new("generated-output");
     let copied = project.0.join("freshness-copy");
     copy_directory(&fixture("freshness-api"), &copied);
@@ -192,7 +214,7 @@ fn generated_out_directory_mutation_cannot_construct_extracted_graph() {
         dependency_environment(&copied, "set"),
         &limits,
     )
-    .resolve(&native, &limits)
+    .resolve(&mut lane, &native, &limits)
     .expect("the generated-output resolution seals");
     let generated = only_named_file(
         &project.cache().join("resolution/authoritative-target"),
@@ -206,7 +228,7 @@ fn generated_out_directory_mutation_cannot_construct_extracted_graph() {
         b"pub const GENERATED: &str = \"changed output\";\n",
     )
     .expect("the copied OUT_DIR source can mutate");
-    let error = rawr_import::extract::from_resolution(resolution, &native, &limits)
+    let error = rawr_import::extract::from_resolution(resolution, &mut lane, &native, &limits)
         .err()
         .expect("changed generated output cannot publish an extracted graph");
     // Said as Cargo says a file that changed under it (D664).
@@ -218,7 +240,7 @@ fn generated_out_directory_mutation_cannot_construct_extracted_graph() {
 
 #[test]
 fn cargo_process_environment_ignores_overridden_callers_and_retains_set_unset() {
-    let _lane = crate::shared::lane();
+    let mut lane = crate::shared::lane();
     let project = Project::new("environment");
     let limits = Limits::standard();
     let native = Native::pinned().expect("the pinned driver toolchain is installed");
@@ -257,9 +279,9 @@ fn cargo_process_environment_ignores_overridden_callers_and_retains_set_unset() 
         .and_then(|environment| environment.removing("CARGO_CFG_TARGET_OS"))
         .and_then(|environment| environment.removing("CARGO_FEATURE_NONEXISTENT"))
         .expect("the second reserved environment seals");
-    let first = extract(&native, &project, first_environment, &limits)
+    let first = extract(&mut lane, &native, &project, first_environment, &limits)
         .expect("the first normalized process environment publishes");
-    let second = extract(&native, &project, second_environment, &limits)
+    let second = extract(&mut lane, &native, &project, second_environment, &limits)
         .expect("the second normalized process environment publishes");
     assert_eq!(first.fingerprint(), second.fingerprint());
     assert_eq!(
@@ -268,6 +290,7 @@ fn cargo_process_environment_ignores_overridden_callers_and_retains_set_unset() 
     );
 
     let target = extract(
+        &mut lane,
         &native,
         &project,
         environment("set")
@@ -290,19 +313,19 @@ fn cargo_process_environment_ignores_overridden_callers_and_retains_set_unset() 
 
 #[test]
 fn package_without_rerun_inputs_is_proved_by_its_whole_tree() {
-    let _lane = crate::shared::lane();
+    let mut lane = crate::shared::lane();
     let project = Project::new("package-files");
     let copied = project.0.join("fallback-copy");
     copy_directory(&fixture("fallback-api"), &copied);
     let limits = Limits::standard();
     let native = Native::pinned().expect("the pinned driver toolchain is installed");
-    let first = extract_fallback(&native, &project, &copied, &limits)
+    let first = extract_fallback(&mut lane, &native, &project, &copied, &limits)
         .expect("the initial package tree publishes");
     // The tree is walked whatever `include` and `exclude` say, so a file
     // outside the package's archive is an input as much as one inside it.
     fs::write(copied.join("excluded.txt"), b"changed excluded source\n")
         .expect("the excluded package file can mutate");
-    let excluded = extract_fallback(&native, &project, &copied, &limits)
+    let excluded = extract_fallback(&mut lane, &native, &project, &copied, &limits)
         .expect("the excluded package mutation publishes");
     assert_eq!(first.fingerprint(), excluded.fingerprint());
     assert_ne!(
@@ -312,7 +335,7 @@ fn package_without_rerun_inputs_is_proved_by_its_whole_tree() {
 
     fs::write(copied.join("included.txt"), b"changed included source\n")
         .expect("the included package file can mutate");
-    let included = extract_fallback(&native, &project, &copied, &limits)
+    let included = extract_fallback(&mut lane, &native, &project, &copied, &limits)
         .expect("the included package mutation publishes");
     assert_eq!(first.fingerprint(), included.fingerprint());
     assert_ne!(
@@ -338,14 +361,14 @@ fn package_without_rerun_inputs_is_proved_by_its_whole_tree() {
         )
         .build()
         .expect("the member-addition request seals")
-        .resolve(&native, &limits)
+        .resolve(&mut lane, &native, &limits)
         .expect("the authoritative Build captures the package member set");
     fs::write(
         added_copy.join("src/newly-added.rs"),
         "pub const ADDED: u32 = 1;\n",
     )
     .expect("a new included package member can be added after capture");
-    let error = rawr_import::extract::from_resolution(resolution, &native, &limits)
+    let error = rawr_import::extract::from_resolution(resolution, &mut lane, &native, &limits)
         .err()
         .expect("a file added to the package after capture rejects publication");
     // Said as Cargo says an input that changed under it (D664): the walked
@@ -376,17 +399,21 @@ fn thaw(path: &Path) {
 }
 
 fn extract(
+    lane: &mut rawr_import::cargo::Lane,
     native: &Native,
     project: &Project,
     environment: Environment,
     limits: &Limits,
 ) -> rawr_import::Result<rawr_import::api::Graph<rawr_import::api::Extracted>> {
     request(project, environment, limits)
-        .resolve(native, limits)
-        .and_then(|resolution| rawr_import::extract::from_resolution(resolution, native, limits))
+        .resolve(lane, native, limits)
+        .and_then(|resolution| {
+            rawr_import::extract::from_resolution(resolution, lane, native, limits)
+        })
 }
 
 fn extract_dependency(
+    lane: &mut rawr_import::cargo::Lane,
     native: &Native,
     project: &Project,
     dependency: &Path,
@@ -394,8 +421,10 @@ fn extract_dependency(
     limits: &Limits,
 ) -> rawr_import::Result<rawr_import::api::Graph<rawr_import::api::Extracted>> {
     single_request(project, dependency, environment, limits)
-        .resolve(native, limits)
-        .and_then(|resolution| rawr_import::extract::from_resolution(resolution, native, limits))
+        .resolve(lane, native, limits)
+        .and_then(|resolution| {
+            rawr_import::extract::from_resolution(resolution, lane, native, limits)
+        })
 }
 
 fn request(project: &Project, environment: Environment, limits: &Limits) -> Request {
@@ -437,6 +466,7 @@ fn single_request(
 }
 
 fn extract_fallback(
+    lane: &mut rawr_import::cargo::Lane,
     native: &Native,
     project: &Project,
     dependency: &Path,
@@ -447,8 +477,10 @@ fn extract_fallback(
         .policy(Policy::manifest().seal())
         .dependency(Dependency::path("fallback", dependency)?.package("fallback-api")?)
         .build()?
-        .resolve(native, limits)
-        .and_then(|resolution| rawr_import::extract::from_resolution(resolution, native, limits))
+        .resolve(lane, native, limits)
+        .and_then(|resolution| {
+            rawr_import::extract::from_resolution(resolution, lane, native, limits)
+        })
 }
 
 fn environment(value: &str) -> Environment {

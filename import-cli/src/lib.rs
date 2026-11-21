@@ -35,14 +35,16 @@ pub const MANIFEST: &str = include_str!("../manifest.toml");
 /// program and the runner source a host adds to it.
 pub trait Profile {
     /// Resolve, extract, check and seal the runner request for `target`,
-    /// from `graph` when the caller already loaded it. An owner that
-    /// prepares again on each save passes the API graph it `kept`.
+    /// from `graph` when the caller already loaded it, running Cargo on the
+    /// owner's `cargo` lane. An owner that prepares again on each save
+    /// passes the API graph it `kept`.
     fn prepare(
         &self,
         target: &rawr::project::Target,
         graph: Option<rawr::package::Graph>,
         revision: rawr_import::supervisor::Revision,
         scope: &rawr_import::supervisor::snapshot::attempt::Scope,
+        cargo: &mut rawr_import::cargo::Lane,
         kept: Option<&mut crate::Kept>,
     ) -> Result<Prepared, Error>;
 
@@ -63,12 +65,14 @@ pub trait Profile {
 /// that checks the program, which lowers again only the sources whose
 /// check reads something a save changed, the parse cells its loads read,
 /// the program a save loaded before it prepared, the shadow crate's files
-/// as they were last written (#1849), and what each resolution leaves for
-/// the next (#1825).
+/// as they were last written (#1849), what each resolution leaves for the
+/// next (#1825), and the version the project's compiler gave.
 #[derive(Default)]
 pub struct Kept {
     api: rawr_import::api::Kept,
     memos: rawr_import::cargo::resolution::Memos,
+    /// What the project's compiler said its version is.
+    versions: crate::project::Versions,
     /// The compiler that checks the program as a build builds it, and the
     /// registry its last check installed the crates' facades in.
     check: Option<(
@@ -97,6 +101,12 @@ impl Kept {
     /// What each resolution leaves for the next.
     pub fn memos(&mut self) -> &mut rawr_import::cargo::resolution::Memos {
         &mut self.memos
+    }
+
+    /// What the project's compiler said its version is, for each check of
+    /// the project's build.
+    pub fn versions(&mut self) -> &mut crate::project::Versions {
+        &mut self.versions
     }
 
     /// The parse cells in `directory`, remembered across every load the

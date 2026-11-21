@@ -1690,16 +1690,9 @@ mod tests {
                         let generated = request.generate().expect("the full-DAG overlay validates");
                         let cache = crate::cache::Writer::new(context.project())
                             .expect("the full-DAG local runner cache binds");
-                        // The lane admits one owner per process: this
-                        // test's turn on it.
-                        let turn = crate::store::test_turn();
-                        let cargo = super::super::Owner::acquire()
-                            .expect("the full-DAG Cargo runner lane acquires");
                         let built = generated
-                            .build(&cargo, &cache)
+                            .build(&mut crate::store::test_lane(), &cache)
                             .expect("the full-DAG runner validates");
-                        drop(cargo);
-                        drop(turn);
                         let process = crate::process::Owner::new(context.project())
                             .expect("the full-DAG process socket seals");
                         let admitted = supervisor
