@@ -639,8 +639,19 @@ impl Call {
 /// A script function where native generic code takes a callable: what a
 /// runner's generated function item calls (D594). The runner keeps one
 /// per script function, set each time script code passes the function,
-/// and the function item reads it, so the item itself captures nothing.
-pub struct Slot(std::sync::RwLock<Option<crate::future::Callable>>);
+/// and the function item reads it, so the item itself captures nothing:
+/// a function item native code kept calls what the latest pass set, and
+/// that callable runs in the current generation (D553.1). The function
+/// and its parameters' witnesses fill it together, so one read gives one
+/// pass's pair.
+pub struct Slot(std::sync::RwLock<Option<std::sync::Arc<Filled>>>);
+
+/// What one pass of a script function fills a [`Slot`] with: the function,
+/// and the witness of each of its parameters, where it has one.
+pub struct Filled {
+    callable: crate::future::Callable,
+    witnesses: Box<[Option<crate::host::runtime::Witness>]>,
+}
 
 impl Default for Slot {
     fn default() -> Self {
@@ -655,30 +666,51 @@ impl Slot {
         Self(std::sync::RwLock::new(None))
     }
 
-    /// Fill the slot with the script function `function`.
-    pub fn set(&self, function: Dynamic) -> RawrResultOf<()> {
-        let callable = crate::future::Callable::new(function)?;
+    /// Fill the slot with the script function `function` and the
+    /// `witnesses` of its parameters.
+    pub fn set(
+        &self,
+        function: Dynamic,
+        witnesses: Vec<Option<crate::host::runtime::Witness>>,
+    ) -> RawrResultOf<()> {
+        let filled = Filled {
+            callable: crate::future::Callable::new(function)?,
+            witnesses: witnesses.into_boxed_slice(),
+        };
         *self
             .0
             .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(callable);
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(std::sync::Arc::new(filled));
         Ok(())
     }
 
-    /// Call the slot's function with `arguments`. Each index in `mutable`
-    /// is an argument the function takes `&mut`: it is the function's own
-    /// place afterwards, changed in place or given back.
-    pub fn call(&self, arguments: &mut [Dynamic], mutable: &[usize]) -> RawrResultOf<Dynamic> {
-        let callable = self
-            .0
+    /// What the slot holds now, for one call to read whole. A panic when
+    /// no pass filled it yet, as a Rust function that fails does.
+    #[must_use]
+    pub fn filled(&self) -> std::sync::Arc<Filled> {
+        self.0
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
-            .ok_or_else(|| crate::future::error("rawr: a slot was called before it was filled"))?;
-        callable.call_places(arguments, mutable)
+            .unwrap_or_else(|| panic!("rawr: a slot was called before it was filled"))
+    }
+}
+
+impl Filled {
+    /// The witness of each parameter of the function, where it has one.
+    #[must_use]
+    pub fn witnesses(&self) -> &[Option<crate::host::runtime::Witness>] {
+        &self.witnesses
     }
 
-    /// [`Slot::call`], or a panic with the error's message, as a Rust
+    /// Call the function with `arguments`. Each index in `mutable` is an
+    /// argument the function takes `&mut`: it is the function's own place
+    /// afterwards, changed in place or given back.
+    pub fn call(&self, arguments: &mut [Dynamic], mutable: &[usize]) -> RawrResultOf<Dynamic> {
+        self.callable.call_places(arguments, mutable)
+    }
+
+    /// [`Filled::call`], or a panic with the error's message, as a Rust
     /// function that fails does.
     pub fn invoke(&self, arguments: &mut [Dynamic], mutable: &[usize]) -> Dynamic {
         self.call(arguments, mutable)

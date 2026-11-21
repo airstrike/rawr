@@ -91,14 +91,20 @@ pub struct Arguments<'slice, 'value, 'arena> { pub values: &'slice mut [&'value 
 #[derive(Clone)]
 pub struct NativeHandle { pub epoch: [u8; 32], pub slot: u32, pub generation: u64, pub release: Option<std::sync::Arc<Release>> }
 
-/// The claim the copies of one handle share on its slot.
-pub struct Release { pub epoch: [u8; 32], pub slot: u32, pub generation: u64 }
+/// The claim the copies of one handle share on its slot, and the way back
+/// to the slot's arena, where the last copy's drop sends the slot to free.
+pub struct Release { pub slot: u32, pub generation: u64, pub returns: std::sync::mpsc::Sender<Returned> }
 
-/// Values futures lent and gave back, restored to their slots on the owner
-/// thread the next time it has the arena (D513.6).
-#[allow(clippy::type_complexity)]
-pub static RESTORES: std::sync::Mutex<Vec<(NativeHandle, Box<dyn Any + Send>)>> =
-    std::sync::Mutex::new(Vec::new());
+/// What reaches an arena from wherever its handles go, on its own channel
+/// ([`Arena::returns`]), taken the next time its thread has it
+/// (`Arena::release_dropped`). An arena that is gone took its receiver
+/// with it, so what is sent to it after is dropped where it was sent.
+pub enum Returned {
+    /// A slot whose last handle was dropped.
+    Freed { slot: u32, generation: u64 },
+    /// A value a future lent and gave back, for its slot (D513.6).
+    Restored { handle: NativeHandle, value: Box<dyn Any + Send> },
+}
 
 thread_local! {
     /// The handles the protocol gave out, by their slots: a handle on the
@@ -116,24 +122,6 @@ thread_local! {
     pub static LENT_HOMES: RefCell<Vec<(([u8; 32], u32, u64), std::rc::Rc<LentHome>)>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Slots whose last handle was dropped, freed on the owner thread the next
-/// time it has the arena: one queue for each arena's epoch, so an arena
-/// takes its own and looks at no other's. Its lock is taken before
-/// [`CALL_EPOCHS`]'s where both are held.
-pub static RELEASES: std::sync::Mutex<std::collections::BTreeMap<[u8; 32], Vec<(u32, u64)>>> =
-    std::sync::Mutex::new(std::collections::BTreeMap::new());
-
-/// How many entries [`RESTORES`] and [`RELEASES`] hold together, changed
-/// only under the lock of the queue that changes ([`enqueue`],
-/// [`dequeue`], [`take_releases`]). An arena that finds none, and nothing
-/// in this thread's own [`QUEUED_HERE`], releases nothing and looks at no
-/// queue. It is a count,
-/// not a mark the first arena to look clears: the entries another arena
-/// waits for keep it above zero till that arena takes them, so a call
-/// arena on one thread never misses its own releases because an arena on
-/// another thread looked first.
-pub static PENDING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-
 thread_local! {
     /// The arena each [`arrive`] on this thread took the place of, if
     /// any, which its [`depart`] gives back.
@@ -143,47 +131,6 @@ thread_local! {
     pub static QUEUED_HERE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// Add `entry` to a queue every thread shares, and count it in [`PENDING`].
-pub fn enqueue<T>(queue: &std::sync::Mutex<Vec<T>>, entry: T) {
-    let mut entries = queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    entries.push(entry);
-    PENDING.fetch_add(1, std::sync::atomic::Ordering::Release);
-}
-
-/// Take the entries `take` picks out of a queue every thread shares, and
-/// uncount them in [`PENDING`].
-pub fn dequeue<T>(queue: &std::sync::Mutex<Vec<T>>, mut take: impl FnMut(&T) -> bool) -> Vec<T> {
-    let mut entries = queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let (taken, kept) = std::mem::take(&mut *entries)
-        .into_iter()
-        .partition::<Vec<_>, _>(|entry| take(entry));
-    *entries = kept;
-    PENDING.fetch_sub(taken.len(), std::sync::atomic::Ordering::AcqRel);
-    taken
-}
-
-/// The releases of the arena of `epoch`, taken from [`RELEASES`] and
-/// uncounted in [`PENDING`]. With `past`, those of every arena that is
-/// neither a live call's ([`CALL_EPOCHS`]) nor `epoch`'s are dropped: a past
-/// program's arena is gone.
-pub fn take_releases(epoch: &[u8; 32], past: bool) -> Vec<(u32, u64)> {
-    let mut queues = RELEASES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let taken = queues.remove(epoch).unwrap_or_default();
-    let mut count = taken.len();
-    if past && !queues.is_empty() {
-        let calls = CALL_EPOCHS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        queues.retain(|queued, queue| {
-            let live = calls.contains(queued);
-            if !live {
-                count += queue.len();
-            }
-            live
-        });
-    }
-    PENDING.fetch_sub(count, std::sync::atomic::Ordering::AcqRel);
-    taken
-}
-
 /// Mark [`QUEUED_HERE`] after an entry joins one of this thread's queues.
 pub fn queued_here() {
     let _ = QUEUED_HERE.try_with(|queued| queued.set(true));
@@ -191,10 +138,10 @@ pub fn queued_here() {
 
 impl Drop for Release {
     fn drop(&mut self) {
-        {
-            let mut queues = RELEASES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            queues.entry(self.epoch).or_default().push((self.slot, self.generation));
-            PENDING.fetch_add(1, std::sync::atomic::Ordering::Release);
+        let freed = Returned::Freed { slot: self.slot, generation: self.generation };
+        // An arena that is gone freed its slots with it.
+        if self.returns.send(freed).is_err() {
+            return;
         }
         // A handle may be dropped on any thread; the arena is the owner's.
         __rawr_internal::future::on_owner(|| {
@@ -1427,8 +1374,9 @@ impl std::fmt::Debug for NativeHandle {
 pub struct Parts { pub of: std::any::TypeId, pub fields: Vec<Option<Box<dyn Any>>> }
 
 /// A thread's native values, by slot. `call` marks a call's own
-/// (`CallArena`).
-pub struct Arena { pub epoch: [u8; 32], pub slots: Vec<NativeSlot>, pub free: Vec<u32>, pub call: bool }
+/// (`CallArena`). Each handle's [`Release`] holds a copy of `returns`, and
+/// `returned` takes what they send, so the arena reads only its own.
+pub struct Arena { pub epoch: [u8; 32], pub slots: Vec<NativeSlot>, pub free: Vec<u32>, pub call: bool, pub returns: std::sync::mpsc::Sender<Returned>, pub returned: std::sync::mpsc::Receiver<Returned> }
 
 thread_local! {
     pub static NATIVE_ARENA: RefCell<Option<Arena>> = const { RefCell::new(None) };
@@ -1442,9 +1390,6 @@ pub fn lend<R>(arena: &mut Arena, call: impl FnOnce() -> R) -> R {
     __rawr_internal::island::lend::lend(arena, call)
 }
 
-/// The epochs of the arenas [`CallArena`] made, while each lives.
-pub static CALL_EPOCHS: std::sync::Mutex<Vec<[u8; 32]>> = std::sync::Mutex::new(Vec::new());
-
 /// An arena for one call on a thread that has none, as iced's executor
 /// calls `Task::map`'s function: the native values the call takes and gives
 /// move through it, and it ends with the call. A call that only moves its
@@ -1457,7 +1402,7 @@ pub struct CallArena(pub Option<[u8; 32]>);
 
 #[allow(dead_code)]
 impl CallArena {
-    /// A new call arena's epoch, live from now on ([`CALL_EPOCHS`]).
+    /// A new call arena's epoch, which no other arena has.
     pub fn epoch() -> [u8; 32] {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let mut epoch = [0xca; 32];
@@ -1466,10 +1411,6 @@ impl CallArena {
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
                 .to_le_bytes(),
         );
-        CALL_EPOCHS
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(epoch);
         epoch
     }
 
@@ -1486,10 +1427,6 @@ impl CallArena {
             _ => false,
         });
         if !installed {
-            CALL_EPOCHS
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .retain(|live| *live != epoch);
             return Self(None);
         }
         Self(Some(epoch))
@@ -1498,11 +1435,12 @@ impl CallArena {
 
 impl Drop for CallArena {
     fn drop(&mut self) {
-        let Some(epoch) = self.0 else {
+        if self.0.is_none() {
             return;
-        };
+        }
         // What the call let go of is freed; what is left, a handle still
-        // holds.
+        // holds. The arena's channel goes with it, so a handle dropped
+        // after sends to no one.
         let kept = NATIVE_ARENA.with(|cell| {
             let mut arena = cell.borrow_mut().take()?;
             arena.release_dropped();
@@ -1515,11 +1453,6 @@ impl Drop for CallArena {
                     .unwrap_or_default(),
             )
         });
-        CALL_EPOCHS
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .retain(|live| *live != epoch);
-        take_releases(&epoch, false);
         if let Some(kept) = kept
             && !std::thread::panicking()
         {
@@ -1535,28 +1468,16 @@ impl Drop for CallArena {
 /// arena's slots, each value of a `Send` type out of its slot, so the
 /// arena is made again with the same epoch and slots on the thread that
 /// polls the future next, where the future's handles reach them (#1949).
-/// Dropped, it frees them, as the end of a call frees its arena's.
+/// Its channel goes with it, so a handle dropped between two polls frees
+/// its slot at the next. Dropped, it frees them, as the end of a call frees
+/// its arena's.
 pub struct Departed {
     epoch: [u8; 32],
     generations: Vec<u64>,
     free: Vec<u32>,
     moved: Vec<Moved>,
-    /// Whether the arena went on to another poll, which keeps its epoch.
-    arrived: bool,
-}
-
-impl Drop for Departed {
-    fn drop(&mut self) {
-        if self.arrived {
-            return;
-        }
-        let epoch = self.epoch;
-        CALL_EPOCHS
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .retain(|live| *live != epoch);
-        take_releases(&epoch, false);
-    }
+    returns: std::sync::mpsc::Sender<Returned>,
+    returned: std::sync::mpsc::Receiver<Returned>,
 }
 
 /// The arena an [`arrive`] took the place of: the one in this thread's
@@ -1586,9 +1507,9 @@ pub fn arrive(departed: &mut Option<Box<dyn Any + Send>>) -> bool {
         if carried
             && home.is_none()
             && __rawr_internal::island::lend::with::<Arena, _>(|_| ()).is_some()
-            && let Some(mut away) = departed.take().and_then(|away| away.downcast::<Departed>().ok())
+            && let Some(away) = departed.take().and_then(|away| away.downcast::<Departed>().ok())
         {
-            let arena = arena_of(&mut away);
+            let arena = arena_of(*away);
             if let Some(lent) = __rawr_internal::island::lend::with(|lent: &mut Arena| std::mem::replace(lent, arena)) {
                 VISITED.with_borrow_mut(|visited| visited.push(Visit::Lent(lent)));
                 return true;
@@ -1599,13 +1520,13 @@ pub fn arrive(departed: &mut Option<Box<dyn Any + Send>>) -> bool {
         }
         return false;
     }
-    let Some(mut away) = departed.take().and_then(|away| away.downcast::<Departed>().ok()) else {
+    let Some(away) = departed.take().and_then(|away| away.downcast::<Departed>().ok()) else {
         let guard = CallArena::enter();
         let Some(epoch) = guard.0 else {
             return false;
         };
-        // The arena outlives the guard: `depart` takes it, and `Departed`
-        // frees its epoch.
+        // The arena outlives the guard: `depart` takes it, and its channel
+        // goes with it.
         std::mem::forget(guard);
         let arrived = NATIVE_ARENA.with(|cell| {
             cell.borrow().as_ref().is_some_and(|arena| arena.epoch == epoch)
@@ -1616,23 +1537,28 @@ pub fn arrive(departed: &mut Option<Box<dyn Any + Send>>) -> bool {
         return arrived;
     };
     VISITED.with_borrow_mut(|visited| visited.push(Visit::Cell(home.flatten())));
-    let arena = arena_of(&mut away);
+    let arena = arena_of(*away);
     NATIVE_ARENA.with(|cell| *cell.borrow_mut() = Some(arena));
     true
 }
 
-/// The arena `away` holds, made again with its epoch and slots, its values
-/// back in them.
-fn arena_of(away: &mut Departed) -> Arena {
-    away.arrived = true;
-    let mut arena = Arena { call: true, ..Arena::new(away.epoch) };
-    arena.free = std::mem::take(&mut away.free);
-    arena.slots = away
+/// The arena `away` holds, made again with its epoch, slots and channel,
+/// its values back in them.
+fn arena_of(away: Departed) -> Arena {
+    let slots = away
         .generations
         .iter()
         .map(|generation| NativeSlot { generation: *generation, value: None, homed: None, leased: false, debug: None, display: None, clone: None, relations: Relations::default(), witness: None, project: None, mapper: None, default_of: None, opaque: None, send: None, name: "" })
         .collect();
-    for moved in std::mem::take(&mut away.moved) {
+    let mut arena = Arena {
+        epoch: away.epoch,
+        slots,
+        free: away.free,
+        call: true,
+        returns: away.returns,
+        returned: away.returned,
+    };
+    for moved in away.moved {
         if let Some(entry) = arena.slots.get_mut(moved.slot as usize) {
             entry.value = Some(moved.value);
             entry.send = Some(moved.send);
@@ -1703,9 +1629,10 @@ pub fn depart() -> Option<Box<dyn Any + Send>> {
     Some(Box::new(Departed {
         epoch: arena.epoch,
         generations,
-        free: std::mem::take(&mut arena.free),
+        free: arena.free,
         moved,
-        arrived: false,
+        returns: arena.returns,
+        returned: arena.returned,
     }))
 }
 
@@ -1734,9 +1661,10 @@ pub fn carry(value: &mut Dynamic, arena: &mut Arena) -> Option<Box<dyn Any + Sen
         return None;
     }
     let epoch = CallArena::epoch();
+    let (returns, returned) = std::sync::mpsc::channel();
     let mut given = Vec::with_capacity(moved.len());
     for (slot, value) in (0_u32..).zip(&mut moved) {
-        let release = Release { epoch, slot, generation: 1 };
+        let release = Release { slot, generation: 1, returns: returns.clone() };
         given.push((
             (value.slot, value.generation),
             NativeHandle { epoch, slot, generation: 1, release: Some(std::sync::Arc::new(release)) },
@@ -1768,7 +1696,8 @@ pub fn carry(value: &mut Dynamic, arena: &mut Arena) -> Option<Box<dyn Any + Sen
         generations,
         free: Vec::new(),
         moved,
-        arrived: false,
+        returns,
+        returned,
     }))
 }
 
@@ -2004,7 +1933,8 @@ pub fn range_from<T: Int>(range: std::ops::RangeInclusive<i64>) -> Result<std::o
 
 impl Arena {
     pub fn new(epoch: [u8; 32]) -> Self {
-        Self { epoch, slots: Vec::new(), free: Vec::new(), call: false }
+        let (returns, returned) = std::sync::mpsc::channel();
+        Self { epoch, slots: Vec::new(), free: Vec::new(), call: false, returns, returned }
     }
 
     pub fn insert<T: 'static>(&mut self, value: T) -> Result<NativeHandle, Error> {
@@ -2040,7 +1970,7 @@ impl Arena {
         entry.default_of = None;
         entry.opaque = None;
         entry.send = None;
-        let release = std::sync::Arc::new(Release { epoch: self.epoch, slot, generation: entry.generation });
+        let release = std::sync::Arc::new(Release { slot, generation: entry.generation, returns: self.returns.clone() });
         Ok(NativeHandle { epoch: self.epoch, slot, generation: entry.generation, release: Some(release) })
     }
 
@@ -2716,7 +2646,7 @@ impl Arena {
         let value = self.slots[index].value.take().ok_or(Error::StaleHandle)?;
         self.slots[index].leased = true;
         let value = value.downcast::<T>().map_err(|_| Error::TypeMismatch)?;
-        Ok(Held::Leased { value: Some(value), handle })
+        Ok(Held::Leased { value: Some(value), handle, returns: self.returns.clone() })
     }
 
     /// Lend a native place synchronously on its owner thread, without
@@ -2735,16 +2665,10 @@ impl Arena {
     /// Free each slot whose last handle was dropped. Dropping a native value
     /// may drop handles it holds, which are freed in the next round.
     pub fn release_dropped(&mut self) {
-        // Nothing queued since the last look: nothing to release.
         let here = QUEUED_HERE.try_with(|queued| queued.replace(false)).unwrap_or(false);
-        if PENDING.load(std::sync::atomic::Ordering::Acquire) == 0 && !here {
-            return;
-        }
-        // Another arena's values wait for their own arena.
-        let restores = dequeue(&RESTORES, |(handle, _)| handle.epoch == self.epoch);
-        for (handle, value) in restores {
-            self.restore(handle, value);
-        }
+        // What was given back since the last look, on this arena's own
+        // channel: another arena's goes to that arena's.
+        let mut batch = self.take_returned();
         // A thread that ends has nothing left to give back.
         if here {
             for (handle, homed) in REHOMES.try_with(RefCell::take).unwrap_or_default() {
@@ -2757,21 +2681,14 @@ impl Arena {
                 unlend.unlend(self);
             }
         }
-        // Another live arena's releases wait for it: the owner's for the
-        // owner, and a call arena's for that call (`CallArena`). Those of a
-        // past program's arena are dropped.
-        let call = CALL_EPOCHS
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .contains(&self.epoch);
         loop {
-            let batch = take_releases(&self.epoch, !call);
+            batch.extend(self.take_returned());
             if batch.is_empty() {
                 return;
             }
             let mut dropped = Vec::with_capacity(batch.len());
             let mut homed = Vec::new();
-            for (slot, generation) in batch {
+            for (slot, generation) in std::mem::take(&mut batch) {
                 let Some(entry) = self.slots.get_mut(slot as usize) else {
                     continue;
                 };
@@ -2795,6 +2712,21 @@ impl Arena {
             drop(dropped);
             drop(homed);
         }
+    }
+
+    /// What reached this arena's channel: each value a future gave back,
+    /// restored to its slot here, and each slot whose last handle went, to
+    /// free.
+    fn take_returned(&mut self) -> Vec<(u32, u64)> {
+        let returned: Vec<Returned> = self.returned.try_iter().collect();
+        let mut freed = Vec::new();
+        for entry in returned {
+            match entry {
+                Returned::Freed { slot, generation } => freed.push((slot, generation)),
+                Returned::Restored { handle, value } => self.restore(handle, value),
+            }
+        }
+        freed
     }
 
     /// The value a future borrowed, back in its slot.
@@ -3246,7 +3178,8 @@ impl<T: 'static> __rawr_internal::place::ownership::Owner<T> for PlaceOwner<T> {
 #[allow(dead_code)]
 pub enum Held<T: Send + 'static> {
     Cloned(T),
-    Leased { value: Option<Box<T>>, handle: NativeHandle },
+    /// `returns` is the arena's channel, which the value goes back by.
+    Leased { value: Option<Box<T>>, handle: NativeHandle, returns: std::sync::mpsc::Sender<Returned> },
 }
 
 #[allow(dead_code)]
@@ -3282,13 +3215,17 @@ impl<T: Send + 'static, U: 'static> std::ops::Deref for Projected<T, U> {
 
 impl<T: Send + 'static> Drop for Held<T> {
     fn drop(&mut self) {
-        if let Self::Leased { value, handle } = self
+        if let Self::Leased { value, handle, returns } = self
             && let Some(value) = value.take()
         {
             // The arena is the owner thread's, and may be borrowed by the
             // native call that drops this future, or absent on an executor's
-            // thread: the value waits in the queue its next use drains.
-            enqueue(&RESTORES, (handle.clone(), value as Box<dyn Any + Send>));
+            // thread: the value waits on the arena's channel, which its next
+            // use drains. An arena that is gone took its slot with it.
+            let restored = Returned::Restored { handle: handle.clone(), value: value as Box<dyn Any + Send> };
+            if returns.send(restored).is_err() {
+                return;
+            }
             __rawr_internal::future::on_owner(|| {
                 let _ = with_arena(|_| Ok(()));
             });
@@ -5884,9 +5821,38 @@ mod native_arena_tests {
         assert_ne!(next.slot, handle.slot);
     }
 
-    /// A value in the owner's arena, and that handle. Tests run on parallel
-    /// threads and share the restore queue, which an arena drains by its
-    /// epoch, so each test that lends installs an epoch of its own.
+    /// Each arena reads only its own channel: a handle dropped for one
+    /// frees nothing in another that has the same slot.
+    #[test]
+    fn a_dropped_handle_frees_its_slot_in_its_own_arena_alone() {
+        let mut first = Arena::new([31; 32]);
+        let mut second = Arena::new([32; 32]);
+        let handle = first.insert(NonClone { value: 1 }).expect("insert");
+        let kept = second.insert(NonClone { value: 2 }).expect("insert");
+        assert_eq!(handle.slot, kept.slot);
+        drop(handle);
+        second.release_dropped();
+        assert_eq!(second.shared::<NonClone, _>(kept, |value| value.value).expect("kept"), 2);
+        first.release_dropped();
+        assert_eq!(first.free, [0]);
+    }
+
+    /// A handle dropped on another thread reaches its arena by the
+    /// arena's channel, and one dropped after its arena is gone sends to
+    /// no one.
+    #[test]
+    fn a_handle_dropped_elsewhere_or_after_its_arena_frees_or_does_nothing() {
+        let mut arena = Arena::new([33; 32]);
+        let handle = arena.insert(NonClone { value: 1 }).expect("insert");
+        std::thread::spawn(move || drop(handle)).join().expect("dropped elsewhere");
+        arena.release_dropped();
+        assert_eq!(arena.free, [0]);
+        let late = arena.insert(NonClone { value: 2 }).expect("reuse");
+        drop(arena);
+        drop(late);
+    }
+
+    /// A value in this thread's arena, and that handle.
     fn installed(epoch: u8, value: i64) -> NativeHandle {
         install_arena([epoch; 32]);
         with_arena(|arena| arena.insert(NonClone { value })).expect("insert")
@@ -20195,7 +20161,7 @@ fn render_slot(
         format!(
             "{}.unwrap_or_else(|error| panic!(\"rawr: a value native code gave a script function can't cross: {{error:?}}\"))",
             in_arena(&format!(
-                "let witnesses = WITNESSES_{local}.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone(); Ok::<_, Error>([{}])",
+                "let witnesses = filled.witnesses(); Ok::<_, Error>([{}])",
                 values.join(", ")
             ))
         )
@@ -20250,7 +20216,7 @@ fn render_slot(
             let invoked = format!(
                 "let mut values = {values};
         let mut region = __rawr_internal::scope::Region::anchored({pins});
-        let value = __rawr_internal::scope::open_anchored(&mut region, || SLOT_{local}.invoke(&mut values, &[{mutable}]));{restores}
+        let value = __rawr_internal::scope::open_anchored(&mut region, || filled.invoke(&mut values, &[{mutable}]));{restores}
         let scoped = value
             .read_lock::<__rawr_internal::scope::Scoped>()
             .map(|scoped| *scoped)
@@ -20318,7 +20284,7 @@ fn render_slot(
             };
             let invoked = format!(
                 "let mut values = {values};
-        let value = SLOT_{local}.invoke(&mut values, &[{mutable}]);{restores}
+        let value = filled.invoke(&mut values, &[{mutable}]);{restores}
         value"
             );
             let (items, invoked) = lent_around(&lends, held_around(&held, invoked));
@@ -20332,24 +20298,18 @@ fn render_slot(
             )
         }
     };
-    let body = place::around(
-        &places,
-        &format!(
-            "WITNESSES_{local}.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone()"
-        ),
-        body,
+    // Each call reads the slot once, so its function and the witnesses
+    // its native inputs take are one pass's.
+    let body = format!(
+        "let filled = SLOT_{local}.filled();\n        {}",
+        place::around(&places, "filled.witnesses()", body)
     );
     // The witnesses of the script function's parameters, read where
-    // script code passes it, which its native inputs take.
+    // script code passes it, which fill the slot with it.
     let witnesses = if native {
-        format!(
-            "
-    static WITNESSES_{local}: std::sync::RwLock<Vec<Option<__rawr_internal::host::runtime::Witness>>> = std::sync::RwLock::new(Vec::new());
-    *WITNESSES_{local}.write().unwrap_or_else(std::sync::PoisonError::into_inner) = closure_inputs({index}, {});",
-            inputs.len()
-        )
+        format!("closure_inputs({index}, {})", inputs.len())
     } else {
-        String::new()
+        "Vec::new()".to_owned()
     };
     // The slot at the type its witness names, by the bound the call's
     // parameter's `Fn` takes it through.
@@ -20371,8 +20331,8 @@ fn render_slot(
         output,
         "    static SLOT_{local}: __rawr_internal::crossing::Slot = __rawr_internal::crossing::Slot::new();
     SLOT_{local}
-        .set((**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take())
-        .map_err(|error| Error::Value(__rawr_internal::future::message(&error)))?;{witnesses}{constant_pins}
+        .set((**arguments.values.get_mut({index}).ok_or(Error::MissingArgument)?).take(), {witnesses})
+        .map_err(|error| Error::Value(__rawr_internal::future::message(&error)))?;{constant_pins}
     #[allow(unused_mut, clippy::needless_lifetimes)]
     fn slot_{local}{generics}({}) -> {rust} {{
         {body}
@@ -29877,9 +29837,20 @@ mod tests {
             "impl<T: Clone + Send + 'static> HoldClone<T> for HoldProbe<T> {",
             "impl Drop for Release {",
             "fn release_dropped(&mut self) {",
+            "fn take_returned(&mut self) -> Vec<(u32, u64)> {",
             "if entry.generation == handle.generation && entry.leased {",
         ] {
             assert!(runtime.contains(expected), "{expected}");
+        }
+        // Each arena takes its releases and restores on its own channel,
+        // so no queue every thread shares stands between them.
+        for shared in [
+            "static RELEASES",
+            "static RESTORES",
+            "static CALL_EPOCHS",
+            "static PENDING",
+        ] {
+            assert!(!runtime.contains(shared), "{shared}");
         }
     }
 
