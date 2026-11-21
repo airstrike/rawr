@@ -4,64 +4,15 @@
 
 use std::io::Write as _;
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
+
+use super::call::{Call, Wake};
 
 /// How long a group gets between SIGTERM and SIGKILL.
 pub const GRACE: Duration = Duration::from_secs(2);
 
 /// How much of each output stream a finished call keeps: its tail.
 pub const KEPT: usize = 256 * 1024;
-
-/// A call's cancellation: the client's `notifications/cancelled`, or the
-/// server shutting down. It wakes what the call waits on, and the call
-/// ends what it started.
-#[derive(Default)]
-pub struct Cancel {
-    cancelled: AtomicBool,
-    wakes: Mutex<Vec<Box<dyn FnOnce() + Send>>>,
-}
-
-impl std::fmt::Debug for Cancel {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("Cancel")
-            .field("cancelled", &self.is_cancelled())
-            .finish_non_exhaustive()
-    }
-}
-
-impl Cancel {
-    /// Wake each wait of the call, and any it starts later.
-    pub fn cancel(&self) {
-        let wakes = {
-            let mut wakes = self.wakes.lock().unwrap_or_else(PoisonError::into_inner);
-            self.cancelled.store(true, Ordering::SeqCst);
-            std::mem::take(&mut *wakes)
-        };
-        for wake in wakes {
-            wake();
-        }
-    }
-
-    /// Whether the call was cancelled.
-    #[must_use]
-    pub fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::SeqCst)
-    }
-
-    /// Run `wake` when the call is cancelled, at once if it was.
-    pub fn on_cancel(&self, wake: impl FnOnce() + Send + 'static) {
-        let mut wakes = self.wakes.lock().unwrap_or_else(PoisonError::into_inner);
-        if self.is_cancelled() {
-            drop(wakes);
-            wake();
-        } else {
-            wakes.push(Box::new(wake));
-        }
-    }
-}
 
 /// Start `command` as the leader of a new process group.
 pub fn spawn(command: &mut Command) -> std::io::Result<Child> {
@@ -244,26 +195,13 @@ pub struct Finished {
     pub elapsed: Duration,
 }
 
-/// What a running child's call hears first.
-enum Heard {
-    /// The child exited. It stays a zombie for the call to reap, so its
-    /// group can't pass to another process before the call ends it.
-    Exited,
-    /// The call was cancelled.
-    Cancelled,
-}
-
 /// Run `command` in a group of its own with `stdin` as its input, to its
-/// exit or `cancel`; then its group is ended.
+/// exit or the call's cancel; then its group is ended.
 ///
-/// A thread waits in the kernel for the child's exit without reaping it,
-/// and the cancel sends on the same channel, so the call blocks on
-/// whichever comes first.
-pub fn run(
-    command: &mut Command,
-    stdin: Option<&str>,
-    cancel: &Cancel,
-) -> std::io::Result<Finished> {
+/// A thread waits in the kernel for the child's exit without reaping it
+/// and wakes the call, whose cancel wakes it on the same channel, so the
+/// call blocks on whichever comes first.
+pub fn run(command: &mut Command, stdin: Option<&str>, call: &Call) -> std::io::Result<Finished> {
     let started = Instant::now();
     command
         .stdin(if stdin.is_some() {
@@ -275,22 +213,18 @@ pub fn run(
         .stderr(Stdio::piped());
     let mut child = spawn(command)?;
     let group = child.id();
-    let (told, heard) = mpsc::channel::<Heard>();
-    let exited = told.clone();
+    let waker = call.waker();
     let waiting = std::thread::Builder::new()
         .name("rawr-mcp-exit".into())
         .spawn(move || {
             rawr_watch::exit::wait(group);
-            let _ = exited.send(Heard::Exited);
+            waker.wake(Wake::Exited { group });
         });
     if let Err(error) = waiting {
         kill_group(group);
         let _ = child.wait();
         return Err(error);
     }
-    cancel.on_cancel(move || {
-        let _ = told.send(Heard::Cancelled);
-    });
     if let (Some(text), Some(mut pipe)) = (stdin, child.stdin.take()) {
         let text = text.to_owned();
         let _ = std::thread::Builder::new()
@@ -301,15 +235,17 @@ pub fn run(
     }
     let stdout = child.stdout.take().map(Tail::read).unwrap_or_default();
     let stderr = child.stderr.take().map(Tail::read).unwrap_or_default();
-    // The exit thread holds a sender until it sends, so the channel never
-    // closes first.
-    let status = match heard.recv() {
-        Ok(Heard::Cancelled) => {
+    let exited = call.wait(|wake| match wake {
+        Wake::Exited { group: exited } if exited == group => Some(()),
+        _ => None,
+    });
+    let status = match exited {
+        None => {
             end_group(group);
             let _ = child.wait();
             None
         }
-        Ok(Heard::Exited) | Err(mpsc::RecvError) => {
+        Some(()) => {
             // Whatever the leader left running in its group goes with it.
             kill_group(group);
             Some(child.wait()?)
@@ -344,7 +280,8 @@ mod tests {
     use std::io::Write as _;
     use std::process::Command;
 
-    use super::{Cancel, Tail};
+    use super::Tail;
+    use crate::mcp::call::Call;
 
     /// A child's exit answers the call with its status and output, and a
     /// cancel ends a child that would run on.
@@ -353,15 +290,15 @@ mod tests {
     fn a_run_ends_at_the_childs_exit_or_at_its_cancel() {
         let mut exiting = Command::new("sh");
         exiting.args(["-c", "echo said; exit 3"]);
-        let finished = super::run(&mut exiting, None, &Cancel::default()).unwrap();
+        let finished = super::run(&mut exiting, None, &Call::default()).unwrap();
         assert_eq!(finished.status.map(super::code), Some(3));
         assert_eq!(finished.stdout.finish().0, "said\n");
 
-        let cancel = Cancel::default();
-        cancel.cancel();
+        let call = Call::default();
+        call.waker().cancel();
         let mut lasting = Command::new("sleep");
         lasting.arg("1000");
-        let finished = super::run(&mut lasting, None, &cancel).unwrap();
+        let finished = super::run(&mut lasting, None, &call).unwrap();
         assert!(finished.status.is_none(), "a cancelled run has no status");
     }
 

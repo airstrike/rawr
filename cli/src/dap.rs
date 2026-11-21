@@ -11,6 +11,13 @@
 //! become `breakpoint` events. A save still reloads the program, and the
 //! adapter says so as output.
 //!
+//! One thread owns the adapter: the client's references, the breakpoints
+//! it knows and the turn its breakpoint requests take. It hears the
+//! client's requests and the session's answers on one inbox, and blocks
+//! on neither: a request that needs the program asks the session and goes
+//! on once the answer reaches the inbox, so a breakpoint set while the
+//! program builds holds no other request.
+//!
 //! The protocol counts one thread: the one that runs the program's code,
 //! which the inspector pauses. Frames are the inspector's, innermost first,
 //! each named by its Rust path, and a value's children are its parts as
@@ -28,90 +35,147 @@ mod serve;
 mod values;
 mod wire;
 
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::sync::{mpsc, Arc};
 
 use serde_json::{json, Value};
 
-use crate::mcp::process::Cancel;
-use crate::mcp::session::{Refusal, Session, Sessions};
+use crate::mcp::session::{Ear, Refusal, Session, Told, Wait};
 
 pub use serve::{serve, serve_on};
 
 /// The thread the protocol names: the one that runs the program's code.
 const THREAD: u64 = 1;
 
+/// Why a request that needs the program has no answer before `launch` or
+/// `attach`.
+const NO_PROGRAM: &str = "no program yet: launch or attach first";
+
+/// What the adapter's thread hears.
+enum Heard {
+    /// A request from the client.
+    Request(Value),
+    /// The client's input ended.
+    Ended,
+    /// The session told the adapter's request or wait `id`.
+    Session { id: u64, told: Told },
+}
+
+/// What the adapter does once the session told one of its requests or
+/// waits.
+type Then = Box<dyn FnOnce(&mut Adapter, Told)>;
+
 /// One client, and the program it debugs once it launched or attached.
 struct Adapter {
     /// Where relative paths start.
     root: PathBuf,
     out: wire::Writer,
-    sessions: Sessions,
-    /// The program's session, set once by the first `launch` or `attach`.
-    session: OnceLock<Arc<Session>>,
-    handles: Mutex<handles::Handles>,
+    /// The adapter's inbox, where the session answers it.
+    heard: mpsc::Sender<Heard>,
+    /// The program's session, once the client launched or attached.
+    session: Option<Arc<Session>>,
+    /// A `launch` or `attach` waits for a run's greeting.
+    beginning: bool,
+    handles: handles::Handles,
     /// The line the client counts from: 1, or 0.
-    first_line: AtomicU64,
-    /// One breakpoint request changes the program's breakpoints at a time.
-    /// It holds the functions the client set breakpoints on, which its
-    /// next `setFunctionBreakpoints` replaces.
-    breaking: Mutex<Vec<String>>,
+    first_line: u64,
+    /// The functions the client set breakpoints on, which its next
+    /// `setFunctionBreakpoints` replaces.
+    functions: Vec<String>,
     /// The breakpoints the client knows, by their ids.
-    known: Mutex<breakpoints::Known>,
+    known: breakpoints::Known,
+    /// One breakpoint request changes the program's breakpoints at a time:
+    /// whether one has the turn, and those waiting for it.
+    breaking: bool,
+    turn: VecDeque<Value>,
     /// The client heard `stopped` and no `continued` since.
-    stopped: AtomicBool,
+    stopped: bool,
     /// The program the adapter launched waits at its start for the
     /// client's `configurationDone`, which releases it (#2274).
-    held: AtomicBool,
+    held: bool,
+    /// How each request or wait on the session goes on, by its number.
+    then: HashMap<u64, Then>,
+    /// Where the session's events, output and breakpoints were told to.
+    following: follow::Following,
+    /// The client is gone and the adapter ended its program.
+    over: bool,
 }
 
 impl Adapter {
-    fn new(root: PathBuf, out: wire::Writer) -> Self {
+    fn new(root: PathBuf, out: wire::Writer, heard: mpsc::Sender<Heard>) -> Self {
         Self {
             root,
             out,
-            sessions: Sessions::default(),
-            session: OnceLock::new(),
-            handles: Mutex::new(handles::Handles::default()),
-            first_line: AtomicU64::new(1),
-            breaking: Mutex::new(Vec::new()),
-            known: Mutex::new(breakpoints::Known::default()),
-            stopped: AtomicBool::new(false),
-            held: AtomicBool::new(false),
+            heard,
+            session: None,
+            beginning: false,
+            handles: handles::Handles::default(),
+            first_line: 1,
+            functions: Vec::new(),
+            known: breakpoints::Known::default(),
+            breaking: false,
+            turn: VecDeque::new(),
+            stopped: false,
+            held: false,
+            then: HashMap::new(),
+            following: follow::Following::default(),
+            over: false,
         }
     }
 
-    fn handles(&self) -> MutexGuard<'_, handles::Handles> {
-        self.handles.lock().unwrap_or_else(PoisonError::into_inner)
+    /// An ear on the adapter's inbox.
+    fn ear(&self) -> Ear {
+        let heard = self.heard.clone();
+        Ear::new(move |id, told| heard.send(Heard::Session { id, told }).is_ok())
     }
 
-    fn known(&self) -> MutexGuard<'_, breakpoints::Known> {
-        self.known.lock().unwrap_or_else(PoisonError::into_inner)
+    /// Wait for `wait` of `session`, then go on with `then`.
+    fn park(
+        &mut self,
+        session: &Session,
+        wait: Wait,
+        then: impl FnOnce(&mut Self, Told) + 'static,
+    ) {
+        let id = session.park(wait, self.ear());
+        self.then.insert(id, Box::new(then));
     }
 
-    /// The program's session, once the client launched or attached.
-    fn session(&self) -> Result<Arc<Session>, String> {
-        self.session
-            .get()
-            .cloned()
-            .ok_or_else(|| "no program yet: launch or attach first".to_owned())
+    /// Ask the program `request`, then go on with `then` and its answer,
+    /// or why it has none: refused by the session or by the program.
+    fn ask(
+        &mut self,
+        request: Value,
+        then: impl FnOnce(&mut Self, Result<Value, String>) + 'static,
+    ) {
+        let Some(session) = &self.session else {
+            return then(self, Err(NO_PROGRAM.to_owned()));
+        };
+        let id = session.request(request, self.ear());
+        self.then.insert(
+            id,
+            Box::new(move |adapter, told| {
+                let answer = match told {
+                    Told::Answer(answer) => adapter.answered(answer),
+                    told => Err(format!("the session told no answer: {told:?}")),
+                };
+                then(adapter, answer);
+            }),
+        );
     }
 
-    /// The program's answer to `request`, or why it has none: refused by
-    /// the session or by the program.
-    fn ask(&self, request: &Value) -> Result<Value, String> {
-        let session = self.session()?;
-        let answer = session
-            .ask(request, &Cancel::default())
-            .map_err(|refusal| match refusal {
-                Refusal::NotRunning => format!(
-                    "the program isn't running (state: {})",
-                    session.phase().name()
-                ),
-                Refusal::Error(error) => error,
-                Refusal::Cancelled => "cancelled".to_owned(),
-            })?;
+    /// A session's answer as the client reads it.
+    fn answered(&self, answer: Result<Value, Refusal>) -> Result<Value, String> {
+        let answer = answer.map_err(|refusal| match refusal {
+            Refusal::NotRunning => format!(
+                "the program isn't running (state: {})",
+                self.session
+                    .as_ref()
+                    .map_or("not started", |session| session.phase().name())
+            ),
+            Refusal::Error(error) => error,
+            Refusal::Cancelled => "cancelled".to_owned(),
+        })?;
         match answer["error"].as_str() {
             Some("not paused") => Err("the program isn't paused".to_owned()),
             Some(error) => Err(error.to_owned()),
@@ -120,13 +184,13 @@ impl Adapter {
     }
 
     /// A line the client gave, as the program counts lines: from 1.
-    fn line_in(&self, line: u64) -> u64 {
-        line + 1 - self.first_line.load(Ordering::Relaxed)
+    const fn line_in(&self, line: u64) -> u64 {
+        line + 1 - self.first_line
     }
 
     /// A line of the program, as the client counts lines.
-    fn line_out(&self, line: u64) -> u64 {
-        (line + self.first_line.load(Ordering::Relaxed)).saturating_sub(1)
+    const fn line_out(&self, line: u64) -> u64 {
+        (line + self.first_line).saturating_sub(1)
     }
 
     /// Tell the client `text` as output in `category`: `console` for the
@@ -140,41 +204,91 @@ impl Adapter {
 #[cfg(test)]
 mod tests {
     use std::io::{BufRead as _, BufReader, Write as _};
+    use std::os::unix::net::UnixStream;
     use std::path::PathBuf;
-    use std::sync::atomic::Ordering;
-    use std::sync::Arc;
+    use std::sync::{mpsc, Arc};
 
     use serde_json::{json, Value};
 
-    use super::{wire, Adapter};
+    use super::{wire, Adapter, Heard};
     use crate::mcp::session::{Phase, Session};
+
+    /// An adapter on a thread of its own, debugging `session`, `held` at
+    /// its start or not, that writes to the stream returned: its inbox and
+    /// its thread, which ends once it heard `Ended` and ended its program.
+    fn serving(
+        session: Arc<Session>,
+        held: bool,
+    ) -> (
+        mpsc::Sender<Heard>,
+        BufReader<UnixStream>,
+        std::thread::JoinHandle<()>,
+    ) {
+        let (written, read) = UnixStream::pair().unwrap();
+        let (heard, hearing) = mpsc::channel();
+        let telling = heard.clone();
+        let thread = std::thread::spawn(move || {
+            let out = wire::Writer::new(written).unwrap();
+            let mut adapter = Adapter::new(PathBuf::from("/p"), out, telling);
+            adapter.begin(session);
+            adapter.held = held;
+            adapter.serve(&hearing);
+        });
+        (heard, BufReader::new(read), thread)
+    }
+
+    /// A request numbered `seq`.
+    fn request(seq: u64, command: &str, arguments: Value) -> Heard {
+        Heard::Request(json!({
+            "type": "request",
+            "seq": seq,
+            "command": command,
+            "arguments": arguments,
+        }))
+    }
+
+    /// The response to the request numbered `seq`, past the events before
+    /// it.
+    fn response(heard: &mut BufReader<UnixStream>, seq: u64) -> Value {
+        loop {
+            let message = wire::read(heard).unwrap().unwrap();
+            if message["type"] == "response" && message["request_seq"] == seq {
+                return message;
+            }
+        }
+    }
+
+    /// The next line the session's peer reads, as JSON.
+    fn next(lines: &mut impl Iterator<Item = std::io::Result<String>>) -> Value {
+        serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap()
+    }
 
     /// `configurationDone` releases the program the adapter launched, held
     /// at its start, once; a second asks the program nothing (#2274).
     #[test]
     fn configuration_done_releases_a_launched_program_once() {
         let (session, other) = Session::running_at(Phase::Running);
-        let adapter = Arc::new(Adapter::new(
-            PathBuf::from("/p"),
-            wire::Writer::new(std::io::sink()).unwrap(),
-        ));
-        assert!(
-            adapter.session.set(session).is_ok(),
-            "the adapter starts with no session"
-        );
-        adapter.held.store(true, Ordering::Release);
-        let configuring = Arc::clone(&adapter);
-        let configured = std::thread::spawn(move || configuring.configured());
+        let (heard, mut told, thread) = serving(session, true);
         let mut lines = BufReader::new(other.try_clone().unwrap()).lines();
-        let mut next = || serde_json::from_str::<Value>(&lines.next().unwrap().unwrap()).unwrap();
-        assert_eq!(next()["method"], "hello");
-        let asked = next();
+        assert_eq!(next(&mut lines)["method"], "hello");
+        heard
+            .send(request(1, "configurationDone", json!({})))
+            .unwrap();
+        let asked = next(&mut lines);
         assert_eq!(asked["params"], json!({ "op": "release" }));
         let answer = json!({ "jsonrpc": "2.0", "id": asked["id"], "result": { "released": true } });
         writeln!(&other, "{answer}").unwrap();
-        assert_eq!(configured.join().unwrap(), json!({}));
-        // Nothing is held any more: no request goes to the program.
-        assert_eq!(adapter.configured(), json!({}));
+        assert_eq!(response(&mut told, 1)["success"], true);
+        // Nothing is held any more: the next request the program hears is
+        // the one after the second `configurationDone`.
+        heard
+            .send(request(2, "configurationDone", json!({})))
+            .unwrap();
+        assert_eq!(response(&mut told, 2)["success"], true);
+        heard.send(request(3, "pause", json!({}))).unwrap();
+        assert_eq!(next(&mut lines)["params"], json!({ "op": "pause" }));
+        heard.send(Heard::Ended).unwrap();
+        thread.join().unwrap();
     }
 
     /// A breakpoint another shell sets reaches the client as a `breakpoint`
@@ -182,9 +296,14 @@ mod tests {
     /// clear as `removed` by the same id (#2278).
     #[test]
     fn another_shells_breakpoint_is_told_as_new_then_removed() {
-        let (written, read) = std::os::unix::net::UnixStream::pair().unwrap();
-        let adapter = Adapter::new(PathBuf::from("/p"), wire::Writer::new(written).unwrap());
-        adapter.first_line.store(0, Ordering::Relaxed);
+        let (written, read) = UnixStream::pair().unwrap();
+        let (heard, _hearing) = mpsc::channel();
+        let mut adapter = Adapter::new(
+            PathBuf::from("/p"),
+            wire::Writer::new(written).unwrap(),
+            heard,
+        );
+        adapter.first_line = 0;
         let mut heard = BufReader::new(read);
         let spec = json!({ "file": "/p/src/main.rs", "line": 7, "text": "tick();" });
         adapter.follow_breakpoints(&json!({ "revision": 1, "breakpoints": [spec] }));
@@ -212,24 +331,17 @@ mod tests {
     #[test]
     fn a_breakpoint_a_save_moved_is_told_as_changed() {
         let (session, other) = Session::running_at(Phase::Running);
-        let (written, read) = std::os::unix::net::UnixStream::pair().unwrap();
-        let adapter = Arc::new(Adapter::new(
-            PathBuf::from("/p"),
-            wire::Writer::new(written).unwrap(),
-        ));
-        let following = Arc::clone(&adapter);
-        let followed = std::thread::spawn(move || following.follow(&session));
-        let mut heard = BufReader::new(read);
+        let (heard, mut told, thread) = serving(session, false);
         let mut breakpoint = |revision: u64, line: u64| {
             let listed =
                 json!({ "id": 3, "file": "/p/src/main.rs", "line": line, "text": "tick();" });
             let event =
                 json!({ "event": "breakpoints", "revision": revision, "breakpoints": [listed] });
-            let told = json!({ "jsonrpc": "2.0", "method": "event", "params": event });
-            writeln!(&other, "{told}").unwrap();
+            let event = json!({ "jsonrpc": "2.0", "method": "event", "params": event });
+            writeln!(&other, "{event}").unwrap();
             // The next `breakpoint` event, past the run's own output.
             loop {
-                let message = wire::read(&mut heard).unwrap().unwrap();
+                let message = wire::read(&mut told).unwrap().unwrap();
                 if message["event"] == "breakpoint" {
                     return message["body"].clone();
                 }
@@ -243,7 +355,8 @@ mod tests {
         assert_eq!(changed["breakpoint"]["line"], 9, "{changed}");
         assert_eq!(changed["breakpoint"]["source"]["path"], "/p/src/main.rs");
         other.shutdown(std::net::Shutdown::Both).unwrap();
-        followed.join().unwrap();
+        heard.send(Heard::Ended).unwrap();
+        thread.join().unwrap();
     }
 
     /// Rawr's own lines, the stderr of the run the adapter started, reach
@@ -252,24 +365,17 @@ mod tests {
     #[test]
     fn rawr_lines_are_console_and_the_programs_stderr_is_stderr() {
         let (session, other) = Session::running_at(Phase::Running);
-        let (written, read) = std::os::unix::net::UnixStream::pair().unwrap();
-        let adapter = Arc::new(Adapter::new(
-            PathBuf::from("/p"),
-            wire::Writer::new(written).unwrap(),
-        ));
         session.read_rawr(b"rawr > building runner  55%\n");
-        let told = json!({
+        let output = json!({
             "jsonrpc": "2.0",
             "method": "output",
             "params": { "stream": "stderr", "text": "the program's own\n" },
         });
-        writeln!(&other, "{told}").unwrap();
-        let following = Arc::clone(&adapter);
-        let followed = std::thread::spawn(move || following.follow(&session));
-        let mut heard = BufReader::new(read);
+        writeln!(&other, "{output}").unwrap();
+        let (heard, mut told, thread) = serving(session, false);
         let mut outputs = Vec::new();
         while outputs.len() < 2 {
-            let message = wire::read(&mut heard).unwrap().unwrap();
+            let message = wire::read(&mut told).unwrap().unwrap();
             if message["event"] == "output" {
                 outputs.push((
                     message["body"]["category"].as_str().unwrap().to_owned(),
@@ -289,6 +395,52 @@ mod tests {
             ]
         );
         other.shutdown(std::net::Shutdown::Both).unwrap();
-        followed.join().unwrap();
+        heard.send(Heard::Ended).unwrap();
+        thread.join().unwrap();
+    }
+
+    /// A breakpoint request waiting on a session whose connection closes
+    /// is answered as failed, and the request that waited for its turn is
+    /// answered after it: no request hangs on a peer that went away.
+    #[test]
+    fn a_peer_that_closes_mid_request_answers_it_and_the_next_in_turn() {
+        let (session, other) = Session::running_at(Phase::Running);
+        let (heard, mut told, thread) = serving(session, false);
+        let mut lines = BufReader::new(other.try_clone().unwrap()).lines();
+        assert_eq!(next(&mut lines)["method"], "hello");
+        let source =
+            json!({ "source": { "path": "/p/src/main.rs" }, "breakpoints": [{ "line": 3 }] });
+        heard.send(request(1, "setBreakpoints", source)).unwrap();
+        let functions = json!({ "breakpoints": [{ "name": "tick" }] });
+        heard
+            .send(request(2, "setFunctionBreakpoints", functions))
+            .unwrap();
+        assert_eq!(next(&mut lines)["params"]["op"], "clear");
+        other.shutdown(std::net::Shutdown::Both).unwrap();
+        let lines_set = response(&mut told, 1);
+        assert_eq!(lines_set["success"], false, "{lines_set}");
+        let functions_set = response(&mut told, 2);
+        assert_eq!(functions_set["success"], true, "{functions_set}");
+        assert_eq!(
+            functions_set["body"]["breakpoints"][0]["verified"], false,
+            "{functions_set}"
+        );
+        heard.send(Heard::Ended).unwrap();
+        thread.join().unwrap();
+    }
+
+    /// A `disconnect` while a request waits on the program is answered,
+    /// and the adapter ends, without the program's answer.
+    #[test]
+    fn a_disconnect_mid_request_ends_the_adapter() {
+        let (session, other) = Session::running_at(Phase::Running);
+        let (heard, mut told, thread) = serving(session, false);
+        let mut lines = BufReader::new(other.try_clone().unwrap()).lines();
+        assert_eq!(next(&mut lines)["method"], "hello");
+        heard.send(request(1, "pause", json!({}))).unwrap();
+        assert_eq!(next(&mut lines)["params"]["op"], "pause");
+        heard.send(request(2, "disconnect", json!({}))).unwrap();
+        assert_eq!(response(&mut told, 2)["success"], true);
+        thread.join().unwrap();
     }
 }

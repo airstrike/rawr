@@ -14,36 +14,50 @@ use super::Adapter;
 impl Adapter {
     /// `setVariable`: the variable `name` behind `variablesReference`, a
     /// frame's binding or a value's part, assigned `value`.
-    pub(super) fn set_variable(&self, arguments: &Value) -> Result<Value, String> {
-        let name = arguments["name"]
-            .as_str()
-            .ok_or("setVariable needs the variable's name")?;
-        let (frame, place) = match self.handle(arguments)? {
-            Handle::Frame(frame) => (frame, Place::binding(name)),
-            Handle::Parts(parts) => (parts.frame, parts.place_of(name)),
+    pub(super) fn set_variable(&mut self, request: Value) {
+        let arguments = &request["arguments"];
+        let Some(name) = arguments["name"].as_str() else {
+            let refusal = Err("setVariable needs the variable's name".to_owned());
+            return self.out.respond(&request, refusal);
         };
-        self.assign(arguments, frame, place)
+        let (frame, place) = match self.handle(arguments) {
+            Ok(Handle::Frame(frame)) => (frame, Place::binding(name)),
+            Ok(Handle::Parts(parts)) => (parts.frame, parts.place_of(name)),
+            Err(message) => return self.out.respond(&request, Err(message)),
+        };
+        self.assign(request, frame, place);
     }
 
     /// `setExpression`: the place `expression` names in frame `frameId`
     /// assigned `value`.
-    pub(super) fn set_expression(&self, arguments: &Value) -> Result<Value, String> {
-        let expression = arguments["expression"]
-            .as_str()
-            .ok_or("setExpression needs an expression")?;
+    pub(super) fn set_expression(&mut self, request: Value) {
+        let arguments = &request["arguments"];
+        let Some(expression) = arguments["expression"].as_str() else {
+            let refusal = Err("setExpression needs an expression".to_owned());
+            return self.out.respond(&request, refusal);
+        };
         let frame = arguments["frameId"].as_u64().unwrap_or(1).saturating_sub(1);
-        self.assign(arguments, frame, Place::expression(expression))
+        let place = Place::expression(expression);
+        self.assign(request, frame, place);
     }
 
-    /// `arguments`' `value` assigned to `place` in frame `frame`: answered
+    /// The request's `value` assigned to `place` in frame `frame`: answered
     /// with the value the place then holds, and its parts behind a
     /// reference.
-    fn assign(&self, arguments: &Value, frame: u64, place: Place) -> Result<Value, String> {
-        let value = arguments["value"].as_str().ok_or("a new value is needed")?;
-        let variable = self.eval(frame, &place.assign(value), place)?;
-        Ok(json!({
-            "value": variable["value"],
-            "variablesReference": variable["variablesReference"],
-        }))
+    fn assign(&mut self, request: Value, frame: u64, place: Place) {
+        let Some(value) = request["arguments"]["value"].as_str() else {
+            let refusal = Err("a new value is needed".to_owned());
+            return self.out.respond(&request, refusal);
+        };
+        let code = place.assign(value);
+        self.eval(frame, &code, place, move |adapter, variable| {
+            let answer = variable.map(|variable| {
+                json!({
+                    "value": variable["value"],
+                    "variablesReference": variable["variablesReference"],
+                })
+            });
+            adapter.out.respond(&request, answer);
+        });
     }
 }
