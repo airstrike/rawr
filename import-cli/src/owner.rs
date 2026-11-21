@@ -267,7 +267,9 @@ fn events(
 /// swaps or restarts it as [`run`] does. A program that panics or exits
 /// with an error runs again on a save when stdin is a terminal or a `rawr
 /// mcp` supervises the run; otherwise, or when it exits with status 0 or
-/// Ctrl-C ended it, this returns its exit status (#1800).
+/// Ctrl-C ended it, this returns its exit status (#1800). Its session is
+/// hosted on the listener a shell `handed` the run, or on a socket of its
+/// own.
 ///
 /// `cargo`'s errors are printed when the program first ends. A program
 /// whose copy fails to build as `cargo check` fails shows cargo's errors
@@ -278,6 +280,7 @@ pub fn run_program(
     profile: &dyn crate::Profile,
     arguments: &[std::ffi::OsString],
     mut cargo: Option<rawr_cli::cargo::Pending>,
+    handed: Option<rawr_cli::events::Handed>,
 ) -> Result<i32, Option<diagnostic::Report>> {
     // Ctrl-C at the terminal ends the program with SIGINT, as a shell
     // reports it.
@@ -289,7 +292,8 @@ pub fn run_program(
         output: Some(output),
     };
     // Shells attach to the run here (D1053.2).
-    let _session = rawr_cli::events::session::open(&rawr_cli::events::session::root(target));
+    let _session =
+        rawr_cli::events::session::open(&rawr_cli::events::session::root(target), handed);
     // The program hears its reload outcomes on this stream (#1166). A
     // program runs without it when it can't be made.
     let reload = rawr_cli::events::reload::Stream::open()

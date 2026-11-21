@@ -29,7 +29,7 @@ impl Adapter {
             file: file.to_string_lossy().into_owned(),
             line,
         };
-        let _one = self.breaking.lock().unwrap_or_else(PoisonError::into_inner);
+        let _turn = self.breaking.lock().unwrap_or_else(PoisonError::into_inner);
         self.known().ask(lines.iter().copied().map(point).collect());
         let mut last = None;
         let mut answers = Vec::new();
@@ -76,11 +76,7 @@ impl Adapter {
             .flatten()
             .filter_map(|breakpoint| breakpoint["name"].as_str())
             .collect();
-        let _one = self.breaking.lock().unwrap_or_else(PoisonError::into_inner);
-        let mut functions = self
-            .functions
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut functions = self.breaking.lock().unwrap_or_else(PoisonError::into_inner);
         self.known().ask(
             functions
                 .iter()

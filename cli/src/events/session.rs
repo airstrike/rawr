@@ -61,7 +61,7 @@ mod host;
 mod place;
 mod state;
 
-pub use handover::{adopt, handed, LISTENER};
+pub use handover::{adopt, handed, Handed, LISTENER};
 pub use host::{open, output, prepare, record, takes_stderr, Host, CANCELLED, NOT_RUNNING};
 pub use place::{root, Place};
 pub use state::{Phase, State};

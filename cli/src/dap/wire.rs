@@ -2,7 +2,7 @@
 //! after a `Content-Length` header and a blank line, both ways.
 
 use std::io::{BufRead, Write};
-use std::sync::{Mutex, PoisonError};
+use std::sync::mpsc;
 
 use serde_json::{json, Value};
 
@@ -41,40 +41,44 @@ pub fn read(input: &mut impl BufRead) -> std::io::Result<Option<Value>> {
     }
 }
 
-/// Where the adapter writes: each message numbered in the order written,
-/// whichever thread writes it.
+/// Where the adapter writes: each message numbered in the order sent,
+/// whichever thread sends it. One thread owns the stream and the count,
+/// and writes the messages in turn.
 pub struct Writer {
-    out: Mutex<Out>,
+    out: mpsc::Sender<Out>,
 }
 
-struct Out {
-    stream: Box<dyn Write + Send>,
-    seq: u64,
+enum Out {
+    Message(Value),
+    /// Answered once every message sent before it is written.
+    Flush(mpsc::Sender<()>),
 }
 
 impl Writer {
-    #[must_use]
-    pub fn new(stream: impl Write + Send + 'static) -> Self {
-        Self {
-            out: Mutex::new(Out {
-                stream: Box::new(stream),
-                seq: 0,
-            }),
-        }
+    /// Start the thread that writes to `stream`.
+    ///
+    /// # Errors
+    ///
+    /// When the thread can't start.
+    pub fn new(stream: impl Write + Send + 'static) -> std::io::Result<Self> {
+        let (out, messages) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("rawr-dap-writer".into())
+            .spawn(move || write(stream, &messages))?;
+        Ok(Self { out })
     }
 
-    /// Write `message`, numbered next. A client that went away hears
-    /// nothing more.
-    fn send(&self, mut message: Value) {
-        let mut out = self.out.lock().unwrap_or_else(PoisonError::into_inner);
-        out.seq += 1;
-        message["seq"] = json!(out.seq);
-        let body = message.to_string();
-        let framed = format!("Content-Length: {}\r\n\r\n{body}", body.len());
-        let _ = out
-            .stream
-            .write_all(framed.as_bytes())
-            .and_then(|()| out.stream.flush());
+    fn send(&self, message: Value) {
+        let _ = self.out.send(Out::Message(message));
+    }
+
+    /// Wait for every message sent so far to be written, or for the client
+    /// to go away.
+    pub fn flush(&self) {
+        let (written, flushed) = mpsc::channel();
+        if self.out.send(Out::Flush(written)).is_ok() {
+            let _ = flushed.recv();
+        }
     }
 
     /// An event, `name` with `body`.
@@ -100,5 +104,31 @@ impl Writer {
             }
         }
         self.send(response);
+    }
+}
+
+/// Write each message to `stream`, numbered next, for as long as a sender
+/// is left. A client that went away hears nothing more, and a flush is
+/// answered at once.
+fn write(mut stream: impl Write, messages: &mpsc::Receiver<Out>) {
+    let mut seq: u64 = 0;
+    let mut open = true;
+    for out in messages {
+        match out {
+            Out::Message(mut message) if open => {
+                seq += 1;
+                message["seq"] = json!(seq);
+                let body = message.to_string();
+                let framed = format!("Content-Length: {}\r\n\r\n{body}", body.len());
+                open = stream
+                    .write_all(framed.as_bytes())
+                    .and_then(|()| stream.flush())
+                    .is_ok();
+            }
+            Out::Message(_) => {}
+            Out::Flush(written) => {
+                let _ = written.send(());
+            }
+        }
     }
 }

@@ -141,6 +141,7 @@ pub fn run(
     loaded: base::Loaded,
     arguments: &[OsString],
     mut cargo: Option<crate::cargo::Pending>,
+    handed: Option<crate::events::Handed>,
 ) -> ExitCode {
     let location = location(&loaded.target);
     let name = program_name(&loaded.target);
@@ -148,7 +149,10 @@ pub fn run(
     let mut started_from = contents(&loaded.graph);
     // Shells attach to the run here (D1053.2).
     #[cfg(unix)]
-    let _session = crate::events::session::open(&crate::events::session::root(&loaded.target));
+    let _session =
+        crate::events::session::open(&crate::events::session::root(&loaded.target), handed);
+    #[cfg(not(unix))]
+    let _ = handed;
     drop(loaded);
     // The program shares this process's group, which the watch ends when
     // this process's parent dies.

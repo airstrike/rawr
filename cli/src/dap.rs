@@ -30,7 +30,7 @@ mod wire;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use serde_json::{json, Value};
 
@@ -48,15 +48,15 @@ struct Adapter {
     root: PathBuf,
     out: wire::Writer,
     sessions: Sessions,
-    session: Mutex<Option<Arc<Session>>>,
+    /// The program's session, set once by the first `launch` or `attach`.
+    session: OnceLock<Arc<Session>>,
     handles: Mutex<handles::Handles>,
     /// The line the client counts from: 1, or 0.
     first_line: AtomicU64,
-    /// The functions the client set breakpoints on, which its next
-    /// `setFunctionBreakpoints` replaces.
-    functions: Mutex<Vec<String>>,
     /// One breakpoint request changes the program's breakpoints at a time.
-    breaking: Mutex<()>,
+    /// It holds the functions the client set breakpoints on, which its
+    /// next `setFunctionBreakpoints` replaces.
+    breaking: Mutex<Vec<String>>,
     /// The breakpoints the client knows, by their ids.
     known: Mutex<breakpoints::Known>,
     /// The client heard `stopped` and no `continued` since.
@@ -72,11 +72,10 @@ impl Adapter {
             root,
             out,
             sessions: Sessions::default(),
-            session: Mutex::new(None),
+            session: OnceLock::new(),
             handles: Mutex::new(handles::Handles::default()),
             first_line: AtomicU64::new(1),
-            functions: Mutex::new(Vec::new()),
-            breaking: Mutex::new(()),
+            breaking: Mutex::new(Vec::new()),
             known: Mutex::new(breakpoints::Known::default()),
             stopped: AtomicBool::new(false),
             held: AtomicBool::new(false),
@@ -94,9 +93,8 @@ impl Adapter {
     /// The program's session, once the client launched or attached.
     fn session(&self) -> Result<Arc<Session>, String> {
         self.session
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+            .get()
+            .cloned()
             .ok_or_else(|| "no program yet: launch or attach first".to_owned())
     }
 
@@ -158,9 +156,12 @@ mod tests {
         let (session, other) = Session::running_at(Phase::Running);
         let adapter = Arc::new(Adapter::new(
             PathBuf::from("/p"),
-            wire::Writer::new(std::io::sink()),
+            wire::Writer::new(std::io::sink()).unwrap(),
         ));
-        *adapter.session.lock().unwrap() = Some(session);
+        assert!(
+            adapter.session.set(session).is_ok(),
+            "the adapter starts with no session"
+        );
         adapter.held.store(true, Ordering::Release);
         let configuring = Arc::clone(&adapter);
         let configured = std::thread::spawn(move || configuring.configured());
@@ -182,7 +183,7 @@ mod tests {
     #[test]
     fn another_shells_breakpoint_is_told_as_new_then_removed() {
         let (written, read) = std::os::unix::net::UnixStream::pair().unwrap();
-        let adapter = Adapter::new(PathBuf::from("/p"), wire::Writer::new(written));
+        let adapter = Adapter::new(PathBuf::from("/p"), wire::Writer::new(written).unwrap());
         adapter.first_line.store(0, Ordering::Relaxed);
         let mut heard = BufReader::new(read);
         let spec = json!({ "file": "/p/src/main.rs", "line": 7, "text": "tick();" });
@@ -214,7 +215,7 @@ mod tests {
         let (written, read) = std::os::unix::net::UnixStream::pair().unwrap();
         let adapter = Arc::new(Adapter::new(
             PathBuf::from("/p"),
-            wire::Writer::new(written),
+            wire::Writer::new(written).unwrap(),
         ));
         let following = Arc::clone(&adapter);
         let followed = std::thread::spawn(move || following.follow(&session));
@@ -254,7 +255,7 @@ mod tests {
         let (written, read) = std::os::unix::net::UnixStream::pair().unwrap();
         let adapter = Arc::new(Adapter::new(
             PathBuf::from("/p"),
-            wire::Writer::new(written),
+            wire::Writer::new(written).unwrap(),
         ));
         session.read_rawr(b"rawr > building runner  55%\n");
         let told = json!({

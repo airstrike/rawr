@@ -11,9 +11,9 @@ use std::io::Write as _;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::mpsc;
 
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::events::session;
 
@@ -82,12 +82,12 @@ fn run(path: Option<&PathBuf>) -> Result<ExitCode, String> {
     drop(listener);
     // The kernel holds the connection until the run accepts it.
     let told = UnixStream::connect(&socket).map_err(|error| error.to_string())?;
-    let told = Arc::new(Mutex::new(told));
+    let pieces = teller(told);
     if let Some(pipe) = child.stdout.take() {
-        relay(pipe, "stdout", Arc::clone(&told));
+        relay(pipe, "stdout", pieces.clone());
     }
     if let Some(pipe) = child.stderr.take() {
-        relay(pipe, "stderr", Arc::clone(&told));
+        relay(pipe, "stderr", pieces);
     }
     let closed = status(Command::new(&window).arg(&socket));
     if let Ok(None) = child.try_wait()
@@ -112,12 +112,28 @@ fn status(command: &mut Command) -> Result<ExitCode, String> {
         .map_or(ExitCode::FAILURE, ExitCode::from))
 }
 
-/// Echo `pipe` to this process's own `stream`, and tell the session each
-/// piece as `output` for the shells attached to it.
+/// Start the thread that writes each piece it is sent to the session as a
+/// line of its own, until both relays end.
+fn teller(mut told: UnixStream) -> mpsc::Sender<Value> {
+    let (pieces, heard) = mpsc::channel::<Value>();
+    let _ = std::thread::Builder::new()
+        .name("rawr-gui-tell".into())
+        .spawn(move || {
+            for piece in heard {
+                if writeln!(told, "{piece}").is_err() {
+                    return;
+                }
+            }
+        });
+    pieces
+}
+
+/// Echo `pipe` to this process's own `stream`, and send each piece to the
+/// teller as `output` for the shells attached to the session.
 fn relay(
     mut pipe: impl std::io::Read + Send + 'static,
     stream: &'static str,
-    told: Arc<Mutex<UnixStream>>,
+    pieces: mpsc::Sender<Value>,
 ) {
     let _ = std::thread::Builder::new()
         .name("rawr-gui-output".into())
@@ -148,10 +164,9 @@ fn relay(
                     "method": "output",
                     "params": { "stream": stream, "text": text },
                 });
-                let _ = writeln!(
-                    told.lock().unwrap_or_else(PoisonError::into_inner),
-                    "{piece}"
-                );
+                // The echo goes on when the session is gone, so the run
+                // never blocks on a full pipe.
+                let _ = pieces.send(piece);
             }
         });
 }

@@ -31,13 +31,14 @@ pub fn serve_on(
     mut input: impl BufRead,
     output: impl std::io::Write + Send + 'static,
 ) -> std::io::Result<()> {
-    let adapter = Arc::new(Adapter::new(root, wire::Writer::new(output)));
+    let adapter = Arc::new(Adapter::new(root, wire::Writer::new(output)?));
     while let Some(request) = wire::read(&mut input)? {
         if request["type"] != "request" {
             continue;
         }
         if request["command"] == "disconnect" {
             adapter.disconnect(&request);
+            adapter.out.flush();
             return Ok(());
         }
         let answering = Arc::clone(&adapter);
@@ -47,6 +48,7 @@ pub fn serve_on(
     }
     // The client went away: what the adapter started goes too.
     adapter.end();
+    adapter.out.flush();
     Ok(())
 }
 

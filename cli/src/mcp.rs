@@ -2,7 +2,9 @@
 //! (D537). It is `rawr`'s own, whatever is installed.
 //!
 //! JSON-RPC 2.0, one message per line, with the standard library only
-//! (D430.4). The main thread reads; each `tools/call` runs on a worker, so
+//! (D430.4). A reader thread forwards each line, and the main thread loops
+//! over the lines and the calls that returned, owning the calls in flight
+//! and the tools last listed. Each `tools/call` runs on a worker, so
 //! `ping`, `notifications/cancelled` and the end of input are handled while
 //! a long build runs; one writer thread writes every message. A call waits
 //! for what it needs as long as that takes, telling its progress where it
@@ -24,7 +26,7 @@ pub(crate) mod tools;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{mpsc, Arc, Mutex, PoisonError};
+use std::sync::{mpsc, Arc};
 
 use serde_json::{json, Value};
 
@@ -33,17 +35,36 @@ use serde_json::{json, Value};
 pub const PROTOCOL: &str = "2025-06-18";
 const PROTOCOLS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 
-/// The server: where relative paths start, the writer, the calls in
-/// flight and the programs it reaches.
+/// The server: where relative paths start, the writer and the programs
+/// it reaches.
 pub(crate) struct Server {
     root: PathBuf,
     out: mpsc::Sender<Value>,
-    calls: Mutex<HashMap<String, Arc<process::Cancel>>>,
     sessions: session::Sessions,
     checks: check::Checks,
+}
+
+/// What the main loop hears.
+enum Heard {
+    /// A line of input.
+    Line(String),
+    /// The input ended.
+    Ended,
+    /// A call returned: its answer, unless it panicked or was cancelled.
+    Returned { id: Value, answer: Option<Value> },
+}
+
+/// The main loop's state, and how it starts calls.
+struct Loop<'scope, 'env> {
+    server: &'scope Server,
+    scope: &'scope std::thread::Scope<'scope, 'env>,
+    /// Where a call says it returned.
+    heard: mpsc::Sender<Heard>,
+    /// The calls in flight, by their ids, for the client's cancels.
+    calls: HashMap<String, Arc<process::Cancel>>,
     /// The tool names last listed, to tell the client when installs change
     /// them.
-    listed: Mutex<Vec<String>>,
+    listed: Vec<String>,
 }
 
 impl Server {
@@ -60,32 +81,22 @@ impl Server {
             json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } }),
         );
     }
-
-    /// End every call and every program the server started.
-    fn shut_down(&self) {
-        for (_, call) in self
-            .calls
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .drain()
-        {
-            call.cancel();
-        }
-        self.sessions.stop_all();
-        self.checks.stop_all();
-    }
 }
 
 /// Serve MCP on stdin and stdout until stdin closes. Relative paths in
 /// calls start at `root`.
 pub fn serve(root: PathBuf) -> std::io::Result<()> {
-    serve_on(root, std::io::stdin().lock(), std::io::stdout())
+    serve_on(
+        root,
+        std::io::BufReader::new(std::io::stdin()),
+        std::io::stdout(),
+    )
 }
 
 /// [`serve`] over any reader and writer.
 pub fn serve_on(
     root: PathBuf,
-    input: impl std::io::BufRead,
+    input: impl std::io::BufRead + Send,
     output: impl std::io::Write + Send + 'static,
 ) -> std::io::Result<()> {
     let (out, messages) = mpsc::channel::<Value>();
@@ -105,122 +116,164 @@ pub fn serve_on(
     let server = Server {
         root,
         out,
-        calls: Mutex::new(HashMap::new()),
         sessions: session::Sessions::default(),
         checks: check::Checks::default(),
-        listed: Mutex::new(Vec::new()),
     };
     // Each call runs on a thread of this scope, and the scope ends once
     // every call has seen its cancel and returned.
-    std::thread::scope(|calls| {
-        for line in input.lines() {
-            let Ok(line) = line else {
-                break;
-            };
-            if line.trim().is_empty() {
-                continue;
-            }
-            match serde_json::from_str::<Value>(&line) {
-                Ok(message) => handle(&server, calls, message),
-                Err(error) => server.send(json!({
-                    "jsonrpc": "2.0",
-                    "id": null,
-                    "error": { "code": -32700, "message": error.to_string() },
-                })),
+    let served = std::thread::scope(|scope| {
+        let (heard, hearing) = mpsc::channel::<Heard>();
+        let reading = heard.clone();
+        std::thread::Builder::new()
+            .name("rawr-mcp-read".into())
+            .spawn_scoped(scope, move || {
+                for line in input.lines() {
+                    let Ok(line) = line else {
+                        break;
+                    };
+                    if reading.send(Heard::Line(line)).is_err() {
+                        return;
+                    }
+                }
+                let _ = reading.send(Heard::Ended);
+            })?;
+        let mut serving = Loop {
+            server: &server,
+            scope,
+            heard,
+            calls: HashMap::new(),
+            listed: Vec::new(),
+        };
+        for message in &hearing {
+            match message {
+                Heard::Line(line) => serving.line(&line),
+                Heard::Returned { id, answer } => serving.returned(id, answer),
+                Heard::Ended => break,
             }
         }
         // The client went away: what the server started goes too.
-        server.shut_down();
+        serving.shut_down();
+        Ok::<(), std::io::Error>(())
     });
     // The writer ends with the server's sender.
     drop(server);
     let _ = writer.join();
-    Ok(())
+    served
 }
 
-fn handle<'scope>(
-    server: &'scope Server,
-    calls: &'scope std::thread::Scope<'scope, '_>,
-    message: Value,
-) {
-    let Some(method) = message.get("method").and_then(Value::as_str) else {
-        // A response to nothing the server asked.
-        return;
-    };
-    let params = message.get("params").cloned().unwrap_or(Value::Null);
-    let Some(id) = message.get("id").cloned() else {
-        if method == "notifications/cancelled"
-            && let Some(request) = params.get("requestId")
-        {
-            let call = server
-                .calls
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .remove(&request.to_string());
-            if let Some(call) = call {
+impl<'scope> Loop<'scope, '_> {
+    fn line(&mut self, line: &str) {
+        if line.trim().is_empty() {
+            return;
+        }
+        match serde_json::from_str::<Value>(line) {
+            Ok(message) => self.handle(message),
+            Err(error) => self.server.send(json!({
+                "jsonrpc": "2.0",
+                "id": null,
+                "error": { "code": -32700, "message": error.to_string() },
+            })),
+        }
+    }
+
+    fn handle(&mut self, message: Value) {
+        let server = self.server;
+        let Some(method) = message.get("method").and_then(Value::as_str) else {
+            // A response to nothing the server asked.
+            return;
+        };
+        let params = message.get("params").cloned().unwrap_or(Value::Null);
+        let Some(id) = message.get("id").cloned() else {
+            if method == "notifications/cancelled"
+                && let Some(request) = params.get("requestId")
+                && let Some(call) = self.calls.remove(&request.to_string())
+            {
                 call.cancel();
             }
-        }
-        return;
-    };
-    match method {
-        "initialize" => {
-            let asked = params.get("protocolVersion").and_then(Value::as_str);
-            let version = asked
-                .filter(|asked| PROTOCOLS.contains(asked))
-                .unwrap_or(PROTOCOL);
-            server.reply(
-                id,
-                json!({
-                    "protocolVersion": version,
-                    "capabilities": { "tools": { "listChanged": true } },
-                    "serverInfo": { "name": "rawr", "version": rawr::VERSION },
-                    "instructions": tools::instructions(&server.root),
-                }),
-            );
-        }
-        "ping" => server.reply(id, json!({})),
-        "tools/list" => {
-            let listed = tools::list();
-            *server.listed.lock().unwrap_or_else(PoisonError::into_inner) = names(&listed);
-            server.reply(id, json!({ "tools": listed }));
-        }
-        "tools/call" => {
-            let cancel = Arc::new(process::Cancel::default());
-            let key = id.to_string();
-            server
-                .calls
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .insert(key.clone(), Arc::clone(&cancel));
-            let spawned = std::thread::Builder::new()
-                .name("rawr-mcp-call".into())
-                .spawn_scoped(calls, move || {
-                    // A call that panics gets no answer and the server goes
-                    // on: its unwind ends here, so the scope's end doesn't
-                    // raise it again.
-                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        tools::call(server, &params, &cancel)
-                    }));
-                    server
-                        .calls
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .remove(&key);
-                    // An install the call saw is told before its answer.
-                    tell_changes(server);
-                    // A cancelled request gets no answer.
-                    if let Ok(result) = result
-                        && !cancel.is_cancelled()
-                    {
-                        server.reply(id, result);
-                    }
-                });
-            if let Err(error) = spawned {
-                server.error(Value::Null, -32603, &error.to_string());
+            return;
+        };
+        match method {
+            "initialize" => {
+                let asked = params.get("protocolVersion").and_then(Value::as_str);
+                let version = asked
+                    .filter(|asked| PROTOCOLS.contains(asked))
+                    .unwrap_or(PROTOCOL);
+                server.reply(
+                    id,
+                    json!({
+                        "protocolVersion": version,
+                        "capabilities": { "tools": { "listChanged": true } },
+                        "serverInfo": { "name": "rawr", "version": rawr::VERSION },
+                        "instructions": tools::instructions(&server.root),
+                    }),
+                );
             }
+            "ping" => server.reply(id, json!({})),
+            "tools/list" => {
+                let listed = tools::list();
+                self.listed = names(&listed);
+                server.reply(id, json!({ "tools": listed }));
+            }
+            "tools/call" => self.call(id, params),
+            method => server.error(id, -32601, &format!("unknown method `{method}`")),
         }
-        method => server.error(id, -32601, &format!("unknown method `{method}`")),
+    }
+
+    /// Run one `tools/call` on a thread of the scope, which says when it
+    /// returned.
+    fn call(&mut self, id: Value, params: Value) {
+        let server = self.server;
+        let cancel = Arc::new(process::Cancel::default());
+        self.calls.insert(id.to_string(), Arc::clone(&cancel));
+        let heard = self.heard.clone();
+        let spawned = std::thread::Builder::new()
+            .name("rawr-mcp-call".into())
+            .spawn_scoped(self.scope, move || {
+                // A call that panics gets no answer and the server goes
+                // on: its unwind ends here, so the scope's end doesn't
+                // raise it again.
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    tools::call(server, &params, &cancel)
+                }));
+                // A cancelled request gets no answer.
+                let answer = result.ok().filter(|_| !cancel.is_cancelled());
+                let _ = heard.send(Heard::Returned { id, answer });
+            });
+        if let Err(error) = spawned {
+            server.error(Value::Null, -32603, &error.to_string());
+        }
+    }
+
+    /// A call returned: an install it saw is told before its answer.
+    fn returned(&mut self, id: Value, answer: Option<Value>) {
+        self.calls.remove(&id.to_string());
+        self.tell_changes();
+        if let Some(answer) = answer {
+            self.server.reply(id, answer);
+        }
+    }
+
+    /// Tell the client when an install or removal changed the tools since
+    /// it last listed them.
+    fn tell_changes(&mut self) {
+        if self.listed.is_empty() {
+            return;
+        }
+        let now = names(&tools::list());
+        if now != self.listed {
+            self.listed = now;
+            self.server
+                .send(json!({ "jsonrpc": "2.0", "method": "notifications/tools/list_changed" }));
+        }
+    }
+
+    /// End every call and every program the server started.
+    fn shut_down(&mut self) {
+        for (_, call) in self.calls.drain() {
+            call.cancel();
+        }
+        self.server.sessions.stop_all();
+        self.server.checks.stop_all();
     }
 }
 
@@ -229,20 +282,6 @@ fn names(tools: &[Value]) -> Vec<String> {
         .iter()
         .filter_map(|tool| tool["name"].as_str().map(str::to_owned))
         .collect()
-}
-
-/// Tell the client when an install or removal changed the tools since it
-/// last listed them.
-fn tell_changes(server: &Server) {
-    let mut listed = server.listed.lock().unwrap_or_else(PoisonError::into_inner);
-    if listed.is_empty() {
-        return;
-    }
-    let now = names(&tools::list());
-    if now != *listed {
-        *listed = now;
-        server.send(json!({ "jsonrpc": "2.0", "method": "notifications/tools/list_changed" }));
-    }
 }
 
 /// Relay progress for a request that asked for it.
@@ -264,5 +303,41 @@ impl Progress<'_> {
         self.server.send(
             json!({ "jsonrpc": "2.0", "method": "notifications/progress", "params": params }),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{BufRead as _, BufReader};
+    use std::os::unix::net::UnixStream;
+    use std::path::PathBuf;
+
+    use serde_json::{json, Value};
+
+    /// The loop answers each request it reads and ends with its input. A
+    /// cancel of a call it doesn't know changes nothing.
+    #[test]
+    fn the_loop_answers_requests_and_ends_with_its_input() {
+        let input = concat!(
+            r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#,
+            "\n",
+            r#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":9}}"#,
+            "\n",
+            "not json\n",
+            r#"{"jsonrpc":"2.0","id":2,"method":"nothing"}"#,
+            "\n",
+        );
+        let (written, read) = UnixStream::pair().unwrap();
+        super::serve_on(PathBuf::from("/p"), input.as_bytes(), written).unwrap();
+        let heard: Vec<Value> = BufReader::new(read)
+            .lines()
+            .map(|line| serde_json::from_str(&line.unwrap()).unwrap())
+            .collect();
+        assert_eq!(heard.len(), 3, "{heard:?}");
+        assert_eq!(heard[0]["id"], 1);
+        assert_eq!(heard[0]["result"], json!({}));
+        assert_eq!(heard[1]["error"]["code"], -32700);
+        assert_eq!(heard[2]["id"], 2);
+        assert_eq!(heard[2]["error"]["code"], -32601);
     }
 }

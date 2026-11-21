@@ -42,7 +42,9 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
     }
     // Before any process starts, so none inherits it.
     #[cfg(unix)]
-    events::session::adopt();
+    let handed = events::session::adopt();
+    #[cfg(not(unix))]
+    let handed = None;
     let arguments = match target_arguments(arguments) {
         Ok(arguments) => arguments,
         Err(message) => {
@@ -63,7 +65,7 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
             check,
             path,
             program,
-        }) => self::program(check, path.as_ref(), &arguments, &program),
+        }) => self::program(check, path.as_ref(), &arguments, &program, handed),
         Ok(Request::Web { path, .. }) => on_web(path.as_ref(), &arguments),
         Ok(Request::Test { path, options }) => test(path.as_ref(), &arguments, &options),
         Ok(Request::Doctor { path }) => doctor(path.as_ref(), &arguments),
@@ -576,9 +578,12 @@ fn program(
     path: Option<&PathBuf>,
     arguments: &[OsString],
     program: &[OsString],
+    handed: Option<events::Handed>,
 ) -> ExitCode {
-    match base::load(path, base::Build::Program).and_then(|loaded| served(loaded, arguments)) {
-        Ok(Served::Base(loaded)) => on_base(*loaded, check, program),
+    let loaded = base::load(path, base::Build::Program)
+        .and_then(|loaded| served(loaded, arguments, handed.as_ref()));
+    match loaded {
+        Ok(Served::Base(loaded)) => on_base(*loaded, check, program, handed),
         Ok(Served::Handed(code)) => code,
         Err(report) => failure(&report),
     }
@@ -589,7 +594,8 @@ fn program(
 /// program on the base language goes to the binary that provides `rawr run
 /// --web`, which runs it on a runner of rawr and std alone.
 fn on_web(path: Option<&PathBuf>, arguments: &[OsString]) -> ExitCode {
-    match base::load(path, base::Build::Program).and_then(|loaded| served(loaded, arguments)) {
+    match base::load(path, base::Build::Program).and_then(|loaded| served(loaded, arguments, None))
+    {
         Ok(Served::Base(_)) => {
             let mut run = Vec::with_capacity(arguments.len() + 1);
             if arguments.first().is_none_or(|word| word != "run") {
@@ -606,7 +612,7 @@ fn on_web(path: Option<&PathBuf>, arguments: &[OsString]) -> ExitCode {
 /// `rawr test`: load the program for its tests once, then run them here
 /// or hand it to the binary that serves it.
 fn test(path: Option<&PathBuf>, arguments: &[OsString], options: &harness::Options) -> ExitCode {
-    match base::load(path, base::Build::Test).and_then(|loaded| served(loaded, arguments)) {
+    match base::load(path, base::Build::Test).and_then(|loaded| served(loaded, arguments, None)) {
         Ok(Served::Base(loaded)) => harness::run(*loaded, options),
         Ok(Served::Handed(code)) => code,
         Err(report) => failure(&report),
@@ -621,11 +627,13 @@ enum Served {
     Handed(ExitCode),
 }
 
-/// Hand the loaded program, with the same `arguments`, to the installed
-/// binary that serves it, or keep it here on the base language.
+/// Hand the loaded program, with the same `arguments` and the listener a
+/// shell `handed` this run, to the installed binary that serves it, or
+/// keep it here on the base language.
 fn served(
     loaded: base::Loaded,
     arguments: &[OsString],
+    handed: Option<&events::Handed>,
 ) -> Result<Served, rawr::diagnostic::Report> {
     let installed = layer::installed();
     let facts = loaded.sheet.facts();
@@ -639,7 +647,7 @@ fn served(
                     binary.path.display()
                 );
             }
-            return Ok(Served::Handed(hand_off(&binary.path, arguments)));
+            return Ok(Served::Handed(hand_off(&binary.path, arguments, handed)));
         }
         Ok(None) => {}
     }
@@ -668,13 +676,19 @@ fn served(
 /// then `fn main` if it has one, as in Rust. `cargo check` runs beside it
 /// for a Cargo crate. A run goes in a process of its own, which gets
 /// `arguments` and restarts when a save changes the program
-/// ([`supervise`]).
+/// ([`supervise`]), and hosts its session on the listener a shell
+/// `handed` it.
 #[must_use]
-pub fn on_base(loaded: base::Loaded, check: bool, arguments: &[OsString]) -> ExitCode {
+pub fn on_base(
+    loaded: base::Loaded,
+    check: bool,
+    arguments: &[OsString],
+    handed: Option<events::Handed>,
+) -> ExitCode {
     // rustc checks a Cargo crate of marked files while Rawr works.
     let cargo = cargo::begin(&loaded.graph);
     if !check {
-        return supervise::run(loaded, arguments, cargo);
+        return supervise::run(loaded, arguments, cargo, handed);
     }
     let checked = base::check(loaded);
     if cargo::conclude(checked.as_deref(), cargo) {
@@ -790,7 +804,7 @@ fn create(path: PathBuf, template: Option<&str>, arguments: &[OsString]) -> Exit
         |manifest: &layer::Manifest| manifest.templates.iter().any(|name| name == template);
     let installed = layer::installed();
     if let Some(binary) = installed.iter().find(|binary| offers(&binary.manifest)) {
-        return hand_off(&binary.path, arguments);
+        return hand_off(&binary.path, arguments, None);
     }
     if let Some(known) = layer::catalog()
         .into_iter()
@@ -868,7 +882,7 @@ fn forward(arguments: &[OsString]) -> ExitCode {
         .into_iter()
         .find(|binary| binary.manifest.provides(arguments))
     {
-        return hand_off(&binary.path, arguments);
+        return hand_off(&binary.path, arguments, None);
     }
     for known in layer::catalog() {
         if let Some(command) = known.manifest.provided(arguments) {
@@ -893,17 +907,19 @@ fn forward(arguments: &[OsString]) -> ExitCode {
 }
 
 /// Run `binary` with the same arguments and feature flags in place of this
-/// process.
-fn hand_off(binary: &Path, arguments: &[OsString]) -> ExitCode {
+/// process, keeping the listener a shell `handed` this run.
+fn hand_off(binary: &Path, arguments: &[OsString], handed: Option<&events::Handed>) -> ExitCode {
     let mut command = Command::new(binary);
     command.args(arguments);
     rawr::project::cargo::features::Selection::selected().hand(&mut command);
     color::hand(&mut command);
+    #[cfg(not(unix))]
+    let _ = handed;
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt as _;
         // The binary hosts the run's session in this one's place.
-        events::session::pass_on(&mut command);
+        events::session::pass_on(&mut command, handed);
         let error = command.exec();
         eprintln!(
             "{}: cannot run {}: {error}",

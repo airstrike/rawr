@@ -46,7 +46,7 @@ pub(super) use imp::{give, restore, take_back, wake};
 #[cfg(unix)]
 mod imp {
     use std::io::{IsTerminal as _, Write as _};
-    use std::sync::Mutex;
+    use std::sync::{Mutex, OnceLock};
 
     use rustix::process::{getpgrp, kill_process_group, Pid, Signal};
     use rustix::termios::{
@@ -54,8 +54,8 @@ mod imp {
         Termios,
     };
 
-    /// The terminal's modes before the first runner had it.
-    static SAVED: Mutex<Option<Termios>> = Mutex::new(None);
+    /// The terminal's modes before the first runner had it, set once.
+    static SAVED: OnceLock<Termios> = OnceLock::new();
     /// Lines [`super::say`] held while a program had the terminal raw.
     pub(super) static HELD: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
@@ -82,10 +82,10 @@ mod imp {
         if !tcgetpgrp(&stdin).is_ok_and(|foreground| foreground == getpgrp()) {
             return false;
         }
-        if let Ok(mut saved) = SAVED.lock()
-            && saved.is_none()
+        if SAVED.get().is_none()
+            && let Ok(modes) = tcgetattr(&stdin)
         {
-            *saved = tcgetattr(&stdin).ok();
+            let _ = SAVED.set(modes);
         }
         if tcsetpgrp(&stdin, leader).is_err() {
             return false;
@@ -120,11 +120,10 @@ mod imp {
     /// when they changed, with the fixed reset, then print the held lines.
     pub(in crate::process) fn restore() {
         let stdin = std::io::stdin();
-        let saved = SAVED.lock().ok().and_then(|saved| saved.clone());
-        if let (Some(saved), Ok(now)) = (saved, tcgetattr(&stdin))
-            && !same(&saved, &now)
+        if let (Some(saved), Ok(now)) = (SAVED.get(), tcgetattr(&stdin))
+            && !same(saved, &now)
         {
-            let _ = tcsetattr(&stdin, OptionalActions::Now, &saved);
+            let _ = tcsetattr(&stdin, OptionalActions::Now, saved);
             write_reset();
         }
         crate::progress::clear_left();

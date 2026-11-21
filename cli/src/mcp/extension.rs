@@ -186,7 +186,7 @@ pub fn call(
     if let Some(result) = result {
         return result;
     }
-    let (errors, _) = stderr.text();
+    let (errors, _) = stderr.finish();
     if !ended {
         return content::failure("cancelled");
     }

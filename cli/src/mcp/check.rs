@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Instant, SystemTime};
 
 use serde_json::{json, Value};
 
@@ -146,15 +146,14 @@ fn run(path: &Path, root: &Path, sink: &Path, group: &Mutex<Option<u32>>) -> Val
     let status = child.wait();
     *group.lock().unwrap_or_else(PoisonError::into_inner) = None;
     process::kill_group(child.id());
-    std::thread::sleep(Duration::from_millis(20));
     let diagnostics: Vec<Value> = std::fs::read_to_string(sink)
         .unwrap_or_default()
         .lines()
         .filter_map(|line| serde_json::from_str(line).ok())
         .collect();
     let passed = status.as_ref().is_ok_and(std::process::ExitStatus::success);
-    let (stdout, _) = stdout.text();
-    let (stderr, _) = stderr.text();
+    let (stdout, _) = stdout.finish();
+    let (stderr, _) = stderr.finish();
     let errors = diagnostics
         .iter()
         .filter(|diagnostic| diagnostic["severity"] == "error")

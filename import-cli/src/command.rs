@@ -41,7 +41,9 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
     // The session listener a shell handed `rawr run`, before any process
     // starts, so none inherits it.
     #[cfg(unix)]
-    rawr_cli::events::session::adopt();
+    let handed = rawr_cli::events::session::adopt();
+    #[cfg(not(unix))]
+    let handed = None;
     // A universe runner, as `?play`'s image builds it (#434).
     if std::env::var_os(rawr_import::universe::VARIABLE).is_some_and(|value| value == "1") {
         rawr_import::universe::set();
@@ -125,7 +127,7 @@ pub fn main(arguments: Vec<OsString>) -> ExitCode {
     };
     match (request, web) {
         (Ok((_, path)), Some(options)) => crate::web::run(path.as_ref(), &options),
-        (Ok((check, path)), None) => program(check, path.as_ref(), &program_arguments),
+        (Ok((check, path)), None) => program(check, path.as_ref(), &program_arguments, handed),
         (Err(message), _) => {
             eprintln!(
                 "{}: {message}; run `rawr-import --help` for usage",
@@ -204,7 +206,14 @@ fn warm() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn program(check: bool, path: Option<&PathBuf>, arguments: &[OsString]) -> ExitCode {
+/// Run or check the program at `path`, hosting its session on the listener
+/// a shell `handed` this run.
+fn program(
+    check: bool,
+    path: Option<&PathBuf>,
+    arguments: &[OsString],
+    handed: Option<rawr_cli::events::Handed>,
+) -> ExitCode {
     let loaded = match rawr_cli::base::load(path, rawr_cli::base::Build::Program) {
         Ok(loaded) => loaded,
         Err(report) => return failure(&report),
@@ -213,7 +222,7 @@ fn program(check: bool, path: Option<&PathBuf>, arguments: &[OsString]) -> ExitC
     // A program that imports no Rust runs on the base language, unless the
     // caller takes its runner: that runner is rawr and std alone.
     if !loaded.graph.declares_rust_import() && !rawr_import::universe::delivers() {
-        return rawr_cli::on_base(loaded, check, arguments);
+        return rawr_cli::on_base(loaded, check, arguments, handed);
     }
     let rawr_cli::base::Loaded { target, graph, .. } = loaded;
     // rustc checks the crate while Rawr works.
@@ -244,7 +253,14 @@ fn program(check: bool, path: Option<&PathBuf>, arguments: &[OsString]) -> ExitC
             ExitCode::FAILURE
         };
     }
-    let ran = owner::run_program(&target, Some(graph), &Plain::PROGRAM, arguments, cargo);
+    let ran = owner::run_program(
+        &target,
+        Some(graph),
+        &Plain::PROGRAM,
+        arguments,
+        cargo,
+        handed,
+    );
     // What the run's preparation did: a warm start reads, classifies,
     // generates and compiles nothing (#1604).
     if rawr_cli::cells::verbose() {
