@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-21",
-  "version": "0.4.96",
+  "version": "0.4.97",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.97",
+        "date": "2026-11-21",
+        "entries": [
+          {"text":"An eval or a read asked at a pause that a continue or step ends first is answered at once as resumed, and never runs at the program's next pause. A screenshot given up while the window draws still gives the window's layer its settings back, and a click, drag or key press a pause interrupts still lets go of its button or key.","issues":[2419]}
+        ]
+      },
       {
         "version": "0.4.96",
         "date": "2026-11-21",
@@ -5901,7 +5908,10 @@
     {"issue":2415,"title":"Some of the owner's rawr: lines skip the hold while a program has the terminal raw","state":"closed","category":"Health","release":"0.4.92"},
     {"issue":2416,"title":"Debugger evaluations ask cargo metadata on each evaluation","state":"open","category":"Health"},
     {"issue":2417,"title":"rawr-cli's marked-library test sees no island shape","state":"open","category":"Health"},
-    {"issue":2418,"title":"Importer lib tests leave thousands of rawr-* temp directories behind","state":"open","category":"Health"}
+    {"issue":2418,"title":"Importer lib tests leave thousands of rawr-* temp directories behind","state":"open","category":"Health"},
+    {"issue":2419,"title":"An eval or a read asked at a pause that a continue or step ends first is answered at once as…","state":"closed","category":"Health","release":"0.4.97"},
+    {"issue":2420,"title":"The input and screenshot waits for the compositor are 17 ms waits","state":"open","category":"Health"},
+    {"issue":2421,"title":"A window closed between a capture's draw and its compose","state":"open","category":"Health"}
   ],
   "groups": [
     {

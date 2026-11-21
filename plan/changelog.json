@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.4.97",
+      "date": "2026-11-21",
+      "entries": [
+        {"text":"An eval or a read asked at a pause that a continue or step ends first is answered at once as resumed, and never runs at the program's next pause. A screenshot given up while the window draws still gives the window's layer its settings back, and a click, drag or key press a pause interrupts still lets go of its button or key.","issues":[2419]}
+      ]
+    },
+    {
       "version": "0.4.96",
       "date": "2026-11-21",
       "entries": [

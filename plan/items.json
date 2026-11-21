@@ -2417,6 +2417,9 @@
     {"t":"T2415","issue":2415,"title":"T2415: Some of the owner's rawr: lines skip the hold while a program has the terminal raw","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":["D534"],"commit":"a78845e55","release":"0.4.92"},
     {"t":"T2416","issue":2416,"title":"T2416: Debugger evaluations ask cargo metadata on each evaluation","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T2417","issue":2417,"title":"T2417: rawr-cli's marked-library test sees no island shape","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T2418","issue":2418,"title":"T2418: Importer lib tests leave thousands of rawr-* temp directories behind","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T2418","issue":2418,"title":"T2418: Importer lib tests leave thousands of rawr-* temp directories behind","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T2419","issue":2419,"title":"T2419: An eval or a read asked at a pause that a continue or step ends first is answered at once as…","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":"0.4.97"},
+    {"t":"T2420","issue":2420,"title":"T2420: The input and screenshot waits for the compositor are 17 ms waits","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T2421","issue":2421,"title":"T2421: A window closed between a capture's draw and its compose","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }
