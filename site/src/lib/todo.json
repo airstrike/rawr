@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-21",
-  "version": "0.4.95",
+  "version": "0.4.96",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.96",
+        "date": "2026-11-21",
+        "entries": [
+          {"text":"The graph budget stays on the thread that owns the graph: the extraction plan and capture carry only whether the graph owns their artifacts, so the graph's account registry has no locks.","issues":[2407]}
+        ]
+      },
       {
         "version": "0.4.95",
         "date": "2026-11-21",
@@ -5883,7 +5890,7 @@
     {"issue":2404,"title":"eval at a step inside a chain on a local runs against an empty scope","state":"open","category":"Health"},
     {"issue":2405,"title":"Read sets stay on the thread that owns them, and the compiler proves it: the importer's read-set…","state":"closed","category":"Health","release":"0.4.86"},
     {"issue":2406,"title":"eval of a crate use the running build doesn't bind: a field the program never reads, or a generic at a new type","state":"closed","category":"Health","release":"0.4.87"},
-    {"issue":2407,"title":"The graph budget rides in plan::Plan and plan::Capture, so the account registry keeps two locks","state":"open","category":"Health"},
+    {"issue":2407,"title":"The graph budget rides in plan::Plan and plan::Capture, so the account registry keeps two locks","state":"closed","category":"Health","release":"0.4.96"},
     {"issue":2408,"title":"Importer integration fixtures extract once per test thread now that contracts are not Sync","state":"open","category":"Health"},
     {"issue":2409,"title":"Bind the visible fields of the crate types a runner already crosses, so eval can read them without a rebuild","state":"open","category":"Health"},
     {"issue":2410,"title":"Offer to rebuild with an eval's missing use and re-run the program to the same pause","state":"open","category":"Health"},
@@ -5893,7 +5900,8 @@
     {"issue":2414,"title":"rawr's status line, the lines above it and the lines held while a program has the terminal are…","state":"closed","category":"Health","release":"0.4.91"},
     {"issue":2415,"title":"Some of the owner's rawr: lines skip the hold while a program has the terminal raw","state":"closed","category":"Health","release":"0.4.92"},
     {"issue":2416,"title":"Debugger evaluations ask cargo metadata on each evaluation","state":"open","category":"Health"},
-    {"issue":2417,"title":"rawr-cli's marked-library test sees no island shape","state":"open","category":"Health"}
+    {"issue":2417,"title":"rawr-cli's marked-library test sees no island shape","state":"open","category":"Health"},
+    {"issue":2418,"title":"Importer lib tests leave thousands of rawr-* temp directories behind","state":"open","category":"Health"}
   ],
   "groups": [
     {

@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.4.96",
+      "date": "2026-11-21",
+      "entries": [
+        {"text":"The graph budget stays on the thread that owns the graph: the extraction plan and capture carry only whether the graph owns their artifacts, so the graph's account registry has no locks.","issues":[2407]}
+      ]
+    },
+    {
       "version": "0.4.95",
       "date": "2026-11-21",
       "entries": [

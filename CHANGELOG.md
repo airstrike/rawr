@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.96 (2026-11-21)
+
+- The graph budget stays on the thread that owns the graph: the extraction plan and capture carry only whether the graph owns their artifacts, so the graph's account registry has no locks. (#2407)
+
 ## 0.4.95 (2026-11-21)
 
 - The check's owner holds the list of kept macro expansions its checks read, not a process-wide global; a check that reuses a remembered lowering still keeps the expansions that lowering read. (#2387)
