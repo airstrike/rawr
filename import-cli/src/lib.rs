@@ -62,11 +62,13 @@ pub trait Profile {
 /// preparation to the next: the API graph its saves share, the compiler
 /// that checks the program, which lowers again only the sources whose
 /// check reads something a save changed, the parse cells its loads read,
-/// the program a save loaded before it prepared, and the shadow crate's
-/// files as they were last written (#1849).
+/// the program a save loaded before it prepared, the shadow crate's files
+/// as they were last written (#1849), and what each resolution leaves for
+/// the next (#1825).
 #[derive(Default)]
 pub struct Kept {
     api: rawr_import::api::Kept,
+    memos: rawr_import::cargo::resolution::Memos,
     /// The compiler that checks the program as a build builds it, and the
     /// registry its last check installed the crates' facades in.
     check: Option<(
@@ -90,6 +92,11 @@ impl Kept {
     /// The shadow crate's files as they were last written.
     pub fn copies(&mut self) -> &mut rawr::package::Copies {
         &mut self.copies
+    }
+
+    /// What each resolution leaves for the next.
+    pub fn memos(&mut self) -> &mut rawr_import::cargo::resolution::Memos {
+        &mut self.memos
     }
 
     /// The parse cells in `directory`, remembered across every load the

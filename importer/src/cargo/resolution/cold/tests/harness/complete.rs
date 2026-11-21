@@ -363,7 +363,8 @@ fn exercise(outcome: Outcome) {
                         )
                         .expect("complete cold record and inventory seal together");
                         let cargo_home = replay_request.config.cargo_home()?;
-                        let compare = |budget: &mut crate::input::stored::Budget<'_>,
+                        let replays = std::sync::Mutex::default();
+                        let compare =|budget: &mut crate::input::stored::Budget<'_>,
                                            cargo_limits: &Limits,
                                            cargo_allocation: &mut cargo::unit::Allocation| {
                             let lock = definition.candidate(
@@ -382,6 +383,7 @@ fn exercise(outcome: Outcome) {
                                 current_context,
                                 None,
                                 None,
+                                &replays,
                                 &limits,
                                 cargo_limits,
                                 cargo_allocation,

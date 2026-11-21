@@ -215,11 +215,14 @@ impl Request {
             cargo_limits,
             cargo_allocation,
             true,
+            &mut super::remembered::Remembered::default(),
         )
     }
 
-    /// Reconstruct a selected current-universe harness in the reserved Layout.
-    /// A persisted receipt selects input bytes, never portable completion authority.
+    /// Reconstruct a selected current-universe harness in the reserved Layout,
+    /// taking Cargo's outputs from those `remembered` holds when Cargo's view
+    /// is unchanged. A persisted receipt selects input bytes, never portable
+    /// completion authority.
     pub(in crate::cargo) fn prepare_harness_in(
         &self,
         layout: &layout::Layout,
@@ -227,6 +230,7 @@ impl Request {
         limits: &Limits,
         cargo_limits: &Limits,
         cargo_allocation: cargo::unit::Allocation,
+        remembered: &mut super::remembered::Remembered,
     ) -> Result<cargo::Harness> {
         self.prepare_selected_harness_in(
             layout,
@@ -235,9 +239,14 @@ impl Request {
             cargo_limits,
             cargo_allocation,
             false,
+            remembered,
         )
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one preparation binds the reserved layout, its accounts and the owner's remembered Cargo outputs"
+    )]
     fn prepare_selected_harness_in(
         &self,
         layout: &layout::Layout,
@@ -246,6 +255,7 @@ impl Request {
         cargo_limits: &Limits,
         mut cargo_allocation: cargo::unit::Allocation,
         fresh_only: bool,
+        remembered: &mut super::remembered::Remembered,
     ) -> Result<cargo::Harness> {
         cargo_allocation.require(cargo_limits);
         let catalog = self
@@ -294,7 +304,7 @@ impl Request {
         // `--locked`, and reads what it read for them (#1847).
         let reuse = (|| {
             let outputs =
-                super::remembered::lookup(&remembered_base, layout.root(), cached.context.rawr())?;
+                remembered.lookup(&remembered_base, layout.root(), cached.context.rawr())?;
             let recalled = self.internal.recall(&outputs.internal)?;
             match &placement.state {
                 cargo::PlacementState::Persisted { lock, .. } if *outputs.lock != *lock.bytes() => {
@@ -454,7 +464,7 @@ impl Request {
             crate::process::CAPTURE_BYTES,
         )?;
         if let (None, Some(candidate), Some(recipe)) = (&reuse, produced, internal.encode()) {
-            super::remembered::remember(
+            remembered.remember(
                 remembered_base,
                 layout.root(),
                 &workspace.roots,

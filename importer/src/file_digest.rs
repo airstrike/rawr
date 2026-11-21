@@ -17,6 +17,11 @@
 //! fixed-size checked records beside it, and the table is loaded on attach, so
 //! an unchanged file is not read again by a later process. A torn, corrupt or
 //! full table is emptied; correctness never depends on a hit.
+//!
+//! The memo is the process's, not a run owner's: every store, input and
+//! toolchain read consults it, on whatever thread reads, and each answer is
+//! a pure function of a file's bytes, so sharing it never changes a result.
+//! Its lock covers the map alone; the table is read and written outside it.
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -90,15 +95,15 @@ const RECORD: usize = 56 + 6 + 32 + 8;
 /// What a memoized digest is keyed by.
 type Key = (Identity, Domain);
 
-#[derive(Default)]
-struct Memo {
-    digests: HashMap<Key, [u8; 32]>,
-    table: Option<File>,
+fn memo() -> &'static Mutex<HashMap<Key, [u8; 32]>> {
+    static MEMO: OnceLock<Mutex<HashMap<Key, [u8; 32]>>> = OnceLock::new();
+    MEMO.get_or_init(Mutex::default)
 }
 
-fn memo() -> &'static Mutex<Memo> {
-    static MEMO: OnceLock<Mutex<Memo>> = OnceLock::new();
-    MEMO.get_or_init(Mutex::default)
+/// The table new digests are appended to, once a store is attached.
+fn table() -> &'static OnceLock<File> {
+    static TABLE: OnceLock<File> = OnceLock::new();
+    &TABLE
 }
 
 fn record(identity: Identity, domain: Domain, digest: [u8; 32]) -> [u8; RECORD] {
@@ -161,8 +166,7 @@ fn parse(record: &[u8; RECORD]) -> Option<(Key, [u8; 32])> {
 /// Load the digests table at `path` and append later digests to it. The first
 /// attach in a process wins; failures leave the memo process-local.
 pub(crate) fn attach(path: &Path) {
-    let Ok(mut memo) = memo().lock() else { return };
-    if memo.table.is_some() {
+    if table().get().is_some() {
         return;
     }
     let mut options = std::fs::OpenOptions::new();
@@ -172,14 +176,26 @@ pub(crate) fn attach(path: &Path) {
         use std::os::unix::fs::OpenOptionsExt as _;
         options.custom_flags(libc::O_NOFOLLOW);
     }
-    let Ok(mut table) = options.open(path) else {
+    let Ok(mut opened) = options.open(path) else {
         return;
     };
-    match load(&mut table) {
-        Some(records) => memo.digests.extend(records),
-        None => drop(table.set_len(0)),
+    let records = load(&mut opened);
+    // Two attaches at once both load; only the first keeps its table.
+    if table().set(opened).is_err() {
+        return;
     }
-    memo.table = Some(table);
+    match records {
+        Some(records) => {
+            if let Ok(mut digests) = memo().lock() {
+                digests.extend(records);
+            }
+        }
+        None => {
+            if let Some(table) = table().get() {
+                drop(table.set_len(0));
+            }
+        }
+    }
 }
 
 /// Every record of a whole, checked table that fits the memo.
@@ -195,12 +211,7 @@ fn load(table: &mut File) -> Option<Vec<(Key, [u8; 32])>> {
 /// The digest previously computed for exactly this identity, if any.
 pub(crate) fn get(identity: Option<Identity>, domain: Domain) -> Option<[u8; 32]> {
     let identity = identity?;
-    memo()
-        .lock()
-        .ok()?
-        .digests
-        .get(&(identity, domain))
-        .copied()
+    memo().lock().ok()?.get(&(identity, domain)).copied()
 }
 
 /// The bytes of the file at `path` and their SHA-256: the digest this memo
@@ -237,17 +248,26 @@ pub(crate) fn sha256(path: &Path) -> std::io::Result<(u64, [u8; 32])> {
 /// Remember a digest computed from bytes read while the file kept `identity`.
 pub(crate) fn insert(identity: Option<Identity>, domain: Domain, digest: [u8; 32]) {
     let Some(identity) = identity else { return };
-    let Ok(mut memo) = memo().lock() else { return };
-    let memo = &mut *memo;
-    if memo.digests.len() >= CAPACITY {
-        memo.digests.clear();
-        if let Some(table) = &memo.table {
-            drop(table.set_len(0));
+    let (cleared, new) = {
+        let Ok(mut digests) = memo().lock() else {
+            return;
+        };
+        let cleared = digests.len() >= CAPACITY;
+        if cleared {
+            digests.clear();
         }
+        (
+            cleared,
+            digests.insert((identity, domain), digest) != Some(digest),
+        )
+    };
+    let Some(mut table) = table().get() else {
+        return;
+    };
+    if cleared {
+        drop(table.set_len(0));
     }
-    if memo.digests.insert((identity, domain), digest) != Some(digest)
-        && let Some(table) = &mut memo.table
-    {
+    if new {
         // One append-mode write per record keeps concurrent writers whole.
         drop(table.write_all(&record(identity, domain, digest)));
     }

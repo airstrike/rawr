@@ -15,8 +15,9 @@
 //! added target) runs Cargo as before.
 //!
 //! The demand is not part of the request here: it changes what the probe
-//! extracts, never what Cargo sees. The outputs are also kept in the
-//! project's Rawr directory, so the next process starts from them too.
+//! extracts, never what Cargo sees. The owner remembers the outputs, and
+//! they are also kept in the project's Rawr directory, so the next process
+//! starts from them too.
 //!
 //! The files are read when the outputs are saved, after Cargo ran. A file
 //! modified since Cargo started reading may hold bytes Cargo never saw, so
@@ -26,7 +27,6 @@
 //! are compared; a source's bytes are never part of Cargo's view.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use sha2::{Digest as _, Sha256};
@@ -50,7 +50,9 @@ struct Entry {
     outputs: Outputs,
 }
 
-static REMEMBERED: Mutex<Vec<Arc<Entry>>> = Mutex::new(Vec::new());
+/// The requests an owner remembers, most recent first.
+#[derive(Default)]
+pub(in crate::cargo) struct Remembered(Vec<Entry>);
 
 /// Requests remembered: the current one and a few it may return to.
 const ENTRIES: usize = 4;
@@ -125,9 +127,9 @@ fn decode(mut bytes: &[u8]) -> Option<Entry> {
 
 /// The entry an earlier process kept, read back. A file that does not
 /// decode is a miss.
-fn kept(rawr: &Path, base: &[u8; 32]) -> Option<Arc<Entry>> {
+fn kept(rawr: &Path, base: &[u8; 32]) -> Option<Entry> {
     let entry = decode(&std::fs::read(file(rawr, base)).ok()?)?;
-    (entry.base == *base).then(|| Arc::new(entry))
+    (entry.base == *base).then_some(entry)
 }
 
 /// Keep `entry` for the next process, and only the few newest beside it.
@@ -169,47 +171,74 @@ pub(in crate::cargo) fn base(parts: &[&[u8]]) -> [u8; 32] {
     digest.finalize().into()
 }
 
-/// The remembered outputs for this request when Cargo's view is unchanged,
-/// rewritten to name `root`: this process's, else the one kept under the
-/// project's Rawr directory `rawr`.
-pub(in crate::cargo) fn lookup(base: &[u8; 32], root: &Path, rawr: &Path) -> Option<Outputs> {
-    let new = Spelled::of(root)?;
-    let known = REMEMBERED
-        .lock()
-        .ok()?
-        .iter()
-        .find(|entry| entry.base == *base)
-        .cloned();
-    let entry = match known {
-        Some(entry) => entry,
-        None => {
-            let entry = kept(rawr, base)?;
-            if let Ok(mut remembered) = REMEMBERED.lock() {
-                remembered.insert(0, Arc::clone(&entry));
-                remembered.truncate(ENTRIES);
+impl Remembered {
+    /// The remembered outputs for this request when Cargo's view is
+    /// unchanged, rewritten to name `root`: the owner's, else the one kept
+    /// under the project's Rawr directory `rawr`.
+    pub(in crate::cargo) fn lookup(
+        &mut self,
+        base: &[u8; 32],
+        root: &Path,
+        rawr: &Path,
+    ) -> Option<Outputs> {
+        let new = Spelled::of(root)?;
+        let at = match self.0.iter().position(|entry| entry.base == *base) {
+            Some(at) => at,
+            None => {
+                self.0.insert(0, kept(rawr, base)?);
+                self.0.truncate(ENTRIES);
+                0
             }
-            entry
+        };
+        let entry = &self.0[at];
+        if determinants(&entry.roots, root, None)? != entry.determinants {
+            return None;
         }
-    };
-    if determinants(&entry.roots, root, None)? != entry.determinants {
-        return None;
+        let rewrite = |bytes: &[u8]| entry.root.rewrite(bytes, &new);
+        Some(Outputs {
+            internal: entry.outputs.internal.clone(),
+            candidate: rewrite(&entry.outputs.candidate),
+            lock: entry.outputs.lock.clone(),
+            units: rewrite(&entry.outputs.units),
+        })
     }
-    let rewrite = |bytes: &[u8]| entry.root.rewrite(bytes, &new);
-    Some(Outputs {
-        internal: entry.outputs.internal.clone(),
-        candidate: rewrite(&entry.outputs.candidate),
-        lock: entry.outputs.lock.clone(),
-        units: rewrite(&entry.outputs.units),
-    })
+
+    /// Remember what Cargo produced for this request in the bundle at
+    /// `root`, and keep it under the project's Rawr directory `rawr`, unless
+    /// a file Cargo read was modified since `started`.
+    pub(in crate::cargo) fn remember(
+        &mut self,
+        base: [u8; 32],
+        root: &Path,
+        roots: &[PathBuf],
+        outputs: Outputs,
+        rawr: &Path,
+        started: Started,
+    ) {
+        let Some(spelled) = Spelled::of(root) else {
+            return;
+        };
+        let Some(determinants) = determinants(roots, root, Some(started)) else {
+            return;
+        };
+        let entry = Entry {
+            base,
+            root: spelled,
+            roots: roots.into(),
+            determinants,
+            outputs,
+        };
+        keep(rawr, &entry);
+        self.0.retain(|known| known.base != base);
+        self.0.insert(0, entry);
+        self.0.truncate(ENTRIES);
+    }
 }
 
-/// Forget every remembered request, in this process and under the
-/// project's Rawr directory `rawr`, so the next preparation asks Cargo.
+/// Forget every request kept under the project's Rawr directory `rawr`, so
+/// the next preparation that remembers none asks Cargo.
 #[cfg(test)]
 pub(in crate::cargo) fn forget(rawr: &Path) {
-    if let Ok(mut remembered) = REMEMBERED.lock() {
-        remembered.clear();
-    }
     match std::fs::remove_dir_all(rawr.join(DIRECTORY)) {
         Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
             panic!("the remembered outputs are removed: {error}")
@@ -246,38 +275,6 @@ impl Started {
 
 fn since_epoch(time: SystemTime) -> Option<Duration> {
     time.duration_since(UNIX_EPOCH).ok()
-}
-
-/// Remember what Cargo produced for this request in the bundle at `root`,
-/// and keep it under the project's Rawr directory `rawr`, unless a file
-/// Cargo read was modified since `started`.
-pub(in crate::cargo) fn remember(
-    base: [u8; 32],
-    root: &Path,
-    roots: &[PathBuf],
-    outputs: Outputs,
-    rawr: &Path,
-    started: Started,
-) {
-    let Some(spelled) = Spelled::of(root) else {
-        return;
-    };
-    let Some(determinants) = determinants(roots, root, Some(started)) else {
-        return;
-    };
-    let entry = Arc::new(Entry {
-        base,
-        root: spelled,
-        roots: roots.into(),
-        determinants,
-        outputs,
-    });
-    keep(rawr, &entry);
-    if let Ok(mut remembered) = REMEMBERED.lock() {
-        remembered.retain(|known| known.base != base);
-        remembered.insert(0, entry);
-        remembered.truncate(ENTRIES);
-    }
 }
 
 /// A bundle root as Cargo's JSON spells it: the text of a path string, and
@@ -434,7 +431,7 @@ fn determinants(roots: &[PathBuf], harness: &Path, since: Option<Started>) -> Op
 
 #[cfg(test)]
 mod tests {
-    use super::{lookup, remember, Outputs, Spelled, Started};
+    use super::{Outputs, Remembered, Spelled, Started};
 
     /// A root's path text is a JSON string's and its URL is the one a file
     /// URL gives it, so a rewrite between a plain root and one with a space,
@@ -480,16 +477,23 @@ mod tests {
             lock: Box::from(&b"lock"[..]),
             units: Box::from(&b"{}"[..]),
         };
+        let mut remembered = Remembered::default();
         let base = super::base(&[b"started-source"]);
         let started = Started::now();
         std::fs::write(package.join("src/lib.rs"), "pub fn g() {}\n").unwrap();
-        remember(base, &bundle, &roots, outputs.clone(), &rawr, started);
-        assert!(lookup(&base, &bundle, &rawr).is_some(), "a source edit");
+        remembered.remember(base, &bundle, &roots, outputs.clone(), &rawr, started);
+        assert!(
+            remembered.lookup(&base, &bundle, &rawr).is_some(),
+            "a source edit"
+        );
         let base = super::base(&[b"started-manifest"]);
         let started = Started::now();
         std::fs::write(package.join("Cargo.toml"), "[package]\nname = \"q\"\n").unwrap();
-        remember(base, &bundle, &roots, outputs, &rawr, started);
-        assert!(lookup(&base, &bundle, &rawr).is_none(), "a manifest edit");
+        remembered.remember(base, &bundle, &roots, outputs, &rawr, started);
+        assert!(
+            remembered.lookup(&base, &bundle, &rawr).is_none(),
+            "a manifest edit"
+        );
         std::fs::remove_dir_all(scratch).unwrap();
     }
 
@@ -509,8 +513,9 @@ mod tests {
             format!("{{\"workspace_root\":\"{}\"}}", root.display()).into_bytes()
         };
         let rawr = scratch.join("rawr");
+        let mut remembered = Remembered::default();
         let base = super::base(&[b"request"]);
-        remember(
+        remembered.remember(
             base,
             &old,
             &roots,
@@ -524,23 +529,35 @@ mod tests {
             Started::now(),
         );
         std::fs::write(package.join("src/lib.rs"), "pub fn f() { let _ = 1; }\n").unwrap();
-        let reused = lookup(&base, &new, &rawr).expect("a source edit keeps Cargo's view");
+        let reused = remembered
+            .lookup(&base, &new, &rawr)
+            .expect("a source edit keeps Cargo's view");
         assert_eq!(&*reused.candidate, named(&new).as_slice());
         assert_eq!(&*reused.units, named(&new).as_slice());
         assert_eq!(&*reused.lock, b"lock");
         assert_eq!(&*reused.internal, b"recipe");
-        assert!(lookup(&super::base(&[b"other"]), &new, &rawr).is_none());
+        assert!(remembered
+            .lookup(&super::base(&[b"other"]), &new, &rawr)
+            .is_none());
         // The next process starts from what this one kept.
-        super::REMEMBERED.lock().unwrap().clear();
-        let kept = lookup(&base, &new, &rawr).expect("kept for the next process");
+        let mut remembered = Remembered::default();
+        let kept = remembered
+            .lookup(&base, &new, &rawr)
+            .expect("kept for the next process");
         assert_eq!(&*kept.units, named(&new).as_slice());
         std::fs::create_dir_all(package.join("src/bin")).unwrap();
         std::fs::write(package.join("src/bin/tool.rs"), "fn main() {}\n").unwrap();
-        assert!(lookup(&base, &new, &rawr).is_none(), "a new binary target");
+        assert!(
+            remembered.lookup(&base, &new, &rawr).is_none(),
+            "a new binary target"
+        );
         std::fs::remove_dir_all(package.join("src/bin")).unwrap();
-        assert!(lookup(&base, &new, &rawr).is_some());
+        assert!(remembered.lookup(&base, &new, &rawr).is_some());
         std::fs::write(package.join("Cargo.toml"), "[package]\nname = \"q\"\n").unwrap();
-        assert!(lookup(&base, &new, &rawr).is_none(), "a changed manifest");
+        assert!(
+            remembered.lookup(&base, &new, &rawr).is_none(),
+            "a changed manifest"
+        );
         std::fs::remove_dir_all(scratch).unwrap();
     }
 }

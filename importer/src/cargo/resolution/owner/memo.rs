@@ -19,7 +19,6 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -302,12 +301,14 @@ fn write(path: &Path, bytes: &[u8]) -> Option<fs::Metadata> {
 
 /// The remembered resolution for `request` under `attestation`, when every
 /// file it read and every entry it used is as it was. Each entry's use is
-/// marked, as reading it would.
+/// marked, as reading it would, and its validation is answered from the one
+/// `witnessed` holds while the files it read are unchanged.
 pub(super) fn recall(
     rawr: &Path,
     request: &[u8; 32],
     attestation: &[u8; 32],
     current: &crate::input::bindings::Current,
+    witnessed: &mut Witnessed,
 ) -> Option<Memo> {
     let mut memo = serde_json::from_slice::<Memo>(&fs::read(rawr.join(FILE)).ok()?).ok()?;
     let hex = crate::extract::engine::hex;
@@ -325,7 +326,7 @@ pub(super) fn recall(
         return None;
     }
     for used in &memo.entries {
-        let witness = used.witness(current)?;
+        let witness = used.witness(current, witnessed)?;
         if crate::extract::engine::home::generation(&used.directory, &used.key).as_ref()
             != Some(&used.generation)
         {
@@ -336,10 +337,10 @@ pub(super) fn recall(
     Some(memo)
 }
 
-/// The last validation of each shared entry's inputs in this process, by
-/// the entry's directory, key and generation.
-static WITNESSED: Mutex<BTreeMap<(PathBuf, String, String), Witnessed>> =
-    Mutex::new(BTreeMap::new());
+/// The last validation of each shared entry's inputs an owner made, by the
+/// entry's directory, key and generation.
+#[derive(Default)]
+pub(in crate::cargo::resolution) struct Witnessed(BTreeMap<(PathBuf, String, String), Validation>);
 
 #[cfg(test)]
 thread_local! {
@@ -352,7 +353,7 @@ const WITNESSED_ENTRIES: usize = 1 << 14;
 
 /// One validation of an entry's inputs under `current`, and the proof of
 /// the files it read.
-struct Witnessed {
+struct Validation {
     inputs: crate::input::bindings::Inputs,
     current: crate::input::bindings::Current,
     proof: Proof,
@@ -366,15 +367,18 @@ impl Used {
     /// they don't validate under `current`. While the stamps taken before the
     /// last validation read them all hold, that validation's proof is the
     /// answer, with no file read again.
-    fn witness(&self, current: &crate::input::bindings::Current) -> Option<Proof> {
+    fn witness(
+        &self,
+        current: &crate::input::bindings::Current,
+        witnessed: &mut Witnessed,
+    ) -> Option<Proof> {
         let key = (
             self.directory.clone(),
             self.key.clone(),
             self.generation.clone(),
         );
-        let last = WITNESSED
-            .lock()
-            .ok()?
+        let last = witnessed
+            .0
             .remove(&key)
             .filter(|last| last.inputs == self.inputs && last.current == *current);
         let unchanged = last.as_ref().is_some_and(|last| {
@@ -386,7 +390,7 @@ impl Used {
             #[cfg(test)]
             WITNESS_HITS.with(|hits| hits.set(hits.get() + 1));
             let proof = last.proof.clone();
-            remember_witness(key, last);
+            witnessed.remember(key, last);
             return Some(proof);
         }
         // What the last validation read, stamped before it is read again.
@@ -398,9 +402,9 @@ impl Used {
             last.as_ref()
                 .is_some_and(|last| last.proof.entries() == proof.entries())
         });
-        remember_witness(
+        witnessed.remember(
             key,
-            Witnessed {
+            Validation {
                 inputs: self.inputs.clone(),
                 current: current.clone(),
                 proof: proof.clone(),
@@ -411,12 +415,12 @@ impl Used {
     }
 }
 
-fn remember_witness(key: (PathBuf, String, String), witnessed: Witnessed) {
-    if let Ok(mut remembered) = WITNESSED.lock() {
-        if remembered.len() >= WITNESSED_ENTRIES {
-            remembered.clear();
+impl Witnessed {
+    fn remember(&mut self, key: (PathBuf, String, String), validation: Validation) {
+        if self.0.len() >= WITNESSED_ENTRIES {
+            self.0.clear();
         }
-        remembered.insert(key, witnessed);
+        self.0.insert(key, validation);
     }
 }
 
@@ -435,7 +439,7 @@ fn unhex(text: &str) -> Option<[u8; 32]> {
 mod tests {
     use std::path::PathBuf;
 
-    use super::{recall, remember, File, Resolution};
+    use super::{recall, remember, File, Resolution, Witnessed};
     use crate::bindings::Settled;
     use crate::input::proof::Role;
 
@@ -488,6 +492,7 @@ mod tests {
         let request = [1; 32];
         let attestation = [2; 32];
         let current = crate::input::bindings::Current::fixture();
+        let mut witnessed = Witnessed::default();
         remember(
             &rawr,
             &Resolution {
@@ -516,16 +521,16 @@ mod tests {
             ),
             Some(Sha256::digest(b"{\"schema\":1}").into())
         );
-        let memo = recall(&rawr, &request, &attestation, &current).unwrap();
+        let memo = recall(&rawr, &request, &attestation, &current, &mut witnessed).unwrap();
         assert_eq!(memo.identity(), Some([3; 32]));
         // The next recall stamps what the first read before reading it
         // again, and the one after reads nothing again while those stamps
         // hold (#1759).
         let hits = || super::WITNESS_HITS.with(std::cell::Cell::get);
         let before = hits();
-        assert!(recall(&rawr, &request, &attestation, &current).is_some());
+        assert!(recall(&rawr, &request, &attestation, &current, &mut witnessed).is_some());
         assert_eq!(hits(), before);
-        assert!(recall(&rawr, &request, &attestation, &current).is_some());
+        assert!(recall(&rawr, &request, &attestation, &current, &mut witnessed).is_some());
         assert_eq!(hits(), before + 1);
         let proof = memo.proof().unwrap();
         let watches = proof.watch().collect::<Vec<_>>();
@@ -540,39 +545,39 @@ mod tests {
         let materials = memo.materials(&rawr).unwrap();
         assert_eq!(materials.document, b"{\"schema\":1}");
         std::fs::write(rawr.join(super::DOCUMENT), "{}").unwrap();
-        assert!(recall(&rawr, &request, &attestation, &current).is_none());
+        assert!(recall(&rawr, &request, &attestation, &current, &mut witnessed).is_none());
         std::fs::remove_file(rawr.join(super::DOCUMENT)).unwrap();
-        assert!(recall(&rawr, &request, &attestation, &current).is_none());
+        assert!(recall(&rawr, &request, &attestation, &current, &mut witnessed).is_none());
         std::fs::write(rawr.join(super::DOCUMENT), "{\"schema\":1}").unwrap();
-        assert!(recall(&rawr, &request, &attestation, &current).is_some());
+        assert!(recall(&rawr, &request, &attestation, &current, &mut witnessed).is_some());
         let remembered = std::fs::read_to_string(rawr.join(super::FILE)).unwrap();
         let damaged = remembered.replace(&crate::extract::engine::hex(&[3; 32]), "damaged");
         std::fs::write(rawr.join(super::FILE), damaged).unwrap();
-        assert!(recall(&rawr, &request, &attestation, &current).is_none());
+        assert!(recall(&rawr, &request, &attestation, &current, &mut witnessed).is_none());
         std::fs::write(rawr.join(super::FILE), remembered).unwrap();
         // Declared input changes cannot return the historical API or its
         // historical watch projection, including creation of an absent path.
         std::fs::write(&declared, "second").unwrap();
-        assert!(recall(&rawr, &request, &attestation, &current).is_none());
+        assert!(recall(&rawr, &request, &attestation, &current, &mut witnessed).is_none());
         std::fs::write(&declared, "first").unwrap();
         std::fs::write(&missing, "created").unwrap();
-        assert!(recall(&rawr, &request, &attestation, &current).is_none());
+        assert!(recall(&rawr, &request, &attestation, &current, &mut witnessed).is_none());
         std::fs::remove_file(&missing).unwrap();
         std::fs::write(tree.join("new.txt"), "created").unwrap();
-        assert!(recall(&rawr, &request, &attestation, &current).is_none());
+        assert!(recall(&rawr, &request, &attestation, &current, &mut witnessed).is_none());
         std::fs::remove_file(tree.join("new.txt")).unwrap();
         // Another request, or another toolchain, runs the resolution.
-        assert!(recall(&rawr, &[9; 32], &attestation, &current).is_none());
-        assert!(recall(&rawr, &request, &[9; 32], &current).is_none());
+        assert!(recall(&rawr, &[9; 32], &attestation, &current, &mut witnessed).is_none());
+        assert!(recall(&rawr, &request, &[9; 32], &current, &mut witnessed).is_none());
         // A lock that appears is a change.
         std::fs::write(&lock, "# lock").unwrap();
-        assert!(recall(&rawr, &request, &attestation, &current).is_none());
+        assert!(recall(&rawr, &request, &attestation, &current, &mut witnessed).is_none());
         std::fs::remove_file(&lock).unwrap();
-        assert!(recall(&rawr, &request, &attestation, &current).is_some());
+        assert!(recall(&rawr, &request, &attestation, &current, &mut witnessed).is_some());
         // A republished entry is a change.
         crate::extract::engine::home::publish(&bindings, "iced", &[("table.json", b"other")])
             .unwrap();
-        assert!(recall(&rawr, &request, &attestation, &current).is_none());
+        assert!(recall(&rawr, &request, &attestation, &current, &mut witnessed).is_none());
         // Replacement after replay but before remembering must not attach
         // the new generation to the old document.
         std::fs::remove_file(rawr.join(super::FILE)).unwrap();

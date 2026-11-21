@@ -56,7 +56,11 @@ use crate::{metrics, store};
 
 mod carried;
 mod memo;
+mod memos;
 mod recorded;
+
+pub use memos::Memos;
+pub(in crate::cargo) use memos::Replays;
 
 /// The exact admitted node and the successful replay that admitted its bytes.
 pub(crate) struct Ready {
@@ -138,6 +142,7 @@ impl Ready {
             replay.input,
             &evaluation.request.policy,
             limits,
+            evaluation.reading.as_ref(),
         )
     }
 
@@ -214,6 +219,7 @@ impl Ready {
                     capture,
                     &source.request.policy,
                     &owned_limits,
+                    source.reading.as_ref(),
                 )
             },
         )
@@ -255,12 +261,13 @@ impl Product {
     }
 }
 
-// Pure owner-replay interpretations this process staged last, for every graph
+// Pure owner-replay interpretations the owner staged last, for every graph
 // evaluation it runs (#1759). The first replay charges its authenticated
 // parse; later replays, in this graph or a later one, still run every current
 // check and reuse a value only when that observation's sealed commitment
 // names the same exact bytes. Never a Context, GraphBudget, or Replay.
-struct Stage {
+#[derive(Default)]
+pub(super) struct Stage {
     lock: Option<(Limits, cargo::universe::Candidate)>,
     receipt: Option<StagedReceipt>,
     /// The records of the last few bundles replayed, least recent first: a
@@ -272,12 +279,6 @@ struct Stage {
 /// How many bundles' records the stage keeps: the launch's, and the last
 /// two saves' a save may go back to.
 const STAGED_RECORDS: usize = 3;
-
-const EMPTY: Stage = Stage {
-    lock: None,
-    receipt: None,
-    records: Vec::new(),
-};
 
 impl Stage {
     /// The record staged for `key` at `root`, `target` and `profile`, now
@@ -307,28 +308,6 @@ impl Stage {
         }
         self.records.push(record);
     }
-}
-
-#[cfg(not(test))]
-static STAGE: Mutex<Stage> = Mutex::new(EMPTY);
-
-#[cfg(test)]
-thread_local! {
-    /// A test thread stages as a process would: tests running beside it
-    /// leave its stage alone.
-    static STAGE: std::cell::RefCell<Stage> = const { std::cell::RefCell::new(EMPTY) };
-}
-
-/// Run `staged` over this process's stage.
-fn staged<T>(staged: impl FnOnce(&mut Stage) -> Result<T, node::Error>) -> Result<T, node::Error> {
-    #[cfg(test)]
-    return STAGE.with_borrow_mut(staged);
-    #[cfg(not(test))]
-    staged(
-        &mut *STAGE
-            .lock()
-            .map_err(|_| node::Error::State("resolution replay stage was poisoned"))?,
-    )
 }
 
 struct StagedReceipt {
@@ -374,12 +353,6 @@ thread_local! {
     pub(crate) static STAGE_HITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// Owner replays validated on this test thread.
     pub(crate) static REPLAYS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// Forget what this test thread staged, as a new process starts.
-#[cfg(test)]
-pub(in crate::cargo) fn unstage() {
-    STAGE.with_borrow_mut(|stage| *stage = EMPTY);
 }
 
 fn stage_hit() {
@@ -429,6 +402,11 @@ struct Evaluation {
     /// The request's authority as shared bindings check it, captured once
     /// for every replay of this evaluation.
     current: Option<input::bindings::Current>,
+    /// What the owner's replays staged, compared and recorded.
+    replays: Arc<Mutex<Replays>>,
+    /// What the owner's API reads kept, lent to this evaluation's
+    /// canonicalizations.
+    reading: Option<crate::extract::Reading>,
     #[cfg(test)]
     script: Option<ScriptFactory>,
 }
@@ -527,6 +505,7 @@ pub(in crate::cargo) fn prepare_cached_in(
     limits: &Limits,
     scope: &crate::supervisor::snapshot::attempt::Scope,
     sink: &dyn metrics::Sink,
+    memos: &mut Memos,
 ) -> Result<Resolved, node::Error> {
     let context = scoped_context(&request, limits, scope)?;
     let preflight = preflight(request, context)?;
@@ -536,6 +515,7 @@ pub(in crate::cargo) fn prepare_cached_in(
         attestation,
         limits,
         sink,
+        memos,
         #[cfg(test)]
         None,
     )
@@ -574,6 +554,7 @@ pub(in crate::cargo) fn evaluate_scripted(
     cached: cargo::CachedToolchain,
     limits: &Limits,
     sink: &dyn metrics::Sink,
+    memos: &mut Memos,
     script: ScriptFactory,
 ) -> Result<Ready, node::Error> {
     let expected_context = capture_context(&request, limits)?;
@@ -583,7 +564,14 @@ pub(in crate::cargo) fn evaluate_scripted(
         ));
     }
     let preflight = preflight(request, cached.context)?;
-    match evaluate(preflight, cached.attestation, limits, sink, Some(script))? {
+    match evaluate(
+        preflight,
+        cached.attestation,
+        limits,
+        sink,
+        memos,
+        Some(script),
+    )? {
         Resolved::Owner(ready) => Ok(*ready),
         Resolved::Shared(_) => Err(node::Error::State(SHARED)),
         Resolved::Recorded(_) => Err(node::Error::State(NEW_INSTANCES)),
@@ -595,6 +583,7 @@ fn evaluate(
     attestation: Arc<node::Validated<cargo::toolchain::Attestation>>,
     limits: &Limits,
     sink: &dyn metrics::Sink,
+    memos: &mut Memos,
     #[cfg(test)] script: Option<ScriptFactory>,
 ) -> Result<Resolved, node::Error> {
     let Preflight {
@@ -641,6 +630,8 @@ fn evaluate(
             built: None,
         }),
         current,
+        replays: Arc::clone(&memos.replays),
+        reading: memos.reading(),
     });
     // A shared resolution whose request, toolchain, files and entries are
     // as they were: no Cargo and no tables (`memo`).
@@ -651,6 +642,7 @@ fn evaluate(
             state.identity.as_bytes(),
             &attestation,
             current,
+            &mut memos.witnessed,
         )
     }) {
         return Ok(Resolved::Shared(Box::new(SharedReady {
@@ -663,7 +655,7 @@ fn evaluate(
     let node = match node::Evaluator::new(&store, sink).discover_bundled_budgeted(
         &recipe,
         move |value, graph| validator.validate(value, graph),
-        |attempt| state.execute(attempt, &mut left),
+        |attempt| state.execute(attempt, &mut left, memos),
     ) {
         Ok(node) => node,
         Err(error) => {
@@ -786,7 +778,7 @@ impl Evaluation {
         // stays for a return to it (#1794). A refused candidate leaves the
         // capture of the one a lookup admitted before it; a replay that
         // succeeds replaces it.
-        if recorded::find(self.cached.context.rawr(), &value.wire())
+        if recorded::find(&self.replays, self.cached.context.rawr(), &value.wire())
             .is_some_and(|recorded| recorded.changed())
         {
             return Err(node::Error::Superseded);
@@ -840,15 +832,18 @@ impl Evaluation {
         #[cfg(test)]
         REPLAYS.with(|replays| replays.set(replays.get() + 1));
         let (mut replay, completed) = outcome?;
+        if let Some(bundle) = replay.watched.bundle() {
+            recorded::keep(
+                &self.replays,
+                self.cached.context.rawr(),
+                &value.wire(),
+                || Recorded::of(replay.decoded.entries(), bundle),
+            );
+        }
         let mut captured = self
             .captured
             .lock()
             .map_err(|_| node::Error::State("resolution replay capture was poisoned"))?;
-        if let Some(bundle) = replay.watched.bundle() {
-            recorded::keep(self.cached.context.rawr(), &value.wire(), || {
-                Recorded::of(replay.decoded.entries(), bundle)
-            });
-        }
         captured.current = Some(Current {
             wire: value.wire(),
             watched: std::mem::take(&mut replay.watched),
@@ -880,46 +875,57 @@ impl Evaluation {
         let lock_commitment = observed.commitment(paths.final_form().lock())?;
         let receipt_commitment = observed.commitment(paths.receipt())?;
         let record_commitment = observed.commitment(paths.record())?;
-        let (lock, receipt) = staged(|stage| {
-            let lock = match stage.lock.as_ref().filter(|(limits, lock)| {
+        // The stage is looked up and written under its lock, and the files
+        // are read with it released.
+        let staged_lock = Replays::lock(&self.replays)
+            .stage
+            .lock
+            .as_ref()
+            .filter(|(limits, lock)| {
                 *limits == self.limits && lock.names(definition, lock_commitment)
-            }) {
-                Some((_, lock)) => {
-                    stage_hit();
-                    lock.clone()
-                }
-                None => {
-                    let lock_bytes = read(paths.final_form().lock())?;
-                    observed.require_bytes(paths.final_form().lock(), &lock_bytes)?;
-                    let lock = definition.candidate(lock_bytes.into_boxed_slice())?;
-                    stage.lock = Some((self.limits, lock.clone()));
-                    lock
-                }
-            };
-            let receipt = match &stage.receipt {
-                Some(staged)
-                    if staged.limits == self.limits
-                        && staged.universe == *definition.identity()
-                        && staged.commitment == receipt_commitment =>
-                {
-                    stage_hit();
-                    staged.receipt.clone()
-                }
-                _ => {
-                    let receipt_bytes = read(paths.receipt())?;
-                    observed.require_bytes(paths.receipt(), &receipt_bytes)?;
-                    let receipt = cargo::universe::Receipt::parse(&receipt_bytes, definition)?;
-                    stage.receipt = Some(StagedReceipt {
-                        limits: self.limits,
-                        universe: *definition.identity(),
-                        commitment: receipt_commitment,
-                        receipt: receipt.clone(),
-                    });
-                    receipt
-                }
-            };
-            Ok((lock, receipt))
-        })?;
+            })
+            .map(|(_, lock)| lock.clone());
+        let lock = match staged_lock {
+            Some(lock) => {
+                stage_hit();
+                lock
+            }
+            None => {
+                let lock_bytes = read(paths.final_form().lock())?;
+                observed.require_bytes(paths.final_form().lock(), &lock_bytes)?;
+                let lock = definition.candidate(lock_bytes.into_boxed_slice())?;
+                Replays::lock(&self.replays).stage.lock = Some((self.limits, lock.clone()));
+                lock
+            }
+        };
+        let staged_receipt = Replays::lock(&self.replays)
+            .stage
+            .receipt
+            .as_ref()
+            .filter(|staged| {
+                staged.limits == self.limits
+                    && staged.universe == *definition.identity()
+                    && staged.commitment == receipt_commitment
+            })
+            .map(|staged| staged.receipt.clone());
+        let receipt = match staged_receipt {
+            Some(receipt) => {
+                stage_hit();
+                receipt
+            }
+            None => {
+                let receipt_bytes = read(paths.receipt())?;
+                observed.require_bytes(paths.receipt(), &receipt_bytes)?;
+                let receipt = cargo::universe::Receipt::parse(&receipt_bytes, definition)?;
+                Replays::lock(&self.replays).stage.receipt = Some(StagedReceipt {
+                    limits: self.limits,
+                    universe: *definition.identity(),
+                    commitment: receipt_commitment,
+                    receipt: receipt.clone(),
+                });
+                receipt
+            }
+        };
         if !receipt.matches_request(self.identity) {
             return Err(node::Error::Codec(
                 "resolution bundle receipt belongs to another request",
@@ -950,18 +956,15 @@ impl Evaluation {
             record: record_commitment,
             context,
         };
-        let kept = staged(|stage| {
-            let kept = stage.record(
-                &key,
-                paths.root(),
-                &self.request.target,
-                &self.request.profile,
-            );
-            if kept.is_some() {
-                stage_hit();
-            }
-            Ok(kept)
-        })?;
+        let kept = Replays::lock(&self.replays).stage.record(
+            &key,
+            paths.root(),
+            &self.request.target,
+            &self.request.profile,
+        );
+        if kept.is_some() {
+            stage_hit();
+        }
         let fresh = match &kept {
             Some(_) => None,
             None => Some((
@@ -991,6 +994,7 @@ impl Evaluation {
                 context,
                 Some(receipt),
                 kept,
+                &self.replays,
                 &self.limits,
                 &self.limits,
                 cargo_account,
@@ -998,16 +1002,15 @@ impl Evaluation {
             .map_err(error)?;
         crate::progress::timed("the resolution's bundle was replayed", replaying.elapsed());
         if let Some((root, target, profile)) = fresh {
-            staged(|stage| {
-                stage.keep_record(StagedRecord {
+            Replays::lock(&self.replays)
+                .stage
+                .keep_record(StagedRecord {
                     key,
                     root,
                     target,
                     profile,
                     decoded: Arc::clone(&replay.decoded),
                 });
-                Ok(())
-            })?;
         }
         Ok(replay)
     }
@@ -1016,6 +1019,7 @@ impl Evaluation {
         &self,
         attempt: store::bundle::Attempt,
         left: &mut Left,
+        memos: &mut Memos,
     ) -> Result<node::Bundled<Product>, node::Error> {
         let graph = self.store.graph_budget();
         self.accounts.with(
@@ -1026,14 +1030,16 @@ impl Evaluation {
                     return Err(node::Error::State("resolution owner account refused"));
                 }
                 // A demand round the store lacks, of the build an earlier
-                // round of this process completed: its tables, grown by its
+                // round of this owner completed: its tables, grown by its
                 // probe run again (`carried`). A round the store holds is
                 // that node, as the next run reads it, so the store is asked
                 // first: a carried API in its place keys the check apart
                 // from the next run's (#400).
                 let attestation = self.cached.attestation.content().digest();
                 let mut tables = self.request.tables().clone();
-                if let Some(parts) = self.carried_parts(&attestation.as_bytes(), &mut tables) {
+                if let Some(parts) =
+                    self.carried_parts(&memos.carried, &attestation.as_bytes(), &mut tables)
+                {
                     left.shared = Some(parts);
                     return Err(node::Error::State(SHARED));
                 }
@@ -1052,8 +1058,15 @@ impl Evaluation {
                     let script = self
                         .script
                         .map(|factory| factory(&self.request, &self.cached, &layout));
+                    // A script answers every Cargo command a cold
+                    // preparation runs, so none is answered from Cargo's
+                    // remembered outputs.
+                    #[cfg(test)]
+                    if script.is_some() {
+                        memos.remembered = super::remembered::Remembered::default();
+                    }
                     let run = || {
-                        self.execute_in(layout, cargo_account, accounts, graph, tables, left)
+                        self.execute_in(layout, cargo_account, accounts, tables, left, memos)
                             .map_err(|error| self.settle(error))
                     };
                     #[cfg(test)]
@@ -1083,10 +1096,11 @@ impl Evaluation {
         layout: layout::Layout,
         cargo_account: cargo::unit::Allocation,
         accounts: &mut Accounts,
-        graph: &node::GraphBudget,
         mut tables: crate::extract::plan::replayed::Tables,
         left: &mut Left,
+        memos: &mut Memos,
     ) -> Result<node::Bundled<Product>, node::Error> {
+        let graph = self.store.graph_budget();
         let preparing = std::time::Instant::now();
         let harness = self.request.prepare_harness_in(
             &layout,
@@ -1094,6 +1108,7 @@ impl Evaluation {
             &self.limits,
             &self.limits,
             cargo_account,
+            &mut memos.remembered,
         )?;
         crate::progress::timed("the resolution's harness was prepared", preparing.elapsed());
         // Every selected crate's table in the home: no nightly build and no
@@ -1195,7 +1210,7 @@ impl Evaluation {
             reprobe,
             carried::key(&self.request, &attestation.as_bytes()),
         ) {
-            carried::keep(key, carrying.probed(reprobe));
+            memos.carried.keep(key, carrying.probed(reprobe));
         }
         Ok(bundled)
     }
@@ -1591,6 +1606,7 @@ impl SharedReady {
                     &materials.context,
                     &source.request.policy,
                     &owned_limits,
+                    source.reading.as_ref(),
                 )
             },
         )

@@ -1029,22 +1029,26 @@ impl Request {
         self.prepare_cached_in(
             limits,
             &crate::supervisor::snapshot::attempt::Scope::begin(),
+            &mut resolution::Memos::default(),
         )
     }
 
     /// Prepare or fall back within the original reload attempt's cumulative
-    /// validation budget, including all prior resident snapshot checks.
+    /// validation budget, including all prior resident snapshot checks. What
+    /// the owner's earlier preparations left in `memos` answers what they
+    /// answered, and this one leaves its own there for the next.
     #[cfg(feature = "rustc-driver")]
     pub fn prepare_cached_in(
         self,
         limits: &Limits,
         scope: &crate::supervisor::snapshot::attempt::Scope,
+        memos: &mut resolution::Memos,
     ) -> Result<Prepared> {
         assert!(
             !self.inventory,
             "an intrinsic acquisition resolves uncached; demand replay is not complete"
         );
-        resolution::owner::prepare_cached_in(self, limits, scope, &crate::metrics::Current)
+        resolution::owner::prepare_cached_in(self, limits, scope, &crate::metrics::Current, memos)
             .map(|owner| Prepared { owner })
             .map_err(|source| Error::Node {
                 operation: "complete resolution owner",

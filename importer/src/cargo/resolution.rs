@@ -43,6 +43,8 @@ pub(crate) mod content;
 
 #[cfg(feature = "rustc-driver")]
 pub(crate) mod owner;
+#[cfg(feature = "rustc-driver")]
+pub use owner::Memos;
 
 #[cfg(feature = "rustc-driver")]
 mod watched;
