@@ -453,7 +453,7 @@ pub fn admit_generated_structural_retained(
     for adapter in adapters {
         engine
             .host_registry
-            .admit_structural(adapter.definition, &mut *native.allocation())?;
+            .admit_structural(adapter.definition, &mut native.allocation())?;
     }
     Ok(())
 }
@@ -477,8 +477,12 @@ pub fn authenticate_generated_structural_retained(
     rows: &[StructuralRow],
     native: &mut account::Native,
 ) -> Result<Box<[host::runtime::StructuralAdapter]>, Error> {
-    let (carrier, mut allocation) = native.parts();
-    authenticate_structural(definitions, carrier, rows, &mut allocation)
+    authenticate_structural(
+        definitions,
+        native.carrier(),
+        rows,
+        &mut native.allocation(),
+    )
 }
 
 fn authenticate_structural(

@@ -15,7 +15,7 @@ pub(crate) mod support;
 
 use std::{
     fmt,
-    sync::{Arc, Mutex, MutexGuard, OnceLock},
+    sync::{Arc, OnceLock},
 };
 
 use crate::host::ImportAllocation;
@@ -31,7 +31,9 @@ pub struct Native {
 
 struct Baseline {
     carrier: Carrier,
-    allocation: Mutex<Attempt>,
+    // The account's whole state. A refusal sets it through `&self`, so every
+    // scope reaches it through a shared `Arc` and nothing else changes.
+    latch: Arc<OnceLock<Refusal>>,
 }
 
 /// One candidate's scope in the shared account.
@@ -90,7 +92,7 @@ impl Native {
         Self {
             inner: Arc::new(Baseline {
                 carrier,
-                allocation: Mutex::new(allocation),
+                latch: allocation.latch,
             }),
         }
     }
@@ -101,7 +103,7 @@ impl Native {
         // is shared: retaining the previous baseline would build an
         // ever-growing chain of retired engines' metadata.
         let allocation = Attempt {
-            latch: Arc::clone(&lock(&self.inner.allocation).latch),
+            latch: Arc::clone(&self.inner.latch),
             baseline: None,
         };
         allocation.admit()?;
@@ -117,7 +119,7 @@ impl Native {
     /// Begin a candidate scope in this same account.
     pub fn attempt(&self) -> Result<Attempt, Error> {
         let attempt = Attempt {
-            latch: Arc::clone(&lock(&self.inner.allocation).latch),
+            latch: Arc::clone(&self.inner.latch),
             baseline: Some(Arc::clone(&self.inner)),
         };
         attempt.admit()?;
@@ -127,7 +129,7 @@ impl Native {
     /// The first refusal that latched this account, if any.
     #[must_use]
     pub fn first_refusal(&self) -> Option<Refusal> {
-        lock(&self.inner.allocation).latch.get().copied()
+        self.inner.latch.get().copied()
     }
 
     /// How many scopes keep this decoded metadata alive.
@@ -136,12 +138,12 @@ impl Native {
         Arc::strong_count(&self.inner)
     }
 
-    pub(super) fn allocation(&mut self) -> MutexGuard<'_, Attempt> {
-        lock(&self.inner.allocation)
-    }
-
-    pub(super) fn parts(&mut self) -> (&Carrier, MutexGuard<'_, Attempt>) {
-        (&self.inner.carrier, lock(&self.inner.allocation))
+    /// The baseline's own scope: the account's latch and no retained owner.
+    pub(super) fn allocation(&self) -> Attempt {
+        Attempt {
+            latch: Arc::clone(&self.inner.latch),
+            baseline: None,
+        }
     }
 }
 
@@ -208,12 +210,5 @@ impl fmt::Debug for Attempt {
             .debug_struct("Attempt")
             .field("retains_native", &self.baseline.is_some())
             .finish_non_exhaustive()
-    }
-}
-
-fn lock<T>(account: &Mutex<T>) -> MutexGuard<'_, T> {
-    match account.lock() {
-        Ok(state) => state,
-        Err(poisoned) => poisoned.into_inner(),
     }
 }

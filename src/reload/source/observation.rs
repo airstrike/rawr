@@ -118,14 +118,6 @@ pub fn decode(bytes: &[u8]) -> Result<Decoded, Error> {
 }
 
 impl Decoded {
-    /// Whether these are exactly `inputs`' identities, whose derived
-    /// directories then need no second filesystem pass: any change to them
-    /// since is a watched event that revokes the request carrying this.
-    #[must_use]
-    pub fn identifies(&self, inputs: &Inputs) -> bool {
-        self.paths == inputs.paths && self.trees == inputs.trees && self.sources == inputs.sources
-    }
-
     /// Reconstruct derived watcher directories using the current filesystem.
     ///
     /// Missing files and parents remain valid identities. Retained directory

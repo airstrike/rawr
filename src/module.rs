@@ -2308,8 +2308,6 @@ impl Module {
 
         let orig_lib_len = global.lib.len();
 
-        let orig_constants = std::mem::take(&mut global.constants);
-
         // Run the script
         let caches = &mut crate::eval::Caches::new();
 
@@ -2333,8 +2331,6 @@ impl Module {
         });
 
         // Restore global state
-        let constants = std::mem::replace(&mut global.constants, orig_constants);
-
         global.truncate_imports(orig_imports_len);
 
         global.lib.truncate(orig_lib_len);
@@ -2350,7 +2346,6 @@ impl Module {
                 .into_iter()
                 .collect(),
             imports,
-            constants,
         });
 
         // Variables with an alias left in the scope become module variables

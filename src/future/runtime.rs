@@ -1286,16 +1286,18 @@ pub fn kept() -> Vec<(item::Value, Program)> {
 }
 
 /// The program the process runs, for script values native code holds
-/// (`rawr::Value`'s `Clone` and `Debug`) on any thread.
-static PUBLISHED: std::sync::RwLock<Option<Program>> = std::sync::RwLock::new(None);
-
-/// Make `program` the one script values native code holds belong to.
-pub fn publish(program: Program) {
-    *PUBLISHED.write().unwrap_or_else(PoisonError::into_inner) = Some(program);
-}
-
+/// (`rawr::Value`'s `Clone` and `Debug`) on any thread: the shared program
+/// of the generation the island installed last, which threads that don't
+/// own the program call into.
 fn published() -> Option<Program> {
-    PUBLISHED.read().ok()?.clone()
+    #[cfg(feature = "rust-import")]
+    {
+        crate::island::published()
+    }
+    #[cfg(not(feature = "rust-import"))]
+    {
+        None
+    }
 }
 
 /// The program script code runs in on this thread: the generation current

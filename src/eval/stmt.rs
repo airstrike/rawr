@@ -583,14 +583,7 @@ impl Engine {
         }
 
         // Run the statements
-        self.eval_stmts_from(
-            global,
-            caches,
-            scope,
-            this_ptr,
-            statements,
-            restore_orig_state,
-        )
+        self.eval_stmts_from(global, caches, scope, this_ptr, statements)
     }
 
     /// Evaluate a block's statements from some point on, inside the block's
@@ -606,18 +599,10 @@ impl Engine {
         scope: &mut Scope,
         mut this_ptr: Option<&mut Dynamic>,
         statements: &[Stmt],
-        restore_orig_state: bool,
     ) -> RawrResult {
         let mut result = Dynamic::UNIT;
         for (k, stmt) in statements.iter().enumerate() {
-            result = self.eval_stmt(
-                global,
-                caches,
-                scope,
-                this_ptr.as_deref_mut(),
-                stmt,
-                restore_orig_state,
-            )?;
+            result = self.eval_stmt(global, caches, scope, this_ptr.as_deref_mut(), stmt)?;
 
             // `let p = Parser::new(&text);`: the rest of the block runs in
             // the frame the call made, with `p` bound to its value.
@@ -634,14 +619,7 @@ impl Engine {
                     let mut continuation = |mut value: Dynamic| -> RawrResult {
                         value.set_access_mode(access);
                         *scope.get_mut_by_index(at) = value;
-                        self.eval_stmts_from(
-                            global,
-                            caches,
-                            scope,
-                            this_ptr.as_deref_mut(),
-                            rest,
-                            restore_orig_state,
-                        )
+                        self.eval_stmts_from(global, caches, scope, this_ptr.as_deref_mut(), rest)
                     };
                     return opening.open(&mut continuation);
                 }
@@ -821,7 +799,6 @@ impl Engine {
         scope: &mut Scope,
         mut this_ptr: Option<&mut Dynamic>,
         stmt: &Stmt,
-        rewind_scope: bool,
     ) -> RawrResult {
         self.track_operation(global, stmt.position())?;
 
@@ -997,18 +974,6 @@ impl Engine {
                     _ => value.flatten(),
                 };
                 let mut value = self.intern_string(value);
-
-                // Put global constants into global module
-                if !rewind_scope
-                    && global.scope_level == 0
-                    && access == AccessMode::ReadOnly
-                    && global.lib.iter().any(|m| !m.is_empty())
-                {
-                    crate::func::waited_write(global.constants.get_or_insert_with(|| {
-                        crate::Shared::new(crate::Locked::new(std::collections::BTreeMap::new()))
-                    }))
-                    .insert(var_name.name.clone(), value.clone());
-                }
 
                 match index {
                     Some(index) => {

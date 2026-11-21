@@ -41,7 +41,8 @@ static START: Mutex<Option<fn() -> i32>> = Mutex::new(None);
 static MOVE: OnceLock<Move> = OnceLock::new();
 
 /// The generation that calls from threads that don't own the program run
-/// in, with what they look up in it.
+/// in, with what they look up in it. Its shared program is also the one
+/// script values native code holds belong to ([`published`]).
 static ELSEWHERE: std::sync::RwLock<Option<(Arc<Calls>, Arc<Shared>)>> =
     std::sync::RwLock::new(None);
 
@@ -987,7 +988,6 @@ fn install(current: Current) {
     }
     let current = Rc::new(current);
     crate::future::serve(current.clone());
-    crate::future::publish(current.shared.clone());
     *ELSEWHERE
         .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner) =
@@ -2273,6 +2273,27 @@ fn elsewhere() -> Option<(Arc<Calls>, Arc<Shared>)> {
     ELSEWHERE.read().ok()?.clone()
 }
 
+/// The shared program of the generation published last.
+pub(crate) fn published() -> Option<crate::future::Program> {
+    let published = ELSEWHERE.read().ok()?;
+    let (_, shared) = published.as_ref()?;
+    Some(Arc::clone(shared) as crate::future::Program)
+}
+
+/// Publish `authority` with `runtime` as the generation threads that don't
+/// own the program call into, as a test does with no runner.
+#[cfg(test)]
+fn publish_shared(
+    authority: program::Authority,
+    runtime: crate::Shared<crate::host::runtime::Registry>,
+) {
+    let calls = Arc::new(Calls::new(&authority, &runtime));
+    *ELSEWHERE
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) =
+        Some((calls, share(authority, runtime)));
+}
+
 impl Calls {
     fn new(
         authority: &program::Authority,
@@ -3126,7 +3147,7 @@ mod tests {
         };
         let counter = call("counter", &mut []);
         let job = call("job", &mut []);
-        crate::future::publish(super::shared(authority.clone(), runtime.clone()));
+        super::publish_shared(authority.clone(), runtime.clone());
         let copy = crate::Value::from(counter).clone();
         assert_eq!(call("count", &mut [copy.into_inner()]).as_int().unwrap(), 2);
         assert_eq!(

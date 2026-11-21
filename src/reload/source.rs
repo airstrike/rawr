@@ -62,9 +62,7 @@ pub struct Inputs {
 }
 
 /// Exact source and manifest contents consumed by one compiled candidate.
-///
-/// A snapshot becomes final-admission evidence only after a publication stage
-/// revalidates every file against the filesystem. A clone shares its files.
+/// A clone shares its files.
 #[derive(Clone, Debug)]
 pub struct Snapshot {
     inputs: Arc<Inputs>,
@@ -494,10 +492,6 @@ impl Snapshot {
     /// Borrow the exact canonical identities covered by this snapshot.
     #[must_use]
     pub fn inputs(&self) -> &Inputs {
-        &self.inputs
-    }
-
-    pub(super) const fn shared_inputs(&self) -> &Arc<Inputs> {
         &self.inputs
     }
 
