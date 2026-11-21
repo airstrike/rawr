@@ -275,7 +275,7 @@ fn a_late_attach_to_a_paused_program_reads_its_bindings_with_their_parts() {
         "{read}"
     );
     let screen = rig.screen();
-    assert!(screen.contains("paused at main.rs:7"), "{screen}");
+    assert!(screen.contains("Paused  main.rs:7"), "{screen}");
     assert!(screen.contains("app: "), "{screen}");
     let bindings = pane::pane(&screen, "bindings").expect("a bindings pane");
     assert!(bindings.trim().is_empty(), "{screen}");
@@ -347,7 +347,7 @@ fn a_stop_shows_the_source_the_frames_and_the_bindings() {
     let screen = rig.screen();
     println!("{screen}");
     assert!(
-        screen.contains("paused at main.rs:7 in `app::update` (breakpoint)"),
+        screen.contains("● Paused  main.rs:7 in app::update · breakpoint"),
         "{screen}"
     );
     // The breakpoint's mark and the stop's arrow are on line 7.
@@ -392,7 +392,7 @@ fn a_step_moves_the_stop_and_keeps_an_open_value_open() {
     rig.session.event(json!({ "event": "resumed", "seq": 3 }));
     rig.hear(1);
     let screen = rig.screen();
-    assert!(screen.contains("· running"), "{screen}");
+    assert!(screen.contains("● Running"), "{screen}");
     assert!(!screen.contains("#0 app::update"), "{screen}");
     rig.pause(8, "step", 2);
     let at = json!({ "file": rig.file(), "line": 8, "function": "app::update", "reason": "step" });
@@ -401,7 +401,7 @@ fn a_step_moves_the_stop_and_keeps_an_open_value_open() {
     let screen = rig.screen();
     println!("{screen}");
     assert!(
-        screen.contains("paused at main.rs:8 in `app::update` (step)"),
+        screen.contains("● Paused  main.rs:8 in app::update · step"),
         "{screen}"
     );
     assert!(
@@ -452,7 +452,7 @@ fn an_eval_shows_its_code_and_its_value_in_the_console() {
     rig.session.answer(&resume, json!({ "paused": null }));
     rig.session.event(json!({ "event": "resumed", "seq": 3 }));
     rig.hear(2);
-    assert!(rig.screen().contains("· running"));
+    assert!(rig.screen().contains("● Running"));
 }
 
 #[test]
@@ -464,11 +464,11 @@ fn a_pause_stops_the_running_program_where_its_event_says() {
     assert_eq!(pause["params"], json!({ "op": "pause" }));
     rig.session.answer(&pause, json!({ "paused": null }));
     rig.hear(1);
-    assert!(rig.screen().contains("· running"));
+    assert!(rig.screen().contains("● Running"));
     rig.pause(8, "pause", 1);
     let screen = rig.screen();
     assert!(
-        screen.contains("paused at main.rs:8 in `app::update` (pause)"),
+        screen.contains("● Paused  main.rs:8 in app::update · pause"),
         "{screen}"
     );
     assert!(
@@ -484,38 +484,55 @@ fn a_pause_stops_the_running_program_where_its_event_says() {
 }
 
 #[test]
-fn the_source_draws_rust_in_colour_with_its_breakpoint_and_stop() {
+fn the_source_draws_rust_in_the_guis_colours_with_its_stop_on_a_faint_band() {
     let mut rig = Rig::new("colour");
     rig.attach();
     rig.break_at_seven();
     rig.pause(7, "breakpoint", 1);
     let screen = rig.screen();
     let buffer = rig.terminal.backend().buffer().clone();
+    let cell = |x: usize, y: usize| {
+        buffer
+            .cell((u16::try_from(x).unwrap(), u16::try_from(y).unwrap()))
+            .unwrap()
+            .clone()
+    };
     let (row, line) = screen
         .lines()
         .enumerate()
         .find(|(_, line)| line.contains("fn update(app: &mut App)"))
         .expect("the source shows `update`");
     let column = line[..line.find("fn update").unwrap()].chars().count();
-    let at = |x: usize| {
-        buffer
-            .cell((u16::try_from(x).unwrap(), u16::try_from(row).unwrap()))
-            .unwrap()
-            .fg
-    };
-    // `fn` is a keyword and `update` a function's name: each in its own
-    // colour, neither the terminal's.
-    let keyword = at(column);
-    let name = at(column + 3);
-    assert!(matches!(keyword, Color::Rgb(..)), "{keyword:?}");
-    assert!(matches!(name, Color::Rgb(..)), "{name:?}");
-    assert_ne!(keyword, name);
-    assert_eq!(at(column + 1), keyword);
+    // `fn` is a keyword and `update` a function's name, each in its calm
+    // hue of `rawr gui`'s Oxocarbon.
+    assert_eq!(cell(column, row).fg, Color::Rgb(0xc3, 0xa6, 0xf4));
+    assert_eq!(cell(column + 1, row).fg, Color::Rgb(0xc3, 0xa6, 0xf4));
+    assert_eq!(cell(column + 3, row).fg, Color::Rgb(0x6f, 0xbc, 0xf4));
 
-    // The stop's line keeps its breakpoint's dot and the arrow.
-    let seven = line_with(&screen, "app.count += 1;");
+    // The stop's line keeps its breakpoint's dot and the arrow, the arrow
+    // in the accent, on the accent's faint band from the pane's edge to
+    // its other edge.
+    let (row, seven) = screen
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.contains("app.count += 1;"))
+        .unwrap();
     assert!(seven.contains("● 7 ▶"), "{seven}");
+    let arrow = seven[..seven.find('▶').unwrap()].chars().count();
+    assert_eq!(cell(arrow, row).fg, Color::Rgb(0x00, 0xb4, 0xff));
+    let band = Color::Rgb(0x1d, 0x3a, 0x46);
+    assert_eq!(cell(1, row).bg, band);
+    // The source takes 66 of the screen's 110 columns, its border one at
+    // each side.
+    assert_eq!(cell(64, row).bg, band);
+    assert_ne!(cell(65, row).bg, band);
+    assert_ne!(cell(1, row + 1).bg, band);
 
-    // The screen as a terminal shows it.
-    picture::save(&buffer, "tui-highlighted.png");
+    // The screen as a terminal shows it, with a value open.
+    rig.press(KeyCode::Tab);
+    rig.press(KeyCode::Tab);
+    rig.press(KeyCode::Enter);
+    rig.screen();
+    let shown = picture::save(rig.terminal.backend().buffer(), "tui-highlighted.png");
+    println!("{}", shown.display());
 }

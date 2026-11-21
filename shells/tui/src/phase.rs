@@ -62,6 +62,19 @@ impl Stop {
     pub const fn line(&self) -> usize {
         self.line
     }
+
+    /// The function it is paused in, when the session names it.
+    #[must_use]
+    pub fn function(&self) -> Option<&str> {
+        self.function.as_deref()
+    }
+
+    /// Why it paused, when the session says: a breakpoint, a step or a
+    /// pause.
+    #[must_use]
+    pub fn reason(&self) -> Option<&str> {
+        self.reason.as_deref()
+    }
 }
 
 impl Phase {

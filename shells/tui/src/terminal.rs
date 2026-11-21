@@ -10,7 +10,7 @@ use std::sync::mpsc;
 use crossterm::event::{self, Event};
 
 use crate::client::Client;
-use crate::shell::{Flow, Input, Shell, Stream};
+use crate::shell::{Depth, Flow, Input, Shell, Stream};
 
 /// What the shell attaches to: a connection to a run's session, the file
 /// it shows first, and the output of the run when this shell started it.
@@ -59,7 +59,7 @@ pub fn run(session: Session) -> std::io::Result<()> {
     std::thread::Builder::new()
         .name("rawr-tui-keys".into())
         .spawn(move || read_keys(&send))?;
-    let mut shell = Shell::new(client, session.source);
+    let mut shell = Shell::new(client, session.source).with_depth(Depth::of_terminal());
     let mut terminal = ratatui::init();
     let result = (|| loop {
         terminal.draw(|screen| shell.draw(screen))?;

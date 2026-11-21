@@ -11,10 +11,12 @@ pub(super) struct Row {
     /// this one: what keeps it open across steps.
     pub(super) path: Vec<String>,
     pub(super) depth: usize,
-    pub(super) text: String,
+    /// The binding's name or the field's key.
+    pub(super) name: String,
+    /// The value's text, or why it can't be read.
+    pub(super) value: Result<String, String>,
     pub(super) expandable: bool,
     pub(super) expanded: bool,
-    pub(super) unreadable: bool,
 }
 
 impl Shell {
@@ -28,10 +30,10 @@ impl Shell {
                 Err(reason) => rows.push(Row {
                     path,
                     depth: 0,
-                    text: format!("{}: {reason}", binding.name),
+                    name: binding.name.clone(),
+                    value: Err(reason.clone()),
                     expandable: false,
                     expanded: false,
-                    unreadable: true,
                 }),
             }
         }
@@ -48,18 +50,18 @@ impl Shell {
     ) {
         let expandable = !node.children().is_empty();
         let expanded = expandable && self.expanded.contains(&path);
-        let text = if expanded {
-            format!("{name} = {}", node.opening())
+        let value = if expanded {
+            node.opening()
         } else {
-            format!("{name} = {}", node.text())
+            node.text()
         };
         rows.push(Row {
             path: path.clone(),
             depth,
-            text,
+            name: name.to_owned(),
+            value: Ok(value.to_owned()),
             expandable,
             expanded,
-            unreadable: false,
         });
         if !expanded {
             return;

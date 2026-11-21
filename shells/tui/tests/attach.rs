@@ -26,12 +26,16 @@ use std::sync::mpsc;
 
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::backend::TestBackend;
-use ratatui::style::Modifier;
+use ratatui::style::Color;
 use ratatui::Terminal;
 use rawr_tui::client::{Client, Message, Reply};
 use rawr_tui::home;
 use rawr_tui::{Flow, Input, Shell};
 use serde_json::Value;
+
+/// A selected row's background: `rawr gui`'s accent at 0.22 on its
+/// surface.
+const SELECTION: Color = Color::Rgb(0x1b, 0x43, 0x53);
 
 /// A typical terminal's size, in cells.
 const WIDTH: u16 = 120;
@@ -90,16 +94,24 @@ impl Live {
         self.press(KeyCode::Enter);
     }
 
-    /// The text of the selected binding row: the only row drawn reversed
-    /// while the bindings pane has the focus.
+    /// The text of the selected binding row: the only row of the bindings
+    /// pane drawn on the selection's band while the pane has the focus.
     fn selected(&mut self) -> String {
-        self.screen();
+        let screen = self.screen();
+        let (top, left) = screen
+            .lines()
+            .enumerate()
+            .find_map(|(y, row)| {
+                let at = row.find("┌ bindings ")?;
+                Some((y, row[..at].chars().count()))
+            })
+            .expect("a bindings pane");
         let buffer = self.terminal.backend().buffer();
-        (0..buffer.area.height)
+        (u16::try_from(top).unwrap()..buffer.area.height)
             .map(|y| {
-                (0..buffer.area.width)
+                (u16::try_from(left).unwrap()..buffer.area.width)
                     .filter_map(|x| buffer.cell((x, y)))
-                    .filter(|cell| cell.modifier.contains(Modifier::REVERSED))
+                    .filter(|cell| cell.bg == SELECTION)
                     .map(|cell| cell.symbol())
                     .collect::<String>()
             })
@@ -182,7 +194,7 @@ fn the_shell_attaches_to_a_run_stops_at_its_breakpoint_and_opens_a_binding() {
 
     // The binding is looked for in the bindings pane alone: the source
     // beside it names the binding too, as `players: HashMap<..>` does.
-    let stopped = format!("paused at {name}:{line}");
+    let stopped = format!("Paused  {name}:{line}");
     let opened = format!("{binding} = ");
     let unreadable = format!("{binding}: ");
     let listed = |screen: &str| {
@@ -236,7 +248,7 @@ fn the_shell_attaches_to_a_run_stops_at_its_breakpoint_and_opens_a_binding() {
         screen
             .lines()
             .next()
-            .is_some_and(|top| top.contains("· running"))
+            .is_some_and(|top| top.contains("● Running"))
     });
     assert_eq!(live.press(KeyCode::Char('q')), Flow::Quit);
 }
