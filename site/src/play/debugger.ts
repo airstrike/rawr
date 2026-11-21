@@ -263,12 +263,18 @@ export class Debugger {
     this.set({ bindings: answer.bindings ?? [], unread: answer.unread ?? null, frames: answer.frames ?? this.state.frames });
   }
 
-  /** Evaluate `code` where the program is paused, in the selected frame. */
+  /**
+   * Evaluate `code` where the program is paused, in the selected frame. The
+   * panel's bindings are the program's, so an evaluation, which may write any
+   * place, reads the frame again rather than keeping what it showed.
+   */
   async evaluate(code: string): Promise<void> {
     const run = this.run;
+    const frame = this.state.frame;
     if (!this.ask || !code.trim()) return;
-    const answer = await this.ask({ op: "eval", code, frame: this.state.frame, children: true });
+    const answer = await this.ask({ op: "eval", code, frame, children: true });
     if (run !== this.run) return;
+    if (this.state.paused) await this.select(frame);
     const evaluated: Evaluated = answer.error !== undefined
       ? { code, error: String(answer.error) }
       : { code, value: String(answer.value), ...(Array.isArray(answer.children) ? { children: answer.children } : {}) };
