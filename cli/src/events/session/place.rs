@@ -56,18 +56,26 @@ impl Place {
     }
 
     /// The place whose socket `listener` is bound to, as the shell that
-    /// started this run bound it.
+    /// started this run bound it: the directory the socket is in, whatever
+    /// the shell named it, and the shell's pid, as the shell is this
+    /// process's parent (`exec` keeps it). The run serves where its shell
+    /// waits, and reads nothing of the shell's layout from the path, so a
+    /// shell that names its places otherwise, as one built before each run
+    /// had its own place does, still hears its run (#2441).
     ///
     /// # Errors
     ///
-    /// When `listener` isn't bound in a run's place.
+    /// When `listener` isn't bound to a path.
     pub fn bound(listener: &UnixListener) -> std::io::Result<Self> {
         let address = listener.local_addr()?;
-        address
+        let directory = address
             .as_pathname()
             .and_then(Path::parent)
-            .and_then(Self::at)
-            .ok_or_else(|| std::io::Error::other(format!("{address:?} isn't in a run's place")))
+            .ok_or_else(|| std::io::Error::other(format!("{address:?} isn't bound to a path")))?;
+        Ok(Self {
+            directory: directory.to_path_buf(),
+            pid: std::os::unix::process::parent_id(),
+        })
     }
 
     /// The place at `directory`, named by its run's pid.
@@ -362,7 +370,7 @@ mod tests {
     #[test]
     fn a_run_a_shell_started_finds_its_place_from_the_listener_it_was_handed() {
         let root = format!("/rawr-place-test/handed/{}", std::process::id());
-        let shell = place_of(Path::new(&root), 1);
+        let shell = place_of(Path::new(&root), std::os::unix::process::parent_id());
         shell.make().unwrap();
         let listener = UnixListener::bind(shell.socket()).unwrap();
         assert_eq!(Place::bound(&listener).unwrap(), shell);

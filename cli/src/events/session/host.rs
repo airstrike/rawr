@@ -1270,6 +1270,38 @@ mod tests {
         line
     }
 
+    /// A run serves the listener its shell handed it wherever the shell
+    /// bound it, so a shell that names its places otherwise, as one from
+    /// before each run had its own place binds `<digest>/session.sock`,
+    /// hears its program run instead of waiting at `starting` (#2441).
+    #[test]
+    fn a_handed_listener_is_served_wherever_its_shell_bound_it() {
+        let directory = std::env::temp_dir().join(format!("rawr-2441-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let socket = directory.join("session.sock");
+        let _ = std::fs::remove_file(&socket);
+        let listener = UnixListener::bind(&socket).unwrap();
+        // The shell connects before the run is ready, as it binds.
+        let shell = Shell::connect(&socket);
+        let place = Place::bound(&listener).unwrap();
+        assert_eq!(place.socket(), socket);
+        let host = Host::serve(
+            &directory,
+            place,
+            listener,
+            Opening {
+                handed: true,
+                ..Opening::default()
+            },
+        )
+        .unwrap();
+        host.record(json!({ "event": "running" }));
+        let events = shell.hello();
+        assert_eq!(events.last().unwrap()["event"], "running", "{events:?}");
+        drop(host);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
     /// A program that ends while it holds a request, as a restart retires
     /// it, leaves the request to the program that serves next (#1964).
     #[test]
