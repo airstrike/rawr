@@ -2,21 +2,22 @@
 //! metadata`, and what one target builds with on the host (the crates its
 //! code names, the features it enables and its profile's panic strategy)
 //! from Cargo's unit graph, asked with the command's feature flags. Rawr
-//! infers none of these from `Cargo.toml` itself. Each answer is kept while
-//! the files Cargo read for it are unchanged.
+//! infers none of these from `Cargo.toml` itself. Each answer is kept in
+//! the [`Answers`] its asker lends, while the files Cargo read for it are
+//! unchanged.
 
 use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 pub mod cfg;
 pub mod features;
 
 /// The workspace `cargo metadata` describes from one manifest: its
 /// members, each with its library and binary targets.
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct Workspace {
     packages: Box<[Package]>,
     /// Cargo's answer, for the fields a package inherits.
@@ -121,6 +122,16 @@ const METADATA: &str = "cargo metadata";
 const UNIT_GRAPH: &str = "cargo build --unit-graph";
 const PRINT_CFG: &str = "rustc --print cfg";
 
+/// Cargo's answers kept for whoever holds them: the run's owner, or a
+/// one-shot command, makes one and lends it `&mut` to discovery, loading
+/// and each ask, so an answer lasts as long as its holder does. Each
+/// answer is read again only when the files Cargo read for it changed.
+#[derive(Default)]
+pub struct Answers {
+    described: Vec<Described>,
+    built: Vec<Built>,
+}
+
 /// One kept `cargo metadata` answer, by the manifest it was asked from.
 struct Described {
     manifest: PathBuf,
@@ -149,9 +160,6 @@ struct Inputs {
     files: Box<[(PathBuf, Option<String>)]>,
     listings: Box<[(PathBuf, Box<[OsString]>)]>,
 }
-
-static DESCRIBED: Mutex<Vec<Described>> = Mutex::new(Vec::new());
-static BUILT: Mutex<Vec<Built>> = Mutex::new(Vec::new());
 
 impl fmt::Display for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -192,26 +200,33 @@ impl std::error::Error for Error {
     }
 }
 
+impl Answers {
+    /// No answers yet.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            described: Vec::new(),
+            built: Vec::new(),
+        }
+    }
+}
+
 impl Workspace {
     /// The workspace of the manifest at `manifest`, as `cargo metadata
-    /// --no-deps` describes it.
-    pub fn of(manifest: &Path) -> Result<Arc<Self>, Error> {
+    /// --no-deps` describes it, kept in `answers`.
+    pub fn of(manifest: &Path, answers: &mut Answers) -> Result<Arc<Self>, Error> {
         let manifest = canonical(manifest);
-        let kept = lock(&DESCRIBED)
+        let kept = answers
+            .described
             .iter()
             .find(|kept| kept.manifest == manifest)
-            .map(|kept| (Arc::clone(&kept.workspace), kept.inputs.read_again()));
-        if let Some((workspace, now)) = kept {
-            let fresh = lock(&DESCRIBED)
-                .iter()
-                .any(|kept| kept.manifest == manifest && kept.inputs == now);
-            if fresh {
-                return Ok(workspace);
-            }
+            .filter(|kept| kept.inputs == kept.inputs.read_again());
+        if let Some(kept) = kept {
+            return Ok(Arc::clone(&kept.workspace));
         }
         let workspace = Arc::new(Self::ask(&manifest)?);
         let inputs = workspace.inputs();
-        let mut described = lock(&DESCRIBED);
+        let described = &mut answers.described;
         described.retain(|kept| kept.manifest != manifest);
         described.push(Described {
             manifest,
@@ -477,9 +492,14 @@ impl Unit {
     /// What `target` of `package` builds with on the host in `mode`, as
     /// `cargo build` builds it in the dev profile or `cargo test` in the
     /// test profile, with the process's feature flags
-    /// ([`features::Selection::selected`]).
-    pub fn of(package: &Package, target: &Target, mode: Mode) -> Result<Self, Error> {
-        Self::on(package, target, mode, None)
+    /// ([`features::Selection::selected`]), kept in `answers`.
+    pub fn of(
+        package: &Package,
+        target: &Target,
+        mode: Mode,
+        answers: &mut Answers,
+    ) -> Result<Self, Error> {
+        Self::on(package, target, mode, None, answers)
     }
 
     /// What `target` of `package` builds with for `platform`, as `cargo
@@ -490,6 +510,7 @@ impl Unit {
         target: &Target,
         mode: Mode,
         platform: Option<&str>,
+        answers: &mut Answers,
     ) -> Result<Self, Error> {
         let selection = features::Selection::selected();
         let files = || {
@@ -503,7 +524,8 @@ impl Unit {
             files
         };
         let now = Inputs::read(files(), Vec::new());
-        let kept = lock(&BUILT)
+        let kept = answers
+            .built
             .iter()
             .find(|kept| {
                 kept.manifest == package.manifest
@@ -520,7 +542,7 @@ impl Unit {
         let unit = Self::ask(package, target, mode, platform, selection)?;
         // Cargo may have written the lockfile, so the inputs are read after.
         let inputs = Inputs::read(files(), Vec::new());
-        let mut built = lock(&BUILT);
+        let built = &mut answers.built;
         built.retain(|kept| {
             !(kept.manifest == package.manifest
                 && kept.target == *target
@@ -750,9 +772,4 @@ fn listing(directory: &Path) -> Box<[OsString]> {
 
 fn canonical(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
-}
-
-fn lock<T>(cell: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    cell.lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }

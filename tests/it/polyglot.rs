@@ -16,8 +16,9 @@ fn fixture() -> PathBuf {
 #[test]
 fn polyglot_discovery_records_rust_modules_and_compiles_only_rawr() {
     let root = fixture();
-    let target = rawr::project::Target::discover(&root).unwrap();
-    let graph = Graph::load(&Engine::new(), &target).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(&root, &mut answers).unwrap();
+    let graph = Graph::load(&Engine::new(), &target, &mut answers).unwrap();
     let sources = graph.sources().iter().map(|source| source.path().to_path_buf()).collect::<Vec<_>>();
     assert_eq!(sources, [root.join("src/main.rs"), root.join("src/view.rs")]);
     let rust = graph.entry_package().rust_modules();
@@ -35,8 +36,9 @@ fn polyglot_discovery_follows_mod_rs_and_rust_children() {
     project.write("src/ui/widgets/button.rs", "pub struct Button;\n");
     project.write("src/ui/widgets/inner/deep.rs", "");
     project.write("src/data/mod.rs", "");
-    let target = rawr::project::Target::discover(project.path()).unwrap();
-    let graph = Graph::load(&Engine::new(), &target).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(project.path(), &mut answers).unwrap();
+    let graph = Graph::load(&Engine::new(), &target, &mut answers).unwrap();
     assert_eq!(graph.sources().len(), 2);
     let modules = graph.entry_package().rust_modules().iter().map(|module| module.modules().join("::")).collect::<Vec<_>>();
     assert_eq!(modules, ["ui::widgets::button", "ui::widgets::inner::deep", "ui::widgets", "data"]);
@@ -48,8 +50,9 @@ fn a_module_with_both_files_is_an_error() {
     project.write("src/main.rs", "// rawr\nmod model;\n");
     project.write("src/model.rs", "// rawr\n");
     project.write("src/model/mod.rs", "");
-    let target = rawr::project::Target::discover(project.path()).unwrap();
-    let error = Graph::load(&Engine::new(), &target).unwrap_err().to_string();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(project.path(), &mut answers).unwrap();
+    let error = Graph::load(&Engine::new(), &target, &mut answers).unwrap_err().to_string();
     assert!(error.contains("file for module `model` found at both") && error.contains("model.rs") && error.contains("model/mod.rs"), "{error}");
 }
 
@@ -59,8 +62,9 @@ fn a_native_module_declaring_a_marked_module_is_an_error() {
     project.write("src/main.rs", "// rawr\nmod model;\n");
     project.write("src/model.rs", "pub mod view;\n");
     project.write("src/model/view.rs", "// rawr\n");
-    let target = rawr::project::Target::discover(project.path()).unwrap();
-    let error = Graph::load(&Engine::new(), &target).unwrap_err();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(project.path(), &mut answers).unwrap();
+    let error = Graph::load(&Engine::new(), &target, &mut answers).unwrap_err();
     let message = error.to_string();
     assert!(message.contains("native module `crate::model` cannot declare the marked module `mod view;`") && message.contains(") yet. Declare it from the crate root"), "{message}");
     let report = error.report().unwrap();
@@ -78,8 +82,9 @@ fn a_native_root_s_native_module_declares_a_marked_module() {
     project.write("src/workspace/screen.rs", "pub mod home;\nmod other;\nconst PREFIX: &str = \"home\";\n");
     project.write("src/workspace/screen/other.rs", "pub fn helper() {}\n");
     project.write("src/workspace/screen/home.rs", "// rawr\npub fn view() {}\n");
-    let target = rawr::project::Target::discover(project.path()).unwrap();
-    let graph = Graph::load(&Engine::new(), &target).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(project.path(), &mut answers).unwrap();
+    let graph = Graph::load(&Engine::new(), &target, &mut answers).unwrap();
     let marked = graph.sources().iter().map(|source| source.modules().join("::")).collect::<Vec<_>>();
     assert_eq!(marked, ["", "workspace", "workspace::screen", "workspace::screen::home"]);
     let native = graph.entry_package().rust_modules().iter().map(|module| module.modules().join("::")).collect::<Vec<_>>();
@@ -130,8 +135,9 @@ fn a_path_into_a_rust_module_names_the_app_crate() {
     project.write("src/view.rs", "// rawr\nuse super::model::answer;\n\npub fn total() -> i64 {\n    answer()\n}\n");
     project.write("src/model.rs", "pub fn answer() -> i64 { 21 }\n");
 
-    let target = rawr::project::Target::discover(project.path()).unwrap();
-    let graph = Graph::load(&Engine::new(), &target).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(project.path(), &mut answers).unwrap();
+    let graph = Graph::load(&Engine::new(), &target, &mut answers).unwrap();
     assert_eq!(graph.entry_package().rust_crate(), Some("poly_app"));
 
     let mut facade = host::facade::Builder::new("poly_app", host::facade::Abi::new(1).unwrap()).unwrap();
@@ -141,10 +147,10 @@ fn a_path_into_a_rust_module_names_the_app_crate() {
     facade.item(host::item::Definition::function("model::answer", answer.finish()).unwrap()).unwrap();
     let mut engine = Engine::new();
     engine.register_host_facade(facade.finish().unwrap()).unwrap();
-    engine.compile_package_executable(&target).unwrap();
+    engine.compile_package_executable(&target, &mut answers).unwrap();
 
     project.write("src/view.rs", "// rawr\nuse crate::model::missing;\n\npub fn total() -> i64 {\n    missing()\n}\n");
-    let error = engine.compile_package_executable(&target).unwrap_err().to_string();
+    let error = engine.compile_package_executable(&target, &mut answers).unwrap_err().to_string();
     // rustc's E0432 names the path as the `use` writes it.
     assert!(error.contains("unresolved import `crate::model::missing`"), "{error}");
 }
@@ -160,7 +166,8 @@ fn a_qualified_expression_path_into_a_rust_module_names_the_app_crate() {
     project.write("src/view.rs", "// rawr\npub fn total() -> i64 {\n    super::model::answer()\n}\n");
     project.write("src/model.rs", "pub fn answer() -> i64 { 21 }\n");
 
-    let target = rawr::project::Target::discover(project.path()).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(project.path(), &mut answers).unwrap();
     let mut facade = host::facade::Builder::new("poly_app", host::facade::Abi::new(1).unwrap()).unwrap();
     facade.module("model").unwrap();
     let mut answer = host::signature::Builder::new();
@@ -168,11 +175,11 @@ fn a_qualified_expression_path_into_a_rust_module_names_the_app_crate() {
     facade.item(host::item::Definition::function("model::answer", answer.finish()).unwrap()).unwrap();
     let mut engine = Engine::new();
     engine.register_host_facade(facade.finish().unwrap()).unwrap();
-    engine.compile_package_executable(&target).unwrap();
+    engine.compile_package_executable(&target, &mut answers).unwrap();
 
     #[cfg(feature = "rust-import")]
     {
-        let graph = Graph::load(&engine, &target).unwrap();
+        let graph = Graph::load(&engine, &target, &mut answers).unwrap();
         let seed = graph.rust_demand_seed();
         assert!(seed.contains(&Box::<str>::from("poly_app::model::answer")), "{seed:?}");
     }
@@ -193,7 +200,8 @@ fn a_qualified_type_path_into_a_rust_module_names_the_app_crate() {
     );
     project.write("src/model.rs", "pub struct Thing;\npub fn make() -> Thing { Thing }\n");
 
-    let target = rawr::project::Target::discover(project.path()).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(project.path(), &mut answers).unwrap();
     let mut facade = host::facade::Builder::new("poly_app", host::facade::Abi::new(1).unwrap()).unwrap();
     facade.module("model").unwrap();
     facade.type_::<Thing>("model::Thing", &[], &[]).unwrap();
@@ -202,7 +210,7 @@ fn a_qualified_type_path_into_a_rust_module_names_the_app_crate() {
     facade.item(host::item::Definition::function("model::make", make.finish()).unwrap()).unwrap();
     let mut engine = Engine::new();
     engine.register_host_facade(facade.finish().unwrap()).unwrap();
-    engine.compile_package_executable(&target).unwrap();
+    engine.compile_package_executable(&target, &mut answers).unwrap();
 }
 
 /// A `use` that binds a `.rs` module (`use crate::model;`, `use
@@ -228,7 +236,8 @@ fn a_use_bound_rust_module_names_the_app_crate() {
         "pub const BONUS: i64 = 7;\npub struct Thing;\npub fn make() -> Thing { Thing }\npub fn answer() -> i64 { 21 }\npub mod inner {\n    pub fn deep() -> i64 { 1 }\n}\n",
     );
 
-    let target = rawr::project::Target::discover(project.path()).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(project.path(), &mut answers).unwrap();
     let i64 = || host::type_ref::Type::builtin(host::type_ref::Builtin::I64);
     let mut facade = host::facade::Builder::new("poly_app", host::facade::Abi::new(1).unwrap()).unwrap();
     facade.module("model").unwrap();
@@ -245,11 +254,11 @@ fn a_use_bound_rust_module_names_the_app_crate() {
     }
     let mut engine = Engine::new();
     engine.register_host_facade(facade.finish().unwrap()).unwrap();
-    engine.compile_package_executable(&target).unwrap();
+    engine.compile_package_executable(&target, &mut answers).unwrap();
 
     #[cfg(feature = "rust-import")]
     {
-        let seed = Graph::load(&engine, &target).unwrap().rust_demand_seed();
+        let seed = Graph::load(&engine, &target, &mut answers).unwrap().rust_demand_seed();
         for path in ["poly_app::model::BONUS", "poly_app::model::answer", "poly_app::model::inner::deep", "poly_app::model::Thing"] {
             assert!(seed.contains(&Box::<str>::from(path)), "{path} in {seed:?}");
         }
@@ -280,7 +289,8 @@ fn a_marked_module_names_its_native_roots_items_through_the_app_crate() {
     );
     project.write("src/units.rs", "pub const BONUS: i64 = 7;\n");
 
-    let target = rawr::project::Target::discover(project.path()).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(project.path(), &mut answers).unwrap();
     let i64 = || host::type_ref::Type::builtin(host::type_ref::Builtin::I64);
     let mut facade = host::facade::Builder::new("poly_app", host::facade::Abi::new(1).unwrap()).unwrap();
     facade.module("units").unwrap();
@@ -300,11 +310,11 @@ fn a_marked_module_names_its_native_roots_items_through_the_app_crate() {
         .unwrap();
     let mut engine = Engine::new();
     engine.register_host_facade(facade.finish().unwrap()).unwrap();
-    engine.compile_package_executable(&target).unwrap();
+    engine.compile_package_executable(&target, &mut answers).unwrap();
 
     #[cfg(feature = "rust-import")]
     {
-        let seed = Graph::load(&engine, &target).unwrap().rust_demand_seed();
+        let seed = Graph::load(&engine, &target, &mut answers).unwrap().rust_demand_seed();
         for path in ["poly_app::Thing", "poly_app::helper", "poly_app::make", "poly_app::SCALE", "poly_app::units::BONUS"] {
             assert!(seed.contains(&Box::<str>::from(path)), "{path} in {seed:?}");
         }
@@ -328,8 +338,9 @@ fn the_app_crate_is_imported_and_a_rawr_module_uses_its_rust_module() {
         project.write(file, &fs::read_to_string(fixture().join(file)).unwrap());
     }
     let engine = Engine::new();
-    let target = rawr::project::Target::discover(project.path()).unwrap();
-    let graph = Graph::load(&engine, &target).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(project.path(), &mut answers).unwrap();
+    let graph = Graph::load(&engine, &target, &mut answers).unwrap();
     assert!(graph.declares_rust_import(), "a Cargo package with .rs modules declares a Rust import");
     assert_eq!(graph.rust_demand_seed(), [Box::<str>::from("polyglot::model::Thing::new")]);
 
@@ -363,7 +374,7 @@ fn the_app_crate_is_imported_and_a_rawr_module_uses_its_rust_module() {
     let model = fs::read_to_string(project.path().join("src/model.rs")).unwrap();
     project.write("src/model.rs", &model.replace("    pub fn doubled", "    pub(crate) fn tripled(&self) -> i64 {\n        self.count * 3\n    }\n\n    pub fn doubled"));
     project.write("src/view.rs", "// rawr\nuse crate::model::Thing;\n\npub fn total() -> i64 {\n    Thing::new(1).tripled()\n}\n");
-    let graph = Graph::load(&engine, &target).unwrap();
+    let graph = Graph::load(&engine, &target, &mut answers).unwrap();
     let contract = import(&graph);
     let snapshot = rawr::reload::source::Snapshot::from_graph(&rawr::reload::source::Graph::from_package(&graph));
     engine.compile_imported(&contract, snapshot).expect("the new pub(crate) Rust method is imported");

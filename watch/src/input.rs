@@ -209,8 +209,10 @@ mod tests {
         let project = Project::new();
         project.write("Cargo.toml", "[package]\nname = \"watch-input\"\n");
         project.write("src/main.rs", "// rawr\npub fn main() {}\n");
-        let target = rawr::project::Target::discover(&project.root).unwrap();
-        let graph = rawr::package::Graph::load(&rawr::Engine::new(), &target).unwrap();
+        let mut answers = rawr::project::cargo::Answers::new();
+        let target = rawr::project::Target::discover(&project.root, &mut answers).unwrap();
+        let graph =
+            rawr::package::Graph::load(&rawr::Engine::new(), &target, &mut answers).unwrap();
         let source = rawr::reload::source::Graph::from_package(&graph);
         let root = fs::canonicalize(&project.root).unwrap();
         let missing = root.join("absent/config.toml");

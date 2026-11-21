@@ -59,7 +59,9 @@ fn revealed(
     snapshot: &package::snapshot::Snapshot,
 ) -> String {
     let mut allocation = host::TestImportAllocation::default();
-    let graph = package::Graph::load_snapshot(engine, snapshot).unwrap();
+    let graph =
+        package::Graph::load_snapshot(engine, snapshot, &mut crate::project::cargo::Answers::new())
+            .unwrap();
     let native = resolve::native::Capture::from_graph(&graph, &mut allocation).unwrap();
     let mut program =
         resolve::package::resolve_captured(graph, &engine.host_registry, native).unwrap();
@@ -103,7 +105,12 @@ fn a_reveal_that_reuses_unchanged_bodies_finds_what_a_fresh_one_does() {
 fn reads(snapshot: &package::snapshot::Snapshot, file: &str) -> ([u8; 32], [u8; 32]) {
     let engine = compiler();
     let mut allocation = host::TestImportAllocation::default();
-    let graph = package::Graph::load_snapshot(&engine, snapshot).unwrap();
+    let graph = package::Graph::load_snapshot(
+        &engine,
+        snapshot,
+        &mut crate::project::cargo::Answers::new(),
+    )
+    .unwrap();
     let native = resolve::native::Capture::from_graph(&graph, &mut allocation).unwrap();
     let program = resolve::package::resolve_captured(graph, &engine.host_registry, native).unwrap();
     let runtime =

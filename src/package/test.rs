@@ -312,7 +312,12 @@ impl Total {
         engine.set_test(test);
         let path = std::path::PathBuf::from("/tested/src/main.rs");
         let snapshot = Snapshot::new(path.clone(), vec![(path, text.into())]).unwrap();
-        let graph = Graph::load_snapshot(&engine, &snapshot).unwrap();
+        let graph = Graph::load_snapshot(
+            &engine,
+            &snapshot,
+            &mut crate::project::cargo::Answers::new(),
+        )
+        .unwrap();
         let (ast, tests, _) = engine.compile_package_tests(graph).unwrap();
         (engine, ast, tests)
     }

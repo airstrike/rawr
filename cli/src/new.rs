@@ -905,9 +905,11 @@ mod tests {
         assert_eq!(source, super::PLAIN_SOURCE);
         assert!(rawr::project::is_marked(&source));
         assert!(!source.contains("iced"));
-        let target = rawr::project::Target::discover(&target).unwrap();
+        let mut answers = rawr::project::cargo::Answers::new();
+        let target = rawr::project::Target::discover(&target, &mut answers).unwrap();
         assert!(matches!(target, rawr::project::Target::Project(_)));
-        let graph = rawr::package::Graph::load(&rawr::Engine::new(), &target).unwrap();
+        let graph =
+            rawr::package::Graph::load(&rawr::Engine::new(), &target, &mut answers).unwrap();
         assert!(!graph.declares_rust_import());
         std::fs::remove_dir_all(&sandbox).unwrap();
     }

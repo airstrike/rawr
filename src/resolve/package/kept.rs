@@ -467,7 +467,14 @@ pub fn outline(circle: &Circle) -> f64 {
         ];
         let snapshot =
             crate::package::snapshot::Snapshot::new("/shapes/src/main.rs".into(), files).unwrap();
-        let load = || crate::package::Graph::load_snapshot(engine, &snapshot).unwrap();
+        let load = || {
+            crate::package::Graph::load_snapshot(
+                engine,
+                &snapshot,
+                &mut crate::project::cargo::Answers::new(),
+            )
+            .unwrap()
+        };
         let fresh = package::resolve(load(), &engine.host_registry)
             .unwrap_or_else(|failure| panic!("fresh resolution: {:?}", failure.error));
         let reused = package::resolve_kept(load(), &engine.host_registry, None, kept)

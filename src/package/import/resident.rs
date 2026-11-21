@@ -24,6 +24,9 @@ mod tests;
 pub struct Cache {
     parses: package::Cells,
     lowerings: crate::resolve::lower_nominal::Lowerings,
+    /// What Cargo answered its compiles' loads, for as long as the runner
+    /// holds the cache.
+    answers: crate::project::cargo::Answers,
 }
 
 /// The same compiled candidate and its child-derived native evidence.
@@ -162,6 +165,7 @@ impl Cache {
         Self {
             parses: package::Cells::in_memory(),
             lowerings: crate::resolve::lower_nominal::Lowerings::new(),
+            answers: crate::project::cargo::Answers::new(),
         }
     }
 
@@ -179,6 +183,7 @@ impl Cache {
         Self {
             parses: package::Cells::new(directory.join("parse")).remember(),
             lowerings,
+            answers: crate::project::cargo::Answers::new(),
         }
     }
 
@@ -208,11 +213,11 @@ impl Cache {
     /// compile parsed read from that parse: only the sources whose text
     /// changed are parsed (#1604).
     pub(crate) fn load_snapshot(
-        &self,
+        &mut self,
         engine: &Engine,
         snapshot: &package::snapshot::Snapshot,
     ) -> Result<package::Graph, package::Error> {
-        package::Graph::load_snapshot_with_cells(engine, snapshot, &self.parses)
+        package::Graph::load_snapshot_with_cells(engine, snapshot, &self.parses, &mut self.answers)
     }
 
     /// The parses its compiles read and made, shared: what the generation

@@ -615,7 +615,12 @@ fn counted() -> imported::Choice {
     let path = std::path::PathBuf::from("/main.rs");
     let snapshot =
         crate::package::snapshot::Snapshot::new(path.clone(), vec![(path, text.into())]).unwrap();
-    let graph = crate::package::Graph::load_snapshot(&engine, &snapshot).unwrap();
+    let graph = crate::package::Graph::load_snapshot(
+        &engine,
+        &snapshot,
+        &mut crate::project::cargo::Answers::new(),
+    )
+    .unwrap();
     let program = resolve::package::resolve(graph, &engine.host_registry)
         .unwrap_or_else(|failure| panic!("re-exported variants: {:?}", failure.error));
     let uses = symbolic_imported(&engine, &program)

@@ -43,9 +43,12 @@ impl Engine {
         snapshot: &crate::package::snapshot::Snapshot,
         parses: Option<&crate::package::Parses>,
     ) -> Result<(AST, program::Positions), crate::package::Error> {
+        let mut answers = crate::project::cargo::Answers::new();
         match parses {
-            Some(parses) => crate::package::Graph::load_snapshot_reading(self, snapshot, parses),
-            None => crate::package::Graph::load_snapshot(self, snapshot),
+            Some(parses) => {
+                crate::package::Graph::load_snapshot_reading(self, snapshot, parses, &mut answers)
+            }
+            None => crate::package::Graph::load_snapshot(self, snapshot, &mut answers),
         }
         .and_then(|graph| self.compile_package_with_positions(graph))
         .map(|(ast, _, positions)| (ast, positions))
@@ -68,11 +71,13 @@ impl Engine {
     }
 
     /// Compile one discovered static package graph into an executable bundle.
+    /// What Cargo answers is kept in `answers`.
     pub fn compile_package_executable(
         &self,
         target: &crate::project::Target,
+        answers: &mut crate::project::cargo::Answers,
     ) -> Result<program::Executable, crate::package::Error> {
-        crate::package::compile::executable(self, target)
+        crate::package::compile::executable(self, target, answers)
     }
 
     /// Compile one loaded package graph to run as a program: its [`AST`]

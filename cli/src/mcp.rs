@@ -47,6 +47,10 @@ pub(crate) struct Server {
     out: mpsc::Sender<Value>,
     /// What the main loop hears from calls.
     heard: mpsc::Sender<Heard>,
+    /// What Cargo answered the calls' discoveries, for as long as the
+    /// server runs. Each call runs on its own thread and discovers its
+    /// program there, so the calls share the answers behind one lock.
+    answers: std::sync::Mutex<rawr::project::cargo::Answers>,
 }
 
 /// What the main loop hears.
@@ -80,6 +84,13 @@ struct Loop<'scope, 'env> {
 }
 
 impl Server {
+    /// The calls' Cargo answers, for one discovery.
+    pub(crate) fn answers(&self) -> std::sync::MutexGuard<'_, rawr::project::cargo::Answers> {
+        self.answers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     fn send(&self, message: Value) {
         let _ = self.out.send(message);
     }
@@ -132,7 +143,12 @@ pub fn serve_on(
             }
         })?;
     let (heard, hearing) = mpsc::channel::<Heard>();
-    let server = Server { root, out, heard };
+    let server = Server {
+        root,
+        out,
+        heard,
+        answers: std::sync::Mutex::new(rawr::project::cargo::Answers::new()),
+    };
     // Each call runs on a thread of this scope, and the scope ends once
     // every call has seen its cancel and returned.
     let served = std::thread::scope(|scope| {

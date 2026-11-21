@@ -39,11 +39,13 @@ fn graph(
     root: &Path,
     cells: Option<&rawr::package::Cells>,
 ) -> Result<rawr::package::Graph, String> {
-    let target = rawr::project::Target::discover(root).map_err(|error| error.to_string())?;
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target =
+        rawr::project::Target::discover(root, &mut answers).map_err(|error| error.to_string())?;
     let engine = rawr::Engine::new();
     match cells {
-        Some(cells) => rawr::package::Graph::load_with_cells(&engine, &target, cells),
-        None => rawr::package::Graph::load(&engine, &target),
+        Some(cells) => rawr::package::Graph::load_with_cells(&engine, &target, cells, &mut answers),
+        None => rawr::package::Graph::load(&engine, &target, &mut answers),
     }
     .map_err(|error| error.to_string())
 }

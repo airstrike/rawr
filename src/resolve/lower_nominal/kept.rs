@@ -171,7 +171,7 @@ impl Read {
             Self::File { path, bytes } => included(&models.access, path)
                 .is_ok_and(|read| <[u8; 32]>::from(Sha256::digest(read)) == *bytes),
             Self::Variable { place, name, value } => {
-                place.variable(&models.access, name).as_deref() == value.as_deref()
+                place.variable(models, name).as_deref() == value.as_deref()
             }
             Self::Expansion { path, bytes } => {
                 let holds = std::fs::read(path)

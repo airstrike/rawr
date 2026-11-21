@@ -563,8 +563,10 @@ mod tests {
             source.len()
         ));
         std::fs::write(&path, source).unwrap();
-        let target = rawr::project::Target::discover(&path).unwrap();
-        let graph = rawr::package::Graph::load(&rawr::Engine::new(), &target).unwrap();
+        let mut answers = rawr::project::cargo::Answers::new();
+        let target = rawr::project::Target::discover(&path, &mut answers).unwrap();
+        let graph =
+            rawr::package::Graph::load(&rawr::Engine::new(), &target, &mut answers).unwrap();
         std::fs::remove_file(path).unwrap();
         rawr::layer::Facts::of(&graph)
     }

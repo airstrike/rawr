@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 
 use toml_edit::{Document, Item};
 
+use crate::project::cargo::Workspace;
+
 /// The package whose `Cargo.toml` is nearest above `file`, and its parsed
 /// manifest.
 struct Package {
@@ -78,11 +80,17 @@ impl Package {
     }
 
     /// The target whose root is `entry`: its crate name, and its name when
-    /// it is a binary.
-    fn target(&self, entry: &Path) -> (String, Option<String>) {
-        // Cargo names the target; without Cargo, its default layout does.
-        let described = crate::project::cargo::Workspace::of(&self.directory.join("Cargo.toml"))
-            .ok()
+    /// it is a binary. `workspace` is the entry's, as Cargo described it
+    /// when the program loaded.
+    fn target(&self, entry: &Path, workspace: Option<&Workspace>) -> (String, Option<String>) {
+        // Cargo names the target when this package is a member of the
+        // entry's workspace; without Cargo, its default layout does.
+        let described = workspace
+            .filter(|workspace| {
+                workspace
+                    .package(&self.directory.join("Cargo.toml"))
+                    .is_some()
+            })
             .and_then(|workspace| {
                 let (_, target) = workspace.target_at(entry)?;
                 let binary = target.kind() == crate::project::cargo::Kind::Binary;
@@ -145,8 +153,8 @@ impl Package {
     }
 
     /// The variable `name` as Cargo sets it for the target rooted at
-    /// `entry`.
-    fn variable(&self, name: &str, entry: &Path) -> Option<String> {
+    /// `entry`, of the entry's `workspace`.
+    fn variable(&self, name: &str, entry: &Path, workspace: Option<&Workspace>) -> Option<String> {
         let version = self.text("version").unwrap_or_else(|| "0.0.0".into());
         // `1.2.3-beta.1+build`: the build metadata is no part of these.
         let release = version.split('+').next().unwrap_or_default();
@@ -197,8 +205,8 @@ impl Package {
                     .unwrap_or_default()
                     .to_owned(),
             }),
-            "CARGO_CRATE_NAME" => Some(self.target(entry).0),
-            "CARGO_BIN_NAME" => self.target(entry).1,
+            "CARGO_CRATE_NAME" => Some(self.target(entry, workspace).0),
+            "CARGO_BIN_NAME" => self.target(entry, workspace).1,
             "CARGO_PRIMARY_PACKAGE" => Some("1".into()),
             _ => None,
         }
@@ -207,10 +215,15 @@ impl Package {
 
 /// The variable `name` that Cargo sets when it builds the target rooted at
 /// `entry`, for code in `file`: `None` outside a package, or for a variable
-/// Cargo does not set for that target.
-pub(super) fn variable(file: &Path, entry: &Path, name: &str) -> Option<Option<String>> {
+/// Cargo does not set for that target. `workspace` is the entry's.
+pub(super) fn variable(
+    file: &Path,
+    entry: &Path,
+    name: &str,
+    workspace: Option<&Workspace>,
+) -> Option<Option<String>> {
     let package = Package::of(file)?;
-    Some(package.variable(name, entry))
+    Some(package.variable(name, entry, workspace))
 }
 
 /// `file!()` of code in `file`: its path from the workspace root (or the
@@ -230,10 +243,11 @@ pub(super) fn file_path(file: &Path) -> String {
 }
 
 /// The crate name of the target rooted at `entry`, which `module_path!()`
-/// starts with: rustc's name of a lone file is its stem.
-pub(super) fn crate_name(entry: &Path) -> String {
+/// starts with: rustc's name of a lone file is its stem. `workspace` is
+/// the entry's.
+pub(super) fn crate_name(entry: &Path, workspace: Option<&Workspace>) -> String {
     match Package::of(entry) {
-        Some(package) => package.target(entry).0,
+        Some(package) => package.target(entry, workspace).0,
         None => entry
             .file_stem()
             .and_then(|stem| stem.to_str())

@@ -51,6 +51,10 @@ pub struct Package {
     library: bool,
     /// The package's target the crate is, as Cargo lists it.
     target: Option<project::cargo::Target>,
+    /// The entry package's workspace, as Cargo described it while the
+    /// graph loaded: what the lowering's `env!("CARGO_CRATE_NAME")` and
+    /// `module_path!()` read the entry target's names from.
+    workspace: Option<std::sync::Arc<project::cargo::Workspace>>,
     /// The crate root has a frontmatter block: a cargo script.
     script: bool,
     /// The `use` declarations of marked modules that native modules'
@@ -309,6 +313,12 @@ impl Package {
         &self.features
     }
 
+    /// The workspace Cargo described for the entry package while the graph
+    /// loaded: none for another package, or without Cargo.
+    pub(crate) const fn workspace(&self) -> Option<&std::sync::Arc<project::cargo::Workspace>> {
+        self.workspace.as_ref()
+    }
+
     /// The crate name the native modules are imported under, when the
     /// crate has native code and its root `Cargo.toml` is a package.
     #[must_use]
@@ -455,9 +465,14 @@ impl Graph {
     /// Load and parse one complete target graph through the supplied Engine.
     ///
     /// Every source path is canonicalized before it enters this proof
-    /// bundle. Only declared `mod` edges are traversed.
-    pub fn load(engine: &Engine, target: &project::Target) -> Result<Self, Error> {
-        Builder::new(engine).load(target)
+    /// bundle. Only declared `mod` edges are traversed. What Cargo answers
+    /// is kept in `answers`.
+    pub fn load(
+        engine: &Engine,
+        target: &project::Target,
+        answers: &mut project::cargo::Answers,
+    ) -> Result<Self, Error> {
+        Builder::new(engine, answers).load(target)
     }
 
     /// Keep `directory` as the project's Rawr directory, which its owner
@@ -502,8 +517,9 @@ impl Graph {
         engine: &Engine,
         target: &project::Target,
         cells: &super::Cells,
+        answers: &mut project::cargo::Answers,
     ) -> Result<Self, Error> {
-        let mut builder = Builder::new(engine);
+        let mut builder = Builder::new(engine, answers);
         builder.cells = Some(cells);
         builder.load(target)
     }
@@ -514,8 +530,9 @@ impl Graph {
     pub fn load_snapshot(
         engine: &Engine,
         snapshot: &super::snapshot::Snapshot,
+        answers: &mut project::cargo::Answers,
     ) -> Result<Self, Error> {
-        Builder::from_snapshot(engine, snapshot).load_snapshot()
+        Builder::from_snapshot(engine, snapshot, answers).load_snapshot()
     }
 
     /// [`Graph::load_snapshot`], reading each source's parse from its cell
@@ -525,8 +542,9 @@ impl Graph {
         engine: &Engine,
         snapshot: &super::snapshot::Snapshot,
         cells: &super::Cells,
+        answers: &mut project::cargo::Answers,
     ) -> Result<Self, Error> {
-        let mut builder = Builder::from_snapshot(engine, snapshot);
+        let mut builder = Builder::from_snapshot(engine, snapshot, answers);
         builder.cells = Some(cells);
         builder.load_snapshot()
     }
@@ -538,8 +556,9 @@ impl Graph {
         engine: &Engine,
         snapshot: &super::snapshot::Snapshot,
         parses: &super::Parses,
+        answers: &mut project::cargo::Answers,
     ) -> Result<Self, Error> {
-        let mut builder = Builder::from_snapshot(engine, snapshot);
+        let mut builder = Builder::from_snapshot(engine, snapshot, answers);
         builder.parses = Some(parses);
         builder.load_snapshot()
     }
@@ -550,8 +569,9 @@ impl Graph {
         engine: &Engine,
         snapshot: &super::snapshot::Snapshot,
         entry: crate::parse::Unit,
+        answers: &mut project::cargo::Answers,
     ) -> Result<Self, Error> {
-        let mut builder = Builder::from_snapshot(engine, snapshot);
+        let mut builder = Builder::from_snapshot(engine, snapshot, answers);
         builder.entry = Some(entry);
         builder.load_snapshot()
     }
@@ -599,10 +619,11 @@ impl Graph {
     pub fn entry_features_on(
         &self,
         platform: &str,
+        answers: &mut project::cargo::Answers,
     ) -> Result<project::cargo::features::Enabled, project::cargo::Error> {
         let entry = self.entry_source().path();
         let described = self.entry_package().cargo().and_then(|cargo| {
-            project::cargo::Workspace::of(&cargo.path)
+            project::cargo::Workspace::of(&cargo.path, answers)
                 .ok()?
                 .package(&cargo.path)
                 .cloned()
@@ -623,6 +644,7 @@ impl Graph {
                 target,
                 project::cargo::Mode::Build,
                 Some(platform),
+                answers,
             )
             .map(|unit| unit.features().clone()),
             None => Ok(project::cargo::features::Enabled::of_platform(
@@ -855,6 +877,8 @@ fn snapshot_root(entry: &Path, snapshot: &super::snapshot::Snapshot) -> PathBuf 
 
 struct Builder<'a> {
     engine: &'a Engine,
+    /// What Cargo answered, lent by the load's caller.
+    answers: &'a mut project::cargo::Answers,
     cells: Option<&'a super::Cells>,
     /// A generation's parses, read and never written (`load_snapshot_reading`).
     parses: Option<&'a super::Parses>,
@@ -884,9 +908,10 @@ struct Request {
 }
 
 impl<'a> Builder<'a> {
-    fn new(engine: &'a Engine) -> Self {
+    fn new(engine: &'a Engine, answers: &'a mut project::cargo::Answers) -> Self {
         Self {
             engine,
+            answers,
             cells: None,
             parses: None,
             snapshot: None,
@@ -904,8 +929,12 @@ impl<'a> Builder<'a> {
         }
     }
 
-    fn from_snapshot(engine: &'a Engine, snapshot: &'a super::snapshot::Snapshot) -> Self {
-        let mut builder = Self::new(engine);
+    fn from_snapshot(
+        engine: &'a Engine,
+        snapshot: &'a super::snapshot::Snapshot,
+        answers: &'a mut project::cargo::Answers,
+    ) -> Self {
+        let mut builder = Self::new(engine, answers);
         builder.snapshot = Some(snapshot);
         builder
     }
@@ -997,20 +1026,33 @@ impl<'a> Builder<'a> {
         } else {
             root.clone()
         };
-        // The package and the target it runs, as Cargo describes them.
+        // The package and the target it runs, as Cargo describes them. A
+        // script's package is its expanded manifest in rawr's area, which
+        // Cargo reads when there are tables to decide.
+        #[cfg(feature = "rust-import")]
+        if let Some((cargo, _)) = &cargo
+            && request.package.is_none()
+            && script
+            && self.snapshot.is_none()
+            && !cargo.targets.is_empty()
+        {
+            let _ = manifest::script::materialize(cargo);
+        }
+        // The entry's workspace is kept for the lowering; another package's
+        // is asked only when discovery did not describe it.
+        let workspace = match (&request.package, &cargo) {
+            (_, Some((cargo, _))) if self.packages.is_empty() => self.workspace(&cargo.path),
+            (None, Some((cargo, _))) => self.workspace(&cargo.path),
+            _ => None,
+        };
         let described = match (request.package, &cargo) {
             (Some(package), _) => Some(package),
-            (None, Some((cargo, _))) => {
-                // A script's package is its expanded manifest in rawr's
-                // area, which Cargo reads when there are tables to decide.
-                #[cfg(feature = "rust-import")]
-                if script && self.snapshot.is_none() && !cargo.targets.is_empty() {
-                    let _ = manifest::script::materialize(cargo);
-                }
-                self.described(&cargo.path)
-            }
+            (None, Some((cargo, _))) => workspace
+                .as_ref()
+                .and_then(|workspace| workspace.package(&cargo.path).cloned()),
             (None, None) => None,
         };
+        let workspace = workspace.filter(|_| self.packages.is_empty());
         let target = described
             .as_ref()
             .and_then(|package| package.target_at(&canonical).cloned());
@@ -1085,6 +1127,7 @@ impl<'a> Builder<'a> {
             features,
             library,
             target: target.clone(),
+            workspace,
             script,
             re_exports: Vec::new(),
             marked_uses: false,
@@ -2136,14 +2179,10 @@ impl<'a> Builder<'a> {
         Ok(())
     }
 
-    /// The package whose manifest is `manifest`, as Cargo describes it. A
-    /// manifest Cargo can't read has none; its own errors are reported as
-    /// Rawr reads it.
-    fn described(&self, manifest: &Path) -> Option<project::cargo::Package> {
-        project::cargo::Workspace::of(manifest)
-            .ok()?
-            .package(manifest)
-            .cloned()
+    /// The workspace of `manifest`, as Cargo describes it. A manifest Cargo
+    /// can't read has none; its own errors are reported as Rawr reads it.
+    fn workspace(&mut self, manifest: &Path) -> Option<std::sync::Arc<project::cargo::Workspace>> {
+        project::cargo::Workspace::of(manifest, self.answers).ok()
     }
 
     /// `cargo` as Cargo builds `target` of `package` on the host: its
@@ -2161,14 +2200,13 @@ impl<'a> Builder<'a> {
         target: Option<&project::cargo::Target>,
         mode: project::cargo::Mode,
     ) -> Result<(manifest::cargo::Cargo, Option<project::cargo::Unit>), Error> {
-        let built = package
-            .filter(|_| self.snapshot.is_none())
-            .and_then(|package| {
-                target
-                    .or_else(|| package.run_binary())
-                    .or_else(|| package.library())
-                    .map(|target| project::cargo::Unit::of(package, target, mode))
-            });
+        let built = match package.filter(|_| self.snapshot.is_none()) {
+            Some(package) => target
+                .or_else(|| package.run_binary())
+                .or_else(|| package.library())
+                .map(|target| project::cargo::Unit::of(package, target, mode, self.answers)),
+            None => None,
+        };
         match built {
             Some(Ok(unit)) => Ok((
                 cargo.on_host(manifest::cargo::Host::Built(&unit)),
@@ -2209,8 +2247,8 @@ impl<'a> Builder<'a> {
         };
         let source = diagnostic::Source::new(path.to_string_lossy().into_owned(), text.clone())
             .map_err(Error::diagnostic)?;
-        let ask_cargo = self.snapshot.is_none();
-        match manifest::cargo::Cargo::parse(path, text, root, ask_cargo) {
+        let answers = self.snapshot.is_none().then_some(&mut *self.answers);
+        match manifest::cargo::Cargo::parse(path, text, root, answers) {
             Ok(cargo) => Ok(cargo.map(|cargo| (cargo, source))),
             Err(error) => {
                 let evidence = self.push_evidence(source);

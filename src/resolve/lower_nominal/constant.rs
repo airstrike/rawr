@@ -385,7 +385,7 @@ impl<'a> Parser<'a> {
     /// being read, as `app::geometry`.
     pub(super) fn module_path(&self) -> String {
         let root = match self.entry_file() {
-            Some(entry) => cargo_env::crate_name(&entry),
+            Some(entry) => cargo_env::crate_name(&entry, self.models.workspace.as_deref()),
             None => std::path::Path::new(&self.source_identity())
                 .file_stem()
                 .and_then(|stem| stem.to_str())
@@ -418,7 +418,7 @@ impl<'a> Parser<'a> {
             file: self.source_file(),
             entry: self.entry_file(),
         };
-        let value = place.variable(&self.models.access, name);
+        let value = place.variable(&self.models, name);
         #[cfg(feature = "rust-import")]
         self.read(super::kept::Read::variable(place, name, value.as_deref()));
         value
@@ -529,14 +529,15 @@ impl Place {
     /// for the crate the file is in, `CARGO_MANIFEST_DIR` being the
     /// directory of the project the file is in, and else the
     /// environment's. A program granted no environment has none: every
-    /// variable is undefined, as rustc reports one.
-    pub(super) fn variable(&self, access: &crate::Access, name: &str) -> Option<String> {
-        if !access.env() {
+    /// variable is undefined, as rustc reports one. `tables` give the
+    /// program's access and its entry's workspace.
+    pub(super) fn variable(&self, tables: &super::models::Tables, name: &str) -> Option<String> {
+        if !tables.access.env() {
             return None;
         }
         if name.starts_with("CARGO_")
             && let (Some(file), Some(entry)) = (&self.file, &self.entry)
-            && let Some(value) = cargo_env::variable(file, entry, name)
+            && let Some(value) = cargo_env::variable(file, entry, name, tables.workspace.as_deref())
         {
             return value;
         }

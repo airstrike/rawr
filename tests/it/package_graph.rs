@@ -17,8 +17,9 @@ fn declared_modules_form_the_only_source_graph() {
     project.write("src/internal.rs", "struct Hidden;\n");
     project.write("src/unreferenced.rs", "this is not parsed");
 
-    let target = rawr::project::Target::discover(project.path()).unwrap();
-    let graph = Graph::load(&Engine::new(), &target).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(project.path(), &mut answers).unwrap();
+    let graph = Graph::load(&Engine::new(), &target, &mut answers).unwrap();
 
     assert_eq!(graph.packages().len(), 1);
     assert_eq!(graph.entry_package().name(), "declared");
@@ -54,10 +55,11 @@ fn package_import_retains_a_host_item_and_module_at_one_path() {
         .item(host::item::Definition::value("widget::button::primary", host::type_ref::Type::builtin(host::type_ref::Builtin::I64)).unwrap())
         .unwrap();
 
-    let target = rawr::project::Target::discover(project.path()).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(project.path(), &mut answers).unwrap();
     let mut engine = Engine::new();
     engine.register_host_facade(facade.finish().unwrap()).unwrap();
-    engine.compile_package_executable(&target).unwrap();
+    engine.compile_package_executable(&target, &mut answers).unwrap();
 }
 
 #[test]
@@ -65,9 +67,10 @@ fn child_parse_errors_retain_the_child_source() {
     let project = Project::new("child-parse");
     project.write("src/main.rs", "mod broken;\n");
     project.write("src/broken.rs", "struct Broken {\n");
-    let target = rawr::project::Target::discover(project.path()).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(project.path(), &mut answers).unwrap();
 
-    let error = Graph::load(&Engine::new(), &target).unwrap_err();
+    let error = Graph::load(&Engine::new(), &target, &mut answers).unwrap_err();
     let report = error.report().unwrap();
 
     assert_eq!(error.category(), Category::Parse);
@@ -78,9 +81,10 @@ fn child_parse_errors_retain_the_child_source() {
 fn missing_modules_point_to_the_declaration() {
     let project = Project::new("missing-module");
     project.write("src/main.rs", "mod absent;\n");
-    let target = rawr::project::Target::discover(project.path()).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(project.path(), &mut answers).unwrap();
 
-    let error = Graph::load(&Engine::new(), &target).unwrap_err();
+    let error = Graph::load(&Engine::new(), &target, &mut answers).unwrap_err();
     let report = error.report().unwrap();
 
     assert_eq!(error.category(), Category::Resource);
@@ -103,9 +107,10 @@ fn aggregate_compile_resolves_module_types_and_stable_item_keys() {
     let project = Project::new("aggregate_types");
     project.write("src/main.rs", "pub mod controls;\nuse crate::controls::Button;\npub fn accept(value: Button) {}\n");
     project.write("src/controls.rs", "pub struct Button;\n");
-    let target = rawr::project::Target::discover(project.path()).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(project.path(), &mut answers).unwrap();
 
-    let executable = Engine::new().compile_package_executable(&target).unwrap();
+    let executable = Engine::new().compile_package_executable(&target, &mut answers).unwrap();
     let accept = executable.items().find(|item| item.key().name() == "accept").unwrap();
 
     assert_eq!(executable.type_count(), 1);
@@ -130,10 +135,11 @@ fn unit_and_tuple_structs_through_module_paths() {
         "#,
     );
     project.write("src/units.rs", "pub struct Origin;\npub struct Meters(pub i64);\n");
-    let target = rawr::project::Target::discover(project.path()).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(project.path(), &mut answers).unwrap();
     let engine = Shared::new(Engine::new());
 
-    let executable = engine.compile_package_executable(&target).unwrap();
+    let executable = engine.compile_package_executable(&target, &mut answers).unwrap();
     let authority = engine.authorize(executable).unwrap();
     let answer = authority.items().find(|value| value.key().name() == "answer").unwrap().clone();
 
@@ -156,10 +162,11 @@ fn public_type_aliases_are_read_across_modules() {
         "#,
     );
     project.write("src/geometry.rs", "pub type Path = Vec<Coord>;\npub type Coord = (i64, i64);\npub fn first(path: &Path) -> i64 { path[0].0 }\n");
-    let target = rawr::project::Target::discover(project.path()).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(project.path(), &mut answers).unwrap();
     let engine = Shared::new(Engine::new());
 
-    let executable = engine.compile_package_executable(&target).unwrap();
+    let executable = engine.compile_package_executable(&target, &mut answers).unwrap();
     let authority = engine.authorize(executable).unwrap();
     let answer = authority.items().find(|value| value.key().name() == "answer").unwrap().clone();
 
@@ -174,9 +181,10 @@ fn aggregate_compile_rejects_private_import_hops_with_both_sources() {
     project.write("src/controls.rs", "mod inner;\n");
     project.write("src/controls/inner.rs", "pub struct Button;\n");
     project.write("src/other.rs", "use crate::controls::inner::Button;\n");
-    let target = rawr::project::Target::discover(project.path()).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(project.path(), &mut answers).unwrap();
 
-    let error = Engine::new().compile_package_executable(&target).unwrap_err();
+    let error = Engine::new().compile_package_executable(&target, &mut answers).unwrap_err();
     let report = error.report().unwrap();
 
     assert_eq!(error.category(), Category::Resolution);
@@ -199,10 +207,11 @@ fn rust_module_privacy_paths_and_constants() {
         "src/signal.rs",
         "use super::config;\nuse crate::config::GAP;\npub struct State { level: i64 }\npub fn make() -> State { State { level: GAP * 4 } }\npub fn level(state: State) -> i64 { state.level + config::GAP }\n",
     );
-    let target = rawr::project::Target::discover(project.path()).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(project.path(), &mut answers).unwrap();
     let engine = Shared::new(Engine::new());
 
-    let executable = engine.compile_package_executable(&target).unwrap_or_else(|error| panic!("{error}"));
+    let executable = engine.compile_package_executable(&target, &mut answers).unwrap_or_else(|error| panic!("{error}"));
     let authority = engine.authorize(executable).unwrap();
     let answer = authority.items().find(|value| value.key().name() == "answer").unwrap().clone();
 
@@ -217,10 +226,11 @@ fn crate_paths_reach_root_imports_from_inline_modules() {
         "mod preset;\nuse preset::Preset;\nconst BASE: i64 = 2;\nmod grid {\n    use crate::Preset;\n    use crate::BASE;\n    pub fn size(preset: Preset) -> i64 { preset.cells + BASE + inner::extra() }\n    mod inner {\n        use crate::Preset;\n        use super::super::BASE;\n        pub fn extra() -> i64 { let p = Preset { cells: 10 }; p.cells * BASE }\n    }\n}\npub fn answer() -> i64 { grid::size(Preset { cells: 3 }) }\n",
     );
     project.write("src/preset.rs", "pub struct Preset { pub cells: i64 }\n");
-    let target = rawr::project::Target::discover(project.path()).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(project.path(), &mut answers).unwrap();
     let engine = Shared::new(Engine::new());
 
-    let executable = engine.compile_package_executable(&target).unwrap_or_else(|error| panic!("{error}"));
+    let executable = engine.compile_package_executable(&target, &mut answers).unwrap_or_else(|error| panic!("{error}"));
     let authority = engine.authorize(executable).unwrap();
     let answer = authority.items().find(|value| value.key().name() == "answer").unwrap().clone();
 
@@ -232,9 +242,10 @@ fn aggregate_compile_rejects_non_entry_statements_at_their_source() {
     let project = Project::new("module-statements");
     project.write("src/main.rs", "mod controls;\n");
     project.write("src/controls.rs", "let hidden = 1;\n");
-    let target = rawr::project::Target::discover(project.path()).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(project.path(), &mut answers).unwrap();
 
-    let error = Engine::new().compile_package_executable(&target).unwrap_err();
+    let error = Engine::new().compile_package_executable(&target, &mut answers).unwrap_err();
     let report = error.report().unwrap();
 
     assert_eq!(error.category(), Category::Resolution);
@@ -247,10 +258,11 @@ fn imported_functions_lower_once_with_module_qualified_runtime_symbols() {
     project.write("src/main.rs", "pub mod left;\npub mod right;\nuse crate::left::double;\npub fn answer(value: i64) -> i64 { double(value) }\n");
     project.write("src/left.rs", "pub fn double(value: i64) -> i64 { value + value }\n");
     project.write("src/right.rs", "pub fn double(value: i64) -> i64 { value + value + 1 }\n");
-    let target = rawr::project::Target::discover(project.path()).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(project.path(), &mut answers).unwrap();
     let engine = Shared::new(Engine::new());
 
-    let executable = engine.compile_package_executable(&target).unwrap();
+    let executable = engine.compile_package_executable(&target, &mut answers).unwrap();
     let authority = engine.authorize(executable).unwrap();
     let answer = authority.items().find(|value| value.key().name() == "answer").unwrap().clone();
     let left = authority
@@ -274,9 +286,10 @@ fn lowering_failures_keep_the_exact_child_source() {
     let project = Project::new("child-lowering");
     project.write("src/main.rs", "pub mod broken;\n");
     project.write("src/broken.rs", "pub fn wrong(value: i64) -> bool { value }\n");
-    let target = rawr::project::Target::discover(project.path()).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(project.path(), &mut answers).unwrap();
 
-    let error = Engine::new().compile_package_executable(&target).unwrap_err();
+    let error = Engine::new().compile_package_executable(&target, &mut answers).unwrap_err();
     let report = error.report().unwrap();
 
     assert_eq!(error.category(), Category::Compilation);
@@ -289,9 +302,10 @@ fn duplicate_methods_retain_both_declaring_sources() {
     project.write("src/main.rs", "pub mod first;\npub mod second;\npub struct State;\n");
     project.write("src/first.rs", "use crate::State;\nimpl State { pub fn value(&self) -> i64 { 1 } }\n");
     project.write("src/second.rs", "use crate::State;\nimpl State { pub fn value(&self) -> i64 { 2 } }\n");
-    let target = rawr::project::Target::discover(project.path()).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(project.path(), &mut answers).unwrap();
 
-    let error = Engine::new().compile_package_executable(&target).unwrap_err();
+    let error = Engine::new().compile_package_executable(&target, &mut answers).unwrap_err();
     let report = error.report().unwrap();
 
     assert_eq!(error.category(), Category::Resolution);
@@ -306,9 +320,10 @@ fn qualified_header_paths_resolve_without_an_import_binding() {
     let project = Project::new("qualified-header");
     project.write("src/main.rs", "pub mod model;\npub fn keep(value: crate::model::State) -> crate::model::State { value }\n");
     project.write("src/model.rs", "pub struct State { value: i64 }\n");
-    let target = rawr::project::Target::discover(project.path()).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(project.path(), &mut answers).unwrap();
 
-    let executable = Engine::new().compile_package_executable(&target).unwrap();
+    let executable = Engine::new().compile_package_executable(&target, &mut answers).unwrap();
 
     assert_eq!(executable.type_count(), 1);
 }
@@ -341,9 +356,10 @@ fn child_module_types_resolve_relatively_in_every_header_position() {
         "#,
     );
     project.write("src/controls.rs", "pub enum Message { Tick }\n");
-    let target = rawr::project::Target::discover(project.path()).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(project.path(), &mut answers).unwrap();
 
-    let executable = Engine::new().compile_package_executable(&target).unwrap();
+    let executable = Engine::new().compile_package_executable(&target, &mut answers).unwrap();
 
     assert_eq!(executable.type_count(), 3);
 }
@@ -354,9 +370,10 @@ fn nested_child_module_types_resolve_from_their_containing_module() {
     project.write("src/main.rs", "pub mod screen;\n");
     project.write("src/screen.rs", "pub mod controls;\npub struct Model { message: controls::Message }\n");
     project.write("src/screen/controls.rs", "pub enum Message { Tick }\n");
-    let target = rawr::project::Target::discover(project.path()).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(project.path(), &mut answers).unwrap();
 
-    let executable = Engine::new().compile_package_executable(&target).unwrap();
+    let executable = Engine::new().compile_package_executable(&target, &mut answers).unwrap();
 
     assert_eq!(executable.type_count(), 2);
 }
@@ -366,9 +383,10 @@ fn a_private_function_of_another_module_is_rustcs_e0603() {
     let project = Project::new("private-function");
     project.write("src/main.rs", "mod factory;\nfn main() {\n    factory::make();\n}\n");
     project.write("src/factory.rs", "fn make() {}\n");
-    let target = rawr::project::Target::discover(project.path()).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(project.path(), &mut answers).unwrap();
 
-    let error = Engine::new().compile_package_executable(&target).unwrap_err();
+    let error = Engine::new().compile_package_executable(&target, &mut answers).unwrap_err();
     let report = error.report().unwrap();
 
     assert_eq!(report.code(), code::RESOLVE_PRIVATE_ITEM);
@@ -384,9 +402,10 @@ fn relative_header_types_preserve_private_module_boundaries() {
     project.write("src/main.rs", "mod controls;\npub struct Model { message: controls::inner::Message }\n");
     project.write("src/controls.rs", "mod inner;\n");
     project.write("src/controls/inner.rs", "pub enum Message { Tick }\n");
-    let target = rawr::project::Target::discover(project.path()).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(project.path(), &mut answers).unwrap();
 
-    let error = Engine::new().compile_package_executable(&target).unwrap_err();
+    let error = Engine::new().compile_package_executable(&target, &mut answers).unwrap_err();
     let report = error.report().unwrap();
 
     assert_eq!(error.category(), Category::Resolution);
@@ -401,9 +420,10 @@ fn unknown_types_under_a_relative_module_are_rustcs_e0425() {
     let project = Project::new("unknown-relative-header-type");
     project.write("src/main.rs", "pub mod controls;\npub struct Model { message: controls::Missing }\n");
     project.write("src/controls.rs", "pub enum Message { Tick }\n");
-    let target = rawr::project::Target::discover(project.path()).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(project.path(), &mut answers).unwrap();
 
-    let error = Engine::new().compile_package_executable(&target).unwrap_err();
+    let error = Engine::new().compile_package_executable(&target, &mut answers).unwrap_err();
     let report = error.report().unwrap();
 
     // rustc: E0425 cannot find type `Missing` in module `controls`.
@@ -419,9 +439,10 @@ fn super_imports_resolve_in_the_parent_module() {
     let project = Project::new("super-import");
     project.write("src/main.rs", "pub mod child;\n");
     project.write("src/child.rs", "use super::State;\n");
-    let target = rawr::project::Target::discover(project.path()).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(project.path(), &mut answers).unwrap();
 
-    let error = Engine::new().compile_package_executable(&target).unwrap_err();
+    let error = Engine::new().compile_package_executable(&target, &mut answers).unwrap_err();
     let report = error.report().unwrap();
 
     assert_eq!(report.code(), code::RESOLVE_UNKNOWN_IMPORT);
@@ -435,9 +456,10 @@ fn cyclic_public_reexports_are_rejected_before_lowering() {
     project.write("src/main.rs", "pub mod a;\npub mod b;\n");
     project.write("src/a.rs", "pub use crate::b::Thing;\n");
     project.write("src/b.rs", "pub use crate::a::Thing;\n");
-    let target = rawr::project::Target::discover(project.path()).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(project.path(), &mut answers).unwrap();
 
-    let error = Engine::new().compile_package_executable(&target).unwrap_err();
+    let error = Engine::new().compile_package_executable(&target, &mut answers).unwrap_err();
     let report = error.report().unwrap();
 
     assert_eq!(error.category(), Category::Resolution);
@@ -452,9 +474,10 @@ fn a_script_is_its_own_package_wherever_it_sits() {
     let main = project.path().join("src/main.rs");
     fs::create_dir_all(main.parent().unwrap()).unwrap();
     fs::write(&main, "#!/usr/bin/env rawr\n---cargo\n[package]\nedition = \"2024\"\n---\n// rawr\nfn main() {}\n").unwrap();
-    let target = rawr::project::Target::discover(&main).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(&main, &mut answers).unwrap();
 
-    let graph = Graph::load(&Engine::new(), &target).unwrap();
+    let graph = Graph::load(&Engine::new(), &target, &mut answers).unwrap();
 
     // Its package lives in rawr's area for scripts, never beside it.
     let root = Graph::root_of(&target);
@@ -471,9 +494,10 @@ fn a_script_s_dependencies_are_its_frontmatter_s() {
     let project = Project::new("script-dependencies");
     let script = project.path().join("tool.rs");
     fs::write(&script, "---cargo\n[dependencies]\nrand = \"0.9\"\n---\n// rawr\nfn main() {}\n").unwrap();
-    let target = rawr::project::Target::discover(&script).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(&script, &mut answers).unwrap();
 
-    let graph = Graph::load(&Engine::new(), &target).unwrap();
+    let graph = Graph::load(&Engine::new(), &target, &mut answers).unwrap();
 
     assert!(graph.declares_rust_import());
     assert_eq!(graph.entry_package().name(), "tool");
@@ -483,8 +507,9 @@ fn a_script_s_dependencies_are_its_frontmatter_s() {
     assert!(text.contains(&format!("path = {:?}", fs::canonicalize(&script).unwrap().display().to_string())), "{text}");
 
     fs::write(&script, "---cargo\n[dependencies]\nrand = \"0.9\"\n[lib]\n---\n// rawr\nfn main() {}\n").unwrap();
-    let target = rawr::project::Target::discover(&script).unwrap();
-    let error = Graph::load(&Engine::new(), &target).unwrap_err();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(&script, &mut answers).unwrap();
+    let error = Graph::load(&Engine::new(), &target, &mut answers).unwrap_err();
     let report = error.report().unwrap();
     assert!(report.message().contains("`lib` is not allowed in embedded manifests"), "{report}");
     assert_eq!(report.labels()[0].span().start(), Position::new(4, 2));
@@ -495,17 +520,19 @@ fn a_script_s_parse_errors_keep_the_file_s_lines_and_columns() {
     let project = Project::new("script-positions");
     let script = project.path().join("tool.rs");
     fs::write(&script, "#!/usr/bin/env rawr\n---cargo\n---\n// rawr\nfn main() {}\nstruct 1;\n").unwrap();
-    let target = rawr::project::Target::discover(&script).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(&script, &mut answers).unwrap();
 
-    let error = Graph::load(&Engine::new(), &target).unwrap_err();
+    let error = Graph::load(&Engine::new(), &target, &mut answers).unwrap_err();
     let report = error.report().unwrap();
 
     assert_eq!(error.category(), Category::Parse);
     assert_eq!(report.labels()[0].span().start(), Position::new(6, 8), "{report}");
 
     fs::write(&script, "---cargo\n[package]\n// rawr\nfn main() {}\n").unwrap();
-    let target = rawr::project::Target::discover(&script).unwrap();
-    let error = Graph::load(&Engine::new(), &target).unwrap_err();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(&script, &mut answers).unwrap();
+    let error = Graph::load(&Engine::new(), &target, &mut answers).unwrap_err();
     let report = error.report().unwrap();
     assert!(report.message().contains("unclosed frontmatter"), "{report}");
 }
@@ -515,8 +542,9 @@ fn a_script_s_parse_errors_keep_the_file_s_lines_and_columns() {
 fn a_crate_without_dependencies_produces_no_import_request() {
     let project = Project::new("no-rust-import");
     project.write("src/main.rs", "let ready = true;\n");
-    let target = rawr::project::Target::discover(project.path()).unwrap();
-    let graph = Graph::load(&Engine::new(), &target).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(project.path(), &mut answers).unwrap();
+    let graph = Graph::load(&Engine::new(), &target, &mut answers).unwrap();
 
     assert!(
         graph
@@ -536,8 +564,9 @@ fn manifest_cannot_claim_the_reserved_internal_alias() {
     project.write("internal/Cargo.toml", "[package]\nname = \"__rawr_internal\"\nedition = \"2024\"\n");
     project.write("internal/src/lib.rs", "");
     project.write("Cargo.toml", "[package]\nname = \"reserved-rust-alias\"\nedition = \"2024\"\n[workspace]\n[dependencies]\n__rawr_internal = { path = \"internal\" }\n");
-    let target = rawr::project::Target::discover(project.path()).unwrap();
-    let graph = Graph::load(&Engine::new(), &target).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(project.path(), &mut answers).unwrap();
+    let graph = Graph::load(&Engine::new(), &target, &mut answers).unwrap();
 
     let error = graph
         .rust_import(rawr_import::cargo::config::Environment::empty(), &rawr_import::cargo::Limits::standard())
@@ -558,9 +587,10 @@ fn canonical_module_targets_cannot_escape_or_alias() {
     write(&outside, "pub struct Outside;\n");
     write(&escaping.join("src/main.rs"), "mod outside;\n");
     symlink(&outside, escaping.join("src/outside.rs")).unwrap();
-    let target = rawr::project::Target::discover(&escaping).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(&escaping, &mut answers).unwrap();
 
-    let error = Graph::load(&Engine::new(), &target).unwrap_err();
+    let error = Graph::load(&Engine::new(), &target, &mut answers).unwrap_err();
     let report = error.report().unwrap();
 
     assert_eq!(error.category(), Category::Resource);
@@ -573,9 +603,10 @@ fn canonical_module_targets_cannot_escape_or_alias() {
     write(&aliasing.join("src/shared.rs"), "pub struct Shared;\n");
     symlink("shared.rs", aliasing.join("src/first.rs")).unwrap();
     symlink("shared.rs", aliasing.join("src/second.rs")).unwrap();
-    let target = rawr::project::Target::discover(&aliasing).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(&aliasing, &mut answers).unwrap();
 
-    let error = Graph::load(&Engine::new(), &target).unwrap_err();
+    let error = Graph::load(&Engine::new(), &target, &mut answers).unwrap_err();
     let report = error.report().unwrap();
 
     assert_eq!(error.category(), Category::Module);
@@ -588,8 +619,9 @@ fn canonical_module_targets_cannot_escape_or_alias() {
 fn marked_untyped_function_is_rejected() {
     let project = Project::new("untyped-sink");
     project.write("src/main.rs", "fn sink(value) {}\nfn main() { sink(1); }\n");
-    let target = rawr::project::Target::discover(project.path()).unwrap();
-    let error = Engine::new().compile_package_executable(&target).unwrap_err();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(project.path(), &mut answers).unwrap();
+    let error = Engine::new().compile_package_executable(&target, &mut answers).unwrap_err();
     assert!(error.to_string().contains("expected one of `:`, `@`, or `|`, found `)`"), "{error}");
 }
 
@@ -648,18 +680,20 @@ fn rust_use_forms_and_qualified_types() {
         "src/signal/inner.rs",
         "pub fn seed() -> i64 { let s: super::State = super::State { level: 5 }; super::level(s) }\npub fn keep(state: super::State) -> super::State { state }\n",
     );
-    let target = rawr::project::Target::discover(project.path()).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(project.path(), &mut answers).unwrap();
     let engine = Shared::new(Engine::new());
 
-    let executable = engine.compile_package_executable(&target).unwrap_or_else(|error| panic!("{error}"));
+    let executable = engine.compile_package_executable(&target, &mut answers).unwrap_or_else(|error| panic!("{error}"));
     let authority = engine.authorize(executable).unwrap();
     let answer = authority.items().find(|value| value.key().name() == "answer").unwrap().clone();
     assert_eq!(authority.invoke(&answer, &mut []).unwrap().as_int().unwrap(), 5 + 10);
 
     // As in Rust, `self` cannot import a module that is already in scope.
     project.write("src/main.rs", "mod signal;\nuse signal::{self};\n");
-    let target = rawr::project::Target::discover(project.path()).unwrap();
-    assert!(Engine::new().compile_package_executable(&target).is_err());
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(project.path(), &mut answers).unwrap();
+    assert!(Engine::new().compile_package_executable(&target, &mut answers).is_err());
 }
 
 /// Items are identified by their module path, as rustc's are: two modules
@@ -681,10 +715,11 @@ fn two_modules_declare_their_own_trait_of_one_name() {
         "src/sidebar.rs",
         "pub struct Line(pub i64);\npub trait Shape { fn size(&self) -> i64; fn twice(&self) -> i64 { self.size() * 2 } }\nimpl Shape for Line { fn size(&self) -> i64 { self.0 } }\nimpl crate::home::Shape for Line { fn size(&self) -> i64 { 100 } }\npub fn area<T: Shape>(shape: T) -> i64 { shape.twice() }\npub fn seven() -> i64 { <Line as Shape>::size(&Line(7)) }\n",
     );
-    let target = rawr::project::Target::discover(project.path()).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(project.path(), &mut answers).unwrap();
     let engine = Shared::new(Engine::new());
 
-    let executable = engine.compile_package_executable(&target).unwrap_or_else(|error| panic!("{error}"));
+    let executable = engine.compile_package_executable(&target, &mut answers).unwrap_or_else(|error| panic!("{error}"));
     let authority = engine.authorize(executable).unwrap();
     let answer = authority.items().find(|value| value.key().name() == "answer").unwrap().clone();
     assert_eq!(authority.invoke(&answer, &mut []).unwrap().as_int().unwrap(), 9 + 8 + 1 + 25 + 7 + 100);
@@ -709,10 +744,11 @@ fn a_crate_traits_function_is_called_through_its_module_path() {
         project.write("src/main.rs", main);
         project.write("src/home.rs", home);
         project.write("src/sidebar.rs", sidebar);
-        let target = rawr::project::Target::discover(project.path()).unwrap();
+        let mut answers = rawr::project::cargo::Answers::new();
+        let target = rawr::project::Target::discover(project.path(), &mut answers).unwrap();
         let engine = Shared::new(Engine::new());
 
-        let executable = engine.compile_package_executable(&target).unwrap_or_else(|error| panic!("{case}: {error}"));
+        let executable = engine.compile_package_executable(&target, &mut answers).unwrap_or_else(|error| panic!("{case}: {error}"));
         let authority = engine.authorize(executable).unwrap();
         let answer = authority.items().find(|value| value.key().name() == "answer").unwrap().clone();
         assert_eq!(authority.invoke(&answer, &mut []).unwrap().as_int().unwrap(), 9 + 4 + 1 + 7, "{case}");
@@ -731,10 +767,11 @@ fn an_imported_crate_trait_is_implemented_by_its_name() {
         "src/sidebar.rs",
         "use crate::home::Area;\npub struct Line(pub i64);\nimpl Area for Line { fn size(&self) -> i64 { self.0 } }\npub fn area<T: Area>(shape: T) -> i64 { shape.size() }\n",
     );
-    let target = rawr::project::Target::discover(project.path()).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(project.path(), &mut answers).unwrap();
     let engine = Shared::new(Engine::new());
 
-    let executable = engine.compile_package_executable(&target).unwrap_or_else(|error| panic!("{error}"));
+    let executable = engine.compile_package_executable(&target, &mut answers).unwrap_or_else(|error| panic!("{error}"));
     let authority = engine.authorize(executable).unwrap();
     let answer = authority.items().find(|value| value.key().name() == "answer").unwrap().clone();
     assert_eq!(authority.invoke(&answer, &mut []).unwrap().as_int().unwrap(), 4);

@@ -100,8 +100,8 @@ impl Project {
 
 /// The program of the Cargo package at `root`: the package's crate, or the
 /// script its crate root is.
-fn load_directory(root: PathBuf) -> Result<Target, Error> {
-    match entry(&root)? {
+fn load_directory(root: PathBuf, answers: &mut cargo::Answers) -> Result<Target, Error> {
+    match entry(&root, answers)? {
         Entry::Found(source, package) => Project::load(root, source, package).map(Target::Project),
         Entry::Script(source) => source::File::load_explicit(source).map(Target::File),
         Entry::Unmarked(entry) => Err(Error::Unmarked { root, entry }),
@@ -114,8 +114,9 @@ fn load_directory(root: PathBuf) -> Result<Target, Error> {
 }
 
 impl Target {
-    /// Discover and validate an explicit source file, manifest, or directory.
-    pub fn discover(path: impl AsRef<Path>) -> Result<Self, Error> {
+    /// Discover and validate an explicit source file, manifest, or
+    /// directory, keeping what Cargo answers in `answers`.
+    pub fn discover(path: impl AsRef<Path>, answers: &mut cargo::Answers) -> Result<Self, Error> {
         let requested = path.as_ref().to_path_buf();
         let canonical = canonicalize_input(&requested)?;
         let metadata = fs::metadata(&canonical).map_err(|source| Error::Unreadable {
@@ -125,19 +126,23 @@ impl Target {
         })?;
 
         if metadata.is_file() {
-            return discover_file(canonical);
+            return discover_file(canonical, answers);
         }
         if !metadata.is_dir() {
             return Err(Error::UnsupportedInput { path: canonical });
         }
 
-        discover_directory(canonical)
+        discover_directory(canonical, answers)
     }
 
     /// The crate root of the binary target `name`, as `cargo run --bin
     /// <name>` finds it from `start`: of the package whose manifest is
     /// nearest above, or of any member of a workspace with no root package.
-    pub fn binary(start: &Path, name: &str) -> Result<PathBuf, Error> {
+    pub fn binary(
+        start: &Path,
+        name: &str,
+        answers: &mut cargo::Answers,
+    ) -> Result<PathBuf, Error> {
         let start = canonicalize_input(start)?;
         let manifest = start
             .ancestors()
@@ -148,10 +153,11 @@ impl Target {
                 boundary: start.ancestors().last().unwrap_or(&start).to_path_buf(),
                 legacy: None,
             })?;
-        let workspace = cargo::Workspace::of(&manifest).map_err(|source| Error::Cargo {
-            manifest: manifest.clone(),
-            source,
-        })?;
+        let workspace =
+            cargo::Workspace::of(&manifest, answers).map_err(|source| Error::Cargo {
+                manifest: manifest.clone(),
+                source,
+            })?;
         let packages = match workspace.package(&manifest) {
             Some(package) => vec![package],
             None => workspace.packages().collect(),
@@ -172,9 +178,9 @@ impl Target {
     }
 
     /// Discover a project from the process current directory.
-    pub fn current() -> Result<Self, Error> {
+    pub fn current(answers: &mut cargo::Answers) -> Result<Self, Error> {
         let current = std::env::current_dir().map_err(Error::CurrentDirectory)?;
-        Self::discover(current)
+        Self::discover(current, answers)
     }
 
     /// Return the validated source selected by this target.
@@ -196,13 +202,13 @@ impl Target {
     }
 }
 
-fn discover_file(path: PathBuf) -> Result<Target, Error> {
+fn discover_file(path: PathBuf, answers: &mut cargo::Answers) -> Result<Target, Error> {
     let name = path.file_name();
     if name == Some(OsStr::new(CARGO_NAME)) {
         let Some(parent) = path.parent() else {
             return Err(Error::UnsupportedInput { path });
         };
-        return load_directory(parent.to_path_buf());
+        return load_directory(parent.to_path_buf(), answers);
     }
     if name == Some(OsStr::new(LEGACY_CONFIG)) || path.extension() == Some(OsStr::new("rawr")) {
         return Err(Error::Legacy { path });
@@ -215,7 +221,7 @@ fn discover_file(path: PathBuf) -> Result<Target, Error> {
     if frontmatter::is_script(file.text()) {
         return Ok(Target::File(file));
     }
-    Ok(match owner(file.path())? {
+    Ok(match owner(file.path(), answers)? {
         Some(package) => Target::Project(Project {
             root: root::Directory::from_canonical(package.directory().to_path_buf()),
             source: file,
@@ -229,12 +235,12 @@ fn discover_file(path: PathBuf) -> Result<Target, Error> {
 /// The package that lists the file at `path` as a library or binary
 /// target, as Cargo describes the workspace of the nearest manifest above
 /// it, within the VCS boundary.
-fn owner(path: &Path) -> Result<Option<cargo::Package>, Error> {
+fn owner(path: &Path, answers: &mut cargo::Answers) -> Result<Option<cargo::Package>, Error> {
     let mut directory = path.parent();
     while let Some(current) = directory {
         let manifest = current.join(CARGO_NAME);
         if path_exists(&manifest, Resource::Manifest)? {
-            return Ok(workspace(&manifest)?.and_then(|workspace| {
+            return Ok(workspace(&manifest, answers)?.and_then(|workspace| {
                 workspace
                     .target_at(path)
                     .map(|(package, _)| package.clone())
@@ -248,9 +254,9 @@ fn owner(path: &Path) -> Result<Option<cargo::Package>, Error> {
     Ok(None)
 }
 
-fn discover_directory(start: PathBuf) -> Result<Target, Error> {
-    if !matches!(entry(&start)?, Entry::None) {
-        return load_directory(start);
+fn discover_directory(start: PathBuf, answers: &mut cargo::Answers) -> Result<Target, Error> {
+    if !matches!(entry(&start, answers)?, Entry::None) {
+        return load_directory(start, answers);
     }
 
     let mut candidates = Vec::new();
@@ -258,7 +264,10 @@ fn discover_directory(start: PathBuf) -> Result<Target, Error> {
     let mut current = start.clone();
 
     loop {
-        if matches!(entry(&current)?, Entry::Found(..) | Entry::Script(_)) {
+        if matches!(
+            entry(&current, answers)?,
+            Entry::Found(..) | Entry::Script(_)
+        ) {
             candidates.push(current.clone());
         }
         if legacy.is_none() {
@@ -272,10 +281,10 @@ fn discover_directory(start: PathBuf) -> Result<Target, Error> {
 
         let at_boundary = path_exists(&current.join(VCS_BOUNDARY), Resource::Boundary)?;
         let Some(parent) = current.parent().map(Path::to_path_buf) else {
-            return finish_search(start, current, candidates, legacy);
+            return finish_search(start, current, candidates, legacy, answers);
         };
         if at_boundary || parent == current {
-            return finish_search(start, current, candidates, legacy);
+            return finish_search(start, current, candidates, legacy, answers);
         }
         current = parent;
     }
@@ -307,15 +316,19 @@ enum Entry {
 /// module turns up. With neither marked, the first that exists is the
 /// unmarked entry. With several binaries and no `default-run`, the
 /// package's entry is ambiguous, as `cargo run` finds it.
-fn entry(root: &Path) -> Result<Entry, Error> {
+fn entry(root: &Path, answers: &mut cargo::Answers) -> Result<Entry, Error> {
     let manifest = root.join(CARGO_NAME);
     if !path_exists(&manifest, Resource::Manifest)? {
         return Ok(Entry::None);
     }
-    let Some(workspace) = workspace(&manifest)? else {
+    let Some(workspace) = workspace(&manifest, answers)? else {
         // Without Cargo, Rawr knows only Cargo's default crate roots.
         let source = root.join(SOURCE_DIRECTORY);
-        return marked_root([source.join("main.rs"), source.join("lib.rs")], None);
+        return marked_root(
+            [source.join("main.rs"), source.join("lib.rs")],
+            None,
+            answers,
+        );
     };
     let Some(package) = workspace.package(&manifest) else {
         return Ok(Entry::None);
@@ -340,7 +353,7 @@ fn entry(root: &Path) -> Result<Entry, Error> {
             .chain(package.library())
             .collect(),
     );
-    marked_root(roots, Some(package))
+    marked_root(roots, Some(package), answers)
 }
 
 /// The entry of `package` (`None` without Cargo) that the first of `roots`
@@ -348,6 +361,7 @@ fn entry(root: &Path) -> Result<Entry, Error> {
 fn marked_root(
     roots: impl IntoIterator<Item = PathBuf>,
     package: Option<&cargo::Package>,
+    answers: &mut cargo::Answers,
 ) -> Result<Entry, Error> {
     let mut unmarked = None;
     for path in roots {
@@ -359,7 +373,7 @@ fn marked_root(
             path: path.clone(),
             source,
         })?;
-        if !marking.marked && !reaches_marked(&path, package)? {
+        if !marking.marked && !reaches_marked(&path, package, answers)? {
             unmarked.get_or_insert(path);
             continue;
         }
@@ -375,8 +389,11 @@ fn marked_root(
 /// Cargo's description of the workspace of `manifest`, or none when Cargo
 /// is not installed. Then Rawr runs what needs no build, as it skips
 /// `cargo check` (D459.5), and knows only Cargo's default crate roots.
-fn workspace(manifest: &Path) -> Result<Option<std::sync::Arc<cargo::Workspace>>, Error> {
-    match cargo::Workspace::of(manifest) {
+fn workspace(
+    manifest: &Path,
+    answers: &mut cargo::Answers,
+) -> Result<Option<std::sync::Arc<cargo::Workspace>>, Error> {
+    match cargo::Workspace::of(manifest, answers) {
         Ok(workspace) => Ok(Some(workspace)),
         Err(source) if source.is_not_installed() => Ok(None),
         Err(source) => Err(Error::Cargo {
@@ -393,7 +410,11 @@ fn workspace(manifest: &Path) -> Result<Option<std::sync::Arc<cargo::Workspace>>
 /// are those a `#[cfg]` leaves out under the features and target options
 /// Cargo builds the root's target of `package` with (the host's own
 /// without a package). Cargo is asked only for a tree that has a `cfg`.
-fn reaches_marked(root: &Path, package: Option<&cargo::Package>) -> Result<bool, Error> {
+fn reaches_marked(
+    root: &Path,
+    package: Option<&cargo::Package>,
+    answers: &mut cargo::Answers,
+) -> Result<bool, Error> {
     let Some(directory) = root.parent() else {
         return Ok(false);
     };
@@ -411,13 +432,15 @@ fn reaches_marked(root: &Path, package: Option<&cargo::Package>) -> Result<bool,
         if features.is_none() && text.contains("cfg") {
             let target = package.and_then(|package| Some((package, package.target_at(root)?)));
             features = Some(match target {
-                Some((package, target)) => cargo::Unit::of(package, target, cargo::Mode::Build)
-                    .map_err(|source| Error::Cargo {
-                        manifest: package.manifest().to_path_buf(),
-                        source,
-                    })?
-                    .features()
-                    .clone(),
+                Some((package, target)) => {
+                    cargo::Unit::of(package, target, cargo::Mode::Build, answers)
+                        .map_err(|source| Error::Cargo {
+                            manifest: package.manifest().to_path_buf(),
+                            source,
+                        })?
+                        .features()
+                        .clone()
+                }
                 None => cargo::features::Enabled::default(),
             });
         }
@@ -459,6 +482,7 @@ fn finish_search(
     boundary: PathBuf,
     candidates: Vec<PathBuf>,
     legacy: Option<PathBuf>,
+    answers: &mut cargo::Answers,
 ) -> Result<Target, Error> {
     if candidates.is_empty() {
         return Err(Error::NotFound {
@@ -468,7 +492,7 @@ fn finish_search(
         });
     }
     if candidates.len() == 1 {
-        return load_directory(candidates[0].clone());
+        return load_directory(candidates[0].clone(), answers);
     }
     Err(Error::Ambiguous {
         start,

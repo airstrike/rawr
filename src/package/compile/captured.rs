@@ -113,11 +113,16 @@ fn lower<A: host::ImportAllocation, T>(
     reuse: Reuse<'_>,
     read: impl FnOnce(&package::Graph) -> T,
 ) -> Result<Lowered<T>, Error> {
+    // A compile lent no cache keeps what Cargo answers for itself alone.
+    let mut answers = crate::project::cargo::Answers::new();
     let (mut graph, mut cache) = match reuse {
-        Reuse::Fresh => (package::Graph::load_snapshot(engine, snapshot)?, None),
+        Reuse::Fresh => (
+            package::Graph::load_snapshot(engine, snapshot, &mut answers)?,
+            None,
+        ),
         Reuse::Kept(cache) => (cache.load_snapshot(engine, snapshot)?, Some(cache)),
         Reuse::Read(parses) => (
-            package::Graph::load_snapshot_reading(engine, snapshot, parses)?,
+            package::Graph::load_snapshot_reading(engine, snapshot, parses, &mut answers)?,
             None,
         ),
     };

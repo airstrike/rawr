@@ -394,8 +394,10 @@ mod tests {
         let id = std::process::id();
         let path = std::env::temp_dir().join(format!("rawr-layer-facts-{id}-{}.rs", source.len()));
         std::fs::write(&path, source).unwrap();
-        let target = crate::project::Target::discover(&path).unwrap();
-        let graph = crate::package::Graph::load(&crate::Engine::new(), &target).unwrap();
+        let mut answers = crate::project::cargo::Answers::new();
+        let target = crate::project::Target::discover(&path, &mut answers).unwrap();
+        let graph =
+            crate::package::Graph::load(&crate::Engine::new(), &target, &mut answers).unwrap();
         std::fs::remove_file(path).unwrap();
         Facts::of(&graph)
     }
@@ -474,8 +476,11 @@ mod tests {
         };
         let mut sheet = super::Sheet::default();
         let load = |sheet: &mut super::Sheet| {
-            let target = crate::project::Target::discover(&root).unwrap();
-            sheet.update(&crate::package::Graph::load(&crate::Engine::new(), &target).unwrap())
+            let mut answers = crate::project::cargo::Answers::new();
+            let target = crate::project::Target::discover(&root, &mut answers).unwrap();
+            sheet.update(
+                &crate::package::Graph::load(&crate::Engine::new(), &target, &mut answers).unwrap(),
+            )
         };
         let update = |recomputed, changed| super::Update {
             recomputed,

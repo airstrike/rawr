@@ -38,7 +38,9 @@ impl Adapter {
             return Err(ONE_PROGRAM.to_owned());
         }
         let cwd = tools::absolute(&self.root, arguments["cwd"].as_str());
-        tools::place(&cwd, arguments["program"].as_str())
+        // The adapter places its one program once.
+        let mut answers = rawr::project::cargo::Answers::new();
+        tools::place(&cwd, arguments["program"].as_str(), &mut answers)
     }
 
     /// `launch`: start `rawr run` on the `program` path, with `args`, as

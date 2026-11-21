@@ -31,7 +31,11 @@ pub fn child() -> Option<ExitCode> {
     // What the program prints reaches the run's session too (#2288).
     #[cfg(unix)]
     rawr::teller::open(rawr::teller::Streams::Both);
-    let code = match base::load(Some(&path), base::Build::Program) {
+    let code = match base::load(
+        Some(&path),
+        base::Build::Program,
+        &mut rawr::project::cargo::Answers::new(),
+    ) {
         Ok(loaded) => crate::run_once(loaded),
         Err(report) => crate::failure(&report),
     };
@@ -145,6 +149,8 @@ pub fn run(
 ) -> ExitCode {
     let location = location(&loaded.target);
     let name = program_name(&loaded.target);
+    // What Cargo answers each save's load, for as long as the run lasts.
+    let mut answers = rawr::project::cargo::Answers::new();
     let mut watcher = Watcher::open(&loaded.graph);
     let mut started_from = contents(&loaded.graph);
     // Shells attach to the run here (D1053.2).
@@ -208,7 +214,7 @@ pub fn run(
         }
         // A save: load the program again, and keep the one running unless
         // the new one compiles.
-        let loaded = match base::load(Some(&location), base::Build::Program) {
+        let loaded = match base::load(Some(&location), base::Build::Program, &mut answers) {
             Ok(loaded) => loaded,
             Err(report) => {
                 eprint!("{}", crate::diagnostic::render(&report));

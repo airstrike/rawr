@@ -85,9 +85,21 @@ pub struct Kept {
     /// The program a save loaded through the cells of this directory.
     loaded: Option<(PathBuf, rawr::package::Graph)>,
     copies: rawr::package::Copies,
+    /// What Cargo answered the owner's discoveries, loads and checks.
+    cargo: rawr::project::cargo::Answers,
 }
 
 impl Kept {
+    /// What an owner keeps, starting from what Cargo answered its first
+    /// load.
+    #[must_use]
+    pub fn with_cargo(cargo: rawr::project::cargo::Answers) -> Self {
+        Self {
+            cargo,
+            ..Self::default()
+        }
+    }
+
     /// The API graph the saves share.
     pub fn api(&mut self) -> &mut rawr_import::api::Kept {
         &mut self.api
@@ -101,6 +113,11 @@ impl Kept {
     /// What each resolution leaves for the next.
     pub fn memos(&mut self) -> &mut rawr_import::cargo::resolution::Memos {
         &mut self.memos
+    }
+
+    /// What Cargo answered the owner's discoveries, loads and checks.
+    pub fn cargo(&mut self) -> &mut rawr::project::cargo::Answers {
+        &mut self.cargo
     }
 
     /// What the project's compiler said its version is, for each check of
@@ -141,13 +158,18 @@ impl Kept {
 
     /// The API graph, the compiler that checks the program as `build`
     /// builds it (the last check's, when it was of the same build) with
-    /// what its last check kept, and the shadow crate's files.
+    /// what its last check kept and what Cargo answered, and the shadow
+    /// crate's files.
     pub fn split(
         &mut self,
         build: rawr_cli::base::Build,
     ) -> (
         &mut rawr_import::api::Kept,
-        (&rawr::Engine, &mut rawr::package::import::Kept),
+        (
+            &rawr::Engine,
+            &mut rawr::package::import::Kept,
+            &mut rawr::project::cargo::Answers,
+        ),
         &mut rawr::package::Copies,
     ) {
         if self.check.as_ref().is_some_and(|(kept, ..)| *kept != build) {
@@ -160,7 +182,11 @@ impl Kept {
                 rawr::package::import::Kept::default(),
             )
         });
-        (&mut self.api, (engine, checked), &mut self.copies)
+        (
+            &mut self.api,
+            (engine, checked, &mut self.cargo),
+            &mut self.copies,
+        )
     }
 }
 

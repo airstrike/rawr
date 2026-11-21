@@ -60,8 +60,9 @@ fn a_crates_derive_expands_through_the_pinned_nightly() {
 fn expand_in(root: &Path) {
     crate::support::driver();
     use rawr_import::expand::{directory, expand, Basis, Item};
-    let target = rawr::project::Target::discover(root.join("src/main.rs")).unwrap();
-    let graph = rawr::package::Graph::load(&rawr::Engine::new(), &target).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(root.join("src/main.rs"), &mut answers).unwrap();
+    let graph = rawr::package::Graph::load(&rawr::Engine::new(), &target, &mut answers).unwrap();
     let limits = graph.rust_limits();
     let environment = rawr_import::cargo::config::Environment::capture().unwrap();
     let request = graph

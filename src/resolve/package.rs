@@ -1197,6 +1197,7 @@ impl<'a> Resolver<'a> {
         let features = entry
             .map(|package| package.features().clone())
             .unwrap_or_default();
+        let workspace = entry.and_then(|package| package.workspace().cloned());
         let program = Program {
             #[cfg(feature = "rust-import")]
             native: self.native,
@@ -1225,6 +1226,7 @@ impl<'a> Resolver<'a> {
             own: self.own,
             crates: prelude,
             features,
+            workspace,
             aliases,
             scripts,
             instances: super::Instances {

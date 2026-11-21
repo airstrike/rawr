@@ -212,7 +212,8 @@ fn resident_cold_retry_observes_fresh_sources_without_a_hot_begin() {
     let request = adapter.observe_and_start(Instant::now()).unwrap().unwrap();
     let mut lane = super::super::Lane::new(&fixture.root).unwrap();
     let revision = lane.revision().unwrap();
-    let target = rawr::project::Target::discover(&fixture.root).unwrap();
+    let mut answers = rawr::project::cargo::Answers::new();
+    let target = rawr::project::Target::discover(&fixture.root, &mut answers).unwrap();
     fixture.write("src/main.rs", "pub fn main( {");
     let source = rawr::diagnostic::Source::new("main.rs", "pub fn main( {").unwrap();
     let result = super::attempt(
@@ -229,6 +230,7 @@ fn resident_cold_retry_observes_fresh_sources_without_a_hot_begin() {
         &rawr_import::supervisor::snapshot::attempt::Scope::begin(),
         &rawr_cli::base::Build::Program.parser(),
         &rawr::package::Cells::new(fixture.root.join("target/rawr/parse")).remember(),
+        &mut answers,
         &source,
     );
     let Err(report) = result else {
@@ -479,8 +481,9 @@ impl Fixture {
     }
 
     fn graph(&self) -> rawr::package::Graph {
-        let target = rawr::project::Target::discover(&self.root).unwrap();
-        rawr::package::Graph::load(&rawr::Engine::new(), &target).unwrap()
+        let mut answers = rawr::project::cargo::Answers::new();
+        let target = rawr::project::Target::discover(&self.root, &mut answers).unwrap();
+        rawr::package::Graph::load(&rawr::Engine::new(), &target, &mut answers).unwrap()
     }
 
     fn inputs(&self) -> source::Inputs {

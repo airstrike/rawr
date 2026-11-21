@@ -193,7 +193,7 @@ mod tests {
             PathBuf::from("/app/Cargo.toml"),
             text.to_owned(),
             Path::new("/app"),
-            false,
+            None,
         )
         .unwrap()
         .unwrap()
@@ -274,21 +274,25 @@ c = ["dep:off"]
             [features]\ndefault = [\"dep:extra\"]\n";
         write("app/Cargo.toml", member);
         write("app/src/lib.rs", "");
+        let mut answers = crate::project::cargo::Answers::new();
         let cargo = Cargo::parse(
             root.join("app/Cargo.toml"),
             member.to_owned(),
             &root.join("app"),
-            true,
+            Some(&mut answers),
         )
         .unwrap()
         .unwrap();
         // The table for unix and windows joins as Cargo builds it here.
-        let workspace = crate::project::cargo::Workspace::of(&root.join("app/Cargo.toml")).unwrap();
+        let workspace =
+            crate::project::cargo::Workspace::of(&root.join("app/Cargo.toml"), &mut answers)
+                .unwrap();
         let package = workspace.package(&root.join("app/Cargo.toml")).unwrap();
         let unit = crate::project::cargo::Unit::of(
             package,
             package.library().unwrap(),
             crate::project::cargo::Mode::Build,
+            &mut answers,
         )
         .unwrap();
         let cargo = cargo.on_host(super::super::cargo::Host::Built(&unit));

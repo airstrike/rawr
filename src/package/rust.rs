@@ -1828,7 +1828,7 @@ mod tests {
             path.to_path_buf(),
             text.to_owned(),
             path.parent().unwrap(),
-            false,
+            None,
         )
         .unwrap()
         .unwrap()

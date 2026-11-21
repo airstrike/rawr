@@ -29,8 +29,9 @@ type ExecutableEvidence = (
 pub(crate) fn executable(
     engine: &Engine,
     target: &project::Target,
+    answers: &mut project::cargo::Answers,
 ) -> Result<program::Executable, Error> {
-    executable_with_evidence(engine, target, false).map(|(executable, ..)| executable)
+    executable_with_evidence(engine, target, false, answers).map(|(executable, ..)| executable)
 }
 
 /// One in-memory file, `text` named `identity` and already parsed as
@@ -66,7 +67,8 @@ pub(crate) fn one_file(
     let snapshot = snapshot(identity)
         .or_else(|_| snapshot("main.rs"))
         .expect("one absolute file is a valid snapshot");
-    let compiled = Graph::load_parsed(engine, &snapshot, unit)
+    // A file with no manifest asks Cargo nothing.
+    let compiled = Graph::load_parsed(engine, &snapshot, unit, &mut project::cargo::Answers::new())
         .and_then(|graph| lower_graph(engine, graph, false, (scope, optimization_level)))
         .map_err(Error::into_file_error);
     compiled.map(|(executable, ..)| executable.into_one_file())
@@ -141,11 +143,13 @@ fn snapshot_program<T>(
     reuse: Reuse<'_>,
     read: impl FnOnce(&Graph) -> T,
 ) -> Result<(program::Executable, T), Error> {
+    // A compile lent no cache keeps what Cargo answers for itself alone.
+    let mut answers = project::cargo::Answers::new();
     let (mut graph, cache) = match reuse {
-        Reuse::Fresh => (Graph::load_snapshot(engine, snapshot)?, None),
+        Reuse::Fresh => (Graph::load_snapshot(engine, snapshot, &mut answers)?, None),
         Reuse::Kept(cache) => (cache.load_snapshot(engine, snapshot)?, Some(cache)),
         Reuse::Read(parses) => (
-            Graph::load_snapshot_reading(engine, snapshot, parses)?,
+            Graph::load_snapshot_reading(engine, snapshot, parses, &mut answers)?,
             None,
         ),
     };
@@ -208,8 +212,9 @@ fn executable_with_evidence(
     engine: &Engine,
     target: &project::Target,
     retain_source: bool,
+    answers: &mut project::cargo::Answers,
 ) -> Result<ExecutableEvidence, Error> {
-    executable_from_graph(engine, Graph::load(engine, target)?, retain_source)
+    executable_from_graph(engine, Graph::load(engine, target, answers)?, retain_source)
 }
 
 /// [`executable_with_evidence`] of a graph already loaded.

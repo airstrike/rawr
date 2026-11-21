@@ -43,6 +43,9 @@ pub(super) struct Session {
     built: Arc<AtomicBool>,
     /// Asks the builder for a build, and tells it the features.
     builds: mpsc::Sender<Ask>,
+    /// What Cargo answered each save's load, for as long as the session
+    /// serves.
+    answers: rawr::project::cargo::Answers,
 }
 
 /// What the builder hears.
@@ -73,7 +76,8 @@ impl Session {
         path: Option<&PathBuf>,
         options: &rawr_cli::web::Options,
     ) -> Result<Option<Self>, Failure> {
-        let loaded = rawr_cli::base::load(path, rawr_cli::base::Build::Program)?;
+        let mut answers = rawr::project::cargo::Answers::new();
+        let loaded = rawr_cli::base::load(path, rawr_cli::base::Build::Program, &mut answers)?;
         rawr_cli::cells::keep("rawr-import", &loaded.cells, &loaded.graph);
         // A package builds in its target directory, a script in its
         // directory in rawr's area, as `rawr run` builds them. A program
@@ -96,7 +100,7 @@ impl Session {
         let entry = loaded.target.source().path().to_path_buf();
         let mut build = Build::new(&location, &root, options.out.as_deref());
         let built = build.run();
-        let features = features(&loaded.graph)?;
+        let features = features(&loaded.graph, &mut answers)?;
         let package = Package::read(&entry, &features).map_err(Error::from)?;
         if options.out.is_some() {
             built?;
@@ -143,6 +147,7 @@ impl Session {
             handle,
             built,
             builds,
+            answers,
         }))
     }
 
@@ -158,11 +163,13 @@ impl Session {
             watcher.wait();
             // A program that no longer parses still goes to the page,
             // which reports its error as it compiles it.
-            if let Ok(loaded) =
-                rawr_cli::base::load(self.path.as_ref(), rawr_cli::base::Build::Program)
-            {
+            if let Ok(loaded) = rawr_cli::base::load(
+                self.path.as_ref(),
+                rawr_cli::base::Build::Program,
+                &mut self.answers,
+            ) {
                 self.graph = loaded.graph;
-                match features(&self.graph) {
+                match features(&self.graph, &mut self.answers) {
                     Ok(features) if features != self.features => {
                         self.features = features;
                         let _ = self.builds.send(Ask::Features(self.features.clone()));
@@ -279,9 +286,12 @@ fn builder(
 /// What the page's `cfg(..)`s read: the features and options Cargo builds
 /// the program's crate with for the page's target, as `cargo build
 /// --target wasm32-unknown-unknown` builds it.
-fn features(graph: &rawr::package::Graph) -> Result<Enabled, Error> {
+fn features(
+    graph: &rawr::package::Graph,
+    answers: &mut rawr::project::cargo::Answers,
+) -> Result<Enabled, Error> {
     graph
-        .entry_features_on(build::TARGET)
+        .entry_features_on(build::TARGET, answers)
         .map_err(|error| Error::Cargo(error.to_string()))
 }
 
@@ -400,10 +410,14 @@ mod tests {
             std::fs::copy(fixture.join(file), to).unwrap();
         }
         let app = root.join("app");
-        let Ok(loaded) = rawr_cli::base::load(Some(&app), rawr_cli::base::Build::Program) else {
+        let mut answers = rawr::project::cargo::Answers::new();
+        let Ok(loaded) =
+            rawr_cli::base::load(Some(&app), rawr_cli::base::Build::Program, &mut answers)
+        else {
             panic!("the member loads");
         };
-        let features = super::features(&loaded.graph).expect("Cargo describes the member");
+        let features =
+            super::features(&loaded.graph, &mut answers).expect("Cargo describes the member");
         assert!(
             features.holds("loud"),
             "{:?}",

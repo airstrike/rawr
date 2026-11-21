@@ -75,14 +75,14 @@ pub(crate) enum Host<'a> {
 impl Cargo {
     /// Parse `Cargo.toml`: `None` when it is only a workspace (no `[package]`).
     ///
-    /// With `ask_cargo`, Cargo resolves what the package inherits from its
-    /// workspace. Without it (a runner's snapshot) an inherited dependency
-    /// keeps only its alias.
+    /// With `answers`, Cargo resolves what the package inherits from its
+    /// workspace, kept there. Without them (a runner's snapshot) an
+    /// inherited dependency keeps only its alias.
     pub(crate) fn parse(
         path: PathBuf,
         text: String,
         root: &Path,
-        ask_cargo: bool,
+        answers: Option<&mut crate::project::cargo::Answers>,
     ) -> Result<Option<Self>, Error> {
         let document = Document::parse(text.as_str()).map_err(|error| Error {
             message: error.to_string().into(),
@@ -133,16 +133,17 @@ impl Cargo {
                             )
                         })
                     });
-        let inherited = if inheriting && ask_cargo {
-            Some(super::workspace::inherited(&path).map_err(|message| Error {
-                message: message.into(),
-                span: table.get("package").map_or_else(
-                    || Span::new(Position::START, Position::START),
-                    |item| item_span(&text, item),
-                ),
-            })?)
-        } else {
-            None
+        let inherited = match answers.filter(|_| inheriting) {
+            Some(answers) => Some(super::workspace::inherited(&path, answers).map_err(
+                |message| Error {
+                    message: message.into(),
+                    span: table.get("package").map_or_else(
+                        || Span::new(Position::START, Position::START),
+                        |item| item_span(&text, item),
+                    ),
+                },
+            )?),
+            None => None,
         };
         let string = |key: &str| match package.get(key) {
             Some(item) if inherits(item) => inherited.as_ref().and_then(|inherited| match key {
@@ -439,7 +440,7 @@ console_log = "1.0"
             PathBuf::from("/tour/Cargo.toml"),
             text.to_owned(),
             Path::new("/tour"),
-            false,
+            None,
         )
         .unwrap()
         .unwrap();
@@ -481,7 +482,7 @@ tokio = { version = "1", features = ["rt"] }
             PathBuf::from("/universe/Cargo.toml"),
             text.to_owned(),
             Path::new("/universe"),
-            false,
+            None,
         )
         .unwrap()
         .unwrap();
@@ -527,7 +528,7 @@ iced_winit = { version = "0.14", features = ["webgl"] }
             PathBuf::from("/integration/Cargo.toml"),
             text.to_owned(),
             Path::new("/integration"),
-            false,
+            None,
         )
         .unwrap()
         .unwrap();
@@ -580,7 +581,7 @@ by-default = { git = "https://example.invalid/d" }
             PathBuf::from("/app/Cargo.toml"),
             text.to_owned(),
             Path::new("/app"),
-            false,
+            None,
         )
         .unwrap()
         .unwrap();
@@ -633,7 +634,7 @@ by-default = { git = "https://example.invalid/d" }
             PathBuf::from("/app/Cargo.toml"),
             versioned.to_owned(),
             Path::new("/app"),
-            false,
+            None,
         )
         .expect("Cargo accepts `version` beside `git`")
         .unwrap();
@@ -659,7 +660,7 @@ by-default = { git = "https://example.invalid/d" }
             PathBuf::from("/app/Cargo.toml"),
             both.to_owned(),
             Path::new("/app"),
-            false,
+            None,
         )
         .expect_err("Cargo allows one of git and path");
         assert!(
@@ -676,7 +677,7 @@ by-default = { git = "https://example.invalid/d" }
             PathBuf::from("/app/Cargo.toml"),
             ambiguous.to_owned(),
             Path::new("/app"),
-            false,
+            None,
         )
         .expect_err("Cargo allows one of branch, tag and rev");
         assert!(

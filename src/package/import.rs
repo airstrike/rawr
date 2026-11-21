@@ -122,8 +122,19 @@ impl crate::Engine {
         snapshot: crate::reload::source::Snapshot,
     ) -> Result<rawr_import::Demand<rawr_import::Sealed, Brand>, super::Error> {
         let limits = rawr_import::limits::Limits::standard();
-        self.compile_imported_applied(contract, snapshot, &limits, &[], None, None, None)
-            .map(|compiled| compiled.demand)
+        // A one-off compile keeps what Cargo answers for itself alone.
+        let mut answers = crate::project::cargo::Answers::new();
+        self.compile_imported_applied(
+            contract,
+            snapshot,
+            &limits,
+            &[],
+            None,
+            None,
+            None,
+            &mut answers,
+        )
+        .map(|compiled| compiled.demand)
     }
 
     /// Compile against a contract with the proof-backed applications its
@@ -133,7 +144,8 @@ impl crate::Engine {
     /// reads instead of generating it a second time, and the program is
     /// loaded through `cells`, so a check that remembers its parses parses
     /// each source once across its rounds (#1618). A check against the API
-    /// the check `kept` installed shares its registry (#1755).
+    /// the check `kept` installed shares its registry (#1755). What Cargo
+    /// answers is kept in the check's `answers`.
     #[cfg(not(target_arch = "wasm32"))]
     #[doc(hidden)]
     #[allow(clippy::too_many_arguments)]
@@ -145,6 +157,7 @@ impl crate::Engine {
         applications: &[rawr_import::surface::application::Application],
         cells: &super::Cells,
         kept: &mut Kept,
+        answers: &mut crate::project::cargo::Answers,
     ) -> Result<rawr_import::Demand<rawr_import::Sealed, Brand>, super::Error> {
         let limits = rawr_import::limits::Limits::standard();
         self.compile_imported_applied(
@@ -155,6 +168,7 @@ impl crate::Engine {
             Some(facade.bytes()),
             Some(cells),
             Some(kept),
+            answers,
         )
         .map(|compiled| compiled.demand)
     }
@@ -169,6 +183,7 @@ impl crate::Engine {
         facade: Option<&[u8]>,
         cells: Option<&super::Cells>,
         mut kept: Option<&mut Kept>,
+        answers: &mut crate::project::cargo::Answers,
     ) -> Result<CompiledImported, super::Error> {
         let mut step = crate::Instant::now();
         let mut steps = Vec::new();
@@ -185,12 +200,12 @@ impl crate::Engine {
             .map_err(Error::from)
             .map_err(super::Error::import)?;
 
-        let target = crate::project::Target::discover(snapshot.entry())
+        let target = crate::project::Target::discover(snapshot.entry(), answers)
             .map_err(Error::from)
             .map_err(super::Error::import)?;
         let mut graph = match cells {
-            Some(cells) => super::Graph::load_with_cells(self, &target, cells)?,
-            None => super::Graph::load(self, &target)?,
+            Some(cells) => super::Graph::load_with_cells(self, &target, cells, answers)?,
+            None => super::Graph::load(self, &target, answers)?,
         };
         let project = graph.entry_package().root().to_path_buf();
         let current_source = crate::reload::source::Graph::from_package(&graph);
