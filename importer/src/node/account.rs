@@ -1,9 +1,14 @@
 //! Typed scratch accounts whose lifetime belongs to one graph evaluation.
+//!
+//! The registry lives on the thread that owns the graph. A plan or capture
+//! that crosses to another thread carries only whether the graph owns its
+//! artifacts, so the cells are `RefCell`s.
 
 use std::any::Any;
+use std::cell::RefCell;
 use std::marker::PhantomData;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
 
 use super::{Error, GraphBudget};
 
@@ -18,7 +23,7 @@ pub(crate) struct Key<T> {
 
 #[derive(Default)]
 pub(super) struct Registry {
-    cells: Mutex<Vec<Entry>>,
+    cells: RefCell<Vec<Entry>>,
 }
 
 struct Cell<T> {
@@ -28,10 +33,10 @@ struct Cell<T> {
 
 struct Entry {
     id: u64,
-    value: Arc<dyn Any + Send + Sync>,
+    value: Rc<dyn Any>,
 }
 
-impl<T: Send + 'static> Key<T> {
+impl<T: 'static> Key<T> {
     pub(crate) fn new() -> Result<Self, Error> {
         let id = NEXT.fetch_add(1, Ordering::Relaxed);
         if id == u64::MAX {
@@ -63,9 +68,11 @@ impl<T: Send + 'static> Key<T> {
                 refused: false,
             },
         )?;
+        // The cell's borrow spans `use_account`, so an account used again
+        // from inside its own use is refused, never aliased.
         let mut account = cell
-            .lock()
-            .map_err(|_| Error::State("graph account cell was poisoned"))?;
+            .try_borrow_mut()
+            .map_err(|_| Error::State("graph account is already in use"))?;
         if account.refused {
             return Err(Error::State(
                 "graph account initialization previously refused",
@@ -89,15 +96,12 @@ impl<T: Send + 'static> Key<T> {
 }
 
 impl Registry {
-    fn insert<T: Send + 'static>(&self, id: u64, value: T) -> Result<(), Error> {
-        let value = Arc::new(Mutex::new(Cell {
+    fn insert<T: 'static>(&self, id: u64, value: T) -> Result<(), Error> {
+        let value = Rc::new(RefCell::new(Cell {
             value: Some(value),
             refused: false,
         }));
-        let mut cells = self
-            .cells
-            .lock()
-            .map_err(|_| Error::State("graph account registry was poisoned"))?;
+        let mut cells = self.cells.borrow_mut();
         if cells.iter().any(|entry| entry.id == id) {
             return Err(Error::State("graph account is already seeded"));
         }
@@ -106,30 +110,27 @@ impl Registry {
         Ok(())
     }
 
-    fn get_or_insert<T: Send + 'static>(
+    fn get_or_insert<T: 'static>(
         &self,
         id: u64,
         value: Cell<T>,
-    ) -> Result<Arc<Mutex<Cell<T>>>, Error> {
-        let mut cells = self
-            .cells
-            .lock()
-            .map_err(|_| Error::State("graph account registry was poisoned"))?;
+    ) -> Result<Rc<RefCell<Cell<T>>>, Error> {
+        let mut cells = self.cells.borrow_mut();
         if let Some(entry) = cells.iter().find(|entry| entry.id == id) {
-            return Arc::clone(&entry.value)
-                .downcast::<Mutex<Cell<T>>>()
+            return Rc::clone(&entry.value)
+                .downcast::<RefCell<Cell<T>>>()
                 .map_err(|_| Error::State("graph account type differs"));
         }
         Self::push(&mut cells, id, value)
     }
 
-    fn push<T: Send + 'static>(
+    fn push<T: 'static>(
         cells: &mut Vec<Entry>,
         id: u64,
         value: Cell<T>,
-    ) -> Result<Arc<Mutex<Cell<T>>>, Error> {
+    ) -> Result<Rc<RefCell<Cell<T>>>, Error> {
         cells.try_reserve_exact(1).map_err(|_| Error::Allocation)?;
-        let value = Arc::new(Mutex::new(value));
+        let value = Rc::new(RefCell::new(value));
         cells.push(Entry {
             id,
             value: value.clone(),
@@ -176,13 +177,13 @@ mod tests {
 
     #[test]
     fn graph_drop_releases_accounts_and_cell_calls_can_charge_graph() {
-        struct Dropped(Arc<AtomicUsize>);
+        struct Dropped(std::sync::Arc<AtomicUsize>);
         impl Drop for Dropped {
             fn drop(&mut self) {
                 self.0.fetch_add(1, Ordering::Relaxed);
             }
         }
-        let count = Arc::new(AtomicUsize::new(0));
+        let count = std::sync::Arc::new(AtomicUsize::new(0));
         let key = Key::<Dropped>::new().unwrap();
         let graph = GraphBudget::new();
         key.seed(&graph, Dropped(count.clone())).unwrap();

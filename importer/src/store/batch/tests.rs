@@ -48,7 +48,6 @@ impl Value for Owned {
 fn batch_and_two_legacy_contenders_serialize_while_another_project_progresses() {
     let root = Root::prepare();
     let store = Store::open(&root.0, [1; 32]).unwrap();
-    let other = Store::open(&root.0, [2; 32]).unwrap();
     let seed = Direct::<Owned>::capture([3; 32], b"seed", &[]).unwrap();
     let owner = Evaluator::new(&store, &crate::metrics::Current)
         .direct(&seed, || Ok(Owned))
@@ -64,12 +63,15 @@ fn batch_and_two_legacy_contenders_serialize_while_another_project_progresses() 
     std::thread::scope(|scope| {
         for _ in 0..2 {
             let done = done.clone();
-            let store = &store;
+            let root = &root;
             let start = &start;
             let calls = &calls;
+            // Each contender opens its own store, as another process would:
+            // a store's graph budget stays on its thread.
             scope.spawn(move || {
+                let store = Store::open(&root.0, [1; 32]).unwrap();
                 start.wait();
-                let evaluator = Evaluator::new(store, &crate::metrics::Current);
+                let evaluator = Evaluator::new(&store, &crate::metrics::Current);
                 let result = Direct::<Owned>::capture([3; 32], b"seed", &[])
                     .and_then(|seed| evaluator.direct(&seed, || Ok(Owned)))
                     .and_then(|owner| {
@@ -89,6 +91,7 @@ fn batch_and_two_legacy_contenders_serialize_while_another_project_progresses() 
             });
         }
         scope.spawn(|| {
+            let other = Store::open(&root.0, [2; 32]).unwrap();
             start.wait();
             let result =
                 Direct::<Owned>::capture([4; 32], b"independent", &[]).and_then(|independent| {

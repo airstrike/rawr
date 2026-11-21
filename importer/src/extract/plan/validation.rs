@@ -99,8 +99,12 @@ impl Inputs {
     }
 
     fn probe(&self, layout: &Layout, proof: &toolchain::Proof) -> Result<Probe> {
-        self.plan(layout, proof)?
-            .bind(&self.build, &self.graph, &cargo::Limits::standard())
+        self.plan(layout, proof)?.bind(
+            &self.build,
+            &self.graph,
+            &cargo::Limits::standard(),
+            Some(layout.budget()),
+        )
     }
 }
 
@@ -337,6 +341,7 @@ fn selected_artifacts_from_other_attempt_roots_reject_before_launch() {
                             &inputs.graph,
                             &inputs.metadata,
                             &cargo::Limits::standard(),
+                            Some(layout.budget()),
                         )
                     })
                     .expect("artifact containment rejects before any launcher callback")
@@ -397,6 +402,7 @@ fn cold_seal_and_read_only_validation_produce_the_same_capture() {
                         &inputs.graph,
                         &inputs.metadata,
                         &limits,
+                        Some(layout.budget()),
                     )
                 })
                 .expect("exactly one independently matched cold Probe runs")?;
@@ -640,6 +646,7 @@ fn failed_cold_probe_stops_before_output_decode() {
                         &inputs.graph,
                         &inputs.metadata,
                         &cargo::Limits::standard(),
+                        Some(layout.budget()),
                     )
                 })
                 .expect("the exact failing Probe is the only child")

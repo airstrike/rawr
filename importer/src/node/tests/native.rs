@@ -126,8 +126,12 @@ fn retained_bundle_rejects_parent_drift_after_execution_wait() {
     let execution = recipe.execution();
     let (held, holding) = mpsc::channel();
     std::thread::scope(|threads| {
+        // The holder opens its own store on its thread: a store's graph
+        // budget stays on its thread.
         let holder = threads.spawn(|| {
-            store
+            fixture_context(&root)
+                .open_store()
+                .unwrap()
                 .with_execution_lease(execution, || {
                     held.send(()).unwrap();
                     assert!(

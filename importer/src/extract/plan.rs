@@ -56,7 +56,10 @@ pub(crate) struct Plan {
     reuse: Option<PathBuf>,
     sharing: Sharing,
     allocation: Allocation,
-    graph_budget: Option<crate::node::GraphBudget>,
+    /// The resolution graph owns this plan's directories. The plan carries
+    /// only this flag, so a parallel fan-out can share it; the owner lends
+    /// the graph's budget when it binds the probe.
+    owned: bool,
 }
 
 /// The sidecar document shared bindings gave, with what binds it.
@@ -208,7 +211,10 @@ pub(crate) struct Capture {
     sidecars: Box<[(PathBuf, [u8; 32])]>,
     controls: Box<[(PathBuf, [u8; 32])]>,
     artifacts: Box<[(PathBuf, u64, [u8; 32])]>,
-    graph_budget: Option<crate::node::GraphBudget>,
+    /// The resolution graph owns the artifacts, so they are hashed as
+    /// streams under its retained directories. The capture carries only
+    /// this flag, so a background API rebuild can take it.
+    owned: bool,
     sharing: Sharing,
     reuse: Option<PathBuf>,
     expansion: Expansion,
@@ -413,7 +419,7 @@ impl Plan {
             reuse: None,
             sharing: Sharing::default(),
             allocation,
-            graph_budget: None,
+            owned: false,
         })
     }
 
@@ -427,7 +433,7 @@ impl Plan {
     ) -> Result<Self> {
         Self::from_layout(layout.paths(), graph, proof, selected_target, limits, true).map(
             |mut plan| {
-                plan.graph_budget = Some(layout.budget().clone());
+                plan.owned = true;
                 plan
             },
         )
@@ -484,8 +490,8 @@ impl Plan {
     ) -> Result<Capture> {
         let mut plan = Self::from_layout(layout, graph, proof, selected_target, limits, false)?
             .demand(demand)?;
-        plan.graph_budget = Some(graph_budget.clone());
-        let mut probe = plan.bind(build, graph, limits)?;
+        plan.owned = true;
+        let mut probe = plan.bind(build, graph, limits, Some(graph_budget))?;
         if let Some(retained) = namespace {
             let (search, roots, explicit) = probe.namespace_inputs(proof.native_paths().1)?;
             if retained.roots != roots || retained.explicit != explicit {
@@ -586,7 +592,7 @@ impl Plan {
             reuse: None,
             sharing: Sharing::default(),
             allocation,
-            graph_budget: None,
+            owned: false,
         })
     }
 
@@ -1089,6 +1095,9 @@ impl Plan {
         self.allocation.clone_path(&self.target_directory)
     }
 
+    /// Run the probe and capture its outputs. `budget` is the budget of the
+    /// graph that owns the plan's directories (`prepare_in`), lent by the
+    /// owner that runs the probe.
     pub(crate) fn seal(
         mut self,
         native: &impl crate::process::ProductionReplay,
@@ -1096,11 +1105,12 @@ impl Plan {
         graph: &unit::BuildGraph,
         metadata: &unit::Metadata,
         limits: &cargo::Limits,
+        budget: Option<&crate::node::GraphBudget>,
     ) -> Result<Capture> {
         if let Some(reuse) = &self.reuse {
             seed(reuse, &mut self.sharing, &build.binding_scripts());
         }
-        let mut probe = self.bind(build, graph, limits)?;
+        let mut probe = self.bind(build, graph, limits, budget)?;
         if let Some(reuse) = &probe.reuse
             && !probe.sharing.keys.is_empty()
         {
@@ -1141,7 +1151,7 @@ impl Plan {
                 ..Sharing::default()
             },
             allocation: Allocation::new(limits),
-            graph_budget: None,
+            owned: false,
         }
     }
 
@@ -1160,12 +1170,22 @@ impl Plan {
         &self.sharing.local_closures
     }
 
+    /// The probe holds `budget` only when the graph owns this plan, and an
+    /// owned plan needs one.
     fn bind(
         mut self,
         build: &crate::input::build::Build,
         graph: &unit::BuildGraph,
         limits: &cargo::Limits,
+        budget: Option<&crate::node::GraphBudget>,
     ) -> Result<Probe> {
+        let graph_budget = match (self.owned, budget) {
+            (false, _) => None,
+            (true, Some(budget)) => Some(budget.clone()),
+            (true, None) => {
+                return Err(extraction("resolution-inventory", "original graph absent"));
+            }
+        };
         let selected = build.selected_artifacts(graph, &mut self.allocation)?;
         if selected.len() != self.entries.len() {
             return Err(extraction(
@@ -1294,7 +1314,7 @@ impl Plan {
             reuse: self.reuse,
             sharing: self.sharing,
             allocation,
-            graph_budget: self.graph_budget,
+            graph_budget,
         })
     }
 }
@@ -1429,6 +1449,7 @@ impl Probe {
                 ));
             }
         }
+        let budget = self.graph_budget.clone();
         let mut capture = self.validate_outputs_with_inventory(
             build,
             graph,
@@ -1439,6 +1460,15 @@ impl Probe {
                 .as_ref()
                 .map(|(root, inventory)| (*root, inventory)),
         )?;
+        let inventory = match inventory {
+            Some((root, inventory)) => {
+                let budget = budget
+                    .as_ref()
+                    .ok_or_else(|| extraction("resolution-inventory", "original graph absent"))?;
+                Some((root, inventory, budget))
+            }
+            None => None,
+        };
         capture.revalidate_with_inventory(limits, inventory)?;
         Ok(capture)
     }
@@ -1747,7 +1777,7 @@ impl Probe {
                     // artifact it is.
                     if !loaded_digests.contains(path) {
                         let (length, digest) =
-                            artifact_digest(path, &mut allocation, self.graph_budget.as_ref())?;
+                            artifact_digest(path, &mut allocation, self.graph_budget.is_some())?;
                         allocation.items(1)?;
                         loaded_digests.insert(allocation.clone_path(path)?);
                         let path = allocation.clone_path(path)?;
@@ -1817,7 +1847,7 @@ impl Probe {
             sidecars: sidecars.into_boxed_slice(),
             controls: controls.into_boxed_slice(),
             artifacts: artifacts.into_boxed_slice(),
-            graph_budget: self.graph_budget,
+            owned: self.graph_budget.is_some(),
             sharing: self.sharing,
             reuse: self.reuse,
             expansion,
@@ -2051,19 +2081,21 @@ impl Capture {
 
     /// Artifacts and namespace members are hashed as streams; the accounting
     /// limits play no part.
+    /// The owner that holds the inventory lends its graph's budget beside
+    /// it, and `complete` charges it there.
     fn revalidate_with_inventory(
         &mut self,
         _limits: &cargo::Limits,
-        inventory: Option<(&Path, resolution::bundle::Inventory<'_>)>,
+        inventory: Option<(
+            &Path,
+            resolution::bundle::Inventory<'_>,
+            &crate::node::GraphBudget,
+        )>,
     ) -> Result<()> {
         if let Some(search) = &self.search {
             search.revalidate(&mut self.invocations.allocation)?;
         }
-        if let Some((root, inventory)) = inventory {
-            let graph = self
-                .graph_budget
-                .as_ref()
-                .ok_or_else(|| extraction("resolution-inventory", "original graph absent"))?;
+        if let Some((root, inventory, graph)) = inventory {
             inventory.complete(
                 root,
                 self.namespace.as_deref(),
@@ -2098,11 +2130,8 @@ impl Capture {
             }
         }
         for (path, expected_length, expected_digest) in &self.artifacts {
-            let (length, digest) = artifact_digest(
-                path,
-                &mut self.invocations.allocation,
-                self.graph_budget.as_ref(),
-            )?;
+            let (length, digest) =
+                artifact_digest(path, &mut self.invocations.allocation, self.owned)?;
             if length != *expected_length || digest != *expected_digest {
                 return Err(extraction(
                     "selected-artifact-drift",
@@ -2840,9 +2869,9 @@ fn publish(path: &Path, bytes: &[u8], allocation: &mut Allocation) -> Result<()>
 fn artifact_digest(
     path: &Path,
     allocation: &mut Allocation,
-    graph: Option<&crate::node::GraphBudget>,
+    owned: bool,
 ) -> Result<(u64, [u8; 32])> {
-    if graph.is_none() {
+    if !owned {
         let bytes = read_bounded_accounted(path, allocation)?;
         return Ok((bytes.len() as u64, Sha256::digest(bytes).into()));
     }
@@ -3097,10 +3126,9 @@ mod tests {
         let path = root.join("libfixture.rmeta");
         let bytes = vec![93_u8; 2 * 64 * 1024 + 17];
         fs::write(&path, &bytes).unwrap();
-        let graph = crate::node::GraphBudget::new();
         // Artifact bytes are streamed, not owned by the extraction decoder.
         let mut allocation = Allocation::with_limits(0, 0);
-        let observed = super::artifact_digest(&path, &mut allocation, Some(&graph)).unwrap();
+        let observed = super::artifact_digest(&path, &mut allocation, true).unwrap();
         assert_eq!(
             observed,
             (bytes.len() as u64, Sha256::digest(&bytes).into())
@@ -3108,27 +3136,25 @@ mod tests {
         assert_eq!(allocation.usage(), (0, 0));
         // An unchanged artifact reuses its digest without a read; a new
         // status-change time gives it a new identity that is read again.
-        let reused = crate::node::GraphBudget::new();
         assert_eq!(
-            super::artifact_digest(&path, &mut allocation, Some(&reused)).unwrap(),
+            super::artifact_digest(&path, &mut allocation, true).unwrap(),
             observed
         );
         fs::set_permissions(&path, fs::metadata(&path).unwrap().permissions()).unwrap();
         // A new identity streams the artifact again and charges its content
         // bytes plus the EOF probe.
-        let fresh = crate::node::GraphBudget::new();
         assert_eq!(
-            super::artifact_digest(&path, &mut allocation, Some(&fresh)).unwrap(),
+            super::artifact_digest(&path, &mut allocation, true).unwrap(),
             observed
         );
         let linked = root.join("linked.rmeta");
         fs::hard_link(&path, &linked).unwrap();
-        assert!(super::artifact_digest(&path, &mut allocation, Some(&graph)).is_err());
+        assert!(super::artifact_digest(&path, &mut allocation, true).is_err());
         fs::remove_file(&linked).unwrap();
         #[cfg(unix)]
         {
             std::os::unix::fs::symlink(&path, &linked).unwrap();
-            assert!(super::artifact_digest(&linked, &mut allocation, Some(&graph)).is_err());
+            assert!(super::artifact_digest(&linked, &mut allocation, true).is_err());
         }
         fs::remove_dir_all(&root).unwrap();
     }
@@ -3250,7 +3276,7 @@ mod tests {
     }
 
     #[test]
-    fn repeated_control_and_sidecar_reads_keep_the_original_graph_budget() {
+    fn repeated_control_and_sidecar_reads_charge_one_allocation() {
         let root = std::env::temp_dir().join(format!(
             "rawr-probe-replay-account-{}-{:?}",
             std::process::id(),
@@ -3264,7 +3290,6 @@ mod tests {
         fs::write(&sidecar, b"sidecar").unwrap();
         let digest = |bytes: &[u8]| <[u8; 32]>::from(Sha256::digest(bytes));
         let limits = Limits::standard();
-        let graph = crate::node::GraphBudget::new();
         let mut capture = Capture {
             search: None,
             namespace: None,
@@ -3283,7 +3308,7 @@ mod tests {
             sidecars: Box::from([(sidecar, digest(b"sidecar"))]),
             controls: Box::from([(control, digest(b"control"))]),
             artifacts: Box::default(),
-            graph_budget: Some(graph.clone()),
+            owned: true,
             sharing: super::Sharing::default(),
             reuse: None,
             expansion: super::Expansion::default(),
@@ -3330,7 +3355,7 @@ mod tests {
             sidecars: Box::from([(sidecar.clone(), digest(b"sidecar"))]),
             controls: Box::from([(control.clone(), digest(b"control"))]),
             artifacts: Box::from([(artifact.clone(), 8, digest(b"artifact"))]),
-            graph_budget: None,
+            owned: false,
             sharing: super::Sharing::default(),
             reuse: None,
             expansion: super::Expansion::default(),
@@ -3422,7 +3447,7 @@ mod tests {
             sidecars: Box::from([(sidecar.clone(), digest)]),
             controls: Box::default(),
             artifacts: Box::default(),
-            graph_budget: None,
+            owned: false,
             sharing: super::Sharing::default(),
             reuse: None,
             expansion: super::Expansion::default(),
@@ -3492,7 +3517,7 @@ mod tests {
                 )]),
                 controls: Box::default(),
                 artifacts: Box::default(),
-                graph_budget: None,
+                owned: false,
                 sharing: super::Sharing::default(),
                 reuse: None,
                 expansion: super::Expansion::default(),
@@ -3621,12 +3646,7 @@ mod tests {
         limits.json_bytes = 1;
         let mut allocation = Allocation::new(&limits);
         assert_eq!(
-            super::artifact_digest(
-                &path,
-                &mut allocation,
-                Some(&crate::node::GraphBudget::new())
-            )
-            .unwrap(),
+            super::artifact_digest(&path, &mut allocation, true).unwrap(),
             (bytes.len() as u64, Sha256::digest(&bytes).into())
         );
         let roots = vec![root.clone()];
