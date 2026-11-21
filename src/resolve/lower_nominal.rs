@@ -114,6 +114,8 @@ mod derive_shape_tests;
 #[cfg(test)]
 mod divergence_tests;
 #[cfg(test)]
+mod inference_tests;
+#[cfg(test)]
 mod language_tests;
 #[cfg(test)]
 mod macro_tests;
