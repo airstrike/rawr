@@ -8650,7 +8650,9 @@
             {"number":2106,"title":"An `impl Trait<Assoc = T>` return bound doesn't fix its hidden type's inference: a literal in it takes i32","state":"open"},
             {"number":2214,"title":"A program's trait impl for an array type (`impl Total for [i32; 3]`) is refused as an inherent impl","state":"open"},
             {"number":1555,"title":"A program's blanket impl: associated fns without self, two blanket impls sharing a method name, T::Item","state":"open"},
-            {"number":2229,"title":"A closure local that shadows a capture (`let c = c.borrow(); c.method()`) panics with \"Function not found\"","state":"open"}
+            {"number":2229,"title":"A closure local that shadows a capture (`let c = c.borrow(); c.method()`) panics with \"Function not found\"","state":"open"},
+            {"number":2455,"title":"A method call on a program type calls its inherent method, as rustc does, when the type's impl…","state":"closed"},
+            {"number":2458,"title":"Inside a dependency trait's impl, rawr treats that trait as in scope for method calls","state":"open"}
           ]
         },
         {
