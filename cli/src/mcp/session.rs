@@ -535,6 +535,17 @@ impl Session {
         Some(session)
     }
 
+    /// A session of a run started elsewhere, not yet greeted, with no
+    /// process of its own, on one end of a pair whose other end is
+    /// returned: it greets once that end answers `hello`.
+    #[cfg(test)]
+    pub fn greeting() -> (Arc<Self>, UnixStream) {
+        let (stream, other) = UnixStream::pair().unwrap();
+        let session =
+            Arc::new(Self::open(Path::new("/p"), Path::new("/p"), &[], None, stream).unwrap());
+        (session, other)
+    }
+
     /// A session already in `phase`, with no process of its own, on one
     /// end of a pair whose other end is returned.
     #[cfg(test)]

@@ -86,7 +86,7 @@ impl Server {
 
     /// Take one message: a request, a notification, or the client's answer
     /// to a request of the server's, which needs nothing.
-    fn take(&mut self, mut message: Value) {
+    pub(super) fn take(&mut self, mut message: Value) {
         let Some(method) = message["method"].as_str().map(str::to_owned) else {
             return;
         };
@@ -108,10 +108,26 @@ impl Server {
                 self.shut = true;
                 self.respond(&id, Value::Null);
             }
+            "textDocument/hover" | "textDocument/inlayHint"
+                if self.hold(
+                    params["textDocument"]["uri"].as_str().unwrap_or_default(),
+                    &json!({ "id": id, "method": method, "params": params }),
+                ) => {}
             "textDocument/hover" => self.hover(id, &params),
             "textDocument/inlayHint" => self.inlay_hints(&id, &params),
             method => self.refuse(&id, UNKNOWN, &format!("rawr lsp doesn't serve `{method}`")),
         }
+    }
+
+    /// Answer `request`, a hover or an inlay-hint request, with nothing:
+    /// its run went before it greeted the server.
+    pub(super) fn unanswered(&mut self, request: &Value) {
+        let nothing = if request["method"] == "textDocument/inlayHint" {
+            json!([])
+        } else {
+            Value::Null
+        };
+        self.respond(&request["id"], nothing);
     }
 
     /// The error answer to request `id`.
