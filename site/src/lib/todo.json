@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-20",
-  "version": "0.4.74",
+  "version": "0.4.75",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them."],"entries":[]},
     "releases": [
+      {
+        "version": "0.4.75",
+        "date": "2026-11-20",
+        "entries": [
+          {"text":"std's `io::SeekFrom` variants work: `SeekFrom::Start(n)`, `End(n)` and `Current(n)` build values, serve as `fn` pointers and match in `match`, `if let` and `let`-`else`, and a missed variant is written with its fields. Messages name a std type as rustc does: `PathBuf` alone, `std::fmt::Alignment` where another type shares the name, and E0599 names the type's kind.","issues":[2370]}
+        ]
+      },
       {
         "version": "0.4.74",
         "date": "2026-11-20",
@@ -5686,11 +5693,12 @@
     {"issue":2367,"title":"Under rawr dap, rawr's own progress lines go to stderr and show red in VS Code","state":"closed","category":"Health","release":"0.4.71"},
     {"issue":2368,"title":"A module that a glob of the parent's `use` imports is not followed in an impl's trait path","state":"closed","category":"Health","release":"0.4.72"},
     {"issue":2369,"title":"A match on a std enum rawr's std holds as a value needs a `_` arm that rustc doesn't","state":"closed","category":"Health","release":"0.4.73"},
-    {"issue":2370,"title":"std's `io::SeekFrom` variants are unbound, and notes write std types by full path where rustc writes the name","state":"open","category":"Health"},
+    {"issue":2370,"title":"std's `io::SeekFrom` variants are unbound, and notes write std types by full path where rustc writes the name","state":"closed","category":"Health","release":"0.4.75"},
     {"issue":2371,"title":"A program's `Mutex` hands its lock to a waiting thread as soon as the guard ends, with no 1 ms…","state":"closed","category":"Health","release":"0.4.74"},
     {"issue":2372,"title":"The debugger reads a generation's lines, eval program and files together, so a request during a…","state":"closed","category":"Health","release":"0.4.74"},
     {"issue":2373,"title":"A read through a RefCell's borrow_mut() temporary isn't checked against a borrow already held","state":"open","category":"Health"},
-    {"issue":2374,"title":"Three owner-harness tests fail with \"Overlay must reuse content\"","state":"open","category":"Health"}
+    {"issue":2374,"title":"Three owner-harness tests fail with \"Overlay must reuse content\"","state":"open","category":"Health"},
+    {"issue":2375,"title":"A full std path to a missing item is E0433 where rustc gives E0599, and std type naming ignores dependency types","state":"open","category":"Health"}
   ],
   "groups": [
     {

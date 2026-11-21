@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.4.75",
+      "date": "2026-11-20",
+      "entries": [
+        {"text":"std's `io::SeekFrom` variants work: `SeekFrom::Start(n)`, `End(n)` and `Current(n)` build values, serve as `fn` pointers and match in `match`, `if let` and `let`-`else`, and a missed variant is written with its fields. Messages name a std type as rustc does: `PathBuf` alone, `std::fmt::Alignment` where another type shares the name, and E0599 names the type's kind.","issues":[2370]}
+      ]
+    },
+    {
       "version": "0.4.74",
       "date": "2026-11-20",
       "entries": [

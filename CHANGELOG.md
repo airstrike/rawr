@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.75 (2026-11-20)
+
+- std's `io::SeekFrom` variants work: `SeekFrom::Start(n)`, `End(n)` and `Current(n)` build values, serve as `fn` pointers and match in `match`, `if let` and `let`-`else`, and a missed variant is written with its fields. Messages name a std type as rustc does: `PathBuf` alone, `std::fmt::Alignment` where another type shares the name, and E0599 names the type's kind. (#2370)
+
 ## 0.4.74 (2026-11-20)
 
 - A program's `Mutex` hands its lock to a waiting thread as soon as the guard ends, with no 1 ms poll: a handoff takes about 3 µs where it took about 1.2 ms, and a contended workload runs 22% faster. (#2371; part of #1828)
