@@ -2439,7 +2439,7 @@
     {"t":"T2437","issue":2437,"title":"T2437: rawr fails on a lib+bin package whose lib has a marked module","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T2438","issue":2438,"title":"T2438: rawr doesn't run a main that returns ExitCode or reads std::env::args_os","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T2439","issue":2439,"title":"T2439: The iced adapter needs the application state to be Clone","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
-    {"t":"T2440","issue":2440,"title":"T2440: rawr lsp: value hover, inlay hints and rawr's diagnostics beside rust-analyzer","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":["D1102","D1053"],"commit":null,"release":null},
+    {"t":"T2440","issue":2440,"title":"T2440: rawr lsp: value hover, inlay hints and rawr's diagnostics beside rust-analyzer","state":"closed","category":"Health","labels":["health"],"gantt":{"group":"debug","row":"editor-adapter"},"decisions":["D1102","D1053"],"commit":"b58bc9108","release":"0.4.108"},
     {"t":"T2441","issue":2441,"title":"T2441: A windowed run stays \"starting\" in its session while the owner already waits for saves","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":"671f87a09","release":"0.4.105"},
     {"t":"T2442","issue":2442,"title":"T2442: A hover in rawr dap, rawr gui and VS Code reads the whole place under the pointer, such as…","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":"0.4.105"},
     {"t":"T2443","issue":2443,"title":"T2443: rawr mcp shows a started run as starting forever when the run closes its session before greeting","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
@@ -2451,6 +2451,7 @@
     {"t":"T2449","issue":2449,"title":"T2449: A long hover over a function in rawr gui and the playground shows its definition","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
     {"t":"T2450","issue":2450,"title":"T2450: The reload's live lists, the owner's inbox and the program's statics each share one lock, the…","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":"0.4.107"},
     {"t":"T2451","issue":2451,"title":"T2451: rawr gui shows no hover over a call, a macro or anything else the hover read doesn't run, as…","state":"closed","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":"0.4.107"},
-    {"t":"T2452","issue":2452,"title":"T2452: A marked module's `impl page::Page for …` resolves `page::Page` as a module, not the trait","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
+    {"t":"T2452","issue":2452,"title":"T2452: A marked module's `impl page::Page for …` resolves `page::Page` as a module, not the trait","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null},
+    {"t":"T2453","issue":2453,"title":"T2453: The VS Code extension starts rawr lsp beside rust-analyzer","state":"open","category":"Health","labels":["health"],"gantt":null,"decisions":[],"commit":null,"release":null}
   ]
 }

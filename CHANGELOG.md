@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is shared bindings: rawr extracts and generates a crate's bindings once per machine, and every project that uses that crate reuses them.
 
+## 0.4.108 (2026-11-21)
+
+- `rawr lsp` is a small language server beside rust-analyzer: while the program is paused, hovers and inlay hints show its values, read without running any of its code, and a save that doesn't reload shows rawr's errors under the code until one does. It attaches to the newest run of each program you open a file of, waits for one to start, and holds a hover asked before the run greets it. (#2440)
+
 ## 0.4.107 (2026-11-21)
 
 - The reload's live lists, the owner's inbox and the program's statics each share one lock, the leaked texts, slices and locations are kept in the one lasting pin table, generic instance keys are literals in the generated runner, and a script impl's member takes no lock to find. Fifteen locks are gone. (#2450)

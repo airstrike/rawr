@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.4.108",
+      "date": "2026-11-21",
+      "entries": [
+        {"text":"`rawr lsp` is a small language server beside rust-analyzer: while the program is paused, hovers and inlay hints show its values, read without running any of its code, and a save that doesn't reload shows rawr's errors under the code until one does. It attaches to the newest run of each program you open a file of, waits for one to start, and holds a hover asked before the run greets it.","issues":[2440]}
+      ]
+    },
+    {
       "version": "0.4.107",
       "date": "2026-11-21",
       "entries": [
