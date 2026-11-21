@@ -29,6 +29,7 @@ use ratatui::backend::TestBackend;
 use ratatui::style::Modifier;
 use ratatui::Terminal;
 use rawr_tui::client::{Client, Message, Reply};
+use rawr_tui::home;
 use rawr_tui::{Flow, Input, Shell};
 use serde_json::Value;
 
@@ -167,7 +168,10 @@ fn the_shell_attaches_to_a_run_stops_at_its_breakpoint_and_opens_a_binding() {
         terminal: Terminal::new(TestBackend::new(WIDTH, HEIGHT)).unwrap(),
     };
     live.until("the hello", |screen| {
-        screen.lines().next().is_some_and(|top| top.contains(&root))
+        screen
+            .lines()
+            .next()
+            .is_some_and(|top| top.contains(&home::shorten(&root)))
     });
 
     // `B` breaks at a line of the shown file, the entry until a stop.

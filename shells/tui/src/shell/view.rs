@@ -10,6 +10,8 @@ use ratatui::text::{Line as Text, Span};
 use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph};
 use ratatui::Frame as Screen;
 
+use crate::home;
+
 use super::update::file_name;
 use super::{colours, Breakpoint, Focus, Kind, Purpose, Shell};
 
@@ -41,7 +43,7 @@ impl Shell {
         .areas(side);
 
         // The phase first, so a long root is what a narrow terminal cuts.
-        let header = format!(" rawr tui · {} · {}", self.phase, self.root);
+        let header = format!(" rawr tui · {} · {}", self.phase, home::shorten(&self.root));
         screen.render_widget(
             Paragraph::new(header).style(Style::new().add_modifier(Modifier::BOLD)),
             top,
