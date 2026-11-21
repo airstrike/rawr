@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-21",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,16 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors."],"entries":[]},
     "releases": [
+      {
+        "version": "0.5.3",
+        "date": "2026-11-21",
+        "entries": [
+          {"text":"`(*w).push(1)` on a type with `DerefMut` calls `deref_mut`, and `(*f(&mut v)).push(1)` changes `v`, where the change used to go to a copy and be lost.","issues":[873]},
+          {"text":"`w[i]`, `w[i] = x` and `w[i] += 1` index through a program type's `Deref` and `DerefMut`, with rustc's E0596 when only `Deref` is there.","issues":[817]},
+          {"text":"Two traits in scope giving one method are rustc's E0034, and a glob-imported trait is found beside an out-of-scope trait of the same name.","issues":[767]},
+          {"text":"`&mut w` passed where `&mut Target` is expected coerces through a program type's `DerefMut`, so the callee changes `w`.","issues":[2460],"refs":[816]}
+        ]
+      },
       {
         "version": "0.5.2",
         "date": "2026-11-21",
@@ -4360,7 +4370,7 @@
     {"issue":764,"title":"A program's &mut self method through its impl DerefMut in the method probe","state":"closed","category":"Divergences from rustc","release":"0.3.116"},
     {"issue":765,"title":"type_provides' capability table for natives moves onto the std impl lookup","state":"open","category":"Divergences from rustc"},
     {"issue":766,"title":"Hold an opaque impl FnMut, impl FnOnce, higher-ranked or non-Send impl Fn a crate returns","state":"open","category":"No glue (D593)"},
-    {"issue":767,"title":"Two traits in scope giving a function the same method is E0034, and glob-imported traits are searched","state":"open","category":"Divergences from rustc"},
+    {"issue":767,"title":"Two traits in scope giving a function the same method is E0034, and glob-imported traits are searched","state":"closed","category":"Divergences from rustc","release":"0.5.3"},
     {"issue":768,"title":"Iterator's methods and adapter summaries come from Iterator's std declaration (D711 step 4, last type)","state":"closed","category":"Divergences from rustc","release":"0.3.115"},
     {"issue":769,"title":"VecDeque, Vec and [T] are distinct types in rawr","state":"closed","category":"Divergences from rustc","release":"0.3.114"},
     {"issue":770,"title":"A std method rawr doesn't run reports the not-yet error before its argument errors","state":"closed","category":"Divergences from rustc","release":"0.3.116"},
@@ -4410,7 +4420,7 @@
     {"issue":814,"title":"Maps and sets keyed by a crate type don't cross yet","state":"open","category":"No glue (D593)"},
     {"issue":815,"title":"A crate type's Deref target read in place, not copied","state":"open","category":"Divergences from rustc"},
     {"issue":816,"title":"&mut deref coercion and as_deref_mut through a program's DerefMut","state":"open","category":"Divergences from rustc"},
-    {"issue":817,"title":"Indexing through a program's Deref","state":"open","category":"Divergences from rustc"},
+    {"issue":817,"title":"Indexing through a program's Deref","state":"closed","category":"Divergences from rustc","release":"0.5.3"},
     {"issue":818,"title":"`to_mut()` with nothing written through it leaves a `Cow` borrowed","state":"open","category":"Divergences from rustc"},
     {"issue":819,"title":"`into_owned()` on a `&Cow` is accepted; rustc says E0507","state":"open","category":"Divergences from rustc"},
     {"issue":820,"title":"Text `.into()` follows only a `let`'s annotated target","state":"open","category":"Divergences from rustc"},
@@ -4466,7 +4476,7 @@
     {"issue":870,"title":"Drop a temporary at the end of its statement","state":"open","category":"Divergences from rustc"},
     {"issue":871,"title":"Proxy `-> impl Trait` and by-value methods of a borrowing opaque result","state":"open","category":"No glue (D593)"},
     {"issue":872,"title":"?play time limits are too tight for the bot's shared container","state":"closed","category":"Health","release":"0.3.122"},
-    {"issue":873,"title":"(*w).method() through DerefMut picks deref","state":"open","category":"Divergences from rustc"},
+    {"issue":873,"title":"(*w).method() through DerefMut picks deref","state":"closed","category":"Divergences from rustc","release":"0.5.3"},
     {"issue":874,"title":"Calling a crate function item bound to a local","state":"open","category":"Divergences from rustc"},
     {"issue":875,"title":"A borrowing result passed by value to a callee that bounds it by Send or Sync","state":"open","category":"No glue (D593)"},
     {"issue":876,"title":"Moving a borrowing result whose trait has generic or borrowing methods into a crate call","state":"retired","category":"No glue (D593)"},
@@ -6050,8 +6060,11 @@
     {"issue":2455,"title":"A method call on a program type calls its inherent method, as rustc does, when the type's impl…","state":"closed","category":"Health","release":"0.5.1"},
     {"issue":2456,"title":"rawr's launch line says what it waits on and what Cargo is compiling, not only a stage and a percent","state":"closed","category":"Health","release":"0.5.2"},
     {"issue":2457,"title":"rawr's per-project state lands in the workspace's shared target, not the worktree's CARGO_TARGET_DIR","state":"open","category":"Health"},
-    {"issue":2458,"title":"Inside a dependency trait's impl, rawr treats that trait as in scope for method calls","state":"open","category":"Health"},
-    {"issue":2459,"title":"A check's phase line says when Cargo waits for a lock","state":"open","category":"Health"}
+    {"issue":2458,"title":"Inside a dependency trait's impl, rawr treats that trait as in scope for method calls","state":"closed","category":"Health"},
+    {"issue":2459,"title":"A check's phase line says when Cargo waits for a lock","state":"open","category":"Health"},
+    {"issue":2460,"title":"`&mut w` passed where `&mut Target` is expected coerces through a program type's `DerefMut`, so…","state":"closed","category":"Divergences from rustc","release":"0.5.3"},
+    {"issue":2461,"title":"A program's `impl std::io::Write` lacks the trait's provided methods (`write_all`, `write_fmt`)","state":"open","category":"Divergences from rustc"},
+    {"issue":2462,"title":"A script fn returning `impl Trait` of a program trait is refused","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -8631,16 +8644,16 @@
             {"number":731,"title":"#[rawr::export] declares a &T parameter as &T, not an owned T","state":"open"},
             {"number":732,"title":"Text .into() takes its target from the use site: &str, Box<str>, Arc<str>, PathBuf","state":"open"},
             {"number":737,"title":"An array of Elements widens to a slice only at an IntoIterator parameter","state":"open"},
-            {"number":767,"title":"Two traits in scope giving a function the same method is E0034, and glob-imported traits are searched","state":"open"},
+            {"number":767,"title":"Two traits in scope giving a function the same method is E0034, and glob-imported traits are searched","state":"closed"},
             {"number":773,"title":"try_into into an integer while a program TryFrom of the same source exists","state":"open"},
             {"number":789,"title":"An instance alias's core traits are claimed for any arguments","state":"open"},
             {"number":801,"title":"`?Sized` bounds on generic parameters are refused","state":"open"},
             {"number":802,"title":"`where Self: Sized` on a trait method is refused","state":"open"},
             {"number":815,"title":"A crate type's Deref target read in place, not copied","state":"open"},
             {"number":816,"title":"&mut deref coercion and as_deref_mut through a program's DerefMut","state":"open"},
-            {"number":817,"title":"Indexing through a program's Deref","state":"open"},
+            {"number":817,"title":"Indexing through a program's Deref","state":"closed"},
             {"number":820,"title":"Text `.into()` follows only a `let`'s annotated target","state":"open"},
-            {"number":873,"title":"(*w).method() through DerefMut picks deref","state":"open"},
+            {"number":873,"title":"(*w).method() through DerefMut picks deref","state":"closed"},
             {"number":1033,"title":"A trait function called by its trait's path infers Self from the expected type","state":"open"},
             {"number":1034,"title":"? converts &str to String through From","state":"open"},
             {"number":1037,"title":"Infer a generic fn's type parameter from the let it's assigned to","state":"open"},
@@ -8660,7 +8673,10 @@
             {"number":1555,"title":"A program's blanket impl: associated fns without self, two blanket impls sharing a method name, T::Item","state":"open"},
             {"number":2229,"title":"A closure local that shadows a capture (`let c = c.borrow(); c.method()`) panics with \"Function not found\"","state":"open"},
             {"number":2455,"title":"A method call on a program type calls its inherent method, as rustc does, when the type's impl…","state":"closed"},
-            {"number":2458,"title":"Inside a dependency trait's impl, rawr treats that trait as in scope for method calls","state":"open"}
+            {"number":2458,"title":"Inside a dependency trait's impl, rawr treats that trait as in scope for method calls","state":"closed"},
+            {"number":2460,"title":"`&mut w` passed where `&mut Target` is expected coerces through a program type's `DerefMut`, so…","state":"closed"},
+            {"number":2461,"title":"A program's `impl std::io::Write` lacks the trait's provided methods (`write_all`, `write_fmt`)","state":"open"},
+            {"number":2462,"title":"A script fn returning `impl Trait` of a program trait is refused","state":"open"}
           ]
         },
         {

@@ -6,6 +6,13 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors.
 
+## 0.5.3 (2026-11-21)
+
+- `(*w).push(1)` on a type with `DerefMut` calls `deref_mut`, and `(*f(&mut v)).push(1)` changes `v`, where the change used to go to a copy and be lost. (#873)
+- `w[i]`, `w[i] = x` and `w[i] += 1` index through a program type's `Deref` and `DerefMut`, with rustc's E0596 when only `Deref` is there. (#817)
+- Two traits in scope giving one method are rustc's E0034, and a glob-imported trait is found beside an out-of-scope trait of the same name. (#767)
+- `&mut w` passed where `&mut Target` is expected coerces through a program type's `DerefMut`, so the callee changes `w`. (#2460; part of #816)
+
 ## 0.5.2 (2026-11-21)
 
 - The build line says what Cargo reports: the step, the crates finished of the total, the crate that has compiled longest and the time, as in `building runner · 212 of 340 crates · iced_wgpu · 3m12s`. It no longer fills a bar on time, so a stalled build shows as stalled. When Cargo waits for another Cargo's lock the line says which directory and for how long, and a wait for rawr's shared extraction directory names it as rawr's, with the process using it and its project. rawr mcp, rawr tui and rawr gui show the same text in place of a percent. (#2456)

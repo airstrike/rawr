@@ -1,6 +1,6 @@
 [package]
 name = "rawr-tui"
-version = "0.5.2"
+version = "0.5.3"
 rust-version = "1.95.0"
 edition = "2024"
 publish = false

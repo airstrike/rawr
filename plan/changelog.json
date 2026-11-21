@@ -8,6 +8,16 @@
   },
   "releases": [
     {
+      "version": "0.5.3",
+      "date": "2026-11-21",
+      "entries": [
+        {"text":"`(*w).push(1)` on a type with `DerefMut` calls `deref_mut`, and `(*f(&mut v)).push(1)` changes `v`, where the change used to go to a copy and be lost.","issues":[873]},
+        {"text":"`w[i]`, `w[i] = x` and `w[i] += 1` index through a program type's `Deref` and `DerefMut`, with rustc's E0596 when only `Deref` is there.","issues":[817]},
+        {"text":"Two traits in scope giving one method are rustc's E0034, and a glob-imported trait is found beside an out-of-scope trait of the same name.","issues":[767]},
+        {"text":"`&mut w` passed where `&mut Target` is expected coerces through a program type's `DerefMut`, so the callee changes `w`.","issues":[2460],"refs":[816]}
+      ]
+    },
+    {
       "version": "0.5.2",
       "date": "2026-11-21",
       "entries": [
