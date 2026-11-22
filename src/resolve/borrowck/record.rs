@@ -541,6 +541,65 @@ impl Recorder {
         }
     }
 
+    /// The place `loan` borrows.
+    pub(crate) fn loan_place(&self, loan: LoanId) -> &Place {
+        &self.body.loans[loan.0 as usize].place
+    }
+
+    /// `loan` is a reborrow that lasts within the references at `through`
+    /// of its place's local.
+    pub(crate) fn reborrow_through(&mut self, loan: LoanId, through: Vec<Path>) {
+        self.body.loans[loan.0 as usize].through = Some(through);
+    }
+
+    /// The place of the value the use starting at `start` reads: a
+    /// holder's use is the holder itself, unless it is read through `*`.
+    pub(crate) fn value_place(&self, start: Position) -> Option<Place> {
+        let (point, mut place) = self.mention_place(start)?;
+        if place.projection == [Projection::Deref] && !self.dereferenced.contains(&point) {
+            place.projection.clear();
+        }
+        Some(place)
+    }
+
+    /// The value the function returned last is a `&mut` place below
+    /// `place`, which rustc reborrows within the references at `through`
+    /// of that local.
+    pub(crate) fn returned_reborrow(&mut self, place: Local, through: Vec<Path>) {
+        if let Some(&value) = self.body.returned.last() {
+            self.body.returned_reborrows.push(super::Reborrow {
+                value,
+                place,
+                through,
+            });
+        }
+    }
+
+    /// A value below a reference in `place`, whose positions are at
+    /// `positions` of the local's type, takes `held` at its positions here,
+    /// by the call or the assignment spanning `span`.
+    pub(crate) fn store_below(
+        &mut self,
+        place: Local,
+        positions: Vec<(Path, Path)>,
+        held: &[(Path, Origin)],
+        span: Span,
+        cause: crate::resolve::outlives::Cause,
+    ) {
+        if held.is_empty() {
+            return;
+        }
+        let value = self.hidden("<stored>", span);
+        self.flow_into(value, held);
+        self.body.stores.push(super::Store {
+            value,
+            place,
+            positions,
+            span,
+            cause,
+        });
+    }
+
     /// `held` is borrowed for `'static` here: its region is every point.
     pub(crate) fn forever(&mut self, held: &[(Path, Origin)]) {
         let local = match self.everywhere {
@@ -817,11 +876,25 @@ impl Recorder {
 
     /// `*r` (starting at `alias`) of the use starting at `start`: a holder
     /// used through `*` is what it refers to even where a bare use would
-    /// be the holder itself (`&mut *r`, against `&mut r`).
-    pub(crate) fn deref(&mut self, start: Position, alias: Position) {
-        if let Some(point) = self.mentioned(start) {
-            self.mentions.insert(alias, point);
-            self.dereferenced.insert(point);
+    /// be the holder itself (`&mut *r`, against `&mut r`). Of a
+    /// `reference` the use reads through already (`**x`, `*r.a`), it reads
+    /// one step further down.
+    pub(crate) fn deref(&mut self, start: Position, alias: Position, reference: bool) {
+        let Some(point) = self.mentioned(start) else {
+            return;
+        };
+        self.mentions.insert(alias, point);
+        let through = !self.dereferenced.insert(point)
+            || !matches!(
+                self.body.fact(point),
+                Some(Fact::Access { place, .. }) if place.projection == [Projection::Deref]
+            );
+        if reference
+            && through
+            && !self.overloaded.contains(&point)
+            && let Fact::Access { place, .. } = self.fact_mut(point)
+        {
+            place.projection.push(Projection::Deref);
         }
     }
 
@@ -858,11 +931,19 @@ impl Recorder {
         }
     }
 
-    /// The use starting at `start` is moved.
+    /// The use starting at `start` is moved: a reference's use, the
+    /// reference itself.
     pub(crate) fn moved(&mut self, start: Position) {
         if let Some(point) = self.mentioned(start)
             && !self.subjects.contains(&point)
         {
+            let dereferenced = self.dereferenced.contains(&point);
+            if let Fact::Access { place, .. } = self.fact_mut(point)
+                && place.projection == [Projection::Deref]
+                && !dereferenced
+            {
+                place.projection.clear();
+            }
             self.set_access(point, Access::Move);
         }
     }
@@ -947,6 +1028,7 @@ impl Recorder {
             at: point,
             temporary,
             of_reference: false,
+            through: None,
         });
         let loan = LoanId(self.body.loans.len() as u32 - 1);
         if let Fact::Access { loan: made, .. } = self.fact_mut(point) {
@@ -1052,6 +1134,11 @@ impl Recorder {
             span,
             loan: None,
         });
+    }
+
+    /// A local's name and declaration.
+    pub(crate) fn local_info(&self, local: Local) -> &LocalInfo {
+        &self.body.locals[local.0 as usize]
     }
 
     /// The place the use starting at `start` accesses.
@@ -1584,7 +1671,7 @@ impl Recorder {
     /// and `output`: what it returns is checked against them.
     pub(crate) fn own_signature(
         &mut self,
-        parameters: Vec<(ImmutableString, Span, super::signature::Regions, bool)>,
+        parameters: Vec<(ImmutableString, Span, super::signature::Parameter, bool)>,
         output: super::signature::Output,
         names: super::Names,
     ) {

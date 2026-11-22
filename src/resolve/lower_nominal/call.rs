@@ -1505,6 +1505,7 @@ impl<'a> Parser<'a> {
                 self.coerce_argument(&parameter.ty, &expected, argument)?;
                 self.convert_into_host(&function.definition.generics, &parameter.ty, argument)?;
                 self.move_local(argument)?;
+                self.move_generic_reference(argument, &parameter.ty);
                 if function.source == self.models.context {
                     let owning = OwningParameter {
                         function: function.definition.name.text.clone(),
@@ -1839,6 +1840,7 @@ impl<'a> Parser<'a> {
             let expected = instantiate(&Ty::from_resolved(&parameter.ty), substitution);
             self.coerce_argument(&parameter.ty, &expected, argument)?;
             self.move_local(argument)?;
+            self.move_generic_reference(argument, &parameter.ty);
             if definition.source() == self.models.context {
                 let owning = OwningParameter {
                     function: definition.name().into(),

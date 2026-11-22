@@ -19,6 +19,9 @@ pub(crate) struct UseAfterMove {
     pub(crate) moved: Span,
     /// The use.
     pub(crate) access: Span,
+    /// The use is a `&mut` borrow, whose span ends where its text does;
+    /// another's ends where its last token starts.
+    pub(crate) whole: bool,
     /// The use borrows the place: rustc's "borrow of moved value".
     pub(crate) borrowed: bool,
     /// What moved is a part of the place used: rustc's "partially moved".
@@ -91,7 +94,7 @@ pub(crate) fn check(body: &Body) -> Option<UseAfterMove> {
             Block(index as u32),
             &moved,
             &mut state,
-            &mut |place, span, (known, at), borrowed| {
+            &mut |place, Used { span, whole }, (known, at), borrowed| {
                 // rustc names the moved place when it is above the one
                 // used, and the one used when only a part of it moved.
                 let above = known.projection.len() < place.projection.len();
@@ -99,6 +102,7 @@ pub(crate) fn check(body: &Body) -> Option<UseAfterMove> {
                     name: describe(body, if above { known } else { place }),
                     moved: at,
                     access: span,
+                    whole,
                     borrowed,
                     partial: known.projection.len() > place.projection.len(),
                     moved_place: describe(body, known),
@@ -116,6 +120,14 @@ pub(crate) fn check(body: &Body) -> Option<UseAfterMove> {
 /// A place moved out of, and where.
 type Moved<'a> = (&'a Place, Span);
 
+/// A use of a place, as its error marks it.
+#[derive(Clone, Copy)]
+struct Used {
+    span: Span,
+    /// It is a `&mut` borrow, whose span ends where its text does.
+    whole: bool,
+}
+
 /// Runs `block`'s facts over `state` (which moved places may be moved),
 /// calling `error` at each access of a place that may be moved, with the
 /// moved place and where it moved, and whether the access borrows it.
@@ -124,7 +136,7 @@ fn run(
     block: Block,
     moved: &[Moved<'_>],
     state: &mut [bool],
-    error: &mut dyn FnMut(&Place, Span, Moved<'_>, bool),
+    error: &mut dyn FnMut(&Place, Used, Moved<'_>, bool),
 ) {
     // Where a place that may be moved and overlaps `place` was moved, if
     // one does (`strict`: one above it).
@@ -153,7 +165,7 @@ fn run(
                 place,
                 access,
                 span,
-                ..
+                loan,
             } => match access {
                 Access::None | Access::StorageDead => {}
                 Access::Write => {
@@ -161,7 +173,11 @@ fn run(
                     // place itself, or a place above what was moved, is
                     // given a value again.
                     if let Some(at) = moved_at(state, place, true) {
-                        error(place, *span, at, false);
+                        let used = Used {
+                            span: *span,
+                            whole: false,
+                        };
+                        error(place, used, at, false);
                     }
                     clear(moved, state, |known| {
                         known.projection.len() >= place.projection.len() && overlaps(known, place)
@@ -171,7 +187,21 @@ fn run(
                     if let Some(at) = moved_at(state, place, false) {
                         let borrowed =
                             matches!(access, Access::Shared | Access::Reserve | Access::Mutable);
-                        error(place, *span, at, borrowed);
+                        // A borrow is its whole expression (`&mut self.a`).
+                        let used = match loan {
+                            Some(loan) => {
+                                let loan = &body.loans[loan.0 as usize];
+                                Used {
+                                    span: loan.span,
+                                    whole: loan.mutable,
+                                }
+                            }
+                            None => Used {
+                                span: *span,
+                                whole: false,
+                            },
+                        };
+                        error(place, used, at, borrowed);
                     }
                     if *access == Access::Move
                         && let Some(index) = moved.iter().position(|(known, _)| *known == place)

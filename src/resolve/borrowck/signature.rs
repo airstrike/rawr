@@ -134,6 +134,17 @@ struct Reader<'a> {
     /// `&mut` refers to, a cell's value, a crate type's invariant
     /// parameters.
     invariant: Vec<(Path, Invariance)>,
+    /// The positions read so far below which the type is contravariant: a
+    /// function type's arguments, a crate type's contravariant parameters.
+    /// Below two of them it is covariant again.
+    contravariant: Vec<Path>,
+    /// The outlives bounds read so far that crate types imply between the
+    /// lifetimes at two positions, longer first (RFC 2093).
+    implied: Vec<(Path, Path)>,
+    /// Whether a function type's argument and output types are read, below
+    /// it, as a crate type's variance needs: a function value holds none of
+    /// their borrows.
+    functions: bool,
 }
 
 /// An elided lifetime of a signature: the type it is elided in, and
@@ -157,14 +168,64 @@ pub(crate) enum Invariance {
     Nominal(Type, Path),
 }
 
-/// The positions of a crate type, each a [`Step::Lifetime`] or
-/// [`Step::Arg`] of it, at which its fields make it invariant: a lifetime
-/// or type parameter used in what a `&mut` refers to or in a cell's value.
-pub(crate) type Variance<'a> = &'a dyn Fn(&Target) -> Vec<Path>;
+/// What a crate type's fields make of its lifetime and type parameters,
+/// each a [`Step::Lifetime`] or [`Step::Arg`] path of it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Fields {
+    /// Where its fields make it invariant: a parameter used in what a
+    /// `&mut` refers to or in a cell's value, or used both ways.
+    pub(crate) invariant: Vec<Path>,
+    /// Where they make it contravariant: a parameter used only in function
+    /// types' arguments.
+    pub(crate) contravariant: Vec<Path>,
+    /// The outlives bounds they imply between its lifetime parameters,
+    /// longer first, by index (RFC 2093): `struct S<'a, 'b>(&'a &'b i32)`
+    /// has `'b: 'a`.
+    pub(crate) outlives: Vec<(u8, u8)>,
+}
+
+/// What a crate type's fields make of its parameters ([`Fields`]).
+pub(crate) type Variance<'a> = &'a dyn Fn(&Target) -> Fields;
 
 /// A crate type's variance where the signature's reading doesn't need it.
-fn covariant(_: &Target) -> Vec<Path> {
-    Vec::new()
+fn covariant(_: &Target) -> Fields {
+    Fields::default()
+}
+
+/// How a position of a type varies.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Varies {
+    Covariant,
+    Contravariant,
+    Invariant,
+}
+
+impl Varies {
+    /// The variance of a parameter used both ways.
+    pub(crate) fn join(self, other: Self) -> Self {
+        if self == other {
+            self
+        } else {
+            Self::Invariant
+        }
+    }
+
+    /// How the position `path` varies, below the `invariant` and
+    /// `contravariant` positions of its type.
+    fn at(invariant: &[(Path, Invariance)], contravariant: &[Path], path: Path) -> Self {
+        if invariant.iter().any(|(root, _)| path.starts_with(*root)) {
+            return Self::Invariant;
+        }
+        let flips = contravariant
+            .iter()
+            .filter(|root| path.starts_with(**root))
+            .count();
+        if flips % 2 == 1 {
+            Self::Contravariant
+        } else {
+            Self::Covariant
+        }
+    }
 }
 
 /// Whether the builtin `name` is invariant in its type arguments, as std's
@@ -265,7 +326,16 @@ impl Reader<'_> {
             }
             // A function value holds what it captures: within the
             // lifetimes its type is bounded by (`impl Fn() + 'a`), or any.
-            Type::Path(path) if ty.fn_signature().is_some() => {
+            Type::Path(path) if let Some((arguments, returned)) = ty.fn_signature() => {
+                if self.functions {
+                    for (index, argument) in arguments.iter().enumerate() {
+                        let below = at.push(Step::Arg(index as u8));
+                        self.contravariant.push(below);
+                        self.positions(argument, below, output, out);
+                    }
+                    let below = at.push(Step::Arg(arguments.len() as u8));
+                    self.positions(returned, below, output, out);
+                }
                 let bounded: Vec<Region> = path
                     .arguments
                     .iter()
@@ -303,12 +373,22 @@ impl Reader<'_> {
                 }
                 let script = matches!(path.target, Target::Script { .. });
                 if script {
-                    let invariant = (self.variance)(&path.target);
+                    let fields = (self.variance)(&path.target);
                     self.invariant.extend(
-                        invariant
+                        fields
+                            .invariant
                             .into_iter()
                             .map(|below| (at.join(below), Invariance::Nominal(ty.clone(), below))),
                     );
+                    self.contravariant
+                        .extend(fields.contravariant.into_iter().map(|below| at.join(below)));
+                    self.implied
+                        .extend(fields.outlives.into_iter().map(|(longer, shorter)| {
+                            (
+                                at.push(Step::Lifetime(longer)),
+                                at.push(Step::Lifetime(shorter)),
+                            )
+                        }));
                 }
                 let cell =
                     (path.target == Target::Builtin && invariant_builtin(&path.name)).then_some(ty);
@@ -459,6 +539,22 @@ struct Read {
     elided: Vec<Elision>,
     /// The output's positions below which it is invariant.
     invariant: Vec<(Path, Invariance)>,
+    /// The output's positions below which it is contravariant.
+    contravariant: Vec<Path>,
+    /// The bounds crate types imply between two positions of each input,
+    /// as [`Read::inputs`] has them, and of the output.
+    implied: Vec<Vec<(Path, Path)>>,
+    output_implied: Vec<(Path, Path)>,
+    /// Where each input, as [`Read::inputs`] has them, varies.
+    varied: Vec<Varied>,
+}
+
+/// Where a type is invariant, and what makes each position so, and where
+/// it is contravariant.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct Varied {
+    invariant: Vec<(Path, Invariance)>,
+    contravariant: Vec<Path>,
 }
 
 fn read(
@@ -472,6 +568,9 @@ fn read(
         variance,
         elided: Vec::new(),
         invariant: Vec::new(),
+        contravariant: Vec::new(),
+        implied: Vec::new(),
+        functions: false,
     };
     let mut owner = Positions::new();
     match &signature.lifetimes.owner {
@@ -479,7 +578,12 @@ fn read(
         None if signature.receiver.is_some() => owner.push((Path::OWN, Region::Unknown)),
         None => {}
     }
+    let owner_implied = std::mem::take(&mut reader.implied);
+    let owner_invariant = std::mem::take(&mut reader.invariant);
+    let owner_contravariant = std::mem::take(&mut reader.contravariant);
     let mut inputs: Vec<(Input, Positions)> = Vec::new();
+    let mut implied = Vec::new();
+    let mut varied = Vec::new();
     // The receiver's own region, which elided output lifetimes take.
     let mut receiver_region = None;
     if let Some(mode) = signature.receiver {
@@ -506,6 +610,33 @@ fn read(
                     positions
                 }
             };
+        let below = match mode {
+            Receiver::Owned => Path::ROOT,
+            Receiver::Shared | Receiver::Mutable => Path::of(&[Step::Arg(0)]),
+        };
+        implied.push(
+            owner_implied
+                .iter()
+                .map(|&(longer, shorter)| (below.join(longer), below.join(shorter)))
+                .collect(),
+        );
+        let mut invariant: Vec<(Path, Invariance)> = owner_invariant
+            .iter()
+            .map(|(path, invariance)| (below.join(*path), invariance.clone()))
+            .collect();
+        if mode == Receiver::Mutable
+            && let Some(owner) = &signature.lifetimes.owner
+        {
+            invariant.push((below, Invariance::Referent((**owner).clone())));
+        }
+        let contravariant = owner_contravariant
+            .iter()
+            .map(|path| below.join(*path))
+            .collect();
+        varied.push(Varied {
+            invariant,
+            contravariant,
+        });
         inputs.push((Input::Receiver, positions));
     }
     let written = signature.lifetimes.written_parameters.as_deref();
@@ -513,11 +644,17 @@ fn read(
         let ty = written.and_then(|written| written.get(index)).unwrap_or(ty);
         let mut positions = Positions::new();
         reader.positions(ty, Path::ROOT, false, &mut positions);
+        implied.push(std::mem::take(&mut reader.implied));
+        varied.push(Varied {
+            invariant: std::mem::take(&mut reader.invariant),
+            contravariant: std::mem::take(&mut reader.contravariant),
+        });
         inputs.push((Input::Argument(index), positions));
     }
     let mut output = Positions::new();
     let written = signature.lifetimes.written_output.as_deref();
     reader.invariant.clear();
+    reader.contravariant.clear();
     reader.positions(
         written.unwrap_or(signature.output),
         Path::ROOT,
@@ -551,6 +688,10 @@ fn read(
         unknown,
         elided: reader.elided,
         invariant: reader.invariant,
+        contravariant: reader.contravariant,
+        implied,
+        output_implied: reader.implied,
+        varied,
     }
 }
 
@@ -616,16 +757,28 @@ pub(crate) struct Bounds(Vec<(Lifetime, Lifetime)>);
 
 impl Bounds {
     /// The bounds `written`, and those the types of `regions` imply: each
-    /// region below a value's own region outlives it.
+    /// region below a value's own region outlives it, and each crate type
+    /// implies its fields' bounds, at the pairs of positions of each.
     fn of<'a>(
         written: &[(ImmutableString, ImmutableString)],
-        regions: impl IntoIterator<Item = &'a Regions>,
+        regions: impl IntoIterator<Item = (&'a Regions, &'a [(Path, Path)])>,
     ) -> Self {
         let mut bounds: Vec<(Lifetime, Lifetime)> = written
             .iter()
             .map(|(longer, shorter)| (Lifetime::named(longer), Lifetime::named(shorter)))
             .collect();
-        for regions in regions {
+        for (regions, implied) in regions {
+            let at = |position: &Path| {
+                regions
+                    .iter()
+                    .find(|(path, _)| path == position)
+                    .and_then(|(_, lifetime)| lifetime.clone())
+            };
+            for (longer, shorter) in implied {
+                if let (Some(longer), Some(shorter)) = (at(longer), at(shorter)) {
+                    bounds.push((longer, shorter));
+                }
+            }
             for (own, shorter) in regions {
                 let (true, Some(shorter)) = (own.is_own(), shorter) else {
                     continue;
@@ -666,12 +819,39 @@ impl Bounds {
 /// A function's own signature, as its body is checked against it (T170):
 /// the regions of its receiver, each parameter and its output.
 pub(crate) struct Own {
-    pub(crate) receiver: Regions,
-    pub(crate) parameters: Vec<Regions>,
+    pub(crate) receiver: Parameter,
+    pub(crate) parameters: Vec<Parameter>,
     pub(crate) output: Output,
     /// Each elided input lifetime, by its number less one: the receiver's
     /// is at no place.
     pub(crate) elided: Vec<Elision>,
+}
+
+/// A receiver or a parameter of a function's own signature, as its body
+/// is checked against it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Parameter {
+    pub(crate) regions: Regions,
+    /// Its positions below which it is invariant, and what makes each so.
+    invariant: Vec<(Path, Invariance)>,
+    /// Its positions below which it is contravariant.
+    contravariant: Vec<Path>,
+}
+
+impl Parameter {
+    /// What makes the value at its position `at` invariant, where a `&mut`
+    /// or a cell holds it.
+    pub(crate) fn invariance_at(&self, at: Path) -> Option<&Invariance> {
+        self.invariant
+            .iter()
+            .find(|(root, _)| *root == at)
+            .map(|(_, invariance)| invariance)
+    }
+
+    /// What makes each of its invariant positions so.
+    pub(crate) fn invariances(&self) -> impl Iterator<Item = &Invariance> {
+        self.invariant.iter().map(|(_, invariance)| invariance)
+    }
 }
 
 /// A function's output, as what its body returns is checked against it.
@@ -682,6 +862,9 @@ pub(crate) struct Output {
     /// Its positions below which it is invariant, and what makes each so:
     /// what is returned there has its lifetimes exactly.
     invariant: Vec<(Path, Invariance)>,
+    /// Its positions below which it is contravariant: what is returned
+    /// there has lifetimes its lifetimes outlive.
+    contravariant: Vec<Path>,
     bounds: Bounds,
 }
 
@@ -708,24 +891,43 @@ pub(crate) fn own(
             (*path, lifetime)
         })
         .collect();
-    let mut receiver = Regions::new();
+    let mut receiver = Parameter::default();
     let mut parameters = Vec::new();
-    for (input, positions) in &read.inputs {
-        let regions = positions
-            .iter()
-            .filter(generic)
-            .map(|(path, region)| (*path, Lifetime::of(region)))
-            .collect();
+    for ((input, positions), varied) in read.inputs.iter().zip(&read.varied) {
+        let parameter = Parameter {
+            regions: positions
+                .iter()
+                .filter(generic)
+                .map(|(path, region)| (*path, Lifetime::of(region)))
+                .collect(),
+            invariant: varied.invariant.clone(),
+            contravariant: varied.contravariant.clone(),
+        };
         match input {
-            Input::Receiver => receiver = regions,
-            Input::Argument(_) => parameters.push(regions),
+            Input::Receiver => receiver = parameter,
+            Input::Argument(_) => parameters.push(parameter),
         }
     }
+    let has_receiver = read
+        .inputs
+        .first()
+        .is_some_and(|(input, _)| *input == Input::Receiver);
+    let mut implied = read.implied.iter().map(Vec::as_slice);
+    let receiver_implied = if has_receiver {
+        implied.next().unwrap_or_default()
+    } else {
+        &[]
+    };
     let bounds = Bounds::of(
         &signature.lifetimes.bounds,
-        std::iter::once(&receiver)
-            .chain(&parameters)
-            .chain(std::iter::once(&output)),
+        std::iter::once((&receiver.regions, receiver_implied))
+            .chain(
+                parameters
+                    .iter()
+                    .map(|parameter| &parameter.regions)
+                    .zip(implied),
+            )
+            .chain(std::iter::once((&output, &read.output_implied[..]))),
     );
     Own {
         receiver,
@@ -733,6 +935,7 @@ pub(crate) fn own(
         output: Output {
             regions: output,
             invariant: read.invariant,
+            contravariant: read.contravariant,
             bounds,
         },
         elided: read.elided,
@@ -774,6 +977,38 @@ pub(crate) enum Direction {
 }
 
 impl Output {
+    /// A value below a reference in `parameter`, whose positions are at
+    /// `positions` of the parameter's type by prefix, as what the body
+    /// stores there is checked against it: the parameter's regions there,
+    /// and where the value's type varies below its root, with the
+    /// signature's bounds. Where a field's positions are not one prefix of
+    /// the parameter's, what makes its type vary is its owner's.
+    pub(crate) fn stored(&self, parameter: &Parameter, positions: &[(Path, Path)]) -> Self {
+        let value = |path: &Path| {
+            positions
+                .iter()
+                .filter(|(_, local)| path.starts_with(*local))
+                .max_by_key(|(_, local)| local.len())
+                .map(|(value, local)| value.join(path.strip(*local)))
+        };
+        let whole = matches!(positions, [(root, _)] if root.is_root());
+        let below = |path: &Path| value(path).filter(|path| whole && !path.is_root());
+        Self {
+            regions: parameter
+                .regions
+                .iter()
+                .filter_map(|(path, lifetime)| Some((value(path)?, lifetime.clone())))
+                .collect(),
+            invariant: parameter
+                .invariant
+                .iter()
+                .filter_map(|(path, invariance)| Some((below(path)?, invariance.clone())))
+                .collect(),
+            contravariant: parameter.contravariant.iter().filter_map(below).collect(),
+            bounds: self.bounds.clone(),
+        }
+    }
+
     /// What makes each of its invariant positions so.
     pub(crate) fn invariances(&self) -> impl Iterator<Item = &Invariance> {
         self.invariant.iter().map(|(_, invariance)| invariance)
@@ -804,13 +1039,30 @@ impl Output {
                 .find(|(root, _)| exact && path.starts_with(*root))
                 .map(|(_, invariance)| invariance)
         };
+        let contravariant = |path: Path| {
+            exact && Varies::at(&[], &self.contravariant, path) == Varies::Contravariant
+        };
         below
             .into_iter()
             .find_map(|(path, output)| {
                 let invariance = invariance(path);
-                let direction = if invariance.is_some() && !self.bounds.outlives(output, lifetime) {
+                // The input's lifetime must outlive the output's at a
+                // covariant position, be outlived by it at a contravariant
+                // one, and both at an invariant one.
+                let varies = if invariance.is_some() {
+                    Varies::Invariant
+                } else if contravariant(path) {
+                    Varies::Contravariant
+                } else {
+                    Varies::Covariant
+                };
+                let shorter =
+                    varies != Varies::Covariant && !self.bounds.outlives(output, lifetime);
+                let longer =
+                    varies != Varies::Contravariant && !self.bounds.outlives(lifetime, output);
+                let direction = if shorter {
                     Direction::Output
-                } else if !self.bounds.outlives(lifetime, output) {
+                } else if longer {
                     Direction::Input
                 } else {
                     return None;
@@ -824,71 +1076,130 @@ impl Output {
             .map_or(Relation::Holds, Relation::Broken)
     }
 
-    /// `at`, or the own region above it that holds it where the output's
-    /// type has no region at or below `at`: what a reborrow keeps below the
-    /// reference it makes is within that reference's region.
+    /// `at`, or the own region that holds it where the output's type has
+    /// no region at or below `at`: what a reborrow keeps below the
+    /// reference it makes is within that reference's region, as what
+    /// `&x[1..]` of a `&'a str` keeps is within `'a`.
     fn within(&self, at: Path) -> Path {
         let mut above = at;
         while !self.regions.iter().any(|(path, _)| path.starts_with(above)) {
             if above.is_root() {
                 return at;
             }
-            above = above.parent();
-            if above.is_own() && self.regions.iter().any(|(path, _)| *path == above) {
-                return above;
+            let value = above.parent();
+            let own = if value.is_own() {
+                value
+            } else {
+                value.push(Step::Own)
+            };
+            if self.regions.iter().any(|(path, _)| *path == own) {
+                return own;
             }
+            above = value;
         }
         at
     }
 }
 
-/// The positions of the crate type whose field or payload is of type `ty`,
-/// below which it is invariant ([`Variance`]). Its lifetime parameters are
-/// `regions`' and its type parameters `parameters`.
-pub(crate) fn invariant_in(
+/// What the field or payload of type `ty` of a crate type makes of the
+/// type's parameters ([`Fields`]): how each parameter it uses varies there,
+/// by its [`Step::Lifetime`] or [`Step::Arg`] path, and the outlives bounds
+/// it implies between the type's lifetime parameters. Its lifetime
+/// parameters are `regions`' and its type parameters `parameters`.
+pub(crate) fn field_variance(
     ty: &Type,
     regions: &crate::resolve::item::TypeRegions,
     parameters: &[ImmutableString],
     declared: &dyn Fn(&Target) -> Option<usize>,
     variance: Variance<'_>,
-) -> Vec<Path> {
-    let mut reader = Reader {
+) -> FieldVariance {
+    let parameter = |region: &Region| match region {
+        Region::Named(name) => regions
+            .params
+            .iter()
+            .position(|param| param == name)
+            .map(|index| Step::Lifetime(index as u8)),
+        Region::Parameter(name) => parameters
+            .iter()
+            .position(|param| param == name)
+            .map(|index| Step::Arg(index as u8)),
+        _ => None,
+    };
+    let reader = |functions| Reader {
         lifetimes: &regions.written,
         declared,
         variance,
         elided: Vec::new(),
         invariant: Vec::new(),
+        contravariant: Vec::new(),
+        implied: Vec::new(),
+        functions,
     };
+    let mut varied = reader(true);
     let mut positions = Positions::new();
-    reader.positions(ty, Path::ROOT, true, &mut positions);
-    let mut invariant = Vec::new();
-    for (path, region) in positions {
-        if !reader
-            .invariant
-            .iter()
-            .any(|(root, _)| path.starts_with(*root))
-        {
+    varied.positions(ty, Path::ROOT, true, &mut positions);
+    let mut varies: Vec<(Path, Varies)> = Vec::new();
+    for (path, region) in &positions {
+        let Some(step) = parameter(region) else {
             continue;
-        }
-        let step = match &region {
-            Region::Named(name) => regions
-                .params
-                .iter()
-                .position(|param| param == name)
-                .map(|index| Step::Lifetime(index as u8)),
-            Region::Parameter(name) => parameters
-                .iter()
-                .position(|param| param == name)
-                .map(|index| Step::Arg(index as u8)),
-            _ => None,
         };
-        if let Some(step) = step
-            && !invariant.contains(&Path::of(&[step]))
-        {
-            invariant.push(Path::of(&[step]));
+        let at = Varies::at(&varied.invariant, &varied.contravariant, *path);
+        let step = Path::of(&[step]);
+        match varies.iter_mut().find(|(known, _)| *known == step) {
+            Some((_, known)) => *known = known.join(at),
+            None => varies.push((step, at)),
         }
     }
-    invariant
+    // A function type's argument and output types imply nothing of the
+    // type's lifetimes: a function value holds none of their borrows.
+    let mut held = reader(false);
+    let mut positions = Positions::new();
+    held.positions(ty, Path::ROOT, true, &mut positions);
+    let lifetime = |region: &Region| match parameter(region) {
+        Some(Step::Lifetime(index)) => Some(index),
+        _ => None,
+    };
+    let mut outlives = Vec::new();
+    for (own, shorter) in &positions {
+        let (true, Some(shorter)) = (own.is_own(), lifetime(shorter)) else {
+            continue;
+        };
+        for (below, longer) in &positions {
+            if let Some(longer) = lifetime(longer)
+                && below != own
+                && below.starts_with(own.parent())
+                && longer != shorter
+                && !outlives.contains(&(longer, shorter))
+            {
+                outlives.push((longer, shorter));
+            }
+        }
+    }
+    for (longer, shorter) in &held.implied {
+        let at = |position: &Path| {
+            positions
+                .iter()
+                .find(|(path, _)| path == position)
+                .and_then(|(_, region)| lifetime(region))
+        };
+        if let (Some(longer), Some(shorter)) = (at(longer), at(shorter))
+            && longer != shorter
+            && !outlives.contains(&(longer, shorter))
+        {
+            outlives.push((longer, shorter));
+        }
+    }
+    FieldVariance { varies, outlives }
+}
+
+/// What a field of a crate type makes of the type's parameters
+/// ([`field_variance`]).
+pub(crate) struct FieldVariance {
+    /// How each parameter it uses varies there, by its path.
+    pub(crate) varies: Vec<(Path, Varies)>,
+    /// The bounds it implies between the type's lifetime parameters,
+    /// longer first, by index.
+    pub(crate) outlives: Vec<(u8, u8)>,
 }
 
 /// What a call of `signature` keeps of each of its inputs. `declared` says
@@ -1000,6 +1311,9 @@ pub(crate) fn field_positions(
         variance: &covariant,
         elided: Vec::new(),
         invariant: Vec::new(),
+        contravariant: Vec::new(),
+        implied: Vec::new(),
+        functions: false,
     };
     let mut positions = Positions::new();
     reader.positions(ty, Path::ROOT, true, &mut positions);

@@ -1122,7 +1122,9 @@ fn sections(error: &resolve::Error, source: &Source) -> Vec<Section> {
                         Some("you could clone this value".into()),
                     ),
                 ),
-                resolve::Cloning::Clone | resolve::Cloning::None => None,
+                resolve::Cloning::Clone | resolve::Cloning::Reborrow | resolve::Cloning::None => {
+                    None
+                }
             };
             parameter.chain(derivable).collect()
         }
@@ -1400,6 +1402,17 @@ fn suggestion(error: &resolve::Error, source: &Source) -> Result<Option<Suggesti
             Style::Verbose,
             after(*moved),
             ".clone()",
+        ),
+        resolve::Error::MovedValue {
+            name,
+            moved,
+            cause: Some(cause),
+            ..
+        } if cause.cloning == resolve::Cloning::Reborrow => suggestion(
+            &format!("consider creating a fresh reborrow of `{name}` here"),
+            Style::Verbose,
+            before(*moved),
+            "&mut *",
         ),
         resolve::Error::ArgumentCount {
             arguments: Some(arguments),

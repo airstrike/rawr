@@ -288,6 +288,12 @@ impl<'a> Parser<'a> {
         let borrowed_value = matches!(self.peek(), Token::Ampersand | Token::And);
         let moved_borrow = matches!(self.peek(), Token::Identifier(ref alias) if self.aliases.contains_key(alias.as_str()))
             && matches!(self.peek_second(), Token::SemiColon);
+        // `let t = r;` of a `&mut` local moves it: rustc reborrows where the
+        // type is written (`let t: &mut T = r;`).
+        let moved_reference = annotation.is_none()
+            && self.closures.is_empty()
+            && matches!(self.peek(), Token::Identifier(_) | Token::SelfValue)
+            && matches!(self.peek_second(), Token::SemiColon);
         let block_like = self.peek_block_like();
         let outer = self.mutable_borrow;
         if borrowing {
@@ -310,6 +316,15 @@ impl<'a> Parser<'a> {
         self.mutable_borrow = outer;
         let mut value = value?;
         self.frame_value(&mut value);
+        if moved_reference
+            && matches!(
+                self.inference.resolve(&value.ty),
+                Ty::Reference { mutable: true, .. }
+            )
+        {
+            self.note_move(&value);
+            self.flow().moved(value.span.start());
+        }
         // `let mut it = v.iter_mut();`: each `it.next()` lends the next
         // element of `v`.
         match self.pending_iter_mut.take() {
