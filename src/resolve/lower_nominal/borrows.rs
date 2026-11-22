@@ -2192,8 +2192,9 @@ impl Parser<'_> {
         lvalue: &Lvalue,
         replacement: &ParsedExpr,
         start: ValueStart,
-        compound: bool,
+        assignment: record::Assignment,
     ) {
+        let compound = assignment != record::Assignment::Plain;
         let holds = self.may_hold_borrow(&replacement.ty);
         // A local that holds borrows given a whole new value (`r = &w`,
         // `view = View { value: &b }`) holds only the new value's.
@@ -2220,7 +2221,7 @@ impl Parser<'_> {
             return;
         }
         let whole = assignee::assignment_span(target, replacement);
-        self.flow().assigned(target.start(), whole, compound);
+        self.flow().assigned(target.start(), whole, assignment);
         // `pair.right = &b`: the local takes the borrows besides its own.
         let origins = self
             .flow()

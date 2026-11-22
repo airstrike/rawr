@@ -1086,6 +1086,7 @@ impl<'a> Parser<'a> {
         let block = block?;
         // The block's value is its tail's, with the borrows it holds.
         self.flow().same_origins(block.syntax, block.value.span);
+        self.note_fn_branches(block.syntax, &[(block.value.span, &block.value.ty)]);
         if matches!(self.inference.resolve(&block.value.ty), Ty::FnItem { .. }) {
             self.closure_blocks
                 .insert(block.syntax, block.value.prelude.clone());

@@ -291,7 +291,13 @@ impl<'a> Parser<'a> {
             if let Token::Identifier(trait_name) | Token::Reserved(trait_name) = self.peek()
                 && matches!(trait_name.as_str(), "Fn" | "FnMut" | "FnOnce")
             {
-                self.next();
+                let borrow = if trait_name.as_str() == "Fn" {
+                    call::Borrow::Shared
+                } else {
+                    call::Borrow::Mutable
+                };
+                let (_, at) = self.next();
+                self.written_fn_traits.insert(at, borrow);
                 return self.parse_local_fn_type(false);
             }
             // `dyn std::error::Error`: traits are crate-wide by name, as in

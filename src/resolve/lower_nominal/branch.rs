@@ -616,6 +616,11 @@ impl<'a> Parser<'a> {
             .collect();
         self.flow()
             .either(span(match_span.start(), end), &arm_spans);
+        let valued = arms
+            .iter()
+            .map(|(_, _, action, _)| (action.value.span, &action.value.ty))
+            .collect::<Vec<_>>();
+        self.note_fn_branches(span(match_span.start(), end), &valued);
         if !wildcard {
             let witnesses = self.coverage_witnesses(&coverage_types, &coverage_rows, true);
             let mut sealed = Vec::new();
@@ -1156,6 +1161,11 @@ impl<'a> Parser<'a> {
             .collect();
         self.flow()
             .either(span(match_span.start(), end), &arm_spans);
+        let valued = arms
+            .iter()
+            .map(|(_, _, action)| (action.value.span, &action.value.ty))
+            .collect::<Vec<_>>();
+        self.note_fn_branches(span(match_span.start(), end), &valued);
         if !exhaustive {
             // rustc's witnesses: the ranges no arm covers, the `bool` no arm
             // names, `&_` for a `&str`, or `_` (a float's, or an integer's
@@ -1526,6 +1536,11 @@ impl<'a> Parser<'a> {
             .collect();
         self.flow()
             .either(span(match_span.start(), end), &arm_spans);
+        let valued = arms
+            .iter()
+            .map(|(_, _, action)| (action.value.span, &action.value.ty))
+            .collect::<Vec<_>>();
+        self.note_fn_branches(span(match_span.start(), end), &valued);
         // A `#[non_exhaustive]` crate enum has values outside its crate's
         // variants, which only an arm matching anything covers.
         let sealed = matches!(
@@ -1991,6 +2006,13 @@ impl<'a> Parser<'a> {
                 (alternative.value.span, alternative_end),
             ],
         );
+        self.note_fn_branches(
+            span,
+            &[
+                (consequent.value.span, &consequent.value.ty),
+                (alternative.value.span, &alternative.value.ty),
+            ],
+        );
         let (hit, value) = (self.temporary("hit"), self.temporary("chain"));
         let mut source =
             origin::Fragment::plain(format!("{{\nlet {hit} = false;\nlet {value} = ();\n"));
@@ -2161,6 +2183,13 @@ impl<'a> Parser<'a> {
             &[
                 (consequent.value.span, consequent_end),
                 (alternative.value.span, alternative_end),
+            ],
+        );
+        self.note_fn_branches(
+            span,
+            &[
+                (consequent.value.span, &consequent.value.ty),
+                (alternative.value.span, &alternative.value.ty),
             ],
         );
         if let Some((subject, arm, binds)) = pattern {
@@ -2464,13 +2493,17 @@ impl<'a> Parser<'a> {
         let value_start = self.flow().value_start();
         let mut replacement = self.parse_expr()?;
         let compound = compound_operator(&assignment).is_some();
+        let kind = match compound_operator(&assignment) {
+            Some(_) => self.compound_kind(&value.ty, &replacement.ty),
+            None => record::Assignment::Plain,
+        };
         self.assigned_place(
             value.span,
             &value.ty,
             &lvalue,
             &replacement,
             value_start,
-            compound,
+            kind,
         );
         self.effect(value.span.start());
         let mut opened = None;

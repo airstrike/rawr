@@ -427,13 +427,17 @@ impl<'a> Parser<'a> {
             let place = value.ty.clone();
             self.parse_expr_expecting(Some(&place))?
         };
+        let kind = match compound_operator(&assignment) {
+            Some(_) => self.compound_kind(&value.ty, &replacement.ty),
+            None => record::Assignment::Plain,
+        };
         self.assigned_place(
             value.span,
             &value.ty,
             &lvalue,
             &replacement,
             value_start,
-            compound,
+            kind,
         );
         self.effect(value.span.start());
         let mut opened = None;

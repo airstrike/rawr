@@ -1169,7 +1169,15 @@ impl<'a> Parser<'a> {
         if let (Some(rhs), Some(parameter)) = (rhs, definition.parameters().first()) {
             let expected = instantiate(&Ty::from_resolved(&parameter.ty), &substitution);
             self.coerce_expr(&expected, rhs)?;
+            // The impl takes the right operand by value: the call moves it.
+            self.move_local(rhs)?;
             arguments.push(rhs.rendered_source());
+        }
+        // So it does the left operand, but for `+=`, whose place the impl
+        // changes through `&mut self`.
+        let mut lhs = lhs.clone();
+        if !symbol.ends_with('=') {
+            self.move_local(&mut lhs)?;
         }
         // The operator takes its own copy of the left operand, as a move or
         // copy does; `+=` gives back the changed copy.
@@ -1179,12 +1187,6 @@ impl<'a> Parser<'a> {
         source.push_text(format!(";\n{receiver}.{}(", method_name(&definition)));
         source.push(origin::Fragment::join(arguments, ", "));
         let ty = if symbol.ends_with('=') {
-            // `a += b` through a crate's `AddAssign` borrows `a` before `b`
-            // is made, which these facts do not record yet.
-            self.flow().unmodeled(
-                "a compound assignment through a crate's operator impl",
-                expression,
-            );
             source.push_text(format!(");\n{receiver}\n}})"));
             lhs_ty
         } else {

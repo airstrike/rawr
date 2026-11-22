@@ -10453,3 +10453,148 @@ main();
         );
     }
 }
+
+#[test]
+fn a_compound_assignment_through_an_operator_impl_borrows_its_place_mut() {
+    // `v += x` through `AddAssign` is `AddAssign::add_assign(&mut v, x)`:
+    // a two-phase `&mut` borrow of `v`, reserved before `x` is made and
+    // activated after it, and the call moves `x`, as `a + b` moves both
+    // operands (#130).
+    let output = printed(
+        r#"
+use std::ops::{Add, AddAssign};
+#[derive(Debug, Clone, Copy)]
+struct V(i32);
+impl AddAssign for V { fn add_assign(&mut self, o: V) { self.0 += o.0; } }
+impl AddAssign<i32> for V { fn add_assign(&mut self, o: i32) { self.0 += o; } }
+impl Add for V { type Output = V; fn add(self, o: V) -> V { V(self.0 + o.0) } }
+fn main() {
+    let mut v = V(1);
+    v += v;
+    v += V(v.0);
+    v += v.0;
+    let w = v + v;
+    let mut vs = vec![V(1)];
+    vs[0] += 2;
+    let r = &mut v;
+    *r += 3;
+    println!("{:?} {:?} {:?}", v, w, vs);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "V(11) V(16) [V(3)]\n");
+    let shared = refused(
+        r#"
+use std::ops::AddAssign;
+#[derive(Debug, Clone, Copy)]
+struct V(i32);
+impl AddAssign for V { fn add_assign(&mut self, o: V) { self.0 += o.0; } }
+fn main() { let mut v = V(1); let r = &v; v += V(2); println!("{:?}", r); }
+main();
+"#,
+    );
+    assert!(
+        shared.contains(
+            "error[E0502]: cannot borrow `v` as mutable because it is also borrowed as \
+             immutable\n --> <script>:6:43"
+        ),
+        "{shared}"
+    );
+    let moved = refused(
+        r#"
+use std::ops::AddAssign;
+#[derive(Debug)]
+struct V(i32);
+impl AddAssign for V { fn add_assign(&mut self, o: V) { self.0 += o.0; } }
+fn main() { let mut v = V(1); v += v; println!("{:?}", v); }
+main();
+"#,
+    );
+    assert!(
+        moved.contains(
+            "error[E0505]: cannot move out of `v` because it is borrowed\n --> <script>:6:36"
+        ),
+        "{moved}"
+    );
+    let operand = refused(
+        r#"
+use std::ops::AddAssign;
+#[derive(Debug)]
+struct V(i32);
+impl AddAssign for V { fn add_assign(&mut self, o: V) { self.0 += o.0; } }
+fn main() { let mut w = V(1); let v = V(2); w += v; println!("{:?} {:?}", w, v); }
+main();
+"#,
+    );
+    assert!(
+        operand.contains("error[E0382]: borrow of moved value: `v`\n --> <script>:6:78"),
+        "{operand}"
+    );
+}
+
+#[test]
+fn a_function_value_from_a_method_a_field_or_a_branch_is_called_as_its_type_says() {
+    // A local set from a method's `impl Fn`, a field's `fn`, or an `if` or
+    // `match` of `impl Fn` values is called through a shared borrow, as
+    // `Fn::call` borrows it; a `Box<dyn FnMut>` through a `&mut` one, as
+    // `FnMut::call_mut` does (#188).
+    let output = printed(
+        r#"
+struct M;
+impl M { fn adder(&self) -> impl Fn(i32) -> i32 { |x| x + 3 } }
+struct H { f: fn(i32) -> i32 }
+fn one(x: i32) -> i32 { x + 1 }
+fn make() -> impl Fn(i32) -> i32 { |x| x * 10 }
+fn main() {
+    let m = M;
+    let mut g = m.adder();
+    let r = &g;
+    println!("{} {}", g(1), r(2));
+    let h = H { f: one };
+    let mut f = h.f;
+    let r = &f;
+    println!("{} {}", f(1), r(2));
+    let k = 2;
+    let mut b = if k > 1 { make() } else { make() };
+    let r = &b;
+    println!("{} {}", b(1), r(2));
+    let mut a = match k { 1 => make(), _ => make() };
+    let r = &a;
+    println!("{} {}", a(3), r(4));
+    let mut c = 0;
+    let mut counter: Box<dyn FnMut() -> i32> = Box::new(move || { c += 1; c });
+    println!("{} {}", counter(), counter());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "4 5\n2 3\n10 20\n30 40\n1 2\n");
+    let written = refused(
+        r#"
+fn main() { let mut c = 0; let mut f: Box<dyn FnMut() -> i32> = Box::new(move || { c += 1; c }); let r = &f; f(); std::mem::drop(r); }
+main();
+"#,
+    );
+    assert!(
+        written.contains(
+            "error[E0502]: cannot borrow `f` as mutable because it is also borrowed as \
+             immutable\n --> <script>:2:110"
+        ),
+        "{written}"
+    );
+    let returned = refused(
+        r#"
+fn counter() -> Box<dyn FnMut() -> i32> { let mut c = 0; Box::new(move || { c += 1; c }) }
+fn main() { let mut f = counter(); let r = &f; f(); std::mem::drop(r); }
+main();
+"#,
+    );
+    assert!(
+        returned.contains(
+            "error[E0502]: cannot borrow `f` as mutable because it is also borrowed as \
+             immutable\n --> <script>:3:48"
+        ),
+        "{returned}"
+    );
+}

@@ -266,6 +266,10 @@ pub(crate) struct Body {
     /// Each `let x;` not declared `mut`, where it is declared: it is given
     /// its value once on each path from there (`assigns::check`).
     pub(crate) single_assignments: Vec<(Point, Local)>,
+    /// Where each two-phase `&mut` borrow is activated: a use of the borrow
+    /// its reservation made, not of its place, so the move check reads no
+    /// use there, as rustc's reads none of the borrowed temporary.
+    pub(crate) activations: std::collections::BTreeSet<Point>,
 }
 
 /// A value the body stores below a reference (`v.push(x)`, `*r = x`):
