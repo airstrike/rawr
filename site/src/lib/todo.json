@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors."],
+      "entries": [
+        {"text":"A `&mut` view of a collection's elements kept past its statement reaches them as rustc's does: `&mut v[a..b]`, `as_mut_slice()`, `make_contiguous()`, `split_at_mut`'s halves (side by side, from closures and scoped threads), `chunks_mut`'s chunks, `first_mut` and `last_mut` of a view, and a kept `iter_mut()` walked, zipped, reversed, enumerated, filtered, collected into a `Vec<&mut T>` or passed to a function. rustc's E0499 and E0502 hold while a view lives, and a view out of bounds panics with std's message.","issues":[800,806,805]}
+      ]
+    },
     "releases": [
       {
         "version": "0.5.16",
@@ -4550,13 +4555,13 @@
     {"issue":797,"title":"Install rawr with one command: prebuilt binaries and a self-installed toolchain","state":"closed","category":"Health","release":"0.3.116"},
     {"issue":798,"title":"Box<dyn Error> in a fn's return type is an unknown type unless the program also implements Error","state":"closed","category":"Divergences from rustc","release":"0.5.16"},
     {"issue":799,"title":"The std table's toolchain is nightly, so methods stable only there resolve where stable rustc gives E0658","state":"open","category":"Divergences from rustc"},
-    {"issue":800,"title":"A `&mut [T]` kept from `v.as_mut_slice()` or `d.make_contiguous()` can't be changed","state":"open","category":"Divergences from rustc"},
+    {"issue":800,"title":"A `&mut [T]` kept from `v.as_mut_slice()` or `d.make_contiguous()` can't be changed","state":"closed","category":"Divergences from rustc"},
     {"issue":801,"title":"`?Sized` bounds on generic parameters are refused","state":"open","category":"Divergences from rustc"},
     {"issue":802,"title":"`where Self: Sized` on a trait method is refused","state":"open","category":"Divergences from rustc"},
     {"issue":803,"title":"Closures passed to Cell, RefCell, char and number methods get no parameter types from std","state":"open","category":"Divergences from rustc"},
     {"issue":804,"title":"A closure passed to a std method doesn't take its return type from the method's Fn bound","state":"open","category":"Divergences from rustc"},
-    {"issue":805,"title":"A kept `iter_mut()` holds its Vec mutably borrowed while it lives","state":"open","category":"Divergences from rustc"},
-    {"issue":806,"title":"A kept `iter_mut()` used other than by `next()`","state":"open","category":"Divergences from rustc"},
+    {"issue":805,"title":"A kept `iter_mut()` holds its Vec mutably borrowed while it lives","state":"closed","category":"Divergences from rustc"},
+    {"issue":806,"title":"A kept `iter_mut()` used other than by `next()`","state":"closed","category":"Divergences from rustc"},
     {"issue":807,"title":"A bare `Reverse(x)` or `PhantomData` value with no `use` is refused as rustc refuses it","state":"closed","category":"Divergences from rustc","release":"0.5.16"},
     {"issue":808,"title":"A module-relative std path such as `time::Duration` needs a `use` of its module, as in rustc","state":"closed","category":"Divergences from rustc","release":"0.5.16"},
     {"issue":809,"title":"rustc's 'consider importing' help for a std name no `use` binds","state":"open","category":"Divergences from rustc"},
@@ -6312,7 +6317,12 @@
     {"issue":2560,"title":"A turbofish in a pattern path is refused","state":"open","category":"Divergences from rustc"},
     {"issue":2561,"title":"io::Write's methods on a Vec<u8> need a root-module use and an annotated Vec<u8>","state":"open","category":"Divergences from rustc"},
     {"issue":2562,"title":"PhantomData's Debug prints ()","state":"open","category":"Divergences from rustc"},
-    {"issue":2563,"title":"A type path through super:: that names nothing is E0432","state":"open","category":"Divergences from rustc"}
+    {"issue":2563,"title":"A type path through super:: that names nothing is E0432","state":"open","category":"Divergences from rustc"},
+    {"issue":2564,"title":"Each use of a kept `&mut [T]` view moves its whole range out and back","state":"open","category":"Divergences from rustc"},
+    {"issue":2565,"title":"A function returning a tuple of `&mut` (`(&'a mut [T], &'a mut [T])`) is refused by the signature check","state":"open","category":"Divergences from rustc"},
+    {"issue":2566,"title":"std's named iterator types (`std::slice::Iter<'a, T>`, `IterMut`) in a signature aren't run","state":"open","category":"Divergences from rustc"},
+    {"issue":2567,"title":"`split_first_mut`, `split_last_mut`, `chunks_exact_mut`, `rchunks_mut` and `split_mut` of a slice aren't run","state":"open","category":"Divergences from rustc"},
+    {"issue":2568,"title":"A map's `iter_mut()` or `values_mut()` kept or given to an adaptor is refused","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -8979,8 +8989,8 @@
             {"number":194,"title":"`match x { ref v => .. }` isn't lowered (\"'=>' after a match pattern\"), and on scalars it…","state":"open"},
             {"number":195,"title":"`let o = v.last_mut(); let r = o.unwrap(); *r = 9;` is refused as \"Cannot mutate immutable…","state":"closed"},
             {"number":196,"title":"Moving a member or nested field whose type has drop glue is refused as unsupported, since only…","state":"open"},
-            {"number":800,"title":"A `&mut [T]` kept from `v.as_mut_slice()` or `d.make_contiguous()` can't be changed","state":"open"},
-            {"number":806,"title":"A kept `iter_mut()` used other than by `next()`","state":"open"},
+            {"number":800,"title":"A `&mut [T]` kept from `v.as_mut_slice()` or `d.make_contiguous()` can't be changed","state":"closed"},
+            {"number":806,"title":"A kept `iter_mut()` used other than by `next()`","state":"closed"},
             {"number":870,"title":"Drop a temporary at the end of its statement","state":"closed"},
             {"number":3,"title":"A non-primitive `op=` through a guard evaluates its right side before `write()`, which rustc…","state":"open"},
             {"number":410,"title":"An out-of-range element borrow panics at first use, not at the borrow","state":"open"},
@@ -9020,7 +9030,7 @@
             {"number":192,"title":"`static` items are parsed as `const`, so moving out of a static (E0507) is left to rustc","state":"closed"},
             {"number":193,"title":"The closure kind a use requires (`Fn` or `FnMut` bounds) isn't read, so a closure that moves out…","state":"open"},
             {"number":651,"title":"rawr's checker refuses a write to a value leased to a pending future (D683.2)","state":"open"},
-            {"number":805,"title":"A kept `iter_mut()` holds its Vec mutably borrowed while it lives","state":"open"},
+            {"number":805,"title":"A kept `iter_mut()` holds its Vec mutably borrowed while it lives","state":"closed"},
             {"number":819,"title":"`into_owned()` on a `&Cow` is accepted; rustc says E0507","state":"open"},
             {"number":2097,"title":"A slice member receiver borrow ends at the call in the borrow checker","state":"open"},
             {"number":1563,"title":"A body static of a non-Sync native type is accepted; rustc says E0277","state":"open"},

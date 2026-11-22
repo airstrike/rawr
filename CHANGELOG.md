@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors.
+- A `&mut` view of a collection's elements kept past its statement reaches them as rustc's does: `&mut v[a..b]`, `as_mut_slice()`, `make_contiguous()`, `split_at_mut`'s halves (side by side, from closures and scoped threads), `chunks_mut`'s chunks, `first_mut` and `last_mut` of a view, and a kept `iter_mut()` walked, zipped, reversed, enumerated, filtered, collected into a `Vec<&mut T>` or passed to a function. rustc's E0499 and E0502 hold while a view lives, and a view out of bounds panics with std's message. (#800, #806, #805)
 
 ## 0.5.16 (2026-11-22)
 
