@@ -497,12 +497,13 @@ impl<'a> Parser<'a> {
         };
         let Some(size) = primitive_size(&ty) else {
             return Err(Error::UnsupportedNominalSyntax {
-                construct: format!(
-                    "`std::mem::{function}` of `{}`, whose layout is rustc's own; only numbers, \
-                     `bool`, `char`, `()` and arrays of them have a size in Rawr",
+                construct: crate::resolve::Unsupported::construct(format!(
+                    "`std::mem::{function}` of `{}`, whose layout is rustc's own,",
                     ty.name(&self.models)
-                )
-                .into(),
+                ))
+                .with_help(
+                    "only numbers, `bool`, `char`, `()` and arrays of them have a size in Rawr",
+                ),
                 source: call,
             });
         };

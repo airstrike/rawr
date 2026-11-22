@@ -1144,9 +1144,10 @@ impl<'a> Parser<'a> {
                 };
                 let Some(holder) = holder else {
                     return Err(Error::UnsupportedNominalSyntax {
-                        construct: "`..base` of a place other than a local, with fields whose \
-                                    type implements `Drop`: not supported in Rawr yet"
-                            .into(),
+                        construct: crate::resolve::Unsupported::said(
+                            "`..base` of a place other than a local, with fields whose \
+                                    type implements `Drop`: not supported in Rawr yet",
+                        ),
                         source: base.span,
                     });
                 };

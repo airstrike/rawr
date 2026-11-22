@@ -525,7 +525,7 @@ impl fmt::Display for ParseErrorType {
                     write!(f, "Invalid match for '{owner}': {reason}")
                 }
                 crate::resolve::Error::UnsupportedNominalSyntax { construct, .. } => {
-                    write!(f, "{}", crate::resolve::Unsupported(construct))
+                    write!(f, "{construct}")
                 }
                 crate::resolve::Error::Syntax { message, .. }
                 | crate::resolve::Error::Macro { message, .. } => f.write_str(message),

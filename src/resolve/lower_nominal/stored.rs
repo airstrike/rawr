@@ -107,7 +107,9 @@ impl Parser<'_> {
             return Ok(());
         }
         let refused = |construct: &str, at: Span| Error::UnsupportedNominalSyntax {
-            construct: format!("{construct}: not supported in Rawr yet").into(),
+            construct: crate::resolve::Unsupported::said(format!(
+                "{construct}: not supported in Rawr yet"
+            )),
             source: at,
         };
         if let Some(lvalue) = &value.lvalue
@@ -150,9 +152,10 @@ impl Parser<'_> {
     /// it from outliving the call, which then stores the copy back.
     pub(super) fn view_of(&mut self, value: &ParsedExpr) -> Result<origin::Fragment, Error> {
         let refused = || Error::UnsupportedNominalSyntax {
-            construct: "a view of the elements of this place kept past its statement: not \
-                        supported in Rawr yet"
-                .into(),
+            construct: crate::resolve::Unsupported::said(
+                "a view of the elements of this place kept past its statement: not \
+                        supported in Rawr yet",
+            ),
             source: value.span,
         };
         let Some(lvalue) = value.lvalue.as_ref() else {
@@ -198,9 +201,10 @@ impl Parser<'_> {
             return Ok(());
         }
         let refused = Error::UnsupportedNominalSyntax {
-            construct: "an `Option<&mut T>` of this place kept in a value: not supported in \
-                        Rawr yet"
-                .into(),
+            construct: crate::resolve::Unsupported::said(
+                "an `Option<&mut T>` of this place kept in a value: not supported in \
+                        Rawr yet",
+            ),
             source: value.span,
         };
         if self.in_async_body() || self.copied_parameter(lvalue.binding()) {

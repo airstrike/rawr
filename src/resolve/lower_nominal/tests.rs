@@ -921,7 +921,7 @@ fn user_cannot_spell_compiler_private_argument_temporaries() {
         ParseErrorType::Resolution(resolve::Error::UnsupportedNominalSyntax {
             construct,
             ..
-        }) if construct == "compiler-private nominal intrinsic"
+        }) if construct.message() == "compiler-private nominal intrinsic is not supported"
     ));
 }
 

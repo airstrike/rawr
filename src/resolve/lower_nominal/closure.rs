@@ -1070,11 +1070,10 @@ impl<'a> Parser<'a> {
                 && self.needs_drop(&ty, expression)?
             {
                 return Err(Error::UnsupportedNominalSyntax {
-                    construct: format!(
+                    construct: crate::resolve::Unsupported::said(format!(
                         "a closure or async block that takes `{name}`, whose type implements \
                          `Drop`, by move: dropping it with the closure is not supported in Rawr yet"
-                    )
-                    .into(),
+                    )),
                     source: expression,
                 });
             }
@@ -1302,9 +1301,11 @@ impl<'a> Parser<'a> {
         const MOST: usize = 5;
         let at = start.start();
         let ident = |text: &str| (Token::Identifier(Box::new(text.into())), at);
-        let unsupported = |construct: String, end: Position| Error::UnsupportedNominalSyntax {
-            construct: construct.into(),
-            source: span(at, end),
+        let unsupported = |construct: crate::resolve::Unsupported, end: Position| {
+            Error::UnsupportedNominalSyntax {
+                construct,
+                source: span(at, end),
+            }
         };
         self.next();
         let mut futures = Vec::<Vec<(Token, Position)>>::new();
@@ -1333,14 +1334,20 @@ impl<'a> Parser<'a> {
         let count = futures.len();
         if !(2..=MOST).contains(&count) {
             return Err(unsupported(
-                format!("`{name}!` of {count} futures is not supported yet; it takes 2 to {MOST}"),
+                crate::resolve::Unsupported::said(format!(
+                    "`{name}!` of {count} futures is not supported yet"
+                ))
+                .with_help(format!("it takes 2 to {MOST}")),
                 end,
             ));
         }
         // The core has `join!` (D513.7).
         if name != "join" {
             return Err(unsupported(
-                format!("`{name}!` of more than one future is not supported yet; `join!` is"),
+                crate::resolve::Unsupported::said(format!(
+                    "`{name}!` of more than one future is not supported yet"
+                ))
+                .with_help("`join!` is"),
                 end,
             ));
         }

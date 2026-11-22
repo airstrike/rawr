@@ -22,8 +22,11 @@ impl<'a> Parser<'a> {
         if inline {
             if frames.iter().any(|frame| !frame.after.is_empty()) {
                 return Err(self.unsupported(
-                    "a `let` that binds a value borrowing a `&mut` buffer its call fills is \
-                     not supported in Rawr yet; match on the call in a statement of its own",
+                    crate::resolve::Unsupported::said(
+                        "a `let` that binds a value borrowing a `&mut` buffer its call fills is \
+                         not supported in Rawr yet",
+                    )
+                    .with_help("match on the call in a statement of its own"),
                 ));
             }
             for frame in frames {

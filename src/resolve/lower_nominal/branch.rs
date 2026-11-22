@@ -711,9 +711,10 @@ impl<'a> Parser<'a> {
                 // A binding of `Some(&mut place)` itself would be a copy.
                 if place.optional() && arms.iter().any(|(.., bound)| bound.is_some()) {
                     return Err(Error::UnsupportedNominalSyntax {
-                        construct: "a binding of a whole `Option<&mut T>` beside `&mut` \
-                                    bindings of its value: not supported in Rawr yet"
-                            .into(),
+                        construct: crate::resolve::Unsupported::said(
+                            "a binding of a whole `Option<&mut T>` beside `&mut` \
+                                    bindings of its value: not supported in Rawr yet",
+                        ),
                         source: span(match_span.start(), end),
                     });
                 }
@@ -1900,9 +1901,10 @@ impl<'a> Parser<'a> {
                     || binds.as_str().contains(crate::engine::KEYWORD_CLEAR)
                 {
                     return Err(Error::UnsupportedNominalSyntax {
-                        construct: "a let chain over a value whose type implements `Drop`: \
-                                    not supported in Rawr yet"
-                            .into(),
+                        construct: crate::resolve::Unsupported::said(
+                            "a let chain over a value whose type implements `Drop`: \
+                                    not supported in Rawr yet",
+                        ),
                         source: point_span(self.position()),
                     });
                 }

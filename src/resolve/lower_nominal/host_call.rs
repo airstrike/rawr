@@ -2588,12 +2588,11 @@ impl<'a> Parser<'a> {
             if let Some(&(earlier, _)) = effects.first() {
                 let line = statement.line().unwrap_or_default();
                 return Err(Error::UnsupportedNominalSyntax {
-                    construct: format!(
+                    construct: crate::resolve::Unsupported::said(format!(
                         "a call or assignment run before a call whose value borrows a local \
                          it takes, in the statement at line {line}, is not supported in Rawr \
                          yet"
-                    )
-                    .into(),
+                    )),
                     source: point_span(earlier),
                 });
             }

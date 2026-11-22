@@ -1941,13 +1941,12 @@ impl<'a> Parser<'a> {
                 };
                 let Some(item) = item else {
                     return Err(Error::UnsupportedNominalSyntax {
-                        construct: format!(
+                        construct: crate::resolve::Unsupported::said(format!(
                             "`{}` as an associated type bounded by `{bound}<Item = ..>` is not \
-                             supported in Rawr yet; only Rust's own iterators (a `Range`, an \
+                             supported in Rawr yet: only Rust's own iterators (a `Range`, an \
                              iterator chain) are",
                             ty.name(&self.models)
-                        )
-                        .into(),
+                        )),
                         source: name.span,
                     });
                 };

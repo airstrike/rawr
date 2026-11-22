@@ -1521,11 +1521,10 @@ impl Parser<'_> {
             && self.needs_drop(&item, member_span)?
         {
             return Err(Error::UnsupportedNominalSyntax {
-                construct: format!(
+                construct: crate::resolve::Unsupported::said(format!(
                     "`{member}` on an iterator of values whose type implements `Drop`: dropping \
                      them where Rust does is not supported in Rawr yet"
-                )
-                .into(),
+                )),
                 source: member_span,
             });
         }

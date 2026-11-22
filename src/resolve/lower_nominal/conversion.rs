@@ -747,13 +747,14 @@ impl<'a> Parser<'a> {
         } else if item.opens() && source.is_text() {
             let target = target.name(&self.models);
             return Err(Error::UnsupportedNominalSyntax {
-                construct: format!(
+                construct: crate::resolve::Unsupported::said(format!(
                     "a `{target}` that borrows the text it converts, where only a later use \
-                     gives the type, is not supported in Rawr yet; name the type where the \
-                     conversion is written, by `T::from(..)`, `Into::<T>::into(..)` or a `let` \
-                     annotation"
-                )
-                .into(),
+                     gives the type, is not supported in Rawr yet"
+                ))
+                .with_help(
+                    "name the type where the conversion is written, by `T::from(..)`, \
+                     `Into::<T>::into(..)` or a `let` annotation",
+                ),
                 source: call,
             });
         }

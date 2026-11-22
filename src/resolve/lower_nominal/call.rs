@@ -20,7 +20,7 @@ impl<'a> Parser<'a> {
         }
         if open != Token::LeftParen {
             return Err(Error::UnsupportedNominalSyntax {
-                construct: format!("'(' to start call arguments; found `{open}`").into(),
+                construct: crate::resolve::Unsupported::token("'(' to start call arguments", open),
                 source: point_span(position),
             });
         }
@@ -1051,7 +1051,11 @@ impl<'a> Parser<'a> {
                 && closure.span.end() <= value.span.end())
         {
             return Err(Error::UnsupportedNominalSyntax {
-                construct: "a capturing closure passed to native code from a variable is not supported in Rawr yet; write it where the call takes it".into(),
+                construct: crate::resolve::Unsupported::said(
+                    "a capturing closure passed to native code from a variable is not supported \
+                     in Rawr yet",
+                )
+                .with_help("write it where the call takes it"),
                 source: value.span,
             });
         }

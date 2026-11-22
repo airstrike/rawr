@@ -898,12 +898,11 @@ impl<'a> Parser<'a> {
             };
             if source.len() > placeholder.len() {
                 return Err(Error::UnsupportedNominalSyntax {
-                    construct: format!(
-                        "`Default::default()` for `{}` is not supported in Rawr yet; write \
-                         `<{0}>::default()`",
+                    construct: crate::resolve::Unsupported::said(format!(
+                        "`Default::default()` for `{}` is not supported in Rawr yet",
                         ty.name(&self.models)
-                    )
-                    .into(),
+                    ))
+                    .with_help(format!("write `<{}>::default()`", ty.name(&self.models))),
                     source: span,
                 });
             }

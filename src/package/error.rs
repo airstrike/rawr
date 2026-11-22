@@ -482,12 +482,12 @@ impl Error {
             Kind::Module {
                 message, primary, ..
             } => ParseError::from(crate::resolve::Error::UnsupportedNominalSyntax {
-                construct: message,
+                construct: crate::resolve::Unsupported::said(message),
                 source: primary.span,
             }),
             Kind::Manifest { message, span, .. } => {
                 ParseError::from(crate::resolve::Error::UnsupportedNominalSyntax {
-                    construct: message,
+                    construct: crate::resolve::Unsupported::said(message),
                     source: span,
                 })
             }
@@ -594,7 +594,7 @@ impl Error {
 /// reports it.
 fn refused_message(message: String) -> ParseError {
     ParseError::from(crate::resolve::Error::UnsupportedNominalSyntax {
-        construct: message.into(),
+        construct: crate::resolve::Unsupported::said(message),
         source: Span::NONE,
     })
 }

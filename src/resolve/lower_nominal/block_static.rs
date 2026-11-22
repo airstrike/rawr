@@ -114,7 +114,8 @@ impl Parser<'_> {
             let (_, keyword) = self.next();
             if matches!(self.peek(), Token::Mut) {
                 return Err(Error::UnsupportedNominalSyntax {
-                    construct: "a `static mut`; keep the value in your state".into(),
+                    construct: crate::resolve::Unsupported::construct("a `static mut`")
+                        .with_help("keep the value in your state"),
                     source: point_span(self.position()),
                 });
             }

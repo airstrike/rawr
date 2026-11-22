@@ -241,9 +241,10 @@ impl<'a> Parser<'a> {
             // (`move_field`).
             let Some(slots) = self.cleared_slots(value, &root) else {
                 return Err(Error::UnsupportedNominalSyntax {
-                    construct: "a move out of a member or of a field below a field, whose type \
-                                has drop glue: not supported in Rawr yet"
-                        .into(),
+                    construct: crate::resolve::Unsupported::said(
+                        "a move out of a member or of a field below a field, whose type \
+                                has drop glue: not supported in Rawr yet",
+                    ),
                     source: value.span,
                 });
             };
@@ -477,9 +478,10 @@ impl<'a> Parser<'a> {
             }
             if self.needs_drop(&value.ty, value.span)? {
                 return Err(Error::UnsupportedNominalSyntax {
-                    construct: "a move out of a field below a field of `self`, whose type has \
-                                drop glue: not supported in Rawr yet"
-                        .into(),
+                    construct: crate::resolve::Unsupported::said(
+                        "a move out of a field below a field of `self`, whose type has \
+                                drop glue: not supported in Rawr yet",
+                    ),
                     source: value.span,
                 });
             }
@@ -589,9 +591,10 @@ impl<'a> Parser<'a> {
             .is_some_and(|scope| scope.outer.get(field.binding.as_str()) == Some(&declaration));
         if captured && self.needs_drop(&value.ty, value.span)? {
             return Err(Error::UnsupportedNominalSyntax {
-                construct: "a closure that moves a field whose type implements `Drop` out of a \
-                            captured local: not supported in Rawr yet"
-                    .into(),
+                construct: crate::resolve::Unsupported::said(
+                    "a closure that moves a field whose type implements `Drop` out of a \
+                            captured local: not supported in Rawr yet",
+                ),
                 source: value.span,
             });
         }
@@ -709,11 +712,10 @@ impl<'a> Parser<'a> {
                     })
                     .collect::<String>();
                 return Err(Error::UnsupportedNominalSyntax {
-                    construct: format!(
+                    construct: crate::resolve::Unsupported::said(format!(
                         "a closure that takes `{name}{path}`, whose type implements `Drop`, by \
                          move: dropping it with the closure is not supported in Rawr yet"
-                    )
-                    .into(),
+                    )),
                     source: at,
                 });
             }

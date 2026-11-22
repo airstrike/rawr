@@ -985,11 +985,10 @@ impl<'a> Parser<'a> {
                 // doesn't call through a trait object yet.
                 if type_ref::is_native_trait(trait_name) {
                     return Err(Error::UnsupportedNominalSyntax {
-                        construct: format!(
+                        construct: crate::resolve::Unsupported::said(format!(
                             "calling `{member}` of the native trait object `{}` is not supported yet",
                             object.name(&self.models)
-                        )
-                        .into(),
+                        )),
                         source: member_span,
                     });
                 }
@@ -2265,9 +2264,10 @@ impl<'a> Parser<'a> {
                 {
                     if inline.is_some() {
                         return Err(Error::UnsupportedNominalSyntax {
-                            construct: "a `&mut` borrow of this place, held by an async \
-                                        method's future: not supported in Rawr yet"
-                                .into(),
+                            construct: crate::resolve::Unsupported::said(
+                                "a `&mut` borrow of this place, held by an async \
+                                        method's future: not supported in Rawr yet",
+                            ),
                             source: value.span,
                         });
                     }
@@ -2993,11 +2993,10 @@ impl<'a> Parser<'a> {
         ) && self.needs_drop(&element, member_span)?
         {
             return Err(Error::UnsupportedNominalSyntax {
-                construct: format!(
+                construct: crate::resolve::Unsupported::said(format!(
                     "`{member}` on a `Vec` or array of values whose type implements `Drop`: \
                      dropping them where Rust does is not supported in Rawr yet"
-                )
-                .into(),
+                )),
                 source: member_span,
             });
         }

@@ -176,7 +176,7 @@ impl<'a> Parser<'a> {
                 Ok(((*name).into(), point_span(position)))
             }
             token => Err(Error::UnsupportedNominalSyntax {
-                construct: format!("{construct}; found `{token}`").into(),
+                construct: crate::resolve::Unsupported::token(construct, token),
                 source: point_span(position),
             }),
         }
@@ -197,7 +197,7 @@ impl<'a> Parser<'a> {
                 reference: Span::new(position, text_end(position, "self")),
             }),
             token => Err(Error::UnsupportedNominalSyntax {
-                construct: format!("qualified nominal member; found `{token}`").into(),
+                construct: crate::resolve::Unsupported::token("a qualified member", token),
                 source: point_span(position),
             }),
         }
@@ -228,7 +228,7 @@ impl<'a> Parser<'a> {
                 Ok((first.into(), point_span(position)))
             }
             token => Err(Error::UnsupportedNominalSyntax {
-                construct: format!("field or capability method; found `{token}`").into(),
+                construct: crate::resolve::Unsupported::token("a field or a method", token),
                 source: point_span(position),
             }),
         }
@@ -240,13 +240,16 @@ impl<'a> Parser<'a> {
             Ok(position)
         } else {
             Err(Error::UnsupportedNominalSyntax {
-                construct: format!("{construct}; found `{token}`").into(),
+                construct: crate::resolve::Unsupported::token(construct, token),
                 source: point_span(position),
             })
         }
     }
 
-    pub(super) fn unsupported(&mut self, construct: &str) -> Error {
+    pub(super) fn unsupported(
+        &mut self,
+        construct: impl Into<crate::resolve::Unsupported>,
+    ) -> Error {
         Error::UnsupportedNominalSyntax {
             construct: construct.into(),
             source: point_span(self.position()),
