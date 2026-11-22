@@ -9259,6 +9259,14 @@ main();
         "[7, 7, 7] [1, 2] [2, 4, 8, 16] [1, 3, 9, 27, 81, 243] 0\nSome(1) [2, 3]\n\
          [1, 2] 2 12 [\"w\"] 1\n"
     );
+    // `repeat` clones its value, which must be `Clone`.
+    let report = refused(
+        "struct S;\nfn main() {\n    let n = std::iter::repeat(S).take(2).count();\n}\nmain();\n",
+    );
+    assert!(
+        report.starts_with("error[E0277]: the trait bound `S: Clone` is not satisfied"),
+        "{report}"
+    );
 }
 
 #[test]

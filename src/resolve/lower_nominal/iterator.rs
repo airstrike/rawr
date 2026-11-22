@@ -927,6 +927,13 @@ impl Parser<'_> {
             self.coerce_expr(ty, argument)?;
             self.move_local(argument)?;
         }
+        // `repeat<T: Clone>` and `repeat_n<T: Clone>` clone their value.
+        if let (Constructor::Repeat | Constructor::RepeatN, Some(value)) =
+            (constructor, arguments.first())
+        {
+            self.pending_bounds
+                .push((item.clone(), capability::Kind::Clone, value.span, None));
+        }
         let values = arguments
             .iter()
             .map(ParsedExpr::rendered_source)

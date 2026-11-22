@@ -102,9 +102,34 @@ impl std::fmt::Debug for Inner {
     }
 }
 
+impl Inner {
+    /// The reader in `value`, taken: a `File`, `Stdin` or `Cursor`.
+    fn reader(value: &mut Dynamic) -> Result<Self, Box<EvalAltResult>> {
+        if value.is::<super::file::File>()
+            || value.is::<super::io::Stdin>()
+            || value.is::<Cursor<Dynamic>>()
+        {
+            return Ok(Self(value.take()));
+        }
+        Err(error(unheld(value).to_string()))
+    }
+
+    /// The writer in `value`, taken: a `File`. Any other writer, as
+    /// `Stdout`, which writes where the program's `print!` does, rawr
+    /// buffers none of yet, so its output is never lost in a buffer.
+    fn writer(value: &mut Dynamic) -> Result<Self, Box<EvalAltResult>> {
+        if value.is::<super::file::File>() {
+            return Ok(Self(value.take()));
+        }
+        Err(error(unheld(value).to_string()))
+    }
+}
+
 /// The failure of a read or write of a value rawr buffers none of.
 fn unheld(value: &Dynamic) -> std::io::Error {
-    std::io::Error::other(format!("rawr doesn't buffer `{}` yet", value.type_name()))
+    // The facade's own types by the path std writes: `std::io::Stdout`.
+    let name = value.type_name().replace("rawr::std_facade::", "std::");
+    std::io::Error::other(format!("rawr doesn't buffer `{name}` yet"))
 }
 
 /// std's `BufReader`, which `into_inner` takes its reader back out of.
@@ -225,13 +250,15 @@ fn bind_reader(binds: &mut impl super::Bind) {
     type Callback = fn(&mut [&mut Dynamic]) -> Result<Dynamic, Box<EvalAltResult>>;
     let mut bind = |path: &str, callback: Callback| binds.plain(path, callback);
     bind("io::BufReader::new", |args| {
-        Ok(made_reader(std::io::BufReader::new(Inner(args[0].take()))))
+        Ok(made_reader(std::io::BufReader::new(Inner::reader(
+            args[0],
+        )?)))
     });
     bind("io::BufReader::with_capacity", |args| {
         let capacity = capacity(args[0])?;
         Ok(made_reader(std::io::BufReader::with_capacity(
             capacity,
-            Inner(args[1].take()),
+            Inner::reader(args[1])?,
         )))
     });
     bind("io::BufReader::capacity", |args| {
@@ -298,13 +325,15 @@ fn bind_writer(binds: &mut impl super::Bind) {
     type Callback = fn(&mut [&mut Dynamic]) -> Result<Dynamic, Box<EvalAltResult>>;
     let mut bind = |path: &str, callback: Callback| binds.plain(path, callback);
     bind("io::BufWriter::new", |args| {
-        Ok(made_writer(std::io::BufWriter::new(Inner(args[0].take()))))
+        Ok(made_writer(std::io::BufWriter::new(Inner::writer(
+            args[0],
+        )?)))
     });
     bind("io::BufWriter::with_capacity", |args| {
         let capacity = capacity(args[0])?;
         Ok(made_writer(std::io::BufWriter::with_capacity(
             capacity,
-            Inner(args[1].take()),
+            Inner::writer(args[1])?,
         )))
     });
     bind("io::BufWriter::capacity", |args| {
