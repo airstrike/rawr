@@ -476,17 +476,9 @@ impl Parser<'_> {
             });
         }
         // `F: Send` and `T: Send`, std's bounds.
-        if let Some(unsent) = self.unsent_captures.get(&closure.span).cloned() {
-            return Err(Error::MissingCapability {
-                owner: unsent.ty.name(&self.models),
-                capability: if unsent.borrowed { "Sync" } else { "Send" }.into(),
-                operation: closure.span,
-                derive: false,
-                declared: None,
-                required_by: Some(crate::resolve::Required::by(spawner.path())),
-                formatted: None,
-                chain: crate::resolve::Chain::default(),
-            });
+        if let Some(unsendable) = self.unsent_captures.get(&closure.span).cloned() {
+            let required_by = crate::resolve::Required::by(spawner.path());
+            return Err(unsendable.error(&self.models, closure.span, Some(required_by)));
         }
         // A captured opaque output is `Send` as its hidden type is (D1109).
         for unsent in self
@@ -497,13 +489,14 @@ impl Parser<'_> {
         {
             self.opaque_sends.push(super::entry::HiddenSend {
                 ty: unsent.ty,
-                borrowed: unsent.borrowed,
-                closure: closure.span,
-                item: spawner.path().into(),
+                at: closure.span,
+                closure: Some(unsent.head),
+                item: Some(spawner.path().into()),
             });
         }
+        let required_by = Some(crate::resolve::Required::by(spawner.path()));
         self.pending_bounds
-            .push((output.clone(), capability::Kind::Send, call, None));
+            .push((output.clone(), capability::Kind::Send, call, required_by));
         Ok(output)
     }
 

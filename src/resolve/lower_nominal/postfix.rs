@@ -951,7 +951,7 @@ impl<'a> Parser<'a> {
                 _ => None,
             };
             if let Some(object) = object {
-                let Ty::Dyn(trait_name, _) = &object else {
+                let Ty::Dyn(trait_name, ..) = &object else {
                     unreachable!("matched a trait object");
                 };
                 // A native trait's method on its object is the crate's

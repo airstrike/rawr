@@ -2805,10 +2805,10 @@ main();
         )
     };
     assert_eq!(printed(&program("f64", "2.0")), "2\n");
-    // rawr names the hidden type, as it names a captured `Sq` itself.
+    // rustc names the type in the hidden type that isn't `Send`.
     let report = refused(&program("Rc<f64>", "Rc::new(2.0)"));
     assert!(
-        report.starts_with("error[E0277]: `Sq` cannot be sent between threads safely"),
+        report.starts_with("error[E0277]: `Rc<f64>` cannot be sent between threads safely"),
         "{report}"
     );
     assert!(
@@ -3054,7 +3054,7 @@ main();
 "#,
     );
     assert!(
-        report.starts_with("error[E0277]: `Sq` cannot be sent between threads safely"),
+        report.starts_with("error[E0277]: `Rc<f64>` cannot be sent between threads safely"),
         "{report}"
     );
 }
@@ -10477,4 +10477,214 @@ main();
 "#,
     );
     assert_eq!(output, "3 2 3\n3\n");
+}
+
+#[test]
+fn a_trait_object_is_send_only_as_its_type_writes_it() {
+    // `dyn Shape` is `Send` only with `+ Send` or a `Send` supertrait, and
+    // only what is `Send` becomes `dyn Shape + Send` (#2485).
+    let output = printed(
+        r#"
+use std::rc::Rc;
+trait Shape { fn area(&self) -> f64; }
+trait Named: Send { fn name(&self) -> String; }
+struct Sq(f64);
+impl Shape for Sq { fn area(&self) -> f64 { self.0 * self.0 } }
+impl Named for Sq { fn name(&self) -> String { "sq".into() } }
+struct Shared(Rc<f64>);
+impl Shape for Shared { fn area(&self) -> f64 { *self.0 } }
+fn main() {
+    let b: Box<dyn Shape + Send> = Box::new(Sq(2.0));
+    let n: Box<dyn Named> = Box::new(Sq(1.0));
+    let h = std::thread::spawn(move || (b.area(), n.name()));
+    println!("{:?}", h.join().unwrap());
+    let local: Box<dyn Shape> = Box::new(Shared(Rc::new(3.0)));
+    println!("{}", local.area());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "(4.0, \"sq\")\n3\n");
+    let output = printed(
+        r#"
+use std::error::Error;
+fn parse(text: &str) -> Result<i32, Box<dyn Error + Send + Sync>> {
+    if text.is_empty() {
+        return Err("empty".into());
+    }
+    Ok(text.parse::<i32>()?)
+}
+fn main() {
+    let h = std::thread::spawn(|| (parse("4"), parse("")));
+    let (a, b) = h.join().unwrap();
+    let local: Result<i32, Box<dyn Error + Send + Sync>> = Err("local".into());
+    let moved = std::thread::spawn(move || local.unwrap_err().to_string());
+    println!("{:?} {} {}", a.ok(), b.unwrap_err(), moved.join().unwrap());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "Some(4) empty local\n");
+    let report = refused(
+        r#"
+use std::rc::Rc;
+trait Shape { fn area(&self) -> f64; }
+struct Sq(Rc<f64>);
+impl Shape for Sq { fn area(&self) -> f64 { *self.0 * *self.0 } }
+fn main() {
+    let b: Box<dyn Shape> = Box::new(Sq(Rc::new(2.0)));
+    let h = std::thread::spawn(move || b.area());
+    println!("{}", h.join().unwrap());
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0277]: `dyn Shape` cannot be sent between threads safely"),
+        "{report}"
+    );
+    assert!(
+        report.contains("note: required because it's used within this closure"),
+        "{report}"
+    );
+    let report = refused(
+        r#"
+use std::rc::Rc;
+trait Shape { fn area(&self) -> f64; }
+struct Shared(Rc<f64>);
+impl Shape for Shared { fn area(&self) -> f64 { *self.0 } }
+fn main() {
+    let b: Box<dyn Shape + Send> = Box::new(Shared(Rc::new(3.0)));
+    println!("{}", b.area());
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0277]: `Rc<f64>` cannot be sent between threads safely"),
+        "{report}"
+    );
+    assert!(
+        report.contains("help: within `Shared`, the trait `Send` is not implemented for `Rc<f64>`"),
+        "{report}"
+    );
+    assert!(
+        report.contains("note: required because it appears within the type `Shared`"),
+        "{report}"
+    );
+}
+
+#[test]
+fn e0277_for_a_value_that_isn_t_send_names_the_type_that_isn_t() {
+    // rustc names the innermost type that isn't `Send`, with a note at
+    // each program type and opaque output it appears within (#2495).
+    let report = refused(
+        r#"
+use std::rc::Rc;
+struct Sq(Rc<f64>);
+fn main() {
+    let s = Sq(Rc::new(2.0));
+    let h = std::thread::spawn(move || *s.0);
+    println!("{}", h.join().unwrap());
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0277]: `Rc<f64>` cannot be sent between threads safely"),
+        "{report}"
+    );
+    for note in [
+        "note: required because it appears within the type `Sq`",
+        "note: required because it's used within this closure",
+        "required by a bound in `std::thread::spawn`",
+    ] {
+        assert!(report.contains(note), "{note}: {report}");
+    }
+    let report = refused(
+        r#"
+use std::rc::Rc;
+trait Shape { fn area(&self) -> f64; }
+struct Sq(Rc<f64>);
+impl Shape for Sq { fn area(&self) -> f64 { *self.0 * *self.0 } }
+fn make() -> impl Shape { Sq(Rc::new(2.0)) }
+fn main() {
+    let s = make();
+    let h = std::thread::spawn(move || s.area());
+    println!("{}", h.join().unwrap());
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0277]: `Rc<f64>` cannot be sent between threads safely"),
+        "{report}"
+    );
+    let within_sq = report
+        .find("note: required because it appears within the type `Sq`")
+        .unwrap_or_else(|| panic!("{report}"));
+    let within_opaque = report
+        .find("note: required because it appears within the type `impl Shape`")
+        .unwrap_or_else(|| panic!("{report}"));
+    assert!(within_sq < within_opaque, "{report}");
+}
+
+#[test]
+fn an_opaque_output_is_send_as_its_hidden_type_is_at_any_send_bound() {
+    // A generic call's `T: Send` and spawn's `T: Send` of what the thread
+    // gives see through an opaque output to its hidden type (#2496).
+    let program = |field: &str, value: &str| {
+        format!(
+            r#"
+use std::rc::Rc;
+trait Shape {{ fn area(&self) -> f64; }}
+struct Sq({field});
+impl Shape for Sq {{ fn area(&self) -> f64 {{ 2.0 }} }}
+fn make() -> impl Shape {{ Sq({value}) }}
+fn require<T: Send>(t: T) -> T {{ t }}
+fn main() {{
+    let s = require(make());
+    let h = std::thread::spawn(make);
+    println!("{{}} {{}}", s.area(), h.join().unwrap().area());
+}}
+main();
+"#
+        )
+    };
+    assert_eq!(printed(&program("f64", "2.0")), "2 2\n");
+    let report = refused(&program("Rc<f64>", "Rc::new(2.0)"));
+    assert!(
+        report.starts_with("error[E0277]: `Rc<f64>` cannot be sent between threads safely"),
+        "{report}"
+    );
+    for note in [
+        "help: within `impl Shape`, the trait `Send` is not implemented for `Rc<f64>`",
+        "note: required because it appears within the type `Sq`",
+        "note: required because it appears within the type `impl Shape`",
+        "required by a bound in `require`",
+    ] {
+        assert!(report.contains(note), "{note}: {report}");
+    }
+    let report = refused(
+        r#"
+use std::rc::Rc;
+trait Shape { fn area(&self) -> f64; }
+struct Sq(Rc<f64>);
+impl Shape for Sq { fn area(&self) -> f64 { 2.0 } }
+fn make() -> impl Shape { Sq(Rc::new(2.0)) }
+fn main() {
+    let h = std::thread::spawn(make);
+    println!("{}", h.join().unwrap().area());
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0277]: `Rc<f64>` cannot be sent between threads safely"),
+        "{report}"
+    );
+    assert!(
+        report.contains("required by a bound in `std::thread::spawn`"),
+        "{report}"
+    );
 }

@@ -112,7 +112,7 @@ impl Parser<'_> {
         while through && let Ty::Reference { target, .. } | Ty::Boxed(target) = ty {
             ty = self.inference.resolve(&target);
         }
-        matches!(&ty, Ty::Dyn(name, bindings) if name.as_str() == "Error" && bindings.is_empty())
+        matches!(&ty, Ty::Dyn(name, bindings, _) if name.as_str() == "Error" && bindings.is_empty())
             && self.models.std_error_trait()
     }
 
@@ -322,7 +322,11 @@ impl Parser<'_> {
         else {
             return Ok(());
         };
-        let target = Ty::Boxed(Box::new(Ty::Dyn("Error".into(), Box::default())));
+        let target = Ty::Boxed(Box::new(Ty::Dyn(
+            "Error".into(),
+            Box::default(),
+            ty::Auto::Unknown,
+        )));
         *value = self.operator_expr(object, target, value.span);
         Ok(())
     }
@@ -360,7 +364,7 @@ impl Parser<'_> {
                 let source = self.prelude_op(PreludeOp::ErrorSource, [value.rendered_source()]);
                 let ty = Ty::Option(Box::new(Ty::Reference {
                     mutable: false,
-                    target: Box::new(Ty::Dyn("Error".into(), Box::default())),
+                    target: Box::new(Ty::Dyn("Error".into(), Box::default(), ty::Auto::Unknown)),
                 }));
                 Ok(self.operator_expr(source, ty, call))
             }

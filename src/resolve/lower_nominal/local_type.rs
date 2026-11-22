@@ -324,7 +324,8 @@ impl<'a> Parser<'a> {
                 return Err(miss);
             }
             let trait_name = known.unwrap_or(trait_name);
-            let ty = self.dyn_type(&trait_name, trait_span)?;
+            let mut ty = self.dyn_type(&trait_name, trait_span)?;
+            let (mut send, mut sync) = (false, false);
             // `dyn Shape + Send + 'a`: Rust admits only auto traits and
             // lifetimes after the first trait (E0225).
             while matches!(self.peek(), Token::Plus | Token::UnaryPlus) {
@@ -349,6 +350,14 @@ impl<'a> Parser<'a> {
                         source: extra_span,
                     });
                 }
+                send |= extra.as_str() == "Send";
+                sync |= extra.as_str() == "Sync";
+            }
+            // A crate trait's supertraits aren't known here.
+            if let Ty::Dyn(name, _, auto) = &mut ty
+                && !type_ref::is_native_trait(name)
+            {
+                *auto = ty::Auto::Written { send, sync };
             }
             return Ok(ty);
         }
@@ -1286,7 +1295,11 @@ impl<'a> Parser<'a> {
                     .map(|(index, ty)| (ImmutableString::from(index.to_string()), ty)),
             );
             bindings.sort_by(|(a, _), (b, _)| a.cmp(b));
-            return Ok(Ty::Dyn(trait_name.into(), bindings.into_boxed_slice()));
+            return Ok(Ty::Dyn(
+                trait_name.into(),
+                bindings.into_boxed_slice(),
+                ty::Auto::Unknown,
+            ));
         }
         let Some((_, declared)) = self.models.traits.get(trait_name) else {
             return Err(Error::UnknownType {
@@ -1320,7 +1333,11 @@ impl<'a> Parser<'a> {
                 .map(|(index, ty)| (ImmutableString::from(index.to_string()), ty)),
         );
         bindings.sort_by(|(a, _), (b, _)| a.cmp(b));
-        Ok(Ty::Dyn(trait_name.into(), bindings.into_boxed_slice()))
+        Ok(Ty::Dyn(
+            trait_name.into(),
+            bindings.into_boxed_slice(),
+            ty::Auto::Unknown,
+        ))
     }
 
     /// `for<'a, 'b>` before a body's type: its lifetimes join

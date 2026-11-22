@@ -1023,16 +1023,17 @@ enum HiddenWitness {
     Captured(usize),
 }
 
-/// A thread's closure capturing a value whose type `ty` holds an opaque
-/// output, by reference when `borrowed`: `item`'s `F: Send` holds as the
-/// hidden types do (D1109).
+/// A `Send` bound of `item` on a type `ty` that holds an opaque output,
+/// needed at `at`, which holds as the hidden types do (D1109): a thread's
+/// closure capturing it, whose head is `closure`, a generic call's
+/// argument, or what a thread gives.
 #[derive(Clone)]
 #[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(super) struct HiddenSend {
     pub(super) ty: Ty,
-    pub(super) borrowed: bool,
-    pub(super) closure: Span,
-    pub(super) item: ImmutableString,
+    pub(super) at: Span,
+    pub(super) closure: Option<Span>,
+    pub(super) item: Option<ImmutableString>,
 }
 
 /// A declaration of a local whose `Debug` text a debugger reads by its
@@ -1179,7 +1180,10 @@ fn sent_hidden(
             let hidden = revealed.get(&captured.opaque)?.as_ref()?;
             let output = models.opaque_outputs.get(&captured.opaque)?;
             let substitution = super::generics::opaque_substitution(output, &captured.arguments);
-            Some(super::generics::instantiate(hidden, &substitution))
+            Some((
+                super::generics::instantiate(hidden, &substitution),
+                output.bounds.name.span,
+            ))
         }
         _ => None,
     };
@@ -1197,32 +1201,18 @@ fn sent_hidden(
             None,
         );
         for send in &hidden.sends {
-            // A hidden type may hold another function's opaque output.
-            let mut ty = send.ty.clone();
-            for _ in 0..=revealed.len() {
-                ty = super::generics::substitute(&ty, &reveal);
-            }
-            let refused = if send.borrowed {
-                !parser.shared_between_threads(&ty)
-            } else {
-                parser.not_send(&ty)
+            let Some(unsendable) = parser.unsendable(&send.ty, &reveal) else {
+                continue;
             };
-            if refused {
-                return Err(LoweringFailure::original(
-                    *source,
-                    Error::MissingCapability {
-                        owner: ty.name(models),
-                        capability: if send.borrowed { "Sync" } else { "Send" }.into(),
-                        operation: send.closure,
-                        derive: false,
-                        declared: None,
-                        required_by: Some(crate::resolve::Required::by(send.item.clone())),
-                        formatted: None,
-                        chain: crate::resolve::Chain::default(),
-                    }
-                    .into(),
-                ));
-            }
+            let unsendable = match send.closure {
+                Some(head) => unsendable.in_closure(head),
+                None => unsendable,
+            };
+            let required_by = send.item.clone().map(crate::resolve::Required::by);
+            return Err(LoweringFailure::original(
+                *source,
+                unsendable.error(models, send.at, required_by).into(),
+            ));
         }
     }
     Ok(())

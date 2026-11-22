@@ -1246,9 +1246,9 @@ impl<'a> Parser<'a> {
         } else {
             let known = match self.inference.resolve(&self_ty) {
                 _ if explicit.is_some() => explicit,
-                Ty::Dyn(name, bindings) if name == *trait_name => Some(dyn_arguments(&bindings)),
+                Ty::Dyn(name, bindings, _) if name == *trait_name => Some(dyn_arguments(&bindings)),
                 // A supertrait's method on `dyn Both<i64>`: `Convert<i64>`.
-                Ty::Dyn(name, bindings) => {
+                Ty::Dyn(name, bindings, _) => {
                     let mut instances =
                         self.dyn_supertrait_instances(&name, &bindings, &self_ty, trait_name);
                     (instances.len() == 1).then(|| instances.remove(0))

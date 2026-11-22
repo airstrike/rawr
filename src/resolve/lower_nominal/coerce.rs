@@ -520,22 +520,33 @@ impl<'a> Parser<'a> {
         }
         .and_then(|(to, from)| {
             match (self.inference.resolve(to), self.inference.resolve(from)) {
-                (Ty::Dyn(trait_name, bindings), from)
+                (Ty::Dyn(trait_name, bindings, auto), from)
                     if !matches!(from, Ty::Dyn(..) | Ty::Infer(_) | Ty::Never) =>
                 {
-                    Some((trait_name, bindings, from))
+                    Some((trait_name, bindings, auto, from))
                 }
                 // Trait upcasting: `&dyn Named` to `&dyn Shape` for a
                 // supertrait `Shape` (Rust 1.86); the value is unchanged.
-                (Ty::Dyn(trait_name, bindings), Ty::Dyn(sub, sub_bindings))
+                (Ty::Dyn(trait_name, bindings, auto), Ty::Dyn(sub, sub_bindings, sub_auto))
                     if supertraits(&self.models, &sub).contains(&trait_name) =>
                 {
-                    Some((trait_name, bindings, Ty::Dyn(sub, sub_bindings)))
+                    Some((
+                        trait_name,
+                        bindings,
+                        auto,
+                        Ty::Dyn(sub, sub_bindings, sub_auto),
+                    ))
                 }
                 _ => None,
             }
         });
-        if let Some((trait_name, bindings, concrete)) = unsizing {
+        if let Some((trait_name, bindings, auto, concrete)) = unsizing {
+            // `dyn Shape + Send` holds only what is `Send`.
+            if matches!(auto, ty::Auto::Written { send: true, .. })
+                && let Some(unsendable) = self.unsendable(&concrete, &|_| None)
+            {
+                return Err(unsendable.error(&self.models, value.span, None));
+            }
             // A box of the program's own type that implements a native
             // trait becomes that trait's object: the stand-in rawr's copy of
             // the crate declares for the type, which holds the value's
@@ -656,7 +667,7 @@ impl<'a> Parser<'a> {
                     construct: format!(
                         "coercing `{}` to the native trait object `{}` is not supported yet",
                         concrete.name(&self.models),
-                        Ty::Dyn(trait_name.clone(), bindings.clone()).name(&self.models)
+                        Ty::Dyn(trait_name.clone(), bindings.clone(), auto).name(&self.models)
                     )
                     .into(),
                     source: value.span,
@@ -666,7 +677,7 @@ impl<'a> Parser<'a> {
             // box of one is above (`error_object.rs`), and std's `dyn Any`
             // behind a reference or a box is the value with its type
             // (`any_object.rs`).
-            let object = Ty::Dyn(trait_name.clone(), bindings.clone());
+            let object = Ty::Dyn(trait_name.clone(), bindings.clone(), auto);
             if matches!(target, Ty::Reference { .. } | Ty::Counted(..))
                 && self.std_error(&object, false)
             {

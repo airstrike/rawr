@@ -454,12 +454,23 @@ impl<'a> Parser<'a> {
                 continue;
             }
             // rawr proves no auto trait, but refuses what it knows isn't
-            // `Send`, as an `Rc`.
-            let provided = match kind {
-                capability::Kind::Send => !self.not_send(&ty),
-                _ => self.type_provides(&ty, kind),
-            };
-            if !provided {
+            // `Send`, as an `Rc`. An opaque output is `Send` as its hidden
+            // type is, known once every body is checked (D1109).
+            if kind == capability::Kind::Send {
+                if contains(&ty, &Ty::is_opaque) {
+                    self.opaque_sends.push(super::entry::HiddenSend {
+                        ty: ty.clone(),
+                        at: span,
+                        closure: None,
+                        item: site.as_ref().map(|site| site.item.clone()),
+                    });
+                }
+                if let Some(unsendable) = self.unsendable(&ty, &|_| None) {
+                    return Err(unsendable.error(&self.models, span, site));
+                }
+                continue;
+            }
+            if !self.type_provides(&ty, kind) {
                 return Err(self.unmet_bound(&ty, Obligation::Capability(kind), span, site));
             }
         }
@@ -1420,12 +1431,13 @@ pub(super) fn substitute(ty: &Ty, replaced: &dyn Fn(&Ty) -> Option<Ty>) -> Ty {
                 .map(|argument| substitute(argument, replaced))
                 .collect(),
         ),
-        Ty::Dyn(trait_name, bindings) => Ty::Dyn(
+        Ty::Dyn(trait_name, bindings, auto) => Ty::Dyn(
             trait_name.clone(),
             bindings
                 .iter()
                 .map(|(name, ty)| (name.clone(), substitute(ty, replaced)))
                 .collect(),
+            *auto,
         ),
         Ty::Result(ok, err) => Ty::Result(
             Box::new(substitute(ok, replaced)),

@@ -346,12 +346,12 @@ pub(super) fn imported_surface_type(
         // A crate's trait object (D872): `dyn Trait` itself where a `&T`
         // takes it, as the `&dyn Trait` input a call reads as `&impl
         // Trait` is, and `Box<dyn Trait>`.
-        Ty::Dyn(name, bindings) if crate::resolve::type_ref::is_native_trait(name) => {
+        Ty::Dyn(name, bindings, _) if crate::resolve::type_ref::is_native_trait(name) => {
             native_object(inference, models, name, bindings, operation, imported)?
         }
         Ty::Boxed(inner) | Ty::Counted(_, inner)
             if matches!(inference.resolved_ref(inner),
-                Ty::Dyn(name, _) if crate::resolve::type_ref::is_native_trait(name)) =>
+                Ty::Dyn(name, ..) if crate::resolve::type_ref::is_native_trait(name)) =>
         {
             let Type::Object(object) =
                 imported_surface_type(inference, models, inner, operation, imported)?
@@ -544,7 +544,7 @@ fn is_core_future(proof: &super::ty::HostTyProof) -> bool {
 #[cfg(feature = "rust-import")]
 fn lends_object(inference: &Inference, target: &Ty) -> bool {
     matches!(inference.resolved_ref(target),
-        Ty::Dyn(name, _) if crate::resolve::type_ref::is_native_trait(name))
+        Ty::Dyn(name, ..) if crate::resolve::type_ref::is_native_trait(name))
 }
 
 /// The pointer a crate's trait object owned by `ty`, a `Box`, `Rc` or
@@ -1127,7 +1127,7 @@ pub(super) fn instance_surface_type(
                 .collect::<Option<_>>()?,
         },
         // A crate's trait object, as `imported_surface_type` has it (D872).
-        Ty::Dyn(name, bindings) if crate::resolve::type_ref::is_native_trait(name) => {
+        Ty::Dyn(name, bindings, _) if crate::resolve::type_ref::is_native_trait(name) => {
             shared_object(
                 models,
                 name,
@@ -1140,7 +1140,7 @@ pub(super) fn instance_surface_type(
         }
         Ty::Boxed(inner) | Ty::Counted(_, inner)
             if matches!(inference.resolved_ref(inner),
-                Ty::Dyn(name, _) if crate::resolve::type_ref::is_native_trait(name)) =>
+                Ty::Dyn(name, ..) if crate::resolve::type_ref::is_native_trait(name)) =>
         {
             let Type::Object(object) = instance_surface_type(inference, models, inner)? else {
                 return None;

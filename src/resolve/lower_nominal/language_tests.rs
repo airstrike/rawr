@@ -14703,7 +14703,8 @@ fn language_rc_is_not_send() {
         error.contains("`Rc<i64>` cannot be sent between threads safely"),
         "{error}"
     );
-    // An `Arc` of what isn't `Sync`, as a `RefCell`, isn't `Send` either.
+    // An `Arc` of what isn't `Sync`, as a `RefCell`, isn't `Send` either,
+    // and rustc names the `RefCell`.
     let error = rejected(
         r#"
         use std::cell::RefCell;
@@ -14718,7 +14719,7 @@ fn language_rc_is_not_send() {
         "#,
     );
     assert!(
-        error.contains("cannot be sent between threads safely"),
+        error.contains("`RefCell<i64>` cannot be shared between threads safely"),
         "{error}"
     );
 }
