@@ -211,6 +211,7 @@ pub const KEPT: &str = "\u{1}kept:";
 
 /// What becomes of the kept statics a swap leaves out once `decide` in
 /// [`apart`] has decided.
+#[cfg(feature = "rust-import")]
 pub enum After {
     /// The swap happens: their values drop.
     Release,
@@ -218,12 +219,14 @@ pub enum After {
     Restore,
 }
 
-/// `decide`'s answer, given while the statics the interpreter keeps that
-/// the next generation doesn't declare (the keys `declared` doesn't give)
-/// hold no value: a static whose initializer or type changed, or that was
-/// removed, is a new static, so no check of the values that live counts
-/// the old one's (D862, #2519). `declared` runs only when a static is
-/// kept. Each such static's reads wait while `decide` runs.
+/// `decide`'s answer, given while the census leaves out the values of the
+/// statics the interpreter keeps that the next generation doesn't declare
+/// (the keys `declared` doesn't give): a static whose initializer or type
+/// changed, or that was removed, is a new static, so no check of the
+/// values that live counts the old one's (D862, #2519). `declared` runs
+/// only when a static is kept. Each such static's reads wait while
+/// `decide` runs, and its value drops once `decide` says to release it.
+#[cfg(feature = "rust-import")]
 pub fn apart<R>(
     declared: impl FnOnce() -> std::collections::BTreeSet<crate::ImmutableString>,
     decide: impl FnOnce() -> (R, After),
@@ -243,32 +246,31 @@ pub fn apart<R>(
         .filter(|(key, _)| !declared.contains(&**key))
         .collect();
     let mut states: Vec<_> = left.iter().map(|(_, slot)| slot.state()).collect();
-    let taken: Vec<State> = states
-        .iter_mut()
-        .map(|state| std::mem::replace(&mut **state, State::Reserved { memory: None }))
-        .collect();
-    let (answer, after) = decide();
-    match after {
-        After::Restore => {
-            for (state, value) in states.iter_mut().zip(taken) {
-                **state = value;
+    let mut aside = std::collections::HashMap::new();
+    for state in &mut states {
+        if let State::Kept(value) = &mut **state {
+            crate::program::model::migration::tally(value, &mut aside);
+        }
+    }
+    let (answer, after) = crate::types::nominal::census::aside(aside, decide);
+    if let After::Release = after {
+        let mut statics = statics();
+        for (key, slot) in &left {
+            if statics
+                .slots
+                .get(key)
+                .is_some_and(|kept| Shared::ptr_eq(&kept.0, &slot.0))
+            {
+                statics.slots.remove(key);
             }
         }
-        After::Release => {
-            let mut statics = statics();
-            for (key, slot) in &left {
-                if statics
-                    .slots
-                    .get(key)
-                    .is_some_and(|kept| Shared::ptr_eq(&kept.0, &slot.0))
-                {
-                    statics.slots.remove(key);
-                }
-            }
-            drop(statics);
-            drop(states);
-            drop(taken);
-        }
+        drop(statics);
+        let released: Vec<State> = states
+            .iter_mut()
+            .map(|state| std::mem::replace(&mut **state, State::Reserved { memory: None }))
+            .collect();
+        drop(states);
+        drop(released);
     }
     answer
 }
