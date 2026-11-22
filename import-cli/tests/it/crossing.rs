@@ -2886,6 +2886,22 @@ fn a_method_of_an_opaque_result_is_its_bound_s_and_not_the_hidden_type_s() {
     );
 }
 
+/// #2099: a value of a script function's `impl Tune` whose hidden type is
+/// the program's own, with inherent namesakes of `Tune`'s methods (a
+/// builder of another arity and a `name` of the trait method's shape),
+/// sees only `Tune`'s methods, by value and through a reference, and
+/// `Tune::name(&own)` calls the program's impl over the inherent `name`.
+/// The output is `cargo run`'s.
+#[test]
+fn a_method_of_an_opaque_result_of_a_program_type_is_its_bound_s() {
+    let (rawr, cargo) = both_printed("scale.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "hidden [\"do\", \"re\"] scale of 2\nlent 2 scale of 2\nown inherent scale of 1"
+    );
+}
+
 /// #2102: a crate trait's `&self` method that lends a slice of a type
 /// naming the trait's associated types, on a script function's `impl
 /// Staged` result, lends the slice in place though its elements don't
