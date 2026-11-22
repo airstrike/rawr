@@ -460,7 +460,11 @@ impl<'a> Parser<'a> {
         }
         if matches!(self.peek(), Token::Multiply) {
             let start = self.next().1;
-            let operand = self.parse_operand()?;
+            let mut operand = self.parse_operand()?;
+            // `*s.a = 1` of a `&mut` a value stores (`stored.rs`).
+            if self.stored_holder(&operand) {
+                operand = self.through_stored(operand);
+            }
             // `*r` reads what the holder `r` refers to: its use's place.
             let reference = matches!(self.inference.resolve(&operand.ty), Ty::Reference { .. });
             self.flow().deref(operand.span.start(), start, reference);
@@ -1020,7 +1024,8 @@ impl<'a> Parser<'a> {
             left_out = true;
         }
         let deref = matches!(self.peek(), Token::Multiply);
-        let mut value = self.parse_expr()?;
+        // `(&mut a, &mut b)`: a tuple stores each `&mut` (`stored.rs`).
+        let mut value = self.parse_borrowable(Self::parse_expr)?;
         // `(x += 1)`: an assignment is an expression of type `()`, and
         // parentheses take any expression.
         if assignment_token(&self.peek()) {
@@ -1060,6 +1065,7 @@ impl<'a> Parser<'a> {
             self.keep_pipeline(&before, &value);
             return Ok(value);
         }
+        self.store_borrow(&mut value)?;
         let mut members = vec![value];
         while matches!(self.peek(), Token::Comma) {
             self.next();
@@ -1067,7 +1073,7 @@ impl<'a> Parser<'a> {
             if matches!(self.peek(), Token::RightParen) {
                 break;
             }
-            members.push(self.parse_expr()?);
+            members.push(self.parse_stored(Self::parse_expr)?);
         }
         let end = self.expect(Token::RightParen, "')' after a tuple")?;
         for member in &mut members {

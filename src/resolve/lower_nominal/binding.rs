@@ -626,6 +626,11 @@ impl<'a> Parser<'a> {
         if let Some(expected) = &annotation {
             self.coerce_expr(expected, &mut value)?;
         }
+        // `let o = v.last_mut();`: `o` holds `Some` of the reference to
+        // the element's place (`stored.rs`).
+        if matches!(self.inference.resolve(&value.ty), Ty::Option(_)) {
+            self.store_borrow(&mut value)?;
+        }
 
         self.consume_imported_value(&value, &name, value.span)?;
         self.move_local(&mut value)?;

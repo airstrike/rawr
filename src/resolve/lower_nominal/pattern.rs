@@ -843,6 +843,7 @@ impl<'a> Parser<'a> {
             self.require_irrefutable(syntax, &resolved.coverage, &written_ty, site)?;
         }
         let (scrutinee, values) = (self.temporary("match"), self.temporary("bound"));
+        let stored = self.holds_stored(&subject);
         let place = self.pattern_place(&subject, &mut resolved.proof, &resolved.bindings)?;
         // A value made for the statement drops at its end, or before
         // `else`; a local's moved parts are left `()` in it.
@@ -923,6 +924,7 @@ impl<'a> Parser<'a> {
         if let Some(place) = &place {
             self.bind_parts(place);
         }
+        self.bind_stored(stored, &bindings);
         // The moves out of what was matched, then the rest of a value made
         // for it drops, before the bindings are declared.
         if self.drops() {

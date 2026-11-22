@@ -1400,6 +1400,10 @@ impl Parser<'_> {
         proof: &mut NominalPattern,
         bindings: &[PatternBinding],
     ) -> Result<Option<PlacePattern>, Error> {
+        // A value holding stored `&mut`s gives its references by value.
+        if self.holds_stored(subject) {
+            return Ok(None);
+        }
         // `o.as_mut()` lends its place as `&mut o` does (`lend_place`).
         let lent = match &subject.lvalue {
             None => self.lent_places.get(&subject.span).cloned(),
@@ -1871,10 +1875,24 @@ fn mark_parts(
 /// option's `Some` value: what a script function's `&mut` output names
 /// below the place it was called on.
 pub(super) fn path_invoke(op: PreludeOp, args: &mut FnCallArgs) -> RawrResult {
-    let path = args[1]
+    let mut path = args[1]
         .as_array_ref()
         .map_err(|_| invariant("a place's path is not an array at runtime"))?
         .clone();
+    // A path that starts at a handle (a stored `&mut` the function gave,
+    // D1113) reaches its place below the handle, not the receiver.
+    if path.first().is_some_and(Dynamic::is_shared) {
+        let mut handle = path.remove(0);
+        let mut guard = handle
+            .write_lock::<Dynamic>()
+            .ok_or_else(|| invariant("a stored `&mut`'s place is held"))?;
+        let mut path = Dynamic::from_array(path);
+        let mut forwarded: Vec<&mut Dynamic> = vec![&mut *guard, &mut path];
+        if let Some(value) = args.get_mut(2) {
+            forwarded.push(value);
+        }
+        return path_invoke(op, &mut forwarded);
+    }
     if matches!(op, PreludeOp::PathSet) {
         let value = args[2].take();
         // A native place is stored into where it is (D651): its own
@@ -2134,6 +2152,13 @@ impl Parser<'_> {
             construct: construct.to_string().into(),
             source: at,
         };
+        // `&mut *self.a` of a `&mut` field: the reference's own path, from
+        // its handle, which the caller reaches as it is (`stored.rs`).
+        if Self::stored_place(place)
+            && let Some(located) = self.place_located(place)
+        {
+            return Ok(located.surrounded("(", ")"));
+        }
         if place.binding().as_str() != "self" {
             return Err(unsupported(
                 "returning a `&mut` borrowed from a value other than `self` (or a free \

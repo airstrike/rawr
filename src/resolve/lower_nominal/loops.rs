@@ -761,6 +761,17 @@ impl<'a> Parser<'a> {
                         return Err(self.pipeline_error(&lhs, fallback));
                     }
                 };
+                // `for r in v` of a `Vec<&mut T>`: each `r` is a stored
+                // `&mut` (`stored.rs`).
+                if pattern.is_none()
+                    && self.holds_stored(&lhs)
+                    && matches!(
+                        self.inference.resolve(&ty),
+                        Ty::Reference { mutable: true, .. }
+                    )
+                {
+                    self.stored_items = Some(declaration);
+                }
                 // `for x in v` takes `v`: a later use is rustc's E0382.
                 let mut lhs = lhs;
                 if matches!(
@@ -887,6 +898,9 @@ impl<'a> Parser<'a> {
             },
         );
         self.note_drop_here(&name, declaration, &ty)?;
+        if self.stored_items.take() == Some(declaration) {
+            self.select_local(name.clone(), declaration, ty.clone(), mutable);
+        }
         let wrap = match pattern {
             Some(pattern) => match self
                 .refuse_refutable(pattern, &ty, BindingSite::ForLoop)

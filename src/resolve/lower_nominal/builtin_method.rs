@@ -1153,8 +1153,11 @@ impl<'a> Parser<'a> {
         // `v.get_mut(i).unwrap()` is the element's place, which the
         // `Option` locates: it is evaluated, panicking on `None`, each time
         // the place is reached.
+        // `o.unwrap()` of an `Option` that holds a stored `&mut` is the
+        // reference, moved out (`stored.rs`).
+        let stored = keeps_place && self.holds_stored(&value);
         let place = match &value.lvalue {
-            Some(lvalue) if keeps_place && !matches!(lvalue, Lvalue::Slice(_)) => {
+            Some(lvalue) if keeps_place && !stored && !matches!(lvalue, Lvalue::Slice(_)) => {
                 let mut nested = places::as_nested(lvalue);
                 let mut setup = source.clone();
                 setup.push_text(";");
@@ -1175,6 +1178,9 @@ impl<'a> Parser<'a> {
             self.lend_place(&value, expression);
         }
         let mut parsed = self.operator_expr(source, ty, expression);
+        if stored {
+            return Ok(self.through_stored(parsed));
+        }
         if place.is_some() {
             parsed.lvalue = place;
         }

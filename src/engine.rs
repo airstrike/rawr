@@ -56,6 +56,12 @@ pub const KEYWORD_SOME_THROUGH: &str = "__rawr_some_through_";
 /// ([`KEYWORD_LOCATE`]) made shared where it is, as a closure's capture makes
 /// it, and its shared handle: the same value, not a copy.
 pub const KEYWORD_SHARE: &str = "__rawr_share";
+/// `__rawr_ref(path)`: a `&mut` stored in a value (D1113), as the path
+/// `[handle, part, ..]`: the shared handle of the local the place's path
+/// ([`KEYWORD_LOCATE`]) starts at, made shared where it is as
+/// [`KEYWORD_SHARE`] makes it, then the steps below it. A local holding
+/// one is a place's holder ([`KEYWORD_THROUGH`]) in any frame.
+pub const KEYWORD_REF: &str = "__rawr_ref";
 /// `__rawr_lend(x)`: the local `x`, or `this`, lent to a script function's
 /// `&` parameter. It is made shared where it is, as a closure's capture
 /// makes it, and the parameter is its shared handle: the same value, not a

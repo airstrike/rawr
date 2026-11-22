@@ -1273,10 +1273,16 @@ impl Engine {
                         global, caches, scope, this_ptr, place, &chain.rhs, &mut steps,
                     )?;
                     // A step that is a path itself (a function's `&mut`
-                    // output below its receiver) is its steps.
+                    // output below its receiver) is its steps. One that
+                    // starts at a handle (a stored `&mut` the function
+                    // gave, D1113) is the whole path from there.
                     for step in steps.into_iter().rev() {
                         if step.is_array() {
-                            path.extend(step.into_array().unwrap_or_default());
+                            let steps = step.into_array().unwrap_or_default();
+                            if steps.first().is_some_and(Dynamic::is_shared) {
+                                path.clear();
+                            }
+                            path.extend(steps);
                         } else {
                             path.push(step);
                         }
@@ -1296,29 +1302,30 @@ impl Engine {
                     ERR::ErrorVariableNotFound(crate::engine::KEYWORD_SHARE.into(), pos).into()
                 };
                 let (root, _) = Self::held_path(&path).ok_or_else(missing)?;
-                let place = match root.as_int() {
-                    Ok(-1) => this_ptr.ok_or_else(missing)?,
-                    Ok(slot) => {
-                        let slot = usize::try_from(slot).map_err(|_| missing())?;
-                        if slot >= scope.len() {
-                            return Err(missing());
-                        }
-                        scope.get_mut_by_index(slot)
-                    }
-                    // An async body's local, by its name.
-                    Err(_) => {
-                        let local = root
-                            .read_lock::<crate::ImmutableString>()
-                            .ok_or_else(missing)?
-                            .clone();
-                        let index = scope.search(&local).ok_or_else(missing)?;
-                        scope.get_mut_by_index(index)
-                    }
+                return shared_root(scope, this_ptr, root).ok_or_else(missing);
+            }
+
+            // Handle __rawr_ref(path): a `&mut` stored in a value (D1113),
+            // the shared handle of the local the path starts at, then the
+            // steps below it. A path through a stored `&mut` starts at its
+            // handle already.
+            crate::engine::KEYWORD_REF if num_args == 1 => {
+                let arg = first_arg.unwrap();
+                let (path, pos) =
+                    self.get_arg_value(global, caches, scope, this_ptr.as_deref_mut(), arg)?;
+                let missing = || -> crate::RawrError {
+                    ERR::ErrorVariableNotFound(crate::engine::KEYWORD_REF.into(), pos).into()
                 };
-                if !place.is_shared() {
-                    *place = place.take().into_shared();
-                }
-                return Ok(place.clone());
+                let (root, steps) = Self::held_path(&path).ok_or_else(missing)?;
+                let handle = shared_root(scope, this_ptr, root).ok_or_else(missing)?;
+                let mut reference = crate::Array::with_capacity(steps.len() + 1);
+                reference.push(handle);
+                reference.extend(
+                    steps
+                        .iter()
+                        .map(|&step| Dynamic::from_int(step as crate::INT)),
+                );
+                return Ok(Dynamic::from_array(reference));
             }
 
             _ => (),
@@ -2084,6 +2091,39 @@ fn lend_held(scope: &mut Scope, holder: &str) -> Option<Dynamic> {
     let (_, steps) = Engine::held_path(scope.get_mut_by_index(path))?;
     let index = scope.search(holder)?;
     share_part(scope.get_mut_by_index(index), &steps)
+}
+
+/// The local a place's path starts at (`root`: its slot, `-1` for `this`,
+/// or its name in an async body) made shared where it is, and its shared
+/// handle: the same value, not a copy. A root that is a handle already (a
+/// stored `&mut`'s, or a closure's captured one) is that handle.
+fn shared_root(
+    scope: &mut Scope,
+    this_ptr: Option<&mut Dynamic>,
+    root: Dynamic,
+) -> Option<Dynamic> {
+    if root.is_shared() {
+        return Some(root);
+    }
+    let place = match root.as_int() {
+        Ok(-1) => this_ptr?,
+        Ok(slot) => {
+            let slot = usize::try_from(slot)
+                .ok()
+                .filter(|slot| *slot < scope.len())?;
+            scope.get_mut_by_index(slot)
+        }
+        // An async body's local, by its name.
+        Err(_) => {
+            let local = root.read_lock::<crate::ImmutableString>()?.clone();
+            let index = scope.search(&local)?;
+            scope.get_mut_by_index(index)
+        }
+    };
+    if !place.is_shared() {
+        *place = place.take().into_shared();
+    }
+    Some(place.clone())
 }
 
 /// The value `root` (a local or `this`) holds, itself.

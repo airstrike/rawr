@@ -457,6 +457,10 @@ pub(super) fn debug_value_spec(
 }
 
 pub(super) fn debug_text(value: &Dynamic, models: &Models, spec: Option<&DebugSpec>) -> String {
+    // A stored `&mut` writes what it refers to, as `&mut T`'s `Debug`.
+    if let Some(referent) = crate::Engine::stored_referent(value) {
+        return debug_value_spec(&referent, models, spec);
+    }
     // An `Rc` or `Arc` writes its value; a `Weak` `(Weak)`.
     if let Some(inner) = counted::value(value) {
         return debug_value_spec(&inner, models, spec);
@@ -605,6 +609,12 @@ pub(super) fn debug_typed(
     spec: Option<&DebugSpec>,
 ) -> String {
     match (ty, &value.0) {
+        // A stored `&mut` writes what it refers to (D1113).
+        (type_ref::Type::Reference { target, .. }, Union::Array(..))
+            if let Some(referent) = crate::Engine::stored_referent(value) =>
+        {
+            debug_typed(&referent, target, models, spec)
+        }
         (type_ref::Type::Path(path), Union::Int(..) | Union::Float(..))
             if path.target == type_ref::Target::Builtin
                 && let Some(leaf) = DebugLeaf::of_name(path.name.as_str()) =>

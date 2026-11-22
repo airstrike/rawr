@@ -5075,3 +5075,190 @@ main();
     );
     assert_eq!(output, "1\n2\n");
 }
+
+#[test]
+fn a_mut_stored_in_a_value_reaches_its_place() {
+    // A `&mut` in a struct, a tuple struct, a tuple, `Some` and `vec!`
+    // reaches the place it borrows, as rustc's build runs them (#184,
+    // #2503); a derived `Debug` writes what each refers to.
+    let output = printed(
+        r#"
+#[derive(Debug)]
+struct S<'a> { a: &'a mut i32 }
+struct D<'a>(&'a mut Vec<i32>);
+fn main() {
+    let mut x = 1;
+    let s = S { a: &mut x };
+    *s.a += 5;
+    println!("{:?}", s);
+    println!("{}", x);
+    let mut v = vec![1];
+    let d = D(&mut v);
+    d.0.push(2);
+    println!("{:?}", v);
+    let mut y = 3;
+    let o = Some(&mut y);
+    if let Some(r) = o {
+        *r = 7;
+    }
+    println!("{}", y);
+    let mut a = 1;
+    let mut b = 2;
+    let mut refs = vec![&mut a, &mut b];
+    *refs[0] += 5;
+    *refs[1] *= 3;
+    for r in refs {
+        *r += 10;
+    }
+    println!("{} {}", a, b);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "S { a: 6 }\n6\n[1, 2]\n7\n16 16\n");
+}
+
+#[test]
+fn an_option_of_a_mut_kept_in_a_local_reaches_its_place() {
+    // `v.last_mut()` kept in a local holds `Some` of the element's place,
+    // so a write through its `unwrap()` changes `v` (#195).
+    let output = printed(
+        r#"
+fn main() {
+    let mut v = vec![1, 2, 3];
+    let mut o = v.last_mut();
+    let r = o.unwrap();
+    *r = 9;
+    println!("{:?}", v);
+    let e = v.get_mut(1);
+    if let Some(e) = e {
+        *e = 5;
+    }
+    match v.first_mut() {
+        Some(x) => *x *= 7,
+        None => {}
+    }
+    let f = v.first_mut();
+    match f {
+        Some(x) => *x += 1,
+        None => {}
+    }
+    let none = v.get_mut(10).is_none();
+    println!("{:?} {}", v, none);
+    let mut w = vec![String::from("a")];
+    let t = w.get_mut(0);
+    t.unwrap().push('c');
+    println!("{:?}", w);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "[1, 2, 9]\n[8, 5, 9] true\n[\"ac\"]\n");
+}
+
+#[test]
+fn a_mut_field_reborrowed_through_self_reaches_its_place() {
+    // `&mut *self.a` of a `&mut` field returns the place the field refers
+    // to, and a method changes it through `self` (#2503).
+    let output = printed(
+        r#"
+struct S<'a> { a: &'a mut i32 }
+impl<'a> S<'a> {
+    fn whole(&mut self) -> &mut i32 { &mut *self.a }
+    fn bump(&mut self) { *self.a += 1; }
+}
+fn main() {
+    let mut x = 1;
+    let mut s = S { a: &mut x };
+    s.bump();
+    *s.whole() += 10;
+    println!("{}", x);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "12\n");
+}
+
+#[test]
+fn disjoint_stored_borrows_of_one_local_run_without_a_data_race() {
+    // Two stored `&mut`s of one local's parts, and a method on one part
+    // given a stored `&mut` of another, run as rustc's build runs them:
+    // the part a call is lent is a cell of its own (D1113).
+    let output = printed(
+        r#"
+#[derive(Debug)]
+struct S<'a> { a: &'a mut i32, b: &'a mut i32 }
+impl<'a> S<'a> {
+    fn add_to_a(&mut self) { *self.a += *self.b; }
+}
+fn sw(a: &mut i32, b: &mut i32) { let t = *a; *a = *b; *b = t; }
+struct Buf { data: Vec<u8> }
+struct State { n: u32 }
+struct Ctx { buf: Buf, state: State }
+struct Writer<'a> { out: &'a mut Buf }
+struct Lent<'a> { state: &'a mut State }
+impl State {
+    fn step(&mut self, w: &mut Writer) { self.n += 1; w.out.data.push(self.n as u8); }
+}
+fn main() {
+    let mut p = (1, 2);
+    let t = (&mut p.0, &mut p.1);
+    std::mem::swap(t.0, t.1);
+    println!("{:?}", p);
+    let mut s = S { a: &mut p.0, b: &mut p.1 };
+    s.add_to_a();
+    sw(s.a, s.b);
+    println!("{:?}", s);
+    println!("{:?}", p);
+    let mut ctx = Ctx { buf: Buf { data: vec![] }, state: State { n: 0 } };
+    let mut w = Writer { out: &mut ctx.buf };
+    ctx.state.step(&mut w);
+    let lent = Lent { state: &mut ctx.state };
+    lent.state.step(&mut w);
+    println!("{:?} {}", ctx.buf.data, ctx.state.n);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "(2, 1)\nS { a: 1, b: 3 }\n(1, 3)\n[1, 2] 2\n");
+}
+
+#[test]
+fn a_mut_stored_in_a_value_keeps_its_loan() {
+    // The borrow checker's verdicts hold for a `&mut` in a value, as
+    // rustc's do.
+    let report = refused(
+        r#"
+struct D<'a>(&'a mut Vec<i32>);
+fn main() {
+    let mut v = vec![];
+    let d = D(&mut v);
+    v.push(1);
+    d.0.push(2);
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0499]: cannot borrow `v` as mutable more than once at a time"),
+        "{report}"
+    );
+    let report = refused(
+        r#"
+struct S<'a> { a: &'a mut i32 }
+fn main() {
+    let mut x = 1;
+    let s = S { a: &mut x };
+    x += 1;
+    *s.a += 1;
+    println!("{}", x);
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0503]: cannot use `x` because it was mutably borrowed"),
+        "{report}"
+    );
+}

@@ -90,6 +90,7 @@ mod statement;
 mod std_impl;
 mod std_item;
 mod std_method;
+mod stored;
 mod surface;
 pub(crate) mod thread;
 mod time;
@@ -574,6 +575,10 @@ struct Parser<'a> {
     /// The tails of the block-like value being read that may choose a
     /// `&mut` (`chosen.rs`).
     chosen: Option<chosen::Chosen>,
+    /// Where the binding of the `for` being read is declared, when its
+    /// items are stored `&mut`s, each a `&mut` local reaching its place
+    /// through the reference (`stored.rs`).
+    stored_items: Option<Span>,
     /// Where the operand of the `&` being read starts: a crate struct's
     /// field read there, as all of the operand, is lent, not taken
     /// (`read_imported_field`).
@@ -1075,6 +1080,7 @@ impl<'a> Parser<'a> {
             lend_self: false,
             mutable_borrow: None,
             chosen: None,
+            stored_items: None,
             lent_field: None,
             lent_mut_field: None,
             bound_iterators: BTreeMap::new(),
