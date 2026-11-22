@@ -457,8 +457,15 @@ impl Inference {
         name: &ImmutableString,
     ) -> Ty {
         match &base {
-            // Rawr's iterator type: `<I as Iterator>::Item` is its item.
-            Ty::Iter(item, _) if is_iterator_trait(trait_name) && name.as_str() == "Item" => {
+            // Rawr's iterator type: `<I as Iterator>::Item` is its item,
+            // unless the item is the opaque `<I as Iterator>::Item` that
+            // `type Fore: Iterator;` gives, which is this projection itself.
+            Ty::Iter(item, _)
+                if is_iterator_trait(trait_name)
+                    && name.as_str() == "Item"
+                    && !matches!(&**item, Ty::Projection(_, bound, own)
+                        if is_iterator_trait(bound) && own.as_str() == "Item") =>
+            {
                 return self.resolve(item);
             }
             Ty::Script(id, arguments) => {
