@@ -10670,6 +10670,129 @@ fn main() {{
 }
 
 #[test]
+fn a_cell_drops_its_value_with_it_and_when_its_value_is_replaced() {
+    // A `RefCell`, `Cell` or `Mutex` of a value with drop glue drops the
+    // value when the cell drops, and the value `set`, an assignment
+    // through a borrow or a lock, or `LocalKey::set` replaces, as rustc's
+    // build does (#2643). A `thread_local!` key's cell drops as its thread
+    // ends.
+    let output = printed(
+        r#"
+use std::cell::{Cell, RefCell};
+use std::sync::Mutex;
+
+struct D(&'static str);
+
+impl Drop for D {
+    fn drop(&mut self) {
+        println!("drop {}", self.0);
+    }
+}
+
+struct Holder {
+    cell: RefCell<Vec<D>>,
+    last: D,
+}
+
+thread_local! {
+    static KEPT: RefCell<Vec<D>> = RefCell::new(vec![D("tls")]);
+}
+
+fn main() {
+    {
+        let c = RefCell::new(D("refcell"));
+        println!("made");
+        let old = c.replace(D("refcell2"));
+        println!("replaced");
+        drop(old);
+        *c.borrow_mut() = D("refcell3");
+        println!("assigned");
+        c.replace(D("refcell4"));
+        println!("statement");
+        let e = D("refcell5");
+        let back = c.replace(e);
+        println!("local");
+        drop(back);
+    }
+    println!("--");
+    {
+        let c = Cell::new(Some(D("cell")));
+        let d = Some(D("cell2"));
+        c.set(d);
+        println!("set");
+        let f = Some(D("cell3"));
+        let back = c.replace(f);
+        drop(back);
+        let t = c.take();
+        println!("took");
+        drop(t);
+    }
+    println!("--");
+    {
+        let m = Mutex::new(D("mutex"));
+        *m.lock().unwrap() = D("mutex2");
+        println!("locked");
+    }
+    println!("--");
+    {
+        let h = Holder {
+            cell: RefCell::new(vec![D("v1"), D("v2")]),
+            last: D("last"),
+        };
+        h.cell.borrow_mut().push(D("v3"));
+        let moved = h.cell;
+        println!("moved");
+        drop(moved);
+        println!("dropped");
+    }
+    println!("--");
+    KEPT.with_borrow_mut(|v| v.push(D("tls2")));
+    KEPT.set(vec![D("tls3")]);
+    println!("done");
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        concat!(
+            "made\n",
+            "replaced\n",
+            "drop refcell\n",
+            "drop refcell2\n",
+            "assigned\n",
+            "drop refcell3\n",
+            "statement\n",
+            "local\n",
+            "drop refcell4\n",
+            "drop refcell5\n",
+            "--\n",
+            "drop cell\n",
+            "set\n",
+            "drop cell2\n",
+            "took\n",
+            "drop cell3\n",
+            "--\n",
+            "drop mutex\n",
+            "locked\n",
+            "drop mutex2\n",
+            "--\n",
+            "moved\n",
+            "drop v1\n",
+            "drop v2\n",
+            "drop v3\n",
+            "dropped\n",
+            "drop last\n",
+            "--\n",
+            "drop tls\n",
+            "drop tls2\n",
+            "done\n",
+            "drop tls3\n",
+        )
+    );
+}
+
+#[test]
 fn an_early_exit_drops_the_temporaries_of_each_statement_it_leaves() {
     // A `?`, `continue`, `break` or `return` inside a block inside a
     // statement drops the temporaries made so far in each statement it

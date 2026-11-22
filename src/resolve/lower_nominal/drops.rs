@@ -244,7 +244,9 @@ fn each_part(
         }
         Union::Shared(..) => each_part(&value.flatten_clone(), shape, models, each),
         Union::Variant(..) => {
-            if let Some(Some(inner)) = crate::option::read(value) {
+            if let Some(inner) = cell::owned_value(value) {
+                each(&inner, shape.clone());
+            } else if let Some(Some(inner)) = crate::option::read(value) {
                 each(&inner, shape.clone());
             } else if let Some(Ok(inner)) = crate::result::read(value) {
                 each(&inner, key(shape, "ok"));
@@ -570,8 +572,11 @@ impl Parser<'_> {
                 Shape::Walk => Shape::Walk,
                 element => Shape::Elements(Box::new(element)),
             },
-            // At run time, a `Box` is the value it holds.
-            Ty::Option(inner) | Ty::Boxed(inner) => self.shape_in(inner, visiting),
+            // At run time, a `Box` is the value it holds, and the glue walks
+            // a cell's value as its part.
+            Ty::Option(inner) | Ty::Boxed(inner) | Ty::Cell(_, inner) => {
+                self.shape_in(inner, visiting)
+            }
             Ty::Result(ok, err) => {
                 let (ok, err) = (self.shape_in(ok, visiting), self.shape_in(err, visiting));
                 if ok.walks() && err.walks() {
@@ -792,12 +797,8 @@ impl Parser<'_> {
                 false
             }
 
-            Ty::Cell(_, inner) => {
-                if self.needs_drop_in(inner, at, visiting)? {
-                    return Err(unsupported("a `RefCell`"));
-                }
-                false
-            }
+            // A `RefCell`, `Cell` or `Mutex` drops its value with it.
+            Ty::Cell(_, inner) => self.needs_drop_in(inner, at, visiting)?,
             Ty::Keyed(kind, arguments) => {
                 for argument in arguments.iter() {
                     if self.needs_drop_in(argument, at, visiting)? {
