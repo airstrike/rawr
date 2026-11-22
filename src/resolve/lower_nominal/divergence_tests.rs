@@ -10823,3 +10823,28 @@ main();
     );
     assert_eq!(output, "vec 3 slice 3 slice 2 vec 1\n");
 }
+
+#[test]
+fn an_array_passed_as_impl_into_iterator_where_the_call_is_expected() {
+    // A generic call whose value the caller expects types its parameters
+    // from that expectation, but an `impl IntoIterator` parameter is its
+    // own type parameter: the array is the iterator over its elements,
+    // never coerced to the iterator type.
+    let output = printed(
+        r#"
+struct E<M>(M);
+struct W<M>(Vec<E<M>>);
+fn group<M>(content: impl IntoIterator<Item = E<M>>) -> W<M> {
+    W(content.into_iter().collect())
+}
+fn outer<M: Clone>(m: M) -> W<M> {
+    group([E(m.clone()), E(m)])
+}
+fn main() {
+    println!("{} {}", outer(1).0.len(), group([E('a')]).0.len());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "2 1\n");
+}
