@@ -355,7 +355,12 @@ impl<'a> Parser<'a> {
                 self.pending_turbofish = Some(turbofish);
             }
             // A method call borrows its place; a field is a place below it.
-            if matches!(self.peek(), Token::LeftParen | Token::Unit) {
+            // A turbofish the call reads itself (`collect::<Vec<_>>()`)
+            // makes it a call too.
+            if matches!(self.peek(), Token::LeftParen | Token::Unit)
+                || matches!(self.peek(), Token::DoubleColon)
+                    && matches!(self.peek_second(), Token::LessThan)
+            {
                 self.call_on_place(&value);
                 called = Some((self.call_receiver(&value, from_call), member.clone()));
             } else {

@@ -9310,3 +9310,44 @@ main();
     );
     assert_eq!(output, "6 42 Some('x')\nSome(7) Some(8)\nSome(5) None\n");
 }
+
+#[test]
+fn sum_partition_unzip_and_collect_values_keep_the_items_borrows() {
+    // std's `Extend`, `Sum` and `FromIterator` impls say what the value
+    // keeps: `Vec<&T>` the items' borrows, a sum and a `Vec` of copies
+    // none (#793).
+    let output = printed(
+        r#"
+fn main() {
+    let mut v = vec![1, 2, 3, 4];
+    let total: i32 = v.iter().sum();
+    let (small, big): (Vec<i32>, Vec<i32>) = v.iter().map(|x| *x).partition(|x| *x < 3);
+    let (left, right): (Vec<&i32>, Vec<char>) = v.iter().zip("ab".chars()).unzip();
+    println!("{left:?} {right:?}");
+    v.push(5);
+    let all = v.iter().collect::<Vec<_>>();
+    println!("{total} {small:?} {big:?} {all:?}");
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "[1, 2] ['a', 'b']\n10 [1, 2] [3, 4] [1, 2, 3, 4, 5]\n"
+    );
+    for kept in [
+        "let (small, big): (Vec<&i32>, Vec<&i32>) = v.iter().partition(|x| **x < 3);\nv.push(5);\nprintln!(\"{small:?} {big:?}\");",
+        "let (left, right): (Vec<&i32>, Vec<char>) = v.iter().zip(\"ab\".chars()).unzip();\nv.push(5);\nprintln!(\"{left:?} {right:?}\");",
+        "let all = v.iter().collect::<Vec<_>>();\nv.push(5);\nprintln!(\"{all:?}\");",
+    ] {
+        let report = refused(&format!(
+            "fn main() {{\nlet mut v = vec![1, 2, 3, 4];\n{kept}\n}}\nmain();\n"
+        ));
+        assert!(
+            report.starts_with(
+                "error[E0502]: cannot borrow `v` as mutable because it is also borrowed as immutable"
+            ),
+            "{report}"
+        );
+    }
+}

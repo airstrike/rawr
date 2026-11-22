@@ -853,6 +853,7 @@ pub(super) fn summary(receiver: &Ty, output: &Ty, member: &str) -> Option<Summar
                 }
             }
             reader.collected(output);
+            reader.extended(output, item, declared.output);
             own
         }
         _ => match found.item.impl_self() {
@@ -953,6 +954,34 @@ pub(super) fn summary(receiver: &Ty, output: &Ty, member: &str) -> Option<Summar
         }
     }
     Some(summary)
+}
+
+/// The parts of the native type `ty` that the parameter `name` is in the
+/// declared type `written`, each with the half of a top-level pair it is
+/// (`half`): both halves of `partition`'s `(B, B)`.
+fn parts_named<'a>(
+    written: &Written,
+    ty: &'a Ty,
+    name: &str,
+    half: Option<usize>,
+    parts: &mut Vec<(&'a Ty, Option<usize>)>,
+) {
+    match (written, ty) {
+        (
+            Written::Path {
+                path, arguments, ..
+            },
+            _,
+        ) if arguments.is_empty() && *path == name => parts.push((ty, half)),
+        (Written::Tuple(members), Ty::Tuple(found))
+            if half.is_none() && members.len() == found.len() =>
+        {
+            for (index, (member, found)) in members.iter().zip(found.iter()).enumerate() {
+                parts_named(member, found, name, Some(index), parts);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// What a closure bound returns: `B` of `FnMut(T) -> B`, `()` of `FnMut(T)`.
@@ -1647,6 +1676,90 @@ impl Reader {
         }
     }
 
+    /// Places the type parameters of the call's value `output` that std's
+    /// `Extend`, `Sum` or `Product` impl for it picks (`B: Default +
+    /// Extend<Self::Item>` of `partition`, `FromA` of `unzip`, `S:
+    /// Sum<Self::Item>` of `sum`), from the part of `output` each is in the
+    /// declared output `written`: where that part holds the iterator's
+    /// `item` it holds the items' regions, as `impl<T> Extend<T> for
+    /// Vec<T>` keeps each item; elsewhere it holds none, as `impl<'a, T:
+    /// Copy> Extend<&'a T> for Vec<T>` copies them, or a sum is a new
+    /// value (#793). `unzip`'s `FromA: Extend<A>` of `(A, B)` items is
+    /// placed from the items' half at its own half of `(FromA, FromB)`.
+    fn extended(&mut self, output: &Ty, item: &Ty, written: Option<&'static str>) {
+        let Some(written) = written.map(std_table::written) else {
+            return;
+        };
+        let Some(own) = self.iterator.clone() else {
+            return;
+        };
+        let items = self.item_of(own);
+        for (name, bounds) in self.generics.clone() {
+            if self.bound(name)
+                || !std_table::split_bounds(bounds).iter().any(|bound| {
+                    let path = bound.split_once('<').map_or(*bound, |(path, _)| path);
+                    matches!(path.rsplit("::").next(), Some("Extend" | "Sum" | "Product"))
+                })
+            {
+                continue;
+            }
+            let mut parts = Vec::new();
+            parts_named(&written, output, name, None, &mut parts);
+            let Some((part, half)) = parts.first().copied() else {
+                continue;
+            };
+            let extends_items = bounds.contains("<Self::Item>");
+            let (item, items) = match (item, &items, half) {
+                (Ty::Tuple(members), Type::Tuple { members: found, .. }, Some(half))
+                    if !extends_items =>
+                {
+                    match (members.get(half), found.get(half)) {
+                        (Some(member), Some(found)) => (member, found.clone()),
+                        _ => continue,
+                    }
+                }
+                _ => (item, items.clone()),
+            };
+            if let Some(placed) = self.placed(part, item, &items) {
+                self.substitution.push((name, placed));
+            }
+        }
+    }
+
+    /// The native type `part` of a call's value, with the iterator's `item`
+    /// in it holding the `items`' regions; `None` where it holds a borrow
+    /// that isn't one of the items.
+    fn placed(&mut self, part: &Ty, item: &Ty, items: &Type) -> Option<Type> {
+        if part == item {
+            return Some(items.clone());
+        }
+        Some(match part {
+            Ty::Array {
+                element,
+                kind: sequence::Kind::Vec,
+            } => {
+                let element = self.placed(element, item, items)?;
+                self.builtin("Vec", vec![Argument::Type(element)])
+            }
+            Ty::Option(inner) => {
+                let inner = self.placed(inner, item, items)?;
+                self.builtin("Option", vec![Argument::Type(inner)])
+            }
+            Ty::Tuple(members) => {
+                let members = members
+                    .iter()
+                    .map(|member| self.placed(member, item, items))
+                    .collect::<Option<Vec<_>>>()?;
+                Type::Tuple {
+                    members: members.into_boxed_slice(),
+                    span: self.span(),
+                }
+            }
+            Ty::Reference { .. } | Ty::Str => return None,
+            part => self.native(part)?,
+        })
+    }
+
     /// Whether the call's value `output` has a type parameter the call picks
     /// that no input gives and whose bound may make it of the items
     /// (`S: Sum<Self::Item>`, `B: Extend<Self::Item>`), which these facts
@@ -1956,7 +2069,30 @@ mod tests {
         );
         // A value the declaration can't place is left to rustc.
         assert!(summary(&refs, &Ty::Unknown, "collect").is_none());
-        assert!(summary(&refs, &Ty::Int(Int::I64), "sum").is_none());
+        // `Sum<&i64> for i64` makes a new value, which keeps nothing
+        // (#793).
+        assert_eq!(taps("sum", &Ty::Int(Int::I64)).1, Vec::new());
+        // `Extend<T> for Vec<T>`: both halves of `partition` keep the
+        // items, and `Extend<&T> for Vec<T>` of a `Copy` `T` copies them.
+        let halves = Ty::Tuple(Box::new([collected.clone(), collected.clone()]));
+        has(
+            "partition",
+            &halves,
+            Receiver::Owned,
+            &[
+                tap(&[a0, a0, own], receiver(&[a0, own])),
+                tap(&[a1, a0, own], receiver(&[a0, own])),
+            ],
+        );
+        let copied = Ty::sequence(sequence::Kind::Vec, Ty::Int(Int::I64));
+        let copies = Ty::Tuple(Box::new([copied.clone(), copied]));
+        let found = taps("partition", &copies).1;
+        assert!(
+            found
+                .iter()
+                .all(|tap| !matches!(tap.from, Source::Input(Input::Receiver, _))),
+            "{found:?}"
+        );
         // `count` keeps nothing.
         assert_eq!(taps("count", &Ty::Int(Int::Usize)).1, Vec::new());
     }
