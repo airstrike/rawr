@@ -2158,7 +2158,8 @@ impl<'a> Parser<'a> {
                 .map(|binding| binding.declaration)
                 .filter(|declaration| !outer_locals.contains(declaration))
                 .collect();
-            let drop_uses = self.block_drop_uses();
+            let mut drop_uses = self.block_drop_uses();
+            drop_uses.extend(self.cell_guard_drops(&declared));
             self.flow()
                 .storage_dead(&declared, &drop_uses, point_span(end));
             let mut block_output = std::mem::replace(&mut self.output, outer_output);

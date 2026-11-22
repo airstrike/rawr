@@ -249,6 +249,11 @@ impl<'a> Parser<'a> {
             if matches!(self.peek(), Token::Fn) {
                 self.shared_call_fns.insert(name_span);
             }
+            // `let x: &'static T`: what `x` is given is borrowed for
+            // `'static`, as the annotation requires.
+            if self.split_angle.is_none() && self.outliving_reference_ahead() {
+                self.flow().everywhere(&name, name_span);
+            }
             Some(self.parse_local_type()?)
         } else {
             None

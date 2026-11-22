@@ -1181,6 +1181,8 @@ impl<'a> Parser<'a> {
                 call,
             });
         }
+        let summary = self.trait_method_summary(function);
+        self.note_call(end, summary);
         let mut substitution = self.fresh_generics(&function.generics, call);
         self.apply_trait_turbofish(&function.generics, &substitution, call)?;
         substitution.insert("Self".into(), self_ty.clone());

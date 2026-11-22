@@ -3624,9 +3624,9 @@ fn parse_bounds_with(
         {
             // `F: Fn(A) -> B`: a function type bound.
             let start = *position;
-            let mutable = name.as_str() != "Fn";
+            let kind = fn_trait_type(name);
             input.next();
-            bounds.push(parse_fn_signature(input, start, mutable, false)?);
+            bounds.push(parse_fn_signature(input, start, kind, false)?);
         } else {
             let mut split = None;
             let mut bindings = Vec::new();
@@ -4872,9 +4872,9 @@ fn parse_type_split(
         if let Some((Token::Identifier(name) | Token::Reserved(name), _)) = input.peek()
             && is_fn_trait(name)
         {
-            let mutable = name.as_str() != "Fn";
+            let kind = fn_trait_type(name);
             input.next();
-            let mut path = parse_fn_signature(input, start, mutable, false)?;
+            let mut path = parse_fn_signature(input, start, kind, false)?;
             erase_path_lifetimes(&mut path, &binder);
             return skip_fn_bounds(input, split, path).map(type_ref::Type::Path);
         }
@@ -5005,8 +5005,8 @@ fn parse_type_split(
     // `fn(A) -> B`, `impl Fn(A) -> B` and `dyn Fn(A) -> B`: Rawr's one
     // function type; `impl Iterator<Item = T>`.
     match fn_type_start(input)? {
-        Some(ImplStart::Fn(start, mutable, binder, pointer)) => {
-            let mut path = parse_fn_signature(input, start, mutable, pointer)?;
+        Some(ImplStart::Fn(start, kind, binder, pointer)) => {
+            let mut path = parse_fn_signature(input, start, kind, pointer)?;
             erase_path_lifetimes(&mut path, &binder);
             return skip_fn_bounds(input, split, path).map(type_ref::Type::Path);
         }
@@ -5122,10 +5122,10 @@ fn hashes_as_rust(functions: &[crate::item::Function]) -> bool {
 
 /// What a type starting with `fn` or `impl` is.
 enum ImplStart {
-    /// `fn(..)` or `impl Fn*(..)`, its head consumed, whether its call
-    /// takes it `&mut` (`FnMut`, `FnOnce`), the lifetimes a `for<'a>`
-    /// after `impl` binds, and whether it is a `fn` pointer.
-    Fn(Position, bool, Vec<crate::item::Name>, bool),
+    /// `fn(..)` or `impl Fn*(..)`, its head consumed, its builtin name
+    /// ([`fn_trait_type`]), the lifetimes a `for<'a>` after `impl` binds,
+    /// and whether it is a `fn` pointer.
+    Fn(Position, &'static str, Vec<crate::item::Name>, bool),
     /// `impl Iterator` (or another iterator trait), its builtin name.
     Iterator(&'static str, Position),
     /// `impl Bound + Bound` of other traits, after `impl`, and the
@@ -5140,7 +5140,12 @@ fn fn_type_start(input: &mut TokenStream) -> ParseResult<Option<ImplStart>> {
         Some((Token::Fn, position)) => {
             let position = *position;
             input.next();
-            return Ok(Some(ImplStart::Fn(position, false, Vec::new(), true)));
+            return Ok(Some(ImplStart::Fn(
+                position,
+                type_ref::FN_POINTER_TYPE,
+                Vec::new(),
+                true,
+            )));
         }
         Some((Token::Impl, position)) => *position,
         _ => return Ok(None),
@@ -5150,9 +5155,9 @@ fn fn_type_start(input: &mut TokenStream) -> ParseResult<Option<ImplStart>> {
     let binder = parse_binder(input)?;
     let iterator = match input.peek() {
         Some((Token::Identifier(name) | Token::Reserved(name), _)) if is_fn_trait(name) => {
-            let mutable = name.as_str() != "Fn";
+            let kind = fn_trait_type(name);
             input.next();
-            return Ok(Some(ImplStart::Fn(start, mutable, binder, false)));
+            return Ok(Some(ImplStart::Fn(start, kind, binder, false)));
         }
         Some((Token::Identifier(name), _)) if binder.is_empty() => iterator_trait(name),
         _ => None,
@@ -5435,6 +5440,16 @@ fn is_fn_trait(name: &str) -> bool {
     matches!(name, "Fn" | "FnMut" | "FnOnce")
 }
 
+/// The builtin path name of the function type an `Fn`, `FnMut` or `FnOnce`
+/// bound is.
+fn fn_trait_type(name: &str) -> &'static str {
+    match name {
+        "Fn" => type_ref::FN_TYPE,
+        "FnMut" => type_ref::FN_MUT_TYPE,
+        _ => type_ref::FN_ONCE_TYPE,
+    }
+}
+
 /// `(A, B) -> C` after a function type's head: the builtin path `fn` whose
 /// arguments are the inputs, then the output (`()` when omitted). A `fn`
 /// pointer's output may be `!`; an `Fn` trait's is its `Output` type,
@@ -5442,7 +5457,7 @@ fn is_fn_trait(name: &str) -> bool {
 fn parse_fn_signature(
     input: &mut TokenStream,
     start: Position,
-    mutable: bool,
+    kind: &'static str,
     pointer: bool,
 ) -> ParseResult<type_ref::Path> {
     let mut arguments = Vec::new();
@@ -5478,12 +5493,7 @@ fn parse_fn_signature(
     Ok(type_ref::Path {
         segments: Box::new([type_ref::Segment {
             name: crate::item::Name {
-                text: if mutable {
-                    type_ref::FN_MUT_TYPE
-                } else {
-                    type_ref::FN_TYPE
-                }
-                .into(),
+                text: kind.into(),
                 span: token_span(start, "fn"),
             },
             arguments: arguments.into_boxed_slice(),

@@ -107,7 +107,7 @@ impl<'a> Parser<'a> {
         if let Some(scope) = self.closures.last_mut()
             && scope.outer.get(name.as_str()) == Some(&declaration)
         {
-            scope.consumed.insert(name.clone());
+            scope.consumed.entry(name.clone()).or_insert(value.span);
         }
         // The use starting here is the local's own: the binding a scope
         // frame's call is read through (`scoped_call`) starts where the
@@ -590,7 +590,7 @@ impl<'a> Parser<'a> {
         if let Some(scope) = self.closures.last_mut()
             && scope.outer.get(name.as_str()) == Some(&declaration)
         {
-            scope.consumed.insert(name.clone());
+            scope.consumed.entry(name.clone()).or_insert(at);
         }
         if let Some(binding) = self.bindings.get_mut(name.as_str()) {
             binding.available = false;

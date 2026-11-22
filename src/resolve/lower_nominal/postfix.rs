@@ -363,6 +363,7 @@ impl<'a> Parser<'a> {
                     &value,
                     crate::resolve::borrowck::Projection::Field(member.clone()),
                 );
+                self.field_of_temporary(&value);
                 projected = true;
             }
             // An `Rc`'s, `Arc`'s or `Weak`'s own method; any other member of
