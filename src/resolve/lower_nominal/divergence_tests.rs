@@ -1525,3 +1525,312 @@ main();
         "{report}"
     );
 }
+
+/// rustc's verdict on `source`, whose functions are checked against their
+/// own signatures (#170): the report starts with `Err`'s, or the program
+/// prints `Ok`'s.
+fn signature_verdict(source: &str, verdict: Result<&str, &str>) {
+    match verdict {
+        Ok(output) => assert_eq!(printed(source), output),
+        Err(report) => {
+            let refused = Engine::new()
+                .compile(source)
+                .err()
+                .unwrap_or_else(|| panic!("rustc refuses this program:{source}"))
+                .to_string();
+            assert!(refused.starts_with(report), "{refused}");
+        }
+    }
+}
+
+/// rustc's report of a region a function's body doesn't relate to its
+/// signature's as the types require.
+const NOT_LONG_ENOUGH: &str = "error: lifetime may not live long enough";
+
+#[test]
+fn a_returned_reference_widened_to_static_inside_another_is_refused() {
+    // rustc 1.99: "lifetime may not live long enough" at `f2`'s `x`. rawr
+    // ran it and printed 7.
+    signature_verdict(
+        r#"
+use std::cell::Cell;
+fn f1<'a, 'b>(x: &'a &'b Cell<u32>) -> &'b Cell<u32> { *x }
+fn f2<'a, 'b>(x: &'a &'a Cell<u32>) -> &'a &'static Cell<u32> { x }
+fn f3<'a>(x: &'a &'a Cell<u32>) -> &'static Cell<u32> { f1(f2(x)) }
+fn f4<'a>(x: &'a Cell<u32>) -> &'static Cell<u32> { f3(&x) }
+fn main() { let c = Cell::new(7); let s = f4(&c); println!("{}", s.get()); }
+main();
+"#,
+        Err(NOT_LONG_ENOUGH),
+    );
+    // rustc accepts `f1`, `f3` and `f4` against `f2`'s signature.
+    signature_verdict(
+        r#"
+use std::cell::Cell;
+fn f1<'a, 'b>(x: &'a &'b Cell<u32>) -> &'b Cell<u32> { *x }
+fn f2<'a, 'b>(_x: &'a &'a Cell<u32>) -> &'a &'static Cell<u32> { unimplemented!() }
+fn f3<'a>(x: &'a &'a Cell<u32>) -> &'static Cell<u32> { f1(f2(x)) }
+fn f4<'a>(x: &'a Cell<u32>) -> &'static Cell<u32> { f3(&x) }
+fn main() { let c = Cell::new(7); if false { f4(&c); } println!("{}", f1(&&c).get()); }
+main();
+"#,
+        Ok("7\n"),
+    );
+    // rustc: `f1(x)` is a `&'a Cell`, not a `&'static Cell`.
+    signature_verdict(
+        r#"
+use std::cell::Cell;
+fn f1<'a, 'b>(x: &'a &'b Cell<u32>) -> &'b Cell<u32> { *x }
+fn f3<'a>(x: &'a &'a Cell<u32>) -> &'static Cell<u32> { f1(x) }
+fn main() { let c = Cell::new(7); let r = &c; println!("{}", f3(&r).get()); }
+main();
+"#,
+        Err(NOT_LONG_ENOUGH),
+    );
+}
+
+#[test]
+fn a_struct_s_two_lifetimes_are_told_apart() {
+    // rustc: `p.a` is a `&'a i32`, not a `&'b i32`.
+    signature_verdict(
+        r#"
+struct Pair<'a, 'b> { a: &'a i32, b: &'b i32 }
+fn second<'a, 'b>(p: &Pair<'a, 'b>) -> &'b i32 { p.a }
+fn main() { let (x, y) = (1, 2); let p = Pair { a: &x, b: &y }; println!("{}", second(&p)); }
+main();
+"#,
+        Err(NOT_LONG_ENOUGH),
+    );
+    signature_verdict(
+        r#"
+struct Pair<'a, 'b> { a: &'a i32, b: &'b i32 }
+fn second<'a, 'b>(p: &Pair<'a, 'b>) -> &'b i32 { p.b }
+fn first<'a, 'b>(p: Pair<'a, 'b>) -> &'a i32 { p.a }
+fn main() { let (x, y) = (1, 2); let p = Pair { a: &x, b: &y }; println!("{} {}", second(&p), first(p)); }
+main();
+"#,
+        Ok("2 1\n"),
+    );
+    // A method's `self`, of a struct with two lifetimes.
+    signature_verdict(
+        r#"
+struct P<'a, 'b> { a: &'a i32, b: &'b i32 }
+impl<'a, 'b> P<'a, 'b> {
+    fn get_b(&self) -> &'b i32 { self.a }
+}
+fn main() { let (x, y) = (1, 2); let p = P { a: &x, b: &y }; println!("{} {}", p.get_b(), p.b); }
+main();
+"#,
+        Err(NOT_LONG_ENOUGH),
+    );
+    signature_verdict(
+        r#"
+struct P<'a, 'b> { a: &'a i32, b: &'b i32 }
+impl<'a, 'b> P<'a, 'b> {
+    fn get_b(&self) -> &'b i32 { self.b }
+    fn get_a(&self) -> &i32 { self.a }
+}
+fn main() { let (x, y) = (1, 2); let p = P { a: &x, b: &y }; println!("{} {}", p.get_b(), p.get_a()); }
+main();
+"#,
+        Ok("2 1\n"),
+    );
+    // A tuple's members swapped.
+    signature_verdict(
+        r#"
+fn f<'a, 'b>(x: (&'a i32, &'b i32)) -> (&'b i32, &'a i32) { x }
+fn main() { let (a, b) = (1, 2); println!("{:?}", f((&a, &b))); }
+main();
+"#,
+        Err(NOT_LONG_ENOUGH),
+    );
+    signature_verdict(
+        r#"
+fn f<'a, 'b>(x: (&'a i32, &'b i32)) -> (&'b i32, &'a i32) { (x.1, x.0) }
+fn main() { let (a, b) = (1, 2); println!("{:?}", f((&a, &b))); }
+main();
+"#,
+        Ok("(2, 1)\n"),
+    );
+}
+
+#[test]
+fn what_a_mut_reference_or_a_cell_holds_is_invariant() {
+    // rustc: a `&'a mut &'b i32` is no `&'a mut &'a i32`, though `'b: 'a`.
+    signature_verdict(
+        r#"
+fn f<'a, 'b>(x: &'a mut &'b i32) -> &'a mut &'a i32 { x }
+fn main() { let y = 1; let mut r = &y; *f(&mut r) = &2; println!("{}", r); }
+main();
+"#,
+        Err(NOT_LONG_ENOUGH),
+    );
+    signature_verdict(
+        r#"
+fn f<'a, 'b>(x: &'a mut Vec<&'b i32>) -> &'a mut Vec<&'a i32> { x }
+fn main() { let y = 1; let mut v = vec![&y]; println!("{}", f(&mut v).len()); }
+main();
+"#,
+        Err(NOT_LONG_ENOUGH),
+    );
+    signature_verdict(
+        r#"
+use std::cell::Cell;
+fn f<'a, 'b: 'a>(x: &'a Cell<&'b i32>) -> &'a Cell<&'a i32> { x }
+fn main() { let y = 1; let c = Cell::new(&y); println!("{}", f(&c).get()); }
+main();
+"#,
+        Err(NOT_LONG_ENOUGH),
+    );
+    // A struct whose field is a cell is invariant in its lifetime.
+    signature_verdict(
+        r#"
+use std::cell::Cell;
+struct S<'a> { c: Cell<&'a i32> }
+fn f<'a, 'b: 'a>(x: &'a S<'b>) -> &'a S<'a> { x }
+fn main() { let y = 1; let s = S { c: Cell::new(&y) }; println!("{}", f(&s).c.get()); }
+main();
+"#,
+        Err(NOT_LONG_ENOUGH),
+    );
+    // rustc accepts each of these: a shared reference, the same lifetimes,
+    // or a struct whose field is covariant.
+    signature_verdict(
+        r#"
+use std::cell::Cell;
+struct S<'a> { c: &'a i32 }
+fn shared<'a, 'b>(x: &'a mut &'b i32) -> &'a &'a i32 { x }
+fn same<'a, 'b>(x: &'a mut &'b i32) -> &'a mut &'b i32 { x }
+fn cell<'a>(x: &'a Cell<&'a i32>) -> &'a Cell<&'a i32> { x }
+fn get<'a, 'b>(x: &'a Cell<&'b i32>) -> &'b i32 { x.get() }
+fn covariant<'a, 'b: 'a>(x: &'a S<'b>) -> &'a S<'a> { x }
+fn main() {
+    let y = 1;
+    let mut r = &y;
+    println!("{}", shared(&mut r));
+    println!("{}", same(&mut r));
+    let c = Cell::new(&y);
+    let s = S { c: &y };
+    println!("{} {} {} {}", r, cell(&c).get(), get(&c), covariant(&s).c);
+}
+main();
+"#,
+        Ok("1\n1\n1 1 1 1\n"),
+    );
+}
+
+#[test]
+fn a_borrow_returned_as_a_longer_one_is_refused() {
+    signature_verdict(
+        r#"
+fn f<'a>(x: &'a &'a i32) -> &'a &'static i32 { x }
+fn main() { let y = 1; let r = &y; println!("{}", f(&r)); }
+main();
+"#,
+        Err(NOT_LONG_ENOUGH),
+    );
+    signature_verdict(
+        r#"
+fn f<'a, 'b>(x: Option<&'a i32>, y: &'b i32) -> Option<&'b i32> { if y > &0 { x } else { Some(y) } }
+fn main() { let (a, b) = (1, 2); println!("{:?}", f(Some(&a), &b)); }
+main();
+"#,
+        Err(NOT_LONG_ENOUGH),
+    );
+    // rustc's E0621 where the parameter's lifetime is elided.
+    signature_verdict(
+        r#"
+fn f<'a>(x: & &'a i32) -> &'a &'a i32 { x }
+fn main() { let y = 1; let r = &y; println!("{}", f(&r)); }
+main();
+"#,
+        Err("error[E0621]: explicit lifetime required in the type of `x`"),
+    );
+    signature_verdict(
+        r#"
+fn f<'a>(x: &'a &'static i32) -> &'static i32 { *x }
+fn g<'a>(x: &'a &'static i32) -> &'a &'a i32 { x }
+fn h<'a: 'b, 'b>(x: Option<&'a i32>, y: &'b i32) -> Option<&'b i32> { if y > &0 { x } else { Some(y) } }
+fn main() { let r: &'static i32 = &1; println!("{} {} {:?}", f(&r), g(&r), h(Some(&2), &3)); }
+main();
+"#,
+        Ok("1 1 Some(2)\n"),
+    );
+}
+
+#[test]
+fn a_parameter_s_type_implies_its_lifetimes_outlive_each_other() {
+    // rustc accepts each: `&'a &'b i32` and `&'a Holder<'b>` imply
+    // `'b: 'a`.
+    signature_verdict(
+        r#"
+struct Holder<'b> { x: &'b i32 }
+fn inner<'a, 'b>(x: &'a &'b i32) -> &'a i32 { *x }
+fn either<'a, 'b>(x: &'a &'b i32, y: &'b i32) -> &'a i32 { if *x > y { y } else { x } }
+fn field<'a, 'b>(p: &'a Holder<'b>) -> &'a i32 { p.x }
+fn main() {
+    let (a, b) = (1, 2);
+    let r = &a;
+    let h = Holder { x: &b };
+    println!("{} {} {}", inner(&r), either(&r, &b), field(&h));
+}
+main();
+"#,
+        Ok("1 1 2\n"),
+    );
+}
+
+#[test]
+fn a_reborrow_lasts_within_the_reference_it_goes_through() {
+    // rustc: `&**x` is within `'a` alone, and `&y[0]` within `'b`.
+    signature_verdict(
+        r#"
+fn f<'a>(x: &'a &'a i32) -> &'static i32 { &**x }
+fn main() { let y = 1; let r = &y; println!("{}", f(&r)); }
+main();
+"#,
+        Err(NOT_LONG_ENOUGH),
+    );
+    signature_verdict(
+        r#"
+fn first<'a, 'b>(_x: &'a Vec<i32>, y: &'b Vec<i32>) -> &'a i32 { &y[0] }
+fn main() { println!("{}", first(&vec![1], &vec![2])); }
+main();
+"#,
+        Err(NOT_LONG_ENOUGH),
+    );
+    signature_verdict(
+        r#"
+struct S { name: String }
+impl S { fn pick<'a>(&self, _o: &'a str) -> &'a str { self.name.as_str() } }
+fn main() { let s = S { name: String::from("n") }; println!("{}", s.pick("x")); }
+main();
+"#,
+        Err(NOT_LONG_ENOUGH),
+    );
+    // rustc accepts each: the reference reborrowed through outlives the
+    // output.
+    signature_verdict(
+        r#"
+struct P<'a> { a: &'a String, b: &'a i32 }
+impl<'a> P<'a> {
+    fn name(&self) -> &'a str { self.a.as_str() }
+    fn number(&self) -> &'a i32 { &*self.b }
+}
+fn inner<'a, 'b>(x: &'a &'b i32) -> &'b i32 { &**x }
+fn through<'a, 'b>(x: &'a &'b i32) -> &'b i32 { let y = x; &**y }
+fn second<'a, 'b>(_x: &'a Vec<i32>, y: &'b Vec<i32>) -> &'b i32 { &y[0] }
+fn member<'a, 'b>(x: &'a (&'b String, i32)) -> &'b str { x.0.as_str() }
+fn main() {
+    let (s, n) = (String::from("s"), 1);
+    let p = P { a: &s, b: &n };
+    let r = &n;
+    let pair = (&s, 2);
+    println!("{} {} {} {}", p.name(), p.number(), inner(&r), through(&r));
+    println!("{} {}", second(&vec![1], &vec![2]), member(&pair));
+}
+main();
+"#,
+        Ok("s 1 1 1\n2 s\n"),
+    );
+}

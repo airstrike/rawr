@@ -218,7 +218,7 @@ pub(crate) fn origins(held: &[(Path, Origin)]) -> impl Iterator<Item = Origin> +
 
 /// The flows of a body by where they come from, for walking what a region
 /// reaches.
-struct Walker<'a> {
+pub(crate) struct Walker<'a> {
     by_source: Vec<Vec<&'a Flow>>,
     /// The positions reached, by local, and the locals with any, cleared
     /// before each walk.
@@ -227,16 +227,21 @@ struct Walker<'a> {
 }
 
 impl<'a> Walker<'a> {
-    fn new(body: &'a Body) -> Self {
-        let mut by_source = vec![Vec::<&Flow>::new(); body.locals.len()];
-        for flow in &body.flows {
+    pub(crate) fn new(body: &'a Body) -> Self {
+        Self::over(&body.flows, body.locals.len())
+    }
+
+    /// A walker of `flows` between `locals` locals.
+    pub(crate) fn over(flows: &'a [Flow], locals: usize) -> Self {
+        let mut by_source = vec![Vec::<&Flow>::new(); locals];
+        for flow in flows {
             if let Origin::Local(local, _) = flow.from {
                 by_source[local.0 as usize].push(flow);
             }
         }
         Self {
             by_source,
-            at: vec![Vec::new(); body.locals.len()],
+            at: vec![Vec::new(); locals],
             touched: Vec::new(),
         }
     }
@@ -303,10 +308,17 @@ pub(crate) fn reach(body: &Body) -> Vec<Vec<bool>> {
         .collect()
 }
 
-/// The locals what `seeds` hold reaches through the flows: a parameter's
-/// borrows, say.
-pub(crate) fn reach_from(body: &Body, seeds: &[(Local, Path)]) -> Vec<bool> {
-    Walker::new(body).walk(seeds.to_vec())
+/// The positions of `into` that what `local` holds at `at` reaches through
+/// the flows of the body `walker` walks: where a parameter's borrows are in
+/// a returned value, say.
+pub(crate) fn reach_into(
+    walker: &mut Walker<'_>,
+    local: Local,
+    at: Path,
+    into: Local,
+) -> Vec<Path> {
+    walker.walk(vec![(local, at)]);
+    walker.at[into.0 as usize].clone()
 }
 
 /// Whether each loan reaches one of `sinks`.

@@ -539,20 +539,6 @@ impl Recorder {
         {
             self.unmodeled("a borrow of a reference that a function returns", span);
         }
-        // A parameter's borrows returned where the signature's lifetimes
-        // are several, which these facts do not tell apart.
-        if let Some(own) = &self.body.own {
-            let reached = super::reaching(&self.body, &[local]);
-            let several = own.parameters.iter().any(|(parameter, borrows, _)| {
-                reached[parameter.0 as usize] && borrows.outlive(&own.output, &own.bounds).is_none()
-            });
-            if several {
-                self.unmodeled(
-                    "a returned borrow whose lifetimes these facts do not tell apart",
-                    span,
-                );
-            }
-        }
     }
 
     /// `held` is borrowed for `'static` here: its region is every point.
@@ -1594,26 +1580,20 @@ impl Recorder {
     }
 
     /// The body is a function's whose own signature says `parameters`
-    /// (each one's name, declaration, borrows' lifetimes, and whether it is
-    /// `self`), `output` and `bounds`: what it returns is checked against
-    /// them.
+    /// (each one's name, declaration, regions, and whether it is `self`)
+    /// and `output`: what it returns is checked against them.
     pub(crate) fn own_signature(
         &mut self,
-        parameters: &[(ImmutableString, Span, super::signature::Borrows, bool)],
-        output: super::signature::Borrows,
-        bounds: &[(ImmutableString, ImmutableString)],
+        parameters: Vec<(ImmutableString, Span, super::signature::Regions, bool)>,
+        output: super::signature::Output,
     ) {
         let parameters = parameters
-            .iter()
-            .map(|(name, declaration, borrows, receiver)| {
-                (self.local(name, *declaration), borrows.clone(), *receiver)
+            .into_iter()
+            .map(|(name, declaration, regions, receiver)| {
+                (self.local(&name, declaration), regions, receiver)
             })
             .collect();
-        self.body.own = Some(super::OwnSignature {
-            parameters,
-            output,
-            bounds: bounds.into(),
-        });
+        self.body.own = Some(super::OwnSignature { parameters, output });
     }
 
     /// A temporary scope starts here: a statement, a match arm, a
