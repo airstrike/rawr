@@ -1766,7 +1766,17 @@ pub enum Error {
     Malformed,
     Cardinality,
     MissingAdapter,
+    /// An adapter invocation of a generation the runner no longer runs.
     Stale,
+    /// A crate's value reached on a thread that holds no crate values: one
+    /// the program spawned, where rawr doesn't keep them yet.
+    NoArena,
+    /// A call's output reached without the witness of its type.
+    Unwitnessed,
+    /// A crate value's method reached without its value's handle.
+    Unhandled,
+    /// A lent arena missing inside its own lend.
+    Unlent,
     /// A number that does not fit the Rust type it crosses into.
     OutOfRange { value: String, ty: &'static str },
     /// The value is lent to a future that is still running (D513.6).
@@ -1798,10 +1808,14 @@ impl std::fmt::Debug for Error {
             | Self::StaleHandle
             | Self::Malformed
             | Self::Cardinality
-            | Self::MissingAdapter => unreachable!("a rawr bug is written above"),
+            | Self::MissingAdapter
+            | Self::Unwitnessed
+            | Self::Unhandled
+            | Self::Unlent => unreachable!("a rawr bug is written above"),
             Self::ArenaFull => f.write_str("more than 1000000 values of crate types are alive at once"),
             Self::Allocation => f.write_str("memory allocation failed"),
-            Self::Stale => f.write_str("Stale"),
+            Self::Stale => f.write_str("an adapter invocation belongs to a generation the runner no longer runs"),
+            Self::NoArena => f.write_str("rawr doesn't run a crate's values on a thread the program spawned yet"),
             Self::OutOfRange { value, ty } => write!(f, "{value} is out of range for `{ty}`"),
             Self::Leased => f.write_str(
                 "cannot borrow this value: a future or a borrow guard that borrows it mutably is still running (E0499)",
@@ -1833,6 +1847,9 @@ impl Error {
             Self::Malformed => "an adapter invocation's payload is malformed",
             Self::Cardinality => "an adapter ran with a number of arguments it doesn't take",
             Self::MissingAdapter => "a call names an adapter the generated table doesn't have",
+            Self::Unwitnessed => "a call's output reached its adapter without the witness of its type",
+            Self::Unhandled => "a crate value's method ran without its value's handle",
+            Self::Unlent => "an arena lent for a call was missing inside its own lend",
             _ => return None,
         })
     }
@@ -1864,6 +1881,10 @@ impl Error {
             Self::Lent(..) => 14,
             Self::Home(_) => 15,
             Self::Unreached(_) => 16,
+            Self::NoArena => 17,
+            Self::Unwitnessed => 18,
+            Self::Unhandled => 19,
+            Self::Unlent => 20,
         }
     }
 }
@@ -3039,7 +3060,7 @@ pub fn with_arena<T>(call: impl FnOnce(&mut Arena) -> Result<T, Error>) -> Resul
         arena.release_dropped();
         result
     })
-    .unwrap_or(Err(Error::Stale))
+    .unwrap_or(Err(Error::NoArena))
 }
 
 /// Native place ownership uses the existing arena's owner thread and release
@@ -4426,7 +4447,7 @@ pub fn nest_lent(
                         let mut arguments = Arguments { values: &mut **values, arena };
                         nest_lent(&mut arguments, rest, &mut inner, body)
                     })
-                    .unwrap_or(Err(Error::Stale)),
+                    .unwrap_or(Err(Error::Unlent)),
                 );
             })
         })?;
@@ -5164,7 +5185,7 @@ pub fn invoke_in_arena(
         };
         // A projected iced Task takes this call's output witness.
         let output = match output.try_cast_result::<__rawr_internal::host::runtime::Unwitnessed>() {
-            Ok(pending) => pending.witness(declared().ok_or(Error::Stale)?).ok_or(Error::Stale)?,
+            Ok(pending) => pending.witness(declared().ok_or(Error::Unwitnessed)?).ok_or(Error::Unwitnessed)?,
             Err(output) => output,
         };
         if let Some(handle) = output.read_lock::<NativeHandle>().map(|value| value.clone()) {
@@ -5208,7 +5229,7 @@ pub fn runtime_project(
         .try_cast_result::<NativeHandle>()
         .map_err(|_| runtime_error(Error::TypeMismatch))?;
     arena_access(|arena| arena.project(handle, call))
-        .unwrap_or_else(|| Err(runtime_error(Error::Stale)))
+        .unwrap_or_else(|| Err(runtime_error(Error::NoArena)))
 }
 
 pub fn native_attestation(
@@ -5693,6 +5714,17 @@ mod native_arena_tests {
     use super::*;
 
     struct NonClone { value: i64 }
+
+    /// A thread the program spawned holds no crate values: reaching one
+    /// there says so, never a bare `Stale` (#734).
+    #[test]
+    fn a_thread_with_no_arena_says_rawr_does_not_run_crate_values_there() {
+        let error = std::thread::spawn(|| with_arena(|_| Ok(())).err().map(|error| format!("{error:?}")))
+            .join()
+            .expect("the thread ends")
+            .expect("a new thread has no arena");
+        assert_eq!(error, "rawr doesn't run a crate's values on a thread the program spawned yet");
+    }
 
     #[test]
     fn non_clone_values_borrow_move_reuse_and_reject_stale_handles() {
@@ -11468,7 +11500,7 @@ fn lent_field_slice(
     let ty = structural_type(plan);
     Ok(format!(
         "Lender::of(&parent).and_then(|lender| {{
-        let witness = ({witness}).ok_or(Error::Stale)?;
+        let witness = ({witness}).ok_or(Error::Unwitnessed)?;
         __rawr_internal::place::slice::lent_by::<{policy}>(&witness, move |visit| {{
             reach_lender::<{ty}>(&lender, &mut |input| {{
                 #[allow(irrefutable_let_patterns)]
@@ -14065,7 +14097,7 @@ fn render_adapter_body(
                         output,
                         "    let parent = (**arguments.values.first().ok_or(Error::MissingArgument)?).clone();
     let lender = Lender::of(&parent)?;
-    let witness = output_witness().ok_or(Error::Stale)?;
+    let witness = output_witness().ok_or(Error::Unwitnessed)?;
     __rawr_internal::place::slice::lent_by::<{policy}>(&witness, move |visit| reach_lender::<{path}>(&lender, &mut |input| visit(input.{name})))
         .map_err(|error| Error::Value(error.to_string()))",
                         name = field.name()
@@ -15153,7 +15185,7 @@ fn render_adapter_body(
                 let policy = place::policy(element)?;
                 writeln!(
                     output,
-                    "    let witness = output_witness().ok_or(Error::Stale)?;
+                    "    let witness = output_witness().ok_or(Error::Unwitnessed)?;
     __rawr_internal::place::slice::lasting::<{policy}>(&witness, || {constant})
         .map_err(|error| Error::Value(error.to_string()))"
                 )
@@ -15166,7 +15198,7 @@ fn render_adapter_body(
                 let policy = place::policy(ty)?;
                 writeln!(
                     output,
-                    "    let witness = output_witness().ok_or(Error::Stale)?;
+                    "    let witness = output_witness().ok_or(Error::Unwitnessed)?;
     __rawr_internal::place::lasting::<{policy}>(&witness, || &{constant})
         .map_err(|error| Error::Value(error.to_string()))"
                 )
@@ -16196,7 +16228,7 @@ fn render_method_opening(
                 let mut receiver: &{container} = match lasting {{
                     Some(lasting) => lasting,
                     None => {{
-                        held = with_arena(|arena| arena.share(handle.ok_or(Error::Stale)?)).map_err(runtime_error)?;
+                        held = with_arena(|arena| arena.share(handle.ok_or(Error::Unhandled)?)).map_err(runtime_error)?;
                         &*held
                     }}
                 }};"
@@ -16206,7 +16238,7 @@ fn render_method_opening(
             (
                 "let lasting: Option<&'static ()> = None;".to_owned(),
                 format!(
-                    "let mut held: PlaceHeld<{container}> = with_arena(|arena| arena.lease_place(handle.ok_or(Error::Stale)?)).map_err(runtime_error)?;
+                    "let mut held: PlaceHeld<{container}> = with_arena(|arena| arena.lease_place(handle.ok_or(Error::Unhandled)?)).map_err(runtime_error)?;
                 #[allow(unused_mut)]
                 let mut receiver = held.get_mut();"
                 ),
@@ -16276,7 +16308,7 @@ fn render_method_opening(
     {before}let output = __rawr_internal::scope::Opening::new({name:?}, move |rest| {{{rebound}
         let made = match scoped {{
             {scoped}
-            None => with_arena(|arena| arena.{access}::<{container}, _>(handle.ok_or(Error::Stale)?, |receiver| {call})),
+            None => with_arena(|arena| arena.{access}::<{container}, _>(handle.ok_or(Error::Unhandled)?, |receiver| {call})),
         }}
         .map_err(runtime_error)?;
         let mut region = __rawr_internal::scope::Region::new();
@@ -16426,7 +16458,7 @@ fn arena_anchored(
                         let _ = lender;
                         let receiver: &{container} = match lasting {{
                             Some(lasting) => lasting,
-                            None => pins.hold(with_arena(|arena| arena.share(handle.ok_or(Error::Stale)?))?),
+                            None => pins.hold(with_arena(|arena| arena.share(handle.ok_or(Error::Unhandled)?))?),
                         }};{}
                         let made = {call};
                         with_arena(|arena| {{
@@ -18001,7 +18033,7 @@ fn render_lender_slice(
     // one writes at its witness (`around`).
     writeln!(
         output,
-        "    let witness = output_witness().ok_or(Error::Stale)?;
+        "    let witness = output_witness().ok_or(Error::Unwitnessed)?;
     let lender = match lent_value(arguments, 0) {{
         Some(lent) => Lender::Lent(lent),
         None => Lender::Handle(native_handle(arguments, 0, false)?),
@@ -18399,7 +18431,7 @@ fn render_guard(
         writeln!(
             output,
             "    if let Some(receiver) = arguments.values.first().and_then(|value| __rawr_internal::place::statics::lasting::<{container}>(value)) {{
-        let witness = output_witness().ok_or(Error::Stale)?;
+        let witness = output_witness().ok_or(Error::Unwitnessed)?;
         return Ok(__rawr_internal::place::statics::given(witness, receiver.{name}{turbofish}()));
     }}",
             name = plan.name()

@@ -218,25 +218,49 @@ impl Error {
 
     /// The invariant this failure breaks, when only a rawr bug can cause it.
     /// The cache check reads these errors as an entry to rebuild; a fresh
-    /// build panics with this (`node::Error::fresh`, #522).
+    /// build panics with this as a [`Bug`] (`node::Error::fresh`, #522).
     #[must_use]
     pub fn invariant(&self) -> Option<String> {
         match self {
             Self::Node { source, .. } => source.invariant(),
-            Self::Schema { document, reason } => {
-                Some(format!("internal error: rawr misread {document}: {reason}"))
-            }
+            Self::Schema { document, reason } => Some(format!("rawr misread {document}: {reason}")),
             Self::Input { code, reason } if input_condition(code, reason).is_none() => Some(
-                format!("internal error: rawr lost track of a build input (`{code}`): {reason}"),
+                format!("rawr lost track of a build input (`{code}`): {reason}"),
             ),
-            Self::Extraction { code, reason } => Some(format!(
-                "internal error: rawr misread rustc's output (`{code}`): {reason}"
-            )),
-            Self::Invariant { command, field } => Some(format!(
-                "internal error: rawr's {field} differs at {command}"
-            )),
+            Self::Extraction { code, reason } => {
+                Some(format!("rawr misread rustc's output (`{code}`): {reason}"))
+            }
+            Self::Invariant { command, field } => {
+                Some(format!("rawr's {field} differs at {command}"))
+            }
             _ => None,
         }
+    }
+}
+
+/// The payload of a panic on an invariant only a bug in rawr breaks
+/// (D664): what rawr misread or lost track of. rawr-import's panic hook
+/// prints it as rustc prints an internal compiler error.
+#[derive(Debug)]
+pub struct Bug(String);
+
+impl Bug {
+    /// Panic with `invariant` as the payload, at the caller's place.
+    #[track_caller]
+    pub(crate) fn raise(invariant: String) -> ! {
+        std::panic::panic_any(Self(invariant))
+    }
+
+    /// What rawr misread or lost track of.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for Bug {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
     }
 }
 

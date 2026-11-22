@@ -2401,7 +2401,11 @@ impl<'a> Parser<'a> {
                         )?,
                     ));
                 }
-                let object = Box::new(Ty::Dyn(name, bindings.into_boxed_slice()));
+                let object = Box::new(Ty::Dyn(
+                    name,
+                    bindings.into_boxed_slice(),
+                    ty::Auto::Unknown,
+                ));
                 use rawr_import::classify::representability::object::Pointer;
                 match pointer {
                     Pointer::Boxed => Ty::Boxed(object),

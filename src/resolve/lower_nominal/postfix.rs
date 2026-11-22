@@ -92,8 +92,45 @@ impl<'a> Parser<'a> {
     /// The postfix operations after the primary `value`.
     pub(super) fn parse_postfix_of(&mut self, value: ParsedExpr) -> Result<ParsedExpr, Error> {
         self.parse_postfix_steps(value).map_err(|error| {
-            self.std_no_item(self.unscoped_std_method(self.inherent_not_yet(error)))
+            let error = self.std_no_item(self.unscoped_std_method(self.inherent_not_yet(error)));
+            self.boxed_no_item(error)
         })
+    }
+
+    /// A method a `Box<T>` receiver's `T` lacks, as rustc's E0599 names it:
+    /// by the box, "found for struct `Box<{integer}>`", as std's `Box`
+    /// derefs to `T`. Any other error as it is.
+    fn boxed_no_item(&self, error: Error) -> Error {
+        let (member, reference, similar) = match &error {
+            Error::UnknownMember {
+                member, reference, ..
+            } => (member, reference, None),
+            Error::NoItem {
+                member,
+                reference,
+                similar,
+                unsatisfied: None,
+                ..
+            } => (member, reference, similar.clone()),
+            _ => return error,
+        };
+        let Some(boxed) = self.boxed_receivers.get(&reference.start()) else {
+            return error;
+        };
+        let name = boxed.name(&self.models);
+        Error::NoItem {
+            owner: name.clone(),
+            member: member.clone(),
+            reference: *reference,
+            receiver: Box::new(crate::resolve::Receiver {
+                kind: "struct",
+                declared: name.clone(),
+                found: Some(name),
+                definition: None,
+            }),
+            similar,
+            unsatisfied: None,
+        }
     }
 
     /// A member a type of Rawr's std lacks, as rustc's E0599 names it: by
@@ -110,7 +147,7 @@ impl<'a> Parser<'a> {
         };
         let forms = crate::std_facade::held_forms(owner);
         let Some(form) = forms.first().copied() else {
-            return error;
+            return self.native_no_item(error);
         };
         // A stable function std declares on a type the held one stands
         // for, as `Path::strip_prefix` of a `PathBuf`, which the facade
@@ -143,19 +180,9 @@ impl<'a> Parser<'a> {
         let (definition, declared) = match crate::std_table::aliased(form) {
             Some(target) => {
                 let head = target.split('<').next().unwrap_or(target);
-                let parameters = crate::std_table::path(head, crate::std_table::Namespace::Type)
-                    .and_then(|path| crate::std_table::item(path.definition))
-                    .map(|item| {
-                        item.generics()
-                            .filter(|parameter| {
-                                parameter.kind == crate::std_table::ParameterKind::Type
-                            })
-                            .map(|parameter| parameter.name)
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default();
-                let name = head.rsplit("::").next().unwrap_or(head);
-                (head, Some(format!("{name}<{}>", parameters.join(", "))))
+                let declared = crate::std_table::path(head, crate::std_table::Namespace::Type)
+                    .map(|path| super::trimmed::declared(path.definition, &self.models));
+                (head, declared)
             }
             None => (form, None),
         };
@@ -164,7 +191,7 @@ impl<'a> Parser<'a> {
             Some(path) if path.kind == "struct" => "struct",
             _ => return error,
         };
-        let Some(name) = super::ty::std_type_name(owner, &self.models) else {
+        let Some(name) = super::trimmed::std_type_name(owner, &self.models) else {
             return error;
         };
         Error::NoItem {
@@ -174,7 +201,79 @@ impl<'a> Parser<'a> {
             receiver: Box::new(crate::resolve::Receiver {
                 kind,
                 declared: declared.unwrap_or_else(|| name.clone()).as_str().into(),
-                found: name.into(),
+                found: Some(name.into()),
+                definition: None,
+            }),
+            similar: None,
+            unsatisfied: None,
+        }
+    }
+
+    /// A method a native std type lacks, as rustc's E0599 names it: by
+    /// std's kind of the type, and, where it derefs to no other type, by its
+    /// definition's parameters, "found for struct `std::ops::Range<Idx>`",
+    /// else as the label names it, "found for struct `Vec<{integer}>`".
+    /// Any other error as it is, and so is a method of a std trait's name.
+    fn native_no_item(&self, error: Error) -> Error {
+        let Error::UnknownMember { reference, .. } = &error else {
+            return error;
+        };
+        match self.std_receivers.get(&reference.start()) {
+            Some(ty) => self.std_no_method(ty, error),
+            None => error,
+        }
+    }
+
+    /// `error`, a method the receiver `ty` of a std type, or a reference
+    /// to one, lacks, as rustc's E0599 names it (`native_no_item`): a
+    /// reference as it is, "found for reference `&std::ops::Range<i32>`".
+    pub(super) fn std_no_method(&self, ty: &Ty, error: Error) -> Error {
+        let Error::UnknownMember {
+            owner,
+            member,
+            reference,
+        } = &error
+        else {
+            return error;
+        };
+        let Some((definition, _)) = std_impl::std_definition(without_references(ty)) else {
+            return error;
+        };
+        let Some(kind) = crate::std_table::item(definition).and_then(|item| match item.kind {
+            "struct" => Some("struct"),
+            "enum" => Some("enum"),
+            _ => None,
+        }) else {
+            return error;
+        };
+        // A std trait's method, which rustc reports by the trait: its
+        // bounds unmet (`sum` of a `Range<{float}>`), or its trait unused.
+        if !crate::std_table::trait_functions(member).is_empty() {
+            return error;
+        }
+        let found = ty.name(&self.models);
+        let (kind, declared) = if matches!(ty, Ty::Reference { .. }) {
+            (ty.sort(&self.models), found.clone())
+        } else {
+            let derefs = crate::std_table::impls("core::ops::deref::Deref", definition)
+                .next()
+                .is_some();
+            let inherent = crate::std_table::item(&format!("{definition}::{member}")).is_some();
+            let declared = if derefs || inherent {
+                found.clone()
+            } else {
+                super::trimmed::declared(definition, &self.models).into()
+            };
+            (kind, declared)
+        };
+        Error::NoItem {
+            owner: owner.clone(),
+            member: member.clone(),
+            reference: *reference,
+            receiver: Box::new(crate::resolve::Receiver {
+                kind,
+                declared,
+                found: Some(found),
                 definition: None,
             }),
             similar: None,
@@ -232,6 +331,7 @@ impl<'a> Parser<'a> {
             let mut from_call = false;
             if let Some((receiver, member)) = called.take() {
                 self.finish_method_call(&receiver, &member, &value);
+                self.name_iterator(receiver.ty(), &member, &mut value);
                 from_call = true;
             }
             // A `&mut` a value stores, read from its field or element and
@@ -456,6 +556,18 @@ impl<'a> Parser<'a> {
             }
             // `Box<T>` auto-derefs for method calls and fields, as in Rust.
             if let Some((unboxed, boxed)) = self.unbox(&value.ty) {
+                // A crate's type keeps its own miss, which the importer
+                // asks the crate for.
+                if matches!(self.peek(), Token::LeftParen | Token::Unit)
+                    && matches!(self.inference.resolve(&value.ty), Ty::Boxed(_))
+                    && !matches!(
+                        unboxed,
+                        Ty::Host { .. } | Ty::Dyn(..) | Ty::Param(..) | Ty::Projection(..)
+                    )
+                {
+                    self.boxed_receivers
+                        .insert(member_span.start(), boxed.clone());
+                }
                 // `boxed.as_ref()` is a reference to the boxed value, as
                 // `self.on_change.as_ref()` lends a boxed closure.
                 if matches!(member.as_str(), "as_ref" | "as_mut")
@@ -563,10 +675,8 @@ impl<'a> Parser<'a> {
                 // An instance's parameter its template bounds by `T:
                 // Into<U>` converts into `U`, as rustc reads the generic
                 // body (D629).
-                #[cfg(feature = "rust-import")]
                 let bound = self.instance_into_target(&value);
                 value = self.parse_value_into(value, member_span)?;
-                #[cfg(feature = "rust-import")]
                 if let Some(target) = bound {
                     self.unify_type(&target, &value.ty);
                 }
@@ -807,6 +917,40 @@ impl<'a> Parser<'a> {
             }
             self.std_probed
                 .insert(member_span.start(), without_references(&builtin).clone());
+            if matches!(
+                self.peek(),
+                Token::LeftParen | Token::Unit | Token::DoubleColon
+            ) {
+                self.std_receivers
+                    .insert(member_span.start(), self.inference.resolve(&value.ty));
+            }
+            // A field of a std type that has none, as `o.x` of an `Option`:
+            // rustc's E0609, naming the value's type as it is. A method's
+            // name is another error, rustc's E0615.
+            if !matches!(
+                self.peek(),
+                Token::LeftParen | Token::Unit | Token::DoubleColon
+            ) && std_method::inherent(without_references(&builtin), &member).is_none()
+                && crate::std_table::trait_functions(&member).is_empty()
+                && matches!(
+                    without_references(&builtin),
+                    Ty::Option(_)
+                        | Ty::Result(..)
+                        | Ty::Ordering
+                        | Ty::Array { .. }
+                        | Ty::String
+                        | Ty::Str
+                        | Ty::Keyed(..)
+                        | Ty::Iter(..)
+                )
+            {
+                return Err(Error::NoField {
+                    owner: self.inference.resolve(&value.ty).name(&self.models),
+                    field: member,
+                    reference: member_span,
+                    available: Box::default(),
+                });
+            }
             // std's `&mut self` method on a local not declared `mut`
             // (rustc's E0596), as its declaration takes its receiver.
             if matches!(self.peek(), Token::LeftParen | Token::Unit)
@@ -981,7 +1125,7 @@ impl<'a> Parser<'a> {
                 _ => None,
             };
             if let Some(object) = object {
-                let Ty::Dyn(trait_name, _) = &object else {
+                let Ty::Dyn(trait_name, ..) = &object else {
                     unreachable!("matched a trait object");
                 };
                 // A native trait's method on its object is the crate's
@@ -1021,11 +1165,10 @@ impl<'a> Parser<'a> {
                 // doesn't call through a trait object yet.
                 if type_ref::is_native_trait(trait_name) {
                     return Err(Error::UnsupportedNominalSyntax {
-                        construct: format!(
+                        construct: crate::resolve::Unsupported::said(format!(
                             "calling `{member}` of the native trait object `{}` is not supported yet",
                             object.name(&self.models)
-                        )
-                        .into(),
+                        )),
                         source: member_span,
                     });
                 }
@@ -1103,6 +1246,7 @@ impl<'a> Parser<'a> {
                 if let Some((trait_name, function)) =
                     self.bound_trait_function(&bounded, &member, member_span)?
                 {
+                    self.keep_bound_method(value.span, member_span, &builtin, &bounded, &function);
                     value = self.call_trait_method(
                         value,
                         bounded.clone(),
@@ -1131,7 +1275,7 @@ impl<'a> Parser<'a> {
                         receiver: Box::new(crate::resolve::Receiver {
                             kind: bounded.sort(&self.models),
                             declared: name.clone(),
-                            found: name,
+                            found: Some(name),
                             definition: None,
                         }),
                         similar: None,
@@ -1949,6 +2093,7 @@ impl<'a> Parser<'a> {
             };
             let owner = definition.id();
             let expression_span = span(value.span.start(), member_span.end());
+            self.note_fn_value(&field.ty, expression_span);
             // A field of what can't be moved out of, as an `Rc`'s value,
             // can't be either (rustc's E0507).
             if let Some(unmovable) = self.unmovable.get(&value.span) {
@@ -2141,9 +2286,16 @@ impl<'a> Parser<'a> {
                 )
                 .map(Ok);
         }
-        let found = match self_typed {
-            Some(definition) => Some(definition),
-            None => self.probed_method(owner, &member, &value.ty),
+        // A crate trait's method the call names, or the bound of the
+        // `impl Trait` value it is on (`opaque_bound`), is that trait's
+        // impl's.
+        #[cfg(feature = "rust-import")]
+        let spliced = self.spliced_impl_method(owner, &member, member_span);
+        #[cfg(not(feature = "rust-import"))]
+        let spliced = None;
+        let found = match (spliced, self_typed) {
+            (Some(definition), _) | (None, Some(definition)) => Some(definition),
+            (None, None) => self.probed_method(owner, &member, &value.ty),
         };
         // Blanket impls of two traits that give one name: the one whose
         // where-clauses hold for the receiver, as rustc's probe takes it.
@@ -2156,6 +2308,7 @@ impl<'a> Parser<'a> {
         if let Some(definition) = found {
             let summary = self.method_summary(&definition);
             self.note_call(end, summary);
+            self.note_fn_value(definition.output(), span(value.span.start(), end));
             let Some(mode) = definition.receiver() else {
                 return Err(Error::InvalidMethodCall {
                     owner: owner_name.clone(),
@@ -2238,7 +2391,11 @@ impl<'a> Parser<'a> {
                         .chain(witnesses),
                     ", ",
                 );
-                let method = method_name(&definition);
+                let method = self.method_call_name(
+                    &definition,
+                    &substitution,
+                    span(member_span.start(), end),
+                );
                 let places =
                     self.mutable_arguments(&args, method_copied(&definition, &self.models))?;
                 let lent = method_lent(&definition);
@@ -2301,9 +2458,10 @@ impl<'a> Parser<'a> {
                 {
                     if inline.is_some() {
                         return Err(Error::UnsupportedNominalSyntax {
-                            construct: "a `&mut` borrow of this place, held by an async \
-                                        method's future: not supported in Rawr yet"
-                                .into(),
+                            construct: crate::resolve::Unsupported::said(
+                                "a `&mut` borrow of this place, held by an async \
+                                        method's future: not supported in Rawr yet",
+                            ),
                             source: value.span,
                         });
                     }
@@ -2342,7 +2500,8 @@ impl<'a> Parser<'a> {
                     .chain(witnesses),
                 ", ",
             );
-            let method = method_name(&definition);
+            let method =
+                self.method_call_name(&definition, &substitution, span(member_span.start(), end));
             let source = match writeback {
                 Some(Writeback::Owned) => {
                     let receiver = self.temporary("receiver");
@@ -3029,11 +3188,10 @@ impl<'a> Parser<'a> {
         ) && self.needs_drop(&element, member_span)?
         {
             return Err(Error::UnsupportedNominalSyntax {
-                construct: format!(
+                construct: crate::resolve::Unsupported::said(format!(
                     "`{member}` on a `Vec` or array of values whose type implements `Drop`: \
                      dropping them where Rust does is not supported in Rawr yet"
-                )
-                .into(),
+                )),
                 source: member_span,
             });
         }

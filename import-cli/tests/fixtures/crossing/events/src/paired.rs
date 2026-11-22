@@ -39,6 +39,19 @@ pub fn length<I: Iterator>(items: I) -> usize {
     items.count()
 }
 
+/// Each item of `items` with what a clone of the rest gives, as a crate
+/// that clones an iterator part way through sees it.
+pub fn rests<I>(mut items: I) -> Vec<(I::Item, Vec<I::Item>)>
+where
+    I: Iterator + Clone,
+{
+    let mut out = Vec::new();
+    while let Some(item) = items.next() {
+        out.push((item, items.clone().collect()));
+    }
+    out
+}
+
 /// `value` itself, as a crate function over any type gives it back.
 pub fn same<T>(value: T) -> T {
     value

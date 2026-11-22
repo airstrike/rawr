@@ -291,7 +291,13 @@ impl<'a> Parser<'a> {
             if let Token::Identifier(trait_name) | Token::Reserved(trait_name) = self.peek()
                 && matches!(trait_name.as_str(), "Fn" | "FnMut" | "FnOnce")
             {
-                self.next();
+                let borrow = if trait_name.as_str() == "Fn" {
+                    call::Borrow::Shared
+                } else {
+                    call::Borrow::Mutable
+                };
+                let (_, at) = self.next();
+                self.written_fn_traits.insert(at, borrow);
                 return self.parse_local_fn_type(false);
             }
             // `dyn std::error::Error`: traits are crate-wide by name, as in
@@ -324,7 +330,8 @@ impl<'a> Parser<'a> {
                 return Err(miss);
             }
             let trait_name = known.unwrap_or(trait_name);
-            let ty = self.dyn_type(&trait_name, trait_span)?;
+            let mut ty = self.dyn_type(&trait_name, trait_span)?;
+            let (mut send, mut sync) = (false, false);
             // `dyn Shape + Send + 'a`: Rust admits only auto traits and
             // lifetimes after the first trait (E0225).
             while matches!(self.peek(), Token::Plus | Token::UnaryPlus) {
@@ -332,23 +339,42 @@ impl<'a> Parser<'a> {
                 if self.skip_lifetime() {
                     continue;
                 }
-                let (mut extra, extra_span) = self.expect_name("auto trait in a trait object")?;
+                let (mut extra, mut extra_span) =
+                    self.expect_name("auto trait in a trait object")?;
                 while matches!(self.peek(), Token::DoubleColon) {
                     self.next();
-                    extra = self.expect_name("auto trait in a trait object")?.0;
+                    (extra, extra_span) = self.expect_name("auto trait in a trait object")?;
                 }
                 if !matches!(
                     extra.as_str(),
                     "Send" | "Sync" | "Unpin" | "UnwindSafe" | "RefUnwindSafe"
                 ) {
-                    return Err(Error::UnsupportedNominalSyntax {
-                        construct: "a second non-auto trait in a trait object is not supported; \
-                                    only auto traits (`Send`, `Sync`, `Unpin`) can be added, as \
-                                    in Rust (E0225)"
+                    return Err(Error::StdPath {
+                        code: "E0225",
+                        message: "only auto traits can be used as additional traits in a trait \
+                                  object"
                             .into(),
-                        source: extra_span,
+                        label: Some("additional non-auto trait".into()),
+                        note: Some(
+                            "auto-traits like `Send` and `Sync` are traits that have special \
+                             properties; for more information on them, visit \
+                             <https://doc.rust-lang.org/reference/special-types-and-traits.html#auto-traits>"
+                                .into(),
+                        ),
+                        reference: Span::new(
+                            extra_span.start(),
+                            text_end(extra_span.start(), &extra),
+                        ),
                     });
                 }
+                send |= extra.as_str() == "Send";
+                sync |= extra.as_str() == "Sync";
+            }
+            // A crate trait's supertraits aren't known here.
+            if let Ty::Dyn(name, _, auto) = &mut ty
+                && !type_ref::is_native_trait(name)
+            {
+                *auto = ty::Auto::Written { send, sync };
             }
             return Ok(ty);
         }
@@ -1286,7 +1312,11 @@ impl<'a> Parser<'a> {
                     .map(|(index, ty)| (ImmutableString::from(index.to_string()), ty)),
             );
             bindings.sort_by(|(a, _), (b, _)| a.cmp(b));
-            return Ok(Ty::Dyn(trait_name.into(), bindings.into_boxed_slice()));
+            return Ok(Ty::Dyn(
+                trait_name.into(),
+                bindings.into_boxed_slice(),
+                ty::Auto::Unknown,
+            ));
         }
         let Some((_, declared)) = self.models.traits.get(trait_name) else {
             return Err(Error::UnknownType {
@@ -1320,7 +1350,11 @@ impl<'a> Parser<'a> {
                 .map(|(index, ty)| (ImmutableString::from(index.to_string()), ty)),
         );
         bindings.sort_by(|(a, _), (b, _)| a.cmp(b));
-        Ok(Ty::Dyn(trait_name.into(), bindings.into_boxed_slice()))
+        Ok(Ty::Dyn(
+            trait_name.into(),
+            bindings.into_boxed_slice(),
+            ty::Auto::Unknown,
+        ))
     }
 
     /// `for<'a, 'b>` before a body's type: its lifetimes join
@@ -1542,7 +1576,7 @@ impl<'a> Parser<'a> {
                 expression: span,
             });
         }
-        let (expected_name, found) = super::ty::mismatched_names(&expected, &actual, &self.models);
+        let (expected_name, found) = (expected.name(&self.models), actual.name(&self.models));
         // A function's opaque output, which rustc's label describes.
         let opaque = match (expected.is_opaque(), actual.is_opaque()) {
             (true, true) => Some(crate::resolve::Opaqueness::Both),

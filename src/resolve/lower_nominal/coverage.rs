@@ -537,7 +537,7 @@ pub(super) fn host_type_name(
     models: &super::Models,
 ) -> String {
     let path = definition.path();
-    super::ty::std_type_name(path.as_str(), models)
+    super::trimmed::std_type_name(path.as_str(), models)
         .unwrap_or_else(|| path.rsplit("::").next().unwrap_or_default().to_owned())
 }
 

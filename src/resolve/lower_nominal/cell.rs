@@ -544,6 +544,8 @@ impl Parser<'_> {
             ("borrow" | "borrow_mut" | "get_mut", []) => {
                 let mutable = member.as_str() != "borrow";
                 if member.as_str() != "get_mut" {
+                    let guard = self.cell_guard_kind(&value.ty, mutable);
+                    self.cell_guard_types.insert(call, (guard, inner.clone()));
                     self.cell_borrowed(&value, call);
                 }
                 let flag: origin::Fragment = if mutable { "true" } else { "false" }.into();
@@ -638,6 +640,28 @@ impl Parser<'_> {
         }
     }
 
+    /// Which of std's guards a borrow of the cell of type `cell` gives,
+    /// mutable when `mutable`: `Ref`, `RefMut` or `MutexGuard`.
+    fn cell_guard_kind(&self, cell: &Ty, mutable: bool) -> &'static str {
+        let mut cell = self.inference.resolve(cell);
+        // Through the references and pointers its method autoderefs.
+        while let Ty::Reference { target, .. } | Ty::Counted(_, target) | Ty::Boxed(target) = cell {
+            cell = self.inference.resolve(&target);
+        }
+        match cell {
+            Ty::Cell(CellKind::Mutex, _) => "MutexGuard",
+            _ if mutable => "RefMut",
+            _ => "Ref",
+        }
+    }
+
+    /// The type of the guard of the borrow spanning `call`, as rustc
+    /// writes it once the body is checked: `Ref<'_, i32>`.
+    pub(super) fn cell_guard_type(&self, call: Span) -> Option<ImmutableString> {
+        let (guard, inner) = self.cell_guard_types.get(&call)?;
+        Some(format!("{guard}<'_, {}>", self.settled_name(inner)).into())
+    }
+
     /// The error of a method `cell` doesn't run: the not-yet error of one
     /// std declares (D712.1), as `RefCell::replace_with`, else rustc's
     /// unknown member.
@@ -665,11 +689,10 @@ impl Parser<'_> {
         };
         if self.models.holds_cell(&ty, &mut Vec::new()) {
             return Err(Error::UnsupportedNominalSyntax {
-                construct: format!(
+                construct: crate::resolve::Unsupported::said(format!(
                     "cloning a `{}`, which holds a `Cell` or `RefCell`, is not supported yet",
                     ty.name(&self.models)
-                )
-                .into(),
+                )),
                 source: at,
             });
         }
@@ -819,9 +842,14 @@ impl Parser<'_> {
     /// declaration: each drops its guard, a `Ref` or a `RefMut` whose `Drop`
     /// uses the borrow, where it ends.
     pub(super) fn cell_guard_drops(&self, declared: &[Span]) -> Vec<Span> {
+        // An imported method's borrow guard is no `Ref`: a crate's `&mut T`
+        // output, as `get_mut(&mut self) -> &mut Pixel` gives, has no drop,
+        // and its borrow ends where the local is last used.
         self.cell_guards
             .values()
+            .filter(|(.., native)| !native)
             .map(|(declaration, ..)| *declaration)
+            .chain(self.assigned_guards.iter().copied())
             .filter(|declaration| declared.contains(declaration))
             .collect()
     }
@@ -855,11 +883,8 @@ impl Parser<'_> {
         name: &ImmutableString,
         at: Span,
     ) -> Option<origin::Fragment> {
-        if self
-            .closures
-            .last()
-            .is_some_and(|scope| scope.captures.contains(name.as_str()))
-        {
+        let declaration = self.bindings.get(name.as_str())?.declaration;
+        if self.captured_here(name, declaration) {
             return None;
         }
         let (_, guard, ..) = self.cell_guards.get(name)?;
@@ -867,9 +892,7 @@ impl Parser<'_> {
             crate::engine::KEYWORD_MOVE,
             [origin::Fragment::plain(guard.as_str())],
         );
-        let binding = self.bindings.get_mut(name.as_str())?;
-        binding.available = false;
-        let declaration = binding.declaration;
+        self.bindings.get_mut(name.as_str())?.available = false;
         self.moved_at.insert(declaration, at);
         self.flow().moved(at.start());
         Some(self.prelude_op(PreludeOp::CellRelease, [taken]))

@@ -117,6 +117,13 @@ impl<'a> Parser<'a> {
                     .zip(actual_captured.arguments.iter())
                     .all(|(expected, actual)| self.unify_type(expected, actual))
             }
+            // Objects of one trait are one type here whatever auto traits
+            // each writes: an object's `Send` is checked where a value
+            // becomes it and where a thread takes it.
+            (
+                Ty::Dyn(expected_trait, expected_bindings, _),
+                Ty::Dyn(actual_trait, actual_bindings, _),
+            ) => expected_trait == actual_trait && expected_bindings == actual_bindings,
             (
                 Ty::Script(expected_id, expected_arguments),
                 Ty::Script(actual_id, actual_arguments),

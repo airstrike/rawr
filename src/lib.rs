@@ -122,6 +122,7 @@ pub mod config;
 pub mod crossing;
 /// Canonical structured diagnostics shared by compilers, hosts, and tools.
 pub mod diagnostic;
+mod edition;
 mod engine;
 mod eval;
 /// Window frames carried across the restarts of a program `rawr run` runs

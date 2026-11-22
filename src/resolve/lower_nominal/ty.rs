@@ -902,8 +902,8 @@ pub(super) enum Ty {
     /// `dyn Trait`, behind `&` or `Box`: a value of some type implementing
     /// the trait, whose methods dispatch by the value's runtime type.
     /// With its associated type bindings by name (`dyn Shape<Output =
-    /// i64>`), sorted.
-    Dyn(ImmutableString, Box<[(ImmutableString, Ty)]>),
+    /// i64>`), sorted, and the auto traits written after it.
+    Dyn(ImmutableString, Box<[(ImmutableString, Ty)]>, Auto),
     /// A generic type parameter of the item being checked, or a function's
     /// opaque output, as `Parameter` says: by its name, opaque, with only
     /// its bounds' capabilities; any value at runtime.
@@ -921,6 +921,55 @@ pub(super) enum Ty {
     Const(ImmutableString),
     Infer(usize),
     Unknown,
+}
+
+/// The auto traits a trait object's type writes after its trait: `Send`
+/// of `dyn Shape + Send`. An object a crate's signature or a program's
+/// item signature names, or one rawr makes for std, has them unknown, and
+/// is taken to have each.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
+pub(super) enum Auto {
+    Unknown,
+    Written { send: bool, sync: bool },
+}
+
+impl Auto {
+    /// Whether an object of the trait `trait_name` is known not to be
+    /// `Send`: the program writes it without `+ Send`, and the trait has
+    /// no `Send` supertrait.
+    pub(super) fn unsent(self, models: &Models, trait_name: &str) -> bool {
+        matches!(self, Self::Written { send: false, .. })
+            && !models.traits.get(trait_name).is_some_and(|(_, declared)| {
+                declared
+                    .supertraits
+                    .0
+                    .contains(crate::capability::Kind::Send)
+            })
+    }
+
+    /// ` + Send + Sync`, as rustc names the object after its trait.
+    fn written(self) -> &'static str {
+        match self {
+            Self::Unknown
+            | Self::Written {
+                send: false,
+                sync: false,
+            } => "",
+            Self::Written {
+                send: true,
+                sync: false,
+            } => " + Send",
+            Self::Written {
+                send: false,
+                sync: true,
+            } => " + Sync",
+            Self::Written {
+                send: true,
+                sync: true,
+            } => " + Send + Sync",
+        }
+    }
 }
 
 /// What a [`Ty::Param`] is.
@@ -1212,7 +1261,11 @@ impl Ty {
                 )
                 .collect::<Vec<_>>();
             bindings.sort_by(|(a, _), (b, _)| a.cmp(b));
-            return Self::Dyn(trait_name.into(), bindings.into_boxed_slice());
+            return Self::Dyn(
+                trait_name.into(),
+                bindings.into_boxed_slice(),
+                Auto::Unknown,
+            );
         }
         if let Some((inputs, output)) = ty.fn_signature() {
             return Self::Fn {
@@ -1381,6 +1434,14 @@ impl Ty {
         }
     }
 
+    /// The std struct or enum this type is, as a message names it
+    /// (`trimmed::std_name`): `Vec`, `std::ops::Range`.
+    fn std_head(&self, models: &Models) -> std::borrow::Cow<'static, str> {
+        let (definition, _) = super::std_impl::std_definition(self)
+            .expect("a std nominal type has its std definition");
+        super::trimmed::std_name(definition, models)
+    }
+
     pub(super) fn name(&self, models: &Models) -> ImmutableString {
         match self {
             Self::Never => "!".into(),
@@ -1410,23 +1471,21 @@ impl Ty {
             Self::Char => "char".into(),
             Self::Int(kind) => kind.name().into(),
             Self::Float(kind) => kind.name().into(),
-            Self::String => "String".into(),
             Self::UnsizedStr => "str".into(),
             Self::Str => "&str".into(),
-            Self::InclusiveRange(kind) => format!("RangeInclusive<{}>", kind.name()).into(),
-            Self::FloatRange => "RangeInclusive<f64>".into(),
-            Self::Range(element) => format!("Range<{}>", element.name(models)).into(),
-            Self::OpenRange(range::Open::Full, _) => "RangeFull".into(),
-            Self::OpenRange(open, element) => {
-                format!("{}<{}>", open.name(), element.name(models)).into()
+            Self::InclusiveRange(kind) => {
+                format!("{}<{}>", self.std_head(models), kind.name()).into()
             }
-            Self::InclusiveOf(element) => {
-                format!("RangeInclusive<{}>", element.name(models)).into()
+            Self::FloatRange => format!("{}<f64>", self.std_head(models)).into(),
+            Self::String
+            | Self::OpenRange(range::Open::Full, _)
+            | Self::Ordering
+            | Self::Time(_)
+            | Self::ParseError(_) => self.std_head(models).as_ref().into(),
+            Self::Range(element) | Self::InclusiveOf(element) | Self::OpenRange(_, element) => {
+                format!("{}<{}>", self.std_head(models), element.name(models)).into()
             }
-            Self::Ordering => "Ordering".into(),
-            Self::Time(time) => time.name().into(),
-            Self::ParseError(error) => error.name().into(),
-            Self::Arguments => "Arguments<'_>".into(),
+            Self::Arguments => format!("{}<'_>", self.std_head(models)).into(),
             Self::Fn { inputs, output }
             | Self::FnItem { inputs, output, .. }
             | Self::FnChoice { inputs, output, .. } => {
@@ -1440,16 +1499,23 @@ impl Ty {
                 let element = element.name(models);
                 match kind {
                     sequence::Kind::Array(length) => format!("[{element}; {length}]"),
-                    sequence::Kind::Vec => format!("Vec<{element}>"),
                     sequence::Kind::Slice => format!("[{element}]"),
-                    sequence::Kind::Deque => format!("VecDeque<{element}>"),
+                    sequence::Kind::Vec | sequence::Kind::Deque => {
+                        format!("{}<{element}>", self.std_head(models))
+                    }
                 }
                 .into()
             }
-            Self::Option(element) => format!("Option<{}>", element.name(models)).into(),
-            Self::Result(ok, err) => {
-                format!("Result<{}, {}>", ok.name(models), err.name(models)).into()
+            Self::Option(element) => {
+                format!("{}<{}>", self.std_head(models), element.name(models)).into()
             }
+            Self::Result(ok, err) => format!(
+                "{}<{}, {}>",
+                self.std_head(models),
+                ok.name(models),
+                err.name(models)
+            )
+            .into(),
             Self::Tuple(members) => {
                 let names = members
                     .iter()
@@ -1467,25 +1533,34 @@ impl Ty {
                 pointee_name(target, models)
             )
             .into(),
-            Self::Boxed(target) => format!("Box<{}>", pointee_name(target, models)).into(),
-            Self::Counted(counter, target) => {
-                format!("{}<{}>", counter.name(), pointee_name(target, models)).into()
-            }
-            Self::Weak(_, target) => format!("Weak<{}>", target.name(models)).into(),
-            // rustc names a std iterator by its struct: `Chars<'_>`.
-            Self::Iter(_, Some(std), _) => {
-                format!("{}<'_>", std.rsplit("::").next().unwrap_or(std)).into()
-            }
-            Self::Iter(item, None, _) => {
-                format!("impl Iterator<Item = {}>", item.name(models)).into()
-            }
-            Self::Reverse(inner) => format!("Reverse<{}>", inner.name(models)).into(),
-            Self::Cow(borrowed) => format!("Cow<'_, {}>", borrowed.name(models)).into(),
-            Self::Cell(kind, inner) => format!("{}<{}>", kind.name(), inner.name(models)).into(),
-            Self::Thread(kind, inner) => kind.name(&inner.name(models)).into(),
-            Self::Keyed(kind, arguments) => format!(
+            Self::Boxed(target) | Self::Counted(_, target) => format!(
                 "{}<{}>",
-                kind.name(),
+                self.std_head(models),
+                pointee_name(target, models)
+            )
+            .into(),
+            Self::Weak(_, target) => {
+                format!("{}<{}>", self.std_head(models), target.name(models)).into()
+            }
+            // rustc names a std iterator by its struct: `Chars<'_>`. One
+            // whose type arguments rawr doesn't keep, as `Map<I, F>`'s
+            // inner iterator and closure, by its items.
+            Self::Iter(item, std, _) => {
+                match std.and_then(|std| super::trimmed::elided(std, models)) {
+                    Some(name) => name.into(),
+                    None => format!("impl Iterator<Item = {}>", item.name(models)).into(),
+                }
+            }
+            Self::Reverse(inner) | Self::Cell(_, inner) => {
+                format!("{}<{}>", self.std_head(models), inner.name(models)).into()
+            }
+            Self::Cow(borrowed) => {
+                format!("{}<'_, {}>", self.std_head(models), borrowed.name(models)).into()
+            }
+            Self::Thread(kind, inner) => kind.name(&inner.name(models), models).into(),
+            Self::Keyed(_, arguments) => format!(
+                "{}<{}>",
+                self.std_head(models),
                 arguments
                     .iter()
                     .map(|argument| argument.name(models).to_string())
@@ -1493,11 +1568,11 @@ impl Ty {
                     .join(", ")
             )
             .into(),
-            Self::Dyn(trait_name, bindings) if bindings.is_empty() => {
-                format!("dyn {trait_name}").into()
+            Self::Dyn(trait_name, bindings, auto) if bindings.is_empty() => {
+                format!("dyn {trait_name}{}", auto.written()).into()
             }
-            Self::Dyn(trait_name, bindings) => format!(
-                "dyn {trait_name}<{}>",
+            Self::Dyn(trait_name, bindings, auto) => format!(
+                "dyn {trait_name}<{}>{}",
                 dyn_arguments(bindings)
                     .iter()
                     .map(|ty| ty.name(models).to_string())
@@ -1508,7 +1583,8 @@ impl Ty {
                             .map(|(name, ty)| format!("{name} = {}", ty.name(models)))
                     )
                     .collect::<Vec<_>>()
-                    .join(", ")
+                    .join(", "),
+                auto.written()
             )
             .into(),
             Self::Host { proof, arguments } if arguments.is_empty() => {
@@ -1582,6 +1658,7 @@ impl Ty {
                 thread::Kind::Panic => Some(TypeId::of::<thread::Panic>()),
                 // No value is made: no lock rawr runs is poisoned.
                 thread::Kind::PoisonError => Some(TypeId::of::<Dynamic>()),
+                thread::Kind::LocalKey => Some(TypeId::of::<crate::eval::thread_local::LocalKey>()),
             },
             Self::Option(_) => Some(TypeId::of::<crate::option::Value>()),
             Self::Result(..) => Some(TypeId::of::<crate::result::Value>()),
@@ -1617,13 +1694,13 @@ impl Ty {
                 Nominal::Enum { .. } => TypeId::of::<nominal::Enum>(),
             }),
             // std's `dyn Error` is the error object `?` and `Box::new` make.
-            Self::Dyn(name, bindings)
+            Self::Dyn(name, bindings, _)
                 if name.as_str() == "Error" && bindings.is_empty() && models.std_error_trait() =>
             {
                 Some(TypeId::of::<error_object::ErrorObject>())
             }
             // std's `dyn Any` is the value with its type a coercion makes.
-            Self::Dyn(name, bindings)
+            Self::Dyn(name, bindings, _)
                 if name.as_str() == "Any" && bindings.is_empty() && models.std_trait("Any") =>
             {
                 Some(TypeId::of::<any_object::AnyObject>())
@@ -1948,76 +2025,10 @@ pub(super) fn host_type_name(proof: &HostTyProof, models: &Models) -> ImmutableS
         }
     }
     let path = proof.definition.path();
-    if let Some(name) = std_type_name(path.as_str(), models) {
+    if let Some(name) = super::trimmed::std_type_name(path.as_str(), models) {
         return name.into();
     }
     public(&path).as_ref().into()
-}
-
-thread_local! {
-    /// Whether a message names each std type by its name alone, as
-    /// rustc's E0308 labels do (`forced_trimmed`).
-    static FORCED_TRIMMED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// `name()`, with each std type named by its name alone however many
-/// types share it, as rustc's `with_forced_trimmed_paths` names them:
-/// "expected `i32`, found `Alignment`".
-pub(super) fn forced_trimmed<T>(name: impl FnOnce() -> T) -> T {
-    let outer = FORCED_TRIMMED.replace(true);
-    let named = name();
-    FORCED_TRIMMED.set(outer);
-    named
-}
-
-/// `expected` and `actual` as rustc's E0308 label names them: each std
-/// type by its name alone (`forced_trimmed`), unless that names both
-/// alike, as `Alignment` would the program's own and std's; then each as
-/// any message names it, `std::fmt::Alignment` beside `Alignment`.
-pub(super) fn mismatched_names(
-    expected: &Ty,
-    actual: &Ty,
-    models: &Models,
-) -> (ImmutableString, ImmutableString) {
-    let trimmed = forced_trimmed(|| (expected.name(models), actual.name(models)));
-    if trimmed.0 == trimmed.1 {
-        (expected.name(models), actual.name(models))
-    } else {
-        trimmed
-    }
-}
-
-/// The type at the facade path `path`, when it is one of Rawr's std's, as
-/// rustc names std's own: by its name alone when no other type of std's
-/// crates nor of the program has it, else by its std path, as
-/// `std::fmt::Alignment` is beside `std::mem::Alignment`, and
-/// `std::path::PathBuf` beside the program's own `PathBuf`. `None` for
-/// any other type.
-///
-/// A type std's alias names is named as the type it names, as rustc names
-/// an `AtomicUsize` `Atomic<usize>`.
-pub(super) fn std_type_name(path: &str, models: &Models) -> Option<String> {
-    let rest = path
-        .strip_prefix(crate::std_facade::ROOT)?
-        .strip_prefix("::")?;
-    let std = format!("std::{rest}");
-    let (std, arguments) = match crate::std_table::aliased(&std) {
-        Some(target) => target.split_at(target.find('<').unwrap_or(target.len())),
-        None => (std.as_str(), ""),
-    };
-    let name = std.rsplit("::").next().unwrap_or(std);
-    let sole = || {
-        crate::std_table::sole_type(name)
-            && !models
-                .by_definition
-                .values()
-                .any(|nominal| nominal.name() == name)
-    };
-    Some(if FORCED_TRIMMED.get() || sole() {
-        format!("{name}{arguments}")
-    } else {
-        format!("{std}{arguments}")
-    })
 }
 
 pub(super) fn same_head(left: &Ty, right: &Ty) -> bool {
@@ -2312,7 +2323,11 @@ pub(super) fn contains(ty: &Ty, leaf: &dyn Fn(&Ty) -> bool) -> bool {
             | Ty::Range(target)
             | Ty::OpenRange(_, target)
             | Ty::InclusiveOf(target)
-            | Ty::Cell(_, target) => inside(target),
+            | Ty::Cell(_, target)
+            | Ty::Counted(_, target)
+            | Ty::Weak(_, target)
+            | Ty::Thread(_, target) => inside(target),
+            Ty::Script(_, arguments) => arguments.iter().any(inside),
             Ty::Array {
                 element,
                 kind: sequence::Kind::Array(length),

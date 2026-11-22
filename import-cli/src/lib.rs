@@ -321,6 +321,16 @@ impl Error {
         }
     }
 
+    /// A failure to read `graph`'s Rust side: the program's own error when
+    /// a marked function native code sees can't be called through rawr yet
+    /// ([`rawr::package::Graph::island_refusal`]), otherwise `error`.
+    pub fn rust(graph: &rawr::package::Graph, error: rawr_import::Error) -> Self {
+        match graph.island_refusal() {
+            Some(refusal) => Self::Rawr(refusal),
+            None => Self::other(error),
+        }
+    }
+
     /// An importer failure, which is [`Error::Copy`] when Cargo failed to
     /// build rawr's copy of the program, and otherwise as [`Error::cache`].
     pub fn import(error: rawr_import::Error) -> Self {

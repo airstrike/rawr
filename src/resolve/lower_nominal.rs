@@ -43,6 +43,7 @@ mod host_call;
 mod host_signature;
 mod imported;
 mod inference;
+mod instance;
 #[cfg(feature = "rust-import")]
 mod interface;
 mod iterator;
@@ -97,10 +98,12 @@ mod std_scope;
 mod stored;
 mod surface;
 pub(crate) mod thread;
+mod thread_local;
 mod time;
 mod tokens;
 mod trait_call;
 mod traits;
+mod trimmed;
 mod ty;
 mod unify;
 mod wide;
@@ -149,7 +152,7 @@ mod trait_instance_tests;
 
 use super::borrowck::{
     self,
-    record::{Matched, ScopeEnd},
+    record::{self, Matched, ScopeEnd},
 };
 use super::{
     imports::Wanted, intrinsic, item, type_ref, BindingSite, Callee, Candidate, Cloning, Error,
@@ -185,7 +188,7 @@ pub(crate) use dispatch::this_parameter;
 use dispatch::{builtin_conversions_from, builtin_operator, BUILTIN_CONVERSIONS};
 use dispatch::{copied_parameters, inherit_block_names, inherit_names, method_copied};
 use dispatch::{function_copied, function_kept, method_kept};
-use dispatch::{kind_into_dispatcher_name, lent_parameters, method_lent};
+use dispatch::{lent_parameters, method_lent};
 /// The generated function that runs a value's `Drop` and its parts'.
 #[cfg(feature = "rust-import")]
 pub(crate) use drops::GLUE;
@@ -203,8 +206,8 @@ use from_str::{parse_text, ParseError};
 use generics::{
     assumed_generics, bound_kinds, bounded_value, const_generics, dyn_arguments,
     generic_conversion_call, host_witnesses, instantiate, is_iterator_trait, item_generics,
-    kind_into_bound, mentions_parameter, opaque_outputs, opaque_substitution, supertraits,
-    witness_generics, PendingInstance, UNKNOWN_WITNESS,
+    mentions_parameter, opaque_outputs, opaque_substitution, supertraits, witness_generics,
+    PendingInstance, UNKNOWN_WITNESS,
 };
 #[cfg(feature = "rust-import")]
 use generics::{ImplBounds, ImplProjection, Selection};
@@ -250,11 +253,11 @@ pub(crate) use naming::DEBUG_DISPATCHER;
 pub(crate) use naming::DEBUG_GENERIC;
 use naming::{
     call_placeholder, conversion_placeholder, function_name, instance_dispatcher_name,
-    instance_placeholder, instance_text, kind_dispatcher_name, lent_text_placeholder, method_name,
-    pattern_name, static_dispatcher_name, static_instance_dispatcher_name,
-    static_instance_placeholder, text_into_placeholder, trait_dispatcher_name, witness_placeholder,
-    witness_variable, CLOSURE_SENTINEL, DEFAULT_DISPATCHER, FALLBACK_INSTANCE, HIDDEN_DISPATCHER,
-    METHOD_SENTINEL, PRIVATE_PREFIX, SENTINEL,
+    instance_placeholder, instance_text, lent_text_placeholder, method_name, pattern_name,
+    static_dispatcher_name, static_instance_dispatcher_name, static_instance_placeholder,
+    text_into_placeholder, trait_dispatcher_name, witness_placeholder, witness_variable,
+    CLOSURE_SENTINEL, DEFAULT_DISPATCHER, FALLBACK_INSTANCE, HIDDEN_DISPATCHER, METHOD_SENTINEL,
+    PRIVATE_PREFIX, SENTINEL,
 };
 pub(crate) use naming::{function_display_name, private_function_name, PRIVATE_METHOD};
 use obligation::Obligation;
@@ -420,10 +423,10 @@ struct Parser<'a> {
     /// `arithmetic_overflow` and `unconditional_panic` lints check.
     known_values: BTreeMap<Span, Known>,
     known_indices: Vec<KnownIndex>,
-    /// A capture that keeps a closure from being `Send`, of each closure
-    /// that has one, by the closure's span: what `std::thread::spawn`
-    /// refuses (`thread.rs`).
-    unsent_captures: BTreeMap<Span, closure::Unsent>,
+    /// The capture that keeps a closure from being `Send`, as rustc's
+    /// E0277 names it, of each closure that has one, by the closure's
+    /// span: what `std::thread::spawn` refuses (`thread.rs`).
+    unsent_captures: BTreeMap<Span, counted::Unsendable>,
     /// Each closure's captures whose type holds an opaque output (D1109),
     /// which is `Send` as its hidden type is, known once every body is
     /// checked.
@@ -484,6 +487,13 @@ struct Parser<'a> {
     /// `fn`), by their span, and the locals declared with one, by their
     /// declaration (T179).
     shared_call_fns: BTreeSet<Span>,
+    /// Calls and field reads whose value is a boxed `FnMut` or `FnOnce`,
+    /// which a call borrows `&mut` through the box, by their span, and the
+    /// locals declared with one, by their declaration (T188).
+    mutable_call_fns: BTreeSet<Span>,
+    /// The `dyn Fn`, `dyn FnMut` and `dyn FnOnce` written in a body's types,
+    /// by where their trait is, with how a call borrows each (T188).
+    written_fn_traits: BTreeMap<Position, call::Borrow>,
     closure_count: usize,
     lifted: Vec<closure::Lifted>,
     /// Parameter types of the host callable each call argument fills.
@@ -500,6 +510,9 @@ struct Parser<'a> {
     /// pattern and the value, as rustc's E0423 for a trait's name there
     /// offers to make it a `:` (`WrongKind::annotation`).
     unannotated_let: Option<Span>,
+    /// The `let` being read that writes its type, which rustc's E0308 at
+    /// its value labels "expected due to this" (`let_mismatch`).
+    annotated_let: Option<binding::AnnotatedLet>,
     /// The lifetimes the `for<'a>` binders around the body type being
     /// read bind, which are elided ones (`for<'a> fn(&'a T)`).
     bound_lifetimes: Vec<ImmutableString>,
@@ -791,6 +804,13 @@ struct Parser<'a> {
     /// what a method std declares and rawr doesn't run yet is looked up
     /// on (`inherent_not_yet`).
     std_probed: BTreeMap<Position, Ty>,
+    /// Each method call's receiver type, references and all, by its
+    /// member's position: what rustc's E0599 names (`native_no_item`).
+    std_receivers: BTreeMap<Position, Ty>,
+    /// Each method call's receiver that auto-derefs through a `Box`, the
+    /// box's type by its member's position: what rustc's E0599 names
+    /// (`boxed_no_item`).
+    boxed_receivers: BTreeMap<Position, Ty>,
     /// The turbofish of the host function call whose signature is being
     /// instantiated (`rand::random::<f64>()`).
     host_turbofish: Option<Vec<Ty>>,
@@ -849,8 +869,16 @@ struct Parser<'a> {
     /// In an instance, each parameter its template bounds by `Into<U>`
     /// into a held std type, by its declaration, with its `U`
     /// (`Instances::conversions`).
-    #[cfg(feature = "rust-import")]
     instance_conversions: BTreeMap<Span, Ty>,
+    /// Each call of a template whose instance waits for the body's types
+    /// (D1115).
+    pending_template_calls: Vec<instance::Pending>,
+    /// The instances this body's calls bind, and the templates it calls by
+    /// their erased bodies.
+    instance_uses: instance::Uses,
+    /// Whether this body is a template's generic read, which its instances
+    /// lower again at their types (D1115).
+    template_read: bool,
     /// Whether this body is read only for those calls (`monomorphize`).
     #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
     collecting_instances: bool,
@@ -957,6 +985,16 @@ struct Parser<'a> {
     /// The `drops::Shape` of each temporary there whose type needs more
     /// than the walk of every part.
     temporary_shapes: BTreeMap<String, String>,
+    /// What the tail of the block or body being read does with its
+    /// temporaries before edition 2024 (`drops::Tails`).
+    tails: drops::Tails,
+    /// The guard type of each `RefCell` borrow and `Mutex` lock, by the
+    /// call's span: std's guard (`Ref`, `RefMut` or `MutexGuard`) and the
+    /// type of the value it lends (`cell::cell_guard_type`).
+    cell_guard_types: BTreeMap<Span, (&'static str, Ty)>,
+    /// The locals, by declaration, an assignment gave a `RefCell`'s guard
+    /// (`r = c.borrow();`): each drops it where it ends.
+    assigned_guards: BTreeSet<Span>,
     /// Expressions that read a place through a reference, which no
     /// temporary holds (`materialize`).
     borrowed: BTreeSet<Span>,
@@ -1006,6 +1044,7 @@ impl<'a> Parser<'a> {
         }
         let associated = Shared::clone(&models.associated);
         let opaque_outputs = Shared::clone(&models.opaque_outputs);
+        let edition = models.edition();
 
         let mut parser = Self {
             marker: std::marker::PhantomData,
@@ -1072,6 +1111,8 @@ impl<'a> Parser<'a> {
             once_closures: BTreeMap::new(),
             copied_state: BTreeMap::new(),
             shared_call_fns: BTreeSet::new(),
+            mutable_call_fns: BTreeSet::new(),
+            written_fn_traits: BTreeMap::new(),
             closure_count: 0,
             lifted: Vec::new(),
             closure_hints: Vec::new(),
@@ -1079,6 +1120,7 @@ impl<'a> Parser<'a> {
             forward_spec: false,
             closure_hint: None,
             unannotated_let: None,
+            annotated_let: None,
             bound_lifetimes: Vec::new(),
             expansions: 0,
             expansion_ends: Vec::new(),
@@ -1125,7 +1167,7 @@ impl<'a> Parser<'a> {
             alias_roots: BTreeMap::new(),
             undeclared_mut: BTreeSet::new(),
             reborrow_selectors: BTreeMap::new(),
-            flow: std::cell::RefCell::default(),
+            flow: std::cell::RefCell::new(super::borrowck::record::Recorder::new(edition)),
             parameter_declarations: BTreeSet::new(),
             loop_entered: false,
             loop_iterator: None,
@@ -1173,6 +1215,8 @@ impl<'a> Parser<'a> {
             spliced_traits: BTreeMap::new(),
             spliced_turbofish: BTreeMap::new(),
             std_probed: BTreeMap::new(),
+            std_receivers: BTreeMap::new(),
+            boxed_receivers: BTreeMap::new(),
             host_turbofish: None,
             explicit_trait_arguments: None,
             binding_mode: std::cell::Cell::new(None),
@@ -1189,9 +1233,11 @@ impl<'a> Parser<'a> {
             literal_values: Vec::new(),
             trait_parameters: BTreeMap::new(),
             instance_calls: Vec::new(),
-            #[cfg(feature = "rust-import")]
             instance_conversions: BTreeMap::new(),
             collecting_instances: false,
+            pending_template_calls: Vec::new(),
+            instance_uses: instance::Uses::default(),
+            template_read: false,
             reaches_host: false,
             impl_uses: Vec::new(),
             impl_instance: String::new(),
@@ -1223,6 +1269,9 @@ impl<'a> Parser<'a> {
             subject_deref: false,
             temporary_scopes: Vec::new(),
             temporary_shapes: BTreeMap::new(),
+            tails: drops::Tails::default(),
+            cell_guard_types: BTreeMap::new(),
+            assigned_guards: BTreeSet::new(),
             borrowed: BTreeSet::new(),
             borrowed_fields: BTreeMap::new(),
             deferred_clears: Vec::new(),

@@ -106,7 +106,7 @@ pub mod uses;
 pub mod test_fixture;
 
 pub use contract::{Classified, Contract};
-pub use error::Error;
+pub use error::{Bug, Error};
 pub use surface::{Demand, Sealed};
 
 /// The result type returned by importer transformations.

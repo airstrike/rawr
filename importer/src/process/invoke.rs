@@ -21,6 +21,14 @@ pub enum Rejection {
     MissingAdapter,
     #[error("adapter invocation belongs to a stale generation")]
     Stale,
+    #[error("a crate's value was reached on a thread that holds none")]
+    NoArena,
+    #[error("adapter output has no witness of its type")]
+    Unwitnessed,
+    #[error("a crate value's method ran without its handle")]
+    Unhandled,
+    #[error("a lent arena was missing inside its own lend")]
+    Unlent,
 }
 
 /// Local invocation encoding or validation failure.
@@ -48,6 +56,10 @@ impl Rejection {
             7 => Self::Cardinality,
             8 => Self::MissingAdapter,
             9 => Self::Stale,
+            17 => Self::NoArena,
+            18 => Self::Unwitnessed,
+            19 => Self::Unhandled,
+            20 => Self::Unlent,
             _ => return None,
         })
     }

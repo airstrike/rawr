@@ -1247,6 +1247,7 @@ fn diagnostic_path(error: &crate::resolve::Error) -> Option<(String, ImportedNam
     match error {
         R::InvalidTypeArguments { ty, .. } => Some((ty.to_string(), ImportedNamespace::Type)),
         R::UnknownMember { owner, .. }
+        | R::NoField { owner, .. }
         | R::NoItem { owner, .. }
         | R::InvalidConstruction { owner, .. }
         | R::MissingCapability { owner, .. }
@@ -1289,6 +1290,14 @@ fn diagnostic_path(error: &crate::resolve::Error) -> Option<(String, ImportedNam
             },
             ImportedNamespace::Type,
         )),
+        R::LetMismatch(mismatch) => Some((
+            if mismatch.actual.contains("::") {
+                mismatch.actual.to_string()
+            } else {
+                mismatch.expected.to_string()
+            },
+            ImportedNamespace::Type,
+        )),
         R::DuplicateItem { .. }
         | R::DuplicateImport { .. }
         | R::Redefined { .. }
@@ -1306,6 +1315,7 @@ fn diagnostic_path(error: &crate::resolve::Error) -> Option<(String, ImportedNam
         | R::MovedValue { .. }
         | R::BorrowConflict { .. }
         | R::Outlives(_)
+        | R::TailTemporary(_)
         | R::ImmutableBorrow { .. }
         | R::InvalidImport { .. }
         | R::LoweringUnavailable { .. }

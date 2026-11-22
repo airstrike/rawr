@@ -82,12 +82,35 @@ pub(super) struct Condition {
 #[derive(Default)]
 pub(super) struct Scope {
     locals: Vec<Local>,
+    /// How many of `locals`, the first, are a body's parameters, which end
+    /// after its tail's temporaries.
+    parameters: usize,
     /// Outer locals this scope's bindings shadow, by scope and position,
     /// whose own names read them again once it ends.
     shadowed: Vec<(usize, usize)>,
     /// The borrow facts have the uses its drops make at its end already
     /// ([`Parser::block_drop_uses`]).
     uses_recorded: bool,
+    /// What ends the thread's thread-local values after the scope's own
+    /// drops: `main`'s body's (`end_main_thread`).
+    thread_end: Option<String>,
+}
+
+/// Where a block's tail temporaries drop before edition 2024: after the
+/// block's locals, at the end of the temporary scope around the block, or,
+/// in a body's own tail, between its locals and its parameters. Edition
+/// 2024 drops them with the tail, before the locals.
+#[derive(Default)]
+pub(super) struct Tails {
+    /// The block or body being read keeps its tail's temporaries past its
+    /// locals.
+    kept: bool,
+    /// The temporaries its tail handed it, in the order made.
+    handed: Vec<String>,
+    /// The block ahead is a block expression, whose tail's temporaries go
+    /// on to the temporary scope around it. A body's block, a loop's, a
+    /// closure's or a branch's is a temporary scope of its own.
+    escapes: bool,
 }
 
 /// Which of the borrows a value holds its drop uses, as rustc's drop check
@@ -676,11 +699,10 @@ impl Parser<'_> {
         visiting: &mut Vec<(type_def::Id, Box<[Ty]>)>,
     ) -> Result<bool, Error> {
         let unsupported = |holder: &str| Error::UnsupportedNominalSyntax {
-            construct: format!(
+            construct: crate::resolve::Unsupported::said(format!(
                 "a value whose type implements `Drop` inside {holder}: dropping it where Rust \
                  does is not supported in Rawr yet"
-            )
-            .into(),
+            )),
             source: at,
         };
         let resolved = self.inference.resolve(ty);
@@ -866,11 +888,10 @@ impl Parser<'_> {
         match self.note_drop(name, declaration, ty)? {
             None => Ok(()),
             Some(_) => Err(Error::UnsupportedNominalSyntax {
-                construct: format!(
+                construct: crate::resolve::Unsupported::said(format!(
                     "a pattern binding `{name}` that shadows a value whose type implements \
                      `Drop`: keeping the shadowed value is not supported in Rawr yet"
-                )
-                .into(),
+                )),
                 source: declaration,
             }),
         }
@@ -890,11 +911,17 @@ impl Parser<'_> {
 
     /// Close the innermost scope: the drops of its locals, as statements.
     pub(super) fn close_drops(&mut self) -> Result<String, Error> {
+        self.close_drops_after(&[])
+    }
+
+    /// Close the innermost scope: the drops of its locals, then of `tail`,
+    /// its tail's temporaries that outlive them, then of its parameters.
+    fn close_drops_after(&mut self, tail: &[String]) -> Result<String, Error> {
         if !self.drop_scoped() {
-            return Ok(String::new());
+            return Ok(self.temporary_drops(tail));
         }
         let Some(scope) = self.drop_scopes.pop() else {
-            return Ok(String::new());
+            return Ok(self.temporary_drops(tail));
         };
         // The outer locals this scope shadowed have their names again.
         for (outer, position) in scope.shadowed.iter().rev() {
@@ -911,7 +938,16 @@ impl Parser<'_> {
                 self.note_drop_use(local);
             }
         }
-        self.local_drops(&scope.locals)
+        // A body's tail temporaries drop after its locals, before its
+        // parameters.
+        let (parameters, locals) = scope.locals.split_at(scope.parameters);
+        let mut drops = self.local_drops(locals)?;
+        drops.push_str(&self.temporary_drops(tail));
+        drops.push_str(&self.local_drops(parameters)?);
+        if let Some(end) = &scope.thread_end {
+            drops.push_str(end);
+        }
+        Ok(drops)
     }
 
     /// The drops of every scope above `depth`, innermost first: what a jump
@@ -923,8 +959,19 @@ impl Parser<'_> {
         let mut text = String::new();
         for scope in self.drop_scopes.iter().skip(depth).rev() {
             text.push_str(&self.local_drops(&scope.locals)?);
+            if let Some(end) = &scope.thread_end {
+                text.push_str(end);
+            }
         }
         Ok(text)
+    }
+
+    /// End the thread's thread-local values with `statement` after the
+    /// innermost scope's drops, at its end and at each jump out of it.
+    pub(super) fn end_thread_after_scope(&mut self, statement: String) {
+        if let Some(scope) = self.drop_scopes.last_mut() {
+            scope.thread_end = Some(statement);
+        }
     }
 
     /// `value` with `drops` after it: `{ let v = value; drops v }`.
@@ -940,18 +987,21 @@ impl Parser<'_> {
     }
 
     /// A block's statements and tail with the drops of its scope, closed
-    /// here, after the tail's value.
+    /// here, after the tail's value, then the drops of `temporaries`, the
+    /// tail's that outlive the block's locals.
     pub(super) fn close_block_drops(
         &mut self,
         prelude: &mut origin::Fragment,
         source: &mut origin::Fragment,
         tail: bool,
+        temporaries: &[String],
     ) -> Result<(), Error> {
-        let drops = self.close_drops()?;
+        let drops = self.close_drops_after(temporaries)?;
         if drops.is_empty() {
             return Ok(());
         }
         if tail {
+            prelude.push_text(declarations(temporaries));
             let kept = self.temporary("dropped");
             prelude.push_text(format!("let {kept} = "));
             prelude.push(std::mem::replace(
@@ -1002,6 +1052,8 @@ impl Parser<'_> {
         &mut self,
         parameters: impl IntoIterator<Item = (ImmutableString, Span)>,
     ) -> Result<(), Error> {
+        // The body's own tail, closed by `close_body_drops`.
+        let _ = self.open_tails();
         if !self.drop_scoped() {
             return Ok(());
         }
@@ -1024,6 +1076,9 @@ impl Parser<'_> {
                 self.note_drop_here(&name, declaration, &ty)?;
             }
         }
+        if let Some(scope) = self.drop_scopes.last_mut() {
+            scope.parameters = scope.locals.len();
+        }
         Ok(())
     }
 
@@ -1036,9 +1091,10 @@ impl Parser<'_> {
         for (ty, declaration) in parameters {
             if self.needs_drop(&ty, declaration)? {
                 return Err(Error::UnsupportedNominalSyntax {
-                    construct: "an `async` function's parameter whose type implements `Drop`: \
-                                dropping it with the future is not supported in Rawr yet"
-                        .into(),
+                    construct: crate::resolve::Unsupported::said(
+                        "an `async` function's parameter whose type implements `Drop`: \
+                                dropping it with the future is not supported in Rawr yet",
+                    ),
                     source: declaration,
                 });
             }
@@ -1060,26 +1116,38 @@ impl Parser<'_> {
         if self.drop_scoped() && self.drop_scopes.len() > self.drop_base {
             let mut uses = self.block_drop_uses();
             uses.extend(guards);
-            let declared: Vec<Span> = self
+            let (parameters, declared): (Vec<Span>, Vec<Span>) = self
                 .drop_scopes
                 .last()
-                .map(|scope| scope.locals.iter().map(|local| local.declaration).collect())
+                .map(|scope| {
+                    let declarations = scope.locals.iter().map(|local| local.declaration);
+                    (
+                        declarations.clone().take(scope.parameters).collect(),
+                        declarations.skip(scope.parameters).collect(),
+                    )
+                })
                 .unwrap_or_default();
-            let end = point_span(self.position());
-            self.flow().body_end(&declared, &uses, end);
+            // At the body's `}`, as rustc reports what ends there.
+            let end = self.last_read();
+            self.flow().body_end(&declared, &parameters, &uses, end);
         } else if !guards.is_empty() {
-            let end = point_span(self.position());
-            self.flow().body_end(&[], &guards, end);
+            let end = self.last_read();
+            self.flow().body_end(&[], &[], &guards, end);
         }
-        let drops = self.close_drops()?;
+        let temporaries = std::mem::take(&mut self.tails.handed);
+        let drops = self.close_drops_after(&temporaries)?;
         if drops.is_empty() {
             return Ok(());
         }
         match self.last_expression {
             Some((start, endpoint)) => {
-                let mut tail = self.output.split_off(start);
-                tail.trim_end();
-                let tail = self.then_drops(tail, &drops);
+                let mut value = self.output.split_off(start);
+                value.trim_end();
+                let mut tail = self.then_drops(value, &drops);
+                if !temporaries.is_empty() {
+                    // Declared before the tail, which gives them their values.
+                    tail = tail.surrounded(&format!("{{ {}", declarations(&temporaries)), " }");
+                }
                 let start = self.write_output(tail, endpoint);
                 self.last_expression = Some((start, endpoint));
             }
@@ -1221,11 +1289,10 @@ impl Parser<'_> {
                 .map(|local| local.place.to_string());
             let Some(copy) = copy else {
                 return Err(Error::UnsupportedNominalSyntax {
-                    construct: format!(
+                    construct: crate::resolve::Unsupported::said(format!(
                         "a pattern binding that shadows `{place}`, the local it moves a value \
                          whose type implements `Drop` out of: not supported in Rawr yet"
-                    )
-                    .into(),
+                    )),
                     source: at,
                 });
             };
@@ -1242,9 +1309,10 @@ impl Parser<'_> {
             Holder::Local(place, prefix) => (place, prefix),
             Holder::Place => {
                 return Err(Error::UnsupportedNominalSyntax {
-                    construct: "a pattern that moves a value whose type implements `Drop` out of \
-                                a place other than a local or its field: not supported in Rawr yet"
-                        .into(),
+                    construct: crate::resolve::Unsupported::said(
+                        "a pattern that moves a value whose type implements `Drop` out of \
+                                a place other than a local or its field: not supported in Rawr yet",
+                    ),
                     source: at,
                 })
             }
@@ -1296,9 +1364,10 @@ impl Parser<'_> {
             .any(|(_, _, ty)| matches!(self.inference.resolve(ty), Ty::Reference { .. }))
         {
             return Err(Error::UnsupportedNominalSyntax {
-                construct: "a `let` pattern that borrows from a value whose type implements \
-                            `Drop` made for it: keeping that value is not supported in Rawr yet"
-                    .into(),
+                construct: crate::resolve::Unsupported::said(
+                    "a `let` pattern that borrows from a value whose type implements \
+                            `Drop` made for it: keeping that value is not supported in Rawr yet",
+                ),
                 source: syntax.span(),
             });
         }
@@ -1489,9 +1558,10 @@ impl Parser<'_> {
                     && self.needs_drop(&owned, at)?
                 {
                     return Err(Error::UnsupportedNominalSyntax {
-                        construct: "a `Cow::Owned` pattern that moves a value whose type \
-                                    implements `Drop`: not supported in Rawr yet"
-                            .into(),
+                        construct: crate::resolve::Unsupported::said(
+                            "a `Cow::Owned` pattern that moves a value whose type \
+                                    implements `Drop`: not supported in Rawr yet",
+                        ),
                         source: at,
                     });
                 }
@@ -1504,9 +1574,10 @@ impl Parser<'_> {
                     leftover |= self.pattern_moves(alternative, &resolved, path, &mut inside)?;
                     if !inside.is_empty() {
                         return Err(Error::UnsupportedNominalSyntax {
-                            construct: "an `|` pattern that moves a value whose type implements \
-                                        `Drop`: not supported in Rawr yet"
-                                .into(),
+                            construct: crate::resolve::Unsupported::said(
+                                "an `|` pattern that moves a value whose type implements \
+                                        `Drop`: not supported in Rawr yet",
+                            ),
                             source: at,
                         });
                     }
@@ -1516,9 +1587,10 @@ impl Parser<'_> {
             pattern::Syntax::Slice { .. } => {
                 if binds_by_value(syntax) && self.needs_drop(&resolved, at)? {
                     return Err(Error::UnsupportedNominalSyntax {
-                        construct: "a slice pattern that moves a value whose type implements \
-                                    `Drop`: not supported in Rawr yet"
-                            .into(),
+                        construct: crate::resolve::Unsupported::said(
+                            "a slice pattern that moves a value whose type implements \
+                                    `Drop`: not supported in Rawr yet",
+                        ),
                         source: at,
                     });
                 }
@@ -1529,9 +1601,10 @@ impl Parser<'_> {
 
     fn partial_drop_move(&self, at: Span) -> Error {
         Error::UnsupportedNominalSyntax {
-            construct: "a pattern that moves a part of an `Option` or `Result` whose type \
-                        implements `Drop` and leaves another such part: not supported in Rawr yet"
-                .into(),
+            construct: crate::resolve::Unsupported::said(
+                "a pattern that moves a part of an `Option` or `Result` whose type \
+                        implements `Drop` and leaves another such part: not supported in Rawr yet",
+            ),
             source: at,
         }
     }
@@ -1605,10 +1678,11 @@ impl Parser<'_> {
         }
         if !self.drop_scoped() || self.drop_scopes.len() <= self.drop_base {
             return Err(Error::UnsupportedNominalSyntax {
-                construct: "a `let` that borrows a temporary value whose type implements `Drop` \
+                construct: crate::resolve::Unsupported::said(
+                    "a `let` that borrows a temporary value whose type implements `Drop` \
                             outside a block: keeping it to the block's end is not supported in \
-                            Rawr yet"
-                    .into(),
+                            Rawr yet",
+                ),
                 source: value,
             });
         }
@@ -1618,6 +1692,62 @@ impl Parser<'_> {
             self.note_drop_here(&temporary.as_str().into(), declaration, &ty)?;
         }
         Ok(declarations(extended))
+    }
+
+    /// Open the tail of a block or body: before edition 2024 it keeps its
+    /// tail's temporaries past its locals. Gives what the enclosing one's
+    /// was, to close it with, and whether this block's escape to the
+    /// temporary scope around it.
+    pub(super) fn open_tails(&mut self) -> (Tails, bool) {
+        let kept = self.drops() && !self.models.edition().drops_tail_temporaries_first();
+        let mut outer = std::mem::replace(
+            &mut self.tails,
+            Tails {
+                kept,
+                ..Tails::default()
+            },
+        );
+        let escapes = std::mem::take(&mut outer.escapes);
+        (outer, escapes)
+    }
+
+    /// Close the tail opened with `outer` given: the temporaries its tail
+    /// handed it.
+    pub(super) fn close_tails(&mut self, outer: Tails) -> Vec<String> {
+        std::mem::replace(&mut self.tails, outer).handed
+    }
+
+    /// The block ahead is a block expression: its tail's temporaries go on
+    /// to the temporary scope around it before edition 2024.
+    pub(super) fn escape_tails(&mut self) {
+        self.tails.escapes = true;
+    }
+
+    /// `temporaries`, the block's tail's that outlive its locals: those of
+    /// a block expression go on to the temporary scope around it, as
+    /// Rust's do; the others drop at the block's end, after its locals.
+    /// Gives the ones that drop there.
+    pub(super) fn escaped_tails(&mut self, temporaries: Vec<String>, escapes: bool) -> Vec<String> {
+        match self.temporary_scopes.last_mut() {
+            Some(scope) if escapes => {
+                scope.extend(temporaries);
+                Vec::new()
+            }
+            _ => temporaries,
+        }
+    }
+
+    /// The temporaries of the statement written from `start`, closed: a
+    /// tail of a block or body that keeps them hands them to it, and none
+    /// drop with the statement.
+    pub(super) fn hand_tail(&mut self, start: usize, temporaries: Vec<String>) -> Vec<String> {
+        match self.last_expression {
+            Some((tail, _)) if tail >= start && self.tails.kept => {
+                self.tails.handed.extend(temporaries);
+                Vec::new()
+            }
+            _ => temporaries,
+        }
     }
 
     /// Open a temporary scope (a statement, a match arm, a condition): the
@@ -1702,9 +1832,10 @@ impl Parser<'_> {
         let temporary = self.temporary("temporary");
         let Some(scope) = self.temporary_scopes.last_mut() else {
             return Err(Error::UnsupportedNominalSyntax {
-                construct: "a temporary value whose type implements `Drop` outside a statement: \
-                            dropping it where Rust does is not supported in Rawr yet"
-                    .into(),
+                construct: crate::resolve::Unsupported::said(
+                    "a temporary value whose type implements `Drop` outside a statement: \
+                            dropping it where Rust does is not supported in Rawr yet",
+                ),
                 source: value.span,
             });
         };
@@ -1801,11 +1932,10 @@ impl Parser<'_> {
         };
         if discarded == Some(true) {
             return Err(Error::UnsupportedNominalSyntax {
-                construct: format!(
+                construct: crate::resolve::Unsupported::said(format!(
                     "`{member}`, which drops a value whose type implements `Drop` that it does \
                      not return: dropping it where Rust does is not supported in Rawr yet"
-                )
-                .into(),
+                )),
                 source: at,
             });
         }

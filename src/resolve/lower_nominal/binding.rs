@@ -3,6 +3,18 @@
 
 use super::*;
 
+/// A `let` that writes its type, as its value is read.
+pub(super) struct AnnotatedLet {
+    /// Where the type is written.
+    written: Span,
+    /// The written type.
+    ty: Ty,
+    /// Where the value starts.
+    value: Position,
+    /// The value's type, once the value is read.
+    found: Option<Ty>,
+}
+
 impl<'a> Parser<'a> {
     /// Bind each pattern parameter (`(x, y): (i64, i64)`) at the top of the
     /// body, from the compiler-private name the parameter takes.
@@ -113,8 +125,12 @@ impl<'a> Parser<'a> {
         self.open_temporaries();
         self.flow().open_temporaries();
         self.open_frames();
+        let outer_annotated = self.annotated_let.take();
         let bound = self.parse_binding_statement(let_keyword);
-        self.flow().close_temporaries(ScopeEnd::Let);
+        let annotated = std::mem::replace(&mut self.annotated_let, outer_annotated);
+        let bound = bound.map_err(|error| self.let_mismatch(error, annotated));
+        let end = ScopeEnd::Let(self.last_read());
+        self.flow().close_temporaries(end);
         let frames = self.close_frames();
         self.field_entries.truncate(pending);
         // A form of `let` that does not drop its temporaries with its value.
@@ -122,9 +138,10 @@ impl<'a> Parser<'a> {
             let temporaries = self.close_temporaries();
             if bound.is_ok() && !temporaries.is_empty() {
                 return Err(Error::UnsupportedNominalSyntax {
-                    construct: "a temporary value whose type implements `Drop` in this form of \
-                                `let`: dropping it where Rust does is not supported in Rawr yet"
-                        .into(),
+                    construct: crate::resolve::Unsupported::said(
+                        "a temporary value whose type implements `Drop` in this form of \
+                                `let`: dropping it where Rust does is not supported in Rawr yet",
+                    ),
                     source: point_span(self.position()),
                 });
             }
@@ -132,6 +149,47 @@ impl<'a> Parser<'a> {
         bound?;
         self.statement_frames(start, opened, frames, true)?;
         self.settle_parses()
+    }
+
+    /// `error`, rustc's E0308 at the value of the `let` `annotated` that
+    /// writes its type, beside the written type: "expected due to this",
+    /// and rustc's "expected .. found" note where the types aren't simple.
+    /// Any other error as it is.
+    fn let_mismatch(&self, error: Error, annotated: Option<AnnotatedLet>) -> Error {
+        let Some(annotated) = annotated else {
+            return error;
+        };
+        let Error::TypeMismatch {
+            expected,
+            actual,
+            expression,
+        } = &error
+        else {
+            return error;
+        };
+        let written = self.inference.resolve(&annotated.ty);
+        if expression.start() != annotated.value || *expected != written.name(&self.models) {
+            return error;
+        }
+        // A literal's `&str` rustc's note writes `&'static str`, and a
+        // tuple's arity its label names: neither is noted here.
+        let sorts = annotated
+            .found
+            .map(|found| self.inference.resolve(&found))
+            .filter(|found| {
+                !(written.is_simple() && found.is_simple())
+                    && !matches!(written, Ty::Tuple(_))
+                    && !matches!(found, Ty::Tuple(_))
+                    && !actual.contains('&')
+            })
+            .map(|found| (written.sort(&self.models), found.sort(&self.models)));
+        Error::LetMismatch(Box::new(crate::resolve::LetMismatch {
+            expected: expected.clone(),
+            actual: actual.clone(),
+            expression: *expression,
+            written: annotated.written,
+            sorts,
+        }))
     }
 
     /// `value`, a `let`'s, run inside the scope frames its calls opened
@@ -254,10 +312,24 @@ impl<'a> Parser<'a> {
             if self.split_angle.is_none() && self.outliving_reference_ahead() {
                 self.flow().everywhere(&name, name_span);
             }
-            Some(self.parse_local_type()?)
+            let written = self.position();
+            let ty = self.parse_local_type()?;
+            // `let mut f: Box<dyn FnMut(i32)>`: a call of `f` borrows it as
+            // the type's outermost `dyn` function trait says (T188).
+            let end = self.position();
+            let outermost = self
+                .written_fn_traits
+                .range(written..end)
+                .next()
+                .map(|(_, borrow)| *borrow);
+            if outermost == Some(call::Borrow::Mutable) {
+                self.mutable_call_fns.insert(name_span);
+            }
+            Some((ty, self.written_span(written, end)))
         } else {
             None
         };
+        let (annotation, written) = annotation.unzip();
         if let_keyword && matches!(self.peek(), Token::SemiColon) {
             return self
                 .parse_deferred_binding(start, name, binding, name_span, mutable, annotation);
@@ -272,6 +344,14 @@ impl<'a> Parser<'a> {
             });
         }
         self.expect(Token::Equals, "'=' after binding name")?;
+        if let (true, Some(ty), Some(written)) = (let_keyword, &annotation, written) {
+            self.annotated_let = Some(AnnotatedLet {
+                written,
+                ty: ty.clone(),
+                value: self.position(),
+                found: None,
+            });
+        }
         // `let grains = map.entry(k).or_default();`: each use of `grains`
         // is the entry again, so `*grains += n` changes the map. Rust's
         // borrow keeps the map and the entry as they are meanwhile.
@@ -332,6 +412,9 @@ impl<'a> Parser<'a> {
         self.closure_hint = None;
         self.mutable_borrow = outer;
         let mut value = value?;
+        if let Some(annotated) = &mut self.annotated_let {
+            annotated.found = Some(value.ty.clone());
+        }
         // `let s = v.as_mut_slice();` is `let s = &mut v;` of the slice.
         let viewed = self.viewed_whole.take() == Some(value.span);
         self.frame_value(&mut value);
@@ -341,10 +424,10 @@ impl<'a> Parser<'a> {
             let chose = chosen
                 .chose()
                 .map_err(|refused| Error::UnsupportedNominalSyntax {
-                    construct:
+                    construct: crate::resolve::Unsupported::said(
                         "a `&mut` chosen by a branch, of a place that is not a local of the \
-                            body or a part of one: not supported in Rawr yet"
-                            .into(),
+                            body or a part of one: not supported in Rawr yet",
+                    ),
                     source: refused,
                 })?;
             if chose {
@@ -402,6 +485,11 @@ impl<'a> Parser<'a> {
         // borrows it shared, as `Fn::call` does (T179).
         if self.shared_call_fns.contains(&value.span) {
             self.shared_call_fns.insert(name_span);
+        }
+        // `let mut f = make();` of `fn make() -> Box<dyn FnMut(i32)>`: a
+        // call of `f` borrows it `&mut` (T188).
+        if self.mutable_call_fns.contains(&value.span) {
+            self.mutable_call_fns.insert(name_span);
         }
         // `let v = cell.borrow_mut();`: the borrow lasts for `v`'s block.
         if let Some(borrow) = self.last_cell_borrow.take()
@@ -1417,8 +1505,10 @@ impl<'a> Parser<'a> {
                 hosted?;
                 if !out.tests.is_empty() {
                     return Err(Error::UnsupportedNominalSyntax {
-                        construct: "a refutable pattern in a binding; use `if let` or `match`"
-                            .into(),
+                        construct: crate::resolve::Unsupported::construct(
+                            "a refutable pattern in a binding",
+                        )
+                        .with_help("use `if let` or `match`"),
                         source: pattern.owner_span,
                     });
                 }
@@ -1434,7 +1524,10 @@ impl<'a> Parser<'a> {
                 Ok(())
             }
             other => Err(Error::UnsupportedNominalSyntax {
-                construct: "a refutable pattern in a binding; use `if let` or `match`".into(),
+                construct: crate::resolve::Unsupported::construct(
+                    "a refutable pattern in a binding",
+                )
+                .with_help("use `if let` or `match`"),
                 source: other.span(),
             }),
         }
@@ -1453,21 +1546,22 @@ impl<'a> Parser<'a> {
         ty: &Ty,
         statements: &mut String,
     ) -> Result<(), Error> {
-        let (element, length) = match ty {
-            Ty::Array {
-                element,
-                kind: sequence::Kind::Array(sequence::Length::Fixed(length)),
-            } => (element, *length),
-            Ty::Array { .. } => {
-                return Err(Error::UnsupportedNominalSyntax {
-                    construct: "a refutable pattern in a binding: a slice pattern on a slice \
-                                of unknown length; use `if let` or `match`"
-                        .into(),
+        let (element, length) =
+            match ty {
+                Ty::Array {
+                    element,
+                    kind: sequence::Kind::Array(sequence::Length::Fixed(length)),
+                } => (element, *length),
+                Ty::Array { .. } => return Err(Error::UnsupportedNominalSyntax {
+                    construct: crate::resolve::Unsupported::said(
+                        "a refutable pattern in a binding is not supported: a slice pattern on a \
+                         slice of unknown length",
+                    )
+                    .with_help("use `if let` or `match`"),
                     source: pattern,
-                })
-            }
-            other => return Err(self.slice_pattern(other, pattern)),
-        };
+                }),
+                other => return Err(self.slice_pattern(other, pattern)),
+            };
         let fixed = before.len() + after.len();
         if rest.is_none() && fixed != length || fixed > length {
             return Err(Error::ArrayPatternLength {

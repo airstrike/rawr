@@ -2265,7 +2265,10 @@ impl<'a> Parser<'a> {
                 }
                 _ if pending.precision.is_some() && !matches!(ty, Ty::Int(_)) => {
                     return Err(Error::UnsupportedNominalSyntax {
-                        construct: "a `format!` precision on a value whose type is written later; write the closure parameter's type".into(),
+                        construct: crate::resolve::Unsupported::construct(
+                            "a `format!` precision on a value whose type is written later",
+                        )
+                        .with_help("write the closure parameter's type"),
                         source: pending.span,
                     });
                 }

@@ -36,6 +36,9 @@ pub(super) enum Kind {
     /// `PoisonError<T>`, of a lock a panicking thread held. No lock rawr
     /// runs is poisoned, so no value of it is made.
     PoisonError,
+    /// A `thread_local!` key's `LocalKey<T>`, whose value is each
+    /// thread's own (`thread_local`).
+    LocalKey,
 }
 
 impl Kind {
@@ -45,6 +48,7 @@ impl Kind {
             "JoinHandle" => Self::JoinHandle,
             "ScopedJoinHandle" => Self::ScopedJoinHandle,
             "PoisonError" => Self::PoisonError,
+            "LocalKey" => Self::LocalKey,
             crate::resolve::MPSC_SENDER => Self::Sender,
             crate::resolve::MPSC_SYNC_SENDER => Self::SyncSender,
             crate::resolve::MPSC_RECEIVER => Self::Receiver,
@@ -52,18 +56,17 @@ impl Kind {
         })
     }
 
-    /// The type's name, as rustc writes it with `inner`.
-    pub(super) fn name(self, inner: &str) -> String {
+    /// The type's name, as rustc writes it with `inner`
+    /// (`trimmed::std_name`).
+    pub(super) fn name(self, inner: &str, models: &Models) -> String {
+        let Some((definition, _)) = self.definition() else {
+            return "Box<dyn Any + Send>".into();
+        };
+        let head = super::trimmed::std_name(definition, models);
         match self {
-            Self::JoinHandle => format!("JoinHandle<{inner}>"),
-            Self::Sender => format!("Sender<{inner}>"),
-            Self::SyncSender => format!("SyncSender<{inner}>"),
-            Self::Receiver => format!("Receiver<{inner}>"),
-            Self::SendError => format!("SendError<{inner}>"),
-            Self::Panic => "Box<dyn Any + Send>".into(),
-            Self::Scope => "Scope<'_, '_>".into(),
-            Self::ScopedJoinHandle => format!("ScopedJoinHandle<'_, {inner}>"),
-            Self::PoisonError => format!("PoisonError<{inner}>"),
+            Self::Scope => format!("{head}<'_, '_>"),
+            Self::ScopedJoinHandle => format!("{head}<'_, {inner}>"),
+            _ => format!("{head}<{inner}>"),
         }
     }
 
@@ -81,19 +84,27 @@ impl Kind {
             Self::Scope => ("std::thread::scoped::Scope", false),
             Self::ScopedJoinHandle => ("std::thread::scoped::ScopedJoinHandle", true),
             Self::PoisonError => ("std::sync::poison::PoisonError", true),
+            Self::LocalKey => ("std::thread::local::LocalKey", true),
         })
     }
 
     /// Whether a value of the kind holding `inner` is `Send` where
-    /// `inner` is: every one but `Box<dyn Any + Send>`, which always is.
+    /// `inner` is: every one but `Box<dyn Any + Send>` and a `LocalKey`,
+    /// which always are.
     pub(super) const fn sends(self) -> bool {
-        !matches!(self, Self::Panic)
+        !matches!(self, Self::Panic | Self::LocalKey)
     }
 
     /// Whether the kind may be shared between threads where `inner` is
     /// `Send`: a `Receiver` may not.
     pub(super) const fn syncs(self) -> bool {
         !matches!(self, Self::Receiver | Self::Panic)
+    }
+
+    /// Whether the kind may be shared between threads whatever `inner` is:
+    /// a `LocalKey`, which reaches each thread's own value.
+    pub(super) const fn always_syncs(self) -> bool {
+        matches!(self, Self::LocalKey)
     }
 
     /// Whether std implements `Clone` for the kind: a sending half only.
@@ -103,7 +114,7 @@ impl Kind {
 }
 
 /// The functions and methods rawr runs, by the code `invoke` takes.
-const METHODS: [&str; 19] = [
+const METHODS: [&str; 24] = [
     "spawn",
     "join",
     "is_finished",
@@ -123,9 +134,14 @@ const METHODS: [&str; 19] = [
     "into_inner",
     "get_ref",
     "get_mut",
+    "local_key",
+    "local",
+    "vacant",
+    "put",
+    "thread_end",
 ];
 
-fn code(name: &str) -> origin::Fragment {
+pub(super) fn code(name: &str) -> origin::Fragment {
     let code = METHODS
         .iter()
         .position(|method| *method == name)
@@ -274,11 +290,56 @@ pub(super) fn invoke(context: Option<&NativeCallContext<'_>>, args: &mut FnCallA
                 Err(error) => crate::result::err(error),
             })
         }
+        "local_key" => local_key(args[0].take(), args[2].take()),
+        "local" => {
+            let context =
+                context.ok_or_else(|| invariant("a thread-local key is read outside a call"))?;
+            local(args[0])?.value(context)
+        }
+        "vacant" => Ok(Dynamic::from(local(args[0])?.vacant())),
+        "put" => {
+            local(args[0])?.put(args[2].take());
+            Ok(Dynamic::UNIT)
+        }
+        "thread_end" => {
+            let context = context.ok_or_else(|| invariant("a thread ends outside a call"))?;
+            crate::eval::thread_local::end(context)?;
+            Ok(Dynamic::UNIT)
+        }
         "clone" => Ok(args[0].clone()),
         "debug" => Ok(Dynamic::from(ImmutableString::from(debug(args[0])))),
         "display" => Ok(Dynamic::from(ImmutableString::from(display()))),
         _ => Err(invariant("not a `std::thread` or `mpsc` operation")),
     }
+}
+
+/// `thread(initializer, local_key, [key, glue])`: the `LocalKey` of the
+/// key `key`, whose value on a thread `initializer` makes, and `glue`
+/// drops as the thread ends, `()` for a type with no drop glue.
+fn local_key(initializer: Dynamic, operand: Dynamic) -> RawrResult {
+    let malformed = || invariant("a thread-local key is no `[key, glue]`");
+    let initializer = initializer
+        .try_cast::<crate::FnPtr>()
+        .ok_or_else(|| invariant("a thread-local key's initializer is no function"))?;
+    let mut operand = operand.try_cast::<crate::Array>().ok_or_else(malformed)?;
+    let (Some(glue), Some(key)) = (operand.pop(), operand.pop()) else {
+        return Err(malformed());
+    };
+    let key = key.try_cast::<ImmutableString>().ok_or_else(malformed)?;
+    let glue = glue.try_cast::<crate::FnPtr>();
+    Ok(Dynamic::from(crate::eval::thread_local::LocalKey::new(
+        key,
+        initializer,
+        glue,
+    )))
+}
+
+/// The `LocalKey` `value` is at runtime.
+fn local(value: &Dynamic) -> Result<crate::eval::thread_local::LocalKey, Box<EvalAltResult>> {
+    value
+        .read_lock::<crate::eval::thread_local::LocalKey>()
+        .map(|key| key.clone())
+        .ok_or_else(|| invariant("a `LocalKey` is not one at runtime"))
 }
 
 fn spawn(context: Option<&NativeCallContext<'_>>, closure: Dynamic) -> RawrResult {
@@ -411,6 +472,8 @@ fn debug(value: &Dynamic) -> String {
         "SendError { .. }".into()
     } else if value.is::<Panic>() {
         "Any { .. }".into()
+    } else if value.is::<crate::eval::thread_local::LocalKey>() {
+        "LocalKey { .. }".into()
     } else {
         "JoinHandle { .. }".into()
     }
@@ -476,17 +539,9 @@ impl Parser<'_> {
             });
         }
         // `F: Send` and `T: Send`, std's bounds.
-        if let Some(unsent) = self.unsent_captures.get(&closure.span).cloned() {
-            return Err(Error::MissingCapability {
-                owner: unsent.ty.name(&self.models),
-                capability: if unsent.borrowed { "Sync" } else { "Send" }.into(),
-                operation: closure.span,
-                derive: false,
-                declared: None,
-                required_by: Some(crate::resolve::Required::by(spawner.path())),
-                formatted: None,
-                chain: crate::resolve::Chain::default(),
-            });
+        if let Some(unsendable) = self.unsent_captures.get(&closure.span).cloned() {
+            let required_by = crate::resolve::Required::by(spawner.path());
+            return Err(unsendable.error(&self.models, closure.span, Some(required_by)));
         }
         // A captured opaque output is `Send` as its hidden type is (D1109).
         for unsent in self
@@ -497,13 +552,14 @@ impl Parser<'_> {
         {
             self.opaque_sends.push(super::entry::HiddenSend {
                 ty: unsent.ty,
-                borrowed: unsent.borrowed,
-                closure: closure.span,
-                item: spawner.path().into(),
+                at: closure.span,
+                closure: Some(unsent.head),
+                item: Some(spawner.path().into()),
             });
         }
+        let required_by = Some(crate::resolve::Required::by(spawner.path()));
         self.pending_bounds
-            .push((output.clone(), capability::Kind::Send, call, None));
+            .push((output.clone(), capability::Kind::Send, call, required_by));
         Ok(output)
     }
 
@@ -696,6 +752,9 @@ impl Parser<'_> {
         member: ImmutableString,
         member_span: Span,
     ) -> Result<ParsedExpr, Error> {
+        if kind == Kind::LocalKey {
+            return self.parse_local_key_member(value, inner, member, member_span);
+        }
         let (mut arguments, end) = self.parse_call_arguments("method arguments")?;
         let call = span(value.span.start(), end);
         let owned = !matches!(self.inference.resolve(&value.ty), Ty::Reference { .. });

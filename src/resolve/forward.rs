@@ -42,14 +42,17 @@ pub(super) fn fold_reference_impls(items: &mut Vec<item::Shell>) -> Result<(), L
             LocatedError::primary(
                 shell.source,
                 Error::UnsupportedNominalSyntax {
-                    construct: format!(
+                    construct: crate::resolve::Unsupported::said(format!(
                         "an impl of `{trait_name}` for a reference {reason} is not supported in \
-                         Rawr yet; an impl for references must be `impl<T: {trait_name}> \
-                         {trait_name} for &T` with every item forwarding to `T`'s (`<T as \
+                         Rawr yet",
+                        trait_name = name.text,
+                    ))
+                    .with_help(format!(
+                        "an impl for references must be `impl<T: {trait_name}> {trait_name} for \
+                         &T` with every item forwarding to `T`'s (`<T as \
                          {trait_name}>::f(*self)`, `type A = <T as {trait_name}>::A;`)",
                         trait_name = name.text,
-                    )
-                    .into(),
+                    )),
                     source: type_span(&implementation.owner),
                 },
             )

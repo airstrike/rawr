@@ -2278,8 +2278,10 @@ fn a_trait_method_over_fn_runs_on_functions_and_its_callable_crosses() {
 /// pulled only as far as `take` asks, and the `Product` the crate gives
 /// back is an iterator the program drives, with a `for` loop, `map` and
 /// `filter`. That crate iterator fills the trait's `Self` and a crate
-/// function's `I: Iterator` as itself. The output, and so the order of
-/// each side effect, is `cargo run`'s.
+/// function's `I: Iterator` as itself. A clone the crate makes part way
+/// through goes on from the same item, as Rust's clone of an iterator
+/// copies its state (#1056). The output, and so the order of each side
+/// effect, is `cargo run`'s.
 #[test]
 fn a_program_iterator_crosses_lazily_into_a_crate_traits_blanket_method() {
     let (rawr, cargo) = both_printed("paired.rs", "");
@@ -2288,7 +2290,8 @@ fn a_program_iterator_crosses_lazily_into_a_crate_traits_blanket_method() {
         rawr,
         "8 Some(Cell { i: -1, j: 4 })\nmade\ncolumn a\nrow 0\nSome((0, 'a'))\ncolumn b\n0b\n\
          column a\nrow 1\n10a\ncolumn b\n10b\ncolumn a\npull 1\npull 2\n\
-         [(1, 0), (1, 1), (2, 0)]\n05x 05y 06x 06y 15x 15y 16x 16y \n6 4\n5"
+         [(1, 0), (1, 1), (2, 0)]\n05x 05y 06x 06y 15x 15y 16x 16y \n6 4\n5\n\
+         [(10, [20, 30]), (20, [30]), (30, [])]"
     );
 }
 
@@ -2883,6 +2886,22 @@ fn a_method_of_an_opaque_result_is_its_bound_s_and_not_the_hidden_type_s() {
         rawr,
         "by value [\"do\", \"re\"]\nlent 2 do-re over silence\nrebuilt [\"mi\"] mi over silence\n\
          Ok(\"notes: do: re\") Err(\"empty\")"
+    );
+}
+
+/// #2099: a value of a script function's `impl Tune` whose hidden type is
+/// the program's own, with inherent namesakes of `Tune`'s methods (a
+/// builder of another arity and a `name` of the trait method's shape),
+/// sees only `Tune`'s methods, by value and through a reference, and
+/// `Tune::name(&own)` calls the program's impl over the inherent `name`.
+/// The output is `cargo run`'s.
+#[test]
+fn a_method_of_an_opaque_result_of_a_program_type_is_its_bound_s() {
+    let (rawr, cargo) = both_printed("scale.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(
+        rawr,
+        "hidden [\"do\", \"re\"] scale of 2\nlent 2 scale of 2\nown inherent scale of 1"
     );
 }
 

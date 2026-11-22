@@ -403,7 +403,7 @@ fn main() {
         .unwrap();
     let stdout = String::from_utf8_lossy(&test.stdout);
     assert!(
-        test.status.success() && stdout.contains("9 passed"),
+        test.status.success() && stdout.contains("10 passed"),
         "stdout:\n{stdout}\nstderr:\n{}",
         String::from_utf8_lossy(&test.stderr)
     );

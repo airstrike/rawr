@@ -2589,6 +2589,11 @@ impl Dynamic {
                         match result {
                             Ok(v) | Err(v) => scan_inner(v, filter),
                         }
+                    } else if let Some(items) =
+                        any.downcast_mut::<crate::resolve::lower_nominal::lazy::Items>()
+                    {
+                        // A runtime iterator's captures, step and items.
+                        items.for_each_held(&mut |v| scan_inner(v, filter));
                     }
                 }
                 _ => (),

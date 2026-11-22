@@ -1933,7 +1933,7 @@ impl Type {
         if path.target != Target::Builtin
             || !matches!(
                 path.name.as_str(),
-                "JoinHandle" | super::MPSC_SENDER | super::MPSC_RECEIVER
+                "JoinHandle" | "LocalKey" | super::MPSC_SENDER | super::MPSC_RECEIVER
             )
         {
             return None;
@@ -2133,6 +2133,20 @@ impl Type {
             ))
     }
 
+    /// Whether this is a boxed function type whose call borrows it `&mut`
+    /// through the box: `Box<dyn FnMut(..)>` or `Box<dyn FnOnce(..)>`.
+    pub(crate) fn is_boxed_mutable_call_fn(&self) -> bool {
+        self.pointer_element().is_some_and(|(pointer, element)| {
+            pointer == "Box"
+                && matches!(element, Type::Path(path)
+                if path.target == Target::Builtin
+                    && matches!(
+                        path.name.as_str(),
+                        item::type_ref::FN_MUT_TYPE | item::type_ref::FN_ONCE_TYPE
+                    ))
+        })
+    }
+
     /// The inputs and output of a function type `fn(A, ..) -> B`.
     pub(crate) fn fn_signature(&self) -> Option<(Vec<&Type>, &Type)> {
         let Type::Path(path) = self else {
@@ -2170,7 +2184,6 @@ impl Type {
 }
 
 /// `ty` with each generic parameter `types` names replaced by its type.
-#[cfg(feature = "rust-import")]
 pub(crate) fn substitute_parameters(ty: &Type, types: &[(ImmutableString, Type)]) -> Type {
     match ty {
         Type::Path(path) if matches!(path.target, Target::Parameter) => {
@@ -2179,6 +2192,19 @@ pub(crate) fn substitute_parameters(ty: &Type, types: &[(ImmutableString, Type)]
             }
             ty.clone()
         }
+        // `T::Output` at `T`'s type: `<u8 as Add>::Output`.
+        Type::Path(
+            path @ Path {
+                target: Target::Projection(base, trait_name),
+                ..
+            },
+        ) => Type::Path(Path {
+            target: Target::Projection(
+                Box::new(substitute_parameters(base, types)),
+                trait_name.clone(),
+            ),
+            ..path.clone()
+        }),
         Type::Path(path) => Type::Path(Path {
             arguments: path
                 .arguments

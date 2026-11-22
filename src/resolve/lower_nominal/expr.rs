@@ -1072,9 +1072,19 @@ impl<'a> Parser<'a> {
     pub(super) fn parse_block_expr(&mut self) -> Result<ParsedExpr, Error> {
         let original = self.bindings.clone();
         let outer = std::mem::replace(&mut self.no_struct, false);
+        self.escape_tails();
         let block = self.parse_match_action();
         self.no_struct = outer;
-        let inner = std::mem::replace(&mut self.bindings, original);
+        let mut inner = std::mem::replace(&mut self.bindings, original);
+        // The tail's temporaries that went on to the scope around the
+        // block stay bound there.
+        for temporary in self.temporary_scopes.last().into_iter().flatten() {
+            if let Some(binding) = inner.remove(temporary.as_str()) {
+                self.bindings
+                    .entry(temporary.as_str().into())
+                    .or_insert(binding);
+            }
+        }
         for (name, binding) in &mut self.bindings {
             // A binding the block shadowed keeps its own state.
             if let Some(after) = inner.get(name)
@@ -1086,6 +1096,7 @@ impl<'a> Parser<'a> {
         let block = block?;
         // The block's value is its tail's, with the borrows it holds.
         self.flow().same_origins(block.syntax, block.value.span);
+        self.note_fn_branches(block.syntax, &[(block.value.span, &block.value.ty)]);
         if matches!(self.inference.resolve(&block.value.ty), Ty::FnItem { .. }) {
             self.closure_blocks
                 .insert(block.syntax, block.value.prelude.clone());
@@ -1817,8 +1828,13 @@ impl<'a> Parser<'a> {
             && matches!(self.peek(), Token::Pipe | Token::Or)
             && !self.bindings.contains_key("move")
         {
-            let token = self.next().0;
-            return self.parse_closure(token, name_span, true);
+            // `move ||` is the head rustc's notes mark.
+            let (token, at) = self.next();
+            let start = match token {
+                Token::Or => span(name_span.start(), text_end(at, "||")),
+                _ => name_span,
+            };
+            return self.parse_closure(token, start, true);
         }
 
         // A local binding shadows an item of the same name, as in Rust.
@@ -2397,10 +2413,7 @@ impl<'a> Parser<'a> {
         }
         // A local bound to a `RefCell` borrow: the cell's value. A closure
         // or async body reads its own borrows, not one it captures.
-        if self
-            .closures
-            .last()
-            .is_none_or(|scope| !scope.captures.contains(name.as_str()))
+        if !self.captured_here(&name, declaration)
             && let Some(value) = self.cell_guard_use(&name, name_span)
         {
             return Ok(value);

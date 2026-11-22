@@ -84,6 +84,7 @@ Modules are named by their symbols; line numbers drift.
 | `format` | format strings and specs | `format::Spec`, `format::RawSpec`, `DebugSpec`, `parse_format`, `parse_print`, `parse_panic_macro`, `parse_dbg` |
 | `builtin_method` | builtin values' methods | `parse_string_method`, `parse_option_method`, `parse_result_method`, `vec_method`, `str_method`, `int_method` |
 | `time` | `Duration` and `Instant` | `parse_time_method`, `time_binary`, `time_method` |
+| `thread_local` | `thread_local!` keys and `LocalKey<T>`'s methods | `local_key`, `parse_local_key_member`, `end_main_thread` |
 | `from_str` | `FromStr` and std's parse errors | `parse_str_parse`, `ParseError`, `parse_text` |
 | `error_object` | std's `dyn Error` | `ErrorObject`, `error_object`, `parse_error_member` |
 | `any_object` | std's `dyn Any` and the downcasts of it and of `dyn Error` | `any_object::Key`, `AnyObject`, `any_object`, `parse_downcast`, `downcast_key` |

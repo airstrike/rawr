@@ -571,6 +571,22 @@ pub enum Site {
         /// The type as rustc names it in the help: `W<T>`.
         written: ImmutableString,
     },
+    /// The program's type, or a function's `impl Trait` output, that holds
+    /// a type lacking an auto trait, at its name: "required because it
+    /// appears within the type `Sq`".
+    Within(Span),
+    /// The closure whose capture lacks an auto trait, at its head:
+    /// "required because it's used within this closure".
+    Closure(Span),
+}
+
+impl Site {
+    /// Whether this is an impl or derive a bound selects, which rustc's
+    /// help shows before the chain's notes.
+    #[must_use]
+    pub const fn selected(&self) -> bool {
+        matches!(self, Self::Impl { .. } | Self::Derive { .. })
+    }
 }
 
 impl Required {
@@ -1131,6 +1147,10 @@ pub enum Error {
     /// signature's as the signature's types require, as rustc's borrow
     /// checker reports it (T170).
     Outlives(Box<super::outlives::Reports>),
+    /// A local's borrow that a block's tail temporary keeps past the
+    /// local's end, as it does before edition 2024: rustc's E0597, with
+    /// its explanation of the temporary.
+    TailTemporary(Box<super::tail::Explanation>),
     /// A `&mut` borrow of a place that a local not declared `mut` owns,
     /// which rustc refuses (E0596 "cannot borrow `c` as mutable, as it is
     /// not declared as mutable"), suggesting `mut` where the local is
@@ -1166,6 +1186,19 @@ pub enum Error {
         pattern: bool,
         /// What rustc says of the fields the owner does declare.
         hint: FieldHint,
+    },
+    /// `value.field` where a std type has no field of that name, which
+    /// rustc refuses (E0609) naming the value's type as it is.
+    NoField {
+        /// The value's type, as rustc names it: `&Option<i32>`.
+        owner: ImmutableString,
+        /// The missing field.
+        field: ImmutableString,
+        /// The field's name in the source.
+        reference: Span,
+        /// The type's public fields, in declared order, which rustc's note
+        /// lists: `start` and `end` of a `Range`.
+        available: Box<[ImmutableString]>,
     },
     /// `value.member(..)` or `Type::member` where the program's own
     /// struct or enum, or a reference to one, has no item of that name,
@@ -1255,6 +1288,9 @@ pub enum Error {
     /// An argument whose type is not the one its parameter takes, rustc's
     /// E0308 at the argument: "arguments to this function are incorrect".
     ArgumentMismatch(Box<ArgumentMismatch>),
+    /// A `let`'s value whose type is not its written one, rustc's E0308 at
+    /// the value beside the written type: "expected due to this".
+    LetMismatch(Box<LetMismatch>),
     /// A type mismatch where one type or both are a function's opaque
     /// output (D1109), which rustc's label describes as "opaque type".
     OpaqueMismatch {
@@ -1562,8 +1598,8 @@ pub enum Error {
     },
     /// A nominal script reaches syntax deliberately deferred to a later step.
     UnsupportedNominalSyntax {
-        /// Stable description of the unsupported construct.
-        construct: ImmutableString,
+        /// What rawr doesn't run, and how to write it so it runs.
+        construct: Unsupported,
         /// Exact source position that selected it.
         source: Span,
     },
@@ -2033,6 +2069,7 @@ impl Error {
             Self::DuplicateMember { .. } => Category::DuplicateMember,
             Self::UnknownMember { .. }
             | Self::UnknownField { .. }
+            | Self::NoField { .. }
             | Self::NoItem { .. }
             | Self::MemberKind { .. } => Category::UnknownMember,
             Self::NotInModule { .. } => Category::NotInModule,
@@ -2044,12 +2081,14 @@ impl Error {
             Self::WrongKind { .. } => Category::WrongKind,
             Self::Unimplemented { .. } | Self::UnsharedStatic { .. } => Category::Unimplemented,
             Self::MovedValue { .. } => Category::MovedValue,
-            Self::BorrowConflict { .. } | Self::ImmutableBorrow { .. } | Self::Outlives(_) => {
-                Category::BorrowConflict
-            }
+            Self::BorrowConflict { .. }
+            | Self::ImmutableBorrow { .. }
+            | Self::Outlives(_)
+            | Self::TailTemporary(_) => Category::BorrowConflict,
             Self::InvalidConstruction { .. } => Category::InvalidConstruction,
             Self::TypeMismatch { .. }
             | Self::ArgumentMismatch(_)
+            | Self::LetMismatch(_)
             | Self::OpaqueMismatch { .. }
             | Self::Unboxed { .. } => Category::TypeMismatch,
             Self::IfWithoutElse { .. } => Category::IfWithoutElse,
@@ -2115,6 +2154,7 @@ impl Error {
                 message.as_str()
             }
             Self::Outlives(reports) => reports.first().name(),
+            Self::TailTemporary(explanation) => explanation.message(),
             Self::UnknownImport { path, .. } | Self::InvalidImport { path, .. } => path.as_str(),
             Self::UnknownImports { imports } => imports[0].name(),
             Self::InvalidTypeArguments { ty, .. } => ty.as_str(),
@@ -2131,6 +2171,7 @@ impl Error {
             | Self::UnboundAlternative { name, .. } => name.as_str(),
             Self::UnknownField { owner, .. } => owner.name.as_str(),
             Self::UnknownMember { owner, .. }
+            | Self::NoField { owner, .. }
             | Self::NoItem { owner, .. }
             | Self::MemberKind { owner, .. }
             | Self::InvalidConstruction { owner, .. }
@@ -2147,6 +2188,7 @@ impl Error {
             | Self::Unboxed { expected, .. }
             | Self::IfWithoutElse { expected, .. } => expected.as_str(),
             Self::ArgumentMismatch(mismatch) => mismatch.expected.as_str(),
+            Self::LetMismatch(mismatch) => mismatch.expected.as_str(),
             Self::ReturnWithoutValue { output, .. } => output.as_str(),
             Self::ImmutableBinding { binding, .. } => binding.as_str(),
             Self::InvalidImplOwner { owner, .. }
@@ -2158,7 +2200,7 @@ impl Error {
             | Self::ImportedApplicationRequired { item, .. } => item.as_str(),
             Self::UnusedValue { value, .. } => value.as_str(),
             Self::SelfOutsideImpl { .. } => "self",
-            Self::UnsupportedNominalSyntax { construct, .. } => construct.as_str(),
+            Self::UnsupportedNominalSyntax { construct, .. } => construct.message(),
             Self::Syntax { message, .. }
             | Self::Macro { message, .. }
             | Self::Unimplemented { message, .. } => message.as_str(),
@@ -2209,6 +2251,7 @@ impl Error {
             Self::DuplicateMember { declaration, .. } => *declaration,
             Self::UnknownMember { reference, .. }
             | Self::UnknownField { reference, .. }
+            | Self::NoField { reference, .. }
             | Self::NoItem { reference, .. }
             | Self::MemberKind { reference, .. }
             | Self::NotInModule { reference, .. }
@@ -2225,12 +2268,14 @@ impl Error {
             Self::MovedValue { reference, .. } => *reference,
             Self::BorrowConflict { access, .. } | Self::ImmutableBorrow { access, .. } => *access,
             Self::Outlives(reports) => reports.first().returned(),
+            Self::TailTemporary(explanation) => explanation.borrow(),
             Self::InvalidConstruction { construction, .. } => *construction,
             Self::TypeMismatch { expression, .. }
             | Self::OpaqueMismatch { expression, .. }
             | Self::Unboxed { expression, .. }
             | Self::IfWithoutElse { expression, .. } => *expression,
             Self::ArgumentMismatch(mismatch) => mismatch.argument,
+            Self::LetMismatch(mismatch) => mismatch.expression,
             Self::ReturnWithoutValue { at, .. } => *at,
             Self::ImmutableBinding { mutation, .. } => *mutation,
             Self::InvalidImplOwner { reference, .. } => *reference,
@@ -2315,7 +2360,7 @@ impl Error {
             } => None,
             Self::MovedValue { moved, .. } => Some(*moved),
             Self::BorrowConflict { borrow, .. } => Some(*borrow),
-            Self::Outlives(_) => None,
+            Self::Outlives(_) | Self::TailTemporary(_) => None,
             Self::DuplicateMethod {
                 previous_declaration,
                 ..
@@ -2343,6 +2388,7 @@ impl Error {
             | Self::LoweringUnavailable { .. } => None,
             Self::UnknownMember { .. }
             | Self::UnknownField { .. }
+            | Self::NoField { .. }
             | Self::NoItem { .. }
             | Self::MemberKind { .. }
             | Self::NotInModule { .. }
@@ -2383,6 +2429,7 @@ impl Error {
             | Self::OverflowingLiteral { .. }
             | Self::KnownPanic { .. } => None,
             Self::ArgumentMismatch(mismatch) => Some(mismatch.callee),
+            Self::LetMismatch(mismatch) => Some(mismatch.written),
             Self::UnlabeledJumpInWhileCondition { .. } => None,
             Self::InvalidImplOwner { .. }
             | Self::InvalidMethodCall { .. }
@@ -2431,8 +2478,11 @@ pub struct Receiver {
     /// The type as the message names it: a struct or enum with its
     /// declared parameters, `G<T>`.
     pub declared: ImmutableString,
-    /// The type as the label names it, the one found: `G<i32>`.
-    pub found: ImmutableString,
+    /// The type as the label names it, the one found: `G<i32>`. `None`
+    /// where rawr can't name it as rustc does, as an iterator chain's
+    /// `TakeWhile<std::slice::Iter<'_, {integer}>, {closure@..}>`: no
+    /// label then.
+    pub found: Option<ImmutableString>,
     /// The struct's or enum's name where the program declares it, in the
     /// error's file: rustc marks its definition.
     pub definition: Option<Span>,
@@ -2489,6 +2539,11 @@ pub enum Shown {
     /// At its definition, a method whose parameters the call's arguments
     /// don't fit: "but with different arguments".
     DifferentArguments,
+}
+
+/// rustc's E0609 message for the field `field` the type `owner` lacks.
+pub(crate) fn no_field(owner: &str, field: &str) -> String {
+    format!("no field `{field}` on type `{owner}`")
 }
 
 /// rustc's E0599 message for the method `member` of a trait out of scope,
@@ -2714,19 +2769,38 @@ impl FieldHint {
         if names.is_empty() {
             return Some("all struct fields are already assigned".into());
         }
-        // rustc's name series: five names and a count of the rest, or six.
-        let limit = if names.len() == 6 { 6 } else { 5 };
-        let mut series = names
-            .iter()
-            .take(limit)
-            .map(|name| format!("`{name}`"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        if names.len() > limit {
-            series = format!("{series} ... and {} others", names.len() - limit);
-        }
-        Some(format!("available fields are: {series}"))
+        Some(format!("available fields are: {}", name_series(names)))
     }
+}
+
+/// rustc's name series: five names and a count of the rest, or six.
+fn name_series(names: &[ImmutableString]) -> String {
+    let limit = if names.len() == 6 { 6 } else { 5 };
+    let series = names
+        .iter()
+        .take(limit)
+        .map(|name| format!("`{name}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if names.len() > limit {
+        return format!("{series} ... and {} others", names.len() - limit);
+    }
+    series
+}
+
+/// rustc's E0609 note of the fields `available` beside the field `field`
+/// a type lacks: none where one is like `field`, which rustc offers in its
+/// place, or where there are none.
+pub(crate) fn available_fields(field: &str, available: &[ImmutableString]) -> Option<String> {
+    let names = available
+        .iter()
+        .map(ImmutableString::as_str)
+        .collect::<Vec<_>>();
+    if available.is_empty() || super::similar::best(&names, field).is_some() {
+        return None;
+    }
+    let is = if available.len() == 1 { " is" } else { "s are" };
+    Some(format!("available field{is}: {}", name_series(available)))
 }
 
 /// Where a pattern that must match every value is written, as rustc names
@@ -3029,26 +3103,55 @@ impl PatternTypes {
                 elements(arity),
                 elements(found)
             ),
-            None => format!(
-                "expected {}, found {}",
-                Described(&self.expected),
-                Described(&self.found)
-            ),
+            None => {
+                let (expected, found) = super::forced_trim::pair(&self.expected, &self.found);
+                format!(
+                    "expected {}, found {}",
+                    Described(&expected),
+                    Described(&found)
+                )
+            }
         }
     }
 
     /// rustc's note: "expected type `{integer}`" over "found tuple
     /// `(_, _)`", the shorter lead padded so the types line up.
     pub(crate) fn note(&self) -> Option<String> {
-        let (expected, found) = self.sorts?;
-        let expected = format!("expected {expected}");
-        let found = format!("found {found}");
-        let width = expected.len().max(found.len());
-        Some(format!(
-            "{expected:>width$} `{}`\n{found:>width$} `{}`",
-            self.expected, self.found
-        ))
+        Some(sorted_note(self.sorts?, &self.expected, &self.found))
     }
+}
+
+/// A `let`'s value of another type than the one its `let` writes.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct LetMismatch {
+    /// The written type's name.
+    pub expected: ImmutableString,
+    /// The value's type's name.
+    pub actual: ImmutableString,
+    /// The value.
+    pub expression: Span,
+    /// The written type.
+    pub written: Span,
+    /// rustc's sorts of the two types in its "expected .. found" note
+    /// (`struct`, `enum`), or `None` where rustc writes no note.
+    pub sorts: Option<(&'static str, &'static str)>,
+}
+
+impl LetMismatch {
+    /// rustc's note: "expected struct `Vec<i32>`" over "found struct
+    /// `Vec<u8>`".
+    pub(crate) fn note(&self) -> Option<String> {
+        Some(sorted_note(self.sorts?, &self.expected, &self.actual))
+    }
+}
+
+/// rustc's "expected .. found" note of the types `expected` and `found`,
+/// of the sorts `sorts`, the shorter lead padded so the types line up.
+fn sorted_note(sorts: (&str, &str), expected: &str, found: &str) -> String {
+    let lead = format!("expected {}", sorts.0);
+    let trail = format!("found {}", sorts.1);
+    let width = lead.len().max(trail.len());
+    format!("{lead:>width$} `{expected}`\n{trail:>width$} `{found}`")
 }
 
 /// What gave the value a pattern matches its type, which rustc labels
@@ -3515,6 +3618,16 @@ impl fmt::Display for Written<'_> {
                 let (code, message) = owner.missing(field, *pattern);
                 write!(formatter, "{message} at {reference} ({code})")
             }
+            Error::NoField {
+                owner,
+                field,
+                reference,
+                ..
+            } => write!(
+                formatter,
+                "{} at {reference} (E0609)",
+                no_field(owner, field)
+            ),
             Error::NoItem {
                 member,
                 reference,
@@ -3620,6 +3733,12 @@ impl fmt::Display for Written<'_> {
             Error::ImmutableBorrow {
                 message, access, ..
             } => write!(formatter, "{message} at {access} (E0596)"),
+            Error::TailTemporary(explanation) => write!(
+                formatter,
+                "{} at {} (E0597)",
+                explanation.message(),
+                explanation.borrow()
+            ),
             Error::Outlives(reports) => write!(
                 formatter,
                 "{} at {} ({})",
@@ -3659,6 +3778,11 @@ impl fmt::Display for Written<'_> {
                 formatter,
                 "mismatched types at {}: expected `{}`, found `{}` (E0308)",
                 mismatch.argument, mismatch.expected, mismatch.actual
+            ),
+            Error::LetMismatch(mismatch) => write!(
+                formatter,
+                "mismatched types at {}: expected `{}`, found `{}` (E0308)",
+                mismatch.expression, mismatch.expected, mismatch.actual
             ),
             Error::IfWithoutElse {
                 expected,
@@ -3827,7 +3951,7 @@ impl fmt::Display for Written<'_> {
                 write!(formatter, "{} at {rest}", RepeatedRest(*slice))
             }
             Error::UnsupportedNominalSyntax { construct, source } => {
-                write!(formatter, "{} at {source}", Unsupported(construct))
+                write!(formatter, "{construct} at {source}")
             }
             Error::Syntax { message, .. } | Error::Macro { message, .. } => {
                 formatter.write_str(message)
@@ -3957,17 +4081,78 @@ impl fmt::Display for CannotCompare<'_> {
     }
 }
 
-/// A construct rawr doesn't handle yet, named in Rust's terms. A reason
-/// that already says it isn't supported reads as written.
-pub(crate) struct Unsupported<'a>(pub(crate) &'a str);
+/// What rawr doesn't run yet, named in Rust's terms: the message of
+/// rustc's `error:` line, and how to write it so rawr runs it, rustc's
+/// `help:` line.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct Unsupported {
+    message: ImmutableString,
+    help: Option<ImmutableString>,
+}
 
-impl fmt::Display for Unsupported<'_> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.0.contains("not supported") {
-            formatter.write_str(self.0)
-        } else {
-            write!(formatter, "{} is not supported", self.0)
+impl Unsupported {
+    /// `construct is not supported`.
+    pub(crate) fn construct(construct: impl fmt::Display) -> Self {
+        Self {
+            message: format!("{construct} is not supported").into(),
+            help: None,
         }
+    }
+
+    /// A sentence that says, as written, what rawr doesn't run.
+    pub(crate) fn said(message: impl Into<ImmutableString>) -> Self {
+        Self {
+            message: message.into(),
+            help: None,
+        }
+    }
+
+    /// The token `found` where the lowering reads only `expected`, as
+    /// `')' after a tuple`.
+    pub(crate) fn token(expected: &str, found: impl fmt::Display) -> Self {
+        Self {
+            message: format!("`{found}` is not supported here").into(),
+            help: Some(format!("rawr expects {expected} here").into()),
+        }
+    }
+
+    /// The same, with `help` saying how to write it so rawr runs it.
+    #[must_use]
+    pub(crate) fn with_help(self, help: impl Into<ImmutableString>) -> Self {
+        Self {
+            help: Some(help.into()),
+            ..self
+        }
+    }
+
+    /// The message of the error's `error:` line.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    /// How to write it so rawr runs it, the error's `help:` line.
+    #[must_use]
+    pub fn help(&self) -> Option<&str> {
+        self.help.as_deref()
+    }
+}
+
+impl From<&str> for Unsupported {
+    fn from(construct: &str) -> Self {
+        Self::construct(construct)
+    }
+}
+
+impl From<String> for Unsupported {
+    fn from(construct: String) -> Self {
+        Self::construct(construct)
+    }
+}
+
+impl fmt::Display for Unsupported {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
     }
 }
 

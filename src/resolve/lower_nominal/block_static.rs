@@ -1,4 +1,5 @@
-//! Statics declared in a block, written or expanded (D862). Each is named
+//! Statics declared in a block, written or expanded (D862), and the keys a
+//! `thread_local!` call in a block declares (`thread_local`). Each is named
 //! only in its block. One of a native type is a place for the program's
 //! life (`place::statics`), keyed by its site and its block's declarations,
 //! and initialized the first time its block runs. One of another type keeps
@@ -37,6 +38,12 @@ enum Kind {
         value: Vec<(Token, Position)>,
         key: Option<ImmutableString>,
     },
+    /// A `thread_local!` key of a `LocalKey<T>`, `T` the declared type: its
+    /// initializer's tokens and the key each thread's value is found by.
+    ThreadLocal {
+        value: Vec<(Token, Position)>,
+        key: ImmutableString,
+    },
 }
 
 /// How far a block has come with one of its native statics.
@@ -71,21 +78,21 @@ impl Parser<'_> {
     /// Whether a `static` item, perhaps after attributes, starts the next
     /// statement.
     pub(super) fn static_ahead(&mut self) -> bool {
+        let mut ahead = self.input.clone().map(|(token, _)| token);
         if !self.attribute_ahead() {
-            return is_static(&self.peek());
+            return declares(&mut ahead);
         }
-        let mut ahead = self.input.clone();
         loop {
             match ahead.next() {
-                Some((Token::Hash, _)) => {}
-                Some((token, _)) => return is_static(&token),
+                Some(Token::Hash) => {}
+                Some(token) => return declares(&mut std::iter::once(token).chain(ahead)),
                 None => return false,
             }
-            let Some((Token::LeftBracket, _)) = ahead.next() else {
+            let Some(Token::LeftBracket) = ahead.next() else {
                 return false;
             };
             let mut depth = 0_usize;
-            for (token, _) in ahead.by_ref() {
+            for token in ahead.by_ref() {
                 match token {
                     Token::LeftBracket | Token::LeftParen | Token::LeftBrace => depth += 1,
                     Token::RightBracket if depth == 0 => break,
@@ -111,10 +118,15 @@ impl Parser<'_> {
                 continue;
             }
             self.splice_tokens(declaration.tokens);
+            if !is_static(&self.peek()) {
+                self.parse_block_thread_locals(ordinal, group)?;
+                continue;
+            }
             let (_, keyword) = self.next();
             if matches!(self.peek(), Token::Mut) {
                 return Err(Error::UnsupportedNominalSyntax {
-                    construct: "a `static mut`; keep the value in your state".into(),
+                    construct: crate::resolve::Unsupported::construct("a `static mut`")
+                        .with_help("keep the value in your state"),
                     source: point_span(self.position()),
                 });
             }
@@ -174,6 +186,91 @@ impl Parser<'_> {
         self.last_type = Ty::Unit;
         self.last_expression = None;
         Ok(())
+    }
+
+    /// The keys of the `thread_local!` call next, at `ordinal` among the
+    /// block's declarations, `group` their fingerprint: each a `LocalKey<T>`
+    /// named from here on, whose initializer runs at a first access on a
+    /// thread. A key needn't be `Sync`, as each thread has its own value.
+    fn parse_block_thread_locals(&mut self, ordinal: usize, group: u64) -> Result<(), Error> {
+        while !matches!(self.peek(), Token::Bang) {
+            self.next();
+        }
+        self.next();
+        let (open, _) = self.next();
+        let close = match open {
+            Token::LeftParen => Token::RightParen,
+            Token::LeftBracket => Token::RightBracket,
+            _ => Token::RightBrace,
+        };
+        while self.peek() != close {
+            let enabled = self.outer_attributes()?;
+            if matches!(self.peek(), Token::Pub) {
+                self.next();
+                if matches!(self.peek(), Token::LeftParen) {
+                    while !matches!(self.next().0, Token::RightParen | Token::EOF) {}
+                }
+            }
+            let (word, keyword) = self.next();
+            if !is_static(&word) {
+                return Err(no_thread_local_rule(&word, keyword));
+            }
+            let (name, _) = self.expect_name("thread-local key name")?;
+            self.expect(Token::Colon, "':' after a thread-local key's name")?;
+            let ty = self.parse_local_type()?;
+            self.expect(Token::Equals, "'=' after a thread-local key's type")?;
+            // `const { init }`: the block is the initializer.
+            if matches!(self.peek(), Token::Const) {
+                self.next();
+            }
+            let value = self.thread_local_value(&close)?;
+            if !enabled {
+                continue;
+            }
+            let file = self.source_identity();
+            let line = keyword.line().unwrap_or_default();
+            let column = keyword.position().unwrap_or_default();
+            let key = format!("{file}:{line}:{column}#{ordinal}@{group:016x}").into();
+            self.block_statics.push(Declared {
+                name,
+                ty,
+                kind: Kind::ThreadLocal { value, key },
+            });
+        }
+        self.next();
+        if close != Token::RightBrace && matches!(self.peek(), Token::SemiColon) {
+            self.next();
+        }
+        Ok(())
+    }
+
+    /// The tokens of a thread-local key's initializer, through its `;` or
+    /// up to the call's `close`, neither among them. The next key's
+    /// `static` where the `;` goes is rustc's error.
+    fn thread_local_value(&mut self, close: &Token) -> Result<Vec<(Token, Position)>, Error> {
+        let mut tokens = Vec::new();
+        let mut depth = 0_usize;
+        loop {
+            if depth == 0 && self.peek() == *close {
+                return Ok(tokens);
+            }
+            let (token, position) = self.next();
+            match token {
+                Token::LeftParen | Token::LeftBracket | Token::LeftBrace | Token::MapStart => {
+                    depth += 1;
+                }
+                Token::RightParen | Token::RightBracket | Token::RightBrace => {
+                    depth = depth.saturating_sub(1);
+                }
+                Token::SemiColon if depth == 0 => return Ok(tokens),
+                Token::EOF => return Ok(tokens),
+                ref word if depth == 0 && is_static(word) => {
+                    return Err(no_thread_local_rule(word, position));
+                }
+                _ => {}
+            }
+            tokens.push((token, position));
+        }
     }
 
     /// The tokens of a static's initializer, through its `;`, which is not
@@ -312,6 +409,10 @@ impl Parser<'_> {
         }
         let ty = declared.ty.clone();
         let read = match &declared.kind {
+            Kind::ThreadLocal { value, key } => {
+                let (value, key) = (value.clone(), key.clone());
+                return Some(self.block_thread_local(&key, value, ty, name_span));
+            }
             Kind::Native { key, .. } => {
                 let key = origin::Fragment::plain(format!("{key:?}"));
                 let source = self.prelude_op(PreludeOp::StaticValue, [key]);
@@ -344,6 +445,34 @@ impl Parser<'_> {
             }
         }
         Some(read)
+    }
+
+    /// A use of the block's thread-local key `key`, a `LocalKey<ty>` whose
+    /// initializer is `value`'s tokens: its runtime value, which lives as
+    /// long as the program, so a borrow of it is `'static`.
+    fn block_thread_local(
+        &mut self,
+        key: &str,
+        value: Vec<(Token, Position)>,
+        ty: Ty,
+        name_span: Span,
+    ) -> Result<ParsedExpr, Error> {
+        let at = name_span.start();
+        let mut tokens = Vec::with_capacity(value.len() + 2);
+        tokens.push((Token::LeftParen, at));
+        tokens.extend(value);
+        tokens.push((Token::RightParen, at));
+        self.splice_tokens(tokens);
+        let mut initializer = self.parse_primary()?;
+        self.coerce_expr(&ty, &mut initializer)?;
+        let source = self.local_key(key, initializer.rendered_source(), &ty, name_span)?;
+        let read = self.operator_expr(
+            source,
+            Ty::Thread(thread::Kind::LocalKey, Box::new(ty)),
+            name_span,
+        );
+        self.static_reads.insert(read.span);
+        Ok(read)
     }
 
     /// The `static` declarations at the top level of the block from here to
@@ -420,6 +549,64 @@ fn is_static(token: &Token) -> bool {
     matches!(token, Token::Reserved(word) if word.as_str() == "static")
 }
 
+/// rustc's error for `token` at `position` in a `thread_local!` call, where
+/// std's `macro_rules!` matcher has no rule for it.
+fn no_thread_local_rule(token: &Token, position: Position) -> Error {
+    Error::Syntax {
+        message: format!("no rules expected {}", crate::parser::item::found(token)).into(),
+        label: "no rules expected this token in macro call".into(),
+        help: None,
+        at: span(position, text_end(position, &token.to_string())),
+    }
+}
+
+/// Whether `tokens` start a declaration a block's statics take: a `static`,
+/// or a call of std's `thread_local!`, as the prelude or `std::` names it.
+fn declares(tokens: &mut impl Iterator<Item = Token>) -> bool {
+    let name = |token: Option<Token>, text: &str| matches!(token, Some(Token::Identifier(name)) if name.as_str() == text);
+    match tokens.next() {
+        Some(token) if is_static(&token) => true,
+        Some(Token::Identifier(first)) if first.as_str() == "thread_local" => {
+            matches!(tokens.next(), Some(Token::Bang))
+        }
+        Some(Token::Identifier(first)) if first.as_str() == "std" => {
+            matches!(tokens.next(), Some(Token::DoubleColon))
+                && name(tokens.next(), "thread_local")
+                && matches!(tokens.next(), Some(Token::Bang))
+        }
+        _ => false,
+    }
+}
+
+/// Where the `thread_local!` call starting at `at` ends: its closing
+/// delimiter, or the `;` after one in parentheses or brackets.
+fn thread_local_end(tokens: &[(Token, Position)], at: usize) -> Option<usize> {
+    let bang = at
+        + tokens[at..]
+            .iter()
+            .position(|(token, _)| matches!(token, Token::Bang))?;
+    let braced = matches!(tokens.get(bang + 1)?.0, Token::LeftBrace);
+    let mut depth = 0_usize;
+    for (offset, (token, _)) in tokens[bang + 1..].iter().enumerate() {
+        match token {
+            Token::LeftParen | Token::LeftBracket | Token::LeftBrace | Token::MapStart => {
+                depth += 1;
+            }
+            Token::RightParen | Token::RightBracket | Token::RightBrace => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    let end = bang + 1 + offset;
+                    let semicolon = matches!(tokens.get(end + 1), Some((Token::SemiColon, _)));
+                    return Some(if !braced && semicolon { end + 1 } else { end });
+                }
+            }
+            Token::EOF => return None,
+            _ => {}
+        }
+    }
+    None
+}
+
 /// The declaration starting at `index`, perhaps after attributes: where
 /// its `static` is and where its `;` is.
 fn declaration_at(tokens: &[(Token, Position)], index: usize) -> Option<(usize, usize)> {
@@ -444,8 +631,12 @@ fn declaration_at(tokens: &[(Token, Position)], index: usize) -> Option<(usize, 
         }
         at += 1;
     }
-    if !is_static(&tokens.get(at)?.0) {
+    let mut rest = tokens[at..].iter().map(|(token, _)| token.clone());
+    if !declares(&mut rest) {
         return None;
+    }
+    if !is_static(&tokens.get(at)?.0) {
+        return Some((at, thread_local_end(tokens, at)?));
     }
     let mut depth = 0_usize;
     for (offset, (token, _)) in tokens[at..].iter().enumerate() {

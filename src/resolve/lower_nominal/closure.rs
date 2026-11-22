@@ -16,13 +16,12 @@ use crate::tokenizer::Token;
 use crate::{ImmutableString, Position, Span};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// A capture that keeps its closure from being `Send`: one it holds that
-/// rawr knows isn't `Send`, or one it borrows that isn't `Sync`, as `&T` is
-/// `Send` only where `T` is `Sync`.
+/// A closure's capture, as its `Send` sees it: the type it holds, `&T` of
+/// one it borrows, and the closure's head (`move ||`).
 #[derive(Clone)]
 pub(super) struct Unsent {
     pub(super) ty: Ty,
-    pub(super) borrowed: bool,
+    pub(super) head: Span,
 }
 
 /// A closure passed to the host: it becomes its own generated function, an
@@ -45,6 +44,10 @@ pub(super) struct Lifted {
     /// it is written (`places::held`), run before its captures are read:
     /// the handles are among its captures.
     pub(super) held: origin::Fragment,
+    /// What becomes of its body's suspended frames, when it suspends: a
+    /// step a crate pulls from is copied with the iterator a crate clones
+    /// (#1056), and any other body resumes each once.
+    pub(super) frames: crate::eval::machine::Frames,
 }
 
 /// An executable callable for a lifted closure.
@@ -53,6 +56,8 @@ pub(crate) struct Callable {
     pub(crate) arity: usize,
     pub(crate) dispatch: ImmutableString,
     pub(crate) source: crate::program::source::Id,
+    /// What becomes of its body's suspended frames ([`Lifted::frames`]).
+    pub(crate) frames: crate::eval::machine::Frames,
 }
 
 /// The host type a host callable returns, and how many type arguments it
@@ -308,6 +313,15 @@ impl<'a> Parser<'a> {
                 scope.captures.insert(name.clone());
             }
         }
+    }
+
+    /// Whether the innermost closure captures the local `name` declared at
+    /// `declaration`: a local of its own body that shadows a capture
+    /// (`let c = c.borrow();`) is not one.
+    pub(super) fn captured_here(&self, name: &str, declaration: Span) -> bool {
+        self.closures
+            .last()
+            .is_some_and(|scope| scope.outer.get(name) == Some(&declaration))
     }
 
     /// `|a, b: T| body`, `move |..| ..` or `|| ..`. A closure that captures
@@ -750,7 +764,8 @@ impl<'a> Parser<'a> {
             self.open_frames();
             let body = self.parse_expr();
             let frames = self.close_frames();
-            self.flow().close_temporaries(ScopeEnd::Statement);
+            let end = ScopeEnd::Statement(self.last_read());
+            self.flow().close_temporaries(end);
             let temporaries = self.close_temporaries();
             body.and_then(|mut value| {
                 if !temporaries.is_empty() {
@@ -983,18 +998,22 @@ impl<'a> Parser<'a> {
                 let ty = self
                     .inference
                     .resolve(&self.bindings.get(name.as_str())?.ty);
-                let borrowed = !moved && !scope.consumed.contains_key(name);
-                Some(Unsent { ty, borrowed })
+                let ty = if !moved && !scope.consumed.contains_key(name) {
+                    Ty::Reference {
+                        mutable: false,
+                        target: Box::new(ty),
+                    }
+                } else {
+                    ty
+                };
+                Some(Unsent { ty, head: header })
             })
             .collect::<Vec<_>>();
-        if let Some(unsent) = captured.iter().find(|unsent| {
-            if unsent.borrowed {
-                !self.shared_between_threads(&unsent.ty)
-            } else {
-                self.not_send(&unsent.ty)
-            }
+        if let Some(unsendable) = captured.iter().find_map(|unsent| {
+            self.unsendable(&unsent.ty, &|_| None)
+                .map(|unsendable| unsendable.in_closure(unsent.head))
         }) {
-            self.unsent_captures.insert(expression, unsent.clone());
+            self.unsent_captures.insert(expression, unsendable);
         }
         let opaque = captured
             .into_iter()
@@ -1072,11 +1091,10 @@ impl<'a> Parser<'a> {
                 && self.needs_drop(&ty, expression)?
             {
                 return Err(Error::UnsupportedNominalSyntax {
-                    construct: format!(
+                    construct: crate::resolve::Unsupported::said(format!(
                         "a closure or async block that takes `{name}`, whose type implements \
                          `Drop`, by move: dropping it with the closure is not supported in Rawr yet"
-                    )
-                    .into(),
+                    )),
                     source: expression,
                 });
             }
@@ -1185,6 +1203,7 @@ impl<'a> Parser<'a> {
                     span: expression,
                     header,
                     held: Self::held_setup(&scope.held),
+                    frames: crate::eval::machine::Frames::Resumed,
                 });
                 Ty::FnItem {
                     key: Box::new(key),
@@ -1352,9 +1371,11 @@ impl<'a> Parser<'a> {
         const MOST: usize = 5;
         let at = start.start();
         let ident = |text: &str| (Token::Identifier(Box::new(text.into())), at);
-        let unsupported = |construct: String, end: Position| Error::UnsupportedNominalSyntax {
-            construct: construct.into(),
-            source: span(at, end),
+        let unsupported = |construct: crate::resolve::Unsupported, end: Position| {
+            Error::UnsupportedNominalSyntax {
+                construct,
+                source: span(at, end),
+            }
         };
         self.next();
         let mut futures = Vec::<Vec<(Token, Position)>>::new();
@@ -1383,14 +1404,20 @@ impl<'a> Parser<'a> {
         let count = futures.len();
         if !(2..=MOST).contains(&count) {
             return Err(unsupported(
-                format!("`{name}!` of {count} futures is not supported yet; it takes 2 to {MOST}"),
+                crate::resolve::Unsupported::said(format!(
+                    "`{name}!` of {count} futures is not supported yet"
+                ))
+                .with_help(format!("it takes 2 to {MOST}")),
                 end,
             ));
         }
         // The core has `join!` (D513.7).
         if name != "join" {
             return Err(unsupported(
-                format!("`{name}!` of more than one future is not supported yet; `join!` is"),
+                crate::resolve::Unsupported::said(format!(
+                    "`{name}!` of more than one future is not supported yet"
+                ))
+                .with_help("`join!` is"),
                 end,
             ));
         }

@@ -4770,6 +4770,96 @@ fn a_std_type_is_named_as_rustc_names_it() {
     );
 }
 
+/// A native std type is named by its path where another type the program
+/// sees has its name, as rustc's trimmed paths name it (#2524): core's
+/// `core::range::Range` makes `std::ops::Range`, a name the program reads
+/// through a glob import makes `std::ops::RangeTo`, and the program's own
+/// `Vec` makes `std::vec::Vec`. E0308's label names each by its name alone.
+/// Each is what `rustc --edition 2021` reports.
+#[test]
+fn a_native_std_type_is_named_by_its_path_where_another_type_has_its_name() {
+    let cases = [
+        (
+            "fn f<T: Copy>(_: T) {}\nfn main() {\n    f(0..1);\n}\n",
+            "error[E0277]: the trait bound `std::ops::Range<{integer}>: Copy` is not satisfied\n \
+             --> main.rs:3:7\n  |\n3 |     f(0..1);\n  |     - ^^^^ the trait `Copy` is not \
+             implemented for `std::ops::Range<{integer}>`\n",
+        ),
+        (
+            "fn main() {\n    let r = ..1;\n    r.foo();\n}\n",
+            "error[E0599]: no method named `foo` found for struct `RangeTo<Idx>` in the current \
+             scope\n --> main.rs:3:7\n  |\n3 |     r.foo();\n  |       ^^^ method not found in \
+             `RangeTo<{integer}>`\n",
+        ),
+        (
+            "use std::ops::*;\nfn main() {\n    let r: RangeTo<i32> = ..1;\n    r.foo();\n}\n",
+            "error[E0599]: no method named `foo` found for struct `std::ops::RangeTo<Idx>` in the \
+             current scope\n --> main.rs:4:7\n  |\n4 |     r.foo();\n  |       ^^^ method not \
+             found in `std::ops::RangeTo<i32>`\n",
+        ),
+        (
+            "struct Vec;\nfn main() {\n    let v = vec![1];\n    v.foo();\n}\n",
+            "error[E0599]: no method named `foo` found for struct `std::vec::Vec<{integer}>` in \
+             the current scope\n --> main.rs:4:7\n  |\n4 |     v.foo();\n  |       ^^^ method \
+             not found in `std::vec::Vec<{integer}>`\n",
+        ),
+        (
+            "fn main() {\n    let r = 0..1;\n    let _: () = r;\n}\n",
+            "error[E0308]: mismatched types\n --> main.rs:3:17\n  |\n3 |     let _: () = r;\n  \
+             |                 ^ expected `()`, found `Range<{integer}>`\n",
+        ),
+    ];
+    for (source, expected) in cases {
+        let report = rendered(source);
+        assert!(report.starts_with(expected), "{report}");
+    }
+}
+
+/// rustc's E0599 for a method a native std type lacks names the type's
+/// kind, and its definition's parameters, defaults and all, where the type
+/// derefs to no other: `Option<T>`, `HashMap<K, V, S, A>`, but `Vec<{integer}>`,
+/// which derefs to a slice, and a reference as it is. Each is what `rustc
+/// --edition 2021` reports.
+#[test]
+fn a_method_a_native_std_type_lacks_names_its_kind_and_parameters() {
+    let cases = [
+        ("let o = Some(1);", "enum `Option<T>`", "Option<{integer}>"),
+        (
+            "let o: std::collections::HashMap<i32, i32> = std::collections::HashMap::new();",
+            "struct `HashMap<K, V, S, A>`",
+            "HashMap<i32, i32>",
+        ),
+        (
+            "let o = vec![1];",
+            "struct `Vec<{integer}>`",
+            "Vec<{integer}>",
+        ),
+        (
+            "let o = std::cmp::Ordering::Less;",
+            "enum `std::cmp::Ordering`",
+            "std::cmp::Ordering",
+        ),
+        (
+            "let o = &(0..3);",
+            "reference `&std::ops::Range<{integer}>`",
+            "&std::ops::Range<{integer}>",
+        ),
+        (
+            "let o = std::rc::Weak::<i32>::new();",
+            "struct `std::rc::Weak<T, A>`",
+            "std::rc::Weak<i32>",
+        ),
+    ];
+    for (made, receiver, found) in cases {
+        let report = rendered(&format!("fn main() {{\n    {made}\n    o.foo();\n}}\n"));
+        let expected = format!(
+            "error[E0599]: no method named `foo` found for {receiver} in the current scope\n \
+             --> main.rs:3:7\n  |\n3 |     o.foo();\n  |       ^^^ method not found in `{found}`\n"
+        );
+        assert!(report.starts_with(&expected), "{made}\n{report}");
+    }
+}
+
 /// A std thread type's bare name resolves through a `use` alone, as in
 /// rustc: unbound, it is E0425 with the imports rustc suggests, and a path
 /// through a module's `use` names it (#2346).
@@ -5451,4 +5541,209 @@ fn an_into_to_a_type_with_no_from_impl_for_the_value_is_e0277() {
             && literal.ends_with("  = note: required for `{integer}` to implement `Into<B>`\n"),
         "{literal}"
     );
+}
+
+/// An `into` to a std type none of whose `From` impls takes the value
+/// lists the impls, as rustc's help does, each type forced trimmed and
+/// with its elided lifetimes: `Cow<'_, str>` (#671). What `rustc --edition
+/// 2021` reports.
+#[test]
+fn an_into_to_a_std_type_lists_its_from_impls() {
+    let shown = rendered("struct P;\nfn main() {\n    let s: String = P.into();\n}\n");
+    let expected = [
+        "error[E0277]: the trait bound `String: From<P>` is not satisfied",
+        " --> main.rs:3:23",
+        "  |",
+        "3 |     let s: String = P.into();",
+        "  |                       ^^^^ the trait `From<P>` is not implemented for `String`",
+        "  |",
+        "  = help: `String` implements trait `From<T>`:",
+        "            From<&String>",
+        "            From<&mut str>",
+        "            From<&str>",
+        "            From<Box<str>>",
+        "            From<Cow<'_, str>>",
+        "            From<char>",
+        "  = note: required for `P` to implement `Into<String>`",
+    ]
+    .join("\n");
+    assert_eq!(shown.trim_end(), expected);
+    let path = rendered("fn main() {\n    let s: std::path::PathBuf = 5u8.into();\n}\n");
+    assert!(
+        path.contains(
+            "  = help: `PathBuf` implements trait `From<T>`:\n            From<&T>\n            \
+             From<Box<Path>>\n            From<Cow<'_, Path>>\n            From<OsString>\n            \
+             From<String>\n  = note: required for `u8` to implement `Into<PathBuf>`\n"
+        ),
+        "{path}"
+    );
+}
+
+/// rustc's report of the one error in `main.rs`, whose line `line` is
+/// `text`, as the lines `head` before the source and `under` below it.
+fn report_lines(head: &[&str], line: usize, text: &str, under: &[&str]) -> String {
+    let mut lines: Vec<String> = head.iter().map(|line| (*line).to_owned()).collect();
+    lines.push("  |".into());
+    lines.push(format!("{line} | {text}"));
+    lines.extend(under.iter().map(|line| (*line).to_owned()));
+    lines.join("\n")
+}
+
+/// A field of a std type that has none is rustc's E0609 at the field,
+/// naming the value's type as it is, with the public fields a range has
+/// in a note. What `rustc --edition 2021` reports.
+#[test]
+fn a_field_a_std_type_lacks_is_e0609() {
+    let marked = "  |               ^ unknown field";
+    for (before, line, owner, note) in [
+        (
+            "let o: Option<i32> = Some(1);",
+            "let a = o.x;",
+            "Option<i32>",
+            None,
+        ),
+        (
+            "let c = std::cmp::Ordering::Less;",
+            "let a = c.x;",
+            "std::cmp::Ordering",
+            None,
+        ),
+        (
+            "let o: Option<i32> = Some(1);\n    let o = &o;",
+            "let a = o.x;",
+            "&Option<i32>",
+            None,
+        ),
+        ("let v = vec![1];", "let a = v.x;", "Vec<{integer}>", None),
+        (
+            "let r = 0..3;",
+            "let a = r.x;",
+            "std::ops::Range<{integer}>",
+            Some("available fields are: `start`, `end`"),
+        ),
+        (
+            "let r = ..3;",
+            "let a = r.x;",
+            "RangeTo<{integer}>",
+            Some("available field is: `end`"),
+        ),
+    ] {
+        let source = format!("fn main() {{\n    {before}\n    {line}\n}}\n");
+        let at = source
+            .lines()
+            .position(|text| text.ends_with(line))
+            .unwrap_or(0)
+            + 1;
+        let note = note.map(|note| format!("  |\n  = note: {note}"));
+        let expected = report_lines(
+            &[
+                &format!("error[E0609]: no field `x` on type `{owner}`"),
+                &format!(" --> main.rs:{at}:15"),
+            ],
+            at,
+            &format!("    {line}"),
+            &std::iter::once(marked)
+                .chain(note.as_deref())
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(rendered(&source).trim_end(), expected, "{source}");
+    }
+}
+
+/// A method a `Box<T>`'s `T` lacks is rustc's E0599 naming the box, as
+/// `Box` derefs to `T`. What `rustc --edition 2021` reports.
+#[test]
+fn a_method_a_boxed_value_lacks_names_the_box() {
+    let expected = report_lines(
+        &[
+            "error[E0599]: no method named `nope` found for struct `Box<P>` in the current scope",
+            " --> main.rs:4:7",
+        ],
+        4,
+        "    b.nope();",
+        &["  |       ^^^^ method not found in `Box<P>`"],
+    );
+    let source = "struct P;\nfn main() {\n    let b = Box::new(P);\n    b.nope();\n}\n";
+    assert_eq!(rendered(source).trim_end(), expected);
+    let shown = rendered("fn main() {\n    let b = Box::new(5);\n    b.nope();\n}\n");
+    assert!(
+        shown.starts_with(
+            "error[E0599]: no method named `nope` found for struct `Box<{integer}>` in the \
+             current scope\n"
+        ),
+        "{shown}"
+    );
+}
+
+/// A `let`'s value of another type than its written one is rustc's E0308
+/// at the value, beside the written type, with the "expected .. found"
+/// note where the types aren't simple. What `rustc --edition 2021`
+/// reports.
+#[test]
+fn a_lets_value_of_another_type_is_labelled_beside_its_written_type() {
+    let check = |line: usize, text: &str, under: &[&str]| {
+        let source = if line == 3 {
+            format!("struct S;\nfn main() {{\n    {text}\n}}\n")
+        } else {
+            format!("fn main() {{\n    {text}\n}}\n")
+        };
+        let column = text.find(" = ").map_or(0, |at| at + 8);
+        let expected = report_lines(
+            &[
+                "error[E0308]: mismatched types",
+                &format!(" --> main.rs:{line}:{column}"),
+            ],
+            line,
+            &format!("    {text}"),
+            under,
+        );
+        assert_eq!(rendered(&source).trim_end(), expected, "{text}");
+    };
+    check(
+        2,
+        "let x: i32 = \"a\";",
+        &[
+            "  |            ---   ^^^ expected `i32`, found `&str`",
+            "  |            |",
+            "  |            expected due to this",
+        ],
+    );
+    check(
+        2,
+        "let a: Vec<i32> = Vec::<u8>::new();",
+        &[
+            "  |            --------   ^^^^^^^^^^^^^^^^ expected `Vec<i32>`, found `Vec<u8>`",
+            "  |            |",
+            "  |            expected due to this",
+            "  |",
+            "  = note: expected struct `Vec<i32>`",
+            "             found struct `Vec<u8>`",
+        ],
+    );
+    check(
+        3,
+        "let c: S = 5;",
+        &[
+            "  |            -   ^ expected `S`, found integer",
+            "  |            |",
+            "  |            expected due to this",
+        ],
+    );
+}
+
+/// A local's trait object of a second trait that is not an auto trait is
+/// rustc's E0225 at that trait. What `rustc --edition 2021` reports.
+#[test]
+fn a_locals_trait_object_of_a_second_trait_is_e0225() {
+    let source = "trait Shape {}\ntrait Named {}\nstruct S;\nimpl Shape for S {}\nimpl Named for \
+                  S {}\nfn main() {\n    let s = S;\n    let x: &(dyn Shape + Named) = &s;\n}\n";
+    let shown = rendered(source);
+    for part in [
+        "error[E0225]: only auto traits can be used as additional traits in a trait object\n \
+         --> main.rs:8:26\n",
+        "^^^^^ additional non-auto trait",
+        "  = note: auto-traits like `Send` and `Sync` are traits that have special properties",
+    ] {
+        assert!(shown.contains(part), "{shown}");
+    }
 }

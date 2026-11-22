@@ -2805,10 +2805,10 @@ main();
         )
     };
     assert_eq!(printed(&program("f64", "2.0")), "2\n");
-    // rawr names the hidden type, as it names a captured `Sq` itself.
+    // rustc names the type in the hidden type that isn't `Send`.
     let report = refused(&program("Rc<f64>", "Rc::new(2.0)"));
     assert!(
-        report.starts_with("error[E0277]: `Sq` cannot be sent between threads safely"),
+        report.starts_with("error[E0277]: `Rc<f64>` cannot be sent between threads safely"),
         "{report}"
     );
     assert!(
@@ -3054,7 +3054,7 @@ main();
 "#,
     );
     assert!(
-        report.starts_with("error[E0277]: `Sq` cannot be sent between threads safely"),
+        report.starts_with("error[E0277]: `Rc<f64>` cannot be sent between threads safely"),
         "{report}"
     );
 }
@@ -7419,9 +7419,12 @@ main();
     assert_eq!(output, "x z y 1 true \"w\"\nbad gone\n");
 }
 
-/// What the package of `files`, written under the build directory as
-/// `name`, prints when it runs.
-fn printed_package(name: &str, files: &[(&str, &str)]) -> String {
+/// The package of `files`, written under the build directory as `name`,
+/// loaded, with its directory.
+fn loaded_package(
+    name: &str,
+    files: &[(&str, &str)],
+) -> (std::path::PathBuf, crate::package::Graph) {
     use std::fs;
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("target/graph-tests")
@@ -7436,6 +7439,14 @@ fn printed_package(name: &str, files: &[(&str, &str)]) -> String {
     let target = crate::project::Target::discover(&root, &mut answers).unwrap();
     let graph = crate::package::Graph::load(&Engine::new(), &target, &mut answers)
         .unwrap_or_else(|error| panic!("{error}"));
+    (root, graph)
+}
+
+/// What the package of `files`, written under the build directory as
+/// `name`, prints when it runs.
+fn printed_package(name: &str, files: &[(&str, &str)]) -> String {
+    use std::fs;
+    let (root, graph) = loaded_package(name, files);
     let lines = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
     let mut engine = Engine::new();
     let sink = lines.clone();
@@ -8966,50 +8977,6 @@ main();
 }
 
 #[test]
-fn impls_for_two_instances_reached_by_runtime_type_are_refused() {
-    // A generic parameter's or a trait object's value reaches its impl by
-    // its runtime type, which holds no type arguments: rawr refuses where
-    // two impls' Self types are one runtime type, rather than run the
-    // wrong one (#1178, #2569).
-    let refusal = "telling `Foo<i32>`'s impl of `Describe` from `Foo<i64>`'s through a generic \
-                   parameter or a trait object is not supported";
-    let source = |body: &str| {
-        format!(
-            r#"
-trait Describe {{ fn describe(&self) -> String; }}
-struct Foo<T> {{ value: T }}
-impl Describe for Foo<i32> {{ fn describe(&self) -> String {{ format!("i32 {{}}", self.value) }} }}
-impl Describe for Foo<i64> {{ fn describe(&self) -> String {{ format!("i64 {{}}", self.value) }} }}
-fn show<T: Describe>(x: &T) -> String {{ x.describe() }}
-fn main() {{ let a = Foo {{ value: 1i32 }}; {body} }}
-main();
-"#
-        )
-    };
-    for body in [
-        r#"println!("{}", show(&a));"#,
-        r#"let d: &dyn Describe = &a; println!("{}", d.describe());"#,
-    ] {
-        let report = refused(&source(body));
-        assert!(report.contains(refusal), "{report}");
-    }
-    let report = refused(
-        r#"
-trait Scale<T> { fn scale(&self, by: T) -> String; }
-impl Scale<i64> for f32 { fn scale(&self, by: i64) -> String { format!("f32 {}", *self * by as f32) } }
-impl Scale<i64> for f64 { fn scale(&self, by: i64) -> String { format!("f64 {}", *self * by as f64) } }
-fn go<T: Scale<i64>>(x: T) -> String { x.scale(2) }
-fn main() { println!("{}", go(1.5f64)); }
-main();
-"#,
-    );
-    assert!(
-        report.contains("telling `f32`'s impl of `Scale` from `f64`'s"),
-        "{report}"
-    );
-}
-
-#[test]
 fn an_iterator_passed_returned_or_kept_runs_only_as_far_as_it_is_pulled() {
     // A runtime iterator pulls its chain item by item (#407): an unbounded
     // one passed to a function returns, and a closure's side effects come
@@ -10408,32 +10375,71 @@ main();
         output,
         "Some(1)\nSome(1)\nSome(2) None\n[4, 3, 2] [3, 2, 1] Some(4)\nSome(1) [1, 2, 3]\n"
     );
+    // Each refusal names the std struct of the chain's outermost adapter,
+    // with the struct's declared parameters, as rustc's E0599 does (#2617).
     let refusal = |body: &str| refused(&format!("fn main() {{\n{body}\n}}\nmain();\n"));
-    let report = refusal("let v = vec![1, 2, 3];\nlet mut it = v.iter();\nit.peek();");
-    assert!(
-        report.starts_with("error[E0599]: no method named `peek` found for "),
-        "{report}"
-    );
-    let report = refusal(
-        "let v = vec![1, 2, 3];\nlet mut it = v.iter().peekable().map(|x| x * 2);\nit.peek();",
-    );
-    assert!(
-        report.starts_with("error[E0599]: no method named `peek` found for "),
-        "{report}"
-    );
-    let report = refusal(
-        "let v = vec![1, 2, 3];\nlet mut b = v.iter().take_while(|x| **x < 3);\nb.next_back();",
-    );
-    assert!(
-        report.starts_with("error[E0599]: no method named `next_back` found for "),
-        "{report}"
-    );
+    for (body, header) in [
+        (
+            "let v = vec![1, 2, 3];\nlet mut it = v.iter();\nit.peek();",
+            "no method named `peek` found for struct `std::slice::Iter<'a, T>`",
+        ),
+        (
+            "let v = vec![1, 2, 3];\nlet mut it = v.iter().peekable().map(|x| x * 2);\nit.peek();",
+            "no method named `peek` found for struct `Map<I, F>`",
+        ),
+        (
+            "let v = vec![1, 2, 3];\nlet mut b = v.iter().take_while(|x| **x < 3);\nb.next_back();",
+            "no method named `next_back` found for struct `TakeWhile<I, P>`",
+        ),
+    ] {
+        let report = refusal(body);
+        assert!(
+            report.starts_with(&format!("error[E0599]: {header} in the current scope")),
+            "{report}"
+        );
+    }
     let report = refusal("let c: Vec<i32> = (0..).rev().take(2).collect();");
     assert!(
-        report.starts_with("error[E0277]: the trait bound `")
-            && report.contains(": DoubleEndedIterator` is not satisfied"),
+        report.starts_with(
+            "error[E0277]: the trait bound `std::ops::RangeFrom<{integer}>: DoubleEndedIterator` \
+             is not satisfied"
+        ),
         "{report}"
     );
+}
+
+#[test]
+fn a_method_an_iterator_lacks_names_its_std_struct() {
+    // rustc names the struct of the source or of the outermost adapter,
+    // by its trimmed path and declared parameters (#2617).
+    for (chain, owner) in [
+        ("\"ab\".chars()", "Chars<'a>"),
+        ("\"a b\".split_whitespace()", "SplitWhitespace<'a>"),
+        ("\"ab\".bytes()", "std::str::Bytes<'a>"),
+        ("v.clone().into_iter()", "std::vec::IntoIter<T, A>"),
+        ("v.iter_mut()", "std::slice::IterMut<'a, T>"),
+        ("v.iter().map(|x| x + 1)", "Map<I, F>"),
+        ("v.iter().filter(|x| **x > 1)", "Filter<I, P>"),
+        ("v.iter().zip(v.iter())", "Zip<A, B>"),
+        ("v.iter().chain(v.iter())", "std::iter::Chain<A, B>"),
+        ("v.iter().rev()", "Rev<T>"),
+        ("v.iter().enumerate().skip(1)", "Skip<I>"),
+        ("v.iter().peekable()", "Peekable<I>"),
+        ("v.iter().cloned()", "Cloned<I>"),
+        ("v.iter().flat_map(|x| vec![*x])", "FlatMap<I, U, F>"),
+        ("v.iter().step_by(2).take(1)", "std::iter::Take<I>"),
+    ] {
+        let report = refused(&format!(
+            "fn main() {{\n    let mut v = vec![1, 2, 3];\n    {chain}.nope();\n}}\nmain();\n"
+        ));
+        assert!(
+            report.starts_with(&format!(
+                "error[E0599]: no method named `nope` found for struct `{owner}` in the current \
+                 scope"
+            )),
+            "{chain}: {report}"
+        );
+    }
 }
 
 #[test]
@@ -10517,6 +10523,1314 @@ main();
             report.starts_with(
                 "error[E0502]: cannot borrow `v` as mutable because it is also borrowed as immutable"
             ),
+            "{report}"
+        );
+    }
+}
+
+/// The files of a Cargo package of edition `edition` whose `src/main.rs`
+/// is `main`.
+fn edition_package(edition: &str, main: &str) -> [(&'static str, String); 2] {
+    [
+        (
+            "Cargo.toml",
+            format!(
+                "[package]\nname = \"tails\"\nversion = \"0.1.0\"\nedition = \"{edition}\"\n\n\
+                 [workspace]\n"
+            ),
+        ),
+        ("src/main.rs", format!("// rawr\n{main}")),
+    ]
+}
+
+/// The package of edition `edition` whose `src/main.rs` is `main`, loaded
+/// under the build directory as `name`, with its directory.
+fn edition_loaded(
+    name: &str,
+    edition: &str,
+    main: &str,
+) -> (std::path::PathBuf, crate::package::Graph) {
+    let files = edition_package(edition, main);
+    let files: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(path, text)| (*path, text.as_str()))
+        .collect();
+    loaded_package(&format!("tail-{name}-{edition}"), &files)
+}
+
+/// What the package of edition `edition` whose `src/main.rs` is `main`
+/// prints.
+fn edition_printed(name: &str, edition: &str, main: &str) -> String {
+    let files = edition_package(edition, main);
+    let files: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(path, text)| (*path, text.as_str()))
+        .collect();
+    printed_package(&format!("tail-{name}-{edition}"), &files)
+}
+
+/// rustc's report of the package of edition `edition` whose `src/main.rs`
+/// is `main`, which rawr refuses, but for its `-->` line, which names where
+/// the build directory is.
+fn edition_rendered(name: &str, edition: &str, main: &str) -> String {
+    let (root, graph) = edition_loaded(name, edition, main);
+    let error = Engine::new()
+        .compile_package(graph)
+        .map(|_| ())
+        .expect_err("rawr refuses this package");
+    let _ = std::fs::remove_dir_all(&root);
+    let report = crate::diagnostic::render(&error.report().expect("the error is in the package"));
+    let lines: Vec<&str> = report
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("-->"))
+        .collect();
+    format!("{}\n", lines.join("\n"))
+}
+
+/// A type whose `Drop` uses the borrow it holds.
+const GUARD: &str = "struct Guard<'a>(&'a i32);
+
+impl Drop for Guard<'_> {
+    fn drop(&mut self) {
+        println!(\"drop {}\", self.0);
+    }
+}
+
+impl Guard<'_> {
+    fn get(&self) -> i32 {
+        *self.0
+    }
+}
+";
+
+/// The help rustc gives for a tail temporary that outlives a local.
+const TAIL_HELP: &str = "help: for example, you could save the expression's value in a new \
+                         local variable `x` and then make `x` be the expression at the end of \
+                         the block";
+
+/// The note rustc gives for a tail temporary that outlives a local.
+const TAIL_NOTE: &str = "= note: the temporary is part of an expression at the end of a block;";
+
+#[test]
+fn a_tail_temporary_that_borrows_a_local_outlives_it_before_edition_2024() {
+    // Before edition 2024 a block's tail temporaries drop at the end of the
+    // statement around the block, after its locals: a `Drop` temporary that
+    // borrows one is rustc's E0597, with its labels, note and help. Edition
+    // 2024 drops them first (#2517). Each line is one past rustc's, for
+    // `// rawr`.
+    let block = format!(
+        "{GUARD}
+fn main() {{
+    let n = {{
+        let x = 5;
+        Guard(&x).get()
+    }};
+    println!(\"{{n}}\");
+}}
+"
+    );
+    assert_eq!(
+        edition_rendered("block", "2021", &block),
+        format!(
+            "error[E0597]: `x` does not live long enough
+   |
+18 |         let x = 5;
+   |             - binding `x` declared here
+19 |         Guard(&x).get()
+   |         ------^^-
+   |         |     |
+   |         |     borrowed value does not live long enough
+   |         a temporary with access to the borrow is created here ...
+20 |     }};
+   |     -- ... and the borrow might be used here, when that temporary is dropped and runs the `Drop` code for type `Guard`
+   |     |
+   |     `x` dropped here while still borrowed
+   |
+   {TAIL_NOTE}
+           consider forcing this temporary to be dropped sooner, before the block's local variables are dropped
+{TAIL_HELP}
+   |
+19 |         let x = Guard(&x).get(); x
+   |         +++++++                +++
+"
+        )
+    );
+    assert_eq!(edition_printed("block", "2024", &block), "drop 5\n5\n");
+    let body = format!(
+        "{GUARD}
+fn read() -> i32 {{
+    let x = 1;
+    Guard(&x).get()
+}}
+
+fn main() {{
+    println!(\"{{}}\", read());
+}}
+"
+    );
+    assert_eq!(
+        edition_rendered("body", "2021", &body),
+        format!(
+            "error[E0597]: `x` does not live long enough
+   |
+17 |     let x = 1;
+   |         - binding `x` declared here
+18 |     Guard(&x).get()
+   |     ------^^-
+   |     |     |
+   |     |     borrowed value does not live long enough
+   |     a temporary with access to the borrow is created here ...
+19 | }}
+   | -
+   | |
+   | `x` dropped here while still borrowed
+   | ... and the borrow might be used here, when that temporary is dropped and runs the `Drop` code for type `Guard`
+   |
+   {TAIL_NOTE}
+           consider forcing this temporary to be dropped sooner, before the block's local variables are dropped
+{TAIL_HELP}
+   |
+18 |     let x = Guard(&x).get(); x
+   |     +++++++                +++
+"
+        )
+    );
+    assert_eq!(edition_printed("body", "2024", &body), "drop 1\n1\n");
+    // A closure's body ends its own tail's temporaries after its locals.
+    let closure = format!(
+        "{GUARD}
+fn main() {{
+    let g = || {{
+        let y = 2;
+        Guard(&y).get()
+    }};
+    println!(\"{{}}\", g());
+}}
+"
+    );
+    let (root, graph) = edition_loaded("closure", "2021", &closure);
+    let refused = Engine::new()
+        .compile_package(graph)
+        .map(|_| ())
+        .expect_err("rawr refuses this package")
+        .to_string();
+    let _ = std::fs::remove_dir_all(&root);
+    assert!(
+        refused.starts_with("`y` does not live long enough (E0597)"),
+        "{refused}"
+    );
+    // A parameter outlives its body's tail temporaries in every edition.
+    let parameter = format!(
+        "{GUARD}
+fn read(x: i32) -> i32 {{
+    Guard(&x).get()
+}}
+
+fn main() {{
+    println!(\"{{}}\", read(3));
+}}
+"
+    );
+    assert_eq!(
+        edition_printed("parameter", "2021", &parameter),
+        "drop 3\n3\n"
+    );
+}
+
+#[test]
+fn impls_for_two_instances_reached_by_a_trait_object_are_refused() {
+    // A trait object's value reaches its impl by its runtime type, which
+    // holds no type arguments: rawr refuses where two impls' Self types
+    // are one runtime type, rather than run the wrong one (#1178, #2212).
+    let report = refused(
+        r#"
+trait Describe { fn describe(&self) -> String; }
+struct Foo<T> { value: T }
+impl Describe for Foo<i32> { fn describe(&self) -> String { format!("i32 {}", self.value) } }
+impl Describe for Foo<i64> { fn describe(&self) -> String { format!("i64 {}", self.value) } }
+fn main() { let a = Foo { value: 1i32 }; let d: &dyn Describe = &a; println!("{}", d.describe()); }
+main();
+"#,
+    );
+    assert!(
+        report.contains(
+            "telling `Foo<i32>`'s impl of `Describe` from `Foo<i64>`'s through a generic \
+             parameter or a trait object is not supported"
+        ),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_generic_body_runs_at_its_callers_types() {
+    // A generic function whose body uses its parameters' types runs as
+    // rustc's monomorphised instance does: arithmetic, formatting, parse,
+    // sums and impl choice at the type each call gives it (D1115, #2569).
+    let output = printed(
+        r#"
+use std::fmt::{Debug, Display};
+use std::iter::Sum;
+use std::ops::{Add, Mul};
+use std::str::FromStr;
+trait Scale<T> { fn scale(&self, by: T) -> String; }
+impl Scale<i64> for f32 { fn scale(&self, by: i64) -> String { format!("f32 {}", *self * by as f32) } }
+impl Scale<i64> for f64 { fn scale(&self, by: i64) -> String { format!("f64 {}", *self * by as f64) } }
+trait Describe { fn describe(&self) -> String; }
+struct Foo<T> { value: T }
+impl Describe for Foo<i32> { fn describe(&self) -> String { format!("i32 {}", self.value) } }
+impl Describe for Foo<i64> { fn describe(&self) -> String { format!("i64 {}", self.value) } }
+fn twice<T: Add<Output = T> + Copy>(x: T) -> T { x + x }
+fn square<T: Mul<Output = T> + Copy + Display>(x: T) -> String { format!("{} {:>8.2}", x * x, x) }
+fn read<T: FromStr>(s: &str) -> Option<T> where T::Err: Debug { s.parse::<T>().ok() }
+fn text<T: ToString>(x: T) -> String { x.to_string() }
+fn total<T: Sum<T> + Copy>(v: &[T]) -> T { v.iter().copied().sum() }
+fn go<T: Scale<i64>>(x: T) -> String { x.scale(2) }
+fn show<T: Describe>(x: &T) -> String { x.describe() }
+fn main() {
+    println!("{} {}", twice(100u8), twice(1.1f32));
+    println!("{} | {}", square(3.3f32), square(3.3f64));
+    let a: Option<f32> = read("0.1");
+    println!("{:?} {:?}", a, read::<f32>("0.1").map(|x| x * 3.0));
+    println!("{} {} {}", text(0.3f32), text(0.3f64), text(7u8));
+    println!("{} {} {}", total(&[1i64, 2, 3]), total(&[0.1f32, 0.2]), total(&[100u8, 100, 50]));
+    println!("{} | {}", go(1.5f32), go(1.5f64));
+    println!("{} {}", show(&Foo { value: 1i32 }), show(&Foo { value: 2i64 }));
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "200 2.2\n10.889999     3.30 | 10.889999999999999     3.30\nSome(0.1) Some(0.3)\n\
+         0.3 0.3 7\n6 0.3 250\nf32 3 | f64 3\ni32 1 i64 2\n"
+    );
+    for (program, message) in [
+        (
+            "use std::ops::Add;\nfn twice<T: Add<Output = T> + Copy>(x: T) -> T { x + x }\n\
+             fn main() { println!(\"{}\", twice(200u8)); }\nmain();\n",
+            "attempt to add with overflow",
+        ),
+        (
+            "use std::iter::Sum;\nfn total<T: Sum<T> + Copy>(v: &[T]) -> T { v.iter().copied().sum() }\n\
+             fn main() { println!(\"{}\", total(&[100u8, 100, 100])); }\nmain();\n",
+            "attempt to add with overflow",
+        ),
+    ] {
+        let error = Engine::new()
+            .run(program)
+            .expect_err("a `u8` sum past 255 panics");
+        assert!(error.to_string().contains(message), "{error}");
+    }
+}
+
+#[test]
+fn an_instance_keeps_the_generic_reads_resolutions() {
+    // An instance calls what its template's bounds resolve, not what its
+    // type has of that name: a bound's method over an inherent one, a
+    // bound's associated function over the type's, and a nested generic
+    // at the instance's types (D1114, D1115).
+    let output = printed(
+        r#"
+trait Tr { fn len(&self) -> usize; }
+impl Tr for Vec<i32> { fn len(&self) -> usize { 99 } }
+trait Make { fn new() -> Self; fn tag(&self) -> &'static str; }
+struct A;
+impl A { fn new() -> Self { A } fn tag(&self) -> &'static str { "inherent tag" } }
+impl Make for A { fn new() -> Self { A } fn tag(&self) -> &'static str { "trait tag" } }
+fn size<T: Tr>(x: &T) -> usize { x.len() }
+fn made<T: Make>() -> &'static str { T::new().tag() }
+fn outer<T: Make>(x: &T) -> String { format!("{} {}", x.tag(), made::<T>()) }
+fn main() {
+    println!("{} {} {}", size(&vec![1, 2]), made::<A>(), outer(&A));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "99 trait tag trait tag trait tag\n");
+}
+
+#[test]
+fn a_generic_impls_method_runs_at_its_receivers_types() {
+    // An inherent method of a generic impl whose body uses the impl's
+    // parameters runs at the receiver's type arguments, as rustc's
+    // instance does: an `f64`'s impl, a `u8`'s overflow, an `f32`'s digits
+    // (D1115).
+    let output = printed(
+        r#"
+use std::fmt::Display;
+use std::ops::Add;
+trait Half { fn half(&self) -> String; }
+impl Half for f32 { fn half(&self) -> String { format!("f32 {}", self / 2.0) } }
+impl Half for f64 { fn half(&self) -> String { format!("f64 {}", self / 2.0) } }
+struct W<T>(T);
+impl<T: Half> W<T> { fn go(&self) -> String { self.0.half() } }
+struct P<T>(T);
+impl<T: Add<Output = T> + Copy + Display> P<T> {
+    fn new(x: T) -> Self { P(x) }
+    fn dbl(&self) -> T { self.0 + self.0 }
+    fn shown(&self) -> String { format!("{}", self.0) }
+}
+fn main() {
+    println!("{} | {}", W(1.0f64).go(), W(1.0f32).go());
+    println!("{} {} {}", P(100u8).dbl(), P::new(0.1f32).shown(), P(1.1f32).dbl());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "f64 0.5 | f32 0.5\n200 0.1 2.2\n");
+    let error = Engine::new()
+        .run(
+            "struct P<T>(T);\nimpl<T: std::ops::Add<Output = T> + Copy> P<T> { fn dbl(&self) -> T \
+             { self.0 + self.0 } }\nfn main() { println!(\"{}\", P(200u8).dbl()); }\nmain();\n",
+        )
+        .expect_err("a `u8` sum past 255 panics");
+    assert!(
+        error.to_string().contains("attempt to add with overflow"),
+        "{error}"
+    );
+}
+
+#[test]
+fn an_array_type_owns_its_impls_apart_from_its_slice() {
+    // `impl Total for [i32; 3]` beside `impl Total for [i32]`, and an impl
+    // for every length of an array (#2214).
+    let output = printed(
+        r#"
+trait Total { fn total(&self) -> i32; }
+impl Total for [i32; 3] { fn total(&self) -> i32 { self.iter().sum() } }
+impl Total for [i32] { fn total(&self) -> i32 { self.iter().sum::<i32>() * 10 } }
+trait Len { fn size(&self) -> usize; }
+impl<const N: usize> Len for [u8; N] { fn size(&self) -> usize { N } }
+fn main() {
+    let a = [1, 2, 3];
+    println!("{} {} {} {}", a.total(), a[..].total(), [0u8; 4].size(), [1u8, 2].size());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "6 60 4 2\n");
+}
+
+#[test]
+fn a_relaxed_sized_parameter_tells_a_slice_from_a_vec() {
+    // `T: Tr + ?Sized` at `[i32]` and at `Vec<i32>` runs each one's impl,
+    // which their runtime value doesn't tell apart (#801).
+    let output = printed(
+        r#"
+trait Tr { fn name(&self) -> String; }
+impl<T> Tr for [T] { fn name(&self) -> String { format!("slice {}", self.len()) } }
+impl<T> Tr for Vec<T> { fn name(&self) -> String { format!("vec {}", self.len()) } }
+fn f<T: Tr + ?Sized>(t: &T) -> String { t.name() }
+fn main() {
+    let v = vec![1, 2, 3];
+    println!("{} {} {} {}", f(&v), f(&v[..]), f(&v[1..]), f(&vec!["a"]));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "vec 3 slice 3 slice 2 vec 1\n");
+}
+
+#[test]
+fn a_tail_temporary_drops_after_its_blocks_locals_before_edition_2024() {
+    // Before edition 2024 a block's tail temporaries drop at the end of the
+    // temporary scope around the block, after the block's locals, and a
+    // body's between its locals and its parameters. A loop's, a branch's,
+    // an arm's and a closure's body is a temporary scope of its own.
+    // Edition 2024 drops them with the tail, before the locals. Each is
+    // what rustc's build prints.
+    assert_eq!(
+        edition_printed("order", "2021", TAIL_ORDER),
+        "drop local\ndrop temp\nafter let 1\ndrop if local\n\
+         drop if temp\nafter if 1\ndrop arm local\ndrop arm temp\n\
+         after match 1\ndrop body local\ndrop body temp\ndrop param\n\
+         1\ndrop closure local\ndrop closure temp\ndrop closure param\n\
+         1\ndrop inner local\ndrop outer local\ndrop inner temp\n\
+         after nested 1\ndrop vec local\ndrop vec temp\nafter vec 2\n\
+         drop stmt local\ndrop rhs local\ndrop rhs temp\ndrop stmt temp\n\
+         after sum 2\ndrop loop local\ndrop loop temp\niteration 0\n\
+         drop loop local\ndrop loop temp\niteration 1\ndrop loop body local\n\
+         drop loop body temp\nend\n"
+    );
+    assert_eq!(
+        edition_printed("order", "2024", TAIL_ORDER),
+        "drop temp\ndrop local\nafter let 1\ndrop if temp\n\
+         drop if local\nafter if 1\ndrop arm temp\ndrop arm local\n\
+         after match 1\ndrop body temp\ndrop body local\ndrop param\n\
+         1\ndrop closure temp\ndrop closure local\ndrop closure param\n\
+         1\ndrop inner temp\ndrop inner local\ndrop outer local\n\
+         after nested 1\ndrop vec temp\ndrop vec local\nafter vec 2\n\
+         drop stmt temp\ndrop stmt local\ndrop rhs temp\ndrop rhs local\n\
+         after sum 2\ndrop loop temp\ndrop loop local\niteration 0\n\
+         drop loop temp\ndrop loop local\niteration 1\ndrop loop body temp\n\
+         drop loop body local\nend\n"
+    );
+}
+
+/// An `if let` subject, a `match` scrutinee, a `vec!` element and a
+/// `while` condition, each a block whose tail makes a value that prints
+/// its drop.
+const TAIL_SCOPES: &str = r#"struct D(&'static str);
+impl Drop for D {
+    fn drop(&mut self) {
+        println!("drop {}", self.0);
+    }
+}
+impl D {
+    fn get(&self) -> i32 {
+        1
+    }
+    fn some(&self) -> Option<i32> {
+        Some(2)
+    }
+}
+fn main() {
+    if let Some(x) = { let _a = D("subject local"); D("subject temp").some() } {
+        println!("matched {x}");
+    }
+    println!("after if let");
+    match { let _a = D("scrutinee local"); D("scrutinee temp").get() } {
+        1 => println!("one"),
+        _ => println!("other"),
+    }
+    println!("after match");
+    let v = vec![{ let _a = D("vec local"); D("vec temp").get() }, 2];
+    println!("after vec {}", v.len());
+    let mut i = 0;
+    while { let _a = D("cond local"); D("cond temp").get() } > i {
+        println!("loop {i}");
+        i += 1;
+    }
+    println!("end");
+}
+"#;
+
+#[test]
+fn a_tail_temporary_in_a_condition_or_subject_drops_with_it_before_edition_2024() {
+    // A block expression's tail temporaries that go on past its locals
+    // drop with the temporary scope around the block: an `if let`'s and a
+    // `match`'s after the body, a condition's before it. Each is what
+    // rustc's build prints.
+    assert_eq!(
+        edition_printed("scopes", "2021", TAIL_SCOPES),
+        "drop subject local\nmatched 2\ndrop subject temp\nafter if let\n\
+         drop scrutinee local\none\ndrop scrutinee temp\nafter match\n\
+         drop vec local\ndrop vec temp\nafter vec 2\ndrop cond local\n\
+         drop cond temp\nloop 0\ndrop cond local\ndrop cond temp\n\
+         end\n"
+    );
+    assert_eq!(
+        edition_printed("scopes", "2024", TAIL_SCOPES),
+        "drop subject temp\ndrop subject local\nmatched 2\nafter if let\n\
+         drop scrutinee temp\ndrop scrutinee local\none\nafter match\n\
+         drop vec temp\ndrop vec local\nafter vec 2\ndrop cond temp\n\
+         drop cond local\nloop 0\ndrop cond temp\ndrop cond local\n\
+         end\n"
+    );
+}
+
+/// A block whose tail reads through a `RefCell`'s borrow of a local.
+const GUARD_BLOCK: &str = r#"use std::cell::RefCell;
+
+fn main() {
+    let n = {
+        let x = RefCell::new(1);
+        *x.borrow()
+    };
+    println!("{n}");
+}
+"#;
+
+/// A body whose tail calls a method through a `RefCell`'s mutable borrow
+/// of a local.
+const GUARD_BODY: &str = r#"use std::cell::RefCell;
+
+fn total() -> usize {
+    let v = RefCell::new(vec![1, 2]);
+    v.borrow_mut().len()
+}
+
+fn main() {
+    println!("{}", total());
+}
+"#;
+
+#[test]
+fn a_refcell_guard_in_a_tail_outlives_its_cell_before_edition_2024() {
+    // `borrow()` gives std's `Ref<'_, T>` and `borrow_mut()` its
+    // `RefMut<'_, T>`, whose drop uses the borrow of the cell. Before
+    // edition 2024 one made in a block's tail drops after the block's
+    // locals: a borrow of a local cell is rustc's E0597, which names the
+    // guard's destructor (#2620). Edition 2024 drops it first.
+    assert_eq!(
+        edition_rendered("guard-block", "2021", GUARD_BLOCK),
+        "error[E0597]: `x` does not live long enough\n  |\n6 |         let x = RefCell::new(1);\n  |             - binding `x` declared here\n7 |         *x.borrow()\n  |          ^---------\n  |          |\n  |          borrowed value does not live long enough\n  |          a temporary with access to the borrow is created here ...\n8 |     };\n  |     -- ... and the borrow might be used here, when that temporary is dropped and runs the destructor for type `Ref<'_, i32>`\n  |     |\n  |     `x` dropped here while still borrowed\n  |\n  = note: the temporary is part of an expression at the end of a block;\n          consider forcing this temporary to be dropped sooner, before the block's local variables are dropped\nhelp: for example, you could save the expression's value in a new local variable `x` and then make `x` be the expression at the end of the block\n  |\n7 |         let x = *x.borrow(); x\n  |         +++++++            +++\n"
+    );
+    assert_eq!(edition_printed("guard-block", "2024", GUARD_BLOCK), "1\n");
+    assert_eq!(
+        edition_rendered("guard-body", "2021", GUARD_BODY),
+        "error[E0597]: `v` does not live long enough\n  |\n5 |     let v = RefCell::new(vec![1, 2]);\n  |         - binding `v` declared here\n6 |     v.borrow_mut().len()\n  |     ^-------------\n  |     |\n  |     borrowed value does not live long enough\n  |     a temporary with access to the borrow is created here ...\n7 | }\n  | -\n  | |\n  | `v` dropped here while still borrowed\n  | ... and the borrow might be used here, when that temporary is dropped and runs the destructor for type `RefMut<'_, Vec<i32>>`\n  |\n  = note: the temporary is part of an expression at the end of a block;\n          consider forcing this temporary to be dropped sooner, before the block's local variables are dropped\nhelp: for example, you could save the expression's value in a new local variable `x` and then make `x` be the expression at the end of the block\n  |\n6 |     let x = v.borrow_mut().len(); x\n  |     +++++++                     +++\n"
+    );
+    assert_eq!(edition_printed("guard-body", "2024", GUARD_BODY), "2\n");
+}
+
+/// Guards read, changed, printed and held through a `RefCell`, an `Rc` of
+/// one and a `Mutex`, in blocks' tails whose cells outlive them.
+const GUARD_USES: &str = r#"use std::cell::RefCell;
+use std::rc::Rc;
+
+fn first(v: &RefCell<Vec<i32>>) -> i32 {
+    v.borrow()[0]
+}
+
+fn main() {
+    let c = RefCell::new(vec![1, 2]);
+    c.borrow_mut().push(3);
+    *c.borrow_mut() = vec![4, 5, 6];
+    let n = c.borrow().len();
+    println!("{n} {:?} {}", c.borrow(), first(&c));
+    let s = RefCell::new(String::from("hi"));
+    println!("{} {}", s.borrow(), s.borrow().len());
+    let shared = Rc::new(RefCell::new(7));
+    *shared.borrow_mut() += 1;
+    let total = { *shared.borrow() + 1 };
+    let g = c.borrow();
+    println!("{total} {} {}", g[1], g.iter().sum::<i32>());
+    drop(g);
+    drop(c);
+    let m = std::sync::Mutex::new(2);
+    let doubled = { *m.lock().unwrap() * 2 };
+    println!("{doubled}");
+}
+"#;
+
+#[test]
+fn a_refcell_guard_derefs_to_its_value_in_every_edition() {
+    // A guard derefs to the cell's value, and `Display` and `Debug` go
+    // through it. A tail's guard of a cell that outlives the block is
+    // accepted before edition 2024 too. Each is what rustc's build prints.
+    let printed = "3 [4, 5, 6] 4\nhi 2\n9 5 15\n4\n";
+    assert_eq!(edition_printed("guard-uses", "2021", GUARD_USES), printed);
+    assert_eq!(edition_printed("guard-uses", "2024", GUARD_USES), printed);
+}
+
+#[test]
+fn a_refcell_guard_assigned_to_a_local_drops_where_the_local_ends() {
+    // `r = c.borrow();` moves the guard into `r`, whose drop at the end of
+    // `main` uses the borrow of `c`, which ended with its block: rustc's
+    // E0597 though `r` is never read.
+    let report = refused(
+        "use std::cell::RefCell;
+fn main() {
+    let r;
+    {
+        let c = RefCell::new(1);
+        r = c.borrow();
+    }
+}
+main();
+",
+    );
+    assert!(
+        report.starts_with("error[E0597]: `c` does not live long enough"),
+        "{report}"
+    );
+}
+
+/// A type whose drop prints its name, and a block, a branch, an arm, a
+/// body, a closure, a nested block, a sum of blocks and loops whose tails
+/// make one.
+const TAIL_ORDER: &str = r#"struct D(&'static str);
+impl Drop for D {
+    fn drop(&mut self) {
+        println!("drop {}", self.0);
+    }
+}
+impl D {
+    fn get(&self) -> i32 {
+        1
+    }
+    fn touch(&self) {}
+}
+fn body(_p: D) -> i32 {
+    let _a = D("body local");
+    D("body temp").get()
+}
+fn main() {
+    let n = { let _a = D("local"); D("temp").get() };
+    println!("after let {n}");
+    let m = if n == 1 { let _a = D("if local"); D("if temp").get() } else { 0 };
+    println!("after if {m}");
+    let k = match n { 1 => { let _a = D("arm local"); D("arm temp").get() } _ => 0 };
+    println!("after match {k}");
+    println!("{}", body(D("param")));
+    let c = |_p: D| { let _a = D("closure local"); D("closure temp").get() };
+    println!("{}", c(D("closure param")));
+    let nested = { let _o = D("outer local"); { let _i = D("inner local"); D("inner temp").get() } };
+    println!("after nested {nested}");
+    let v = vec![{ let _a = D("vec local"); D("vec temp").get() }, 2];
+    println!("after vec {}", v.len());
+    let s = { let _a = D("stmt local"); D("stmt temp").get() } + { let _b = D("rhs local"); D("rhs temp").get() };
+    println!("after sum {s}");
+    for i in 0..2 {
+        let _l = { let _a = D("loop local"); D("loop temp").get() + i };
+        println!("iteration {i}");
+    }
+    for _ in 0..1 {
+        let _a = D("loop body local");
+        D("loop body temp").touch()
+    }
+    println!("end");
+}
+"#;
+
+#[test]
+fn a_compound_assignment_through_an_operator_impl_borrows_its_place_mut() {
+    // `v += x` through `AddAssign` is `AddAssign::add_assign(&mut v, x)`:
+    // a two-phase `&mut` borrow of `v`, reserved before `x` is made and
+    // activated after it, and the call moves `x`, as `a + b` moves both
+    // operands (#130).
+    let output = printed(
+        r#"
+use std::ops::{Add, AddAssign};
+#[derive(Debug, Clone, Copy)]
+struct V(i32);
+impl AddAssign for V { fn add_assign(&mut self, o: V) { self.0 += o.0; } }
+impl AddAssign<i32> for V { fn add_assign(&mut self, o: i32) { self.0 += o; } }
+impl Add for V { type Output = V; fn add(self, o: V) -> V { V(self.0 + o.0) } }
+fn main() {
+    let mut v = V(1);
+    v += v;
+    v += V(v.0);
+    v += v.0;
+    let w = v + v;
+    let mut vs = vec![V(1)];
+    vs[0] += 2;
+    let r = &mut v;
+    *r += 3;
+    println!("{:?} {:?} {:?}", v, w, vs);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "V(11) V(16) [V(3)]\n");
+    let shared = refused(
+        r#"
+use std::ops::AddAssign;
+#[derive(Debug, Clone, Copy)]
+struct V(i32);
+impl AddAssign for V { fn add_assign(&mut self, o: V) { self.0 += o.0; } }
+fn main() { let mut v = V(1); let r = &v; v += V(2); println!("{:?}", r); }
+main();
+"#,
+    );
+    assert!(
+        shared.contains(
+            "error[E0502]: cannot borrow `v` as mutable because it is also borrowed as \
+             immutable\n --> <script>:6:43"
+        ),
+        "{shared}"
+    );
+    let moved = refused(
+        r#"
+use std::ops::AddAssign;
+#[derive(Debug)]
+struct V(i32);
+impl AddAssign for V { fn add_assign(&mut self, o: V) { self.0 += o.0; } }
+fn main() { let mut v = V(1); v += v; println!("{:?}", v); }
+main();
+"#,
+    );
+    assert!(
+        moved.contains(
+            "error[E0505]: cannot move out of `v` because it is borrowed\n --> <script>:6:36"
+        ),
+        "{moved}"
+    );
+    let operand = refused(
+        r#"
+use std::ops::AddAssign;
+#[derive(Debug)]
+struct V(i32);
+impl AddAssign for V { fn add_assign(&mut self, o: V) { self.0 += o.0; } }
+fn main() { let mut w = V(1); let v = V(2); w += v; println!("{:?} {:?}", w, v); }
+main();
+"#,
+    );
+    assert!(
+        operand.contains("error[E0382]: borrow of moved value: `v`\n --> <script>:6:78"),
+        "{operand}"
+    );
+    // An element's `IndexMut::index_mut` borrow is made before the value.
+    let indexed = refused(
+        r#"
+use std::ops::AddAssign;
+struct V(i32);
+impl AddAssign<i32> for V { fn add_assign(&mut self, o: i32) { self.0 += o; } }
+fn main() { let mut vs = vec![V(1)]; vs[0] += { vs = vec![]; 0 }; }
+main();
+"#,
+    );
+    assert!(
+        indexed.contains(
+            "error[E0506]: cannot assign to `vs` because it is borrowed\n --> <script>:5:49"
+        ),
+        "{indexed}"
+    );
+}
+
+#[test]
+fn a_function_value_from_a_method_a_field_or_a_branch_is_called_as_its_type_says() {
+    // A local set from a method's `impl Fn`, a field's `fn`, or an `if` or
+    // `match` of `impl Fn` values is called through a shared borrow, as
+    // `Fn::call` borrows it; a `Box<dyn FnMut>` through a `&mut` one, as
+    // `FnMut::call_mut` does (#188).
+    let output = printed(
+        r#"
+struct M;
+impl M { fn adder(&self) -> impl Fn(i32) -> i32 { |x| x + 3 } }
+struct H { f: fn(i32) -> i32 }
+fn one(x: i32) -> i32 { x + 1 }
+fn make() -> impl Fn(i32) -> i32 { |x| x * 10 }
+fn main() {
+    let m = M;
+    let mut g = m.adder();
+    let r = &g;
+    println!("{} {}", g(1), r(2));
+    let h = H { f: one };
+    let mut f = h.f;
+    let r = &f;
+    println!("{} {}", f(1), r(2));
+    let k = 2;
+    let mut b = if k > 1 { make() } else { make() };
+    let r = &b;
+    println!("{} {}", b(1), r(2));
+    let mut a = match k { 1 => make(), _ => make() };
+    let r = &a;
+    println!("{} {}", a(3), r(4));
+    let mut c = 0;
+    let mut counter: Box<dyn FnMut() -> i32> = Box::new(move || { c += 1; c });
+    println!("{} {}", counter(), counter());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "4 5\n2 3\n10 20\n30 40\n1 2\n");
+    let written = refused(
+        r#"
+fn main() { let mut c = 0; let mut f: Box<dyn FnMut() -> i32> = Box::new(move || { c += 1; c }); let r = &f; f(); std::mem::drop(r); }
+main();
+"#,
+    );
+    assert!(
+        written.contains(
+            "error[E0502]: cannot borrow `f` as mutable because it is also borrowed as \
+             immutable\n --> <script>:2:110"
+        ),
+        "{written}"
+    );
+    let returned = refused(
+        r#"
+fn counter() -> Box<dyn FnMut() -> i32> { let mut c = 0; Box::new(move || { c += 1; c }) }
+fn main() { let mut f = counter(); let r = &f; f(); std::mem::drop(r); }
+main();
+"#,
+    );
+    assert!(
+        returned.contains(
+            "error[E0502]: cannot borrow `f` as mutable because it is also borrowed as \
+             immutable\n --> <script>:3:48"
+        ),
+        "{returned}"
+    );
+}
+
+#[test]
+fn an_array_passed_as_impl_into_iterator_where_the_call_is_expected() {
+    // A generic call whose value the caller expects types its parameters
+    // from that expectation, but an `impl IntoIterator` parameter is its
+    // own type parameter: the array is the iterator over its elements,
+    // never coerced to the iterator type.
+    let output = printed(
+        r#"
+struct E<M>(M);
+struct W<M>(Vec<E<M>>);
+fn group<M>(content: impl IntoIterator<Item = E<M>>) -> W<M> {
+    W(content.into_iter().collect())
+}
+fn outer<M: Clone>(m: M) -> W<M> {
+    group([E(m.clone()), E(m)])
+}
+fn main() {
+    println!("{} {}", outer(1).0.len(), group([E('a')]).0.len());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "2 1\n");
+}
+
+#[test]
+fn a_closure_local_that_shadows_a_capture_is_the_closure_s_own_borrow() {
+    // `let c = c.borrow();` in a closure binds a `Ref` of the captured
+    // cell, and `c` after it is that `Ref`, not the capture (#2229).
+    let output = printed(
+        r#"
+use std::cell::RefCell;
+use std::rc::Rc;
+struct Counted { n: i32 }
+impl Counted { fn get(&self) -> i32 { self.n } }
+fn main() {
+    let c = Rc::new(RefCell::new(Counted { n: 3 }));
+    let f = move || { let c = c.borrow(); c.get() };
+    let b = RefCell::new(Counted { n: 2 });
+    let g = || { let b = b.borrow(); let n = b.get(); drop(b); n };
+    let h = || { let mut b = b.borrow_mut(); b.n += 1; b.n };
+    println!("{} {} {}", f(), g(), h());
+    println!("{}", b.borrow().n);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "3 2 3\n3\n");
+}
+
+#[test]
+fn a_trait_object_is_send_only_as_its_type_writes_it() {
+    // `dyn Shape` is `Send` only with `+ Send` or a `Send` supertrait, and
+    // only what is `Send` becomes `dyn Shape + Send` (#2485).
+    let output = printed(
+        r#"
+use std::rc::Rc;
+trait Shape { fn area(&self) -> f64; }
+trait Named: Send { fn name(&self) -> String; }
+struct Sq(f64);
+impl Shape for Sq { fn area(&self) -> f64 { self.0 * self.0 } }
+impl Named for Sq { fn name(&self) -> String { "sq".into() } }
+struct Shared(Rc<f64>);
+impl Shape for Shared { fn area(&self) -> f64 { *self.0 } }
+fn main() {
+    let b: Box<dyn Shape + Send> = Box::new(Sq(2.0));
+    let n: Box<dyn Named> = Box::new(Sq(1.0));
+    let h = std::thread::spawn(move || (b.area(), n.name()));
+    println!("{:?}", h.join().unwrap());
+    let local: Box<dyn Shape> = Box::new(Shared(Rc::new(3.0)));
+    println!("{}", local.area());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "(4.0, \"sq\")\n3\n");
+    let output = printed(
+        r#"
+use std::error::Error;
+fn parse(text: &str) -> Result<i32, Box<dyn Error + Send + Sync>> {
+    if text.is_empty() {
+        return Err("empty".into());
+    }
+    Ok(text.parse::<i32>()?)
+}
+fn main() {
+    let h = std::thread::spawn(|| (parse("4"), parse("")));
+    let (a, b) = h.join().unwrap();
+    let local: Result<i32, Box<dyn Error + Send + Sync>> = Err("local".into());
+    let moved = std::thread::spawn(move || local.unwrap_err().to_string());
+    println!("{:?} {} {}", a.ok(), b.unwrap_err(), moved.join().unwrap());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "Some(4) empty local\n");
+    let report = refused(
+        r#"
+use std::rc::Rc;
+trait Shape { fn area(&self) -> f64; }
+struct Sq(Rc<f64>);
+impl Shape for Sq { fn area(&self) -> f64 { *self.0 * *self.0 } }
+fn main() {
+    let b: Box<dyn Shape> = Box::new(Sq(Rc::new(2.0)));
+    let h = std::thread::spawn(move || b.area());
+    println!("{}", h.join().unwrap());
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0277]: `dyn Shape` cannot be sent between threads safely"),
+        "{report}"
+    );
+    assert!(
+        report.contains("note: required because it's used within this closure"),
+        "{report}"
+    );
+    let report = refused(
+        r#"
+use std::rc::Rc;
+trait Shape { fn area(&self) -> f64; }
+struct Shared(Rc<f64>);
+impl Shape for Shared { fn area(&self) -> f64 { *self.0 } }
+fn main() {
+    let b: Box<dyn Shape + Send> = Box::new(Shared(Rc::new(3.0)));
+    println!("{}", b.area());
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0277]: `Rc<f64>` cannot be sent between threads safely"),
+        "{report}"
+    );
+    assert!(
+        report.contains("help: within `Shared`, the trait `Send` is not implemented for `Rc<f64>`"),
+        "{report}"
+    );
+    assert!(
+        report.contains("note: required because it appears within the type `Shared`"),
+        "{report}"
+    );
+}
+
+#[test]
+fn e0277_for_a_value_that_isn_t_send_names_the_type_that_isn_t() {
+    // rustc names the innermost type that isn't `Send`, with a note at
+    // each program type and opaque output it appears within (#2495).
+    let report = refused(
+        r#"
+use std::rc::Rc;
+struct Sq(Rc<f64>);
+fn main() {
+    let s = Sq(Rc::new(2.0));
+    let h = std::thread::spawn(move || *s.0);
+    println!("{}", h.join().unwrap());
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0277]: `Rc<f64>` cannot be sent between threads safely"),
+        "{report}"
+    );
+    for note in [
+        "note: required because it appears within the type `Sq`",
+        "note: required because it's used within this closure",
+        "required by a bound in `std::thread::spawn`",
+    ] {
+        assert!(report.contains(note), "{note}: {report}");
+    }
+    let report = refused(
+        r#"
+use std::rc::Rc;
+trait Shape { fn area(&self) -> f64; }
+struct Sq(Rc<f64>);
+impl Shape for Sq { fn area(&self) -> f64 { *self.0 * *self.0 } }
+fn make() -> impl Shape { Sq(Rc::new(2.0)) }
+fn main() {
+    let s = make();
+    let h = std::thread::spawn(move || s.area());
+    println!("{}", h.join().unwrap());
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0277]: `Rc<f64>` cannot be sent between threads safely"),
+        "{report}"
+    );
+    let within_sq = report
+        .find("note: required because it appears within the type `Sq`")
+        .unwrap_or_else(|| panic!("{report}"));
+    let within_opaque = report
+        .find("note: required because it appears within the type `impl Shape`")
+        .unwrap_or_else(|| panic!("{report}"));
+    assert!(within_sq < within_opaque, "{report}");
+}
+
+#[test]
+fn an_opaque_output_is_send_as_its_hidden_type_is_at_any_send_bound() {
+    // A generic call's `T: Send` and spawn's `T: Send` of what the thread
+    // gives see through an opaque output to its hidden type (#2496).
+    let program = |field: &str, value: &str| {
+        format!(
+            r#"
+use std::rc::Rc;
+trait Shape {{ fn area(&self) -> f64; }}
+struct Sq({field});
+impl Shape for Sq {{ fn area(&self) -> f64 {{ 2.0 }} }}
+fn make() -> impl Shape {{ Sq({value}) }}
+fn require<T: Send>(t: T) -> T {{ t }}
+fn main() {{
+    let s = require(make());
+    let h = std::thread::spawn(make);
+    println!("{{}} {{}}", s.area(), h.join().unwrap().area());
+}}
+main();
+"#
+        )
+    };
+    assert_eq!(printed(&program("f64", "2.0")), "2 2\n");
+    let report = refused(&program("Rc<f64>", "Rc::new(2.0)"));
+    assert!(
+        report.starts_with("error[E0277]: `Rc<f64>` cannot be sent between threads safely"),
+        "{report}"
+    );
+    for note in [
+        "help: within `impl Shape`, the trait `Send` is not implemented for `Rc<f64>`",
+        "note: required because it appears within the type `Sq`",
+        "note: required because it appears within the type `impl Shape`",
+        "required by a bound in `require`",
+    ] {
+        assert!(report.contains(note), "{note}: {report}");
+    }
+    let report = refused(
+        r#"
+use std::rc::Rc;
+trait Shape { fn area(&self) -> f64; }
+struct Sq(Rc<f64>);
+impl Shape for Sq { fn area(&self) -> f64 { 2.0 } }
+fn make() -> impl Shape { Sq(Rc::new(2.0)) }
+fn main() {
+    let h = std::thread::spawn(make);
+    println!("{}", h.join().unwrap().area());
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0277]: `Rc<f64>` cannot be sent between threads safely"),
+        "{report}"
+    );
+    assert!(
+        report.contains("required by a bound in `std::thread::spawn`"),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_thread_local_key_is_each_threads_own_value() {
+    // `thread_local!` keys where an item goes, of `Cell`, `RefCell` and a
+    // plain value, with `const { .. }` and lazy initializers: each thread
+    // makes its own value at its first access, `set` makes it without the
+    // initializer, and a key passes as `&'static LocalKey<T>` (#1765). The
+    // output is rustc's.
+    let output = printed(
+        r#"
+use std::cell::{Cell, RefCell};
+use std::thread::LocalKey;
+thread_local! {
+    static COUNT: Cell<u32> = const { Cell::new(1) };
+    static NAMES: RefCell<Vec<String>> = RefCell::new(Vec::new());
+    pub static LOUD: Cell<i32> = { println!("init LOUD"); Cell::new(7) };
+}
+thread_local!(static PLAIN: i32 = 40 + 2);
+fn bump(key: &'static LocalKey<Cell<u32>>) -> u32 {
+    key.set(key.get() + 1);
+    key.get()
+}
+fn main() {
+    println!("{}", bump(&COUNT));
+    println!("{}", bump(&COUNT));
+    COUNT.with(|c| c.set(c.get() * 10));
+    println!("{}", COUNT.get());
+    NAMES.with_borrow_mut(|names| names.push("a".to_string()));
+    NAMES.with_borrow_mut(|names| names.push("b".to_string()));
+    let joined = NAMES.with_borrow(|names| names.join(","));
+    println!("{joined}");
+    LOUD.set(3);
+    println!("{}", LOUD.get());
+    println!("{}", LOUD.replace(4));
+    println!("{}", LOUD.take());
+    PLAIN.with(|p| println!("{p}"));
+    let seen = std::thread::spawn(|| {
+        let before = COUNT.get();
+        COUNT.set(100);
+        NAMES.with_borrow_mut(|names| names.push("t".into()));
+        let len = NAMES.with_borrow(|names| names.len());
+        (before, COUNT.get(), len, LOUD.get())
+    })
+    .join()
+    .unwrap();
+    println!("{:?}", seen);
+    println!("{} {:?}", COUNT.get(), NAMES.take());
+    let total = NAMES.with(|cell| cell.borrow().len());
+    println!("{total}");
+    println!("{:?}", COUNT);
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "2\n3\n30\na,b\n3\n3\n4\n42\ninit LOUD\n(1, 100, 1, 7)\n30 [\"a\", \"b\"]\n0\nLocalKey { .. }\n"
+    );
+}
+
+#[test]
+fn a_threads_thread_local_values_drop_as_it_ends_the_last_made_first() {
+    // A spawned thread's values drop as its closure returns, before its
+    // join does, and the main thread's after `main`'s locals, each thread's
+    // last made first, a struct's fields after it (#1765). The output is
+    // rustc's.
+    let output = printed(
+        r#"
+struct D(&'static str);
+impl Drop for D { fn drop(&mut self) { println!("drop {}", self.0); } }
+struct Pair { left: D, right: D }
+thread_local! {
+    static A: D = D("a");
+    static B: D = D("b");
+    static P: Pair = Pair { left: D("left"), right: D("right") };
+}
+fn main() {
+    let _local = D("local");
+    B.with(|d| println!("with {}", d.0));
+    A.with(|d| println!("with {}", d.0));
+    std::thread::spawn(|| {
+        A.with(|d| println!("t {}", d.0));
+        P.with(|p| println!("t {} {}", p.left.0, p.right.0));
+        B.with(|d| println!("t {}", d.0));
+        println!("end of closure");
+    }).join().unwrap();
+    println!("end of main");
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "with b\nwith a\nt a\nt left right\nt b\nend of closure\ndrop b\ndrop left\n\
+         drop right\ndrop a\nend of main\ndrop local\ndrop a\ndrop b\n"
+    );
+}
+
+#[test]
+fn a_thread_local_key_a_body_declares_is_named_in_its_block() {
+    // `thread_local!` in a body declares block-scoped keys, braced or in
+    // parentheses through `std::`, each thread's value its own (#1765).
+    // The output is rustc's.
+    let output = printed(
+        r#"
+use std::cell::Cell;
+fn next_id() -> u32 {
+    thread_local! {
+        static NEXT: Cell<u32> = const { Cell::new(0) };
+    }
+    NEXT.with(|next| {
+        let id = next.get();
+        next.set(id + 1);
+        id
+    })
+}
+fn main() {
+    std::thread_local!(static SEEN: Cell<bool> = Cell::new(false));
+    println!("{} {} {}", next_id(), next_id(), next_id());
+    let other = std::thread::spawn(|| (next_id(), next_id())).join().unwrap();
+    println!("{:?} {}", other, next_id());
+    SEEN.set(true);
+    println!("{}", SEEN.get());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "0 1 2\n(0, 1) 3\ntrue\n");
+}
+
+#[test]
+fn a_local_key_method_std_declares_for_another_inner_type_is_e0599() {
+    // `get` is `LocalKey<Cell<T>>`'s, `frob` no `LocalKey`'s, and `take`
+    // needs `T: Default`, as rustc reports them (#1765).
+    let program = |inner: &str, call: &str| {
+        format!(
+            "use std::cell::Cell;\nstruct S;\nthread_local! {{\n    static N: {inner};\n}}\n\
+             fn main() {{\n    let _ = N.{call};\n}}\nmain();\n"
+        )
+    };
+    let report = refused(&program("i32 = 1", "get()"));
+    assert!(
+        report.starts_with(
+            "error[E0599]: no method named `get` found for struct `LocalKey<i32>` in the current \
+             scope"
+        ),
+        "{report}"
+    );
+    assert!(
+        report.contains("method not found in `LocalKey<i32>`"),
+        "{report}"
+    );
+    let report = refused(&program("i32 = 1", "frob()"));
+    assert!(
+        report.starts_with(
+            "error[E0599]: no method named `frob` found for struct `LocalKey<T>` in the current \
+             scope"
+        ),
+        "{report}"
+    );
+    assert!(
+        report.contains("method not found in `LocalKey<i32>`"),
+        "{report}"
+    );
+    let report = refused(&program("Cell<S> = Cell::new(S)", "take()"));
+    assert!(
+        report.starts_with("error[E0277]: the trait bound `S: Default` is not satisfied"),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_refcell_keys_set_take_and_replace_are_its_impls() {
+    // std declares `set`, `take` and `replace` in `impl LocalKey<Cell<T>>`
+    // and in `impl LocalKey<RefCell<T>>`; the std table keeps both (#1549).
+    let output = printed(
+        r#"
+use std::cell::{Cell, RefCell};
+thread_local! {
+    static NAMES: RefCell<Vec<String>> = RefCell::new(Vec::new());
+    static COUNT: Cell<u32> = Cell::new(0);
+}
+fn main() {
+    NAMES.set(vec!["a".to_string()]);
+    let old = NAMES.replace(vec!["b".to_string()]);
+    let now = NAMES.take();
+    COUNT.set(3);
+    println!("{old:?} {now:?} {} {}", COUNT.replace(4), COUNT.take());
+    NAMES.with_borrow(|names| println!("{}", names.len()));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "[\"a\"] [\"b\"] 3 4\n0\n");
+}
+
+#[test]
+fn a_thread_local_call_std_has_no_rule_for_is_rustcs_error() {
+    // What std's `thread_local!` matcher has no rule for: an item that is no
+    // `static`, where an item goes and in a body, and a key with no `;`
+    // before the next (#1765).
+    for (source, token, line) in [
+        (
+            "thread_local! {\n    fn x() {}\n}\nfn main() {}\nmain();\n",
+            "keyword `fn`",
+            2,
+        ),
+        (
+            "fn main() {\n    thread_local! {\n        let x = 1;\n    }\n}\nmain();\n",
+            "keyword `let`",
+            3,
+        ),
+        (
+            "thread_local! {\n    static X: i32 = 1\n    static Y: i32 = 2;\n}\nfn main() {}\n\
+             main();\n",
+            "keyword `static`",
+            3,
+        ),
+    ] {
+        let report = refused(source);
+        assert!(
+            report.starts_with(&format!("error: no rules expected {token}\n")),
+            "{report}"
+        );
+        assert!(report.contains(&format!(":{line}:")), "{report}");
+        assert!(
+            report.contains("no rules expected this token in macro call"),
             "{report}"
         );
     }

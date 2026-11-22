@@ -388,12 +388,13 @@ impl Inference {
                     .map(|argument| self.resolve(argument))
                     .collect(),
             ),
-            Ty::Dyn(trait_name, bindings) => Ty::Dyn(
+            Ty::Dyn(trait_name, bindings, auto) => Ty::Dyn(
                 trait_name.clone(),
                 bindings
                     .iter()
                     .map(|(name, ty)| (name.clone(), self.resolve(ty)))
                     .collect(),
+                *auto,
             ),
             Ty::Param(name, Parameter::Opaque(captured)) if !captured.arguments.is_empty() => {
                 Ty::Param(
@@ -549,7 +550,7 @@ impl Inference {
                 return element;
             }
             // `dyn Shape<Output = i64>`: its binding.
-            Ty::Dyn(object, bindings) if object == trait_name => {
+            Ty::Dyn(object, bindings, _) if object == trait_name => {
                 if let Some((_, ty)) = bindings.iter().find(|(bound, _)| bound == name) {
                     return self.resolve(ty);
                 }

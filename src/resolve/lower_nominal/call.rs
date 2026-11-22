@@ -4,6 +4,15 @@
 
 use super::*;
 
+/// How a call of a function value borrows it: shared, as `Fn::call` and a
+/// `fn` pointer's call do, or `&mut`, as `FnMut::call_mut` does (T179,
+/// T188).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Borrow {
+    Shared,
+    Mutable,
+}
+
 impl<'a> Parser<'a> {
     /// The tokens of a call's parenthesised arguments, from its `(` to the
     /// matching `)` (consumed), without a trailing comma; with the
@@ -20,7 +29,7 @@ impl<'a> Parser<'a> {
         }
         if open != Token::LeftParen {
             return Err(Error::UnsupportedNominalSyntax {
-                construct: format!("'(' to start call arguments; found `{open}`").into(),
+                construct: crate::resolve::Unsupported::token("'(' to start call arguments", open),
                 source: point_span(position),
             });
         }
@@ -672,6 +681,33 @@ impl<'a> Parser<'a> {
         (binding.clone(), parts)
     }
 
+    /// The value spanning `value` is of the declared type `ty`: a function
+    /// whose call borrows it shared (`impl Fn`, `fn`), or a boxed one whose
+    /// call borrows it `&mut` (`Box<dyn FnMut>`), as a local given it is
+    /// called (T179, T188).
+    pub(super) fn note_fn_value(&mut self, ty: &type_ref::Type, value: Span) {
+        if ty.is_shared_call_fn() {
+            self.shared_call_fns.insert(value);
+        } else if ty.is_boxed_mutable_call_fn() {
+            self.mutable_call_fns.insert(value);
+        }
+    }
+
+    /// The value spanning `whole` is one of `branches`, by their spans and
+    /// types (an `if`'s or a `match`'s): a function a call borrows shared
+    /// when each branch that gives a value is one (T188).
+    pub(super) fn note_fn_branches(&mut self, whole: Span, branches: &[(Span, &Ty)]) {
+        let mut valued = branches
+            .iter()
+            .filter(|(_, ty)| self.inference.resolve(ty) != Ty::Never)
+            .peekable();
+        if valued.peek().is_some()
+            && valued.all(|(branch, _)| self.shared_call_fns.contains(branch))
+        {
+            self.shared_call_fns.insert(whole);
+        }
+    }
+
     /// A call through a local binding, which shadows any item of its name.
     pub(super) fn parse_local_call(
         &mut self,
@@ -696,6 +732,13 @@ impl<'a> Parser<'a> {
                     && matches!(binding.kind, BindingKind::Local)
                     && !self.parameter_declarations.contains(&binding.declaration)
                     && !self.shared_call_fns.contains(&binding.declaration)
+            }
+            // A `Box<dyn FnMut(i32)>` is called through the box, which a
+            // call borrows `&mut` (T188).
+            Ty::Boxed(target) if matches!(self.inference.resolve(&target), Ty::Fn { .. }) => {
+                binding.mutable
+                    && matches!(binding.kind, BindingKind::Local)
+                    && self.mutable_call_fns.contains(&binding.declaration)
             }
             _ => false,
         };
@@ -1051,7 +1094,11 @@ impl<'a> Parser<'a> {
                 && closure.span.end() <= value.span.end())
         {
             return Err(Error::UnsupportedNominalSyntax {
-                construct: "a capturing closure passed to native code from a variable is not supported in Rawr yet; write it where the call takes it".into(),
+                construct: crate::resolve::Unsupported::said(
+                    "a capturing closure passed to native code from a variable is not supported \
+                     in Rawr yet",
+                )
+                .with_help("write it where the call takes it"),
                 source: value.span,
             });
         }
@@ -1133,6 +1180,7 @@ impl<'a> Parser<'a> {
             span: value.span,
             header: value.span,
             held: origin::Fragment::default(),
+            frames: crate::eval::machine::Frames::Resumed,
         });
         value.prelude = origin::Fragment::default();
         value.source = origin::Fragment::plain("()");
@@ -1510,7 +1558,13 @@ impl<'a> Parser<'a> {
                 };
                 // rustc coerces the argument to the type the expectation
                 // gives it, a sized one (`rvalue_hint`), and reports it there.
-                if let Some(Some(input)) = expected_inputs.get(index)
+                // An `impl IntoIterator` parameter takes an iterable that
+                // isn't an iterator yet as the iterator over it
+                // (`coerce_argument`), as `[a, b]` is.
+                let iterable = parameter.ty.iterator_item().is_some()
+                    && !matches!(self.inference.resolve(&argument.ty), Ty::Iter(..));
+                if !iterable
+                    && let Some(Some(input)) = expected_inputs.get(index)
                     && let Some(mismatch) = self.coerce_expected_input(input, &expected, argument)
                     && !unsized_hint(&self.inference.resolve(input))
                     && !shared_generic(&function.definition.parameters, index)
@@ -1579,14 +1633,11 @@ impl<'a> Parser<'a> {
             if let Some(summary) = &summary {
                 self.kept_by_call(call, &kept, None, summary);
             }
-            name = function.generated;
-            if function
-                .definition
-                .output
-                .as_ref()
-                .is_some_and(type_ref::Type::is_shared_call_fn)
-            {
-                self.shared_call_fns.insert(call);
+            name = self
+                .template_call(&function.key, &substitution, call, false)
+                .unwrap_or(function.generated);
+            if let Some(output) = &function.definition.output {
+                self.note_fn_value(output, call);
             }
             let places =
                 self.mutable_arguments(&arguments, receiver.into_iter().chain(copied.clone()))?;
@@ -2201,7 +2252,7 @@ fn shared_generic(parameters: &[item::Parameter], index: usize) -> bool {
 }
 
 /// Whether `ty` names the type `name`.
-fn mentions(ty: &type_ref::Type, name: &str) -> bool {
+pub(super) fn mentions(ty: &type_ref::Type, name: &str) -> bool {
     match ty {
         type_ref::Type::Path(path) => {
             path.name == name

@@ -328,3 +328,37 @@ fn score(hits: i64) -> i64 {
     engine.call_fn_with_options::<i64>(options, &mut scope, &ast, "update", (2_i64,)).unwrap();
     assert_eq!(score.as_int().unwrap(), 25);
 }
+
+const COUNTER: &str = "use std::cell::Cell;
+
+thread_local! {
+    static CALLS: Cell<i64> = Cell::new(0);
+}
+
+fn count() -> i64 {
+    CALLS.with(|calls| calls.set(calls.get() + 1));
+    CALLS.get()
+}
+
+fn label() -> String {
+    \"calls\".into()
+}
+";
+
+#[test]
+fn a_thread_local_key_keeps_its_value_across_a_reload_until_its_initializer_changes() {
+    // A key is found by its path, type and initializer, as a kept static
+    // is (#1765, #2519): an edit elsewhere keeps the thread's value, and an
+    // edit of its initializer starts a new one.
+    let path = rules("thread-local", COUNTER);
+    let script = engine().load(&path).unwrap();
+    let count = script.func::<(), i64>("count").unwrap();
+    assert_eq!(count.call().unwrap(), 1);
+    assert_eq!(count.call().unwrap(), 2);
+    std::fs::write(&path, COUNTER.replace("\"calls\"", "\"hits\"")).unwrap();
+    assert!(script.reload().unwrap());
+    assert_eq!(count.call().unwrap(), 3);
+    std::fs::write(&path, COUNTER.replace("Cell::new(0)", "Cell::new(10)")).unwrap();
+    assert!(script.reload().unwrap());
+    assert_eq!(count.call().unwrap(), 11);
+}

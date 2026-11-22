@@ -493,15 +493,12 @@ impl<'a> Parser<'a> {
             return;
         }
         let (source, item) = match self.inference.resolve(&argument.ty) {
-            Ty::Iter(item, _, _) => {
-                let item = Box::new(super::host_signature::lent_item(*item));
-                match self.collected_items(argument) {
-                    Some((source, _)) => (source, item),
-                    None => (
-                        self.prelude_op(PreludeOp::CollectVec, [argument.rendered_source()]),
-                        item,
-                    ),
-                }
+            // A runtime iterator's items are made as it is stepped.
+            Ty::Iter(..) => {
+                let Some((source, item)) = self.collected_items(argument) else {
+                    return;
+                };
+                (source, Box::new(super::host_signature::lent_item(item)))
             }
             ty @ Ty::Host { .. } if self.type_implements(&ty, "Iterator") => {
                 let Some((source, item)) = self.collected_items(argument) else {
@@ -2594,12 +2591,11 @@ impl<'a> Parser<'a> {
             if let Some(&(earlier, _)) = effects.first() {
                 let line = statement.line().unwrap_or_default();
                 return Err(Error::UnsupportedNominalSyntax {
-                    construct: format!(
+                    construct: crate::resolve::Unsupported::said(format!(
                         "a call or assignment run before a call whose value borrows a local \
                          it takes, in the statement at line {line}, is not supported in Rawr \
                          yet"
-                    )
-                    .into(),
+                    )),
                     source: point_span(earlier),
                 });
             }

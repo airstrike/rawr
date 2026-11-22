@@ -3423,7 +3423,10 @@ fn language_trait_objects_with_auto_traits() {
             1
         }} run()"
     ));
-    assert!(error.contains("E0225"), "{error}");
+    assert!(
+        error.contains("only auto traits can be used as additional traits in a trait object"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -8429,16 +8432,29 @@ fn language_an_inclusive_range_of_any_integer_kind_is_a_range_of_it() {
         )
         .unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(value, "2..=4 2..=4 -1..=1");
-    // A range of one kind is not a range of another: rustc's E0308.
-    let error = rejected(
-        "use std::ops::RangeInclusive; \
+    // A range of one kind is not a range of another: rustc's E0308, whose
+    // label names the types forced trimmed and whose note by their paths.
+    let source = "use std::ops::RangeInclusive; \
          fn f(n: isize) -> RangeInclusive<isize> { 0..=n } \
-         pub fn run() -> i64 { let r: RangeInclusive<u8> = f(3); 0 } run()",
+         pub fn run() -> i64 { let r: RangeInclusive<u8> = f(3); 0 } run()";
+    let error = Engine::new()
+        .compile(source)
+        .map(|_| ())
+        .expect_err("Rust rejects this program");
+    let evidence =
+        crate::diagnostic::Source::new("main.rs", source).expect("a test source has an identity");
+    let shown = crate::diagnostic::render(
+        &crate::diagnostic::Report::from_parse(evidence, &error)
+            .expect("the error is in the source"),
     );
-    assert!(
-        error.contains("expected `RangeInclusive<u8>`, found `RangeInclusive<isize>`"),
-        "{error}"
-    );
+    for part in [
+        "^^^^ expected `RangeInclusive<u8>`, found `RangeInclusive<isize>`",
+        "expected due to this",
+        "  = note: expected struct `std::ops::RangeInclusive<u8>`\n             found struct \
+         `std::ops::RangeInclusive<isize>`",
+    ] {
+        assert!(shown.contains(part), "{shown}");
+    }
 }
 
 #[test]
@@ -14703,7 +14719,8 @@ fn language_rc_is_not_send() {
         error.contains("`Rc<i64>` cannot be sent between threads safely"),
         "{error}"
     );
-    // An `Arc` of what isn't `Sync`, as a `RefCell`, isn't `Send` either.
+    // An `Arc` of what isn't `Sync`, as a `RefCell`, isn't `Send` either,
+    // and rustc names the `RefCell`.
     let error = rejected(
         r#"
         use std::cell::RefCell;
@@ -14718,7 +14735,7 @@ fn language_rc_is_not_send() {
         "#,
     );
     assert!(
-        error.contains("cannot be sent between threads safely"),
+        error.contains("`RefCell<i64>` cannot be shared between threads safely"),
         "{error}"
     );
 }

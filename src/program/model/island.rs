@@ -977,7 +977,10 @@ impl Model {
             .and_then(crate::resolve::type_ref::Type::box_element)
             .and_then(crate::resolve::type_ref::Type::iterator_item)
             .is_some_and(|(_, into)| !into);
-        if pulled && !crate::island::native(value) {
+        // A runtime iterator (`lower_nominal::lazy`) is the program's own,
+        // though it is a native type at run time.
+        let own = !crate::island::native(value) || crate::resolve::lower_nominal::lazy::is(value);
+        if pulled && own {
             out.push(KEPT);
             out.extend_from_slice(&crate::island::kept_handle(value).to_le_bytes());
             return Ok(());

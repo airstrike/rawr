@@ -5,8 +5,10 @@ use super::dispatch::{
     write_closures, write_default_dispatcher, write_function, write_method,
     write_trait_dispatchers, Naming,
 };
+use super::imported::named_type;
 #[cfg(feature = "rust-import")]
 use super::imported::{native_impls, ImportedOutput, Programs};
+use super::instance::{Bound, Demand, Uses};
 use super::location::{resolve_locations, retain_locations, Location};
 use super::models::Models;
 use super::naming::{
@@ -26,7 +28,7 @@ use crate::ast::NominalPattern;
 use crate::resolve::{item, type_ref, Error, LoweringFailure, Program};
 use crate::tokenizer::Token;
 use crate::{method, Engine, ImmutableString, Module, Position, Scope, Shared, Span, AST};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write as _;
 
 pub(in crate::resolve) fn lower(
@@ -120,16 +122,23 @@ pub(super) enum Body<'a> {
     Function(&'a item::Shell, &'a item::Function),
     Method(&'a method::Definition),
     Script(&'a crate::resolve::Script),
+    /// A template's instance (D1115): the template's function, in its
+    /// source, read at the instance's types.
+    Instance(&'a item::Shell, &'a item::Function, &'a Demand, &'a [Bound]),
+    /// A template method's instance, read at the instance's types.
+    MethodInstance(&'a method::Definition, &'a Demand, &'a [Bound]),
 }
 
 impl<'a> Body<'a> {
     /// Where the program writes the body: its source, then its place there.
     pub(super) fn written_at(&self) -> (usize, Position) {
         match self {
-            Self::Function(shell, definition) => {
+            Self::Function(shell, definition) | Self::Instance(shell, definition, ..) => {
                 (shell.source.index(), definition.body.span.start())
             }
-            Self::Method(definition) => (definition.source().index(), definition.body().start()),
+            Self::Method(definition) | Self::MethodInstance(definition, ..) => {
+                (definition.source().index(), definition.body().start())
+            }
             Self::Script(script) => (script.source.index(), Position::START),
         }
     }
@@ -137,8 +146,8 @@ impl<'a> Body<'a> {
     /// The source the body is in.
     fn source(&self) -> crate::program::source::Id {
         match self {
-            Self::Function(shell, _) => shell.source,
-            Self::Method(definition) => definition.source(),
+            Self::Function(shell, _) | Self::Instance(shell, ..) => shell.source,
+            Self::Method(definition) | Self::MethodInstance(definition, ..) => definition.source(),
             Self::Script(script) => script.source,
         }
     }
@@ -149,24 +158,40 @@ impl<'a> Body<'a> {
         let key = match self {
             Self::Function(shell, _) => shell.key.as_ref(),
             Self::Method(definition) => Some(definition.key()),
-            Self::Script(_) => None,
+            Self::Script(_) | Self::Instance(..) | Self::MethodInstance(..) => None,
         };
         key.is_some_and(|key| program.instances.templates.contains_key(key))
+    }
+
+    /// The template whose generic read this body is (D1115).
+    fn template(&self, models: &Models) -> Option<crate::item::Key> {
+        match self {
+            Self::Function(shell, _) => shell
+                .key
+                .clone()
+                .filter(|key| models.templates.contains_key(key)),
+            Self::Method(definition) => {
+                Some(definition.key().clone()).filter(|key| models.templates.contains_key(key))
+            }
+            Self::Script(_) | Self::Instance(..) | Self::MethodInstance(..) => None,
+        }
     }
 
     /// The text the body's lowering reads.
     pub(super) fn text(&self, program: &Program) -> std::borrow::Cow<'a, str> {
         match self {
-            Self::Function(shell, definition) => body_source(
-                definition
-                    .body
-                    .text
-                    .as_deref()
-                    .unwrap_or_else(|| program.source.text_at(shell.source)),
-                &definition.body,
-            )
-            .into(),
-            Self::Method(definition) => source_span(
+            Self::Function(shell, definition) | Self::Instance(shell, definition, ..) => {
+                body_source(
+                    definition
+                        .body
+                        .text
+                        .as_deref()
+                        .unwrap_or_else(|| program.source.text_at(shell.source)),
+                    &definition.body,
+                )
+                .into()
+            }
+            Self::Method(definition) | Self::MethodInstance(definition, ..) => source_span(
                 definition
                     .body_text()
                     .unwrap_or_else(|| program.source.text_at(definition.source())),
@@ -185,7 +210,7 @@ impl<'a> Body<'a> {
         use std::fmt::Write as _;
         // A span's `Debug` can't fail to write.
         match self {
-            Self::Function(_, definition) => {
+            Self::Function(_, definition) | Self::Instance(_, definition, ..) => {
                 let _ = write!(
                     written,
                     "f{:?}|{:?}|",
@@ -195,7 +220,7 @@ impl<'a> Body<'a> {
                     super::interface::framed(&mut written.0, text);
                 }
             }
-            Self::Method(definition) => {
+            Self::Method(definition) | Self::MethodInstance(definition, ..) => {
                 let _ = write!(written, "m{:?}|", definition.body());
                 if let Some(text) = definition.body_text() {
                     super::interface::framed(&mut written.0, text);
@@ -228,6 +253,11 @@ struct Assembly {
     /// What each body, in its source, knows of opaque outputs' hidden
     /// types (D1109).
     hidden: Vec<(crate::program::source::Id, Hidden)>,
+    /// What each body found of instances (D1115), with the template whose
+    /// generic read it is.
+    instances: Vec<(Option<crate::item::Key>, Uses)>,
+    /// The instances lowered so far, by key.
+    instanced: BTreeSet<crate::item::Key>,
 }
 
 /// One source's part being lowered, and what its lowering reads.
@@ -278,16 +308,39 @@ impl Assembly {
         body: Body<'_>,
         mut lowered: Lowered,
     ) {
+        // An opaque output's hidden type is its template's generic read's,
+        // in the template's parameters, which each call's types fill.
+        if let Body::Instance(..) = body {
+            lowered.hidden.filled.clear();
+        }
         self.hidden
             .push((body.source(), std::mem::take(&mut lowered.hidden)));
+        self.instances.push((
+            body.template(unit.models),
+            std::mem::take(&mut lowered.instances),
+        ));
         match body {
-            Body::Function(shell, definition) => {
-                let generated_name = function_name(
+            Body::Function(shell, definition) | Body::Instance(shell, definition, ..) => {
+                let instance = match body {
+                    Body::Instance(_, _, demand, _) => Some(demand.key(unit.models)),
+                    _ => None,
+                };
+                let generated_name = function_name(instance.as_ref().unwrap_or_else(|| {
                     shell
                         .key
                         .as_ref()
-                        .expect("resolved functions retain stable item keys"),
-                );
+                        .expect("resolved functions retain stable item keys")
+                }));
+                if let Some(instance) = &instance {
+                    self.symbol_rewrites.insert(
+                        generated_name.as_str().into(),
+                        if unit.program.source.is_aggregate() {
+                            private_function_name(instance)
+                        } else {
+                            instance.name().into()
+                        },
+                    );
+                }
                 if let Some(index) = this_parameter(definition) {
                     self.receivers.insert(
                         generated_name.as_str().into(),
@@ -328,12 +381,27 @@ impl Assembly {
                 );
                 self.declare(generated_name.as_str().into(), lowered.declared);
             }
-            Body::Method(definition) => {
+            Body::Method(definition) | Body::MethodInstance(definition, ..) => {
+                let name = match body {
+                    Body::MethodInstance(_, demand, _) => {
+                        let instance = demand.key(unit.models);
+                        let name = demand.name(unit.models);
+                        self.symbol_rewrites
+                            .insert(name.as_str().into(), method::symbol(&instance));
+                        name
+                    }
+                    _ => method_name(definition),
+                };
                 if definition.receiver().is_some() {
-                    self.receivers
-                        .insert(method_name(definition).into(), "self".into());
+                    self.receivers.insert(name.as_str().into(), "self".into());
                 }
-                let offset = write_method(&mut self.generated, definition, &lowered, unit.models);
+                let offset = write_method(
+                    &mut self.generated,
+                    &name,
+                    definition,
+                    &lowered,
+                    unit.models,
+                );
                 retain_locations(
                     &mut self.locations,
                     offset,
@@ -351,7 +419,7 @@ impl Assembly {
                     &mut self.closures,
                     &mut self.symbol_rewrites,
                 );
-                self.declare(method_name(definition).into(), lowered.declared);
+                self.declare(name.into(), lowered.declared);
             }
             Body::Script(script) => {
                 let offset = self.generated.body(
@@ -511,7 +579,91 @@ fn lower_body<'a>(
 ) -> Result<Lowered, LoweringFailure> {
     let models = unit.models.for_source(unit.source);
     match body {
+        Body::Instance(shell, definition, demand, bound) => {
+            let parameters = models
+                .templates
+                .get(&demand.template)
+                .cloned()
+                .expect("an instance's template is one of the program's templates");
+            let key = demand.key(&models);
+            let types = demand
+                .types
+                .iter()
+                .map(|ty| {
+                    named_type(ty, &models, definition.name.span)
+                        .expect("an instance's types are each one a signature names")
+                })
+                .collect::<Vec<_>>();
+            let instance = super::instance::definition(definition, &parameters, &types);
+            let mut parser = Parser::for_function(
+                unit.engine,
+                text,
+                models,
+                &instance,
+                key,
+                counts.ops,
+                counts.patterns,
+                #[cfg(feature = "rust-import")]
+                imported,
+            );
+            parser.numbering = unit.numbering.clone();
+            parser.enter_instance(
+                (&definition.parameters, &definition.generics),
+                &parameters,
+                &demand.types,
+            );
+            let source = unit.program.source.text_at(shell.source);
+            parser.qualify_bound_methods(unit.engine, &definition.generics, bound, source);
+            parser.qualify_parameter_paths(unit.engine, &definition.generics, &parameters, source);
+            parser
+                .parse_function_body(&instance)
+                .map_err(|error| LoweringFailure::original(shell.source, error.into()))
+        }
+        Body::MethodInstance(definition, demand, bound) => {
+            let parameters = models
+                .templates
+                .get(&demand.template)
+                .cloned()
+                .expect("an instance's template is one of the program's templates");
+            let substituted = parameters
+                .iter()
+                .cloned()
+                .zip(demand.types.iter().map(|ty| {
+                    named_type(ty, &models, definition.name_span())
+                        .expect("an instance's types are each one a signature names")
+                }))
+                .collect::<Vec<_>>();
+            let key = demand.key(&models);
+            let instance =
+                definition.instance(definition.id(), key.clone(), key.name().into(), |ty| {
+                    type_ref::substitute_parameters(ty, &substituted)
+                });
+            let mut parser = Parser::for_method(
+                unit.engine,
+                text,
+                models,
+                &instance,
+                counts.ops,
+                counts.patterns,
+                #[cfg(feature = "rust-import")]
+                imported,
+            )
+            .map_err(|error| LoweringFailure::original(unit.source, error.into()))?;
+            parser.numbering = unit.numbering.clone();
+            parser.enter_instance(
+                (definition.parameters(), definition.generics()),
+                &parameters,
+                &demand.types,
+            );
+            let source = unit.program.source.text_at(definition.source());
+            parser.qualify_bound_methods(unit.engine, definition.generics(), bound, source);
+            parser.qualify_parameter_paths(unit.engine, definition.generics(), &parameters, source);
+            parser
+                .parse_method_body(&instance)
+                .map_err(|error| LoweringFailure::original(unit.source, error.into()))
+        }
         Body::Function(shell, definition) => {
+            let template = body.template(&models).is_some();
             let mut parser = Parser::for_function(
                 unit.engine,
                 text,
@@ -527,6 +679,7 @@ fn lower_body<'a>(
                 imported,
             );
             parser.numbering = unit.numbering.clone();
+            parser.template_read = template;
             parser
                 .parse_function_body(definition)
                 .map_err(|error| LoweringFailure::original(unit.source, error.into()))
@@ -544,6 +697,7 @@ fn lower_body<'a>(
             )
             .map_err(|error| LoweringFailure::original(unit.source, error.into()))?;
             parser.numbering = unit.numbering.clone();
+            parser.template_read = body.template(unit.models).is_some();
             parser
                 .parse_method_body(definition)
                 .map_err(|error| LoweringFailure::original(unit.source, error.into()))
@@ -567,6 +721,206 @@ fn lower_body<'a>(
                 .map_err(|error| LoweringFailure::original(unit.source, error.into()))
         }
     }
+}
+
+/// Lower each instance the program's bodies bind (D1115), and each one an
+/// instance binds in turn, once each, in its template's source. A template
+/// whose erased body a call still needs, from a body that runs, must have
+/// one: else that call reports what its generic read can't lower.
+fn lower_instances(
+    unit: &Unit<'_>,
+    assembly: &mut Assembly,
+    after_script: Option<crate::program::source::Id>,
+    #[cfg(feature = "rust-import")] mut imported: Option<&mut ImportedContext<'_>>,
+) -> Result<(), LoweringFailure> {
+    let shells = unit
+        .program
+        .items
+        .iter()
+        .filter_map(|shell| match &shell.kind {
+            item::Kind::Function(definition) => Some((shell.key.clone()?, (shell, definition))),
+            _ => None,
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut queue = VecDeque::new();
+    demands(assembly, 0, 0, &mut queue);
+    if let Some(source) = after_script
+        && !queue.is_empty()
+    {
+        assembly.generated.declaration(source, Span::NONE, ";\n");
+    }
+    while let Some((demand, depth)) = queue.pop_front() {
+        let key = demand.key(unit.models);
+        if !assembly.instanced.insert(key.clone()) {
+            continue;
+        }
+        let method = unit
+            .program
+            .methods
+            .iter()
+            .find(|definition| demand.method() && definition.key() == &demand.template);
+        let function = shells.get(&demand.template).copied();
+        let source = match (method, function) {
+            (Some(definition), _) => definition.source(),
+            (None, Some((shell, _))) => shell.source,
+            (None, None) => continue,
+        };
+        if depth >= unit.models.macros.limit() {
+            return Err(LoweringFailure::original(
+                source,
+                Error::Syntax {
+                    message: format!(
+                        "reached the recursion limit while instantiating `{}`",
+                        key.name()
+                    )
+                    .into(),
+                    label: ImmutableString::new(),
+                    help: None,
+                    at: demand.call,
+                }
+                .into(),
+            ));
+        }
+        let bound = assembly
+            .instances
+            .iter()
+            .find(|(template, _)| template.as_ref() == Some(&demand.template))
+            .map(|(_, uses)| uses.bound.clone())
+            .unwrap_or_default();
+        let from = assembly.instances.len();
+        let body = match (method, function) {
+            (Some(definition), _) => Body::MethodInstance(definition, &demand, &bound),
+            (None, Some((shell, definition))) => Body::Instance(shell, definition, &demand, &bound),
+            (None, None) => unreachable!("an instance's template is a function or a method"),
+        };
+        lower_part(
+            &Unit {
+                engine: unit.engine,
+                program: unit.program,
+                models: unit.models,
+                scope: unit.scope,
+                source,
+                numbering: format!("{}n{}_", source.index(), assembly.instanced.len()).into(),
+            },
+            assembly,
+            &[body],
+            #[cfg(feature = "rust-import")]
+            imported.as_deref_mut(),
+            #[cfg(feature = "rust-import")]
+            None,
+        )?;
+        demands(assembly, from, depth + 1, &mut queue);
+    }
+    Ok(())
+}
+
+/// Whether each template whose erased body a running body calls has one:
+/// else that call reports what its generic read can't lower (D1115).
+fn erased_needed(unit: &Unit<'_>, assembly: &Assembly) -> Result<(), LoweringFailure> {
+    // The erased bodies that run: those the running bodies call, and
+    // those each of those calls.
+    let own = assembly
+        .instances
+        .iter()
+        .filter_map(|(template, uses)| Some((template.clone()?, uses)))
+        .collect::<BTreeMap<_, _>>();
+    let mut needed = assembly
+        .instances
+        .iter()
+        .filter(|(template, _)| template.is_none())
+        .flat_map(|(_, uses)| uses.erased.iter().cloned())
+        .collect::<Vec<_>>();
+    let mut seen = BTreeSet::new();
+    while let Some((template, _)) = needed.pop() {
+        if !seen.insert(template.clone()) {
+            continue;
+        }
+        let Some(uses) = own.get(&template) else {
+            continue;
+        };
+        if !uses.gap {
+            needed.extend(uses.erased.iter().cloned());
+            continue;
+        }
+        if let Some(shell) = unit
+            .program
+            .items
+            .iter()
+            .find(|shell| shell.key.as_ref() == Some(&template))
+            && let item::Kind::Function(definition) = &shell.kind
+        {
+            return Err(erased_failure(unit, Body::Function(shell, definition)));
+        }
+        if let Some(definition) = unit
+            .program
+            .methods
+            .iter()
+            .find(|definition| definition.key() == &template)
+        {
+            return Err(erased_failure(unit, Body::Method(definition)));
+        }
+    }
+    Ok(())
+}
+
+/// Move the demands of the bodies `assembly` placed from `from` on into
+/// `queue`, each `depth` instances deep.
+fn demands(
+    assembly: &mut Assembly,
+    from: usize,
+    depth: usize,
+    queue: &mut VecDeque<(Demand, usize)>,
+) {
+    for (_, uses) in &mut assembly.instances[from..] {
+        queue.extend(
+            std::mem::take(&mut uses.demands)
+                .into_iter()
+                .map(|demand| (demand, depth)),
+        );
+    }
+}
+
+/// What the erased body of a template, `body`, reports, read as a body
+/// that runs: what its generic read could lower only per instance.
+fn erased_failure(unit: &Unit<'_>, body: Body<'_>) -> LoweringFailure {
+    let text = body.text(unit.program);
+    let source = body.source();
+    let models = unit.models.for_source(source);
+    let read = match body {
+        Body::Function(shell, definition) => Parser::for_function(
+            unit.engine,
+            &text,
+            models,
+            definition,
+            shell
+                .key
+                .clone()
+                .expect("resolved functions retain stable item keys"),
+            0,
+            0,
+            #[cfg(feature = "rust-import")]
+            None,
+        )
+        .parse_function_body(definition),
+        Body::Method(definition) => Parser::for_method(
+            unit.engine,
+            &text,
+            models,
+            definition,
+            0,
+            0,
+            #[cfg(feature = "rust-import")]
+            None,
+        )
+        .and_then(|mut parser| parser.parse_method_body(definition)),
+        Body::Script(_) | Body::Instance(..) | Body::MethodInstance(..) => {
+            unreachable!("a template is a function or a method")
+        }
+    };
+    let Err(error) = read else {
+        unreachable!("a body whose generic read has a gap fails as an erased body");
+    };
+    LoweringFailure::original(source, error.into())
 }
 
 pub(super) fn lower_with_context(
@@ -682,6 +1036,8 @@ pub(super) fn lower_with_context(
         written_receivers: BTreeMap::new(),
         declared: BTreeMap::new(),
         hidden: Vec::new(),
+        instances: Vec::new(),
+        instanced: BTreeSet::new(),
     };
     // A compile lent a runner's lowerings lowers again only the sources
     // whose lowering reads something that changed (#1646).
@@ -727,6 +1083,23 @@ pub(super) fn lower_with_context(
         pieces.written(assembly.generated.len(), Some((source, kept::Part::Bodies)));
     }
 
+    if let Some(first) = bodies.first() {
+        lower_instances(
+            &Unit {
+                engine,
+                program,
+                models: &models,
+                scope,
+                source: first.source(),
+                numbering: ImmutableString::new(),
+            },
+            &mut assembly,
+            None,
+            #[cfg(feature = "rust-import")]
+            imported.as_mut(),
+        )?;
+    }
+
     let mut dispatch_ops = Vec::new();
     write_trait_dispatchers(&mut assembly.generated, &models, &mut dispatch_ops);
     write_default_dispatcher(&mut assembly.generated, program, &models, &mut dispatch_ops);
@@ -762,6 +1135,33 @@ pub(super) fn lower_with_context(
         assembly.generated.len(),
         Some((script.source, kept::Part::Script)),
     );
+    // The instances the script's statements bind come after them, which
+    // its value ends.
+    lower_instances(
+        &Unit {
+            engine,
+            program,
+            models: &models,
+            scope,
+            source: script.source,
+            numbering: ImmutableString::new(),
+        },
+        &mut assembly,
+        Some(script.source),
+        #[cfg(feature = "rust-import")]
+        imported.as_mut(),
+    )?;
+    erased_needed(
+        &Unit {
+            engine,
+            program,
+            models: &models,
+            scope,
+            source: script.source,
+            numbering: ImmutableString::new(),
+        },
+        &assembly,
+    )?;
     witnessed_hidden(&witnesses, &assembly.hidden, &models)?;
     sent_hidden(engine, &assembly.hidden, &models)?;
     #[cfg(feature = "rust-import")]
@@ -779,6 +1179,8 @@ pub(super) fn lower_with_context(
         written_receivers,
         declared,
         hidden: _,
+        instances: _,
+        instanced: _,
     } = assembly;
     // The dispatchers' ops are numbered apart from every source's.
     let ops = dispatch_ops
@@ -897,12 +1299,22 @@ pub(super) fn lower_with_context(
             function.name = name.clone();
         }
     });
-    // Each async body becomes a state machine, once its names are final.
+    // Each async body becomes a state machine, once its names are final,
+    // with its frames as its closure's are kept.
+    let copied = closures
+        .iter()
+        .filter(|closure| matches!(closure.frames, crate::eval::machine::Frames::Copied))
+        .map(|closure| closure.dispatch.clone())
+        .collect::<BTreeSet<_>>();
     let mut unsupported = None;
     ast.for_each_fn_def_mut(|function| {
         if unsupported.is_none() {
-            unsupported =
-                crate::eval::machine::lower(function, crate::eval::machine::Frames::Resumed).err();
+            let frames = if copied.contains(&function.name) {
+                crate::eval::machine::Frames::Copied
+            } else {
+                crate::eval::machine::Frames::Resumed
+            };
+            unsupported = crate::eval::machine::lower(function, frames).err();
         }
     });
     if let Some(crate::eval::machine::Unsupported(what, position)) = unsupported {
@@ -990,6 +1402,8 @@ pub(super) struct Lowered {
     /// The body's locals a debugger prints by their type (#512).
     pub(super) declared: Vec<Declared>,
     pub(super) hidden: Hidden,
+    /// The instances its calls bind (D1115).
+    pub(super) instances: super::instance::Uses,
 }
 
 /// What a body knows of opaque outputs' hidden types (D1109): the hidden
@@ -1023,16 +1437,17 @@ enum HiddenWitness {
     Captured(usize),
 }
 
-/// A thread's closure capturing a value whose type `ty` holds an opaque
-/// output, by reference when `borrowed`: `item`'s `F: Send` holds as the
-/// hidden types do (D1109).
+/// A `Send` bound of `item` on a type `ty` that holds an opaque output,
+/// needed at `at`, which holds as the hidden types do (D1109): a thread's
+/// closure capturing it, whose head is `closure`, a generic call's
+/// argument, or what a thread gives.
 #[derive(Clone)]
 #[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(super) struct HiddenSend {
     pub(super) ty: Ty,
-    pub(super) borrowed: bool,
-    pub(super) closure: Span,
-    pub(super) item: ImmutableString,
+    pub(super) at: Span,
+    pub(super) closure: Option<Span>,
+    pub(super) item: Option<ImmutableString>,
 }
 
 /// A declaration of a local whose `Debug` text a debugger reads by its
@@ -1179,7 +1594,10 @@ fn sent_hidden(
             let hidden = revealed.get(&captured.opaque)?.as_ref()?;
             let output = models.opaque_outputs.get(&captured.opaque)?;
             let substitution = super::generics::opaque_substitution(output, &captured.arguments);
-            Some(super::generics::instantiate(hidden, &substitution))
+            Some((
+                super::generics::instantiate(hidden, &substitution),
+                output.bounds.name.span,
+            ))
         }
         _ => None,
     };
@@ -1197,32 +1615,18 @@ fn sent_hidden(
             None,
         );
         for send in &hidden.sends {
-            // A hidden type may hold another function's opaque output.
-            let mut ty = send.ty.clone();
-            for _ in 0..=revealed.len() {
-                ty = super::generics::substitute(&ty, &reveal);
-            }
-            let refused = if send.borrowed {
-                !parser.shared_between_threads(&ty)
-            } else {
-                parser.not_send(&ty)
+            let Some(unsendable) = parser.unsendable(&send.ty, &reveal) else {
+                continue;
             };
-            if refused {
-                return Err(LoweringFailure::original(
-                    *source,
-                    Error::MissingCapability {
-                        owner: ty.name(models),
-                        capability: if send.borrowed { "Sync" } else { "Send" }.into(),
-                        operation: send.closure,
-                        derive: false,
-                        declared: None,
-                        required_by: Some(crate::resolve::Required::by(send.item.clone())),
-                        formatted: None,
-                        chain: crate::resolve::Chain::default(),
-                    }
-                    .into(),
-                ));
-            }
+            let unsendable = match send.closure {
+                Some(head) => unsendable.in_closure(head),
+                None => unsendable,
+            };
+            let required_by = send.item.clone().map(crate::resolve::Required::by);
+            return Err(LoweringFailure::original(
+                *source,
+                unsendable.error(models, send.at, required_by).into(),
+            ));
         }
     }
     Ok(())

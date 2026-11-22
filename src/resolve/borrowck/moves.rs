@@ -7,7 +7,7 @@
 //! recorded (a local or a part of it used by value, a pattern's by-value
 //! binding, a closure's capture by value) and the body's control flow.
 
-use super::{describe, Access, Block, Body, Fact, Place};
+use super::{describe, Access, Block, Body, Fact, Place, Point};
 use crate::Span;
 
 /// A use of a place that may have been moved: rustc's E0382.
@@ -158,9 +158,14 @@ fn run(
             clear(moved, state, |place| place.local == *local);
         }
     }
-    for fact in &body.blocks[block.0 as usize].facts {
+    for (index, fact) in body.blocks[block.0 as usize].facts.iter().enumerate() {
+        let point = Point {
+            block,
+            index: index as u32,
+        };
         match fact {
             Fact::Def(local) => clear(moved, state, |place| place.local == *local),
+            Fact::Access { .. } if body.activations.contains(&point) => {}
             Fact::Access {
                 place,
                 access,

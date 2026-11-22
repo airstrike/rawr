@@ -77,8 +77,9 @@ struct Table {
     impls: Lines,
     /// The stable functions of std's stable traits, by name.
     trait_functions: OnceLock<HashMap<&'static str, Vec<Item>>>,
-    /// Each type name, and whether one type alone has it (`sole_type`).
-    type_names: OnceLock<HashMap<&'static str, bool>>,
+    /// Each type name, and the one type that has it, if one alone does
+    /// (`sole_type`).
+    type_names: OnceLock<HashMap<&'static str, Option<&'static str>>>,
     /// The directory it was read from; `None` for the embedded table.
     directory: Option<PathBuf>,
 }
@@ -148,29 +149,42 @@ impl Table {
     }
 
     /// The name of each type of std's crates, stable or not, and whether
-    /// one type alone has it, gathered in one pass over the paths: a
-    /// module is no type.
-    fn type_names(&self) -> &HashMap<&'static str, bool> {
+    /// one type alone has it, gathered in one pass over the paths and the
+    /// enums' variants, as rustc's trimmed paths gather the names of the
+    /// type namespace: a module is no type, and rustc passes over a type
+    /// alias (`io::Result`), but an enum's variant counts (`Poll::Ready`
+    /// beside `future::Ready`).
+    fn type_names(&self) -> &HashMap<&'static str, Option<&'static str>> {
         self.type_names.get_or_init(|| {
             let mut definitions = HashMap::<&'static str, Option<&'static str>>::new();
-            for path in self.paths.0.iter().map(|line| path_line(line)) {
-                if path.namespace != Namespace::Type || path.kind == "mod" {
-                    continue;
-                }
-                let name = path.path.rsplit("::").next().unwrap_or(path.path);
+            let paths = self
+                .paths
+                .0
+                .iter()
+                .map(|line| path_line(line))
+                .filter(|path| {
+                    path.namespace == Namespace::Type && !matches!(path.kind, "mod" | "type")
+                })
+                .map(|path| (path.path, path.definition));
+            let variants = self
+                .items
+                .0
+                .iter()
+                .map(|line| item_line(line))
+                .filter(|item| item.kind == "variant")
+                .map(|item| (item.definition, item.definition));
+            for (path, definition) in paths.chain(variants) {
+                let name = path.rsplit("::").next().unwrap_or(path);
                 definitions
                     .entry(name)
                     .and_modify(|sole| {
-                        if *sole != Some(path.definition) {
+                        if *sole != Some(definition) {
                             *sole = None;
                         }
                     })
-                    .or_insert(Some(path.definition));
+                    .or_insert(Some(definition));
             }
             definitions
-                .into_iter()
-                .map(|(name, sole)| (name, sole.is_some()))
-                .collect()
         })
     }
 
@@ -613,15 +627,12 @@ pub(crate) fn public_path(definition: &str) -> Option<&'static str> {
         .min_by_key(|path| path.len())
 }
 
-/// Whether one type of std's crates, stable or not, is named `name`, so
-/// that rustc writes it by its name alone: `IntErrorKind`, where it writes
-/// `std::fmt::Alignment` beside `std::mem::Alignment`.
-pub(crate) fn sole_type(name: &str) -> bool {
-    Table::get()
-        .type_names()
-        .get(name)
-        .copied()
-        .unwrap_or(false)
+/// The definition of the one type of std's crates, stable or not, named
+/// `name`, if one alone is, so that rustc writes it by its name alone:
+/// `IntErrorKind`, where it writes `std::fmt::Alignment` beside
+/// `std::mem::Alignment`.
+pub(crate) fn sole_type(name: &str) -> Option<&'static str> {
+    Table::get().type_names().get(name).copied().flatten()
 }
 
 /// The items through `std`, then through `core`, named `name` in

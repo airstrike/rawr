@@ -5,6 +5,7 @@ pub(crate) mod block;
 pub(crate) mod borrowck;
 mod error;
 pub(crate) mod extern_prelude;
+pub(crate) mod forced_trim;
 mod forward;
 mod fragment;
 pub(crate) mod imports;
@@ -23,23 +24,24 @@ pub(crate) mod record;
 pub(crate) mod similar;
 pub(crate) mod std_path;
 pub(crate) mod std_trait;
+pub mod tail;
 pub(crate) mod type_ref;
 
 use crate::{host, method, parse, program, type_def, ImmutableString, Span};
 pub(crate) use error::{
-    derivable, unscoped_method, ArgumentCount, ArgumentSignature, ArrayLength, AssignTwice,
-    CannotCompare, Described, NonExhaustive, NotFound, PatternFields, Qualified, Refutable,
-    RepeatedRest, SelfOutside, SlicePattern, TypeNeeded, UnboundAlternative, Uninitialized,
-    Unsatisfied, Unsupported, ASYNC_MAIN, IF_WITHOUT_ELSE, INHABITED_REFERENCES, INVALID_ASSIGNEE,
-    RETURN_WITHOUT_VALUE,
+    available_fields, derivable, no_field, unscoped_method, ArgumentCount, ArgumentSignature,
+    ArrayLength, AssignTwice, CannotCompare, Described, NonExhaustive, NotFound, PatternFields,
+    Qualified, Refutable, RepeatedRest, SelfOutside, SlicePattern, TypeNeeded, UnboundAlternative,
+    Uninitialized, Unsatisfied, ASYNC_MAIN, IF_WITHOUT_ELSE, INHABITED_REFERENCES,
+    INVALID_ASSIGNEE, RETURN_WITHOUT_VALUE,
 };
 pub use error::{
     Annotation, ArgumentMismatch, Arguments, Arms, Assignment, Beyond, BinaryOperation,
     BindingSite, Bound, Boxing, Callee, Category, Chain, Cloning, Detail, Error, Expansion,
-    FieldHint, FieldOwner, Fields, Import, Imported, Instead, Lint, MacroScope, Missing,
-    MissingImpl, MoveCause, MovedPlace, MutBinding, Opaqueness, OwningParameter, PatternOrigin,
-    PatternTypes, Placeholder, Private, Receiver, Referent, Required, Requirement, Shown, Similar,
-    Site, Uncovered, Unexpected, UnmetBound, UnmetBounds, Unresolved,
+    FieldHint, FieldOwner, Fields, Import, Imported, Instead, LetMismatch, Lint, MacroScope,
+    Missing, MissingImpl, MoveCause, MovedPlace, MutBinding, Opaqueness, OwningParameter,
+    PatternOrigin, PatternTypes, Placeholder, Private, Receiver, Referent, Required, Requirement,
+    Shown, Similar, Site, Uncovered, Unexpected, UnmetBound, UnmetBounds, Unresolved, Unsupported,
 };
 pub use imports::{Candidate, Direct, Imports};
 use std::collections::BTreeMap;
@@ -139,6 +141,9 @@ pub struct Program {
     /// The features Cargo enables for the package: its bodies'
     /// `cfg(feature = "..")`s hold. None for a source compiled alone.
     features: crate::project::cargo::features::Enabled,
+    /// The edition each source's package is written in, by the source's
+    /// index. Empty for a source compiled alone, which is rawr's own.
+    editions: Box<[crate::edition::Edition]>,
     /// The entry package's workspace, as Cargo described it when the
     /// graph loaded. None for a source compiled alone.
     workspace: Option<std::sync::Arc<crate::project::cargo::Workspace>>,
@@ -434,6 +439,12 @@ impl Program {
     /// The features Cargo enables for the package.
     pub(crate) const fn features(&self) -> &crate::project::cargo::features::Enabled {
         &self.features
+    }
+
+    /// The edition each source's package is written in, by the source's
+    /// index.
+    pub(crate) fn editions(&self) -> &[crate::edition::Edition] {
+        &self.editions
     }
 
     /// The entry package's workspace, as Cargo described it.
@@ -808,6 +819,7 @@ fn resolve_with_evidence_and_namespace(
         own: Box::new([]),
         crates: None,
         features: crate::project::cargo::features::Enabled::default(),
+        editions: Box::default(),
         workspace: None,
         aliases,
         scripts: vec![Script {
@@ -2382,6 +2394,7 @@ pub(crate) fn std_thread_type(path: &str) -> Option<&'static str> {
         "std::sync::mpsc::Receiver" => Some(MPSC_RECEIVER),
         "std::sync::mpsc::SyncSender" => Some(MPSC_SYNC_SENDER),
         "std::thread::ScopedJoinHandle" => Some("ScopedJoinHandle"),
+        "std::thread::LocalKey" => Some("LocalKey"),
         "std::sync::PoisonError" => Some("PoisonError"),
         _ => None,
     }
@@ -2545,9 +2558,10 @@ fn resolve_item(
     let kind = match parsed {
         crate::item::Parsed::TypeAlias(alias) => {
             return Err(Error::UnsupportedNominalSyntax {
-                construct: "a type alias read as an item; its target is resolved with the \
-                            module's types"
-                    .into(),
+                construct: crate::resolve::Unsupported::said(
+                    "a type alias read as an item is not supported: its target is resolved \
+                     with the module's types",
+                ),
                 source: alias.span,
             });
         }
@@ -3180,6 +3194,7 @@ fn resolve_function(
             syntax: parsed.body_syntax,
             constant: parsed.constant,
             static_item: parsed.static_item,
+            thread_local: parsed.thread_local,
             asynchronous: parsed.asynchronous,
             text: None,
             elide: None,
@@ -4098,6 +4113,9 @@ fn foreign_owner(ty: &type_ref::Type) -> Option<ImmutableString> {
 /// no other impl is for.
 pub(crate) const BLANKET_OWNER: i64 = -13;
 
+/// The impl owner of the array types `[T; N]` (`builtin_owner`).
+pub(crate) const ARRAY_OWNER: i64 = -14;
+
 /// The owner of a blanket impl bounded by `IntoIterator<Item = X>` or
 /// `Iterator<Item = X>` (a crate's `impl<'a, T, Message> IntoView<'a,
 /// Message> for T where T: IntoIterator<Item = Element<'a, Message>>`) is
@@ -4193,6 +4211,9 @@ pub(crate) fn builtin_owner(ty: &type_ref::Type) -> Option<(i64, ImmutableString
                 "Vec" => -8,
                 crate::item::type_ref::SLICE_TYPE => -11,
                 "Result" => -10,
+                // `[T; N]` owns its impls apart from `[T]` and `Vec<T>`,
+                // each length its own Self type.
+                name if crate::item::type_ref::array_length(name).is_some() => ARRAY_OWNER,
                 _ => return None,
             }
         }
@@ -5623,7 +5644,11 @@ fn generic_scope(
             .iter()
             .filter_map(|bound| {
                 let name = &bound.segments.last()?.name.text;
-                Some((crate::capability::Kind::from_name(name)?, bound.span))
+                let kind = match name.as_str() {
+                    "Send" => crate::capability::Kind::Send,
+                    name => crate::capability::Kind::from_name(name)?,
+                };
+                Some((kind, bound.span))
             })
             .collect();
         arguments.push(trait_arguments);

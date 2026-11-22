@@ -13,11 +13,23 @@ fn main() -> ExitCode {
         );
     }
     // A panic's message lands below rawr's last line, not on its status
-    // line.
+    // line. One on a broken invariant reads as rustc's internal compiler
+    // error: its `error:` line before the panic, its notes after.
     let reported = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic| {
         rawr_import::progress::flush();
+        let bug = panic.payload().downcast_ref::<rawr_import::Bug>();
+        if let Some(bug) = bug {
+            let report = rawr_import_cli::report::internal(bug.message(), panic.location());
+            eprintln!("{}", rawr_cli::diagnostic::render(&report));
+        }
         reported(panic);
+        if bug.is_some() {
+            eprint!(
+                "{}",
+                rawr_import_cli::report::bug_notes(&color::label(color::Level::Note))
+            );
+        }
     }));
     let code = rawr_import_cli::command::main(std::env::args_os().skip(1).collect());
     rawr_import::progress::flush();

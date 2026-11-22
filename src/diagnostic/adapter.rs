@@ -354,7 +354,8 @@ fn sourced_builder(error: &resolve::Error, source: &Source, primary: Span) -> Bu
             format!(
                 "the method `{member}` exists for {} `{}`, but its trait bounds were not \
                  satisfied",
-                receiver.kind, receiver.found
+                receiver.kind,
+                receiver.found.as_ref().unwrap_or(&receiver.declared)
             ),
         );
     }
@@ -551,6 +552,36 @@ const DEBUG_INSTEAD: &str =
 /// rustc's last note on a static whose type isn't `Sync`.
 const SHARED_STATIC: &str = "shared static variables must have a type that implements `Sync`";
 
+/// What rustc's help on a missing auto trait says it is missing within.
+enum AutoWithin<'a> {
+    /// A closure, which rustc names by its place: no help is written.
+    Closure,
+    /// The outermost type the chain notes the missing trait within.
+    Type(Option<&'a str>),
+}
+
+/// Where the auto trait an unmet bound's `chain` ends in is missing
+/// within: the outermost type that holds the one lacking it, before the
+/// chain needs another trait.
+fn auto_within<'a>(chain: &'a [resolve::Requirement], lacking: &str) -> AutoWithin<'a> {
+    if chain
+        .iter()
+        .any(|requirement| matches!(requirement.site.as_deref(), Some(resolve::Site::Closure(_))))
+    {
+        return AutoWithin::Closure;
+    }
+    AutoWithin::Type(
+        chain
+            .iter()
+            .take_while(|requirement| {
+                requirement.trait_name == lacking
+                    && matches!(requirement.site.as_deref(), Some(resolve::Site::Within(_)))
+            })
+            .last()
+            .map(|holder| holder.ty.as_str()),
+    )
+}
+
 /// rustc's note on a type that holds one that doesn't implement a trait.
 fn appears_within(holder: &str) -> String {
     format!("required because it appears within the type `{holder}`")
@@ -736,6 +767,7 @@ fn resolution_report_with_sources(
         } => origin.label().into(),
         resolve::Error::ArgumentCount { callee, .. } => callee.defined_here().into(),
         resolve::Error::ArgumentMismatch(_) => "arguments to this function are incorrect".into(),
+        resolve::Error::LetMismatch(_) => "expected due to this".into(),
         resolve::Error::ImmutableBinding { binding, .. } => {
             format!("first assignment to `{binding}`").into()
         }
@@ -823,6 +855,13 @@ fn resolution_report_with_sources(
             *written,
             Some(format!("expected `{output}` because of this return type").into()),
         )?;
+    }
+    // rustc explains where the temporary that keeps the borrow is made
+    // and dropped.
+    if let resolve::Error::TailTemporary(explanation) = error {
+        for (span, label) in explanation.labels() {
+            builder = builder.secondary(source.clone(), span, Some(label.into()))?;
+        }
     }
     // rustc marks the lifetimes it names.
     if let resolve::Error::Outlives(reports) = error {
@@ -1599,6 +1638,14 @@ fn suggestion(error: &resolve::Error, source: &Source) -> Result<Option<Suggesti
     let before = |span: Span| Span::new(span.start(), span.start());
     let after = |span: Span| Span::new(span.end(), span.end());
     match error {
+        resolve::Error::TailTemporary(explanation) => {
+            let (message, places) = explanation.help();
+            let mut edits = Vec::with_capacity(places.len());
+            for (span, text) in places {
+                edits.push(Edit::new(source.clone(), span, &text)?);
+            }
+            Ok(Suggestion::of(&message, Style::Verbose, edits))
+        }
         resolve::Error::Outlives(reports) => match reports.first().suggestion() {
             Some(suggested) => {
                 let lifetime = suggested.lifetime;
@@ -1974,6 +2021,7 @@ fn primary_label(
         }
         resolve::Error::ImmutableBorrow { .. } => Some("cannot borrow as mutable".into()),
         resolve::Error::Outlives(reports) => Some(reports.first().label().into()),
+        resolve::Error::TailTemporary(_) => Some(resolve::tail::Explanation::label().into()),
         resolve::Error::NonExhaustive { witnesses, .. } => resolve::NonExhaustive(witnesses)
             .scrutinee_label()
             .map(Into::into),
@@ -2058,31 +2106,29 @@ fn primary_label(
             actual,
             opaque,
             ..
-        } => Some(opaque.label(expected, actual).into()),
-        resolve::Error::ArgumentMismatch(mismatch) => Some(
-            format!(
-                "expected {}, found {}",
-                resolve::Described(&mismatch.expected),
-                resolve::Described(&mismatch.actual)
-            )
-            .into(),
-        ),
+        } => {
+            let (expected, actual) = resolve::forced_trim::pair(expected, actual);
+            Some(opaque.label(&expected, &actual).into())
+        }
+        resolve::Error::ArgumentMismatch(mismatch) => {
+            Some(mismatch_label(&mismatch.expected, &mismatch.actual).into())
+        }
+        resolve::Error::LetMismatch(mismatch) => {
+            Some(mismatch_label(&mismatch.expected, &mismatch.actual).into())
+        }
         resolve::Error::TypeMismatch {
             expected, actual, ..
         }
         | resolve::Error::Unboxed {
             expected, actual, ..
-        } => Some(
+        } => Some(mismatch_label(expected, actual).into()),
+        resolve::Error::IfWithoutElse { expected, .. } => Some(
             format!(
-                "expected {}, found {}",
-                resolve::Described(expected),
-                resolve::Described(actual)
+                "expected {}, found `()`",
+                resolve::Described(&resolve::forced_trim::trimmed(expected))
             )
             .into(),
         ),
-        resolve::Error::IfWithoutElse { expected, .. } => {
-            Some(format!("expected {}, found `()`", resolve::Described(expected)).into())
-        }
         resolve::Error::ReturnWithoutValue { .. } => Some("return type is not `()`".into()),
         resolve::Error::KnownPanic { label, .. } => Some(label.clone()),
         resolve::Error::SelfOutsideImpl { parameter, .. } => {
@@ -2154,7 +2200,7 @@ fn primary_label(
         } => Some(
             format!(
                 "method cannot be called on `{}` due to unsatisfied trait bounds",
-                receiver.found
+                receiver.found.as_ref().unwrap_or(&receiver.declared)
             )
             .into(),
         ),
@@ -2163,8 +2209,9 @@ fn primary_label(
         } => {
             let item = Missing::of(error, source, primary).map_or("method", |missing| missing.item);
             // rustc drops a method's label where it suggests a similar one.
+            let found = receiver.found.as_ref()?;
             (item != "method" || similar.is_none())
-                .then(|| format!("{item} not found in `{}`", receiver.found).into())
+                .then(|| format!("{item} not found in `{found}`").into())
         }
         resolve::Error::MovedValue {
             previous_iteration: true,
@@ -2188,8 +2235,29 @@ fn primary_label(
         resolve::Error::Uninitialized { name, .. } => {
             Some(format!("`{name}` used here but it is possibly-uninitialized").into())
         }
+        // rustc's E0609, at the field.
+        resolve::Error::NoField { .. } => Some("unknown field".into()),
+        resolve::Error::UnknownMember { member, .. }
+            if matches!(
+                member_kind(source, primary, &crate::tokenizer::raw_names(member)),
+                Some(Member::Field)
+            ) =>
+        {
+            Some("unknown field".into())
+        }
         _ => None,
     }
+}
+
+/// rustc's E0308 label for `expected` and `actual`, which names each type
+/// forced trimmed (`forced_trim::pair`): "expected `()`, found `Range<i32>`".
+fn mismatch_label(expected: &str, actual: &str) -> String {
+    let (expected, actual) = resolve::forced_trim::pair(expected, actual);
+    format!(
+        "expected {}, found {}",
+        resolve::Described(&expected),
+        resolve::Described(&actual)
+    )
 }
 
 fn resolution_builder(error: &resolve::Error) -> Builder {
@@ -2254,6 +2322,7 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
                 pattern,
                 ..
             } => code::std_path(owner.missing(field, *pattern).0),
+            resolve::Error::NoField { .. } => code::RESOLVE_NO_FIELD,
             _ => code::RESOLVE_UNKNOWN_MEMBER,
         },
         resolve::Category::NotInModule => code::RESOLVE_NOT_IN_MODULE,
@@ -2266,6 +2335,7 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Category::BorrowConflict => match error {
             resolve::Error::BorrowConflict { code, .. } => code::borrow(code),
             resolve::Error::Outlives(reports) => code::borrow(reports.first().code()),
+            resolve::Error::TailTemporary(_) => code::borrow("E0597"),
             resolve::Error::ImmutableBorrow { .. } => code::BORROW_NOT_MUTABLE,
             _ => unreachable!("a borrow conflict's category"),
         },
@@ -2365,6 +2435,7 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
                 None => builder,
             }
         }
+        resolve::Error::TailTemporary(_) => builder.note(resolve::tail::Explanation::note()),
         resolve::Error::Outlives(reports) => {
             let builder = match reports.first().help() {
                 Some(help) => builder.help(help),
@@ -2415,6 +2486,9 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Error::UnknownField { hint, .. } if let Some(note) = hint.note() => {
             builder.note(note)
         }
+        resolve::Error::NoField {
+            field, available, ..
+        } if let Some(note) = resolve::available_fields(field, available) => builder.note(note),
         // After the enum's note, when it has one (`sections`).
         // Each `#[non_exhaustive]` enum the first witness's `_` stands for
         // follows the type, as rustc notes it.
@@ -2463,6 +2537,9 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Error::PatternFields {
             help: Some(help), ..
         } => builder.help(help.clone()),
+        resolve::Error::LetMismatch(mismatch) if let Some(note) = mismatch.note() => {
+            builder.note(note)
+        }
         resolve::Error::PatternMismatch { types, .. } => match types.note() {
             Some(note) => builder.note(note),
             None => builder,
@@ -2491,6 +2568,10 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Error::Unimplemented {
             help: Some(help), ..
         } => builder.help(help.clone()),
+        resolve::Error::UnsupportedNominalSyntax { construct, .. } => match construct.help() {
+            Some(help) => builder.help(help),
+            None => builder,
+        },
         // The notes on types that hold it with a site are sections.
         resolve::Error::UnsharedStatic {
             ty,
@@ -2560,6 +2641,16 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
                 "Sized" => builder.help(format!(
                     "the trait `Sized` is not implemented for `{owner}`"
                 )),
+                "Send" | "Sync" => match auto_within(chain.requirements(), capability) {
+                    AutoWithin::Closure => builder,
+                    AutoWithin::Type(Some(holder)) => builder.help(format!(
+                        "within `{holder}`, the trait `{capability}` is not implemented for \
+                         `{owner}`"
+                    )),
+                    AutoWithin::Type(None) => builder.help(format!(
+                        "the trait `{capability}` is not implemented for `{owner}`"
+                    )),
+                },
                 _ => builder,
             };
             // `Debug`'s own note for a type the program declares.
@@ -2569,6 +2660,15 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
                 ))
             } else {
                 builder
+            };
+            // A std target's `From` impls, which rustc lists for an `into`
+            // none of them takes.
+            let builder = match into_bound(error) && declared.is_none() && !*derive {
+                true => match super::implemented::help(owner, "core::convert::From") {
+                    Some(help) => builder.help(help),
+                    None => builder,
+                },
+                false => builder,
             };
             // An `into`'s requirement follows the help at the definition
             // (`sections`) when there is one.
@@ -2779,6 +2879,7 @@ fn resolution_message(error: &resolve::Error) -> String {
         | resolve::Error::NoItem { owner, member, .. } => {
             format!("unknown member `{owner}::{member}`")
         }
+        resolve::Error::NoField { owner, field, .. } => resolve::no_field(owner, field),
         resolve::Error::NotInModule { module, item, .. } => {
             format!("cannot find `{item}` in module `{module}`")
         }
@@ -2814,11 +2915,13 @@ fn resolution_message(error: &resolve::Error) -> String {
         resolve::Error::BorrowConflict { message, .. }
         | resolve::Error::ImmutableBorrow { message, .. } => message.to_string(),
         resolve::Error::Outlives(reports) => reports.first().message(),
+        resolve::Error::TailTemporary(explanation) => explanation.message().to_owned(),
         resolve::Error::InvalidConstruction { owner, reason, .. } => {
             format!("invalid construction of `{owner}`: {reason}")
         }
         resolve::Error::TypeMismatch { .. }
         | resolve::Error::ArgumentMismatch(_)
+        | resolve::Error::LetMismatch(_)
         | resolve::Error::OpaqueMismatch { .. }
         | resolve::Error::Unboxed { .. } => "mismatched types".into(),
         resolve::Error::IfWithoutElse { .. } => resolve::IF_WITHOUT_ELSE.into(),
@@ -2872,7 +2975,7 @@ fn resolution_message(error: &resolve::Error) -> String {
             format!("invalid match for `{owner}`: {reason}")
         }
         resolve::Error::UnsupportedNominalSyntax { construct, .. } => {
-            resolve::Unsupported(construct).to_string()
+            construct.message().to_owned()
         }
         resolve::Error::Syntax { message, .. } | resolve::Error::Macro { message, .. } => {
             message.to_string()
@@ -3065,6 +3168,59 @@ mod tests {
                 Some("not found in `extension::registry`")
             );
         }
+    }
+
+    /// A construct rawr doesn't run says so on rustc's `error:` line, and
+    /// how to write it so it runs on a `help:` line of its own; a token the
+    /// lowering doesn't read where it stands says what it reads (#1112).
+    #[test]
+    fn an_unsupported_constructs_hint_is_its_help_line() {
+        let source = Source::new(
+            "src/main.rs",
+            "fn main() {\n    static mut N: i32 = 0;\n}\n",
+        )
+        .expect("test source has a stable identity");
+        let at = Span::new(Position::new(2, 12), Position::new(2, 15));
+        let report = |construct: resolve::Unsupported| {
+            let error = ParseError(
+                Box::new(ParseErrorType::Resolution(
+                    resolve::Error::UnsupportedNominalSyntax {
+                        construct,
+                        source: at,
+                    },
+                )),
+                at.start(),
+                Default::default(),
+            );
+            crate::diagnostic::render(
+                &Report::from_parse(source.clone(), &error)
+                    .expect("the error's span belongs to the source"),
+            )
+        };
+        let hinted = report(
+            resolve::Unsupported::construct("a `static mut`")
+                .with_help("keep the value in your state"),
+        );
+        assert!(
+            hinted.starts_with("error: a `static mut` is not supported\n"),
+            "{hinted}"
+        );
+        assert!(
+            hinted.ends_with("  = help: keep the value in your state\n"),
+            "{hinted}"
+        );
+        let token = report(resolve::Unsupported::token(
+            "':' after a static's name",
+            "mut",
+        ));
+        assert!(
+            token.starts_with("error: `mut` is not supported here\n"),
+            "{token}"
+        );
+        assert!(
+            token.ends_with("  = help: rawr expects ':' after a static's name here\n"),
+            "{token}"
+        );
     }
 
     #[test]

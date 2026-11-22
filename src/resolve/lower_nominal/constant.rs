@@ -50,6 +50,12 @@ impl<'a> Parser<'a> {
         if ty == Ty::Str {
             self.flow().set_origins(span, Vec::new());
         }
+        // A `thread_local!` key is a constant of `LocalKey<T>`.
+        if function.definition.body.thread_local {
+            let source = origin::Fragment::call(function.generated.as_str(), []);
+            let key = Ty::Thread(thread::Kind::LocalKey, Box::new(ty));
+            return self.operator_expr(source, key, span);
+        }
         // A static is a place no use moves out of; a constant's use is a
         // value of its own.
         if function.definition.body.static_item {
@@ -74,6 +80,14 @@ impl<'a> Parser<'a> {
         if plain_initializer(tokens.iter()) {
             return None;
         }
+        let kept = crate::place::statics::KEPT;
+        Some(format!("{kept}{}", self.item_key(definition, &tokens)).into())
+    }
+
+    /// What finds the value of the program's item `definition` that outlives
+    /// a generation, a kept static's or a thread-local key's: its file, its
+    /// path and a fingerprint of its type and its initializer's `tokens`.
+    pub(super) fn item_key(&self, definition: &item::Function, tokens: &[Token]) -> String {
         let mut hasher = std::hash::DefaultHasher::new();
         if let Some(output) = &definition.output {
             Ty::from_resolved(output)
@@ -81,7 +95,7 @@ impl<'a> Parser<'a> {
                 .as_str()
                 .hash(&mut hasher);
         }
-        for token in &tokens {
+        for token in tokens {
             token.to_string().hash(&mut hasher);
         }
         let path = self
@@ -89,8 +103,7 @@ impl<'a> Parser<'a> {
             .as_ref()
             .map_or_else(|| definition.name.text.to_string(), ToString::to_string);
         let file = self.source_identity();
-        let kept = crate::place::statics::KEPT;
-        Some(format!("{kept}{file}#{path}@{:016x}", hasher.finish()).into())
+        format!("{file}#{path}@{:016x}", hasher.finish())
     }
 
     /// A read of the static the interpreter keeps as `key`, whose

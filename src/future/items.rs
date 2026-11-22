@@ -70,19 +70,20 @@ impl<T> Iterator for Items<T> {
     }
 }
 
-/// A copy that pulls from the start, as Rust's clone of an iterator that
-/// hasn't started does: the chain's sources and closures are the ones it was
-/// made with, and its counters start again. itertools' `Product` clones its
-/// second iterator before it pulls from it, to walk it once per item of the
-/// first. A copy of an ended one has ended too.
+/// A copy that goes on by itself from where this one is, as Rust's clone
+/// of an iterator copies its state: one that hasn't started pulls from the
+/// start, with the chain's sources and closures it was made with and its
+/// counters starting again, as itertools' `Product` clones its second
+/// iterator to walk it once per item of the first. One part way through
+/// resumes a copy of its step's frame, its locals copied and each `for`
+/// loop's cursor at the same item (#1056). A copy of an ended one has
+/// ended too.
 impl<T> Clone for Items<T> {
     fn clone(&self) -> Self {
-        let state = match self.state {
+        let state = match &self.state {
             State::Fresh => State::Fresh,
             State::Done => State::Done,
-            State::Suspended(_) => panic!(
-                "rawr: a program's iterator can't be cloned once native code has pulled from it"
-            ),
+            State::Suspended(frame) => State::Suspended(frame.duplicate()),
         };
         Self {
             step: self.step.clone(),
