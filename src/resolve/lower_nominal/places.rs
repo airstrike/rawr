@@ -1582,17 +1582,6 @@ impl Parser<'_> {
             ),
             source,
         };
-        // A range of elements is matched by a slice pattern, not bound whole.
-        if matches!(lvalue, Lvalue::Slice(_))
-            && !matches!(proof, NominalPattern::Slice { .. } | NominalPattern::Or(_))
-        {
-            return Err(Error::UnsupportedNominalSyntax {
-                construct: crate::resolve::Unsupported::said(
-                    "a `&mut` binding of a whole range of elements: not supported in Rawr yet",
-                ),
-                source: subject.span,
-            });
-        }
         // A place behind a borrow guard (a `RefCell` borrow, an imported
         // method's guard, a facade accessor) is reached only through the
         // guard, which rawr can't keep: each use of a binding goes through
@@ -1616,6 +1605,13 @@ impl Parser<'_> {
                 .place_located(&lvalue)
                 .ok_or_else(|| unreached(subject.span))?,
         };
+        // A range of elements is matched where the reference to it reaches
+        // (`view.rs`), which a binding of it whole is.
+        let located = if matches!(lvalue, Lvalue::Slice(_)) {
+            origin::Fragment::call(crate::engine::KEYWORD_REF, [located])
+        } else {
+            located
+        };
         let locate = if optional {
             let (find, none) = self
                 .optional_subjects
@@ -1633,14 +1629,7 @@ impl Parser<'_> {
         } else {
             located
         };
-        if let Err(construct) = mark_parts(proof, &parts, false) {
-            return Err(Error::UnsupportedNominalSyntax {
-                construct: crate::resolve::Unsupported::said(format!(
-                    "{construct}: not supported in Rawr yet"
-                )),
-                source: subject.span,
-            });
-        }
+        mark_parts(proof, &parts);
         Ok(Some(PlacePattern {
             locate,
             optional,
@@ -1908,13 +1897,9 @@ impl Parser<'_> {
 }
 
 /// Make each binding of `pattern` that `parts` names a `Part` held by its
-/// runtime local, or what refuses that: a binding in a slice's rest (`rest`
-/// is whether `pattern` is in one), a copy no path reaches.
-fn mark_parts(
-    pattern: &mut NominalPattern,
-    parts: &[(ImmutableString, Span, ImmutableString)],
-    rest: bool,
-) -> Result<(), &'static str> {
+/// runtime local. One in a slice's rest holds the path to the rest's range
+/// of elements, and reaches them as a stored `&mut [T]` does.
+fn mark_parts(pattern: &mut NominalPattern, parts: &[(ImmutableString, Span, ImmutableString)]) {
     let holder = |name: &ImmutableString| {
         parts
             .iter()
@@ -1923,17 +1908,12 @@ fn mark_parts(
     };
     match pattern {
         NominalPattern::Binding { name, expected } => {
-            let Some(holder) = holder(name) else {
-                return Ok(());
-            };
-            if rest {
-                return Err("a `&mut` binding in a slice pattern's `..` rest");
+            if let Some(holder) = holder(name) {
+                *pattern = NominalPattern::Part {
+                    name: holder,
+                    expected: expected.clone(),
+                };
             }
-            *pattern = NominalPattern::Part {
-                name: holder,
-                expected: expected.clone(),
-            };
-            Ok(())
         }
         NominalPattern::At {
             name,
@@ -1941,46 +1921,38 @@ fn mark_parts(
             part,
         } => {
             if let Some(holder) = holder(name) {
-                if rest {
-                    return Err("a `&mut` binding in a slice pattern's `..` rest");
-                }
                 *name = holder;
                 *part = true;
             }
-            mark_parts(pattern, parts, rest)
+            mark_parts(pattern, parts);
         }
         NominalPattern::Part { .. }
         | NominalPattern::Discard { .. }
         | NominalPattern::Literal(_)
         | NominalPattern::Range { .. }
-        | NominalPattern::Option(None) => Ok(()),
+        | NominalPattern::Option(None) => {}
         NominalPattern::Option(Some(child))
         | NominalPattern::Result(Ok(child) | Err(child))
-        | NominalPattern::Cow { payload: child, .. } => mark_parts(child, parts, rest),
+        | NominalPattern::Cow { payload: child, .. } => mark_parts(child, parts),
         NominalPattern::Enum(child) => child
             .payload
             .iter_mut()
-            .try_for_each(|child| mark_parts(child, parts, rest)),
+            .for_each(|child| mark_parts(child, parts)),
         NominalPattern::Tuple(members) | NominalPattern::Struct(members) => members
             .iter_mut()
-            .try_for_each(|member| mark_parts(member, parts, rest)),
+            .for_each(|member| mark_parts(member, parts)),
         NominalPattern::Slice {
             before,
-            rest: middle,
+            rest,
             after,
-        } => {
-            before
-                .iter_mut()
-                .chain(after.iter_mut())
-                .try_for_each(|member| mark_parts(member, parts, rest))?;
-            match middle {
-                Some(middle) => mark_parts(middle, parts, true),
-                None => Ok(()),
-            }
-        }
+        } => before
+            .iter_mut()
+            .chain(after.iter_mut())
+            .chain(rest.as_deref_mut())
+            .for_each(|member| mark_parts(member, parts)),
         NominalPattern::Or(alternatives) => alternatives
             .iter_mut()
-            .try_for_each(|alternative| mark_parts(alternative, parts, rest)),
+            .for_each(|alternative| mark_parts(alternative, parts)),
     }
 }
 

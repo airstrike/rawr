@@ -10670,6 +10670,137 @@ fn main() {{
 }
 
 #[test]
+fn a_mut_binding_of_a_slice_patterns_rest_is_a_view_of_its_elements() {
+    // `[first, rest @ ..] = &mut v[..]`: `rest` is the `&mut [T]` of the
+    // elements between the pattern's ends, and a write through it, its
+    // methods and a call given it reach `v` itself, as rustc's build does
+    // (#163). So does a catch-all binding of a whole range of elements.
+    let output = printed(&format!(
+        "{}{}{}fn main() {{ first(); second(); third(); }}\nmain();\n",
+        r#"
+fn first() {
+    let mut v = vec![1, 2, 3];
+    if let [first, rest @ ..] = &mut v[..] {
+        *first += 10;
+        rest[0] += 20;
+        rest[1] = 3;
+    }
+    println!("{:?}", v);
+    let mut a = [1, 2, 3, 4];
+    match &mut a[..] {
+        [x, mid @ .., y] => {
+            *x = 0;
+            *y = 9;
+            for m in mid.iter_mut() {
+                *m *= 5;
+            }
+            println!("{}", mid.len());
+        }
+        _ => {}
+    }
+    println!("{:?}", a);
+    let s = &mut v[..];
+    if let [rest @ .., last] = s {
+        *last = 7;
+        rest[0] = 1;
+    }
+    println!("{:?}", v);
+}
+"#,
+        r#"
+fn bump(rest: &mut [String]) {
+    for s in rest.iter_mut() {
+        s.push('!');
+    }
+}
+
+fn second() {
+    let mut a = [1, 2, 3, 4];
+    match &mut a {
+        [x, rest @ ..] => {
+            *x = 7;
+            rest[2] = 8;
+            println!("{:?}", rest);
+        }
+    }
+    println!("{:?}", a);
+    let mut v = vec![String::from("a"), String::from("b"), String::from("c")];
+    if let [head, tail @ ..] = v.as_mut_slice() {
+        head.push('?');
+        bump(tail);
+        tail.swap(0, 1);
+    }
+    println!("{:?}", v);
+    let mut w = vec![1, 2, 3, 4, 5];
+    if let [_, middle @ .., _] = &mut w[1..] {
+        middle.reverse();
+        println!("{}", middle.len());
+    }
+    println!("{:?}", w);
+}
+"#,
+        r#"
+fn third() {
+    let mut v = vec![1, 2, 3, 4];
+    match &mut v[1..] {
+        [] => println!("empty"),
+        [x] => *x = 0,
+        whole => {
+            whole[0] = 20;
+            whole.reverse();
+            println!("{}", whole.len());
+        }
+    }
+    println!("{:?}", v);
+    match &mut v[2..] {
+        [a, rest @ ..] => {
+            *a += 1;
+            rest[0] += 100;
+        }
+        all => all[0] = 9,
+    }
+    println!("{:?}", v);
+}
+"#,
+    ));
+    assert_eq!(
+        output,
+        concat!(
+            "[11, 22, 3]\n",
+            "2\n",
+            "[0, 10, 15, 9]\n",
+            "[1, 22, 7]\n",
+            "[2, 3, 8]\n",
+            "[7, 2, 3, 8]\n",
+            "[\"a?\", \"c!\", \"b!\"]\n",
+            "2\n",
+            "[1, 2, 4, 3, 5]\n",
+            "3\n",
+            "[1, 4, 3, 20]\n",
+            "[1, 4, 4, 120]\n",
+        )
+    );
+    // The rest's borrow of `v` holds while the binding is used.
+    let report = refused(
+        r#"
+fn main() {
+    let mut v = vec![1, 2, 3];
+    if let [_, rest @ ..] = &mut v[..] {
+        v.push(4);
+        rest[0] = 1;
+    }
+    println!("{:?}", v);
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0499]: cannot borrow `v` as mutable more than once at a time"),
+        "{report}"
+    );
+}
+
+#[test]
 fn a_cell_drops_its_value_with_it_and_when_its_value_is_replaced() {
     // A `RefCell`, `Cell` or `Mutex` of a value with drop glue drops the
     // value when the cell drops, and the value `set`, an assignment

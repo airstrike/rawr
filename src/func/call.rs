@@ -2114,7 +2114,7 @@ fn lend_held(scope: &mut Scope, holder: &str) -> Option<Dynamic> {
 /// or its name in an async body) made shared where it is, and its shared
 /// handle: the same value, not a copy. A root that is a handle already (a
 /// stored `&mut`'s, or a closure's captured one) is that handle.
-fn shared_root(
+pub(crate) fn shared_root(
     scope: &mut Scope,
     this_ptr: Option<&mut Dynamic>,
     root: Dynamic,

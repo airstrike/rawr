@@ -62,13 +62,12 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</c
   <li>Giving a new borrow to a <code>&amp;mut</code> local that borrows a field or an element, as in <code>let mut r = &amp;mut s.left; r = &amp;mut s.right;</code>. A <code>&amp;mut</code> local of a whole local can be given new borrows, as in <code>r = &amp;mut b;</code> or <code>prev = r;</code>, except in an async body.</li>
   <li>A <code>&amp;mut</code> chosen by a branch, as in <code>r = if c { &amp;mut a } else { &amp;mut b };</code>. Assign it in each branch instead.</li>
   <li>An output that holds <code>&amp;mut</code> other than <code>&amp;mut T</code> and <code>Option&lt;&amp;mut T&gt;</code>, as in <code>Vec&lt;&amp;mut T&gt;</code>.</li>
-  <li>A <code>&amp;mut</code> pattern binding of a slice pattern&rsquo;s rest, as in <code>[first, rest @ ..] = &amp;mut v[..]</code>, or of a whole range of elements.</li>
   <li>A closure that uses a <code>&amp;mut</code> borrow of a range of elements or of a place behind a <code>RefCell</code> borrow.</li>
   <li>A <code>&amp;mut</code> argument of an <code>async fn</code> or an async <code>&amp;mut self</code> method that is a place below a field, as in <code>run(&amp;mut s.a.b)</code> or <code>run(&amp;mut s.cells[i])</code>. A local, an element of a local or a field of a local works.</li>
   <li>A closure that returns a future, passed to a crate function, as in sipper&rsquo;s <code>sipper(|sender| async move { .. })</code>. The error names the function and says it takes a closure that returns a future.</li>
   <li>A <code>&amp;mut</code> borrow in a struct literal&rsquo;s field, as in <code>W { v: &amp;mut v }</code>.</li>
   <li>Comparing with <code>&lt;</code> a <code>None</code> whose type isn&rsquo;t known yet.</li>
-  <li>A value whose type implements <code>Drop</code> inside an <code>Rc</code>, <code>Arc</code>, <code>RefCell</code>, map or set, or taken by a <code>move</code> closure or an <code>async</code> block. See <a href="/docs/reference/moves#drop">Drop</a>.</li>
+  <li>A value whose type implements <code>Drop</code> inside an <code>Rc</code>, <code>Arc</code>, map or set, or taken by a <code>move</code> closure or an <code>async</code> block. See <a href="/docs/reference/moves#drop">Drop</a>.</li>
 </ul>
 <h3 id="missing-std">Standard library</h3>
 <ul>
