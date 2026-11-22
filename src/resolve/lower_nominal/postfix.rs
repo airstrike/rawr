@@ -4113,9 +4113,13 @@ impl<'a> Parser<'a> {
         };
         // `s.parse()?` whose target only the expected type of the whole
         // expression gives, as `let n: i32 = s.parse()?;`: rustc infers the
-        // target from it, which settles the error the `?` converts.
+        // target from it, which settles the error the `?` converts by the
+        // body's error type's `From`. Into any other error type the parse's
+        // error is the body's, which settles it (rustc's E0271).
         if let Ty::Result(_, error) = self.inference.resolve(&early)
             && matches!(*error, Ty::Infer(_))
+            && let Ty::Result(_, returned) = self.inference.resolve(&output)
+            && owner_id(&returned).is_some()
             && self
                 .pending_parses
                 .iter()

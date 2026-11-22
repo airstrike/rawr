@@ -93,11 +93,13 @@ pub(super) fn write_trait_dispatchers(
 ) {
     // A trait without methods, such as std's `Error`, which every program
     // knows, needs no dispatcher and so no type index.
-    if models
-        .traits
-        .values()
-        .all(|(_, declared)| declared.functions.is_empty())
-    {
+    // So does a std trait whose functions reach no value (`unreached`).
+    if models.traits.iter().all(|(trait_name, (_, declared))| {
+        declared
+            .functions
+            .iter()
+            .all(|function| unreached(models, trait_name, declared, function))
+    }) {
         return;
     }
     let type_index = format!("{SENTINEL}{}", ops.len());
@@ -162,6 +164,9 @@ pub(super) fn write_trait_dispatchers(
             // A blanket impl (`impl<T: Bound> Trait for T`) runs for a
             // value no other impl is for, as coherence leaves it the only
             // impl that can apply.
+            if unreached(models, trait_name, declared, function) {
+                continue;
+            }
             let mut blanket = None;
             for ((owner, _), definitions) in models
                 .trait_methods
@@ -237,6 +242,33 @@ pub(super) fn write_trait_dispatchers(
             output.declaration(*source, declared.name.span, &text);
         }
     }
+}
+
+/// Whether `function` of the std trait `trait_name` reaches no value: no
+/// impl of the program's has it and no builtin runs it, as `Error::source`
+/// of a program that implements no `Error`. It needs no dispatcher.
+fn unreached(
+    models: &Models,
+    trait_name: &str,
+    declared: &item::Trait,
+    function: &item::Function,
+) -> bool {
+    let builtin = matches!(
+        trait_name,
+        "Clone" | "Display" | "Debug" | "PartialEq" | "PartialOrd" | "Ord" | "Drop" | "Into"
+    ) || native_borrow(declared, function).is_some();
+    models.std_traits.contains(trait_name)
+        && function.receiver.is_some()
+        && declared.generics.is_empty()
+        && !builtin
+        && !models.trait_methods.iter().any(|((_, name), definitions)| {
+            *name == function.name.text
+                && definitions.iter().any(|definition| {
+                    definition
+                        .trait_name()
+                        .is_some_and(|name| name == trait_name)
+                })
+        })
 }
 
 /// What a dispatcher gives for a std trait method that only borrows its
