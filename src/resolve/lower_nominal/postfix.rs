@@ -1685,10 +1685,18 @@ impl<'a> Parser<'a> {
                 if member.as_str() == "to_string"
                     && args.is_empty()
                     && self.models.method(definition_id, &member).is_none()
-                    && let Some(text) = self.display_text(
-                        &Ty::Script(definition_id, Box::default()),
-                        value.rendered_source(),
-                    )
+                    && let Some(text) = {
+                        // At the receiver's arguments, which select the impl
+                        // of `Foo<i32>` or of `Foo<i64>`.
+                        let arguments = match self.unreferenced(&value.ty) {
+                            Ty::Script(id, arguments) if id == definition_id => arguments,
+                            _ => Box::default(),
+                        };
+                        self.display_text(
+                            &Ty::Script(definition_id, arguments),
+                            value.rendered_source(),
+                        )
+                    }
                 {
                     value = self.operator_expr(text, Ty::String, span(value.span.start(), end));
                     continue;
@@ -2029,7 +2037,11 @@ impl<'a> Parser<'a> {
         end: Position,
     ) -> Result<Result<ParsedExpr, (ParsedExpr, Vec<ParsedExpr>)>, Error> {
         let member = member.clone();
-        let self_typed = self.self_typed_function(owner, &member, &value.ty);
+        let self_typed =
+            match self.self_typed_method(owner, &member, Some(&value.ty), member_span)? {
+                Some(inherent) => Some(inherent),
+                None => self.self_typed_function(owner, &member, &value.ty),
+            };
         // Two impls of one generic trait: the call's trait arguments
         // pick one, by inference.
         if self_typed.is_none()

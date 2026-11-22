@@ -270,6 +270,11 @@ impl Comparison<'_, '_> {
         } else {
             [("PartialOrd", "partial_cmp"), ("Ord", "cmp")]
         };
+        if let Some((trait_name, _)) = preferred.iter().find(|(trait_name, function)| {
+            self.models.self_typed_impls(owner, trait_name, function)
+        }) {
+            return Err(untold(trait_name, nominal));
+        }
         if let Some(context) = self.context
             && let Some((function, definition)) =
                 preferred.iter().find_map(|(trait_name, function)| {
@@ -463,6 +468,12 @@ impl Comparison<'_, '_> {
         let Some(nominal) = self.models.by_identity.get(identity) else {
             return Ok(None);
         };
+        if self
+            .models
+            .self_typed_impls(nominal.definition().id(), "PartialEq", "eq")
+        {
+            return Err(untold("PartialEq", nominal));
+        }
         let Some(definition) = self
             .models
             .std_impl(nominal.definition().id(), "PartialEq", "eq")
@@ -577,10 +588,13 @@ impl<'a> Parser<'a> {
             Ty::Int(_) | Ty::Float(_) | Ty::String | Ty::Str | Ty::Char | Ty::Ordering => {
                 return Ok(None)
             }
-            Ty::Script(definition, ..)
-                if let Some(definition) =
-                    self.models
-                        .std_impl(*definition, "PartialOrd", "partial_cmp") =>
+            Ty::Script(definition, arguments)
+                if let Some(definition) = self.models.std_impl_at(
+                    *definition,
+                    arguments,
+                    "PartialOrd",
+                    "partial_cmp",
+                ) =>
             {
                 Some((Some(definition.clone()), true))
             }
@@ -902,7 +916,7 @@ impl<'a> Parser<'a> {
             return Ok(self.operator_expr(source, Ty::Bool, expression));
         }
         match peeled {
-            Ty::Script(definition, ..)
+            Ty::Script(definition, ref arguments)
                 if self
                     .models
                     .std_impl(definition, "PartialEq", "eq")
@@ -910,7 +924,7 @@ impl<'a> Parser<'a> {
             {
                 let eq = self
                     .models
-                    .std_impl(definition, "PartialEq", "eq")
+                    .std_impl_at(definition, arguments, "PartialEq", "eq")
                     .expect("guarded by the match arm");
                 let call = Self::std_call(eq, lhs.rendered_source(), &[rhs.rendered_source()]);
                 let source = if negate {
@@ -990,8 +1004,8 @@ impl<'a> Parser<'a> {
         rhs: origin::Fragment,
     ) -> Option<origin::Fragment> {
         let ty = self.ord_type(ty)?;
-        if let Ty::Script(id, _) = &ty
-            && let Some(cmp) = self.models.std_impl(*id, "Ord", "cmp")
+        if let Ty::Script(id, arguments) = &ty
+            && let Some(cmp) = self.models.std_impl_at(*id, arguments, "Ord", "cmp")
         {
             return Some(Self::std_call(cmp, lhs, &[rhs]));
         }
@@ -1322,11 +1336,26 @@ impl<'a> Parser<'a> {
             receiver @ (Ty::Str | Ty::Reference { mutable: false, .. }) => receiver,
             _ => Ty::Reference {
                 mutable: false,
-                target: Box::new(target),
+                target: Box::new(target.clone()),
             },
         };
         self.coerce_expr(&expected, &mut other)?;
         let operands = [value.rendered_source(), other.rendered_source()];
+        // A program type's own `cmp` or `partial_cmp`, of the impl for its
+        // instance: `Foo<i64>`'s beside `Foo<i32>`'s.
+        let (trait_name, ordering) = if member.as_str() == "cmp" {
+            ("Ord", Ty::Ordering)
+        } else {
+            ("PartialOrd", Ty::Option(Box::new(Ty::Ordering)))
+        };
+        if let Ty::Script(id, arguments) = &target
+            && self.models.self_typed_impls(*id, trait_name, &member)
+            && let Some(definition) = self.models.std_impl_at(*id, arguments, trait_name, &member)
+        {
+            let [value, other] = operands;
+            let source = Self::std_call(definition, value, &[other]);
+            return Ok(self.operator_expr(source, ordering, call));
+        }
         let compare = if unsigned {
             self.prelude_op(PreludeOp::Compare, operands.map(unsigned_order))
         } else {
@@ -1479,10 +1508,10 @@ impl<'a> Parser<'a> {
                 source.push_text(" } }");
                 source
             }
-            Ty::Script(id, ..) if self.models.std_impl(*id, "PartialEq", "eq").is_some() => {
+            Ty::Script(id, arguments) if self.models.std_impl(*id, "PartialEq", "eq").is_some() => {
                 let definition = self
                     .models
-                    .std_impl(*id, "PartialEq", "eq")
+                    .std_impl_at(*id, arguments, "PartialEq", "eq")
                     .expect("guarded by the match arm");
                 Self::std_call(definition, lhs, &[rhs])
             }
@@ -1843,5 +1872,16 @@ fn stored_referents(lhs: &Dynamic, rhs: &Dynamic) -> Option<(Dynamic, Dynamic)> 
     Some((
         left.unwrap_or_else(|| lhs.clone()),
         right.unwrap_or_else(|| rhs.clone()),
+    ))
+}
+
+/// rawr's refusal to compare a value by its runtime type where impls of
+/// `trait_name` for two instances of its type each give the comparison
+/// (`Models::self_typed_impls`): the value holds no type arguments.
+fn untold(trait_name: &str, nominal: &Nominal) -> Box<EvalAltResult> {
+    invariant(&format!(
+        "comparing a `{}` inside another value, where `{trait_name}` has impls for two of its \
+         instances, is not supported yet",
+        nominal.definition().name()
     ))
 }

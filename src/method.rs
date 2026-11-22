@@ -306,6 +306,12 @@ impl Definition {
         &self.key
     }
 
+    /// This method keyed as `key`, its impl's Self type in its name, where
+    /// another impl's method has its key (`resolve::key_by_self_type`).
+    pub(crate) fn rekey(&mut self, key: item::Key) {
+        self.key = key;
+    }
+
     pub(crate) fn fingerprint(&self) -> &signature::Fingerprint {
         &self.fingerprint
     }

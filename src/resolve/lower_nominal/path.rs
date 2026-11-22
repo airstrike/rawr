@@ -1419,8 +1419,12 @@ impl<'a> Parser<'a> {
             };
             // A generic type's `default()` has fresh arguments, which its
             // use settles, as `let w: W<i64> = W::default()` does.
+            // `Foo::<i64>::default()` is the written type's, whose impl is
+            // `Foo<i64>`'s beside `Foo<i32>`'s.
             let ty = if model.generics().is_empty() {
                 model.ty()
+            } else if let Some(written) = self.written_owners.get(&owner_span.start()) {
+                written.clone()
             } else {
                 self.fresh_nominal(&model, member_span).0
             };
@@ -1660,6 +1664,12 @@ impl<'a> Parser<'a> {
         member: ImmutableString,
         member_span: Span,
     ) -> Result<ParsedExpr, Error> {
+        // `Foo::<i64>::make()` of `impl Foo<i32>` and `impl Foo<i64>`: the
+        // written type's impl's.
+        let written = self.written_owners.get(&owner_span.start()).cloned();
+        let definition = self
+            .self_typed_method(definition.owner(), &member, written.as_ref(), member_span)?
+            .unwrap_or(definition);
         // `Type::method` as a value: `fn(&Type, ..) -> Output`, or
         // `fn(&mut Type, ..)` for a `&mut self` method.
         if let Some(mode) = definition.receiver()

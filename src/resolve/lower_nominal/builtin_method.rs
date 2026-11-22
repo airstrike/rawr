@@ -1900,11 +1900,15 @@ impl<'a> Parser<'a> {
                     .collect::<Result<Vec<_>, _>>()?;
                 origin::Fragment::join(members, ", ").surrounded("[", "]")
             }
-            Ty::Script(id, ..) => {
+            Ty::Script(id, arguments) => {
                 let model = self.models.definition(*id).clone();
                 self.require_capability(&model, capability::Kind::Default, span)?;
                 // A hand-written `impl Default` runs.
-                if let Some(definition) = self.models.std_impl(*id, "Default", "default").cloned() {
+                if let Some(definition) = self
+                    .models
+                    .std_impl_at(*id, arguments, "Default", "default")
+                    .cloned()
+                {
                     // An impl compiled per instantiation, as native code's
                     // mention of `Content<grid::Message>` makes `impl<'a,
                     // Message> Default for Content<'a, Message>` (D869), runs

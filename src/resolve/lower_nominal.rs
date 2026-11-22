@@ -863,6 +863,10 @@ struct Parser<'a> {
     /// Associated type equalities a generic use requires of its inferred
     /// types: `T::Output` and the bound's type.
     pending_projections: Vec<(Ty, Ty, Span)>,
+    /// Trait bounds of generic parameters, whose values reach the trait's
+    /// impls by their runtime type (`untold_impls`), with the trait's
+    /// arguments and where the use is.
+    pending_dispatches: Vec<(Ty, ImmutableString, Box<[Ty]>, Span)>,
     /// Type witnesses passed for `Default`-bounded generic parameters,
     /// written over their placeholders once the types are inferred.
     /// Each also says what its witness must name (`generics::Need`).
@@ -1179,6 +1183,7 @@ impl<'a> Parser<'a> {
             impl_instance: String::new(),
             pending_traits: Vec::new(),
             pending_projections: Vec::new(),
+            pending_dispatches: Vec::new(),
             pending_witnesses: Vec::new(),
             witnessed_opaques: Vec::new(),
             host_witnesses: Vec::new(),

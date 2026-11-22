@@ -2302,7 +2302,7 @@ impl<'a> Parser<'a> {
         match ty {
             Ty::Script(id, arguments) => self
                 .models
-                .std_impl(*id, "Display", "fmt")
+                .std_impl_at(*id, arguments, "Display", "fmt")
                 .filter(|_| self.impl_holds("Display", *id, arguments))
                 .map(|definition| Self::std_call(definition, value, &["\"\"".into()])),
             Ty::Param(..) | Ty::Projection(..) | Ty::Dyn(..)
@@ -2359,8 +2359,8 @@ impl<'a> Parser<'a> {
     ) -> Option<origin::Fragment> {
         if self.display_takes_spec(ty) {
             return Some(match ty {
-                Ty::Script(id, _) => Self::std_call(
-                    self.models.std_impl(*id, "Display", "fmt")?,
+                Ty::Script(id, arguments) => Self::std_call(
+                    self.models.std_impl_at(*id, arguments, "Display", "fmt")?,
                     value,
                     &[spec.into()],
                 ),
@@ -3032,10 +3032,10 @@ impl<'a> Parser<'a> {
                 routed.push_text(" }");
                 routed
             }
-            Ty::Script(id, ..) if self.models.std_impl(*id, "Debug", "fmt").is_some() => {
+            Ty::Script(id, arguments) if self.models.std_impl(*id, "Debug", "fmt").is_some() => {
                 let definition = self
                     .models
-                    .std_impl(*id, "Debug", "fmt")
+                    .std_impl_at(*id, arguments, "Debug", "fmt")
                     .expect("guarded by the match arm");
                 Self::std_call(definition, value, &["\"\"".into()])
             }
