@@ -618,6 +618,16 @@ fn nominal_of(
     }
 }
 
+/// Count in `counts` each value of a script type `value` holds, itself
+/// among them, as the census counts them, by the walk a survey takes.
+pub(crate) fn tally(value: &mut Dynamic, counts: &mut HashMap<type_def::Identity, usize>) {
+    visit(value, &mut HashSet::new(), &mut |value| {
+        if let Some((identity, ..)) = nominal_of(value) {
+            *counts.entry(identity.clone()).or_insert(0) += 1;
+        }
+    });
+}
+
 /// `value`'s representation, `()` left in its place.
 fn mem_take(value: &mut Dynamic) -> Union {
     std::mem::take(value).0

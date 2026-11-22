@@ -174,6 +174,10 @@ fn a_program_is_called_reloaded_and_keeps_its_last_good_text() {
     a_save_taken_at_once_says_its_admission_refused_it(&universe);
     a_save_that_changes_a_type_nothing_holds_or_makes_swaps_in(&universe);
 
+    // A static whose initializer changed, or that was removed, is a new
+    // one: the old one's value holds its type no longer (#2519).
+    a_static_a_save_declares_otherwise_holds_no_value_of_its_type(&universe);
+
     // A save rewrites the live values of the types whose fields it changed
     // where native code holds them (#2026).
     a_held_value_keeps_its_fields_across_saves_that_add_reorder_and_remove(&universe);
@@ -415,6 +419,56 @@ fn a_save_that_changes_a_type_nothing_holds_or_makes_swaps_in(universe: &Univers
     assert_eq!(total(&program, 2, 3), 5);
     let said = outcomes.try_iter().collect::<Vec<_>>();
     assert_eq!(said, [Outcome::Queued, Outcome::Swapped]);
+}
+
+const INSET: &str = "// rawr
+#[derive(Debug)]
+struct Inset {
+    width: f64,
+}
+
+static INSET: Inset = Inset { width: 1.0 };
+
+pub fn total(a: i64, b: i64) -> i64 {
+    let _ = INSET.width;
+    a + b
+}
+
+fn main() {}
+";
+
+/// A static whose initializer and type's fields a save changes, then one
+/// it removes with its type: each swaps in, as the old static's value is
+/// no value the next generation holds (#2519, D862).
+fn a_static_a_save_declares_otherwise_holds_no_value_of_its_type(universe: &Universe) {
+    let entry = PathBuf::from("/universe-inset/src/main.rs");
+    let program = universe.program(entry, INSET, Vec::new()).unwrap();
+    let outcomes = program.outcomes();
+    assert_eq!(total(&program, 2, 3), 5);
+    let grown = INSET
+        .replace("    width: f64,\n", "    width: f64,\n    depth: f64,\n")
+        .replace("Inset { width: 1.0 }", "Inset { width: 1.0, depth: 2.0 }");
+    assert_eq!(program.replace(grown.as_str()), Outcome::Queued);
+    assert_eq!(total(&program, 2, 3), 5);
+    let removed = grown
+        .replace(
+            "#[derive(Debug)]\nstruct Inset {\n    width: f64,\n    depth: f64,\n}\n\n\
+             static INSET: Inset = Inset { width: 1.0, depth: 2.0 };\n\n",
+            "",
+        )
+        .replace("    let _ = INSET.width;\n", "");
+    assert_eq!(program.replace(removed.as_str()), Outcome::Queued);
+    assert_eq!(total(&program, 2, 3), 5);
+    let said = outcomes.try_iter().collect::<Vec<_>>();
+    assert_eq!(
+        said,
+        [
+            Outcome::Queued,
+            Outcome::Swapped,
+            Outcome::Queued,
+            Outcome::Swapped
+        ]
+    );
 }
 
 const WAITING: &str = "// rawr
