@@ -1078,7 +1078,12 @@ impl<'a> Parser<'a> {
         let mut inner = std::mem::replace(&mut self.bindings, original);
         // The tail's temporaries that went on to the scope around the
         // block stay bound there.
-        for temporary in self.temporary_scopes.last().into_iter().flatten() {
+        for temporary in self
+            .temporary_scopes
+            .last()
+            .into_iter()
+            .flat_map(|scope| &scope.made)
+        {
             if let Some(binding) = inner.remove(temporary.as_str()) {
                 self.bindings
                     .entry(temporary.as_str().into())

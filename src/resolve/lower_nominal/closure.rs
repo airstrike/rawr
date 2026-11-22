@@ -661,6 +661,8 @@ impl<'a> Parser<'a> {
         // its end, and a `return` leaves only its scopes.
         let outer_drops = std::mem::take(&mut self.drop_scopes);
         let outer_drop_base = std::mem::replace(&mut self.drop_base, 0);
+        let outer_temporary_base =
+            std::mem::replace(&mut self.temporary_base, self.temporary_scopes.len());
         self.open_drops();
         for (name, ty, declaration) in &parameters {
             self.parameter_declarations.insert(*declaration);
@@ -742,6 +744,7 @@ impl<'a> Parser<'a> {
                     self.return_blocked = outer_blocked;
                     self.drop_scopes = outer_drops;
                     self.drop_base = outer_drop_base;
+                    self.temporary_base = outer_temporary_base;
                     self.closures.pop();
                     return Err(error);
                 }
@@ -820,6 +823,7 @@ impl<'a> Parser<'a> {
         let parameter_drops = self.close_drops();
         self.drop_scopes = outer_drops;
         self.drop_base = outer_drop_base;
+        self.temporary_base = outer_temporary_base;
         self.copy_out = outer_copy_out;
         self.copy_out_depth = outer_copy_depth;
         self.loops = outer_loops;

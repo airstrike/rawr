@@ -10670,6 +10670,93 @@ fn main() {{
 }
 
 #[test]
+fn an_early_exit_drops_the_temporaries_of_each_statement_it_leaves() {
+    // A `?`, `continue`, `break` or `return` inside a block inside a
+    // statement drops the temporaries made so far in each statement it
+    // leaves, each before the locals of the scope the statement is in,
+    // as rustc's build does (#2625).
+    let main = "struct D(&'static str);
+
+impl Drop for D {
+    fn drop(&mut self) {
+        println!(\"drop {}\", self.0);
+    }
+}
+
+impl D {
+    fn get(&self) -> i32 {
+        1
+    }
+}
+
+fn early(fail: bool) -> Option<i32> {
+    let _a = D(\"a\");
+    let n = D(\"held\").get()
+        + if fail {
+            let _b = D(\"b\");
+            D(\"inner\").get() + None::<i32>?
+        } else {
+            1
+        };
+    Some(n)
+}
+
+fn looped() -> i32 {
+    let mut i = 0;
+    loop {
+        let _c = D(\"c\");
+        let k = D(\"loop\").get() + {
+            let _e = D(\"e\");
+            if i == 0 {
+                i += 1;
+                continue;
+            }
+            if i == 1 {
+                break D(\"break\").get() * 7;
+            }
+            0
+        };
+        println!(\"{k}\");
+    }
+}
+
+fn returned() -> i32 {
+    let v = D(\"return\").get() + {
+        if true {
+            return 5;
+        }
+        0
+    };
+    v
+}
+
+fn tail(_p: D) -> Option<i32> {
+    let _l = D(\"l\");
+    Some(D(\"t\").get() + None::<i32>?)
+}
+
+fn main() {
+    println!(\"{:?}\", early(true));
+    println!(\"{}\", looped());
+    println!(\"{}\", returned());
+    println!(\"{:?}\", tail(D(\"p\")));
+}
+";
+    let rest = "drop held\ndrop a\nNone\ndrop e\ndrop loop\ndrop c\ndrop break\ndrop e\n\
+                drop loop\ndrop c\n7\ndrop return\n5\n";
+    // Before edition 2024 a block's tail temporaries outlive its locals,
+    // and a body's drop between its locals and its parameters.
+    assert_eq!(
+        edition_printed("exit", "2021", main),
+        format!("drop b\ndrop inner\n{rest}drop l\ndrop t\ndrop p\nNone\n")
+    );
+    assert_eq!(
+        edition_printed("exit", "2024", main),
+        format!("drop inner\ndrop b\n{rest}drop t\ndrop l\ndrop p\nNone\n")
+    );
+}
+
+#[test]
 fn impls_for_two_instances_reached_by_a_trait_object_are_refused() {
     // A trait object's value reaches its impl by its runtime type, which
     // holds no type arguments: rawr refuses where two impls' Self types

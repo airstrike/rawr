@@ -121,7 +121,7 @@ impl<'a> Parser<'a> {
         let pending = self.field_entries.len();
         let start = self.output.len();
         let opened = self.calls_noted;
-        self.open_temporaries();
+        self.open_statement_temporaries();
         self.flow().open_temporaries();
         self.open_frames();
         let parsed = self.parse_expression_statement(pending);
@@ -134,7 +134,7 @@ impl<'a> Parser<'a> {
         };
         self.flow().close_temporaries(end);
         let frames = self.close_frames();
-        let temporaries = self.close_temporaries();
+        let temporaries = self.close_statement_temporaries();
         self.field_entries.truncate(pending);
         parsed?;
         let temporaries = self.hand_tail(start, temporaries);
