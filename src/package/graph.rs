@@ -101,6 +101,10 @@ pub struct RustModule {
     modules: Box<[ImmutableString]>,
     path: PathBuf,
     text: String,
+    /// The program's `macro_rules!` definitions in the module's textual
+    /// scope, as written: those its marked ancestors define before the
+    /// `mod` items on the way to it.
+    macros: Box<[ImmutableString]>,
 }
 
 /// A native crate root (D501) and the marked modules of its tree. Every
@@ -437,6 +441,13 @@ impl RustModule {
     #[must_use]
     pub fn text(&self) -> &str {
         &self.text
+    }
+
+    /// The program's `macro_rules!` definitions in the module's textual
+    /// scope that its marked ancestors define, as written, in order.
+    #[must_use]
+    pub fn macros(&self) -> &[ImmutableString] {
+        &self.macros
     }
 }
 
@@ -911,6 +922,9 @@ struct Builder<'a> {
     /// loaded that are in its textual scope: those defined before its
     /// `mod` item, which a call where an item goes may name.
     inherited: Vec<crate::Shared<crate::resolve::macro_rules::Rules>>,
+    /// Those macros' definitions as written, which a native module's
+    /// copy is built with.
+    inherited_text: Vec<ImmutableString>,
     expanded: BTreeMap<(source::Id, Span), ImmutableString>,
     #[cfg(feature = "rust-import")]
     stale: Vec<rawr_import::expand::Item>,
@@ -943,6 +957,7 @@ impl<'a> Builder<'a> {
             module_directories: BTreeMap::new(),
             active_modules: Vec::new(),
             inherited: Vec::new(),
+            inherited_text: Vec::new(),
             expanded: BTreeMap::new(),
             #[cfg(feature = "rust-import")]
             stale: Vec::new(),
@@ -1208,6 +1223,7 @@ impl<'a> Builder<'a> {
                     modules: Box::default(),
                     path: canonical,
                     text,
+                    macros: Box::default(),
                 },
                 marked: Box::default(),
                 bridges: Vec::new(),
@@ -1398,6 +1414,7 @@ impl<'a> Builder<'a> {
             modules: Box::default(),
             path: canonical,
             text,
+            macros: Box::default(),
         }))
     }
 
@@ -1620,7 +1637,8 @@ impl<'a> Builder<'a> {
                 let rules =
                     crate::resolve::macro_rules::Rules::parse(definition.span.text(&file_text))
                         .ok()?;
-                Some((definition.span.end(), crate::Shared::new(rules)))
+                let written = ImmutableString::from(definition.span.text(&file_text));
+                Some((definition.span.end(), crate::Shared::new(rules), written))
             })
             .collect::<Vec<_>>();
         #[cfg(feature = "rust-import")]
@@ -1643,16 +1661,19 @@ impl<'a> Builder<'a> {
         );
 
         let around = self.inherited.clone();
+        let around_text = self.inherited_text.clone();
         for (module, segment) in declarations {
             let mut child_modules = modules.to_vec();
             child_modules.push(segment.clone());
             self.inherited = around.clone();
-            self.inherited.extend(
-                defined
-                    .iter()
-                    .filter(|(end, _)| *end <= module.span.start())
-                    .map(|(_, rules)| rules.clone()),
-            );
+            self.inherited_text = around_text.clone();
+            for (_, rules, written) in defined
+                .iter()
+                .filter(|(end, ..)| *end <= module.span.start())
+            {
+                self.inherited.push(rules.clone());
+                self.inherited_text.push(written.clone());
+            }
             let label = error::Label {
                 source: evidence,
                 span: module.span,
@@ -1734,6 +1755,7 @@ impl<'a> Builder<'a> {
         }
 
         self.inherited = around;
+        self.inherited_text = around_text;
         self.active_modules.pop();
         Ok(id)
     }
@@ -2101,6 +2123,7 @@ impl<'a> Builder<'a> {
             modules,
             path: canonical,
             text,
+            macros: self.inherited_text.clone().into(),
         });
         Ok(())
     }
@@ -2197,6 +2220,7 @@ impl<'a> Builder<'a> {
             modules,
             path: canonical,
             text,
+            macros: self.inherited_text.clone().into(),
         };
         let package = &mut self.packages[package.0];
         match (tree, package.bin.as_mut()) {
