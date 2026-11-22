@@ -6,6 +6,12 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors.
 
+## 0.5.15 (2026-11-22)
+
+- Every range form is a value of std's range type: `a..b`, `a..=b`, `a..`, `..b`, `..=b` and `..` are `Range`, `RangeInclusive`, `RangeFrom`, `RangeTo`, `RangeToInclusive` and `RangeFull` of integers, chars and floats, 128-bit included, with std's fields, traits and methods, iterating where std iterates them and filling a crate's plain `T` as rustc fills it. (#1062, #1063, #1105, #1106, #1260)
+- A program macro called inside a std macro's arguments no longer makes `rawr run` rebuild forever: a reload snapshot keeps the file's own text, not its laid-out expansions. (#2520)
+- url moves to 2.5.9 for RUSTSEC-2026-0592, a stack overflow in `Url::origin()` on nested `blob:` URLs, and manifest package specs parse URLs as url 2.5.9 does. (#2518)
+
 ## 0.5.14 (2026-11-22)
 
 - A non-exhaustive match or a refutable pattern names rustc's integer and char ranges below a constructor, such as `Some(2_i32..=i32::MAX)`, in rustc's order; a constant's path is a pattern and a range end (`i32::MIN..=-5`, `LO..=9`), and a pattern naming a `const` matches its value instead of binding a name. (#1287, #1306, #1288)

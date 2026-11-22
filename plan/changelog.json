@@ -8,6 +8,15 @@
   },
   "releases": [
     {
+      "version": "0.5.15",
+      "date": "2026-11-22",
+      "entries": [
+        {"text":"Every range form is a value of std's range type: `a..b`, `a..=b`, `a..`, `..b`, `..=b` and `..` are `Range`, `RangeInclusive`, `RangeFrom`, `RangeTo`, `RangeToInclusive` and `RangeFull` of integers, chars and floats, 128-bit included, with std's fields, traits and methods, iterating where std iterates them and filling a crate's plain `T` as rustc fills it.","issues":[1062,1063,1105,1106,1260]},
+        {"text":"A program macro called inside a std macro's arguments no longer makes `rawr run` rebuild forever: a reload snapshot keeps the file's own text, not its laid-out expansions.","issues":[2520]},
+        {"text":"url moves to 2.5.9 for RUSTSEC-2026-0592, a stack overflow in `Url::origin()` on nested `blob:` URLs, and manifest package specs parse URLs as url 2.5.9 does.","issues":[2518]}
+      ]
+    },
+    {
       "version": "0.5.14",
       "date": "2026-11-22",
       "entries": [

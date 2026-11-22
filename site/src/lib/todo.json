@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-22",
-  "version": "0.5.14",
+  "version": "0.5.15",
   "examples": {
     "running": 55,
     "total": 56,
@@ -11,6 +11,15 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors."],"entries":[]},
     "releases": [
+      {
+        "version": "0.5.15",
+        "date": "2026-11-22",
+        "entries": [
+          {"text":"Every range form is a value of std's range type: `a..b`, `a..=b`, `a..`, `..b`, `..=b` and `..` are `Range`, `RangeInclusive`, `RangeFrom`, `RangeTo`, `RangeToInclusive` and `RangeFull` of integers, chars and floats, 128-bit included, with std's fields, traits and methods, iterating where std iterates them and filling a crate's plain `T` as rustc fills it.","issues":[1062,1063,1105,1106,1260]},
+          {"text":"A program macro called inside a std macro's arguments no longer makes `rawr run` rebuild forever: a reload snapshot keeps the file's own text, not its laid-out expansions.","issues":[2520]},
+          {"text":"url moves to 2.5.9 for RUSTSEC-2026-0592, a stack overflow in `Url::origin()` on nested `blob:` URLs, and manifest package specs parse URLs as url 2.5.9 does.","issues":[2518]}
+        ]
+      },
       {
         "version": "0.5.14",
         "date": "2026-11-22",
@@ -4759,8 +4768,8 @@
     {"issue":1059,"title":"A crate's facts are the same whether Cargo rebuilt it or reused it, so caches keyed on them no…","state":"closed","category":"Health","release":"0.3.158"},
     {"issue":1060,"title":"game_of_life: Widget::map on an impl Widget a program function returns","state":"closed","category":"Divergences from rustc","release":"0.3.181"},
     {"issue":1061,"title":"todos: std::env::current_dir isn't run","state":"closed","category":"Divergences from rustc","release":"0.3.177"},
-    {"issue":1062,"title":"RangeInclusive<T> has none of Clone, Debug, PartialEq, Eq or Hash as a type's capabilities","state":"open","category":"Divergences from rustc"},
-    {"issue":1063,"title":"An a..=b of i128 or u128 is an iterator chain, not a RangeInclusive<i128>","state":"open","category":"Divergences from rustc"},
+    {"issue":1062,"title":"RangeInclusive<T> has none of Clone, Debug, PartialEq, Eq or Hash as a type's capabilities","state":"closed","category":"Divergences from rustc","release":"0.5.15"},
+    {"issue":1063,"title":"An a..=b of i128 or u128 is an iterator chain, not a RangeInclusive<i128>","state":"closed","category":"Divergences from rustc","release":"0.5.15"},
     {"issue":1064,"title":"A borrowed string fills a crate parameter bounded by 'static, where rustc gives E0597","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":1065,"title":"?play's site snippets take about 2 minutes each on the live bot","state":"closed","category":"Health","release":"0.3.161"},
     {"issue":1066,"title":"The site deploy's snippet check fails on 'Durable Object reset because its code was updated'","state":"closed","category":"Health","release":"0.3.161"},
@@ -4802,8 +4811,8 @@
     {"issue":1102,"title":"A program impl's generic method that takes &O writes type Of<'x> = _ (E0121)","state":"open","category":"Divergences from rustc"},
     {"issue":1103,"title":"Fixes a regression from #1055: an `a..=b` of `isize`, `u8` or any integer other than `i64`…","state":"closed","category":"Divergences from rustc","release":"0.3.164"},
     {"issue":1104,"title":"collect() on a crate iterator is ambiguous after a lane's history: two identical aliases","state":"open","category":"Health"},
-    {"issue":1105,"title":"a..b passed by value to a crate's plain T is an iterator, not Range<T>","state":"open","category":"Divergences from rustc"},
-    {"issue":1106,"title":"range.start and range.end as fields are rejected","state":"open","category":"Divergences from rustc"},
+    {"issue":1105,"title":"a..b passed by value to a crate's plain T is an iterator, not Range<T>","state":"closed","category":"Divergences from rustc","release":"0.5.15"},
+    {"issue":1106,"title":"range.start and range.end as fields are rejected","state":"closed","category":"Divergences from rustc","release":"0.5.15"},
     {"issue":1107,"title":"Marked modules under a package's lib target are invisible when the bin target runs","state":"closed","category":"Divergences from rustc","release":"0.3.167"},
     {"issue":1108,"title":"A git dependency on a branch with a slash panics rawr-import while it reads Cargo metadata","state":"closed","category":"Health","release":"0.3.165"},
     {"issue":1109,"title":"Error messages that don't read like a program's error messages","state":"closed","category":"Health","release":"0.3.166"},
@@ -4957,7 +4966,7 @@
     {"issue":1257,"title":"let v = Vec::new() with no type settled is accepted where rustc gives E0282","state":"closed","category":"Divergences from rustc","release":"0.5.4"},
     {"issue":1258,"title":"rawr test in a package with several binaries stops where cargo test tests each one","state":"open","category":"Divergences from rustc"},
     {"issue":1259,"title":"A marked crate's default features are off in its marked code","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
-    {"issue":1260,"title":"A range of floats that excludes its end has no contains, and float ranges have no Debug","state":"open","category":"Divergences from rustc"},
+    {"issue":1260,"title":"A range of floats that excludes its end has no contains, and float ranges have no Debug","state":"closed","category":"Divergences from rustc","release":"0.5.15"},
     {"issue":1261,"title":"The rawr lib tests don't compile without the rust-import feature","state":"retired","category":"Health"},
     {"issue":1262,"title":"rawr-import overflows its main thread's stack on a 1016-package workspace once the API cap is gone","state":"closed","category":"Health","release":"0.3.172"},
     {"issue":1263,"title":"A marked module can't name a native non-root module's trait or type by path (`page::Page`): E0425","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
@@ -6213,7 +6222,14 @@
     {"issue":2514,"title":"`Trait::m(\"hi\")` on a program trait implemented for `str` and `i32` is E0308","state":"open","category":"Divergences from rustc"},
     {"issue":2515,"title":"An unmarked module file doesn't see the macro_rules! its parent defines before `mod`","state":"open","category":"Divergences from rustc"},
     {"issue":2516,"title":"A crate derive's helper attributes are not checked against what it declares","state":"open","category":"Divergences from rustc"},
-    {"issue":2517,"title":"An edition 2021 crate's tail temporaries drop as edition 2024's do","state":"open","category":"Divergences from rustc"}
+    {"issue":2517,"title":"An edition 2021 crate's tail temporaries drop as edition 2024's do","state":"open","category":"Divergences from rustc"},
+    {"issue":2518,"title":"Move url from 2.5.8 to 2.5.9 for RUSTSEC-2026-0592 and re-verify the manifest reference","state":"closed","category":"Health","release":"0.5.15"},
+    {"issue":2519,"title":"A program static is evaluated again at each read, so a Mutex or atomic static loses its state","state":"open","category":"Divergences from rustc"},
+    {"issue":2520,"title":"A program macro called inside a std macro's arguments no longer makes `rawr run` rebuild…","state":"closed","category":"Health","release":"0.5.15"},
+    {"issue":2521,"title":"String::drain and String::replace_range are not run","state":"open","category":"Divergences from rustc"},
+    {"issue":2522,"title":"A generic R: RangeBounds<T> has no start_bound or end_bound, and std::ops::Bound is not represented","state":"open","category":"Divergences from rustc"},
+    {"issue":2523,"title":"A consuming iterator method doesn't move a non-range iterator local","state":"open","category":"Divergences from rustc"},
+    {"issue":2524,"title":"Diagnostics name std's range types without their path","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -8964,14 +8980,14 @@
             {"number":836,"title":"An associated function's borrowed held argument doesn't select its form","state":"open"},
             {"number":837,"title":"The std facade declares a held type's unbound std members as not yet run","state":"open"},
             {"number":1056,"title":"Cloning a program iterator after native code has pulled from it panics","state":"open"},
-            {"number":1062,"title":"RangeInclusive<T> has none of Clone, Debug, PartialEq, Eq or Hash as a type's capabilities","state":"open"},
-            {"number":1063,"title":"An a..=b of i128 or u128 is an iterator chain, not a RangeInclusive<i128>","state":"open"},
-            {"number":1105,"title":"a..b passed by value to a crate's plain T is an iterator, not Range<T>","state":"open"},
-            {"number":1106,"title":"range.start and range.end as fields are rejected","state":"open"},
+            {"number":1062,"title":"RangeInclusive<T> has none of Clone, Debug, PartialEq, Eq or Hash as a type's capabilities","state":"closed"},
+            {"number":1063,"title":"An a..=b of i128 or u128 is an iterator chain, not a RangeInclusive<i128>","state":"closed"},
+            {"number":1105,"title":"a..b passed by value to a crate's plain T is an iterator, not Range<T>","state":"closed"},
+            {"number":1106,"title":"range.start and range.end as fields are rejected","state":"closed"},
             {"number":1253,"title":"std::rc::Rc::new by its full path says rawr doesn't run it, while Rc::new after a use runs","state":"open"},
             {"number":1254,"title":"std::fs::File and std::sync::RwLock fail with unknown-member errors that name the wrong type","state":"closed"},
             {"number":1255,"title":"Formatter::pad in a Display impl is E0599 naming String","state":"closed"},
-            {"number":1260,"title":"A range of floats that excludes its end has no contains, and float ranges have no Debug","state":"open"},
+            {"number":1260,"title":"A range of floats that excludes its end has no contains, and float ranges have no Debug","state":"closed"},
             {"number":1284,"title":"`dyn Any`: coercion and `downcast_ref`/`is`","state":"open"},
             {"number":1286,"title":"A declared std trait sends a std receiver's method through the program dispatcher","state":"open"},
             {"number":1471,"title":"`SystemTime` values don't compare: `SystemTime::now() >= UNIX_EPOCH` is a type mismatch…","state":"open"},
@@ -8987,7 +9003,11 @@
             {"number":2091,"title":"std::io::Error does not implement Display or std::error::Error, so ? into Box<dyn Error> fails E0277","state":"open"},
             {"number":2499,"title":"Hash::hash into a program's Hasher is refused: derive(Hash) and impl Hash bodies don't run","state":"open"},
             {"number":2500,"title":"by_ref and &mut of std's own iterators, and `for x in &mut it`, aren't run","state":"open"},
-            {"number":2501,"title":"write! into a program's fmt::Write calls write_str once with the whole text","state":"open"}
+            {"number":2501,"title":"write! into a program's fmt::Write calls write_str once with the whole text","state":"open"},
+            {"number":2519,"title":"A program static is evaluated again at each read, so a Mutex or atomic static loses its state","state":"open"},
+            {"number":2521,"title":"String::drain and String::replace_range are not run","state":"open"},
+            {"number":2522,"title":"A generic R: RangeBounds<T> has no start_bound or end_bound, and std::ops::Bound is not represented","state":"open"},
+            {"number":2523,"title":"A consuming iterator method doesn't move a non-range iterator local","state":"open"}
           ]
         },
         {
@@ -9082,7 +9102,8 @@
             {"number":2511,"title":"A macro fragment that starts but doesn't parse reports no-rules, not rustc's parser error","state":"open"},
             {"number":2515,"title":"An unmarked module file doesn't see the macro_rules! its parent defines before `mod`","state":"open"},
             {"number":2516,"title":"A crate derive's helper attributes are not checked against what it declares","state":"open"},
-            {"number":2517,"title":"An edition 2021 crate's tail temporaries drop as edition 2024's do","state":"open"}
+            {"number":2517,"title":"An edition 2021 crate's tail temporaries drop as edition 2024's do","state":"open"},
+            {"number":2520,"title":"A program macro called inside a std macro's arguments no longer makes `rawr run` rebuild…","state":"closed"}
           ]
         },
         {
@@ -9125,7 +9146,8 @@
             {"number":2486,"title":"A function body that breaks its own signature's lifetimes is reported with rustc's labels: where…","state":"closed"},
             {"number":2487,"title":"Report every region error rustc reports for one returned value","state":"open"},
             {"number":2488,"title":"Mark the branch a returned if or match takes its borrow from","state":"open"},
-            {"number":2489,"title":"Suggest a named lifetime for two elided ones, as rustc does","state":"open"}
+            {"number":2489,"title":"Suggest a named lifetime for two elided ones, as rustc does","state":"open"},
+            {"number":2524,"title":"Diagnostics name std's range types without their path","state":"open"}
           ]
         }
       ]
