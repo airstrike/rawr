@@ -472,6 +472,7 @@ impl<'a> Parser<'a> {
             declared: self.models.name_declared_here(model),
             required_by: None,
             formatted: None,
+            chain: Box::default(),
         })
     }
 }

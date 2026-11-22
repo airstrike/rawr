@@ -19,12 +19,13 @@ pub enum Level {
 
 /// A note or help and the places it marks: one primary, `^` under it, and
 /// any related ones, `-` under them, each with its own label or none; and
-/// the notes without places rustc writes after them.
+/// the helps and notes without places rustc writes after them.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Section {
     level: Level,
     message: ImmutableString,
     labels: Vec<Label>,
+    helps: Vec<ImmutableString>,
     notes: Vec<ImmutableString>,
 }
 
@@ -48,8 +49,17 @@ impl Section {
             level,
             message,
             labels: Vec::new(),
+            helps: Vec::new(),
             notes: Vec::new(),
         }
+    }
+
+    /// The section with the `= help:` `message` after its places, before
+    /// its notes.
+    #[must_use]
+    pub fn helped(mut self, message: impl Into<ImmutableString>) -> Self {
+        self.helps.push(message.into());
+        self
     }
 
     /// The section with the `= note:` `message` after its places.
@@ -112,7 +122,13 @@ impl Section {
         &self.labels
     }
 
-    /// Return the notes after its places, in the order they were given.
+    /// Return the helps after its places, in the order they were given.
+    #[must_use]
+    pub fn helps(&self) -> &[ImmutableString] {
+        &self.helps
+    }
+
+    /// Return the notes after its helps, in the order they were given.
     #[must_use]
     pub fn notes(&self) -> &[ImmutableString] {
         &self.notes
@@ -130,6 +146,7 @@ impl Section {
         placed: impl FnMut(Label) -> Result<Label, super::Error>,
     ) -> Result<Self, super::Error> {
         self.message = written(self.message);
+        self.helps = self.helps.into_iter().map(&written).collect();
         self.notes = self.notes.into_iter().map(&written).collect();
         self.labels = self
             .labels

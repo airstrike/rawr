@@ -170,6 +170,7 @@ impl<'a> Parser<'a> {
                                     crate::host::path::public(&item.path()).as_ref(),
                                 )),
                                 formatted: None,
+                                chain: Box::default(),
                             });
                         }
                     }
@@ -651,6 +652,10 @@ impl<'a> Parser<'a> {
                     .all(|argument| self.type_provides(argument, capability))
             }
             Ty::Host { proof, .. } => proof.definition.capabilities().contains(capability),
+            // A hand-written impl holds where its own bounds do.
+            Ty::Script(id, arguments) if self.implemented_by_hand(capability.name(), id) => {
+                self.impl_holds(capability.name(), id, &arguments)
+            }
             // A derive on a generic type holds when its arguments provide
             // the capability too, as derive's bounds require.
             Ty::Script(id, arguments) => {

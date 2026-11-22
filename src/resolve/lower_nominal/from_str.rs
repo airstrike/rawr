@@ -147,6 +147,7 @@ impl<'a> Parser<'a> {
                 declared: None,
                 required_by: None,
                 formatted: None,
+                chain: Box::default(),
             }),
         }
     }

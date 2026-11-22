@@ -160,6 +160,7 @@ impl<'a> Parser<'a> {
                     declared: None,
                     required_by: None,
                     formatted: None,
+                    chain: Box::default(),
                 });
             }
             Ty::Array { .. } | Ty::Keyed(..) | Ty::Reference { .. } => into_iter,

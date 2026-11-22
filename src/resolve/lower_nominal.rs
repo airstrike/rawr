@@ -62,6 +62,7 @@ mod moves;
 mod mutability;
 mod names;
 mod naming;
+mod obligation;
 mod op;
 #[cfg(feature = "rust-import")]
 mod opaque_bound;
@@ -248,6 +249,7 @@ use naming::{
     PRIVATE_PREFIX, SENTINEL,
 };
 pub(crate) use naming::{function_display_name, private_function_name, PRIVATE_METHOD};
+use obligation::Obligation;
 #[cfg(test)]
 use op::builtin_type_key;
 use op::invariant;
@@ -708,6 +710,9 @@ struct Parser<'a> {
     /// (`Vec<T>` of `where Vec<T>: Debug`), with the parameter among
     /// `generics` it lifts, whose bounds the type has here.
     assumed: Box<[(Ty, ImmutableString)]>,
+    /// The impl bounds being proved, each a type and its trait: one the
+    /// proof meets again holds, as a cycle of impls proves it.
+    proving: std::cell::RefCell<Vec<(Ty, ImmutableString)>>,
     /// The const parameters among `generics`, with their value types: `N`
     /// of `const N: usize` reads as its witness, the value the item's use
     /// gives it.
@@ -1109,6 +1114,7 @@ impl<'a> Parser<'a> {
             some_payloads: BTreeMap::new(),
             generics: BTreeMap::new(),
             assumed: Box::default(),
+            proving: std::cell::RefCell::default(),
             constants: BTreeMap::new(),
             opaque: BTreeMap::new(),
             pending_turbofish: None,

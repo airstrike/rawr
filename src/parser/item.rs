@@ -2404,11 +2404,19 @@ fn parse_struct(
     expect(input, Token::Struct, "to start a struct")?;
     let name = parse_name(input, "after 'struct'")?;
     let (mut generics, mut lifetimes) = parse_generics(input)?;
-    parse_where_with(input, &mut generics, None, &mut lifetimes, None)?;
+    let mut others = Vec::new();
+    parse_where_with(
+        input,
+        &mut generics,
+        None,
+        &mut lifetimes,
+        Some(&mut others),
+    )?;
 
     if matches!(input.peek(), Some((Token::SemiColon, _))) {
         let semicolon = expect(input, Token::SemiColon, "to terminate a unit struct")?;
         let end = after(semicolon, 1);
+        let where_bounds = split_where_bounds(&mut generics, &mut lifetimes, others)?;
         return Ok(crate::item::Struct {
             header: crate::item::Header {
                 attributes,
@@ -2418,6 +2426,7 @@ fn parse_struct(
             },
             name,
             generics: generics.into_boxed_slice(),
+            where_bounds,
             lifetimes: lifetimes.clone(),
             fields: Box::default(),
             form: crate::item::StructForm::Unit,
@@ -2455,9 +2464,16 @@ fn parse_struct(
             }
             expect(input, Token::RightParen, "to close a tuple struct")?;
         }
-        parse_where_with(input, &mut generics, None, &mut lifetimes, None)?;
+        parse_where_with(
+            input,
+            &mut generics,
+            None,
+            &mut lifetimes,
+            Some(&mut others),
+        )?;
         let semicolon = expect(input, Token::SemiColon, "to terminate a tuple struct")?;
         let end = after(semicolon, 1);
+        let where_bounds = split_where_bounds(&mut generics, &mut lifetimes, others)?;
         return Ok(crate::item::Struct {
             header: crate::item::Header {
                 attributes,
@@ -2467,6 +2483,7 @@ fn parse_struct(
             },
             name,
             generics: generics.into_boxed_slice(),
+            where_bounds,
             lifetimes: lifetimes.clone(),
             fields: fields.into_boxed_slice(),
             form: crate::item::StructForm::Tuple,
@@ -2500,6 +2517,7 @@ fn parse_struct(
 
     let close = expect(input, Token::RightBrace, "to close a struct")?;
     let end = after(close, 1);
+    let where_bounds = split_where_bounds(&mut generics, &mut lifetimes, others)?;
 
     Ok(crate::item::Struct {
         header: crate::item::Header {
@@ -2510,6 +2528,7 @@ fn parse_struct(
         },
         name,
         generics: generics.into_boxed_slice(),
+        where_bounds,
         lifetimes: lifetimes.clone(),
         fields: fields.into_boxed_slice(),
         form: crate::item::StructForm::Named,
@@ -2555,7 +2574,15 @@ fn parse_enum(
     expect(input, Token::Enum, "to start an enum")?;
     let name = parse_name(input, "after 'enum'")?;
     let (mut generics, mut lifetimes) = parse_generics(input)?;
-    parse_where_with(input, &mut generics, None, &mut lifetimes, None)?;
+    let mut others = Vec::new();
+    parse_where_with(
+        input,
+        &mut generics,
+        None,
+        &mut lifetimes,
+        Some(&mut others),
+    )?;
+    let where_bounds = split_where_bounds(&mut generics, &mut lifetimes, others)?;
     let open = expect(input, Token::LeftBrace, "after an enum name")?;
     let header_end = after(open, 1);
     let mut variants = Vec::new();
@@ -2667,6 +2694,7 @@ fn parse_enum(
         },
         name,
         generics: generics.into_boxed_slice(),
+        where_bounds,
         lifetimes,
         variants: variants.into_boxed_slice(),
         span: Span::new(start, end),
@@ -2708,7 +2736,17 @@ fn parse_impl(
     } else {
         (None, first)
     };
-    parse_where_with(input, &mut generics, None, &mut lifetimes, None)?;
+    // `impl<T> S<T> where Vec<T>: Debug`: each method takes the impl's
+    // parameters, so each takes the lifted one too.
+    let mut others = Vec::new();
+    parse_where_with(
+        input,
+        &mut generics,
+        None,
+        &mut lifetimes,
+        Some(&mut others),
+    )?;
+    lift_where_bounds(&mut generics, &mut lifetimes, others)?;
     let open = expect(input, Token::LeftBrace, "after an impl owner")?;
     let header_end = after(open, 1);
     let mut functions = Vec::new();
@@ -2945,7 +2983,16 @@ fn parse_trait(
     // `where Self: Shape` is a supertrait; `where T: Clone` bounds `T`.
     let mut supertraits = supertraits;
     let mut generics = generics;
-    parse_where_clause(input, &mut generics, Some(&mut supertraits))?;
+    // `where Vec<T>: Debug` bounds the types each impl gives the trait:
+    // each impl's copy of the provided bodies is read at its own types.
+    let mut others = Vec::new();
+    parse_where_with(
+        input,
+        &mut generics,
+        Some(&mut supertraits),
+        &mut crate::item::Lifetimes::default(),
+        Some(&mut others),
+    )?;
     let open = expect(input, Token::LeftBrace, "after a trait name")?;
     let header_end = after(open, 1);
     let mut functions = Vec::new();
@@ -3931,6 +3978,20 @@ fn lift_where_bounds(
     }
     lifetimes.bounds = outlives.into_boxed_slice();
     Ok(())
+}
+
+/// A type's `where` bounds on types other than its parameters (`struct
+/// S<T>(T) where Vec<T>: Debug;`), each lifted as a function's is but kept
+/// apart from `generics`, which a use of the type writes arguments for:
+/// building a value checks them.
+fn split_where_bounds(
+    generics: &mut Vec<crate::item::GenericParam>,
+    lifetimes: &mut crate::item::Lifetimes,
+    bounded: Vec<WhereBound>,
+) -> ParseResult<Box<[crate::item::GenericParam]>> {
+    let declared = generics.len();
+    lift_where_bounds(generics, lifetimes, bounded)?;
+    Ok(generics.split_off(declared).into_boxed_slice())
 }
 
 /// The index in `generics` of the parameter that stands for the associated

@@ -1334,6 +1334,7 @@ impl<'a> Parser<'a> {
                 declared: self.declared_name(&owner_ty),
                 required_by: None,
                 formatted: None,
+                chain: Box::default(),
             });
         };
         let substitution = self.method_substitution(&definition, Some(&owner_ty), expression)?;

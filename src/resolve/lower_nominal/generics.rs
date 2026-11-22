@@ -12,7 +12,14 @@ impl<'a> Parser<'a> {
         span: Span,
     ) -> (Ty, BTreeMap<ImmutableString, Ty>) {
         let generics = model.generics().to_vec();
-        let substitution = self.fresh_generics(&generics, span);
+        // `struct S<T>(T) where Vec<T>: Debug;`: the value checks the
+        // clause as its parameters' bounds.
+        let bounded = generics
+            .iter()
+            .chain(model.where_bounds())
+            .cloned()
+            .collect::<Vec<_>>();
+        let substitution = self.fresh_generics(&bounded, span);
         let arguments = generics
             .iter()
             .map(|generic| substitution[&generic.name.text].clone())
@@ -415,15 +422,7 @@ impl<'a> Parser<'a> {
                 _ => self.type_provides(&ty, kind),
             };
             if !provided {
-                return Err(Error::MissingCapability {
-                    owner: ty.name(&self.models),
-                    capability: kind.name().into(),
-                    operation: span,
-                    derive: matches!(ty, Ty::Script(..)),
-                    declared: self.declared_name(&ty),
-                    required_by: site,
-                    formatted: None,
-                });
+                return Err(self.unmet_bound(&ty, Obligation::Capability(kind), span, site));
             }
         }
         for (ty, trait_name, arguments, span, site) in std::mem::take(&mut self.pending_traits) {
@@ -461,7 +460,16 @@ impl<'a> Parser<'a> {
                         declared: None,
                         required_by: None,
                         formatted: None,
+                        chain: Box::default(),
                     });
+                }
+                // The innermost obligation the program's impls needed:
+                // `Opaque: Debug` of `Wrapper<Opaque>: Summary`.
+                if arguments.is_empty()
+                    && let Ty::Script(id, _) = &ty
+                    && self.models.implements(&trait_name, *id)
+                {
+                    return Err(self.unmet_bound(&ty, Obligation::Trait(trait_name), span, site));
                 }
                 // rustc names the innermost type std's impls needed it
                 // of: `Vec<i32>` of `Rc<Vec<i32>>: Display`.
@@ -507,6 +515,7 @@ impl<'a> Parser<'a> {
                     declared: self.declared_name(&ty),
                     required_by: site,
                     formatted: None,
+                    chain: Box::default(),
                 });
             }
         }
@@ -762,6 +771,7 @@ impl<'a> Parser<'a> {
                             declared: None,
                             required_by: None,
                             formatted: None,
+                            chain: Box::default(),
                         });
                     }
                     format!("{DEFAULT_DISPATCHER}({})", witness_variable(name))

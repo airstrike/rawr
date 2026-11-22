@@ -32,6 +32,7 @@ pub struct SectionView<'a> {
     level: Level,
     message: &'a str,
     labels: Vec<LabelView<'a>>,
+    helps: Vec<&'a str>,
     notes: Vec<&'a str>,
 }
 
@@ -133,6 +134,11 @@ impl Section {
             level: self.level(),
             message: self.message(),
             labels: self.labels().iter().map(Label::view).collect(),
+            helps: self
+                .helps()
+                .iter()
+                .map(crate::ImmutableString::as_str)
+                .collect(),
             notes: self
                 .notes()
                 .iter()

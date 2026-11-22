@@ -1033,6 +1033,7 @@ impl<'a> Parser<'a> {
                         declared: None,
                         required_by: None,
                         formatted: None,
+                        chain: Box::default(),
                     });
                 }
                 // A hand-written `Clone` runs for the value's type.
@@ -2577,6 +2578,7 @@ impl<'a> Parser<'a> {
                     declared: None,
                     required_by: None,
                     formatted: None,
+                    chain: Box::default(),
                 })
             }
             Ty::Array { element, .. } => Ty::Array {
@@ -3553,6 +3555,7 @@ impl<'a> Parser<'a> {
             declared: this.declared_name(ty),
             required_by: None,
             formatted: None,
+            chain: Box::default(),
         };
         let (a, b) = (self.temporary("left"), self.temporary("right"));
         let pair = (
@@ -3762,6 +3765,7 @@ impl<'a> Parser<'a> {
                 declared: this.declared_name(key),
                 required_by: None,
                 formatted: None,
+                chain: Box::default(),
             })
         };
         let (half, mid) = (self.temporary("half"), self.temporary("mid"));
@@ -3861,6 +3865,7 @@ impl<'a> Parser<'a> {
                     declared: self.declared_name(&output),
                     required_by: None,
                     formatted: None,
+                    chain: Box::default(),
                 })?
             } else {
                 origin::Fragment::plain(format!("{function}.__rawr_call({best}, {current})"))
@@ -3879,6 +3884,7 @@ impl<'a> Parser<'a> {
                 declared: self.declared_name(element),
                 required_by: None,
                 formatted: None,
+                chain: Box::default(),
             })?
         };
         let key_value = if keyed {
@@ -3996,6 +4002,7 @@ impl<'a> Parser<'a> {
                     declared: self.declared_name(error.as_ref()),
                     required_by: None,
                     formatted: None,
+                    chain: Box::default(),
                 });
             };
             let returned = self.prelude_op(PreludeOp::Err, [converted]);

@@ -252,6 +252,7 @@ impl<'a> Parser<'a> {
             declared: None,
             required_by: None,
             formatted: None,
+            chain: Box::default(),
         })
     }
 
@@ -1451,6 +1452,7 @@ impl<'a> Parser<'a> {
                     declared: self.declared_name(&target),
                     required_by: None,
                     formatted: None,
+                    chain: Box::default(),
                 });
             };
             let helper = if helper.ends_with(", ") {

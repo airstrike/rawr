@@ -1027,6 +1027,9 @@ pub struct Struct {
     pub name: Name,
     /// Generic type parameters.
     pub generics: Box<[GenericParam]>,
+    /// The parameters lifted for its `where` bounds on other types
+    /// (`Vec<T>: Debug`), which building a value checks.
+    pub where_bounds: Box<[GenericParam]>,
     /// Lifetime parameters.
     pub lifetimes: Lifetimes,
     /// Named fields in declaration order; a tuple struct's are named
@@ -1075,6 +1078,9 @@ pub struct Enum {
     pub name: Name,
     /// Generic type parameters.
     pub generics: Box<[GenericParam]>,
+    /// The parameters lifted for its `where` bounds on other types
+    /// (`Vec<T>: Debug`), which building a value checks.
+    pub where_bounds: Box<[GenericParam]>,
     /// Lifetime parameters.
     pub lifetimes: Lifetimes,
     /// Variants in declaration order.

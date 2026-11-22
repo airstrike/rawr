@@ -996,6 +996,7 @@ impl<'a> Parser<'a> {
             declared: this.declared_name(ty),
             required_by: None,
             formatted: None,
+            chain: Box::default(),
         };
         let generic_trait = self
             .models
