@@ -1509,13 +1509,25 @@ impl<'a> Parser<'a> {
                     )
                 })
                 .collect::<Vec<_>>();
+            let variant_name = declaration.name.text.clone();
             let helper = self.push_op(Op::Enum {
                 definition: definition.clone(),
                 item: Box::new(item),
                 variant,
             });
-            let (source, end) = self.parse_named_values(&definition, &fields, &helper)?;
-            return Ok(self.operator_expr(source, enum_ty, span(owner_span.start(), end)));
+            let (written, end) = self.parse_named_values(&definition, &fields)?;
+            let whole = span(owner_span.start(), end);
+            let parts: Vec<_> = written
+                .iter()
+                .map(|(slot, value)| {
+                    let field =
+                        borrows::Slot::Field(definition.id(), Some(variant_name.as_str()), *slot);
+                    (value, field)
+                })
+                .collect();
+            self.compose(whole, &enum_ty, &parts);
+            let source = self.named_values_source(&written, &helper);
+            return Ok(self.operator_expr(source, enum_ty, whole));
         }
         if !matches!(self.peek(), Token::LeftParen | Token::Unit)
             && !declaration.payload.is_empty()

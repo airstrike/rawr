@@ -5015,3 +5015,376 @@ main();
         );
     }
 }
+
+/// Asserts that rawr refuses each program with the first line rustc gives.
+fn refused_as(cases: &[(&str, &str)]) {
+    for (program, expected) in cases {
+        let report = refused(&format!("{program}\nmain();\n"));
+        assert!(
+            report.starts_with(expected),
+            "{program}\nexpected: {expected}\n{report}"
+        );
+    }
+}
+
+#[test]
+fn a_struct_variant_holds_its_fields_borrows() {
+    // `E::V { r: &a }` keeps `a` borrowed while the value lives, as a
+    // struct literal and a tuple variant do (#133).
+    let assigned = "error[E0506]: cannot assign to `a` because it is borrowed";
+    refused_as(&[
+        (
+            "#[derive(Debug)] enum E<'a> { V { r: &'a i32 } }
+fn main() { let mut a = 1; let e = E::V { r: &a }; a = 2; println!(\"{:?} {}\", e, a); }",
+            assigned,
+        ),
+        (
+            "#[derive(Debug)] enum E<'a> { V { n: i32, r: &'a i32 } }
+use E::V;
+fn main() { let mut a = 1; let e = V { r: &a, n: 1 }; a = 2; println!(\"{:?} {}\", e, a); }",
+            assigned,
+        ),
+    ]);
+    let output = printed(
+        r#"
+#[derive(Debug)]
+enum E<'a> { V { n: i32, r: &'a i32 }, W }
+impl<'a> E<'a> {
+    fn make(r: &'a i32) -> Self { Self::V { r, n: 0 } }
+}
+fn main() {
+    let a = 1;
+    let mut b = 5;
+    let e = E::V { r: &a, n: b };
+    b = 2;
+    if let E::V { r, n } = e {
+        println!("{} {} {} {:?} {:?}", r, n, b, E::make(&a), E::W);
+    }
+}
+main();
+"#,
+    );
+    assert_eq!(output, "1 5 2 V { n: 0, r: 1 } W\n");
+}
+
+#[test]
+fn a_closure_parameter_shadowing_a_borrowed_local_runs() {
+    // `|b: i32|` shadows `b` only in the closure, where the `&mut b` held
+    // in `r` is still `b` (#139).
+    let output = printed(
+        r#"
+fn main() {
+    let mut b = 10;
+    let r = &mut b;
+    let mut f = |b: i32| { *r += b; };
+    f(3);
+    println!("{}", b);
+    let mut c = 10;
+    let s = &mut c;
+    let add = |(a, c): (i32, i32)| a + c;
+    *s += add((1, 2));
+    let mut g = move |x: i32, c| { *s += x * c; };
+    g(2, 5);
+    println!("{}", c);
+    let mut d = 1;
+    let t = &mut d;
+    let h = |d: i32| d | 4;
+    *t += h(1);
+    println!("{}", d);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "13\n23\n6\n");
+}
+
+#[test]
+fn into_owned_through_a_reference_is_e0507() {
+    // `Cow::into_owned` takes the `Cow`, which a reference can't give up
+    // (#819).
+    let program = |body: &str| {
+        format!(
+            "use std::borrow::Cow;
+struct H<'a> {{ r: &'a Cow<'a, str> }}
+fn get<'a>(c: &'a Cow<'a, str>) -> &'a Cow<'a, str> {{ c }}
+fn main() {{
+    let mut c: Cow<str> = Cow::Borrowed(\"hi\");
+    {body}
+}}"
+        )
+    };
+    let cases = [
+        (
+            "let r = &c; let s: String = r.into_owned(); println!(\"{s}\");",
+            "error[E0507]: cannot move out of `*r` which is behind a shared reference",
+        ),
+        (
+            "let rr = &&c; let s = rr.into_owned(); println!(\"{s}\");",
+            "error[E0507]: cannot move out of `**rr` which is behind a shared reference",
+        ),
+        (
+            "let h = H { r: &c }; let s = h.r.into_owned(); println!(\"{s}\");",
+            "error[E0507]: cannot move out of `*h.r` which is behind a shared reference",
+        ),
+        (
+            "let s = get(&c).into_owned(); println!(\"{s}\");",
+            "error[E0507]: cannot move out of a shared reference",
+        ),
+        (
+            "let m = &mut c; let s = m.into_owned(); println!(\"{s}\");",
+            "error[E0507]: cannot move out of `*m` which is behind a mutable reference",
+        ),
+    ];
+    for (body, expected) in cases {
+        let report = refused(&format!("{}\nmain();\n", program(body)));
+        assert!(report.starts_with(expected), "{body}\n{report}");
+    }
+    let output = printed(
+        r#"
+use std::borrow::Cow;
+fn main() {
+    let c: Cow<str> = Cow::Borrowed("ok");
+    let r = &c;
+    let t = r.clone().into_owned();
+    println!("{} {}", t, c.into_owned());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "ok ok\n");
+}
+
+#[test]
+fn a_binding_arm_through_a_reference_keeps_its_loans() {
+    // `match r { n => .. }` on a `&String` or a `&i32` binds the
+    // reference, which keeps what it borrows (#118).
+    refused_as(&[
+        (
+            "fn main() { let mut s = String::from(\"a\"); let r = &s; \
+             let n = match r { n => n }; s.push('b'); println!(\"{} {}\", n, s); }",
+            "error[E0502]: cannot borrow `s` as mutable because it is also borrowed as immutable",
+        ),
+        (
+            "fn main() { let mut x = 1; let r = &x; let n = match r { n => n }; x = 2; \
+             println!(\"{} {}\", n, x); }",
+            "error[E0506]: cannot assign to `x` because it is borrowed",
+        ),
+    ]);
+    let output = printed(
+        r#"
+fn main() {
+    let mut x = 5;
+    let r = &x;
+    let m = match r { n => *n + 1 };
+    let k = match r { 0 => 0, n if *n > 3 => n + 10, n => n * 2 };
+    x = 1;
+    let mut s = String::from("ab");
+    let t = &s;
+    let u = match t { n if n.len() > 5 => n.clone(), n => format!("{}!", n) };
+    let l = match t { n => n.len() };
+    s.push('c');
+    let w: &str = "hi";
+    let z = match &w { &"x" => 0, n => n.len() };
+    println!("{} {} {} {} {} {} {} {}", m, k, x, u, l, s, z, match &s { n => n.len() });
+}
+main();
+"#,
+    );
+    assert_eq!(output, "6 15 1 ab! 2 abc 2 3\n");
+}
+
+#[test]
+fn returning_a_borrow_of_a_reference_local_is_e0515() {
+    // `&r` returned as a `&&T` borrows the local `r` (#157). Returned
+    // where a `&T` is, a deref coercion reborrows what `r` refers to.
+    let local = "error[E0515]: cannot return reference to local variable `r`";
+    refused_as(&[
+        (
+            "fn bad<'a>(v: &'a Vec<i32>) -> &'a &'a Vec<i32> { let r = v; &r }
+fn main() { let v = vec![1]; println!(\"{:?}\", bad(&v)); }",
+            local,
+        ),
+        (
+            "fn bad<'a>(v: &'a str) -> &'a &'a str { let r = v; return &r; }
+fn main() { println!(\"{:?}\", bad(\"a\")); }",
+            local,
+        ),
+    ]);
+    let output = printed(
+        r#"
+fn good<'a>(v: &'a Vec<i32>) -> &'a Vec<i32> { let r = v; &r }
+fn text<'a>(v: &'a String) -> &'a str { let r = v; &r }
+fn main() {
+    let v = vec![1];
+    let s = String::from("x");
+    println!("{:?} {}", good(&v), text(&s));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "[1] x\n");
+}
+
+#[test]
+fn a_local_stored_through_a_parameter_does_not_live_long_enough() {
+    // What a body stores through a parameter, `self` among them, outlives
+    // the body (#171).
+    let short = "error[E0597]: `x` does not live long enough";
+    refused_as(&[
+        (
+            "struct Holder<'a> { r: &'a i32 }
+impl<'a> Holder<'a> { fn local(&mut self) { let x = 5; self.r = &x; } }
+fn main() { let a = 1; let mut h = Holder { r: &a }; h.local(); println!(\"{}\", h.r); }",
+            short,
+        ),
+        (
+            "struct Holder<'a> { r: &'a i32 }
+fn local<'a>(h: &mut Holder<'a>) { let x = 5; h.r = &x; }
+fn main() { let a = 1; let mut h = Holder { r: &a }; local(&mut h); println!(\"{}\", h.r); }",
+            short,
+        ),
+        (
+            "fn local<'a>(v: &mut Vec<&'a i32>) { let x = 5; v.push(&x); }
+fn main() { let a = 1; let mut v = vec![&a]; local(&mut v); println!(\"{:?}\", v); }",
+            short,
+        ),
+        (
+            "fn push<'a>(v: &mut Vec<&'a String>) { v.push(&String::from(\"t\")); }
+fn main() { let a = String::new(); let mut v = vec![&a]; push(&mut v); println!(\"{:?}\", v); }",
+            "error[E0716]: temporary value dropped while borrowed",
+        ),
+        (
+            "struct Holder<'a> { r: &'a i32 }
+impl<'a> Holder<'a> { fn store(&mut self, y: &i32) { self.r = y; } }
+fn main() { let a = 1; let mut h = Holder { r: &a }; h.store(&a); println!(\"{}\", h.r); }",
+            "error[E0621]: explicit lifetime required in the type of `y`",
+        ),
+    ]);
+    let output = printed(
+        r#"
+struct Holder<'a> { r: &'a i32 }
+impl<'a> Holder<'a> {
+    fn five(&mut self) { self.r = &5; }
+    fn through(&mut self, y: &'a i32) { self.r = &*y; }
+}
+fn push<'a>(v: &mut Vec<&'a i32>, y: &'a i32) { v.push(&7); v.push(y); v.push(&*y); }
+fn main() {
+    let a = 1;
+    let b = 2;
+    let mut h = Holder { r: &a };
+    h.five();
+    print!("{} ", h.r);
+    h.through(&b);
+    let mut v = vec![&a];
+    push(&mut v, &b);
+    println!("{} {:?}", h.r, v);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "5 2 [1, 7, 2, 2]\n");
+}
+
+#[test]
+fn a_structs_declared_lifetime_bounds_place_its_fields() {
+    // `'b: 'a` puts what is in `'b` in `'a` too, and `T: 'a` what is in
+    // `T`, while a field read in `'b` holds only its own borrows (#172).
+    let output = printed(
+        r#"
+struct P<'a, 'b: 'a> { x: &'a i32, y: &'b i32 }
+struct W<'a, T: 'a> { x: &'a i32, t: T }
+fn shorter<'a, 'b>(p: &P<'a, 'b>) -> &'a i32 { p.y }
+fn main() {
+    let mut a = 1;
+    let b = 2;
+    let c = 3;
+    let mut p = P { x: &a, y: &b };
+    println!("{} {}", p.x, shorter(&p));
+    p.y = &c;
+    let r = p.y;
+    a += 1;
+    let w = W { x: &b, t: &c };
+    println!("{} {} {} {}", r, a, w.x, w.t);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "1 2\n3 2 2 3\n");
+    let assigned =
+        |name: &str| format!("error[E0506]: cannot assign to `{name}` because it is borrowed");
+    let (b, c) = (assigned("b"), assigned("c"));
+    refused_as(&[
+        (
+            "struct P<'a, 'b: 'a> { x: &'a i32, y: &'b i32 }
+fn main() { let a = 1; let mut b = 2; let p = P { x: &a, y: &b }; let r = p.x; b += 1; \
+             println!(\"{} {}\", r, b); }",
+            &b,
+        ),
+        (
+            "struct Q<'a, 'b, 'c> where 'c: 'b, 'b: 'a { x: &'a i32, y: &'b i32, z: &'c i32 }
+fn main() { let a = 1; let b = 2; let mut c = 3; let q = Q { x: &a, y: &b, z: &c }; \
+             let r = q.x; c += 1; println!(\"{} {}\", r, c); }",
+            &c,
+        ),
+        (
+            "struct W<'a, T: 'a> { x: &'a i32, t: T }
+fn main() { let a = 1; let mut b = 2; let w = W { x: &a, t: &b }; let r = w.x; b += 1; \
+             println!(\"{} {}\", r, b); }",
+            &b,
+        ),
+        (
+            "struct P<'a, 'b: 'a> { x: &'a i32, y: &'b i32 }
+fn longer<'a, 'b>(p: &P<'a, 'b>) -> &'b i32 { p.x }
+fn main() { let a = 1; let p = P { x: &a, y: &a }; println!(\"{}\", longer(&p)); }",
+            "error: lifetime may not live long enough",
+        ),
+    ]);
+}
+
+#[test]
+fn a_slice_patterns_rest_binding_holds_its_borrow() {
+    // `rest @ ..` borrows the subslice it binds, apart from the elements
+    // the pattern names on either side (#116).
+    let pushed =
+        "error[E0502]: cannot borrow `v` as mutable because it is also borrowed as immutable";
+    refused_as(&[
+        (
+            "fn main() { let mut v = vec![1, 2, 3]; let s = v.as_slice(); \
+             if let [_, rest @ ..] = s { v.push(4); println!(\"{:?}\", rest); } }",
+            pushed,
+        ),
+        (
+            "fn main() { let mut v = vec![1, 2, 3]; \
+             match v.as_slice() { [first, rest @ ..] => { v.clear(); println!(\"{} {:?}\", first, rest); } _ => {} } }",
+            pushed,
+        ),
+    ]);
+    let output = printed(
+        r#"
+fn main() {
+    let mut v = vec![1, 2, 3];
+    if let [first, rest @ ..] = v.as_slice() {
+        println!("{} {:?}", first, rest);
+    }
+    v.push(4);
+    let names = [String::from("a"), String::from("b"), String::from("c")];
+    let [head, tail @ ..] = names;
+    println!("{} {:?}", head, tail);
+    let mut a = [1, 2, 3, 4];
+    let [p, mid @ .., q] = &a;
+    println!("{} {:?} {}", p, mid, q);
+    a[0] = 5;
+    match &v[..] {
+        [] => println!("empty"),
+        [only] => println!("{}", only),
+        [.., last] => println!("{} {:?}", last, a),
+    }
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "1 [2, 3]\na [\"b\", \"c\"]\n1 [2, 3] 4\n4 [5, 2, 3, 4]\n"
+    );
+}

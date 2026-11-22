@@ -410,6 +410,11 @@ impl Parser<'_> {
                         expression,
                     )));
                 }
+                // `into_owned` takes the `Cow` itself, which a reference
+                // can't give up (rustc's E0507).
+                if let Some(error) = self.move_out_of_reference(value, member_span) {
+                    return Err(error);
+                }
                 let owned = self.owned_of(&borrowed).unwrap_or(Ty::Unknown);
                 self.move_local(value)?;
                 let source = self.prelude_op(PreludeOp::CowValue, [value.rendered_source()]);

@@ -428,6 +428,46 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// rustc's E0507 for a method that takes its receiver by value, called
+    /// on `value` through references (`r.into_owned()` of a `&Cow`), whose
+    /// name is at `member`: it names the place below them, `*r` or `**rr`,
+    /// as rustc does. `None` when `value` is no reference.
+    pub(super) fn move_out_of_reference(&self, value: &ParsedExpr, member: Span) -> Option<Error> {
+        let mut ty = self.inference.resolve(&value.ty);
+        let mut derefs = 0;
+        let mut shared = false;
+        while let Ty::Reference { mutable, target } = ty {
+            derefs += 1;
+            shared |= !mutable;
+            ty = self.inference.resolve(&target);
+        }
+        if derefs == 0 {
+            return None;
+        }
+        let kind = if shared { "shared" } else { "mutable" };
+        // The receiver as written, before the `.` of the call.
+        let written = self
+            .written(Span::new(value.span.start(), member.start()))
+            .map(|text| text.trim_end().trim_end_matches('.').trim_end().to_owned());
+        let receiver = written.as_ref().map_or(value.span, |text| {
+            Span::new(value.span.start(), text_end(value.span.start(), text))
+        });
+        let message = match written.filter(|_| value.lvalue.is_some()) {
+            Some(place) => format!(
+                "cannot move out of `{}{}` which is behind a {kind} reference",
+                "*".repeat(derefs),
+                lvalue::described_place(&place)
+            ),
+            None => format!("cannot move out of a {kind} reference"),
+        };
+        Some(Error::BorrowConflict {
+            code: "E0507",
+            message: message.into(),
+            access: receiver,
+            borrow: receiver,
+        })
+    }
+
     /// `local.field` by value, where the field's type is not `Copy`: the
     /// local is partially moved. A later use of the field, or of the
     /// whole local, is rustc's E0382. The other fields stay usable, and

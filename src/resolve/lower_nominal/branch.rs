@@ -898,6 +898,13 @@ impl<'a> Parser<'a> {
         match_span: Span,
     ) -> Result<ParsedExpr, Error> {
         let written = self.inference.resolve(&subject.ty);
+        // A binding arm binds the subject as written, `&T` included, as
+        // Rust does. Below a `&mut` it is the value referred to.
+        let binding_ty = if self.shared_references(&written) {
+            written.clone()
+        } else {
+            subject_ty.clone()
+        };
         let temporary = self.temporary("match");
         self.expect(Token::LeftBrace, "'{' to start a match")?;
         // Each arm's tests follow the tests of the arms before it.
@@ -949,7 +956,7 @@ impl<'a> Parser<'a> {
                 self.bindings.insert(
                     name.clone(),
                     Binding {
-                        ty: subject_ty.clone(),
+                        ty: binding_ty.clone(),
                         mutable: *mutable,
                         available: true,
                         declaration: *declaration,

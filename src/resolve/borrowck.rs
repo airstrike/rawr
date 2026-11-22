@@ -68,6 +68,9 @@ pub(crate) enum Projection {
         min_length: u32,
         from_end: bool,
     },
+    /// The elements a slice pattern's `rest @ ..` binds: from `from` up to
+    /// `to`, or up to `to` from the end when `from_end`, as rustc has it.
+    Subslice { from: u32, to: u32, from_end: bool },
     /// The payload of an enum's variant, by its name: a pattern's parts
     /// below it. Different variants' payloads are apart.
     Downcast(ImmutableString),
@@ -425,6 +428,9 @@ pub(crate) fn check(body: &Body, rule: &impl Rule) -> Option<Conflict> {
     }
     let forever = region::reaches_any(&reach, &body.everywhere);
     let returned = region::reaches_any(&reach, &body.returned);
+    // What the body stores through a parameter outlives the body, as a
+    // lifetime of its signature does.
+    let stored = region::reaches_any(&reach, &stored_through_parameters(body));
     for point in body.points() {
         let Some(Fact::Access {
             place,
@@ -436,11 +442,12 @@ pub(crate) fn check(body: &Body, rule: &impl Rule) -> Option<Conflict> {
             continue;
         };
         // A local borrowed for `'static` never lives long enough: it ends
-        // with the body, or when it unwinds. Nor does one a returned
-        // closure captures. Another borrow of a local the body returns is
-        // E0515 (`returned_local`).
+        // with the body, or when it unwinds. Nor does one stored through a
+        // parameter, or one a returned closure captures. Another borrow of
+        // a local the body returns is E0515 (`returned_local`).
         if let Some(loan) = loan
             && (forever[loan.0 as usize]
+                || stored[loan.0 as usize]
                 || returned[loan.0 as usize] && body.loans[loan.0 as usize].capture != Capture::No)
             && !body.loans[loan.0 as usize]
                 .place
@@ -539,6 +546,23 @@ fn returned_local(body: &Body, reach: &[Vec<bool>]) -> Option<Conflict> {
         });
     }
     None
+}
+
+/// The hidden locals holding what the body stores below one of its
+/// function's parameters (`h.r = &x` of an `h: &mut Holder<'a>`).
+fn stored_through_parameters(body: &Body) -> Vec<Local> {
+    let Some(own) = &body.own else {
+        return Vec::new();
+    };
+    body.stores
+        .iter()
+        .filter(|store| {
+            own.parameters
+                .iter()
+                .any(|(local, ..)| *local == store.place)
+        })
+        .map(|store| store.value)
+        .collect()
 }
 
 /// The code of rustc's "lifetime may not live long enough", which rustc
@@ -651,6 +675,82 @@ fn overlap<'a>(accessed: &Place, borrowed: &'a Place) -> Option<&'a [Projection]
                     return None;
                 }
             }
+            // rustc's rules for an element and a subslice, which overlap
+            // when the element may be in it.
+            (
+                Projection::ConstantIndex {
+                    offset,
+                    from_end: false,
+                    ..
+                },
+                Projection::Subslice {
+                    from,
+                    to,
+                    from_end: false,
+                },
+            )
+            | (
+                Projection::Subslice {
+                    from,
+                    to,
+                    from_end: false,
+                },
+                Projection::ConstantIndex {
+                    offset,
+                    from_end: false,
+                    ..
+                },
+            ) if !(from..to).contains(&offset) => return None,
+            (
+                Projection::ConstantIndex {
+                    offset,
+                    from_end: false,
+                    ..
+                },
+                Projection::Subslice { from, .. },
+            )
+            | (
+                Projection::Subslice { from, .. },
+                Projection::ConstantIndex {
+                    offset,
+                    from_end: false,
+                    ..
+                },
+            ) if offset < from => return None,
+            (
+                Projection::ConstantIndex {
+                    offset,
+                    from_end: true,
+                    ..
+                },
+                Projection::Subslice {
+                    to, from_end: true, ..
+                },
+            )
+            | (
+                Projection::Subslice {
+                    to, from_end: true, ..
+                },
+                Projection::ConstantIndex {
+                    offset,
+                    from_end: true,
+                    ..
+                },
+            ) if offset <= to => return None,
+            // Two subslices of an array are apart when their ranges are;
+            // rustc takes any two others to overlap.
+            (
+                Projection::Subslice {
+                    from: a_from,
+                    to: a_to,
+                    from_end: false,
+                },
+                Projection::Subslice {
+                    from: b_from,
+                    to: b_to,
+                    from_end: false,
+                },
+            ) if b_from >= a_to || a_from >= b_to => return None,
             (Projection::Field(_), Projection::Field(_))
             | (Projection::Downcast(_), Projection::Downcast(_))
             | (Projection::Index, Projection::Index)
@@ -801,6 +901,7 @@ pub(crate) fn describe(body: &Body, place: &Place) -> String {
                 text.push_str(field);
             }
             Projection::Index | Projection::ConstantIndex { .. } => text.push_str("[_]"),
+            Projection::Subslice { .. } => text.push_str("[..]"),
             // rustc names `(o as Some).0` as `o.0`.
             Projection::Downcast(_) => {}
             Projection::Deref if place.projection.len() == index + 1 => {

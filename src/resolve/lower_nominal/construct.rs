@@ -1135,15 +1135,13 @@ impl<'a> Parser<'a> {
         .retain_origin())
     }
 
-    /// `{ x, y: value }` after a struct variant: `helper` called with the
-    /// values in declared order, each evaluated in written order, as Rust
-    /// does; with the position of the `}`.
+    /// `{ x, y: value }` after a struct variant: each value with its
+    /// field's slot, in written order, and the position of the `}`.
     pub(super) fn parse_named_values(
         &mut self,
         definition: &type_def::Definition,
         fields: &[(ImmutableString, Ty)],
-        helper: &str,
-    ) -> Result<(origin::Fragment, Position), Error> {
+    ) -> Result<(Vec<(usize, ParsedExpr)>, Position), Error> {
         self.expect(Token::LeftBrace, "'{' after a struct variant")?;
         let mut written = Vec::<(usize, ParsedExpr)>::new();
         while !matches!(self.peek(), Token::RightBrace) {
@@ -1188,20 +1186,28 @@ impl<'a> Parser<'a> {
                 construction: point_span(end),
             });
         }
+        Ok((written, end))
+    }
+
+    /// A struct variant's values as [`Self::parse_named_values`] parsed
+    /// them: `helper` called with them in declared order, each evaluated in
+    /// written order, as Rust does.
+    pub(super) fn named_values_source(
+        &mut self,
+        written: &[(usize, ParsedExpr)],
+        helper: &str,
+    ) -> origin::Fragment {
         if written
             .iter()
             .enumerate()
             .all(|(index, (slot, _))| index == *slot)
         {
             let values = written.iter().map(|(_, value)| value.rendered_source());
-            return Ok((
-                origin::Fragment::call(helper, values.collect::<Vec<_>>()),
-                end,
-            ));
+            return origin::Fragment::call(helper, values.collect::<Vec<_>>());
         }
         let mut source = origin::Fragment::plain("({\n");
-        let mut temporaries = vec![String::new(); fields.len()];
-        for (slot, value) in &written {
+        let mut temporaries = vec![String::new(); written.len()];
+        for (slot, value) in written {
             let temporary = self.temporary("field");
             source.push_text(format!("let {temporary} = "));
             source.push(value.rendered_source());
@@ -1216,7 +1222,7 @@ impl<'a> Parser<'a> {
                 .collect::<Vec<_>>(),
         ));
         source.push_text("\n})");
-        Ok((source, end))
+        source
     }
 
     /// `T { a: x, ..base }` for a facade type: `base.a(x)` through the
