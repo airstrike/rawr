@@ -579,7 +579,7 @@ impl<'a> Parser<'a> {
             }
             // Rawr's iterators are iterators, and `Clone` when their items
             // are.
-            Ty::Iter(item, _) => {
+            Ty::Iter(item, _, _) => {
                 capability == capability::Kind::Iterator
                     || capability == capability::Kind::Clone
                         && self.type_provides(&item, capability)
@@ -702,7 +702,7 @@ impl<'a> Parser<'a> {
                 intrinsic::Type::array(self.proven_type(&element, operation, span)?, kind.length())
             }
             // An iterator a host gives is the array of its items.
-            Ty::Iter(element, _) => {
+            Ty::Iter(element, _, _) => {
                 intrinsic::Type::array(self.proven_type(&element, operation, span)?, None)
             }
             // `None` where the host takes an `Option` of a callable: no item

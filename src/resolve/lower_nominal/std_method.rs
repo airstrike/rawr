@@ -117,10 +117,11 @@ pub(super) fn steps(ty: &Ty) -> Vec<Step> {
                 sequence::Kind::Deque => vec![own("alloc::collections::vec_deque::VecDeque")],
             }
         }
-        // A std iterator struct's own methods, then any iterator's.
-        Ty::Iter(_, std) => std
+        // A std iterator struct's own methods, then those of the traits
+        // and adapter it implements (#792).
+        Ty::Iter(_, std, traits) => std
             .iter()
-            .chain(ITERATOR.iter())
+            .chain(ITERATOR.iter().filter(|owner| offered(*traits, owner)))
             .map(|owner| Step {
                 owner,
                 ty: ty.clone(),
@@ -220,6 +221,30 @@ pub(super) fn iterator(member: &str, implements: impl Fn(&str) -> bool) -> Optio
             rank: 0,
         })
     })
+}
+
+/// Whether an iterator with `traits` has the methods of `owner`, one of
+/// [`ITERATOR`]'s: `DoubleEndedIterator`'s where it is one, `Peekable`'s
+/// where it is one, and always `Iterator`'s and `IntoIterator`'s.
+fn offered(traits: super::ty::Traits, owner: &str) -> bool {
+    match trait_name(owner) {
+        "DoubleEndedIterator" => traits.double_ended(),
+        "Peekable" => traits.peekable(),
+        _ => true,
+    }
+}
+
+/// Whether `member` is a method of `DoubleEndedIterator` or `Peekable`
+/// that the iterator `ty` doesn't have (#792): `peek` of `v.iter()`,
+/// `next_back` of a `take_while`.
+pub(super) fn withheld(ty: &Ty, member: &str) -> bool {
+    let Ty::Iter(_, _, traits) = ty else {
+        return false;
+    };
+    inherent(ty, member).is_none()
+        && ITERATOR
+            .iter()
+            .any(|owner| !offered(*traits, owner) && stable(owner, member).is_some())
 }
 
 /// The name a trait's definition ends in: `Iterator` of
@@ -416,6 +441,11 @@ pub(super) struct Arguments {
     /// for an argument that takes no closure, or one whose inputs name a
     /// type rawr has none of.
     pub closures: Vec<Option<Box<[Ty]>>>,
+    /// The return type of each closure argument, as its `Fn` bound writes
+    /// it: `U` of `map_or`'s `F: FnOnce(T) -> U`, one of the method's own
+    /// type parameters. `None` where `closures` has none, or the bound
+    /// writes no type rawr has.
+    pub returns: Vec<Option<Ty>>,
     /// The type of each argument up to the last that names one of the
     /// method's own type parameters (`init: B` of `fold`), whose value
     /// fixes it for the closures after it. Earlier ones are left to be
@@ -450,7 +480,7 @@ pub(super) fn arguments(receiver: &Ty, member: &str, fresh: &mut impl FnMut() ->
     let mut known = Known {
         types: Vec::new(),
         items: match native {
-            Ty::Iter(item, _) => Some((**item).clone()),
+            Ty::Iter(item, _, _) => Some((**item).clone()),
             _ => None,
         },
     };
@@ -498,18 +528,25 @@ pub(super) fn arguments(receiver: &Ty, member: &str, fresh: &mut impl FnMut() ->
         let closure = written_bounds
             .into_iter()
             .flat_map(std_table::split_bounds)
-            .find_map(closure_inputs);
+            .find_map(|bound| Some((closure_inputs(bound)?, closure_output(bound))));
         match closure {
-            Some(inputs) => {
+            Some((inputs, output)) => {
                 let inputs = std_table::split_list(inputs)
                     .into_iter()
                     .map(|input| known.ty(input))
                     .collect::<Option<Box<[Ty]>>>();
+                arguments.returns.push(
+                    inputs
+                        .is_some()
+                        .then(|| known.ty(output.unwrap_or("()")))
+                        .flatten(),
+                );
                 arguments.closures.push(inputs);
                 arguments.generics.push(fresh());
             }
             None => {
                 arguments.closures.push(None);
+                arguments.returns.push(None);
                 let generic = bounds.iter().any(|(name, _)| *name == written);
                 match known.ty(written) {
                     Some(ty) if generic => {
@@ -532,6 +569,14 @@ fn closure_inputs(bound: &'static str) -> Option<&'static str> {
         .find_map(|closure| bound.starts_with(closure).then_some(closure.len() - 1))?;
     let close = open + std_table::closing(&bound[open..], '(', ')')?;
     Some(&bound[open + 1..close])
+}
+
+/// The output a closure bound writes: `bool` of `FnMut(&T, &T) -> bool`,
+/// `None` for one that writes none, which returns `()`.
+fn closure_output(bound: &'static str) -> Option<&'static str> {
+    let open = bound.find('(')?;
+    let close = open + std_table::closing(&bound[open..], '(', ')')?;
+    Some(bound[close + 1..].trim().strip_prefix("->")?.trim())
 }
 
 /// The types a method's declaration names, as rawr's: its impl's and its
@@ -719,7 +764,7 @@ fn fits(written: &Written, ty: &Ty) -> bool {
                 // An impl's parameter.
                 return true;
             };
-            if let Ty::Iter(_, Some(std)) = ty {
+            if let Ty::Iter(_, Some(std), _) = ty {
                 return definition == *std;
             }
             let Some((found, found_arguments)) = std_impl::std_definition(ty) else {
@@ -762,7 +807,7 @@ pub(super) fn summary(receiver: &Ty, output: &Ty, member: &str) -> Option<Summar
         next: 0,
         slice_output: holds_array(output),
         output_item: match output {
-            Ty::Iter(item, _) => Some((**item).clone()),
+            Ty::Iter(item, _, _) => Some((**item).clone()),
             _ => None,
         },
         substitution: Vec::new(),
@@ -792,7 +837,7 @@ pub(super) fn summary(receiver: &Ty, output: &Ty, member: &str) -> Option<Summar
     }
     let owner = match native {
         // `Self` of an iterator's method: what holds its items.
-        Ty::Iter(item, _) if ITERATOR.contains(&found.owner) => {
+        Ty::Iter(item, _, _) if ITERATOR.contains(&found.owner) => {
             let items = reader.items(item, "Self::Item");
             let own = reader.iterator_self(items);
             reader.iterator = Some(own.clone());
@@ -808,6 +853,7 @@ pub(super) fn summary(receiver: &Ty, output: &Ty, member: &str) -> Option<Summar
                 }
             }
             reader.collected(output);
+            reader.extended(output, item, declared.output);
             own
         }
         _ => match found.item.impl_self() {
@@ -910,6 +956,34 @@ pub(super) fn summary(receiver: &Ty, output: &Ty, member: &str) -> Option<Summar
     Some(summary)
 }
 
+/// The parts of the native type `ty` that the parameter `name` is in the
+/// declared type `written`, each with the half of a top-level pair it is
+/// (`half`): both halves of `partition`'s `(B, B)`.
+fn parts_named<'a>(
+    written: &Written,
+    ty: &'a Ty,
+    name: &str,
+    half: Option<usize>,
+    parts: &mut Vec<(&'a Ty, Option<usize>)>,
+) {
+    match (written, ty) {
+        (
+            Written::Path {
+                path, arguments, ..
+            },
+            _,
+        ) if arguments.is_empty() && *path == name => parts.push((ty, half)),
+        (Written::Tuple(members), Ty::Tuple(found))
+            if half.is_none() && members.len() == found.len() =>
+        {
+            for (index, (member, found)) in members.iter().zip(found.iter()).enumerate() {
+                parts_named(member, found, name, Some(index), parts);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// What a closure bound returns: `B` of `FnMut(T) -> B`, `()` of `FnMut(T)`.
 fn returns(bound: &'static str) -> Option<&'static str> {
     ["FnOnce(", "FnMut(", "Fn("]
@@ -957,7 +1031,9 @@ fn iterator_shaped(path: &TypePath) -> bool {
     match path.target {
         Target::Builtin => matches!(
             path.name.as_str(),
-            crate::item::type_ref::ITER_TYPE | crate::item::type_ref::INTO_ITER_TYPE
+            crate::item::type_ref::ITER_TYPE
+                | crate::item::type_ref::INTO_ITER_TYPE
+                | crate::item::type_ref::PEEKABLE_TYPE
         ),
         Target::Parameter => path.name.as_str() == ITERATOR_SELF,
         _ => false,
@@ -1600,6 +1676,90 @@ impl Reader {
         }
     }
 
+    /// Places the type parameters of the call's value `output` that std's
+    /// `Extend`, `Sum` or `Product` impl for it picks (`B: Default +
+    /// Extend<Self::Item>` of `partition`, `FromA` of `unzip`, `S:
+    /// Sum<Self::Item>` of `sum`), from the part of `output` each is in the
+    /// declared output `written`: where that part holds the iterator's
+    /// `item` it holds the items' regions, as `impl<T> Extend<T> for
+    /// Vec<T>` keeps each item; elsewhere it holds none, as `impl<'a, T:
+    /// Copy> Extend<&'a T> for Vec<T>` copies them, or a sum is a new
+    /// value (#793). `unzip`'s `FromA: Extend<A>` of `(A, B)` items is
+    /// placed from the items' half at its own half of `(FromA, FromB)`.
+    fn extended(&mut self, output: &Ty, item: &Ty, written: Option<&'static str>) {
+        let Some(written) = written.map(std_table::written) else {
+            return;
+        };
+        let Some(own) = self.iterator.clone() else {
+            return;
+        };
+        let items = self.item_of(own);
+        for (name, bounds) in self.generics.clone() {
+            if self.bound(name)
+                || !std_table::split_bounds(bounds).iter().any(|bound| {
+                    let path = bound.split_once('<').map_or(*bound, |(path, _)| path);
+                    matches!(path.rsplit("::").next(), Some("Extend" | "Sum" | "Product"))
+                })
+            {
+                continue;
+            }
+            let mut parts = Vec::new();
+            parts_named(&written, output, name, None, &mut parts);
+            let Some((part, half)) = parts.first().copied() else {
+                continue;
+            };
+            let extends_items = bounds.contains("<Self::Item>");
+            let (item, items) = match (item, &items, half) {
+                (Ty::Tuple(members), Type::Tuple { members: found, .. }, Some(half))
+                    if !extends_items =>
+                {
+                    match (members.get(half), found.get(half)) {
+                        (Some(member), Some(found)) => (member, found.clone()),
+                        _ => continue,
+                    }
+                }
+                _ => (item, items.clone()),
+            };
+            if let Some(placed) = self.placed(part, item, &items) {
+                self.substitution.push((name, placed));
+            }
+        }
+    }
+
+    /// The native type `part` of a call's value, with the iterator's `item`
+    /// in it holding the `items`' regions; `None` where it holds a borrow
+    /// that isn't one of the items.
+    fn placed(&mut self, part: &Ty, item: &Ty, items: &Type) -> Option<Type> {
+        if part == item {
+            return Some(items.clone());
+        }
+        Some(match part {
+            Ty::Array {
+                element,
+                kind: sequence::Kind::Vec,
+            } => {
+                let element = self.placed(element, item, items)?;
+                self.builtin("Vec", vec![Argument::Type(element)])
+            }
+            Ty::Option(inner) => {
+                let inner = self.placed(inner, item, items)?;
+                self.builtin("Option", vec![Argument::Type(inner)])
+            }
+            Ty::Tuple(members) => {
+                let members = members
+                    .iter()
+                    .map(|member| self.placed(member, item, items))
+                    .collect::<Option<Vec<_>>>()?;
+                Type::Tuple {
+                    members: members.into_boxed_slice(),
+                    span: self.span(),
+                }
+            }
+            Ty::Reference { .. } | Ty::Str => return None,
+            part => self.native(part)?,
+        })
+    }
+
     /// Whether the call's value `output` has a type parameter the call picks
     /// that no input gives and whose bound may make it of the items
     /// (`S: Sum<Self::Item>`, `B: Extend<Self::Item>`), which these facts
@@ -1868,16 +2028,25 @@ mod tests {
             Receiver::Mutable,
             &[tap(&[a0, own], receiver(&[a0, a0, own]))],
         );
-        // `Peekable::peek` borrows the iterator.
-        has(
-            "peek",
-            &Ty::Unknown,
-            Receiver::Mutable,
-            &[
-                tap(&[a0, own], receiver(&[own])),
-                tap(&[a0, a0, own], receiver(&[a0, a0, own])),
-            ],
+        // `Peekable::peek` borrows the iterator, a `Peekable`.
+        let peekable = Ty::Iter(
+            Box::new(reference.clone()),
+            None,
+            super::super::ty::Traits::ANY.after("peekable", true),
         );
+        let found = summary(&peekable, &Ty::Unknown, "peek").expect("peek");
+        assert_eq!(found.mode, Some(Receiver::Mutable));
+        let peeked = found.output.expect("peek");
+        for expected in [
+            tap(&[a0, own], receiver(&[own])),
+            tap(&[a0, a0, own], receiver(&[a0, a0, own])),
+        ] {
+            assert!(
+                peeked.contains(&expected),
+                "peek: {expected:?} in {peeked:?}"
+            );
+        }
+        assert!(summary(&refs, &Ty::Unknown, "peek").is_none());
         has(
             "by_ref",
             &Ty::Unknown,
@@ -1900,7 +2069,30 @@ mod tests {
         );
         // A value the declaration can't place is left to rustc.
         assert!(summary(&refs, &Ty::Unknown, "collect").is_none());
-        assert!(summary(&refs, &Ty::Int(Int::I64), "sum").is_none());
+        // `Sum<&i64> for i64` makes a new value, which keeps nothing
+        // (#793).
+        assert_eq!(taps("sum", &Ty::Int(Int::I64)).1, Vec::new());
+        // `Extend<T> for Vec<T>`: both halves of `partition` keep the
+        // items, and `Extend<&T> for Vec<T>` of a `Copy` `T` copies them.
+        let halves = Ty::Tuple(Box::new([collected.clone(), collected.clone()]));
+        has(
+            "partition",
+            &halves,
+            Receiver::Owned,
+            &[
+                tap(&[a0, a0, own], receiver(&[a0, own])),
+                tap(&[a1, a0, own], receiver(&[a0, own])),
+            ],
+        );
+        let copied = Ty::sequence(sequence::Kind::Vec, Ty::Int(Int::I64));
+        let copies = Ty::Tuple(Box::new([copied.clone(), copied]));
+        let found = taps("partition", &copies).1;
+        assert!(
+            found
+                .iter()
+                .all(|tap| !matches!(tap.from, Source::Input(Input::Receiver, _))),
+            "{found:?}"
+        );
         // `count` keeps nothing.
         assert_eq!(taps("count", &Ty::Int(Int::Usize)).1, Vec::new());
     }

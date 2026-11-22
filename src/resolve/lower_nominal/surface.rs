@@ -322,7 +322,7 @@ pub(super) fn imported_surface_type(
         // A program's iterator a crate value holds, as itertools' `Product`
         // holds the two `cartesian_product` took: the native iterator that
         // pulls from it (`future::Items`).
-        Ty::Iter(item, _) => Type::Nominal {
+        Ty::Iter(item, _, _) => Type::Nominal {
             definition: rawr_import::surface::identity::Definition::iterator(),
             arguments: Box::new([imported_surface_type(
                 inference, models, item, operation, imported,
@@ -1152,7 +1152,7 @@ pub(super) fn instance_surface_type(
             arguments: Box::new([instance_surface_type(inference, models, inner)?]),
         },
         // A program's iterator a crate value holds (`future::Items`).
-        Ty::Iter(item, _) => Type::Nominal {
+        Ty::Iter(item, _, _) => Type::Nominal {
             definition: rawr_import::surface::identity::Definition::iterator(),
             arguments: Box::new([instance_surface_type(inference, models, item)?]),
         },

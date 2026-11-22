@@ -1329,7 +1329,7 @@ impl<'a> Parser<'a> {
                 if let Some((_, name)) = relation.associated()
                     && let [declared] = relation.arguments()
                     && let Some(item) = match (name.as_str(), &actual) {
-                        ("Item", Ty::Iter(item, _)) => Some((**item).clone()),
+                        ("Item", Ty::Iter(item, _, _)) => Some((**item).clone()),
                         // An array or a vector a crate takes by value gives
                         // its elements, as rand's `WeightedIndex::new([10,
                         // 4, 2, 1])` reads `I::Item` (#1084).

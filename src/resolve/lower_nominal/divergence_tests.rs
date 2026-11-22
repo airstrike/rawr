@@ -10183,3 +10183,273 @@ main();
     );
     assert_eq!(output, "[1, 1, 2]\n");
 }
+
+#[test]
+fn std_from_runs_char_byte_text_and_slice_conversions() {
+    // std's `From<char> for u32`, `From<u8> for char`, `From<&str> for
+    // Vec<u8>`, `From<&[T]> for Vec<T>` and `From<Vec<T>> for Box<[T]>`,
+    // by path, by `into` and through a generic bound (#763).
+    let output = printed(
+        r#"
+fn wide<T: From<char>>(c: char) -> T { T::from(c) }
+fn code<T: Into<u32>>(x: T) -> u32 { x.into() }
+fn bytes<T: Into<Vec<u8>>>(x: T) -> Vec<u8> { x.into() }
+fn main() {
+    let v: Vec<u8> = "hi".into();
+    let s: &[i32] = &[1, 2];
+    let b: Box<[i32]> = vec![3, 4].into();
+    println!("{} {} {:?} {:?} {:?}", u32::from('a'), char::from(66u8), v, Vec::from("ab"), Vec::from(s));
+    let c: char = 97u8.into();
+    let w: u64 = wide('b');
+    println!("{c} {w} {} {:?} {:?} {:?}", code('c'), bytes("de"), Vec::<u8>::from(String::from("f")), b);
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "97 B [104, 105] [97, 98] [1, 2]\na 98 99 [100, 101] [102] [3, 4]\n"
+    );
+    // std has no `From<char> for i32`.
+    let report = refused("fn main() { let x: i32 = 'a'.into(); }\nmain();\n");
+    assert!(
+        report.starts_with("error[E0277]: the trait bound `i32: From<char>` is not satisfied"),
+        "{report}"
+    );
+}
+
+#[test]
+fn std_trait_functions_without_self_run_by_path() {
+    // `TryFrom::try_from`, `FromIterator::from_iter`, `Sum::sum` and
+    // `Product::product` take `Self` from the expected type, as the std
+    // methods whose bodies call them do; `Vec::from_iter` and
+    // `String::from_iter` name it; an operator trait's function is its
+    // operator (#759).
+    let output = printed(
+        r#"
+use std::convert::TryFrom;
+use std::iter::FromIterator;
+use std::ops::{Add, Mul, Neg, Not};
+#[derive(Debug, Clone, Copy)]
+struct P(i32);
+impl Add for P {
+    type Output = P;
+    fn add(self, o: P) -> P { P(self.0 + o.0) }
+}
+fn main() {
+    let small: Result<u8, _> = TryFrom::try_from(300i32);
+    let fits: Result<i8, std::num::TryFromIntError> = std::convert::TryFrom::try_from(5u64);
+    let v: Vec<i32> = FromIterator::from_iter(1..4);
+    let w = Vec::from_iter(v.iter().map(|x| x * 2));
+    let s = String::from_iter(['a', 'b']);
+    let total: i32 = std::iter::Sum::sum(v.iter());
+    let product: i64 = std::iter::Product::product([2i64, 3].into_iter());
+    println!("{small:?} {fits:?} {v:?} {w:?} {s} {total} {product}");
+    println!("{} {} {} {} {:?}", Add::add(1, 2) * 10, Mul::mul(2.5, 2.0), Neg::neg(3), Not::not(true), Add::add(P(1), P(2)));
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "Err(TryFromIntError(PosOverflow)) Ok(5) [1, 2, 3] [2, 4, 6] ab 6 6\n30 5 -3 false P(3)\n"
+    );
+}
+
+#[test]
+fn a_closure_passed_to_a_cell_method_takes_std_parameter_types() {
+    // `Cell::update`'s `impl FnOnce(T) -> T` gives `x` the cell's type,
+    // and `RefCell::replace_with`'s `F: FnOnce(&mut T) -> T` gives `v`
+    // its: the closure reads before the method's own error (#803).
+    let output = printed(
+        r#"
+use std::cell::Cell;
+fn main() {
+    let c = Cell::new(2u8);
+    c.update(|x| x.pow(2) + 1);
+    let held = &c;
+    held.update(|x| x * 2);
+    println!("{}", c.get());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "10\n");
+    let report = refused(
+        r#"
+fn main() {
+    let r = std::cell::RefCell::new(vec![1]);
+    r.replace_with(|v| { let mut n = v.clone(); n.push(2); n });
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error: rawr doesn't run `RefCell::replace_with` yet"),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_closure_passed_to_a_std_method_returns_its_fn_bounds_output() {
+    // `map_or`'s `F: FnOnce(T) -> U` takes `U` from the default, `&str`,
+    // so the closure's `&String` coerces to it, as rustc's expected
+    // closure signature makes it (#804).
+    let output = printed(
+        r#"
+fn main() {
+    let name = String::from("n");
+    let a: &str = Some(&name).map_or("", |s| s);
+    let held = vec![1, 2];
+    let b = Some(&held).map_or(&[0][..], |v| v);
+    let words = vec![String::from("w")];
+    let c: Vec<usize> = words.iter().map(|w| w.len()).collect();
+    println!("{a} {b:?} {c:?} {}", None.map_or("none", |s: &String| s));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "n [1, 2] [1] none\n");
+}
+
+#[test]
+fn an_iterator_has_peekable_and_double_ended_methods_only_where_std_gives_them() {
+    // `peek` is `Peekable`'s own, and `next_back` and `rev` need a
+    // `DoubleEndedIterator`: `v.iter()` has no `peek`, a `take_while` no
+    // `next_back`, and `0..` no `rev` (#792).
+    let output = printed(
+        r#"
+fn main() {
+    let v = vec![1, 2, 3];
+    let mut p = v.iter().peekable();
+    println!("{:?}", p.peek());
+    println!("{:?}", p.next());
+    let mut q = v.iter().map(|x| x * 2).peekable();
+    println!("{:?} {:?}", q.next_if(|x| *x == 2), q.next_if_eq(&5));
+    let back: Vec<i32> = v.iter().map(|x| x + 1).rev().collect();
+    let ends: Vec<&i32> = v.iter().peekable().rev().collect();
+    println!("{back:?} {ends:?} {:?}", (0..5).rev().next());
+    let mut r = (1..4).peekable();
+    let first = r.peek().copied();
+    println!("{first:?} {:?}", r.collect::<Vec<_>>());
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "Some(1)\nSome(1)\nSome(2) None\n[4, 3, 2] [3, 2, 1] Some(4)\nSome(1) [1, 2, 3]\n"
+    );
+    let refusal = |body: &str| refused(&format!("fn main() {{\n{body}\n}}\nmain();\n"));
+    let report = refusal("let v = vec![1, 2, 3];\nlet mut it = v.iter();\nit.peek();");
+    assert!(
+        report.starts_with("error[E0599]: no method named `peek` found for "),
+        "{report}"
+    );
+    let report = refusal(
+        "let v = vec![1, 2, 3];\nlet mut it = v.iter().peekable().map(|x| x * 2);\nit.peek();",
+    );
+    assert!(
+        report.starts_with("error[E0599]: no method named `peek` found for "),
+        "{report}"
+    );
+    let report = refusal(
+        "let v = vec![1, 2, 3];\nlet mut b = v.iter().take_while(|x| **x < 3);\nb.next_back();",
+    );
+    assert!(
+        report.starts_with("error[E0599]: no method named `next_back` found for "),
+        "{report}"
+    );
+    let report = refusal("let c: Vec<i32> = (0..).rev().take(2).collect();");
+    assert!(
+        report.starts_with("error[E0277]: the trait bound `")
+            && report.contains(": DoubleEndedIterator` is not satisfied"),
+        "{report}"
+    );
+}
+
+#[test]
+fn std_iterator_structs_are_types() {
+    // `vec::IntoIter<T>` as an `IntoIterator` impl's `IntoIter` and a
+    // local's type, `Peekable<I>` as a field's, which has `peek`, and
+    // `slice::Iter<'a, T>`: rawr's iterator of their items (#760).
+    let output = printed(
+        r#"
+use std::iter::Peekable;
+struct Bag(Vec<i32>);
+impl IntoIterator for Bag {
+    type Item = i32;
+    type IntoIter = std::vec::IntoIter<i32>;
+    fn into_iter(self) -> Self::IntoIter { self.0.into_iter() }
+}
+struct Lex<I: Iterator<Item = char>> {
+    chars: Peekable<I>,
+}
+impl<I: Iterator<Item = char>> Lex<I> {
+    fn digits(&mut self) -> String {
+        let mut out = String::new();
+        while let Some(c) = self.chars.peek() {
+            if !c.is_ascii_digit() { break; }
+            out.push(*c);
+            self.chars.next();
+        }
+        out
+    }
+}
+struct Walk<'a> { rest: std::slice::Iter<'a, u8> }
+fn main() {
+    let total: i32 = Bag(vec![1, 2, 3]).into_iter().sum();
+    let mut lex = Lex { chars: "42x".chars().peekable() };
+    println!("{total} {} {:?}", lex.digits(), lex.chars.next());
+    let bytes = [7u8, 8];
+    let mut w = Walk { rest: bytes.iter() };
+    println!("{:?} {:?}", w.rest.next(), w.rest.next());
+    let mut kept: std::vec::IntoIter<u32> = vec![5u32].into_iter();
+    println!("{:?} {:?}", kept.next(), kept.next());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "6 42 Some('x')\nSome(7) Some(8)\nSome(5) None\n");
+}
+
+#[test]
+fn sum_partition_unzip_and_collect_values_keep_the_items_borrows() {
+    // std's `Extend`, `Sum` and `FromIterator` impls say what the value
+    // keeps: `Vec<&T>` the items' borrows, a sum and a `Vec` of copies
+    // none (#793).
+    let output = printed(
+        r#"
+fn main() {
+    let mut v = vec![1, 2, 3, 4];
+    let total: i32 = v.iter().sum();
+    let (small, big): (Vec<i32>, Vec<i32>) = v.iter().map(|x| *x).partition(|x| *x < 3);
+    let (left, right): (Vec<&i32>, Vec<char>) = v.iter().zip("ab".chars()).unzip();
+    println!("{left:?} {right:?}");
+    v.push(5);
+    let all = v.iter().collect::<Vec<_>>();
+    println!("{total} {small:?} {big:?} {all:?}");
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "[1, 2] ['a', 'b']\n10 [1, 2] [3, 4] [1, 2, 3, 4, 5]\n"
+    );
+    for kept in [
+        "let (small, big): (Vec<&i32>, Vec<&i32>) = v.iter().partition(|x| **x < 3);\nv.push(5);\nprintln!(\"{small:?} {big:?}\");",
+        "let (left, right): (Vec<&i32>, Vec<char>) = v.iter().zip(\"ab\".chars()).unzip();\nv.push(5);\nprintln!(\"{left:?} {right:?}\");",
+        "let all = v.iter().collect::<Vec<_>>();\nv.push(5);\nprintln!(\"{all:?}\");",
+    ] {
+        let report = refused(&format!(
+            "fn main() {{\nlet mut v = vec![1, 2, 3, 4];\n{kept}\n}}\nmain();\n"
+        ));
+        assert!(
+            report.starts_with(
+                "error[E0502]: cannot borrow `v` as mutable because it is also borrowed as immutable"
+            ),
+            "{report}"
+        );
+    }
+}

@@ -336,7 +336,7 @@ impl Inference {
             Ty::Boxed(target) => Ty::Boxed(Box::new(self.resolve(target))),
             Ty::Counted(counter, target) => Ty::Counted(*counter, Box::new(self.resolve(target))),
             Ty::Weak(counter, target) => Ty::Weak(*counter, Box::new(self.resolve(target))),
-            Ty::Iter(item, std) => Ty::Iter(Box::new(self.resolve(item)), *std),
+            Ty::Iter(item, std, traits) => Ty::Iter(Box::new(self.resolve(item)), *std, *traits),
             Ty::Reverse(inner) => Ty::Reverse(Box::new(self.resolve(inner))),
             Ty::Cow(inner) => Ty::Cow(Box::new(self.resolve(inner))),
             Ty::Range(element) => Ty::Range(Box::new(self.resolve(element))),
@@ -460,7 +460,7 @@ impl Inference {
             // Rawr's iterator type: `<I as Iterator>::Item` is its item,
             // unless the item is the opaque `<I as Iterator>::Item` that
             // `type Fore: Iterator;` gives, which is this projection itself.
-            Ty::Iter(item, _)
+            Ty::Iter(item, _, _)
                 if is_iterator_trait(trait_name)
                     && name.as_str() == "Item"
                     && !matches!(&**item, Ty::Projection(_, bound, own)
@@ -469,11 +469,24 @@ impl Inference {
                 return self.resolve(item);
             }
             Ty::Script(id, arguments) => {
-                if let Some((ty, parameters, _)) = self
+                // `Self::Item` names no trait: the one trait of the type's
+                // that has the type, as rustc finds it.
+                let mut named = self
                     .associated
                     .impls
-                    .get(&(*id, trait_name.clone(), name.clone()))
-                    .and_then(|impls| self.instance_impl(impls, arguments))
+                    .iter()
+                    .filter(|((owner, bound, item), _)| {
+                        owner == id
+                            && item == name
+                            && (trait_name.is_empty() || bound == trait_name)
+                    })
+                    .map(|(_, impls)| impls);
+                let impls = match (named.next(), named.next()) {
+                    (Some(impls), None) => Some(impls),
+                    _ => None,
+                };
+                if let Some((ty, parameters, _)) =
+                    impls.and_then(|impls| self.instance_impl(impls, arguments))
                 {
                     let substitution = parameters
                         .iter()
@@ -511,7 +524,7 @@ impl Inference {
             // An associated iterator's opaque item (`<T::Fore as
             // Iterator>::Item`) is itself: resolving it reads the iterator
             // again.
-            Ty::Iter(item, _) if name.as_str() == "Item" && is_iterator_trait(trait_name) => {
+            Ty::Iter(item, _, _) if name.as_str() == "Item" && is_iterator_trait(trait_name) => {
                 return match &**item {
                     Ty::Projection(_, trait_name, name)
                         if name.as_str() == "Item" && is_iterator_trait(trait_name) =>

@@ -1720,9 +1720,11 @@ impl Parser<'_> {
             Some(summary) => summary,
             // std's inherent method's, from its declaration (D711 step
             // 4), else a std trait method's rawr binds.
-            None => super::std_method::summary(&receiver.ty, &output, member)
-                .or_else(|| builtin_summary(&receiver.ty, member))
-                .unwrap_or_else(Summary::unknown),
+            None => {
+                super::std_method::summary(&self.inference.resolve(&receiver.ty), &output, member)
+                    .or_else(|| builtin_summary(&receiver.ty, member))
+                    .unwrap_or_else(Summary::unknown)
+            }
         };
         // A `&mut self` call whose lowering recorded no borrow of its place
         // (`o.take()`): its two-phase borrow, reserved where the receiver

@@ -288,7 +288,7 @@ pub(crate) fn matches_type(value: &Dynamic, ty: &type_ref::Type) -> bool {
                 "RangeToInclusive" => value.is::<std::ops::RangeToInclusive<crate::Dynamic>>(),
                 "RangeFull" => value.is::<std::ops::RangeFull>(),
                 // An iterator is the array of its items at runtime.
-                name if name == crate::item::type_ref::ITER_TYPE => true,
+                crate::item::type_ref::ITER_TYPE | crate::item::type_ref::PEEKABLE_TYPE => true,
                 _ => false,
             },
             // An imported Rust value is a handle the generated runner

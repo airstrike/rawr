@@ -534,6 +534,7 @@ impl<'a> Parser<'a> {
             }
         }
         let output_hint = self.closure_output.take();
+        let std_return = self.closure_return.take();
         let outer_changed = self.self_changed.replace(false);
         let mut parameters = Vec::<(ImmutableString, Ty, Span)>::new();
         // Each pattern parameter's index, pattern and written type's span.
@@ -599,7 +600,7 @@ impl<'a> Parser<'a> {
             }
             Some(ty)
         } else {
-            async_step.clone().flatten()
+            async_step.clone().flatten().or(std_return)
         };
         // An async body's step function takes the value it resumes with
         // last (`eval::machine`).

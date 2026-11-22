@@ -1732,9 +1732,11 @@ impl<'a> Parser<'a> {
         let receiver = self.inference.resolve(receiver);
         let declared = std_method::arguments(&receiver, member, &mut || self.inference.fresh());
         self.closure_hints = declared.closures;
+        self.closure_returns = declared.returns;
         self.generic_argument_hints = declared.generics;
         let arguments = self.parse_call_arguments(context);
         self.closure_hints = Vec::new();
+        self.closure_returns = Vec::new();
         self.generic_argument_hints = Vec::new();
         arguments
     }
@@ -1769,6 +1771,7 @@ impl<'a> Parser<'a> {
         let mut arguments = Vec::new();
         let mut hints = std::mem::take(&mut self.closure_hints).into_iter();
         let mut outputs = std::mem::take(&mut self.closure_outputs).into_iter();
+        let mut returns = std::mem::take(&mut self.closure_returns).into_iter();
         // Closures whose parameter types a later argument fixes, read after
         // the others, as rustc checks closure arguments last.
         let mut postponed = Vec::new();
@@ -1781,6 +1784,7 @@ impl<'a> Parser<'a> {
                 tokens: Vec::new(),
                 hint: hints.next().flatten(),
                 output: outputs.next().flatten(),
+                returns: returns.next().flatten(),
                 expected: expected.next().flatten(),
                 generic: generic.next(),
             };
@@ -1834,6 +1838,7 @@ impl<'a> Parser<'a> {
         let outer = std::mem::replace(&mut self.no_struct, false);
         self.closure_hint = argument.hint;
         self.closure_output = argument.output;
+        self.closure_return = argument.returns;
         // A closure where a crate function takes `impl Fn(f32) -> C`
         // has those parameter types, as in Rust.
         if self.closure_hint.is_none()
@@ -1862,6 +1867,7 @@ impl<'a> Parser<'a> {
         self.script_callable = false;
         self.closure_hint = None;
         self.closure_output = None;
+        self.closure_return = None;
         self.no_struct = outer;
         parsed
     }
@@ -2272,6 +2278,8 @@ struct Argument {
     tokens: Vec<(Token, Position)>,
     hint: Option<Box<[Ty]>>,
     output: Option<closure::Output>,
+    /// The return type std's `Fn` bound gives a closure argument (#804).
+    returns: Option<Ty>,
     expected: Option<Ty>,
     generic: Option<Ty>,
 }

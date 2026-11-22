@@ -806,6 +806,9 @@ impl Models {
         // a call on the bounded value runs that instance's dispatcher, which
         // lends a native value the view the instance names (#1676). Only a
         // trait whose method borrows its receiver (`native_borrow`) has one.
+        // The prelude's `Into` has one per target a bound names too, as
+        // `T: Into<u32>`, whose dispatcher runs std's `From` of the value's
+        // runtime type.
         for shell in program.items.iter() {
             let (generics, functions): (&[item::Generic], &[item::Function]) = match &shell.kind {
                 item::Kind::Function(function) => (&function.generics, &[]),
@@ -826,9 +829,10 @@ impl Models {
             for (trait_name, arguments) in bounds {
                 let lends = traits.get(trait_name).is_some_and(|(_, declared)| {
                     declared.name.span == Span::NONE
-                        && declared.functions.iter().any(|function| {
-                            super::dispatch::native_borrow(declared, function).is_some()
-                        })
+                        && (trait_name.as_str() == "Into"
+                            || declared.functions.iter().any(|function| {
+                                super::dispatch::native_borrow(declared, function).is_some()
+                            }))
                 });
                 if !lends || arguments.is_empty() || arguments.iter().any(mentions_parameter) {
                     continue;

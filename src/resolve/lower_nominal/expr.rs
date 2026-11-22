@@ -352,7 +352,7 @@ impl<'a> Parser<'a> {
             Ty::Boxed(boxed) => self.inference.resolve(&boxed),
             ty => ty,
         };
-        let (Ty::Iter(item, kind), true) = (iterator, place) else {
+        let (Ty::Iter(item, kind, traits), true) = (iterator, place) else {
             return Err(self
                 .unsupported("`&mut` borrow expressions other than a function's `&mut` argument"));
         };
@@ -373,7 +373,7 @@ impl<'a> Parser<'a> {
         )?;
         Ok(self.operator_expr(
             drained,
-            Ty::Iter(item, kind),
+            Ty::Iter(item, kind, traits),
             span(start, operand.span.end()),
         ))
     }
@@ -1601,20 +1601,23 @@ impl<'a> Parser<'a> {
                 _ => "Vec",
             };
             if let Some(value) =
-                self.std_method_path(owner, written, &member, name_span, member_span)
+                self.std_method_path(owner.clone(), written, &member, name_span, member_span)
             {
                 return value;
+            }
+            if member.as_str() == "from_iter" {
+                return self.parse_from_iter(owner, name_span.start());
             }
             let (arguments, end) = self.parse_call_arguments(&format!("`{name}` arguments"))?;
             // `Vec<T>` from `[T; N]`, or `VecDeque<T>` from a `Vec<T>` or
             // `[T; N]`, as std's `From` impls say: the same array at
-            // runtime.
+            // runtime. A `Vec<u8>` from a text is its bytes.
             if member.as_str() == "from"
                 && let [value] = &arguments[..]
             {
                 let call = span(name_span.start(), end);
                 let ty = Ty::sequence(kind, self.inference.fresh());
-                if self.std_conversion(&ty, &value.ty).is_none() {
+                let Some(op) = self.std_conversion(&ty, &value.ty) else {
                     let source = self.inference.resolve(&value.ty);
                     if let Some(error) = self.conversion_not_yet(&ty, &source, call) {
                         return Err(error);
@@ -1629,9 +1632,13 @@ impl<'a> Parser<'a> {
                         formatted: None,
                         chain: crate::resolve::Chain::default(),
                     });
-                }
+                };
+                let source = match op {
+                    Some(op) => self.prelude_op(op, [value.rendered_source()]),
+                    None => value.rendered_source(),
+                };
                 let ty = self.inference.resolve(&ty);
-                return Ok(self.operator_expr(value.rendered_source(), ty, call));
+                return Ok(self.operator_expr(source, ty, call));
             }
             let mut arguments = arguments;
             // `Vec::with_capacity(n)`: an empty `Vec` with room for `n`.

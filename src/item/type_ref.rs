@@ -39,6 +39,10 @@ pub(crate) const NEVER_TYPE: &str = "!";
 pub(crate) const ITER_TYPE: &str = "impl Iterator";
 pub(crate) const INTO_ITER_TYPE: &str = "impl IntoIterator";
 
+/// The builtin path name of std's `Peekable<I>`, an iterator that has
+/// `peek`, whose one type argument is the item as `ITER_TYPE`'s is.
+pub(crate) const PEEKABLE_TYPE: &str = "Peekable<impl Iterator>";
+
 /// The builtin path name of an array type `[T; N]` is this prefix, then
 /// the length and `]` (`[_; 9]`), which no Rust path can spell; its one type
 /// argument is the element.

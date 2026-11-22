@@ -41,6 +41,8 @@ pub(super) struct Pipeline {
     reversible: Option<Reversible>,
     /// Whether it is Rust's `ExactSizeIterator`, which has `len()`.
     exact: bool,
+    /// Which of `DoubleEndedIterator`'s and `Peekable`'s methods it has.
+    traits: ty::Traits,
 }
 
 #[derive(Clone)]
@@ -185,6 +187,14 @@ impl Parser<'_> {
                 target,
             } if matches!(self.inference.resolve(&target), Ty::Script(..)) => {
                 self.iterator_receiver(&target, member)
+            }
+            // And of rawr's iterator, with the methods it has: `peek` of a
+            // `&mut Peekable<I>`.
+            Ty::Reference {
+                mutable: true,
+                target,
+            } if let target @ Ty::Iter(..) = self.inference.resolve(&target) => {
+                std_method::inherent(&target, member).is_some()
             }
             // And of a runtime iterator, which steps its place.
             Ty::Reference {
@@ -360,6 +370,7 @@ impl Parser<'_> {
             source: None,
             reversible: None,
             exact: false,
+            traits: ty::Traits::ANY,
         };
         Ok((pipeline, *item))
     }
@@ -508,7 +519,7 @@ impl Parser<'_> {
         };
         let pipeline = self.source_pipeline(source);
         let mut expr = self.iterator_expr(pipeline, Ty::Char, span(value.span.start(), end));
-        expr.ty = Ty::Iter(Box::new(Ty::Char), Some(CHARS));
+        expr.ty = Ty::Iter(Box::new(Ty::Char), Some(CHARS), ty::Traits::ANY);
         expr
     }
 
@@ -611,6 +622,7 @@ impl Parser<'_> {
             source: None,
             reversible: None,
             exact: false,
+            traits: ty::Traits::ANY,
         };
         let (header, entry) = match &source {
             Source::Values { values, .. } => (
@@ -709,7 +721,10 @@ impl Parser<'_> {
             entry,
             exit: String::new(),
         });
-        if !matches!(source, Source::Range { high: None, .. }) {
+        // `low..` is walked only from its front.
+        if matches!(source, Source::Range { high: None, .. }) {
+            pipeline.traits = ty::Traits::FORWARD;
+        } else {
             pipeline.reversible = Some(Reversible {
                 source: source.clone(),
                 item,
@@ -740,7 +755,7 @@ impl Parser<'_> {
     /// The item of a `runtime_iterator` type: its `Iterator::Item`.
     fn runtime_item(&self, ty: &Ty) -> Ty {
         match self.inference.resolve(ty) {
-            Ty::Iter(item, _) => *item,
+            Ty::Iter(item, _, _) => *item,
             ty => self.inference.resolve(&Ty::Projection(
                 Box::new(ty),
                 "Iterator".into(),
@@ -837,6 +852,7 @@ impl Parser<'_> {
             source: None,
             reversible: None,
             exact: false,
+            traits: ty::Traits::ANY,
         }
     }
 
@@ -1057,7 +1073,8 @@ impl Parser<'_> {
         expression: Span,
     ) -> ParsedExpr {
         let source = self.lazy_value(&pipeline);
-        let expr = self.operator_expr(source, Ty::iter(item), expression);
+        let ty = Ty::Iter(Box::new(item), None, pipeline.traits);
+        let expr = self.operator_expr(source, ty, expression);
         self.pipelines
             .insert(expr.source.as_str().to_string(), pipeline);
         expr
@@ -1153,7 +1170,7 @@ impl Parser<'_> {
             return Some((self.source_pipeline(source), item));
         }
         let item = match &ty {
-            Ty::Iter(item, _) => (**item).clone(),
+            Ty::Iter(item, _, _) => (**item).clone(),
             range if let Some(item) = self.stepped_item(range) => item,
             Ty::Array { element, .. } => (**element).clone(),
             // A map's or set's sorted entries.
@@ -1173,11 +1190,13 @@ impl Parser<'_> {
         {
             return Some((pipeline.clone(), item));
         }
-        if let Ty::Iter(..) = ty {
+        if let Ty::Iter(_, _, traits) = ty {
             let source = Source::Items {
                 values: value.rendered_source(),
             };
-            return Some((self.source_pipeline(source), item));
+            let mut pipeline = self.source_pipeline(source);
+            pipeline.traits = traits;
+            return Some((pipeline, item));
         }
         let range = range::parts(&ty).map(|(kind, _)| kind);
         let source = Source::Values {
@@ -1515,6 +1534,30 @@ impl Parser<'_> {
             let fallback = self.unsupported("an iterator method on a value without a chain");
             return Err(self.pipeline_error(&value, fallback));
         };
+        // A method of a trait or adapter the std struct the chain stands
+        // for doesn't implement: rustc's E0599, and E0277 for `rev`'s
+        // `Self: DoubleEndedIterator` (#792).
+        let chain = Ty::Iter(Box::new(item.clone()), None, pipeline.traits);
+        if std_method::withheld(&chain, &member) {
+            return Err(Error::UnknownMember {
+                owner: chain.name(&self.models),
+                member,
+                reference: member_span,
+            });
+        }
+        if member.as_str() == "rev" && !pipeline.traits.double_ended() {
+            return Err(Error::MissingCapability {
+                owner: chain.name(&self.models),
+                capability: "DoubleEndedIterator".into(),
+                operation: member_span,
+                derive: false,
+                declared: None,
+                required_by: None,
+                formatted: None,
+                chain: crate::resolve::Chain::default(),
+            });
+        }
+        pipeline.traits = pipeline.traits.after(&member, pipeline.exact);
         // Items with drop glue may only go on to an owner: a container, or
         // a closure's parameter.
         if !matches!(member.as_str(), "collect" | "for_each" | "map" | "fold")
@@ -1550,25 +1593,24 @@ impl Parser<'_> {
             .as_ref()
             .filter(|(_, depth)| *depth == self.expression_stack.len())
             .map(|(ty, _)| ty.clone());
-        let (mut arguments, end) =
-            if member.as_str() == "fold" && matches!(self.peek(), Token::LeftParen) {
-                self.parse_fold_arguments(&accumulator, &item)?
-            } else {
-                // A crate function named as an argument is the closure that
-                // calls it, as for `Option::map` (T327): `.map(text)`.
-                self.script_callables = true;
-                // A closure given the chain's stored `&mut` items
-                // (`for_each(|x| *x += 1)` of a kept `iter_mut()`) reaches
-                // each item's place through it.
-                self.stored_inputs = matches!(self.peek(), Token::LeftParen)
-                    && matches!(self.peek_second(), Token::Pipe)
-                    && self.holds_mutable_reference(&item);
-                let iterator = Ty::iter(item.clone());
-                let arguments =
-                    self.parse_std_arguments(&iterator, &member, "iterator method arguments");
-                self.stored_inputs = false;
-                arguments?
-            };
+        let (mut arguments, end) = if member.as_str() == "fold"
+            && matches!(self.peek(), Token::LeftParen)
+        {
+            self.parse_fold_arguments(&accumulator, &item)?
+        } else {
+            // A crate function named as an argument is the closure that
+            // calls it, as for `Option::map` (T327): `.map(text)`.
+            self.script_callables = true;
+            // A closure given the chain's stored `&mut` items
+            // (`for_each(|x| *x += 1)` of a kept `iter_mut()`) reaches
+            // each item's place through it.
+            self.stored_inputs = matches!(self.peek(), Token::LeftParen)
+                && matches!(self.peek_second(), Token::Pipe)
+                && self.holds_mutable_reference(&item);
+            let arguments = self.parse_std_arguments(&chain, &member, "iterator method arguments");
+            self.stored_inputs = false;
+            arguments?
+        };
         let expression = span(value.span.start(), end);
         let arity = |expected: usize, arguments: &[ParsedExpr]| {
             if arguments.len() == expected {
@@ -1908,6 +1950,7 @@ impl Parser<'_> {
                     });
                 };
                 self.require_type(&item, &other_item, arguments[0].span)?;
+                pipeline.traits = pipeline.traits.chained(other.traits);
                 let flag = self.nest(&mut pipeline);
                 let next = self.temporary("item");
                 for segment in &mut pipeline.segments {
@@ -1972,7 +2015,7 @@ impl Parser<'_> {
                         (open, String::new(), *inner_item)
                     }
                     // A runtime iterator is stepped by its `next`.
-                    Ty::Iter(inner_item, _) => {
+                    Ty::Iter(inner_item, _, _) => {
                         let flag = self.nest(&mut pipeline);
                         let (walked, option) = (self.temporary("walked"), self.temporary("option"));
                         let mut open = origin::Fragment::plain(format!(
@@ -2593,8 +2636,10 @@ impl Parser<'_> {
             // `Chars::as_str`: the text of the chars left, which the
             // iterator borrows from.
             "as_str"
-                if self.inference.resolve(&value.ty)
-                    == Ty::Iter(Box::new(Ty::Char), Some(CHARS)) =>
+                if matches!(
+                    self.inference.resolve(&value.ty),
+                    Ty::Iter(item, Some(CHARS), _) if *item == Ty::Char
+                ) =>
             {
                 arity(0, &arguments)?;
                 let out = self.temporary("text");
@@ -2707,6 +2752,7 @@ impl Parser<'_> {
             let item = self.temporary("item");
             let mut reversed = self.walked_backwards(None, &pipeline, item);
             reversed.exact = pipeline.exact;
+            reversed.traits = pipeline.traits;
             reversed.outer = pipeline.outer;
             return reversed;
         };
@@ -2726,6 +2772,7 @@ impl Parser<'_> {
         segment.exit = reversible.exit;
         reversed.item = pipeline.item;
         reversed.exact = pipeline.exact;
+        reversed.traits = pipeline.traits;
         reversed.outer = pipeline.outer;
         reversed
     }
@@ -2749,6 +2796,7 @@ impl Parser<'_> {
             source: None,
             reversible: None,
             exact: false,
+            traits: ty::Traits::ANY,
         };
         let (header, entry) = match source {
             Some(Source::Range {

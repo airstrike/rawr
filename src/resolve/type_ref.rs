@@ -526,6 +526,86 @@ fn parameter_projection(
     }))
 }
 
+/// std's iterator struct `definition`, written `parsed`, as rawr's
+/// iterator of its `item`: `vec::IntoIter<T>` is an iterator of `T`, and
+/// `Peekable<I>` one of `I::Item` that has `peek` (#760).
+fn iterator_path(
+    definition: &str,
+    items: super::std_path::Item,
+    parsed: item::type_ref::Path,
+    types: &BTreeMap<ImmutableString, Target>,
+    host: &host::Registry,
+    #[cfg(feature = "rust-import")] native: Option<super::native::Site<'_>>,
+) -> Result<Path, Error> {
+    let span = parsed.span;
+    let mut arguments = Vec::new();
+    for argument in parsed
+        .segments
+        .into_vec()
+        .into_iter()
+        .flat_map(|segment| segment.arguments.into_vec())
+    {
+        if let item::type_ref::Argument::Type(ty) = argument {
+            arguments.push(resolve(
+                ty,
+                types,
+                host,
+                #[cfg(feature = "rust-import")]
+                native,
+            )?);
+        }
+    }
+    let argument = |index: usize| {
+        arguments
+            .get(index)
+            .cloned()
+            .ok_or(Error::InvalidTypeArguments {
+                ty: definition.rsplit("::").next().unwrap_or(definition).into(),
+                expected: index + 1,
+                actual: arguments.len(),
+                reference: span,
+            })
+    };
+    let item = match items {
+        super::std_path::Item::Argument(index) => argument(index)?,
+        super::std_path::Item::Borrowed(index) => Type::Reference {
+            mutable: false,
+            lifetime: None,
+            target: Box::new(argument(index)?),
+            span,
+        },
+        super::std_path::Item::Char => Type::Path(Path {
+            name: "char".into(),
+            target: Target::Builtin,
+            arguments: Box::default(),
+            span,
+        }),
+        super::std_path::Item::Inner(index) => {
+            let inner = argument(index)?;
+            match inner.iterator_item() {
+                Some((item, _)) => item.clone(),
+                None => Type::Path(Path {
+                    name: "Item".into(),
+                    target: Target::Projection(Box::new(inner), Some("Iterator".into())),
+                    arguments: Box::default(),
+                    span,
+                }),
+            }
+        }
+    };
+    let name = if definition == super::std_path::PEEKABLE {
+        item::type_ref::PEEKABLE_TYPE
+    } else {
+        item::type_ref::ITER_TYPE
+    };
+    Ok(Path {
+        name: name.into(),
+        target: Target::Builtin,
+        arguments: Box::new([Argument::Type(item)]),
+        span,
+    })
+}
+
 fn resolve_path(
     parsed: item::type_ref::Path,
     types: &BTreeMap<ImmutableString, Target>,
@@ -820,6 +900,18 @@ fn resolve_path(
             owner: host.type_owner(name.as_str()).cloned(),
         }
     } else {
+        // A std iterator struct: rawr's iterator of its item (#760).
+        if let Some((definition, item)) = std.and_then(super::std_path::iterator) {
+            return iterator_path(
+                definition,
+                item,
+                parsed,
+                types,
+                host,
+                #[cfg(feature = "rust-import")]
+                native,
+            );
+        }
         // A std type Rawr doesn't represent yet.
         if std.is_some() {
             return Err(Error::NotYet {
@@ -1910,7 +2002,7 @@ impl Type {
             return None;
         };
         let into = match path.name.as_str() {
-            item::type_ref::ITER_TYPE => false,
+            item::type_ref::ITER_TYPE | item::type_ref::PEEKABLE_TYPE => false,
             item::type_ref::INTO_ITER_TYPE => true,
             _ => return None,
         };

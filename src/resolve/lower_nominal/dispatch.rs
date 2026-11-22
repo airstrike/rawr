@@ -11,7 +11,7 @@ use super::ty::{Float, Int, Ty};
 use super::{
     closure, default_value, drops, instance_dispatcher_name, instance_text, item_generics,
     kind_code, kind_dispatcher_name, location, mentions_parameter, method_name, origin,
-    retain_locations, static_dispatcher_name, static_instance_dispatcher_name,
+    retain_locations, static_dispatcher_name, static_instance_dispatcher_name, std_impl,
     trait_dispatcher_name, witness_generics, witness_variable, Lowered, ParsedExpr, Parser,
     CLOSURE_SENTINEL, DEFAULT_DISPATCHER, FALLBACK_INSTANCE, SENTINEL, UNKNOWN_WITNESS,
 };
@@ -678,7 +678,16 @@ pub(super) fn write_into_dispatchers(
         if models.kind_into(&target).is_some() {
             write_kind_into_dispatcher(output, models, source, declared, &target, index);
         }
-        for (from, op) in builtin_conversions_into(&target) {
+        // A text's `From` into a sequence, `Vec<u8>`'s of its bytes, which
+        // the bound names; a text's others are `text_into`'s.
+        let text_bytes = matches!(target, Ty::Array { .. })
+            .then(|| std_impl::runs_from(&target, &Ty::Str).flatten())
+            .flatten()
+            .and_then(|op| Some((builtin_code(&Ty::Str)?, op)));
+        for (from, op) in builtin_conversions_into(&target)
+            .into_iter()
+            .chain(text_bytes)
+        {
             let helper = format!("{SENTINEL}{}", ops.len());
             ops.push(ExecutableOp::Prelude(op));
             let _ = writeln!(
@@ -700,12 +709,15 @@ pub(super) fn write_into_dispatchers(
 /// `(target, source, op)` witness codes: `From<bool> for i64` and `f64`,
 /// `From<u8> for f64` and the other integers a float holds exactly (which
 /// of them std has is checked where the bound is), `From<char> for
-/// String`. (`From<&str> for String` is the value itself.)
-pub(super) const BUILTIN_CONVERSIONS: [(crate::INT, crate::INT, PreludeOp); 4] = [
+/// String`, `From<char> for u32` and its wider kin, and `From<u8> for
+/// char`. (`From<&str> for String` is the value itself.)
+pub(super) const BUILTIN_CONVERSIONS: [(crate::INT, crate::INT, PreludeOp); 6] = [
     (-2, -5, PreludeOp::IntFromBool),
     (-3, -5, PreludeOp::FloatFromBool),
     (-3, -2, PreludeOp::FloatFromInt),
     (-4, -6, PreludeOp::StringFromChar),
+    (-2, -6, PreludeOp::IntFromChar),
+    (-6, -2, PreludeOp::CharFromByte),
 ];
 
 /// The builtin conversions from `source`: each target's code and op.
