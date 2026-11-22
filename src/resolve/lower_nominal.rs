@@ -418,6 +418,9 @@ struct Parser<'a> {
     /// Each move of a local or a part of one, by where it starts: what
     /// E0382 says of the move.
     move_sites: BTreeMap<Position, MoveSite>,
+    /// Each move of a local by a crate method that takes it as its owned
+    /// `self`, by where the receiver starts: the method's path.
+    receiver_moves: BTreeMap<Position, ImmutableString>,
     /// The integer expressions whose values are known when compiled, by
     /// span, and the known indices into arrays: what rustc's
     /// `arithmetic_overflow` and `unconditional_panic` lints check.
@@ -1094,6 +1097,7 @@ impl<'a> Parser<'a> {
             closures: Vec::new(),
             moved_at: BTreeMap::new(),
             move_sites: BTreeMap::new(),
+            receiver_moves: BTreeMap::new(),
             known_values: BTreeMap::new(),
             known_indices: Vec::new(),
             unsent_captures: BTreeMap::new(),

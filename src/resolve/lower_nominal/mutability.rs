@@ -117,6 +117,8 @@ impl<'a> Parser<'a> {
         binding.available = false;
         let declaration = binding.declaration;
         self.moved_at.insert(declaration, receiver.span);
+        self.receiver_moves
+            .insert(receiver.span.start(), item.path().into());
         Ok(())
     }
 

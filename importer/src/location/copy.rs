@@ -127,30 +127,42 @@ fn said(error: &crate::Error) -> Option<&str> {
     }
 }
 
-/// One error rustc gave for the copy: its headline, the first place it
-/// names, and the trampoline any place it names is in.
+/// One error rustc or Cargo gave for the copy: its headline, the first
+/// place it names, the generated code any place it names is in, and the
+/// causes Cargo gave under it.
 struct Said {
     headline: String,
     location: Option<String>,
-    trampoline: Option<Trampoline>,
+    generated: Option<Generated>,
+    causes: Vec<String>,
 }
 
 impl std::fmt::Display for Said {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(&self.headline)?;
-        match (&self.trampoline, &self.location) {
-            (Some(trampoline), _) => write!(formatter, "\n{trampoline}"),
-            (None, Some(location)) => write!(formatter, "\n{location}"),
-            (None, None) => Ok(()),
+        match (&self.generated, &self.location) {
+            (Some(generated), _) => write!(formatter, "\n{generated}")?,
+            (None, Some(location)) => write!(formatter, "\n{location}")?,
+            (None, None) => {}
         }
+        for cause in &self.causes {
+            write!(formatter, "\n\nCaused by:\n{cause}")?;
+        }
+        Ok(())
     }
 }
 
-/// Each error in `stderr` as the program's, with the file under it: once
-/// each, as a stand-in's error is its marked type's, and without Cargo's
-/// summary. A line of the copy is no line of the program's, so no line is
-/// named, but for an error in a trampoline, which names the marked
-/// function's signature.
+/// The note a failed runner build's error gets where its place in an
+/// adapter rawr generated is mapped to the program's call that needed the
+/// adapter, before the adapter's own place.
+pub(crate) const CALL_SITE: &str = "in the code rawr generated for this call, at ";
+
+/// Each error in `stderr` as the program's, with the file under it and
+/// the causes Cargo gave: once each, as a stand-in's error is its marked
+/// type's, and without Cargo's summary. A line of the copy is no line of
+/// the program's, so no line is named, but for an error in code rawr
+/// generated for a marked item, which names the item's declaration, and
+/// for one in an adapter, which names the program's call.
 fn errors(stderr: &str) -> Vec<Said> {
     let mut errors: Vec<Said> = Vec::new();
     let mut lines = stderr.lines().peekable();
@@ -160,8 +172,33 @@ fn errors(stderr: &str) -> Vec<Said> {
         }
         let headline = program(line);
         let mut location = None;
-        let mut trampoline = None;
+        let mut generated = None;
+        let mut called = None;
+        let mut causes: Vec<String> = Vec::new();
         while let Some(next) = lines.next_if(|next| !next.starts_with("error")) {
+            if next == "Caused by:" {
+                causes.push(String::new());
+                continue;
+            }
+            if let Some(cause) = causes.last_mut() {
+                if next.starts_with(char::is_whitespace) && !next.trim().is_empty() {
+                    if !cause.is_empty() {
+                        cause.push('\n');
+                    }
+                    cause.push_str(&program(next));
+                }
+                continue;
+            }
+            if let Some(adapter) = next
+                .trim_start()
+                .strip_prefix("= note: ")
+                .and_then(|note| note.strip_prefix(CALL_SITE))
+            {
+                if generated.is_none() {
+                    generated = called.and_then(|place| Generated::called_at(place, adapter));
+                }
+                continue;
+            }
             let Some(place) = place(next) else {
                 continue;
             };
@@ -169,17 +206,27 @@ fn errors(stderr: &str) -> Vec<Said> {
                 let file = place.trim_end_matches(|character: char| {
                     character.is_ascii_digit() || character == ':'
                 });
-                location = Some(format!("  --> {}", program(file)));
+                // A place in the copy names no line of the program's; any
+                // other place is where rustc says.
+                let shown = if program_path(file).is_some() {
+                    program(file)
+                } else {
+                    place.to_owned()
+                };
+                location = Some(format!("  --> {shown}"));
+                called = Some(place);
             }
-            if trampoline.is_none() {
-                trampoline = Trampoline::at(place);
+            if generated.is_none() {
+                generated = Generated::at(place);
             }
         }
+        causes.retain(|cause| !cause.is_empty());
         if !errors.iter().any(|seen| seen.headline == headline) {
             errors.push(Said {
                 headline,
                 location,
-                trampoline,
+                generated,
+                causes,
             });
         }
     }
@@ -196,13 +243,13 @@ fn place(line: &str) -> Option<&str> {
 }
 
 impl Failure {
-    /// The trampoline the first error that is in one is in, as rustc's
-    /// errors name the marked function's signature.
+    /// The generated code the first error that is in some is in, as
+    /// rustc's errors name the marked item's declaration.
     #[must_use]
-    pub fn trampoline(&self) -> Option<Trampoline> {
+    pub fn generated(&self) -> Option<Generated> {
         errors(&self.stderr)
             .into_iter()
-            .find_map(|said| said.trampoline)
+            .find_map(|said| said.generated)
     }
 }
 
@@ -222,21 +269,22 @@ impl std::fmt::Display for Failure {
 /// marked file's path in backticks.
 const GENERATED: &str = "// Generated by Rawr from `";
 
-/// Where an error in a function rawr generated for native code to call a
-/// marked function, its trampoline, is in the program: the marked
-/// function's signature.
+/// Where an error in code rawr generated for a marked item is in the
+/// program: the marked function's signature for its trampoline, the
+/// function rawr generated for native code to call it, and the marked
+/// type's name for an impl that carries the type between native code and
+/// the interpreter.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Trampoline {
-    /// The marked function's path from the crate root, as the interpreter
-    /// finds it: `screen::list::State::clear`.
-    item: Box<str>,
+pub struct Generated {
+    /// What rawr generated the code for.
+    purpose: Purpose,
     /// The marked file.
     file: Box<std::path::Path>,
     /// Its text when the error was read.
     text: Box<str>,
     /// The line and column in it, from 1, of what rustc's error is at in
-    /// the signature, as the trait `impl IntoView` names, or of the
-    /// signature, and its width in characters.
+    /// the declaration, as the trait `impl IntoView` names, or of the
+    /// declaration, and its width in characters.
     line: usize,
     column: usize,
     width: usize,
@@ -244,10 +292,38 @@ pub struct Trampoline {
     generated: Box<str>,
 }
 
-impl Trampoline {
-    /// The trampoline `place` is in, a path into rawr's copy and its line
-    /// and column as rustc writes them, read from the copy and the marked
-    /// file on disk: `None` for a place in no trampoline.
+/// What rawr generated the code an error is in for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Purpose {
+    /// A trampoline: native code calls the marked function at this path
+    /// from the crate root, as the interpreter finds it
+    /// (`screen::list::State::clear`).
+    Call(Box<str>),
+    /// An impl of the island's trait (`Put`, `Take`, `Parts` or `Mirror`)
+    /// for the marked type, as the copy writes it.
+    Crossing { traits: Box<str>, ty: Box<str> },
+    /// An adapter of a runner, which the program's call at the place
+    /// needed.
+    Adapter,
+}
+
+/// The traits of the island's support whose impls for a marked type carry
+/// its values between native code and the interpreter.
+const CROSSING: [&str; 4] = ["Put", "Take", "Parts", "Mirror"];
+
+/// A place in a marked file's generated copy: the copy's lines, and the
+/// place's line and column there, from 1.
+struct Copied<'c> {
+    lines: Vec<&'c str>,
+    line: usize,
+    column: usize,
+}
+
+impl Generated {
+    /// The generated code `place` is in, a path into rawr's copy and its
+    /// line and column as rustc writes them, read from the copy and the
+    /// marked file on disk: `None` for a place in no code rawr generated
+    /// for a marked item.
     fn at(place: &str) -> Option<Self> {
         let mut parts = place.rsplitn(3, ':');
         let column = parts.next()?.parse::<usize>().ok()?;
@@ -261,33 +337,17 @@ impl Trampoline {
             .strip_prefix(GENERATED)?
             .split('`')
             .next()?;
-        let lines = copy.lines().collect::<Vec<_>>();
-        let start = (0..line.min(lines.len()))
-            .rev()
-            .find(|at| signature(lines[*at]).is_some())?;
-        let name = signature(lines[start])?;
-        let item = lines[start + 1..]
-            .iter()
-            .take_while(|line| signature(line).is_none())
-            .find_map(|line| called(line))?;
+        let copied = Copied {
+            lines: copy.lines().collect(),
+            line,
+            column,
+        };
         let text = std::fs::read_to_string(file).ok()?;
-        let (at, start_column) = declared(&text, item, name)?;
-        // The word rustc's error is at, as the trait an `impl Trait`
-        // names, is at the same word of the marked signature, which
-        // differs from the copy's only in its parameters' names.
-        let (at, column, width) = lines
-            .get(start..line)
-            .and_then(|signature| named(signature, column))
-            .and_then(|(word, seen)| found(&text, at, word, seen))
-            .unwrap_or_else(|| {
-                let width = text
-                    .lines()
-                    .nth(at - 1)
-                    .map_or(1, |line| line.trim().chars().count());
-                (at, start_column, width)
-            });
+        let (purpose, (at, column, width)) = copied
+            .trampoline(&text)
+            .or_else(|| copied.crossing(&text))?;
         Some(Self {
-            item: item.into(),
+            purpose,
             file: std::path::Path::new(file).into(),
             text: text.into(),
             line: at,
@@ -303,14 +363,14 @@ impl Trampoline {
         &self.file
     }
 
-    /// The marked file's text the signature's place is in.
+    /// The marked file's text the declaration's place is in.
     #[must_use]
     pub fn text(&self) -> &str {
         &self.text
     }
 
     /// The line and column, from 1, of what the error is at in the
-    /// signature.
+    /// declaration.
     #[must_use]
     pub const fn place(&self) -> (usize, usize) {
         (self.line, self.column)
@@ -325,14 +385,112 @@ impl Trampoline {
     /// What rustc's error is in, said as a note.
     #[must_use]
     pub fn note(&self) -> String {
-        format!(
-            "in the code rawr generated for native code to call `{}`, at {}",
-            self.item, self.generated
-        )
+        match &self.purpose {
+            Purpose::Call(item) => format!(
+                "in the code rawr generated for native code to call `{item}`, at {}",
+                self.generated
+            ),
+            Purpose::Crossing { traits, ty } => format!(
+                "in the `{traits}` impl rawr generated to carry `{ty}` between native code \
+                 and the interpreter, at {}",
+                self.generated
+            ),
+            Purpose::Adapter => format!("{CALL_SITE}{}", self.generated),
+        }
+    }
+
+    /// The program's call at `place`, `file:line:column` as rustc writes
+    /// it, that needed the adapter at `adapter`, read from the program's
+    /// file on disk.
+    fn called_at(place: &str, adapter: &str) -> Option<Self> {
+        let mut parts = place.rsplitn(3, ':');
+        let column = parts.next()?.parse::<usize>().ok()?;
+        let line = parts.next()?.parse::<usize>().ok()?;
+        let file = parts.next()?;
+        let text = std::fs::read_to_string(file).ok()?;
+        let written = text.lines().nth(line.checked_sub(1)?)?;
+        let at = written.char_indices().nth(column.checked_sub(1)?)?.0;
+        let width = words(written)
+            .find(|(start, word)| (*start..start + word.len()).contains(&at))
+            .map_or(1, |(_, word)| word.chars().count());
+        Some(Self {
+            purpose: Purpose::Adapter,
+            file: std::path::Path::new(file).into(),
+            text: text.into(),
+            line,
+            column,
+            width,
+            generated: adapter.into(),
+        })
     }
 }
 
-impl std::fmt::Display for Trampoline {
+impl Copied<'_> {
+    /// The marked function whose trampoline the place is in, and the place
+    /// in `text`, the marked file, of the word rustc's error is at in its
+    /// signature, or of the signature.
+    fn trampoline(&self, text: &str) -> Option<(Purpose, (usize, usize, usize))> {
+        let lines = &self.lines;
+        let start = (0..self.line.min(lines.len()))
+            .rev()
+            .find(|at| signature(lines[*at]).is_some())?;
+        let name = signature(lines[start])?;
+        let body: Vec<&str> = lines[start + 1..]
+            .iter()
+            .take_while(|line| signature(line).is_none())
+            .copied()
+            .collect();
+        let called = body
+            .iter()
+            .find_map(|line| called(line))
+            .or_else(|| body.windows(2).find_map(|pair| instanced(pair[0], pair[1])));
+        // A generic function's instance, which a trampoline hands its call
+        // to, is the marked function's too, but its signature is not.
+        let (item, name, instance) = match called {
+            Some(item) => (item.to_owned(), name, false),
+            None => {
+                let (item, marked) = instance_of(name.strip_prefix(INSTANCE)?, text)?;
+                (item, marked, true)
+            }
+        };
+        let (at, start_column) = declared(text, &item, name)?;
+        // The word rustc's error is at, as the trait an `impl Trait`
+        // names, is at the same word of the marked signature, which
+        // differs from the copy's only in its parameters' names.
+        let place = lines
+            .get(start..self.line)
+            .filter(|_| !instance)
+            .and_then(|signature| named(signature, self.column))
+            .and_then(|(word, seen)| found(text, at, word, seen))
+            .unwrap_or_else(|| {
+                let width = text
+                    .lines()
+                    .nth(at - 1)
+                    .map_or(1, |line| line.trim().chars().count());
+                (at, start_column, width)
+            });
+        Some((Purpose::Call(item.into()), place))
+    }
+
+    /// The crossing impl the place is in, and the place in `text`, the
+    /// marked file, of its type's name where the type is declared.
+    fn crossing(&self, text: &str) -> Option<(Purpose, (usize, usize, usize))> {
+        let header = self.lines[..self.line.min(self.lines.len())]
+            .iter()
+            .rev()
+            .find(|line| line.starts_with("impl"))?;
+        let (traits, ty) = crossed(header)?;
+        let name = ty.split('<').next()?.trim();
+        let (line, column) = declared_type(text, name)?;
+        let purpose = Purpose::Crossing {
+            traits: traits.into(),
+            ty: ty.into(),
+        };
+        Some((purpose, (line, column, name.chars().count())))
+    }
+}
+
+impl std::fmt::Display for Generated {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             formatter,
@@ -343,6 +501,41 @@ impl std::fmt::Display for Trampoline {
             self.note()
         )
     }
+}
+
+/// The island's trait and the type an impl `header` of the copy is of,
+/// when it is a crossing impl: `impl<T> crate::__rawr_island::Put for
+/// Ball<T> {` is `Put` for `Ball<T>`.
+fn crossed(header: &str) -> Option<(&str, &str)> {
+    let (_, after) = header.split_once("__rawr_island::")?;
+    let (traits, ty) = after.split_once(" for ")?;
+    if !CROSSING.contains(&traits) {
+        return None;
+    }
+    Some((traits, ty.trim_end().trim_end_matches('{').trim_end()))
+}
+
+/// The line and column, from 1, of the name `name` where `text` declares a
+/// struct, enum or union of it.
+fn declared_type(text: &str, name: &str) -> Option<(usize, usize)> {
+    text.lines().enumerate().find_map(|(index, line)| {
+        let trimmed = line.trim_start();
+        if !trimmed.starts_with("pub") && !trimmed.starts_with(['s', 'e', 'u']) {
+            return None;
+        }
+        let mut seen = words(line);
+        while let Some((_, word)) = seen.next() {
+            if !matches!(word, "struct" | "enum" | "union") {
+                continue;
+            }
+            let (start, declared) = seen.next()?;
+            if declared != name {
+                return None;
+            }
+            return Some((index + 1, line[..start].chars().count() + 1));
+        }
+        None
+    })
 }
 
 /// The name of the function `line` starts to declare: `None` for any other
@@ -360,6 +553,47 @@ fn signature(line: &str) -> Option<&str> {
         .find(|character: char| !(character.is_alphanumeric() || character == '_'))
         .unwrap_or(rest.len());
     Some(&rest[..end])
+}
+
+/// The prefix of the name of a generic marked function's instance, the
+/// function rawr generates for each of its types.
+const INSTANCE: &str = "__rawr_instance_";
+
+/// The marked function an instance's `mangled` name, after its prefix, is
+/// of, as a path from its owner when it has one (`Sidebar::content`), and
+/// its name: the longest end of the name, after a `_`, that `text`, the
+/// marked file, declares a function of, as rawr names an instance by its
+/// owner, the owner's generics and the function (`Sidebar_a_Message_content`).
+fn instance_of<'t>(mangled: &str, text: &'t str) -> Option<(String, &'t str)> {
+    let declared = |candidate: &str| {
+        text.lines()
+            .find_map(|line| signature(line).filter(|name| *name == candidate))
+    };
+    let ends = std::iter::once(0).chain(mangled.match_indices('_').map(|(at, _)| at + 1));
+    for start in ends {
+        let Some(name) = declared(&mangled[start..]) else {
+            continue;
+        };
+        let item = match mangled[..start]
+            .split('_')
+            .next()
+            .filter(|owner| !owner.is_empty())
+        {
+            Some(owner) => format!("{owner}::{name}"),
+            None => name.to_owned(),
+        };
+        return Some((item, name));
+    }
+    None
+}
+
+/// The generic marked function a trampoline's `line` hands its call to
+/// the instance of, with its path on the `next` line.
+fn instanced<'l>(line: &str, next: &'l str) -> Option<&'l str> {
+    if !line.trim_end().ends_with("__rawr_island::instance(") {
+        return None;
+    }
+    next.trim().strip_prefix('"')?.split('"').next()
 }
 
 /// The marked function a trampoline's `line` calls, when it starts the
@@ -601,7 +835,7 @@ error: could not compile `app` (lib) due to 2 previous errors; 1 warning emitted
             stderr: stderr.into(),
         };
         let failure = super::Failure::of(error).unwrap();
-        let trampoline = failure.trampoline().unwrap();
+        let trampoline = failure.generated().unwrap();
         assert_eq!(trampoline.place(), (15, 5));
         assert_eq!(trampoline.file(), marked);
         assert_eq!(
@@ -664,13 +898,191 @@ error: could not compile `app` (lib) due to 2 previous errors; 1 warning emitted
             stderr: stderr.into(),
         };
         let failure = super::Failure::of(error).unwrap();
-        let trampoline = failure.trampoline().unwrap();
+        let trampoline = failure.generated().unwrap();
         assert_eq!(
             trampoline.place(),
             (5, signature.find("IntoLines").unwrap() + 1)
         );
         assert_eq!(trampoline.width(), "IntoLines".len());
         assert_eq!(trampoline.file(), marked);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Cargo's failure to resolve a dependency keeps the causes it gave
+    /// under it, so a network failure reads as one.
+    #[test]
+    fn a_cargo_failure_keeps_its_causes() {
+        let stderr =
+            "error: failed to get `ahash` as a dependency of package `app v0.1.0 (/p/app)`\n\n\
+Caused by:\n  failed to load source for dependency `ahash`\n\n\
+Caused by:\n  Unable to update registry `crates-io`\n\n\
+Caused by:\n  [6] Couldn't resolve host name (Could not resolve host: index.crates.io)\n";
+        let error = crate::Error::Process {
+            program: "cargo",
+            status: "exit status: 101".into(),
+            stderr: stderr.into(),
+        };
+        assert_eq!(
+            super::Failure::of(error).unwrap().to_string(),
+            "rawr could not build the program; unless `cargo check` fails too, this is a bug in rawr\n\
+             error: failed to get `ahash` as a dependency of package `app v0.1.0 (/p/app)`\n\n\
+             Caused by:\n  failed to load source for dependency `ahash`\n\n\
+             Caused by:\n  Unable to update registry `crates-io`\n\n\
+             Caused by:\n  [6] Couldn't resolve host name (Could not resolve host: index.crates.io)"
+        );
+    }
+
+    /// An error in a marked type's generated `Take` impl names the type
+    /// where the marked file declares it.
+    #[test]
+    fn an_error_in_a_crossing_impl_names_the_marked_type() {
+        let root =
+            std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../target/tests"))
+                .join(format!("rawr-crossing-{}", std::process::id()));
+        let marked = root.join("src/physics.rs");
+        let copied = root.join("target/rawr/crate/src/physics.rs");
+        std::fs::create_dir_all(copied.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(marked.parent().unwrap()).unwrap();
+        std::fs::write(
+            &marked,
+            "// rawr\nuse std::rc::Rc;\n\npub struct Ball<T> {\n    pub weight: Rc<T>,\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            &copied,
+            format!(
+                "// Generated by Rawr from `{}`, which starts with `// rawr`: what native code\n\
+                 // sees of it. Each function hands its arguments to the interpreter.\n\
+                 pub struct Ball<T> {{\n    pub weight: Rc<T>,\n}}\n\
+                 impl<T> crate::__rawr_island::Take for Ball<T> {{\n    #[inline]\n    \
+                 fn take(input: &mut crate::__rawr_island::In<'_>) -> Self {{\n        \
+                 input.structure(\"physics::Ball\", 1);\n        \
+                 Ball {{\n            weight: crate::__rawr_island::Take::take(input),\n        \
+                 }}\n    }}\n}}\n",
+                marked.display()
+            ),
+        )
+        .unwrap();
+        let stderr = format!(
+            "error[E0277]: the trait bound `Rc<T>: Take` is not satisfied\n  --> {}:11:21\n   |\n\n\
+             error: could not compile `app` (lib) due to 1 previous error\n",
+            copied.display()
+        );
+        let error = crate::Error::Process {
+            program: "cargo",
+            status: "exit status: 101".into(),
+            stderr: stderr.into(),
+        };
+        let failure = super::Failure::of(error).unwrap();
+        let generated = failure.generated().unwrap();
+        assert_eq!(generated.place(), (4, 12));
+        assert_eq!(generated.width(), "Ball".len());
+        assert_eq!(generated.file(), marked);
+        assert_eq!(
+            generated.note(),
+            format!(
+                "in the `Take` impl rawr generated to carry `Ball<T>` between native code and \
+                 the interpreter, at {}:11",
+                copied.display()
+            )
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A runner's error mapped from an adapter to the program's call
+    /// names the call, and the adapter in its note.
+    #[test]
+    fn an_error_mapped_from_an_adapter_names_the_program_s_call() {
+        let root =
+            std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../target/tests"))
+                .join(format!("rawr-adapter-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let program = root.join("home.rs");
+        std::fs::write(
+            &program,
+            "// rawr\nfn view() {\n    row().spacing(\"zero\");\n}\n",
+        )
+        .unwrap();
+        let adapter = "src/__rawr_program/rawr_adapters_iced_8.rs:4:50";
+        let stderr = format!(
+            "error[E0277]: the trait bound `Pixels: From<&str>` is not satisfied\n   \
+             --> {}:3:11\n    = note: {}{adapter}\n    |\n\n\
+             error: could not compile `rawr-generated-runner` (bin) due to 1 previous error\n",
+            program.display(),
+            super::CALL_SITE
+        );
+        let error = crate::Error::Process {
+            program: "cargo",
+            status: "exit status: 101".into(),
+            stderr: stderr.into(),
+        };
+        let failure = super::Failure::of(error).unwrap();
+        let generated = failure.generated().unwrap();
+        assert_eq!(generated.place(), (3, 11));
+        assert_eq!(generated.width(), "spacing".len());
+        assert_eq!(generated.file(), program);
+        assert_eq!(
+            failure.to_string(),
+            format!(
+                "rawr could not build the program; unless `cargo check` fails too, this is a bug in rawr\n\
+                 error[E0277]: the trait bound `Pixels: From<&str>` is not satisfied\n  \
+                 --> {}:3:11\n   \
+                 = note: in the code rawr generated for this call, at {adapter}",
+                program.display()
+            )
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// An error in a generic marked method's trampoline, which hands its
+    /// call to an instance, or in the instance, names the method's
+    /// signature, as rustc's E0562 named inboard's sidebar's.
+    #[test]
+    fn an_error_in_a_generic_s_instance_names_the_marked_signature() {
+        let root =
+            std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../target/tests"))
+                .join(format!("rawr-instance-{}", std::process::id()));
+        let marked = root.join("src/widget/sidebar.rs");
+        let copied = root.join("target/rawr/crate/src/widget/sidebar.rs");
+        std::fs::create_dir_all(copied.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(marked.parent().unwrap()).unwrap();
+        std::fs::write(
+            &marked,
+            "// rawr\npub struct Sidebar;\n\nimpl Sidebar {\n    \
+             pub fn content(self, content: impl Into<String>) -> Self {\n        self\n    }\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            &copied,
+            format!(
+                "// Generated by Rawr from `{}`, which starts with `// rawr`: what native code\n\
+                 // sees of it. Each function hands its arguments to the interpreter.\n\
+                 impl Sidebar {{\n    \
+                 pub fn content(self, __a0: impl Into<String>) -> Self {{\n        \
+                 crate::__rawr_island::instance(\n            \"widget::sidebar::Sidebar::content\",\n            \
+                 ::std::any::type_name::<()>(),\n        )\n    }}\n}}\n\
+                 pub(crate) unsafe fn __rawr_instance_Sidebar_content(__key: &'static str) {{\n    \
+                 let __a0: impl Into<String> = todo!();\n}}\n",
+                marked.display()
+            ),
+        )
+        .unwrap();
+        for line in [5, 13] {
+            let stderr = format!(
+                "error[E0562]: `impl Trait` is not allowed in the type of variable bindings\n  \
+                 --> {}:{line}:9\n   |\n\n\
+                 error: could not compile `app` (lib) due to 1 previous error\n",
+                copied.display()
+            );
+            let error = crate::Error::Process {
+                program: "cargo",
+                status: "exit status: 101".into(),
+                stderr: stderr.into(),
+            };
+            let generated = super::Failure::of(error).unwrap().generated().unwrap();
+            assert_eq!(generated.place(), (5, 5), "line {line}");
+            assert_eq!(generated.file(), marked);
+        }
         let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -812,6 +812,9 @@ pub struct MoveCause {
     /// The parameter the move passes the value to, which rustc suggests
     /// making a borrow.
     pub parameter: Option<OwningParameter>,
+    /// The crate method that took the value as its owned `self`, by its
+    /// path, whose receiver rustc notes in the crate's source.
+    pub receiver: Option<ImmutableString>,
 }
 
 /// What moved: a whole local, labelled where it is declared, or a part

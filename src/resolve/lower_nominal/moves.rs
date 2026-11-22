@@ -897,6 +897,7 @@ impl<'a> Parser<'a> {
             ty: self.settled_name(&binding.ty),
             cloning: site.map_or(Cloning::None, |_| self.cloning(&binding.ty)),
             parameter: site.and_then(|site| site.parameter.clone()),
+            receiver: self.receiver_moves.get(&moved.start()).cloned(),
         })
     }
 
@@ -928,6 +929,7 @@ impl<'a> Parser<'a> {
                 self.cloning(&site.ty)
             },
             parameter: site.parameter.clone(),
+            receiver: self.receiver_moves.get(&moved.start()).cloned(),
         }))
     }
 
