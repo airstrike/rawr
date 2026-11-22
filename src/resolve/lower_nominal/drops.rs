@@ -82,6 +82,9 @@ pub(super) struct Condition {
 #[derive(Default)]
 pub(super) struct Scope {
     locals: Vec<Local>,
+    /// How many of `locals`, the first, are a body's parameters, which end
+    /// after its tail's temporaries.
+    parameters: usize,
     /// Outer locals this scope's bindings shadow, by scope and position,
     /// whose own names read them again once it ends.
     shadowed: Vec<(usize, usize)>,
@@ -1024,6 +1027,9 @@ impl Parser<'_> {
                 self.note_drop_here(&name, declaration, &ty)?;
             }
         }
+        if let Some(scope) = self.drop_scopes.last_mut() {
+            scope.parameters = scope.locals.len();
+        }
         Ok(())
     }
 
@@ -1053,13 +1059,20 @@ impl Parser<'_> {
         // drop uses is rustc's E0597.
         if self.drop_scoped() && self.drop_scopes.len() > self.drop_base {
             let uses = self.block_drop_uses();
-            let declared: Vec<Span> = self
+            let (parameters, declared): (Vec<Span>, Vec<Span>) = self
                 .drop_scopes
                 .last()
-                .map(|scope| scope.locals.iter().map(|local| local.declaration).collect())
+                .map(|scope| {
+                    let declarations = scope.locals.iter().map(|local| local.declaration);
+                    (
+                        declarations.clone().take(scope.parameters).collect(),
+                        declarations.skip(scope.parameters).collect(),
+                    )
+                })
                 .unwrap_or_default();
-            let end = point_span(self.position());
-            self.flow().body_end(&declared, &uses, end);
+            // At the body's `}`, as rustc reports what ends there.
+            let end = self.last_read();
+            self.flow().body_end(&declared, &parameters, &uses, end);
         }
         let drops = self.close_drops()?;
         if drops.is_empty() {

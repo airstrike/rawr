@@ -1131,6 +1131,10 @@ pub enum Error {
     /// signature's as the signature's types require, as rustc's borrow
     /// checker reports it (T170).
     Outlives(Box<super::outlives::Reports>),
+    /// A local's borrow that a block's tail temporary keeps past the
+    /// local's end, as it does before edition 2024: rustc's E0597, with
+    /// its explanation of the temporary.
+    TailTemporary(Box<super::tail::Explanation>),
     /// A `&mut` borrow of a place that a local not declared `mut` owns,
     /// which rustc refuses (E0596 "cannot borrow `c` as mutable, as it is
     /// not declared as mutable"), suggesting `mut` where the local is
@@ -2044,9 +2048,10 @@ impl Error {
             Self::WrongKind { .. } => Category::WrongKind,
             Self::Unimplemented { .. } | Self::UnsharedStatic { .. } => Category::Unimplemented,
             Self::MovedValue { .. } => Category::MovedValue,
-            Self::BorrowConflict { .. } | Self::ImmutableBorrow { .. } | Self::Outlives(_) => {
-                Category::BorrowConflict
-            }
+            Self::BorrowConflict { .. }
+            | Self::ImmutableBorrow { .. }
+            | Self::Outlives(_)
+            | Self::TailTemporary(_) => Category::BorrowConflict,
             Self::InvalidConstruction { .. } => Category::InvalidConstruction,
             Self::TypeMismatch { .. }
             | Self::ArgumentMismatch(_)
@@ -2115,6 +2120,7 @@ impl Error {
                 message.as_str()
             }
             Self::Outlives(reports) => reports.first().name(),
+            Self::TailTemporary(explanation) => explanation.message(),
             Self::UnknownImport { path, .. } | Self::InvalidImport { path, .. } => path.as_str(),
             Self::UnknownImports { imports } => imports[0].name(),
             Self::InvalidTypeArguments { ty, .. } => ty.as_str(),
@@ -2225,6 +2231,7 @@ impl Error {
             Self::MovedValue { reference, .. } => *reference,
             Self::BorrowConflict { access, .. } | Self::ImmutableBorrow { access, .. } => *access,
             Self::Outlives(reports) => reports.first().returned(),
+            Self::TailTemporary(explanation) => explanation.borrow(),
             Self::InvalidConstruction { construction, .. } => *construction,
             Self::TypeMismatch { expression, .. }
             | Self::OpaqueMismatch { expression, .. }
@@ -2315,7 +2322,7 @@ impl Error {
             } => None,
             Self::MovedValue { moved, .. } => Some(*moved),
             Self::BorrowConflict { borrow, .. } => Some(*borrow),
-            Self::Outlives(_) => None,
+            Self::Outlives(_) | Self::TailTemporary(_) => None,
             Self::DuplicateMethod {
                 previous_declaration,
                 ..
@@ -3620,6 +3627,12 @@ impl fmt::Display for Written<'_> {
             Error::ImmutableBorrow {
                 message, access, ..
             } => write!(formatter, "{message} at {access} (E0596)"),
+            Error::TailTemporary(explanation) => write!(
+                formatter,
+                "{} at {} (E0597)",
+                explanation.message(),
+                explanation.borrow()
+            ),
             Error::Outlives(reports) => write!(
                 formatter,
                 "{} at {} ({})",

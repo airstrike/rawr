@@ -7419,9 +7419,12 @@ main();
     assert_eq!(output, "x z y 1 true \"w\"\nbad gone\n");
 }
 
-/// What the package of `files`, written under the build directory as
-/// `name`, prints when it runs.
-fn printed_package(name: &str, files: &[(&str, &str)]) -> String {
+/// The package of `files`, written under the build directory as `name`,
+/// loaded, with its directory.
+fn loaded_package(
+    name: &str,
+    files: &[(&str, &str)],
+) -> (std::path::PathBuf, crate::package::Graph) {
     use std::fs;
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("target/graph-tests")
@@ -7436,6 +7439,14 @@ fn printed_package(name: &str, files: &[(&str, &str)]) -> String {
     let target = crate::project::Target::discover(&root, &mut answers).unwrap();
     let graph = crate::package::Graph::load(&Engine::new(), &target, &mut answers)
         .unwrap_or_else(|error| panic!("{error}"));
+    (root, graph)
+}
+
+/// What the package of `files`, written under the build directory as
+/// `name`, prints when it runs.
+fn printed_package(name: &str, files: &[(&str, &str)]) -> String {
+    use std::fs;
+    let (root, graph) = loaded_package(name, files);
     let lines = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
     let mut engine = Engine::new();
     let sink = lines.clone();
@@ -9868,5 +9879,214 @@ main();
     assert_eq!(
         output,
         "60s true\n10ms true false\n4.5s true 2.25s\nabcd true bc\n"
+    );
+}
+
+/// The files of a Cargo package of edition `edition` whose `src/main.rs`
+/// is `main`.
+fn edition_package(edition: &str, main: &str) -> [(&'static str, String); 2] {
+    [
+        (
+            "Cargo.toml",
+            format!(
+                "[package]\nname = \"tails\"\nversion = \"0.1.0\"\nedition = \"{edition}\"\n\n\
+                 [workspace]\n"
+            ),
+        ),
+        ("src/main.rs", format!("// rawr\n{main}")),
+    ]
+}
+
+/// The package of edition `edition` whose `src/main.rs` is `main`, loaded
+/// under the build directory as `name`, with its directory.
+fn edition_loaded(
+    name: &str,
+    edition: &str,
+    main: &str,
+) -> (std::path::PathBuf, crate::package::Graph) {
+    let files = edition_package(edition, main);
+    let files: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(path, text)| (*path, text.as_str()))
+        .collect();
+    loaded_package(&format!("tail-{name}-{edition}"), &files)
+}
+
+/// What the package of edition `edition` whose `src/main.rs` is `main`
+/// prints.
+fn edition_printed(name: &str, edition: &str, main: &str) -> String {
+    let files = edition_package(edition, main);
+    let files: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(path, text)| (*path, text.as_str()))
+        .collect();
+    printed_package(&format!("tail-{name}-{edition}"), &files)
+}
+
+/// rustc's report of the package of edition `edition` whose `src/main.rs`
+/// is `main`, which rawr refuses, but for its `-->` line, which names where
+/// the build directory is.
+fn edition_rendered(name: &str, edition: &str, main: &str) -> String {
+    let (root, graph) = edition_loaded(name, edition, main);
+    let error = Engine::new()
+        .compile_package(graph)
+        .map(|_| ())
+        .expect_err("rawr refuses this package");
+    let _ = std::fs::remove_dir_all(&root);
+    let report = crate::diagnostic::render(&error.report().expect("the error is in the package"));
+    let lines: Vec<&str> = report
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("-->"))
+        .collect();
+    format!("{}\n", lines.join("\n"))
+}
+
+/// A type whose `Drop` uses the borrow it holds.
+const GUARD: &str = "struct Guard<'a>(&'a i32);
+
+impl Drop for Guard<'_> {
+    fn drop(&mut self) {
+        println!(\"drop {}\", self.0);
+    }
+}
+
+impl Guard<'_> {
+    fn get(&self) -> i32 {
+        *self.0
+    }
+}
+";
+
+/// The help rustc gives for a tail temporary that outlives a local.
+const TAIL_HELP: &str = "help: for example, you could save the expression's value in a new \
+                         local variable `x` and then make `x` be the expression at the end of \
+                         the block";
+
+/// The note rustc gives for a tail temporary that outlives a local.
+const TAIL_NOTE: &str = "= note: the temporary is part of an expression at the end of a block;";
+
+#[test]
+fn a_tail_temporary_that_borrows_a_local_outlives_it_before_edition_2024() {
+    // Before edition 2024 a block's tail temporaries drop at the end of the
+    // statement around the block, after its locals: a `Drop` temporary that
+    // borrows one is rustc's E0597, with its labels, note and help. Edition
+    // 2024 drops them first (#2517). Each line is one past rustc's, for
+    // `// rawr`.
+    let block = format!(
+        "{GUARD}
+fn main() {{
+    let n = {{
+        let x = 5;
+        Guard(&x).get()
+    }};
+    println!(\"{{n}}\");
+}}
+"
+    );
+    assert_eq!(
+        edition_rendered("block", "2021", &block),
+        format!(
+            "error[E0597]: `x` does not live long enough
+   |
+18 |         let x = 5;
+   |             - binding `x` declared here
+19 |         Guard(&x).get()
+   |         ------^^-
+   |         |     |
+   |         |     borrowed value does not live long enough
+   |         a temporary with access to the borrow is created here ...
+20 |     }};
+   |     -- ... and the borrow might be used here, when that temporary is dropped and runs the `Drop` code for type `Guard`
+   |     |
+   |     `x` dropped here while still borrowed
+   |
+   {TAIL_NOTE}
+           consider forcing this temporary to be dropped sooner, before the block's local variables are dropped
+{TAIL_HELP}
+   |
+19 |         let x = Guard(&x).get(); x
+   |         +++++++                +++
+"
+        )
+    );
+    assert_eq!(edition_printed("block", "2024", &block), "drop 5\n5\n");
+    let body = format!(
+        "{GUARD}
+fn read() -> i32 {{
+    let x = 1;
+    Guard(&x).get()
+}}
+
+fn main() {{
+    println!(\"{{}}\", read());
+}}
+"
+    );
+    assert_eq!(
+        edition_rendered("body", "2021", &body),
+        format!(
+            "error[E0597]: `x` does not live long enough
+   |
+17 |     let x = 1;
+   |         - binding `x` declared here
+18 |     Guard(&x).get()
+   |     ------^^-
+   |     |     |
+   |     |     borrowed value does not live long enough
+   |     a temporary with access to the borrow is created here ...
+19 | }}
+   | -
+   | |
+   | `x` dropped here while still borrowed
+   | ... and the borrow might be used here, when that temporary is dropped and runs the `Drop` code for type `Guard`
+   |
+   {TAIL_NOTE}
+           consider forcing this temporary to be dropped sooner, before the block's local variables are dropped
+{TAIL_HELP}
+   |
+18 |     let x = Guard(&x).get(); x
+   |     +++++++                +++
+"
+        )
+    );
+    assert_eq!(edition_printed("body", "2024", &body), "drop 1\n1\n");
+    // A closure's body ends its own tail's temporaries after its locals.
+    let closure = format!(
+        "{GUARD}
+fn main() {{
+    let g = || {{
+        let y = 2;
+        Guard(&y).get()
+    }};
+    println!(\"{{}}\", g());
+}}
+"
+    );
+    let (root, graph) = edition_loaded("closure", "2021", &closure);
+    let refused = Engine::new()
+        .compile_package(graph)
+        .map(|_| ())
+        .expect_err("rawr refuses this package")
+        .to_string();
+    let _ = std::fs::remove_dir_all(&root);
+    assert!(
+        refused.starts_with("`y` does not live long enough (E0597)"),
+        "{refused}"
+    );
+    // A parameter outlives its body's tail temporaries in every edition.
+    let parameter = format!(
+        "{GUARD}
+fn read(x: i32) -> i32 {{
+    Guard(&x).get()
+}}
+
+fn main() {{
+    println!(\"{{}}\", read(3));
+}}
+"
+    );
+    assert_eq!(
+        edition_printed("parameter", "2021", &parameter),
+        "drop 3\n3\n"
     );
 }

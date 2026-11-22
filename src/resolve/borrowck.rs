@@ -263,6 +263,9 @@ pub(crate) struct Body {
     /// Each `let x;` not declared `mut`, where it is declared: it is given
     /// its value once on each path from there (`assigns::check`).
     pub(crate) single_assignments: Vec<(Point, Local)>,
+    /// The temporaries of blocks' tails that drop after the blocks'
+    /// locals, as they do before edition 2024.
+    pub(crate) outliving: Vec<super::tail::Outliving>,
 }
 
 /// A value the body stores below a reference (`v.push(x)`, `*r = x`):
@@ -419,6 +422,9 @@ pub(crate) struct Conflict {
     /// rustc's report of a returned value that breaks the function's own
     /// signature, which says more than the conflict.
     pub(crate) report: Option<Box<super::outlives::Reports>>,
+    /// rustc's explanation of a local's borrow that a tail temporary keeps
+    /// past the local's end.
+    pub(crate) tail: Option<Box<super::tail::Explanation>>,
 }
 
 /// The first borrow error in `body` under `rule`, in the order the body
@@ -480,6 +486,7 @@ pub(crate) fn check(body: &Body, rule: &impl Rule) -> Option<Conflict> {
                     access: loan.span,
                     borrow: loan.span,
                     report: None,
+                    tail: None,
                 });
             }
             let name = describe(body, &loan.place);
@@ -501,6 +508,7 @@ pub(crate) fn check(body: &Body, rule: &impl Rule) -> Option<Conflict> {
                 access: loan.span,
                 borrow: loan.span,
                 report: None,
+                tail: None,
             });
         }
         let made = loan.map(|loan| body.loans[loan.0 as usize].capture);
@@ -513,7 +521,7 @@ pub(crate) fn check(body: &Body, rule: &impl Rule) -> Option<Conflict> {
             if !in_scope[loan_index].contains(index(point)) {
                 continue;
             }
-            if let Some(conflict) = conflict(
+            if let Some(mut conflict) = conflict(
                 body,
                 place,
                 *access,
@@ -521,6 +529,11 @@ pub(crate) fn check(body: &Body, rule: &impl Rule) -> Option<Conflict> {
                 *span,
                 &body.loans[loan_index],
             ) {
+                if *access == Access::StorageDead && !is_temporary(body, place.local) {
+                    conflict.tail =
+                        super::tail::Explanation::of(body, &reach, loan_index, place.local, *span)
+                            .map(Box::new);
+                }
                 return Some(conflict);
             }
         }
@@ -561,6 +574,7 @@ fn returned_local(body: &Body, reach: &[Vec<bool>]) -> Option<Conflict> {
             access: value,
             borrow: loan.span,
             report: None,
+            tail: None,
         });
     }
     None
@@ -842,6 +856,7 @@ fn conflict(
             access: span,
             borrow: loan.span,
             report: None,
+            tail: None,
         });
     }
     let (code, message) = match access {
@@ -885,6 +900,7 @@ fn conflict(
                 access: loan.span,
                 borrow: span,
                 report: None,
+                tail: None,
             });
         }
         Access::StorageDead => {
@@ -894,6 +910,7 @@ fn conflict(
                 access: loan.span,
                 borrow: span,
                 report: None,
+                tail: None,
             });
         }
         Access::Read | Access::Length | Access::Shared | Access::Reserve => {
@@ -906,6 +923,7 @@ fn conflict(
         access: span,
         borrow: loan.span,
         report: None,
+        tail: None,
     })
 }
 

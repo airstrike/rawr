@@ -114,7 +114,8 @@ impl<'a> Parser<'a> {
         self.flow().open_temporaries();
         self.open_frames();
         let bound = self.parse_binding_statement(let_keyword);
-        self.flow().close_temporaries(ScopeEnd::Let);
+        let end = ScopeEnd::Let(self.last_read());
+        self.flow().close_temporaries(end);
         let frames = self.close_frames();
         self.field_entries.truncate(pending);
         // A form of `let` that does not drop its temporaries with its value.

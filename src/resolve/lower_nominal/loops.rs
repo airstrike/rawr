@@ -114,7 +114,8 @@ impl<'a> Parser<'a> {
                 let condition = self.parse_head(Self::parse_expr);
                 // The condition's temporaries end before it leaves the loop
                 // or enters the body.
-                self.flow().close_temporaries(ScopeEnd::Statement);
+                let end = ScopeEnd::Statement(self.last_read());
+                self.flow().close_temporaries(end);
                 let jumped = self.leave_while_condition();
                 let frames = self.close_frames();
                 let temporaries = self.close_temporaries();

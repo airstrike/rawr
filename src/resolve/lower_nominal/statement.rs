@@ -124,10 +124,10 @@ impl<'a> Parser<'a> {
         let parsed = self.parse_expression_statement(pending);
         // A tail's value goes on into the block's: a temporary it borrows in
         // an extending place goes on with it.
-        let end = if self.last_expression.is_some() {
-            ScopeEnd::Value
+        let end = if let Some((_, tail)) = self.last_expression {
+            ScopeEnd::Tail(tail)
         } else {
-            ScopeEnd::Statement
+            ScopeEnd::Statement(self.last_read())
         };
         self.flow().close_temporaries(end);
         let frames = self.close_frames();
