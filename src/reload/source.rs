@@ -559,9 +559,24 @@ impl Snapshot {
         capture.bind(expected)
     }
 
+    /// The file `current`, the program as it is on disk now, holds
+    /// otherwise than this snapshot: the first one edited, added or
+    /// removed, or the entry when only it or the features moved. `None`
+    /// when the two match exactly.
     #[cfg(feature = "rust-import")]
-    pub(crate) fn exactly_matches(&self, other: &Self) -> bool {
-        self.entry == other.entry && self.files == other.files && self.features == other.features
+    pub(crate) fn changed_in(&self, current: &Self) -> Option<PathBuf> {
+        if self.entry != current.entry || self.features != current.features {
+            return Some(current.entry.clone());
+        }
+        let mut snapshotted = self.files.iter();
+        let mut now = current.files.iter();
+        loop {
+            match (snapshotted.next(), now.next()) {
+                (None, None) => return None,
+                (Some(snapshotted), Some(now)) if snapshotted == now => {}
+                (_, Some(file)) | (Some(file), None) => return Some(file.path.clone()),
+            }
+        }
     }
 
     /// Re-read every exact source and manifest and reject any content drift.

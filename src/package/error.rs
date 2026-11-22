@@ -234,10 +234,24 @@ impl Error {
         matches!(
             self.kind,
             Kind::Import(
-                super::import::Error::SnapshotMismatch
+                super::import::Error::SnapshotMismatch { .. }
                     | super::import::Error::Snapshot(crate::reload::source::Error::Changed { .. })
             )
         )
+    }
+
+    /// The file a save changed while the program was compiled, when
+    /// [`Self::source_changed`].
+    #[cfg(feature = "rust-import")]
+    #[must_use]
+    pub fn changed_source(&self) -> Option<&std::path::Path> {
+        match &self.kind {
+            Kind::Import(
+                super::import::Error::SnapshotMismatch { path }
+                | super::import::Error::Snapshot(crate::reload::source::Error::Changed { path }),
+            ) => Some(path),
+            _ => None,
+        }
     }
 
     #[cfg(feature = "rust-import")]

@@ -162,6 +162,7 @@ enum Event {
         at: Instant,
         mark: Option<Instant>,
     },
+    Again(Instant),
     Plan(usize),
     /// A line of a Cargo child's, or a wait of rawr's own, heard `at`.
     Said {
@@ -990,6 +991,12 @@ pub(crate) fn stage(stage: usize) {
     });
 }
 
+/// The launch prepares the program again, from its first stage: a save
+/// landed as it started (D531.9). Its later stages come again.
+pub fn again() {
+    let _ = send(Event::Again(Instant::now()));
+}
+
 /// Record the planned unit count from a `--unit-graph` listing.
 pub(crate) fn plan(unit_graph: &[u8]) {
     let units = count(unit_graph, b"\"pkg_id\"");
@@ -1258,24 +1265,36 @@ impl State {
         self.previous = previous;
     }
 
-    /// Close the current stage's record.
+    /// Close the current stage's record. A stage a launch enters again
+    /// keeps the most it did in any one pass.
     fn close(&mut self) {
         let index = self.stage.clamp(1, STAGES.len()) - 1;
-        self.current[index] = self.finished.max(self.compiling);
+        self.current[index] = self.current[index].max(self.finished.max(self.compiling));
         self.compiled |= self.compiling > 0;
     }
 
     fn advance(&mut self, stage: usize, now: Instant) {
         if self.launch.is_some() && stage > self.stage && stage <= STAGES.len() {
-            self.close();
-            self.stage = stage;
-            self.since = Some(now);
-            self.finished = 0;
-            self.compiling = 0;
-            self.building.clear();
-            self.waiting = None;
-            self.step = None;
+            self.enter(stage, now);
         }
+    }
+
+    /// Go back to the first stage, as a launch that prepares again does.
+    fn again(&mut self, now: Instant) {
+        if self.launch.is_some() {
+            self.enter(1, now);
+        }
+    }
+
+    fn enter(&mut self, stage: usize, now: Instant) {
+        self.close();
+        self.stage = stage;
+        self.since = Some(now);
+        self.finished = 0;
+        self.compiling = 0;
+        self.building.clear();
+        self.waiting = None;
+        self.step = None;
     }
 
     /// Take what a Cargo child said `at`.
@@ -1472,6 +1491,7 @@ impl Printer {
                     self.phase(EXTRACTING, mark);
                 }
             }
+            Event::Again(at) => self.line.again(at),
             Event::Plan(units) => self.line.units = Some(units),
             Event::Said { said, at } => {
                 let finished = matches!(said, Said::Finished(_));

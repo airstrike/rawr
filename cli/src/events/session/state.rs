@@ -7,10 +7,14 @@ use serde_json::Value;
 /// Where a session's program is.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum Phase {
-    /// Spawned; nothing reported yet.
+    /// Spawned and nothing reported yet, or its runner is built and
+    /// starts.
     #[default]
     Starting,
-    /// A cold start builds: its stage and status.
+    /// A start resolves, reads and checks the program, or does again
+    /// after a save as it started.
+    Preparing,
+    /// A start builds the program's runner.
     Building,
     /// The program runs.
     Running,
@@ -37,6 +41,7 @@ impl Phase {
     pub fn name(&self) -> &'static str {
         match self {
             Self::Starting => "starting",
+            Self::Preparing => "preparing",
             Self::Building => "building",
             Self::Running => "running",
             Self::Paused => "paused",
@@ -51,7 +56,16 @@ impl Phase {
     /// Still on its way to running or failing.
     #[must_use]
     pub const fn is_pending(&self) -> bool {
-        matches!(self, Self::Starting | Self::Building | Self::Restarting)
+        matches!(
+            self,
+            Self::Starting | Self::Preparing | Self::Building | Self::Restarting
+        )
+    }
+
+    /// A start is under way: what its status line says is the session's.
+    #[must_use]
+    pub const fn is_starting(&self) -> bool {
+        matches!(self, Self::Starting | Self::Preparing | Self::Building)
     }
 
     /// Over: nothing more will happen.
@@ -149,10 +163,19 @@ impl State {
             self.paused = None;
         }
         match name {
+            // A start's stage says its phase: it prepares the program,
+            // builds its runner, then starts it.
             "building" => {
-                self.phase = Phase::Building;
+                self.phase = match event["stage"].as_str().unwrap_or_default() {
+                    "building runner" => Phase::Building,
+                    "starting" => Phase::Starting,
+                    _ => Phase::Preparing,
+                };
                 self.building = Some(event["status"].as_str().unwrap_or_default().to_owned());
             }
+            // A save as the program started prepares it again (D531.9),
+            // while a running program keeps running as a save prepares.
+            "preparing" if !self.phase.is_live() => self.phase = Phase::Preparing,
             "running" | "queued" | "swapped" => {
                 self.phase = Phase::Running;
                 self.failure = None;
@@ -207,11 +230,22 @@ mod tests {
                 "status": "building API · 12 of 340 crates · serde",
             }),
         );
-        assert_eq!(state.phase, Phase::Building);
+        assert_eq!(state.phase, Phase::Preparing);
         assert_eq!(
             state.building(),
             Some("building API · 12 of 340 crates · serde")
         );
+        recorded(
+            &mut state,
+            json!({ "event": "building", "stage": "building runner", "status": "building runner" }),
+        );
+        assert_eq!(state.phase, Phase::Building);
+        // A save as it started prepares it again.
+        recorded(
+            &mut state,
+            json!({ "event": "preparing", "reason": "`src/main.rs` changed" }),
+        );
+        assert_eq!(state.phase, Phase::Preparing);
         recorded(&mut state, json!({ "event": "running" }));
         assert_eq!(state.phase, Phase::Running);
         recorded(&mut state, json!({ "event": "failed", "diagnostics": [] }));
@@ -223,7 +257,7 @@ mod tests {
         assert_eq!(state.phase, Phase::Ended(3));
         assert_eq!(
             state.events.iter().map(|(seq, _)| *seq).collect::<Vec<_>>(),
-            [1, 2, 3, 4, 5]
+            [1, 2, 3, 4, 5, 6, 7]
         );
         let mut paused = State::default();
         recorded(&mut paused, json!({ "event": "running" }));
