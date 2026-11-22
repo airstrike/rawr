@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-22",
-  "version": "0.5.10",
+  "version": "0.5.11",
   "examples": {
     "running": 55,
     "total": 56,
@@ -11,6 +11,15 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors."],"entries":[]},
     "releases": [
+      {
+        "version": "0.5.11",
+        "date": "2026-11-22",
+        "entries": [
+          {"text":"A path through another module's import of a std item resolves to that item, as rustc's does: `super::fmt::Display`, `crate::fmt::Formatter` and `super::super::HashMap::new()` after the parent's `use std::fmt;` or `use std::collections::*;`, in signatures, bodies and patterns.","issues":[2468]},
+          {"text":"`pub use` re-exports a std item or a module, as rustc does: `pub use std::fmt::Display;`, `pub use std::fmt;` and `pub use crate::a::b as c;` work from other modules, and a private import of a std item is E0603 naming the item's kind.","issues":[2469]},
+          {"text":"A function's `impl Trait` output is one type per type argument, as rustc's is: `wrap(Sq(1.0))` and `wrap(Ci(2.0))` no longer mix, and a bound naming a parameter (`impl Into<T>`, `impl Iterator<Item = T>`) works, read at each call's type arguments.","issues":[2492]}
+        ]
+      },
       {
         "version": "0.5.10",
         "date": "2026-11-22",
@@ -6128,8 +6137,8 @@
     {"issue":2465,"title":"A program generic bounded `T: FromStr` called at `u8` is E0277 \"`u8: FromStr` is not satisfied\"","state":"closed","category":"Divergences from rustc","release":"0.5.6"},
     {"issue":2466,"title":"crossing::an_opaque_output_two_crates_reach_is_one_type fails: missing runtime binding for an opaque explain method","state":"open","category":"Health"},
     {"issue":2467,"title":"The playground has a New button beside Examples that starts from an empty `fn main`","state":"closed","category":"Health","release":"0.5.5"},
-    {"issue":2468,"title":"A std path through a `super::` or `crate::` import of a std module fails when lowered","state":"open","category":"Divergences from rustc"},
-    {"issue":2469,"title":"`pub use` of a std trait from a program module is refused as a module re-export","state":"open","category":"Divergences from rustc"},
+    {"issue":2468,"title":"A std path through a `super::` or `crate::` import of a std module fails when lowered","state":"closed","category":"Divergences from rustc","release":"0.5.11"},
+    {"issue":2469,"title":"`pub use` of a std trait from a program module is refused as a module re-export","state":"closed","category":"Divergences from rustc","release":"0.5.11"},
     {"issue":2470,"title":"An impl's, struct's or trait's `where` bound on a type other than its parameters is refused","state":"open","category":"Divergences from rustc"},
     {"issue":2471,"title":"A bound met through a program's conditional impl doesn't check the impl's own bounds","state":"open","category":"Divergences from rustc"},
     {"issue":2472,"title":"E0277 for a std container names the container, where rustc names the element and adds \"required for\"","state":"open","category":"Divergences from rustc"},
@@ -6152,11 +6161,13 @@
     {"issue":2489,"title":"Suggest a named lifetime for two elided ones, as rustc does","state":"open","category":"Divergences from rustc"},
     {"issue":2490,"title":"A function written `-> impl Trait` returns its own opaque type, known by every written bound as…","state":"closed","category":"Divergences from rustc","release":"0.5.9"},
     {"issue":2491,"title":"A static trait function through a generic parameter filled by an opaque output runs","state":"closed","category":"Divergences from rustc","release":"0.5.10"},
-    {"issue":2492,"title":"An opaque output's identity includes its function's generic arguments, and its bounds may name them","state":"open","category":"Divergences from rustc"},
+    {"issue":2492,"title":"An opaque output's identity includes its function's generic arguments, and its bounds may name them","state":"closed","category":"Divergences from rustc","release":"0.5.11"},
     {"issue":2493,"title":"iced's pokedex draws a different frame under rawr each night, where cargo's is the same","state":"open","category":"iced examples"},
     {"issue":2494,"title":"An `impl Trait` value is `Send` exactly when the value it hides is: moving one that holds an…","state":"closed","category":"Divergences from rustc","release":"0.5.10"},
     {"issue":2495,"title":"E0277 for a non-Send capture names the capture's type, not the type that isn't Send","state":"open","category":"Divergences from rustc"},
-    {"issue":2496,"title":"Auto-trait leakage beyond thread closures: a generic call's `T: Send` and spawn's output","state":"open","category":"Divergences from rustc"}
+    {"issue":2496,"title":"Auto-trait leakage beyond thread closures: a generic call's `T: Send` and spawn's output","state":"open","category":"Divergences from rustc"},
+    {"issue":2497,"title":"A `use` that collides with a same-named declaration reports `duplicate item` where rustc reports E0255","state":"open","category":"Divergences from rustc"},
+    {"issue":2498,"title":"A generic call's argument that fails its expected input is E0308 at the argument, as rustc reports it","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -8788,10 +8799,11 @@
             {"number":2485,"title":"A `Box<dyn Trait>` isn't checked for `Send` where a thread needs it","state":"open"},
             {"number":2490,"title":"A function written `-> impl Trait` returns its own opaque type, known by every written bound as…","state":"closed"},
             {"number":2491,"title":"A static trait function through a generic parameter filled by an opaque output runs","state":"closed"},
-            {"number":2492,"title":"An opaque output's identity includes its function's generic arguments, and its bounds may name them","state":"open"},
+            {"number":2492,"title":"An opaque output's identity includes its function's generic arguments, and its bounds may name them","state":"closed"},
             {"number":2494,"title":"An `impl Trait` value is `Send` exactly when the value it hides is: moving one that holds an…","state":"closed"},
             {"number":2495,"title":"E0277 for a non-Send capture names the capture's type, not the type that isn't Send","state":"open"},
-            {"number":2496,"title":"Auto-trait leakage beyond thread closures: a generic call's `T: Send` and spawn's output","state":"open"}
+            {"number":2496,"title":"Auto-trait leakage beyond thread closures: a generic call's `T: Send` and spawn's output","state":"open"},
+            {"number":2498,"title":"A generic call's argument that fails its expected input is E0308 at the argument, as rustc reports it","state":"open"}
           ]
         },
         {
@@ -8953,8 +8965,9 @@
             {"number":1168,"title":"A crate's tuple-struct constructor isn't callable from marked code","state":"open"},
             {"number":2250,"title":"`use krate::{module::Type}` and nested groups, `self` and globs inside a `use` group reach a…","state":"closed"},
             {"number":2452,"title":"A marked module's `impl page::Page for …` resolves `page::Page` as a module, not the trait","state":"closed"},
-            {"number":2468,"title":"A std path through a `super::` or `crate::` import of a std module fails when lowered","state":"open"},
-            {"number":2469,"title":"`pub use` of a std trait from a program module is refused as a module re-export","state":"open"}
+            {"number":2468,"title":"A std path through a `super::` or `crate::` import of a std module fails when lowered","state":"closed"},
+            {"number":2469,"title":"`pub use` of a std trait from a program module is refused as a module re-export","state":"closed"},
+            {"number":2497,"title":"A `use` that collides with a same-named declaration reports `duplicate item` where rustc reports E0255","state":"open"}
           ]
         },
         {

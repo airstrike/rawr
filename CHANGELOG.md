@@ -6,6 +6,12 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors.
 
+## 0.5.11 (2026-11-22)
+
+- A path through another module's import of a std item resolves to that item, as rustc's does: `super::fmt::Display`, `crate::fmt::Formatter` and `super::super::HashMap::new()` after the parent's `use std::fmt;` or `use std::collections::*;`, in signatures, bodies and patterns. (#2468)
+- `pub use` re-exports a std item or a module, as rustc does: `pub use std::fmt::Display;`, `pub use std::fmt;` and `pub use crate::a::b as c;` work from other modules, and a private import of a std item is E0603 naming the item's kind. (#2469)
+- A function's `impl Trait` output is one type per type argument, as rustc's is: `wrap(Sq(1.0))` and `wrap(Ci(2.0))` no longer mix, and a bound naming a parameter (`impl Into<T>`, `impl Iterator<Item = T>`) works, read at each call's type arguments. (#2492)
+
 ## 0.5.10 (2026-11-22)
 
 - A generic call whose `T::zero()` or `T::default()` needs the type an `impl Trait` value hides now runs, as rustc does, even when the caller comes first in the file. (#2491)
