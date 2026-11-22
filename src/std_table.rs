@@ -484,6 +484,21 @@ impl Item {
         Some(ty)
     }
 
+    /// A struct's public field's type, as its declaration writes it:
+    /// `Vec<u8>` of `std::process::Output::stdout`. `None` for any other
+    /// item.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "only `declare` reads it, to write `declared`")
+    )]
+    pub(crate) fn field_type(&self) -> Option<&'static str> {
+        if self.kind != "field" {
+            return None;
+        }
+        let (_, ty) = self.detail.split_once(": ")?;
+        Some(ty)
+    }
+
     /// The last segment of the item's path: `from_str` of
     /// `core::str::traits::FromStr::from_str`.
     pub(crate) fn name(&self) -> &'static str {

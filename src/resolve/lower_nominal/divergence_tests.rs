@@ -8653,6 +8653,72 @@ main();
 }
 
 #[test]
+fn std_command_args_and_output_run_as_stds() {
+    // `args` takes any iterable of `AsRef<OsStr>` items, and `output`
+    // collects the child's stdout and stderr into `Output`'s public fields
+    // (#2082).
+    let program = r#"
+use std::process::Command;
+fn main() {
+    let out = Command::new("sh").args(["-c", "echo hi; echo oops >&2; exit 2"]).output().unwrap();
+    println!("{} {:?}", out.status.success(), out.status.code());
+    print!("{}", String::from_utf8_lossy(&out.stdout));
+    println!("{:?} {}", out.stderr, out.stdout.len());
+    let words = vec!["a", "b"];
+    let listed = Command::new("echo").args(words.iter().map(|w| w.to_uppercase())).arg("c").output().unwrap();
+    print!("{}", String::from_utf8(listed.stdout).unwrap());
+    let mut cmd = Command::new("printf");
+    cmd.args(&["%s-%s", "x"]);
+    cmd.args(vec![String::from("y")]);
+    let printed = cmd.output().unwrap().stdout;
+    println!("{:?} {:?}", cmd, printed);
+}
+main();
+"#;
+    assert_eq!(
+        printed_with(program, crate::Access::all()),
+        "false Some(2)\nhi\n[111, 111, 112, 115, 10] 3\nA B c\n\"printf\" \"%s-%s\" \"x\" \"y\" [120, 45, 121]\n"
+    );
+}
+
+#[test]
+fn a_held_types_functions_take_its_borrowed_forms_by_any_path() {
+    // `Path::new(&os)` and `OsString::from(&path)` select their borrowed
+    // forms (#836), by an import or by the full path, and `OsStr::new` is
+    // the text it is given.
+    let output = printed(
+        r#"
+use std::ffi::{OsStr, OsString};
+use std::path::{Path, PathBuf};
+fn main() {
+    let os = OsString::from("a/b");
+    let path = PathBuf::from("x/y");
+    println!("{} {}", Path::new(&os).display(), std::path::Path::new(&os).display());
+    println!("{:?} {:?}", OsString::from(&path), OsStr::new("s"));
+    println!("{:?} {}", std::ffi::OsStr::new(&os), std::path::Path::new("p/q").display());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "a/b a/b\n\"x/y\" \"s\"\n\"a/b\" p/q\n");
+    // A member std declares and rawr doesn't bind is the not-yet error,
+    // never an unknown member (#837).
+    for (call, path) in [
+        ("p.capacity()", "PathBuf::capacity"),
+        ("PathBuf::with_capacity(3)", "PathBuf::with_capacity"),
+        ("p.components()", "Path::components"),
+    ] {
+        let report = refused(&format!(
+            "use std::path::PathBuf;\nfn main() {{\n    let p = PathBuf::new();\n    let _ = {call};\n}}\nmain();\n"
+        ));
+        assert!(
+            report.contains(&format!("rawr doesn't run `{path}` yet")),
+            "{report}"
+        );
+    }
+}
+
+#[test]
 fn std_atomics_run_as_stds() {
     // Each atomic has its own impl's members (`Atomic<usize>`'s), its
     // value is shared by a static, a borrow and an `Arc` on threads, and

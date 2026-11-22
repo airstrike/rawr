@@ -212,6 +212,17 @@ pub(super) static STEPS: &[Step] = &[
         ],
     },
     Step::Held {
+        std: "std::process::Output",
+        capabilities: &[
+            capability::Kind::Debug,
+            capability::Kind::Clone,
+            capability::Kind::PartialEq,
+            capability::Kind::Eq,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    },
+    Step::Held {
         std: "std::fs::File",
         capabilities: &[
             capability::Kind::Debug,
@@ -4598,6 +4609,15 @@ pub(super) static STEPS: &[Step] = &[
         ),
     },
     Step::Item {
+        path: "process::Command::output",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[],
+        output: Ty::Result(
+            &Ty::Registered("process::Output"),
+            &Ty::Registered("io::Error"),
+        ),
+    },
+    Step::Item {
         path: "process::Command::new",
         kind: Kind::AssociatedFunction,
         inputs: &[Ty::Reference {
@@ -5766,6 +5786,24 @@ pub(super) static STEPS: &[Step] = &[
             mutable: false,
             target: &Ty::Registered("ffi::OsString"),
         },
+    },
+    Step::Item {
+        path: "process::Output::status",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Registered("process::ExitStatus"),
+    },
+    Step::Item {
+        path: "process::Output::stdout",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Vec(&Ty::Builtin(Builtin::U8)),
+    },
+    Step::Item {
+        path: "process::Output::stderr",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Vec(&Ty::Builtin(Builtin::U8)),
     },
     Step::Item {
         path: "process::ExitStatus::success",
@@ -8385,10 +8423,6 @@ pub(super) static STEPS: &[Step] = &[
     Step::StdAlias {
         path: "process::ExitStatusError",
         std: "std::process::ExitStatusError",
-    },
-    Step::StdAlias {
-        path: "process::Output",
-        std: "std::process::Output",
     },
     Step::StdAlias {
         path: "process::Stdio",

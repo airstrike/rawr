@@ -425,6 +425,23 @@ fn member(
         Some(item) if item.kind == "assoc-const" => {
             return constant(sink, reader, &item, path, step::Kind::AssociatedValue);
         }
+        // A public field is read by the shared reader of its name, which
+        // a program writes `value.field`.
+        Some(item) if item.kind == "field" => {
+            let Some(ty) = item.field_type().and_then(|ty| {
+                reader
+                    .with_parameters(value.parameters)
+                    .host(&solve::read(ty))
+            }) else {
+                return Ok(());
+            };
+            return sink.item(
+                path,
+                step::Kind::Method(crate::receiver::Mode::Shared),
+                Vec::new(),
+                ty,
+            );
+        }
         _ => {}
     }
     let mut forms = Vec::<reader::Form>::new();
