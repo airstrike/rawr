@@ -814,10 +814,11 @@ pub(super) enum Ty {
     /// move hands on and a copy never makes.
     Thread(thread::Kind, Box<Ty>),
     /// An iterator of `Item` (`impl Iterator<Item = T>`): an adaptor chain
-    /// fused into one loop where it is consumed, else the array of its
-    /// items at runtime. With the std struct it is, when rawr knows it
-    /// (`core::str::iter::Chars` of `s.chars()`), whose own inherent
-    /// methods it also has; an adaptor's chain is any iterator.
+    /// fused into one loop where it is consumed, else a runtime iterator
+    /// that runs the chain as it is pulled (`lazy.rs`). With the std
+    /// struct it is, when rawr knows it (`core::str::iter::Chars` of
+    /// `s.chars()`), whose own inherent methods it also has; an adaptor's
+    /// chain is any iterator.
     Iter(
         Box<Ty>,
         #[cfg_attr(

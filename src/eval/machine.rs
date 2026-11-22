@@ -868,6 +868,7 @@ impl fmt::Debug for Poll {
 #[derive(Clone)]
 pub struct Frame(crate::Shared<crate::Locked<Option<Saved>>>);
 
+#[derive(Clone)]
 pub(crate) struct Saved {
     machine: crate::Shared<Machine>,
     next: Jump,
@@ -897,6 +898,19 @@ impl Frame {
         crate::func::waited_write(&self.0).take()
     }
 
+    /// A frame of its own at the same point, with copies of its locals: a
+    /// clone of a suspended body that resumes apart from this one, as a
+    /// clone of a Rust iterator part way through goes on by itself.
+    pub(crate) fn duplicate(&self) -> Self {
+        let mut saved = crate::func::waited_read(&self.0).clone();
+        for (_, _, value) in saved.iter_mut().flat_map(|saved| &mut saved.locals) {
+            if let Some(cursor) = value.read_lock::<Cursor>().map(|cursor| cursor.duplicate()) {
+                *value = Dynamic::from(cursor);
+            }
+        }
+        Self(crate::Shared::new(crate::Locked::new(saved)))
+    }
+
     /// The hash of the body this frame suspended in, while it hasn't
     /// resumed: it resumes only in a machine of the same one.
     pub(crate) fn body(&self) -> Option<u64> {
@@ -914,8 +928,16 @@ struct Cursor(crate::Shared<crate::Locked<Iteration>>);
 
 struct Iteration {
     thread: std::thread::ThreadId,
-    iterator: std::mem::ManuallyDrop<Box<dyn Iterator<Item = crate::RawrResultOf<Dynamic>>>>,
+    /// The value the loop walks, and how many items it has taken: what a
+    /// duplicate walks again to the same item.
+    walked: Dynamic,
+    taken: usize,
+    /// The evaluator's iterator over `walked`, made at the first `next`.
+    iterator: Option<std::mem::ManuallyDrop<Walk>>,
 }
+
+/// The evaluator's iterator over a value a `for` loop walks.
+type Walk = Box<dyn Iterator<Item = crate::RawrResultOf<Dynamic>>>;
 
 // SAFETY: the iterator is only advanced and dropped on the thread that made
 // it (`next`, `Drop`); on any other thread it is leaked.
@@ -930,11 +952,27 @@ impl Iteration {
     }
 }
 
+impl Cursor {
+    /// A cursor of its own at the same item, which walks its value again
+    /// from the start to there at its first `next`.
+    fn duplicate(&self) -> Self {
+        let iteration = crate::func::waited_read(&self.0);
+        Self(crate::Shared::new(crate::Locked::new(Iteration {
+            thread: std::thread::current().id(),
+            walked: iteration.walked.clone(),
+            taken: iteration.taken,
+            iterator: None,
+        })))
+    }
+}
+
 impl Drop for Iteration {
     fn drop(&mut self) {
-        if self.owned() {
+        if self.owned()
+            && let Some(iterator) = &mut self.iterator
+        {
             // SAFETY: dropped once, here.
-            unsafe { std::mem::ManuallyDrop::drop(&mut self.iterator) };
+            unsafe { std::mem::ManuallyDrop::drop(iterator) };
         }
     }
 }
@@ -1132,7 +1170,23 @@ impl Engine {
                     if !iteration.owned() {
                         return Err(runtime("a loop's iterator moved to another thread"));
                     }
-                    iteration.iterator.next()
+                    let iteration = &mut *iteration;
+                    let iterator = match &mut iteration.iterator {
+                        Some(iterator) => iterator,
+                        None => {
+                            let mut iterator =
+                                self.walk(global, iteration.walked.clone(), Position::NONE)?;
+                            for _ in 0..iteration.taken {
+                                iterator.next();
+                            }
+                            iteration
+                                .iterator
+                                .insert(std::mem::ManuallyDrop::new(iterator))
+                        }
+                    };
+                    let next = iterator.next();
+                    iteration.taken += 1;
+                    next
                 };
                 match next {
                     Some(value) => Step::Bind(*body, name.clone(), value?.flatten()),
@@ -1159,6 +1213,22 @@ impl Engine {
         value: Dynamic,
         position: Position,
     ) -> crate::RawrResultOf<Cursor> {
+        let iterator = self.walk(global, value.clone(), position)?;
+        Ok(Cursor(crate::Shared::new(crate::Locked::new(Iteration {
+            thread: std::thread::current().id(),
+            walked: value,
+            taken: 0,
+            iterator: Some(std::mem::ManuallyDrop::new(iterator)),
+        }))))
+    }
+
+    /// The evaluator's iterator over `value`, as a `for` loop walks it.
+    fn walk(
+        &self,
+        global: &GlobalRuntimeState,
+        value: Dynamic,
+        position: Position,
+    ) -> crate::RawrResultOf<Walk> {
         let iter_type = value.type_id();
         let iter_func = self
             .global_modules
@@ -1172,10 +1242,7 @@ impl Engine {
                     .find_map(|m| m.get_qualified_iter(iter_type))
             });
         let iter_func = iter_func.ok_or_else(|| EvalAltResult::ErrorFor(position))?;
-        Ok(Cursor(crate::Shared::new(crate::Locked::new(Iteration {
-            thread: std::thread::current().id(),
-            iterator: std::mem::ManuallyDrop::new(iter_func(value)),
-        }))))
+        Ok(iter_func(value))
     }
 }
 

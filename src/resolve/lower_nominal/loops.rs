@@ -696,14 +696,14 @@ impl<'a> Parser<'a> {
                 // A `for` takes a range or an iterator by value, out of
                 // its place; a `&mut` one is walked in place.
                 if self.stepped_item(&iterated).is_some()
-                    || matches!(iterated, Ty::Iter(..))
+                    || self.runtime_iterator(&iterated)
                     || !matches!(iterated, Ty::Reference { .. })
                         && (walked.script().is_some() || matches!(iterated, Ty::Host { .. }))
                         && self.type_implements(walked, "Iterator")
                 {
                     self.move_local(&mut lhs.clone())?;
                 }
-                let pipelined = if matches!(iterated, Ty::Iter(..))
+                let pipelined = if self.runtime_iterator(walked)
                     || self.stepped_item(&iterated).is_some()
                     || (walked.script().is_some() || matches!(iterated, Ty::Host { .. }))
                         && self.type_implements(walked, "Iterator")

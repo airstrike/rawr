@@ -488,6 +488,35 @@ impl Inference {
                     return Ty::ParseError(error);
                 }
             }
+            // An iterator's `Item`, by std's `Iterator` and `IntoIterator`
+            // for every iterator.
+            // An associated iterator's opaque item (`<T::Fore as
+            // Iterator>::Item`) is itself: resolving it reads the iterator
+            // again.
+            Ty::Iter(item, _) if name.as_str() == "Item" && is_iterator_trait(trait_name) => {
+                return match &**item {
+                    Ty::Projection(_, trait_name, name)
+                        if name.as_str() == "Item" && is_iterator_trait(trait_name) =>
+                    {
+                        (**item).clone()
+                    }
+                    item => self.resolve(item),
+                };
+            }
+            // std's ranges of integers and chars are iterators of them.
+            range
+                if name.as_str() == "Item"
+                    && is_iterator_trait(trait_name)
+                    && let Some((
+                        super::range::Kind::Range
+                        | super::range::Kind::Inclusive
+                        | super::range::Kind::From,
+                        element,
+                    )) = super::range::parts(range)
+                    && let element @ (Ty::Int(_) | Ty::Char) = self.resolve(&element) =>
+            {
+                return element;
+            }
             // `dyn Shape<Output = i64>`: its binding.
             Ty::Dyn(object, bindings) if object == trait_name => {
                 if let Some((_, ty)) = bindings.iter().find(|(bound, _)| bound == name) {

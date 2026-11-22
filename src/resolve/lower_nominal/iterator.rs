@@ -6,7 +6,8 @@
 //! pulling where Rust's lazy iterator stops. An iterator bound to an
 //! immutable local stays a chain: its sources and closures are evaluated
 //! where it is bound, and each use runs it from there. An iterator passed,
-//! returned or kept in a `let mut` is the array of its items at runtime.
+//! returned, stored or kept in a `let mut` is a runtime iterator, which
+//! runs its chain as far as its `next()` calls pull (`lazy.rs`).
 
 use super::*;
 
@@ -103,6 +104,9 @@ pub(super) enum Source {
         inclusive: bool,
         char: bool,
     },
+    /// An iterator value with no chain the lowering knows, as a parameter
+    /// holds: walked by its `next` at run time (`lazy.rs`).
+    Items { values: origin::Fragment },
 }
 
 /// The `Cast` code of a code point to its `char`, which a char range's
@@ -151,6 +155,14 @@ impl Parser<'_> {
             } if matches!(self.inference.resolve(&target), Ty::Script(..)) => {
                 self.iterator_receiver(&target, member)
             }
+            // And of a runtime iterator, which steps its place.
+            Ty::Reference {
+                mutable: true,
+                target,
+            } if self.runtime_iterator(&target) => std_method::iterator(member, |trait_| {
+                self.type_implements(&target, std_method::trait_name(trait_))
+            })
+            .is_some(),
             // A crate type's `impl Iterator`: the adaptors its own methods
             // do not name.
             ty @ Ty::Script(id, _) => {
@@ -161,6 +173,14 @@ impl Parser<'_> {
                         self.type_implements(&ty, std_method::trait_name(trait_))
                     })
                     .is_some()
+            }
+            // A generic parameter or an associated type bounded by
+            // `Iterator`, whose value the runtime iterates by what it is.
+            ty @ (Ty::Param(..) | Ty::Projection(..)) if self.runtime_iterator(&ty) => {
+                std_method::iterator(member, |trait_| {
+                    self.type_implements(&ty, std_method::trait_name(trait_))
+                })
+                .is_some()
             }
             // An imported type the crate implements `Iterator` for, as
             // quick-xml's `Attributes` (D558 slice 2): the adaptors its own
@@ -616,6 +636,41 @@ impl Parser<'_> {
                     )),
                 )
             }
+            // The value as made, and its copy each run steps.
+            Source::Items { values } => {
+                let initial = self.bind(&mut pipeline, "iterator", values.clone());
+                let walked = self.bind_state(&mut pipeline, "walked", initial.as_str().into());
+                let option = self.temporary("option");
+                let mut entry = origin::Fragment::plain(format!("let {option} = "));
+                let next = self.next_item(&walked);
+                entry.push(next);
+                entry.push_text("; if !");
+                let test = self.prelude_op(PreludeOp::IsSome, [option.as_str().into()]);
+                entry.push(test);
+                entry.push_text(format!(" {{ break; }} let {item} = "));
+                let unwrapped = self.prelude_op(PreludeOp::Unwrap, [option.as_str().into()]);
+                entry.push(unwrapped);
+                entry.push_text("; ");
+                pipeline.segments.push(Segment {
+                    guards: Vec::new(),
+                    header: vec![Part::Text("loop".into())],
+                    entry,
+                    exit: String::new(),
+                });
+                let source = Source::Items {
+                    values: initial.as_str().into(),
+                };
+                pipeline.reversible = Some(Reversible {
+                    source: source.clone(),
+                    item,
+                    entry: origin::Fragment::default(),
+                    exit: String::new(),
+                    dropping: false,
+                });
+                pipeline.exact = true;
+                pipeline.source = Some(source);
+                return pipeline;
+            }
         };
         pipeline.segments.push(Segment {
             guards: Vec::new(),
@@ -640,15 +695,146 @@ impl Parser<'_> {
         pipeline
     }
 
-    /// The iterator expression of `pipeline`: the array of its items, its
-    /// chain kept for the consumer that fuses it.
+    /// Whether a value of `ty` is iterated by the runtime protocol
+    /// (`lazy.rs`): an iterator with no chain the lowering knows, or a
+    /// generic parameter or an associated type bounded by `Iterator`.
+    pub(super) fn runtime_iterator(&self, ty: &Ty) -> bool {
+        match self.inference.resolve(ty) {
+            Ty::Iter(..) => true,
+            ty @ (Ty::Param(..) | Ty::Projection(..)) => self.type_implements(&ty, "Iterator"),
+            _ => false,
+        }
+    }
+
+    /// The item of a `runtime_iterator` type: its `Iterator::Item`.
+    fn runtime_item(&self, ty: &Ty) -> Ty {
+        match self.inference.resolve(ty) {
+            Ty::Iter(item, _) => *item,
+            ty => self.inference.resolve(&Ty::Projection(
+                Box::new(ty),
+                "Iterator".into(),
+                "Item".into(),
+            )),
+        }
+    }
+
+    /// `Iterator::next` of the iterator in the place `place`, which it
+    /// steps: the program's impl for a struct of its own, through the
+    /// trait's dispatcher, else a runtime iterator's (`lazy.rs`).
+    pub(super) fn next_item(&mut self, place: &str) -> origin::Fragment {
+        let (method, arguments) = self.next_method();
+        let mut text = origin::Fragment::plain(format!("{place}.{method}("));
+        text.push(origin::Fragment::join(arguments, ", "));
+        text.push_text(")");
+        text
+    }
+
+    /// The method `next_item` calls on the place, and its arguments.
+    fn next_method(&mut self) -> (String, Vec<origin::Fragment>) {
+        let implemented = self
+            .models
+            .trait_methods
+            .iter()
+            .any(|((_, name), definitions)| {
+                name.as_str() == "next"
+                    && definitions.iter().any(|definition| {
+                        definition
+                            .trait_name()
+                            .is_some_and(|name| name == "Iterator")
+                    })
+            });
+        if implemented {
+            return (trait_dispatcher_name("Iterator", "next"), Vec::new());
+        }
+        let lazy = self.push_op(Op::Prelude(PreludeOp::Lazy));
+        (lazy, vec![lazy::NEXT.to_string().into(), "()".into()])
+    }
+
+    /// `&mut it` of a local iterator, std's `impl Iterator for &mut I`: a
+    /// chain that steps the local where it is.
+    pub(super) fn borrowed_iterator(
+        &mut self,
+        place: &ParsedExpr,
+        item: Ty,
+        expression: Span,
+    ) -> Result<ParsedExpr, Error> {
+        if let Some(Lvalue::Binding { binding, .. }) = &place.lvalue {
+            self.require_mutable_binding(binding, place.span)?;
+        }
+        self.mutable_use(place, place.span);
+        let pipeline = self.place_pipeline(place)?;
+        Ok(self.iterator_expr(pipeline, item, expression))
+    }
+
+    /// A chain over the iterator in the place `place`, which each item
+    /// steps where it is (`by_ref`).
+    fn place_pipeline(&mut self, place: &ParsedExpr) -> Result<Pipeline, Error> {
+        let (item, option) = (self.temporary("item"), self.temporary("option"));
+        let (method, arguments) = self.next_method();
+        let next = self.mutation_call(place, &method, arguments)?;
+        let mut entry = origin::Fragment::plain(format!("let {option} = "));
+        entry.push(next);
+        entry.push_text("; if !");
+        let test = self.prelude_op(PreludeOp::IsSome, [option.as_str().into()]);
+        entry.push(test);
+        entry.push_text(format!(" {{ break; }} let {item} = "));
+        let unwrapped = self.prelude_op(PreludeOp::Unwrap, [option.as_str().into()]);
+        entry.push(unwrapped);
+        entry.push_text("; ");
+        Ok(Pipeline {
+            setup: origin::Fragment::default(),
+            names: Vec::new(),
+            outer: Vec::new(),
+            state: origin::Fragment::default(),
+            segments: vec![Segment {
+                guards: Vec::new(),
+                header: vec![Part::Text("loop".into())],
+                entry,
+                exit: String::new(),
+            }],
+            item,
+            stop: None,
+            source: None,
+            reversible: None,
+            exact: false,
+        })
+    }
+
+    /// A runtime iterator of `pipeline` (`lazy.rs`): its sources and
+    /// closures evaluated here, where Rust evaluates them, and its loops
+    /// in a step function that suspends at each item, so they run as far
+    /// as its `next()` calls pull.
+    fn lazy_value(&mut self, pipeline: &Pipeline) -> origin::Fragment {
+        let (code, pipeline, _) = self.bound_pipeline(pipeline.clone());
+        let resume = self.temporary("resume");
+        let sink = origin::Fragment::plain(format!(
+            "{}({}); ",
+            crate::eval::machine::AWAIT,
+            pipeline.item
+        ));
+        let mut step = origin::Fragment::plain(format!("|{resume}| {{ "));
+        step.push(Self::render(&pipeline, &sink));
+        step.push_text("}");
+        let made = self.prelude_op(
+            PreludeOp::Lazy,
+            [step, lazy::NEW.to_string().into(), "()".into()],
+        );
+        let mut text = origin::Fragment::plain("{ ");
+        text.push(code);
+        text.push(made);
+        text.push_text(" }");
+        text
+    }
+
+    /// The iterator expression of `pipeline`: a runtime iterator of it,
+    /// its chain kept for the consumer that fuses it.
     pub(super) fn iterator_expr(
         &mut self,
         pipeline: Pipeline,
         item: Ty,
         expression: Span,
     ) -> ParsedExpr {
-        let source = self.materialized(&pipeline);
+        let source = self.lazy_value(&pipeline);
         let expr = self.operator_expr(source, Ty::iter(item), expression);
         self.pipelines
             .insert(expr.source.as_str().to_string(), pipeline);
@@ -720,6 +906,30 @@ impl Parser<'_> {
         if matches!(ty, Ty::Host { .. }) && self.type_implements(&ty, "Iterator") {
             return self.user_pipeline(value, None).ok();
         }
+        // std's `impl Iterator for &mut I`: each `next` steps the place
+        // the reference is to.
+        if let Ty::Reference {
+            mutable: true,
+            target,
+        } = &ty
+            && self.runtime_iterator(target)
+            && value.lvalue.is_some()
+            && value.prelude.is_empty()
+        {
+            let item = self.runtime_item(target);
+            return self
+                .place_pipeline(value)
+                .ok()
+                .map(|pipeline| (pipeline, item));
+        }
+        // A generic value bounded by `Iterator`: its `Item` by the bound.
+        if matches!(ty, Ty::Param(..) | Ty::Projection(..)) && self.runtime_iterator(&ty) {
+            let item = self.runtime_item(&ty);
+            let source = Source::Items {
+                values: value.rendered_source(),
+            };
+            return Some((self.source_pipeline(source), item));
+        }
         let item = match &ty {
             Ty::Iter(item, _) => (**item).clone(),
             range if let Some(item) = self.stepped_item(range) => item,
@@ -740,6 +950,12 @@ impl Parser<'_> {
             && let Some(pipeline) = self.pipelines.get(value.source.as_str())
         {
             return Some((pipeline.clone(), item));
+        }
+        if let Ty::Iter(..) = ty {
+            let source = Source::Items {
+                values: value.rendered_source(),
+            };
+            return Some((self.source_pipeline(source), item));
         }
         let range = range::parts(&ty).map(|(kind, _)| kind);
         let source = Source::Values {
@@ -866,7 +1082,7 @@ impl Parser<'_> {
                         *high = bound_high;
                     }
                 }
-                Source::Range { .. } => {}
+                Source::Range { .. } | Source::Items { .. } => {}
             }
         };
         if let [segment] = &pipeline.segments[..] {
@@ -943,7 +1159,14 @@ impl Parser<'_> {
     pub(super) fn for_pipeline(&mut self, value: &ParsedExpr) -> Option<(Pipeline, Ty)> {
         let (pipeline, item) = self.pipeline_of(value)?;
         if pipeline.stop.is_some() || pipeline.segments.len() != 1 {
-            return None;
+            // A chain of several loops is stepped as a runtime iterator.
+            if !matches!(self.inference.resolve(&value.ty), Ty::Iter(..)) {
+                return None;
+            }
+            let source = Source::Items {
+                values: value.rendered_source(),
+            };
+            return Some((self.source_pipeline(source), item));
         }
         Some((pipeline, item))
     }
@@ -1361,9 +1584,25 @@ impl Parser<'_> {
                 };
                 return Ok(self.adapted(pipeline, item, expression));
             }
-            // A kept iterator is the array of its items, whose first is
-            // what `peek` sees.
+            // A kept iterator is a runtime one, which keeps what `peek`
+            // sees for the `next` after it.
             "into_iter" | "peekable" => {
+                arity(0, &arguments)?;
+                return Ok(self.adapted(pipeline, item, expression));
+            }
+            // `it.by_ref()`, std's `impl Iterator for &mut I`: a chain that
+            // steps the place itself, which goes on from where it stopped.
+            "by_ref" if self.runtime_iterator(&value.ty) && value.lvalue.is_some() => {
+                arity(0, &arguments)?;
+                if let Some(Lvalue::Binding { binding, .. }) = &value.lvalue {
+                    self.require_mutable_binding(binding, value.span)?;
+                }
+                self.mutable_use(&value, value.span);
+                let pipeline = self.place_pipeline(&value)?;
+                return Ok(self.adapted(pipeline, item, expression));
+            }
+            // Of a temporary, nothing goes on after the chain: its chain.
+            "by_ref" if self.runtime_iterator(&value.ty) => {
                 arity(0, &arguments)?;
                 return Ok(self.adapted(pipeline, item, expression));
             }
@@ -1510,9 +1749,26 @@ impl Parser<'_> {
                         open.push_text("; ");
                         (open, String::new(), *inner_item)
                     }
+                    // A runtime iterator is stepped by its `next`.
+                    Ty::Iter(inner_item, _) => {
+                        let flag = self.nest(&mut pipeline);
+                        let (walked, option) = (self.temporary("walked"), self.temporary("option"));
+                        let mut open = origin::Fragment::plain(format!(
+                            "let {walked} = {inner}; loop {{ let {option} = "
+                        ));
+                        let stepped = self.next_item(&walked);
+                        open.push(stepped);
+                        open.push_text("; if !");
+                        let test = is_some(self, &option);
+                        open.push(test);
+                        open.push_text(format!(" {{ break; }} let {next} = "));
+                        let value = unwrap(self, &option);
+                        open.push(value);
+                        open.push_text("; ");
+                        (open, format!("}} if {flag} {{ break; }} "), *inner_item)
+                    }
                     inner_ty => {
                         let inner_item = match inner_ty {
-                            Ty::Iter(item, _) => *item,
                             Ty::Array { element, .. } => *element,
                             range if let Some(item) = self.stepped_item(&range) => item,
                             Ty::Reference { mutable, target } => match *target {
@@ -1672,6 +1928,20 @@ impl Parser<'_> {
             "len" if pipeline.exact => {
                 arity(0, &arguments)?;
                 match pipeline.reversible.clone() {
+                    // A runtime iterator's, which its setup binds.
+                    Some(
+                        reversible @ Reversible {
+                            source: Source::Items { .. },
+                            dropping: false,
+                            ..
+                        },
+                    ) => {
+                        let mut length = origin::Fragment::plain("{ ");
+                        length.push(pipeline.setup.clone());
+                        length.push(self.source_length(&reversible.source));
+                        length.push_text(" }");
+                        (length, Ty::Int(Int::Usize))
+                    }
                     Some(reversible) if !reversible.dropping => {
                         (self.source_length(&reversible.source), Ty::Int(Int::Usize))
                     }
@@ -1893,7 +2163,9 @@ impl Parser<'_> {
                     {
                         let binding = binding.clone();
                         self.require_mutable_binding(&binding, value.span)?;
-                        let first = format!("{binding}[0]");
+                        let lazy = self.push_op(Op::Prelude(PreludeOp::Lazy));
+                        let peeked = self.temporary("peeked");
+                        let first = unwrap(self, &peeked);
                         let (test, ty) = match member.as_str() {
                             "peek" => {
                                 arity(0, &arguments)?;
@@ -1904,7 +2176,9 @@ impl Parser<'_> {
                                 let expected = function(vec![reference(&item)], Ty::Bool);
                                 self.coerce_expr(&expected, &mut arguments[0])?;
                                 let mut test = arguments[0].rendered_source().surrounded("(", ")");
-                                test.push_text(format!(".__rawr_call({first})"));
+                                test.push_text(".__rawr_call(");
+                                test.push(first);
+                                test.push_text(")");
                                 (Some(test), Ty::Option(Box::new(item)))
                             }
                             _ => {
@@ -1912,29 +2186,35 @@ impl Parser<'_> {
                                 self.coerce_expr(&reference(&item), &mut arguments[0])?;
                                 let test = self.equal_source(
                                     &item,
-                                    origin::Fragment::plain(first.clone()),
+                                    first,
                                     arguments[0].rendered_source(),
                                     expression,
                                 )?;
                                 (Some(test), Ty::Option(Box::new(item)))
                             }
                         };
-                        let mut source = origin::Fragment::plain(format!("if {binding}.len() > 0"));
-                        if let Some(test) = test {
-                            source.push_text(" && ");
-                            source.push(test);
+                        // What `peek` sees is kept for the `next` after it.
+                        let mut source = origin::Fragment::plain(format!(
+                            "{{ let {peeked} = {binding}.{lazy}({}, ()); ",
+                            lazy::PEEK
+                        ));
+                        match test {
+                            None => source.push_text(&peeked),
+                            Some(test) => {
+                                source.push_text("if ");
+                                let present = is_some(self, &peeked);
+                                source.push(present);
+                                source.push_text(" && ");
+                                source.push(test);
+                                source.push_text(format!(
+                                    " {{ {binding}.{lazy}({}, ()) }} else {{ ",
+                                    lazy::NEXT
+                                ));
+                                let empty = none(self);
+                                source.push(empty);
+                                source.push_text(" }");
+                            }
                         }
-                        source.push_text(" { ");
-                        let taken = if member.as_str() == "peek" {
-                            first
-                        } else {
-                            format!("{binding}.shift()")
-                        };
-                        let found = some(self, &taken);
-                        source.push(found);
-                        source.push_text(" } else { ");
-                        let empty = none(self);
-                        source.push(empty);
                         source.push_text(" }");
                         return Ok(self.operator_expr(source.surrounded("(", ")"), ty, expression));
                     }
@@ -1948,10 +2228,9 @@ impl Parser<'_> {
                     }
                     "next" => {
                         arity(0, &arguments)?;
-                        // `it.next()` on a `let mut it`: its first item,
-                        // taken from its array.
+                        // `it.next()` on a `let mut it`, which it steps.
                         if let Some(Lvalue::Binding { binding, .. }) = &value.lvalue
-                            && matches!(self.inference.resolve(&value.ty), Ty::Iter(..))
+                            && self.runtime_iterator(&value.ty)
                         {
                             let Some(local) = self.bindings.get(binding) else {
                                 return Err(
@@ -1962,14 +2241,8 @@ impl Parser<'_> {
                                 return Err(Error::borrow_immutable(binding, value.span));
                             }
                             self.mutable_use(&value, value.span);
-                            let mut source =
-                                origin::Fragment::plain(format!("if {binding}.len() == 0 {{ "));
-                            let empty = none(self);
-                            source.push(empty);
-                            source.push_text(" } else { ");
-                            let first = some(self, &format!("{binding}.shift()"));
-                            source.push(first);
-                            source.push_text(" }");
+                            let binding = binding.clone();
+                            let source = self.next_item(&binding);
                             let ty = Ty::Option(Box::new(item));
                             return Ok(self.operator_expr(
                                 source.surrounded("(", ")"),
@@ -1978,23 +2251,21 @@ impl Parser<'_> {
                             ));
                         }
                         // `self.items.next()` on a field, an element or a
-                        // nested place holding a `Box<dyn Iterator>`: its
-                        // first item, taken from the array the place holds.
+                        // nested place holding a `Box<dyn Iterator>`, which
+                        // it steps where it is.
+                        // A `&mut` of one steps the place it is to.
+                        let referenced = matches!(
+                            self.inference.resolve(&value.ty),
+                            Ty::Reference { mutable: true, target } if self.runtime_iterator(&target)
+                        );
                         if matches!(
                             &value.lvalue,
                             Some(Lvalue::Field(_) | Lvalue::Nested(_) | Lvalue::Place { .. })
-                        ) && matches!(self.inference.resolve(&value.ty), Ty::Iter(..))
+                        ) && self.runtime_iterator(&value.ty)
+                            || value.lvalue.is_some() && referenced
                         {
-                            let shifted = self.mutation_call(&value, "shift", Vec::new())?;
-                            let mut source = origin::Fragment::plain("if ");
-                            source.push(value.rendered_source().surrounded("(", ")"));
-                            source.push_text(".len() == 0 { ");
-                            let empty = none(self);
-                            source.push(empty);
-                            source.push_text(" } else { ");
-                            let first = self.prelude_op(PreludeOp::Some, [shifted]);
-                            source.push(first);
-                            source.push_text(" }");
+                            let (method, arguments) = self.next_method();
+                            let source = self.mutation_call(&value, &method, arguments)?;
                             let ty = Ty::Option(Box::new(item));
                             return Ok(self.operator_expr(
                                 source.surrounded("(", ")"),
@@ -2168,6 +2439,13 @@ impl Parser<'_> {
                 length
             }
             Source::Range { .. } => origin::Fragment::plain("0"),
+            // The items left, made ahead of `next` and kept for it.
+            Source::Items { values } => {
+                let lazy = self.push_op(Op::Prelude(PreludeOp::Lazy));
+                let mut length = values.clone();
+                length.push_text(format!(".{lazy}({}, ())", lazy::LEN));
+                length
+            }
         }
     }
 
@@ -2279,6 +2557,13 @@ impl Parser<'_> {
                     Some(source @ Source::Values { .. }) => {
                         let bare = self.source_pipeline(source);
                         self.materialized(&bare)
+                    }
+                    // A runtime iterator's items left, from its first.
+                    Some(Source::Items { values }) => {
+                        let mut copy = values.surrounded("(", ")");
+                        let lazy = self.push_op(Op::Prelude(PreludeOp::Lazy));
+                        copy.push_text(format!(".{lazy}({}, ())", lazy::DRAIN));
+                        copy
                     }
                     _ => self.materialized(pipeline),
                 };

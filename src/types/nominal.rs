@@ -174,11 +174,13 @@ pub(crate) fn matches_type(value: &Dynamic, ty: &type_ref::Type) -> bool {
             length.admits(array.len()) && array.iter().all(|value| matches_type(value, element))
         });
     }
-    // An iterator crossing a function boundary is the array of its items.
+    // An iterator crossing a function boundary is a runtime iterator, whose
+    // items are made as it is stepped, or the array of its items.
     if let Some((item, _)) = ty.iterator_item() {
-        return value
-            .as_array_ref()
-            .is_ok_and(|array| array.iter().all(|value| matches_type(value, item)));
+        return crate::resolve::lower_nominal::lazy::is(value)
+            || value
+                .as_array_ref()
+                .is_ok_and(|array| array.iter().all(|value| matches_type(value, item)));
     }
     // A map is its `[key, value]` pairs at runtime, a set its keys.
     if let Some((_, arguments)) = ty.keyed_arguments() {

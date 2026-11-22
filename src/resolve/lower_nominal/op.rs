@@ -406,6 +406,10 @@ pub(super) enum PreludeOp {
     /// A `std::thread` or `std::sync::mpsc` function or method of
     /// `thread::METHODS`: `thread(value, code, operand)` (`thread.rs`).
     Thread,
+    /// A runtime iterator's operation of `lazy.rs`, by its code:
+    /// `lazy(value, code, argument)`, called as a method on the iterator
+    /// it steps.
+    Lazy,
     /// A `str` method of `STR_METHODS`: `str(text, code, a, b)`.
     StrMethod,
     /// `s.parse::<T>()` for the target kind (`ExecutableOp::Kinded`): a
@@ -589,6 +593,7 @@ impl PreludeOp {
             Self::IntMethod => "int.method",
             Self::Time => "time.method",
             Self::Thread => "thread.method",
+            Self::Lazy => "iterator.lazy",
             Self::Parse => "str.parse",
             Self::StrMethod => "str.method",
             Self::Print => "io.print",
@@ -622,6 +627,7 @@ impl PreludeOp {
             | Self::SetInsert
             | Self::SetRemove
             | Self::VecMethod
+            | Self::Lazy
             | Self::StrChange
             | Self::PathSet
             | Self::ReferentStore
@@ -857,7 +863,7 @@ impl PreludeOp {
                 TypeId::of::<Dynamic>(),
                 TypeId::of::<crate::INT>(),
             ],
-            Self::Time | Self::Thread => vec![
+            Self::Time | Self::Thread | Self::Lazy => vec![
                 TypeId::of::<Dynamic>(),
                 TypeId::of::<crate::INT>(),
                 TypeId::of::<Dynamic>(),
@@ -1320,6 +1326,7 @@ impl PreludeOp {
             }
             Self::Time => return time_method(args),
             Self::Thread => return thread::invoke(context, args),
+            Self::Lazy => return super::lazy::invoke(context, args),
             Self::StrChange => return str_change(context, args),
             Self::StrPieces => return str_pieces(args),
             Self::SliceChunks => {

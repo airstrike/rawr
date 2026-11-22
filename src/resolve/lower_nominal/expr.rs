@@ -302,11 +302,13 @@ impl<'a> Parser<'a> {
         Ok(expression)
     }
 
-    /// `&mut place` of a `Box<dyn Iterator>` place given whole as an
-    /// argument, as `column(&mut self.content)` or `.chain(&mut
-    /// self.actions)`: the iterator by `&mut`, which the callee runs to
-    /// its end, so its items move out and the place is left empty. Any
-    /// other `&mut` outside a function's `&mut` argument is refused.
+    /// `&mut place` of an iterator place. Given whole as an argument, as
+    /// `column(&mut self.content)` or `.chain(&mut self.actions)` of a
+    /// `Box<dyn Iterator>`: the iterator by `&mut`, which the callee runs
+    /// to its end, so its items move out and the place is left empty.
+    /// Elsewhere, as `for x in &mut it`, of a local: a chain that steps the
+    /// local where it is. Any other `&mut` outside a function's `&mut`
+    /// argument is refused.
     fn drained_iterator(&mut self, start: Position) -> Result<ParsedExpr, Error> {
         self.next();
         let operand = self.parse_operand()?;
@@ -316,15 +318,24 @@ impl<'a> Parser<'a> {
             Ty::Boxed(boxed) => self.inference.resolve(&boxed),
             ty => ty,
         };
-        let (Ty::Iter(item, kind), true, true) = (iterator, whole_argument, place) else {
+        let (Ty::Iter(item, kind), true) = (iterator, place) else {
             return Err(self
                 .unsupported("`&mut` borrow expressions other than a function's `&mut` argument"));
         };
+        let expression = span(start, operand.span.end());
+        if !whole_argument && let Some(Lvalue::Binding { .. }) = &operand.lvalue {
+            return self.borrowed_iterator(&operand, *item, expression);
+        }
+        if !whole_argument {
+            return Err(self
+                .unsupported("`&mut` borrow expressions other than a function's `&mut` argument"));
+        }
         self.mutable_use(&operand, operand.span);
+        let drain = self.push_op(Op::Prelude(PreludeOp::Lazy));
         let drained = self.mutation_call(
             &operand,
-            "drain",
-            vec!["0".into(), crate::INT::MAX.to_string().into()],
+            &drain,
+            vec![super::lazy::DRAIN.to_string().into(), "()".into()],
         )?;
         Ok(self.operator_expr(
             drained,

@@ -301,7 +301,10 @@ pub(super) fn rewrite_constant(
 }
 
 /// A closure's definition, and those of the closures it captured, which
-/// the optimizer folds into its curried values.
+/// the optimizer folds into its curried values. A closure that suspends, a
+/// runtime iterator's step (`lazy.rs`), becomes a state machine once its
+/// names are final, as an async body does (`entry`). Its body is the
+/// lowering's own loops, which a machine always lowers.
 pub(super) fn rewrite_pointer(
     pointer: &mut crate::FnPtr,
     rewrites: &BTreeMap<ImmutableString, ImmutableString>,
@@ -310,6 +313,10 @@ pub(super) fn rewrite_pointer(
     if let crate::types::fn_ptr::FnPtrType::Script(definition) = &mut pointer.typ {
         let definition = crate::func::shared_make_mut(definition);
         rewrite_statements(definition.body.statements_mut(), rewrites, patterns);
+        if definition.machine.is_none() {
+            let lowered = crate::eval::machine::lower(definition);
+            debug_assert!(lowered.is_ok(), "a step's loops are ones a machine lowers");
+        }
     }
     for value in pointer.curry.iter_mut() {
         if let Some(captured) = value.downcast_mut::<crate::FnPtr>() {
