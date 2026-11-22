@@ -5264,3 +5264,31 @@ main();
         assert!(report.starts_with(expected), "{report}");
     }
 }
+
+#[test]
+fn string_from_utf8_lossy_is_a_cow_of_the_text() {
+    // Borrowed of valid UTF-8, owned with U+FFFD for an invalid sequence.
+    let output = printed(
+        r#"
+use std::borrow::Cow;
+fn main() {
+    let good = vec![104, 105];
+    let bad = [104, 0xff, 105];
+    let a = String::from_utf8_lossy(&good);
+    let b = String::from_utf8_lossy(&bad);
+    let kind = |c: &Cow<str>| match c {
+        Cow::Borrowed(_) => "borrowed",
+        Cow::Owned(_) => "owned",
+    };
+    println!("{} {} {} {}", a, b, kind(&a), kind(&b));
+    let owned: String = b.into_owned();
+    println!("{:?} {} {}", owned, a.len(), a == "hi");
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "hi h\u{fffd}i borrowed owned\n\"h\u{fffd}i\" 2 true\n"
+    );
+}

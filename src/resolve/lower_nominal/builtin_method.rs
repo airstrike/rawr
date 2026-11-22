@@ -2604,11 +2604,27 @@ pub(super) const STR_PIECES: &[&str] = &[
     "rsplitn",
     "matches",
     "match_indices",
+    "from_utf8_lossy",
 ];
 
 pub(super) fn str_pieces(args: &mut FnCallArgs) -> RawrResult {
     let code = usize::try_from(args[1].as_int().unwrap_or(-1)).unwrap_or(usize::MAX);
     let name = STR_PIECES.get(code).copied().unwrap_or_default();
+    if name == "from_utf8_lossy" {
+        let bytes: Vec<u8> = args[0]
+            .as_array_ref()
+            .map_err(|_| invariant("a `&[u8]` is not an array at runtime"))?
+            .iter()
+            .map(|byte| u8::try_from(byte.as_int().unwrap_or_default()).unwrap_or_default())
+            .collect();
+        let text = Dynamic::from(ImmutableString::from(
+            String::from_utf8_lossy(&bytes).as_ref(),
+        ));
+        return Ok(Dynamic::from(match std::str::from_utf8(&bytes) {
+            Ok(_) => super::cow::Value::Borrowed(text),
+            Err(_) => super::cow::Value::Owned(text),
+        }));
+    }
     if name == "from_utf8" {
         let bytes: Vec<u8> = args[0]
             .as_array_ref()
