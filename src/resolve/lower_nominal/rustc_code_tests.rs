@@ -5730,3 +5730,20 @@ fn a_lets_value_of_another_type_is_labelled_beside_its_written_type() {
         ],
     );
 }
+
+/// A local's trait object of a second trait that is not an auto trait is
+/// rustc's E0225 at that trait. What `rustc --edition 2021` reports.
+#[test]
+fn a_locals_trait_object_of_a_second_trait_is_e0225() {
+    let source = "trait Shape {}\ntrait Named {}\nstruct S;\nimpl Shape for S {}\nimpl Named for \
+                  S {}\nfn main() {\n    let s = S;\n    let x: &(dyn Shape + Named) = &s;\n}\n";
+    let shown = rendered(source);
+    for part in [
+        "error[E0225]: only auto traits can be used as additional traits in a trait object\n \
+         --> main.rs:8:26\n",
+        "^^^^^ additional non-auto trait",
+        "  = note: auto-traits like `Send` and `Sync` are traits that have special properties",
+    ] {
+        assert!(shown.contains(part), "{shown}");
+    }
+}

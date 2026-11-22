@@ -796,17 +796,22 @@ fn language_vec_and_vec_deque_methods_are_each_their_own() {
         (
             format!("{deque}d.push(1); }}\nmain();\n"),
             "push",
-            "VecDeque<i64>",
+            "VecDeque<T, A>",
         ),
         (
             format!("{deque}d.sort(); }}\nmain();\n"),
             "sort",
-            "VecDeque<i64>",
+            "VecDeque<T, A>",
         ),
     ] {
+        // A `Vec` by its type, as it derefs to `[T]`; a `VecDeque` by its
+        // definition's parameters, as it derefs to nothing.
         let report = refused(&source);
         assert!(
-            report.contains(&format!("no method named `{method}` found for `{owner}`")),
+            report.starts_with(&format!(
+                "error[E0599]: no method named `{method}` found for struct `{owner}` in the \
+                 current scope\n"
+            )),
             "{report}"
         );
     }
