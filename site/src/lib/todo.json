@@ -6497,7 +6497,9 @@
     {"issue":2642,"title":"A crate trait's function as a path value (`.and_then(Sheet::close)`) is a false E0599","state":"open","category":"Divergences from rustc"},
     {"issue":2643,"title":"A value whose type implements Drop inside a RefCell, Cell, Mutex or Rc is refused","state":"open","category":"Divergences from rustc"},
     {"issue":2644,"title":"E0599 and E0277 on a std method lack rustc's notes on the impl that has it","state":"open","category":"Divergences from rustc"},
-    {"issue":2645,"title":"LocalKey::try_with is not run","state":"open","category":"Divergences from rustc"}
+    {"issue":2645,"title":"LocalKey::try_with is not run","state":"open","category":"Divergences from rustc"},
+    {"issue":2646,"title":"The type tool sends a whole text in one event-loop turn, so a controlled iced text_input keeps only the last character","state":"open","category":"Health"},
+    {"issue":2647,"title":"A printable `key` press may not reach a widget that `type` of the same character reaches","state":"open","category":"Health"}
   ],
   "groups": [
     {
