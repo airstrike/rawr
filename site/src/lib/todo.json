@@ -6918,7 +6918,7 @@
             {"number":1506,"title":"A crate value a call's output borrows outside a view stays borrowed for the runner's life","state":"open"},
             {"number":2240,"title":"iced::application with a u32 state and () message panics the runner generator","state":"open"}
           ],
-          "milestone": "0.3"
+          "milestone": "0.6"
         },
         {
           "id": "per-example-gaps",
@@ -7154,7 +7154,7 @@
             {"number":2213,"title":"An array whose length is a const parameter isn't supported","state":"closed"},
             {"number":2493,"title":"iced's pokedex draws a different frame under rawr each night, where cargo's is the same","state":"open"}
           ],
-          "milestone": "0.3"
+          "milestone": "0.6"
         },
         {
           "id": "opaque-values",
@@ -9014,7 +9014,8 @@
             {"number":2512,"title":"An untyped closure called where it is written fails with E0308","state":"closed"},
             {"number":2513,"title":"A program trait's generic method called through its path with a turbofish panics","state":"closed"},
             {"number":2514,"title":"`Trait::m(\"hi\")` on a program trait implemented for `str` and `i32` is E0308","state":"closed"}
-          ]
+          ],
+          "milestone": "0.6"
         },
         {
           "id": "borrows-run",
@@ -9044,7 +9045,8 @@
             {"number":410,"title":"An out-of-range element borrow panics at first use, not at the borrow","state":"open"},
             {"number":2074,"title":"A `&mut self -> &mut Self` chain on a temporary of a program's own type is refused","state":"closed"},
             {"number":2225,"title":"`&req.comparators[0]` on a crate struct's field is taken as a partial move: a later method call is a false E0382","state":"open"}
-          ]
+          ],
+          "milestone": "0.6"
         },
         {
           "id": "checker-coverage",
@@ -9089,7 +9091,8 @@
             {"number":2479,"title":"Variance: `fn(T)` fields are contravariant, and struct-inferred outlives bounds are implied","state":"closed"},
             {"number":2502,"title":"A `&mut` moved outside an untyped `let` or a generic parameter is not followed","state":"closed"},
             {"number":2503,"title":"`&mut *self.a` of a `&mut` field is refused as not a place","state":"closed"}
-          ]
+          ],
+          "milestone": "0.6"
         },
         {
           "id": "std-coverage",
@@ -9149,7 +9152,8 @@
             {"number":2521,"title":"String::drain and String::replace_range are not run","state":"closed"},
             {"number":2522,"title":"A generic R: RangeBounds<T> has no start_bound or end_bound, and std::ops::Bound is not represented","state":"open"},
             {"number":2523,"title":"A consuming iterator method doesn't move a non-range iterator local","state":"closed"}
-          ]
+          ],
+          "milestone": "0.6"
         },
         {
           "id": "paths-and-modules",
@@ -9187,7 +9191,8 @@
             {"number":2468,"title":"A std path through a `super::` or `crate::` import of a std module fails when lowered","state":"closed"},
             {"number":2469,"title":"`pub use` of a std trait from a program module is refused as a module re-export","state":"closed"},
             {"number":2497,"title":"A `use` that collides with a same-named declaration reports `duplicate item` where rustc reports E0255","state":"closed"}
-          ]
+          ],
+          "milestone": "0.6"
         },
         {
           "id": "patterns",
@@ -9209,7 +9214,8 @@
             {"number":2508,"title":"A pattern naming a float `const` binds a new name instead of matching its value","state":"open"},
             {"number":2509,"title":"E0004 has no 'defined here' note for std's enums","state":"open"},
             {"number":2510,"title":"A parameter pattern's literal takes no suffix","state":"open"}
-          ]
+          ],
+          "milestone": "0.6"
         },
         {
           "id": "macro-rules",
@@ -9245,7 +9251,8 @@
             {"number":2516,"title":"A crate derive's helper attributes are not checked against what it declares","state":"open"},
             {"number":2517,"title":"An edition 2021 crate's tail temporaries drop as edition 2024's do","state":"open"},
             {"number":2520,"title":"A program macro called inside a std macro's arguments no longer makes `rawr run` rebuild…","state":"closed"}
-          ]
+          ],
+          "milestone": "0.6"
         },
         {
           "id": "rustc-wording",
@@ -9289,7 +9296,8 @@
             {"number":2488,"title":"Mark the branch a returned if or match takes its borrow from","state":"closed"},
             {"number":2489,"title":"Suggest a named lifetime for two elided ones, as rustc does","state":"closed"},
             {"number":2524,"title":"Diagnostics name std's range types without their path","state":"open"}
-          ]
+          ],
+          "milestone": "0.6"
         }
       ]
     },
