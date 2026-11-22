@@ -34,6 +34,9 @@ pub struct Source {
     package: ImmutableString,
     modules: Box<[ImmutableString]>,
     evidence: diagnostic::Source,
+    /// How long the file's own text is, which the evidence holds first,
+    /// before the expansions of macro calls laid out after it.
+    file: usize,
 }
 
 /// The immutable canonical package/source graph used to compile a generation.
@@ -140,6 +143,7 @@ impl Graph {
                 package: source.package().into(),
                 modules: source.modules().into(),
                 evidence: source.diagnostic().clone(),
+                file: source.text().len(),
             })
             .collect();
         let entry_package = graph.entry_package().id().index();
@@ -454,9 +458,11 @@ impl Snapshot {
                     })
             })
             .collect::<Vec<_>>();
+        // A source's file as it is on disk, without the expansions of its
+        // macro calls laid out after it, which no file holds.
         files.extend(graph.sources.iter().map(|source| File {
             path: source.path.clone(),
-            contents: source.text().as_bytes().into(),
+            contents: source.file_text().as_bytes().into(),
         }));
         // What rustc's kept expansions of the program's crate macro calls
         // were expanded against (#2156): a call's expansion is program code
@@ -647,6 +653,12 @@ impl Source {
     #[must_use]
     pub fn text(&self) -> &str {
         self.evidence.text()
+    }
+
+    /// The file's own text, without the expansions laid out after it.
+    #[must_use]
+    pub fn file_text(&self) -> &str {
+        &self.evidence.text()[..self.file]
     }
 
     /// Return the exact diagnostic source evidence compiled into this generation.
