@@ -7210,17 +7210,6 @@ main();
     );
 }
 
-/// What `source` prints, run with `access`.
-fn printed_with(source: &str, access: crate::Access) -> String {
-    let lines = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
-    let mut engine = Engine::new();
-    engine.set_access(access);
-    let sink = lines.clone();
-    engine.on_output(move |_, text| sink.lock().unwrap().push_str(text));
-    engine.run(source).unwrap_or_else(|error| panic!("{error}"));
-    lines.lock().unwrap().clone()
-}
-
 #[test]
 fn std_path_and_path_buf_methods_run_as_stds() {
     // `Path::new`, its readers and file system queries, and `PathBuf`'s

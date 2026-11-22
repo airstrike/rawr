@@ -433,6 +433,7 @@ impl<'a> Parser<'a> {
                     definition: None,
                 }),
                 similar: None,
+                unsatisfied: None,
             });
         }
         if matches!(member.as_str(), "drain" | "replace_range")
