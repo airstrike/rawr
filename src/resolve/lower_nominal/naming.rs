@@ -27,6 +27,9 @@ pub(crate) const DEBUG_GENERIC: &str = "\0rawr.generic.debug";
 pub(crate) const DEBUG_DECLARED: &str = "\0rawr.declared.debug";
 /// The generated function from a type witness to that type's default.
 pub(super) const DEFAULT_DISPATCHER: &str = "__rawr_nominal_default";
+/// The generated function from an opaque output (D1109) to the witness of
+/// its hidden type.
+pub(super) const HIDDEN_DISPATCHER: &str = "__rawr_nominal_hidden";
 pub(super) const CLOSURE_SENTINEL: &str = "__rawr_nominal_closure_";
 pub(super) const PRIVATE_PREFIX: &str = "\0rawr.nominal.";
 

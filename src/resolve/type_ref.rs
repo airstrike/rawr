@@ -94,6 +94,23 @@ impl Opaque {
             index,
         }
     }
+
+    /// The source of its function, and where its name is there.
+    pub(crate) const fn function(&self) -> (crate::program::source::Id, Span) {
+        (self.source, self.function)
+    }
+
+    /// Its source's index, the line and column its function's name starts
+    /// at there, and its index: the numbers the generated text tells it by.
+    pub(crate) fn numbers(&self) -> [usize; 4] {
+        let start = self.function.start();
+        [
+            self.source.index(),
+            start.line().unwrap_or_default(),
+            start.position().unwrap_or_default(),
+            self.index,
+        ]
+    }
 }
 
 /// A type alias's parameters and its target, resolved once in the module

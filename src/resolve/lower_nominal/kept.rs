@@ -1361,7 +1361,7 @@ impl Models {
 mod tests {
     use super::{adapters, applications, Kept, Outside};
     use crate::host::{self, facade, structural};
-    use crate::resolve::lower_nominal::entry::Lowered;
+    use crate::resolve::lower_nominal::entry::{Hidden, Lowered};
     use crate::resolve::lower_nominal::op::{ExecutableOp, WitnessedOp};
     use std::collections::BTreeSet;
 
@@ -1387,6 +1387,7 @@ mod tests {
             patterns: Vec::new(),
             closures: Vec::new(),
             declared: Vec::new(),
+            hidden: Hidden::default(),
         }];
         Kept {
             key: [0; 32],

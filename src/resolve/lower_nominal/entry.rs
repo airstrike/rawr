@@ -11,9 +11,11 @@ use super::location::{resolve_locations, retain_locations, Location};
 use super::models::Models;
 use super::naming::{
     function_name, method_name, pattern_name, private_function_name, private_method_name,
-    trait_dispatcher_name, DEBUG_DISPATCHER, DEBUG_GENERIC, NATIVE_ONLY, SENTINEL,
+    trait_dispatcher_name, DEBUG_DISPATCHER, DEBUG_GENERIC, HIDDEN_DISPATCHER, NATIVE_ONLY,
+    SENTINEL,
 };
-use super::op::{register, ExecutableOp, PreludeOp};
+use super::op::{register, witness_code, ExecutableOp, PreludeOp};
+use super::ty::Ty;
 use super::{
     closure, lex_rust, location, rewrite_statements, source_full_span, source_span, this_parameter,
     Parser,
@@ -21,10 +23,11 @@ use super::{
 #[cfg(feature = "rust-import")]
 use super::{kept, splice, ImportedContext};
 use crate::ast::NominalPattern;
-use crate::resolve::{item, LoweringFailure, Program};
+use crate::resolve::{item, type_ref, Error, LoweringFailure, Program};
 use crate::tokenizer::Token;
 use crate::{method, Engine, ImmutableString, Module, Position, Scope, Shared, Span, AST};
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 
 pub(in crate::resolve) fn lower(
     engine: &Engine,
@@ -222,6 +225,9 @@ struct Assembly {
     /// Each generated function's locals a debugger prints by their type
     /// (#512).
     declared: BTreeMap<ImmutableString, Vec<Declared>>,
+    /// What each body, in its source, knows of opaque outputs' hidden
+    /// types (D1109).
+    hidden: Vec<(crate::program::source::Id, Hidden)>,
 }
 
 /// One source's part being lowered, and what its lowering reads.
@@ -270,8 +276,10 @@ impl Assembly {
         unit: &Unit<'_>,
         counts: &mut Counts<'_>,
         body: Body<'_>,
-        lowered: Lowered,
+        mut lowered: Lowered,
     ) {
+        self.hidden
+            .push((body.source(), std::mem::take(&mut lowered.hidden)));
         match body {
             Body::Function(shell, definition) => {
                 let generated_name = function_name(
@@ -670,6 +678,7 @@ pub(super) fn lower_with_context(
         receivers: BTreeMap::new(),
         written_receivers: BTreeMap::new(),
         declared: BTreeMap::new(),
+        hidden: Vec::new(),
     };
     // A compile lent a runner's lowerings lowers again only the sources
     // whose lowering reads something that changed (#1646).
@@ -718,6 +727,7 @@ pub(super) fn lower_with_context(
     let mut dispatch_ops = Vec::new();
     write_trait_dispatchers(&mut assembly.generated, &models, &mut dispatch_ops);
     write_default_dispatcher(&mut assembly.generated, program, &models, &mut dispatch_ops);
+    let witnesses = write_hidden_dispatcher(&mut assembly.generated, &assembly.hidden);
     #[cfg(feature = "rust-import")]
     pieces.written(assembly.generated.len(), None);
 
@@ -749,6 +759,7 @@ pub(super) fn lower_with_context(
         assembly.generated.len(),
         Some((script.source, kept::Part::Script)),
     );
+    witnessed_hidden(&witnesses, &assembly.hidden, &models)?;
     #[cfg(feature = "rust-import")]
     if let Some(session) = &mut session {
         session.succeeded();
@@ -763,6 +774,7 @@ pub(super) fn lower_with_context(
         receivers,
         written_receivers,
         declared,
+        hidden: _,
     } = assembly;
     // The dispatchers' ops are numbered apart from every source's.
     let ops = dispatch_ops
@@ -972,6 +984,18 @@ pub(super) struct Lowered {
     pub(super) closures: Vec<closure::Lifted>,
     /// The body's locals a debugger prints by their type (#512).
     pub(super) declared: Vec<Declared>,
+    pub(super) hidden: Hidden,
+}
+
+/// What a body knows of opaque outputs' hidden types (D1109): the hidden
+/// type it fills each of its function's with, and each opaque output a
+/// generic call in it takes as a type argument, at the call, whose witness
+/// is its hidden type's once every body is checked.
+#[derive(Clone, Default)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
+pub(super) struct Hidden {
+    pub(super) filled: Vec<(type_ref::Opaque, Ty)>,
+    pub(super) witnessed: Vec<(type_ref::Opaque, Span)>,
 }
 
 /// A declaration of a local whose `Debug` text a debugger reads by its
@@ -987,6 +1011,87 @@ pub(super) struct Declared {
     #[cfg_attr(not(feature = "debugging"), allow(dead_code))]
     pub(super) line: usize,
     pub(super) ty: Option<super::ty::Ty>,
+}
+
+/// The function from each opaque output to the witness of its hidden type
+/// (D1109), which a generic call taking it as a type argument passes:
+/// written once every function's body has filled its own. Each opaque
+/// output's witness, if one hidden type has one.
+fn write_hidden_dispatcher(
+    output: &mut location::Generated,
+    hidden: &[(crate::program::source::Id, Hidden)],
+) -> BTreeMap<type_ref::Opaque, Option<String>> {
+    let mut witnesses = BTreeMap::<type_ref::Opaque, Option<String>>::new();
+    for (opaque, ty) in hidden.iter().flat_map(|(_, hidden)| &hidden.filled) {
+        let witness = match ty {
+            Ty::Script(id, _) => Some(id.number().to_string()),
+            ty => witness_code(ty).map(|code| code.to_string()),
+        };
+        // A trait method's opaque output, which each impl fills (stage 4),
+        // has no one hidden type yet.
+        witnesses
+            .entry(*opaque)
+            .and_modify(|known| {
+                if *known != witness {
+                    *known = None;
+                }
+            })
+            .or_insert(witness);
+    }
+    let mut text = String::new();
+    let mut at = None;
+    for (opaque, witness) in &witnesses {
+        let Some(witness) = witness else {
+            continue;
+        };
+        let [source, line, column, index] = opaque.numbers();
+        let _ = writeln!(
+            text,
+            "if __rawr_source == {source} && __rawr_line == {line} \
+             && __rawr_column == {column} && __rawr_index == {index} {{ return {witness}; }}"
+        );
+        at.get_or_insert(opaque.function());
+    }
+    if let Some((source, span)) = at {
+        output.declaration(
+            source,
+            span,
+            &format!(
+                "__rawr_private fn {HIDDEN_DISPATCHER}(__rawr_source, __rawr_line, \
+                 __rawr_column, __rawr_index) {{\n{text}}}\n"
+            ),
+        );
+    }
+    witnesses
+}
+
+/// Refuse a generic call taking as a type argument an opaque output with
+/// no one hidden type a witness names, as it refuses that type argument.
+fn witnessed_hidden(
+    witnesses: &BTreeMap<type_ref::Opaque, Option<String>>,
+    hidden: &[(crate::program::source::Id, Hidden)],
+    models: &Models,
+) -> Result<(), LoweringFailure> {
+    for (source, hidden) in hidden {
+        for (opaque, span) in &hidden.witnessed {
+            if let Some(Some(_)) = witnesses.get(opaque) {
+                continue;
+            }
+            let name = models
+                .opaque_outputs
+                .get(opaque)
+                .map_or_else(|| "impl Trait".into(), |generic| generic.name.text.clone());
+            return Err(LoweringFailure::original(
+                *source,
+                Error::UnsupportedNominalSyntax {
+                    construct: format!("`{name}` as the type argument of a generic call").into(),
+                    source: *span,
+                }
+                .into(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// The blocks of the import at `span` among a source's `imports`, and of
