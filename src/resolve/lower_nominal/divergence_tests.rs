@@ -9081,3 +9081,301 @@ main();
          (Some(2), Some(4))\nx 6\nSome(10)\nSome(1)\nNone\nSome(1) Some(2)\nSome(3)\n"
     );
 }
+
+#[test]
+fn language_a_float_constant_in_a_pattern_matches_its_value() {
+    // A pattern naming a float `const`, free or associated, matches its
+    // value, as rustc's; an `f32` one its value as an `f32` (#2508). A
+    // suffixed number ends a `match` head.
+    let output = printed(
+        r#"
+const F: f64 = 1.5;
+const G: f64 = -F * 2.0;
+const LO: f64 = 0.5;
+const HI: f64 = LO * 4.0;
+const H: f32 = 0.1;
+const N: u8 = 3u8;
+struct P;
+impl P {
+    const K: f64 = 2.5;
+}
+fn main() {
+    for x in [1.5, 2.0, -3.0, 0.25, 2.5] {
+        match x {
+            F => println!("F {x}"),
+            G => println!("G {x}"),
+            LO..=HI => println!("in {x}"),
+            P::K => println!("K {x}"),
+            _ => println!("other {x}"),
+        }
+    }
+    let y: f32 = 0.1;
+    match y {
+        H => println!("H"),
+        _ => println!("not H"),
+    }
+    match 3u8 {
+        N => println!("N"),
+        _ => println!("not N"),
+    }
+}
+main();
+"#,
+    );
+    assert_eq!(output, "F 1.5\nin 2\nG -3\nother 0.25\nK 2.5\nH\nN\n");
+}
+
+#[test]
+fn language_a_parameter_literal_takes_its_suffix() {
+    // `1u8` in a parameter pattern is a `u8`, as rustc reads it (#2510):
+    // E0005 names the `u8` values it misses, and on an `i32` it is E0308.
+    assert_eq!(
+        rendered("fn f((x, 1u8): (i32, u8)) -> i32 { x }\nfn main() {}\n"),
+        concat!(
+            "error[E0005]: refutable pattern in function argument\n",
+            " --> main.rs:1:6\n",
+            "  |\n",
+            "1 | fn f((x, 1u8): (i32, u8)) -> i32 { x }\n",
+            "  |      ^^^^^^^^ patterns `(_, 0_u8)` and `(_, 2_u8..=u8::MAX)` not covered\n",
+            "  |\n",
+            "  = note: the matched value is of type `(i32, u8)`\n",
+        )
+    );
+    assert_eq!(
+        rendered("fn f((x, 1u8): (i32, i32)) -> i32 { x }\nfn main() {}\n"),
+        concat!(
+            "error[E0308]: mismatched types\n",
+            " --> main.rs:1:10\n",
+            "  |\n",
+            "1 | fn f((x, 1u8): (i32, i32)) -> i32 { x }\n",
+            "  |          ^^^   ---------- expected due to this\n",
+            "  |          |\n",
+            "  |          expected `i32`, found `u8`\n",
+        )
+    );
+    // In a body's pattern too, a suffixed literal is its own type.
+    assert_eq!(
+        rendered(
+            "fn main() {\n    let t: (i32, i32) = (2, 1);\n    match t {\n        \
+             (x, 1u8) => println!(\"{x}\"),\n        _ => {}\n    }\n}\n"
+        ),
+        concat!(
+            "error[E0308]: mismatched types\n",
+            " --> main.rs:4:13\n",
+            "  |\n",
+            "3 |     match t {\n",
+            "  |           - this expression has type `(i32, i32)`\n",
+            "4 |         (x, 1u8) => println!(\"{x}\"),\n",
+            "  |             ^^^ expected `i32`, found `u8`\n",
+        )
+    );
+}
+
+#[test]
+fn language_a_ref_arm_borrows_the_matched_value() {
+    // `match x { ref v => .. }` binds `&x`, and `ref mut` the place, on a
+    // struct, a `Vec`, an `Option`, a `String` or a scalar alike (#194).
+    let output = printed(
+        r#"
+#[derive(Debug)]
+struct P {
+    x: i32,
+}
+fn main() {
+    let p = P { x: 1 };
+    let a = match p { ref q => q.x };
+    let v = vec![1, 2];
+    let b = match v { ref w if w.len() > 5 => 0, ref w => w.len() };
+    let o = Some(String::from("o"));
+    let c = match o { ref r => r.is_some() };
+    let mut m = P { x: 5 };
+    match m { ref mut q => q.x += 1 }
+    let s = String::from("abc");
+    let n = match s { ref v => v.len() };
+    let k = 6;
+    let j = match k { ref v => *v };
+    let mut t = String::from("x");
+    match t { ref mut w => w.push('y') }
+    println!("{a} {b} {c} {:?} {:?} {:?} {:?} {n} {j} {s} {t}", p, v, o, m);
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "1 2 true P { x: 1 } [1, 2] Some(\"o\") P { x: 6 } 3 6 abc xy\n"
+    );
+    // The borrow lasts as long as the binding is used.
+    let report = refused(
+        "fn main() {\n    let mut s = String::from(\"abc\");\n    match s {\n        \
+         ref v => {\n            s.push('d');\n            println!(\"{v}\");\n        }\n    }\n}\n",
+    );
+    assert!(
+        report.starts_with(
+            "error[E0502]: cannot borrow `s` as mutable because it is also borrowed as immutable"
+        ),
+        "{report}"
+    );
+    let report = refused(
+        "struct P {\n    x: i32,\n}\nfn main() {\n    let p = P { x: 1 };\n    \
+         let r = match p {\n        ref q => q,\n    };\n    drop(p);\n    println!(\"{}\", r.x);\n}\n",
+    );
+    assert!(
+        report.starts_with("error[E0505]: cannot move out of `p` because it is borrowed"),
+        "{report}"
+    );
+}
+
+#[test]
+fn language_an_element_borrow_checks_its_index_where_it_is_made() {
+    // `&mut a[i]` past the end panics where the borrow is made, as rustc's
+    // does, not where it is first used (#410).
+    assert_eq!(
+        panicked(
+            "fn main() {\n    let mut a = [1, 2, 3];\n    let v = vec![0; 9];\n    \
+             let i = v.len();\n    let r = &mut a[i];\n    println!(\"made\");\n    *r = 4;\n}\n"
+        ),
+        "thread 'main' panicked at main.rs:5:18:\nindex out of bounds: the len is 3 but the index is 9"
+    );
+    assert_eq!(
+        panicked(
+            "struct G {\n    cells: [i32; 2],\n}\nfn main() {\n    let mut g = G { cells: [1, 2] };\n    \
+             let mut m = [[1, 2], [3, 4]];\n    let k = g.cells.len() + 1;\n    \
+             let c = &mut m[1][k - 2];\n    *c = 0;\n    let d = &mut g.cells[k];\n    \
+             println!(\"made\");\n    *d = 1;\n}\n"
+        ),
+        "thread 'main' panicked at main.rs:10:18:\nindex out of bounds: the len is 2 but the index is 3"
+    );
+}
+
+#[test]
+fn language_a_primitive_op_assign_through_a_ref_cell_reads_its_right_side_first() {
+    // A builtin `op=` of two primitives evaluates its right side before
+    // its place, as rustc does, so the right side's `borrow()` ends before
+    // the place's `borrow_mut()` (#3). A trait's `op=`, of a `String`,
+    // borrows its place first, and the right side's `borrow()` panics.
+    let output = printed(
+        r#"
+use std::cell::RefCell;
+fn main() {
+    let n = RefCell::new(1);
+    *n.borrow_mut() += {
+        let v = *n.borrow();
+        v
+    };
+    let f = RefCell::new(1.5);
+    *f.borrow_mut() *= {
+        let v = *f.borrow();
+        v
+    };
+    println!("primitive {} {}", n.borrow(), f.borrow());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "primitive 2 2.25\n");
+    assert_eq!(
+        panicked(
+            "use std::cell::RefCell;\nfn main() {\n    let s = RefCell::new(String::from(\"a\"));\n    \
+             *s.borrow_mut() += {\n        let v = s.borrow().clone();\n        &v.clone()\n    };\n}\n"
+        )
+        .lines()
+        .next()
+        .map(str::to_owned),
+        Some("thread 'main' panicked at main.rs:5:19:".to_owned())
+    );
+}
+
+#[test]
+fn language_a_whole_optional_borrow_binds_beside_bindings_of_its_value() {
+    // A catch-all binding of a whole `Option<&mut T>`, a local's or a
+    // call's, beside an arm binding its value by `&mut`, holds the
+    // reference to the element's place, as rustc's (#166).
+    let output = printed(
+        r#"
+fn main() {
+    let mut v = vec![1, 2, 3];
+    match v.last_mut() {
+        Some(x) if *x > 10 => *x += 1,
+        whole => {
+            if let Some(y) = whole {
+                *y += 100
+            }
+        }
+    }
+    let mut w = vec![5, 50];
+    let o = w.first_mut();
+    match o {
+        Some(x) if *x > 10 => *x += 1,
+        None => {}
+        whole => {
+            if let Some(y) = whole {
+                *y += 7;
+            }
+        }
+    }
+    let mut u = vec![20];
+    match u.first_mut() {
+        Some(x) if *x > 10 => *x += 1,
+        whole => println!("{:?}", whole),
+    }
+    println!("{:?} {:?} {:?}", v, w, u);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "[1, 2, 103] [12, 50] [21]\n");
+}
+
+#[test]
+fn language_a_part_with_drop_glue_moves_out_below_a_field() {
+    // A move out of a field below a field, or of a member below a member,
+    // whose type implements `Drop` leaves the rest of the local to drop
+    // where rustc drops it, the moved part with its new owner (#196).
+    let output = printed(
+        r#"
+struct D(i32);
+impl Drop for D {
+    fn drop(&mut self) {
+        println!("drop D{}", self.0);
+    }
+}
+struct I {
+    d: D,
+    e: D,
+}
+struct O {
+    i: I,
+    f: D,
+}
+impl O {
+    fn take(self) -> D {
+        println!("taking");
+        self.i.e
+    }
+}
+fn main() {
+    let t = (D(1), (D(2), D(3)));
+    let a = t.1.0;
+    println!("moved {}", a.0);
+    let u = (D(4), D(5));
+    let b = u.1;
+    println!("moved {}", b.0);
+    let mut o = O { i: I { d: D(6), e: D(7) }, f: D(8) };
+    let c = o.i.d;
+    o.i.d = D(9);
+    println!("moved {}", c.0);
+    let p = O { i: I { d: D(10), e: D(11) }, f: D(12) };
+    let e = p.take();
+    println!("took {}", e.0);
+    println!("end");
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "moved 2\nmoved 5\nmoved 6\ntaking\ndrop D10\ndrop D12\ntook 11\nend\ndrop D11\n\
+         drop D6\ndrop D9\ndrop D7\ndrop D8\ndrop D5\ndrop D4\ndrop D2\ndrop D1\ndrop D3\n"
+    );
+}

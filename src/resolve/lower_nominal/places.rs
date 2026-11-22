@@ -1419,6 +1419,28 @@ fn is_slot(index: &str) -> bool {
     !index.is_empty() && index.bytes().all(|digit| digit.is_ascii_digit())
 }
 
+/// Statements that panic where a borrow of `chain` (`v[i][j]`), its
+/// indexes hoisted, is made, as rustc's does, when one of its indexes is
+/// out of bounds (#410): each index, in order, is checked against the
+/// length of what it indexes, and only an index past the end reads the
+/// element, which panics at `place`, the borrowed place as written.
+pub(super) fn bounds_checks(chain: &origin::Fragment, place: Span) -> origin::Fragment {
+    let mut checks = origin::Fragment::default();
+    for (open, close) in chain_indexes(chain.as_str()) {
+        let mut element = chain.clone();
+        element.truncate(close + 1);
+        let mut indexed = element.clone();
+        indexed.truncate(open);
+        element.cover(place);
+        checks.push_text(format!("if {} >= ", &chain.as_str()[open + 1..close]));
+        checks.push(indexed);
+        checks.push_text(".len() { ");
+        checks.push(element);
+        checks.push_text("; } ");
+    }
+    checks
+}
+
 /// Each index of the chain `chain` (`v[i].cells[j]`) below its local that
 /// is an expression, not a struct's slot: where its `[` and its `]` are.
 /// A string or char literal in an index is passed over whole.

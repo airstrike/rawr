@@ -69,6 +69,9 @@ pub(crate) struct Definition {
     /// The value of such a constant when it is one integer literal, as an
     /// array length (`[T; Self::N]`) names it.
     integer: Option<crate::INT>,
+    /// The value of such a constant when its initializer is a constant
+    /// expression of literals alone, as a pattern matches it.
+    value: Option<crate::item::constant::Value>,
     /// The impl's generic parameters, then the method's own.
     generics: Box<[resolve::item::Generic]>,
     /// The type parameters native code fills (`opaque`).
@@ -152,6 +155,11 @@ impl Definition {
                 .body
                 .syntax
                 .integer()
+                .filter(|_| function.body.constant),
+            value: function
+                .body
+                .syntax
+                .constant(&mut |_| None)
                 .filter(|_| function.body.constant),
             generics: function.generics.clone(),
             opaque: function
@@ -281,6 +289,11 @@ impl Definition {
     /// An integer-literal associated constant's value.
     pub(crate) const fn integer(&self) -> Option<crate::INT> {
         self.integer
+    }
+
+    /// An associated constant's value, of an initializer of literals.
+    pub(crate) const fn value(&self) -> Option<crate::item::constant::Value> {
+        self.value
     }
 
     /// The trait whose default body this function is, when it is one.

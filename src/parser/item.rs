@@ -835,7 +835,9 @@ fn resolve_const_lengths(items: &mut [crate::item::Parsed]) -> ParseResult<()> {
                     {
                         let Some(length) = values.get(name).and_then(|value| match value {
                             constant::Value::Integer(value) => usize::try_from(*value).ok(),
-                            constant::Value::Bool(_) | constant::Value::Char(_) => None,
+                            constant::Value::Bool(_)
+                            | constant::Value::Char(_)
+                            | constant::Value::Float(_) => None,
                         }) else {
                             return Err(PERR::MissingSymbol(format!(
                                 "an array length `{name}` that names a `const` of an integer"
@@ -4398,13 +4400,30 @@ fn parse_parameter_literal(input: &mut TokenStream) -> ParseResult<crate::item::
         input.next();
     }
     let (token, position) = input.next().expect("token streams always end with EOF");
-    let end = after(position, token.to_string().len());
+    let mut end = after(position, token.to_string().len());
     let literal = match token {
         Token::IntegerConstant(value) => {
-            crate::item::PatternLiteral::Integer(if negative { -value } else { value })
+            let suffix = match input.peek() {
+                Some((token @ Token::Identifier(name), position)) if literal_suffix(token) => {
+                    end = after(*position, name.len());
+                    Some(crate::ImmutableString::from(name.as_str()))
+                }
+                _ => None,
+            };
+            if suffix.is_some() {
+                input.next();
+            }
+            crate::item::PatternLiteral::Integer {
+                value: if negative { -value } else { value },
+                suffix,
+            }
         }
-        Token::CharConstant(value) if !negative => crate::item::PatternLiteral::Char(value),
+        Token::CharConstant(value) if !negative => {
+            end = after(position, format!("{value:?}").len());
+            crate::item::PatternLiteral::Char(value)
+        }
         Token::StringConstant(value) if !negative => {
+            end = after(position, format!("{:?}", value.as_str()).len());
             crate::item::PatternLiteral::Str(value.as_str().into())
         }
         Token::True if !negative => crate::item::PatternLiteral::Bool(true),
@@ -6055,6 +6074,9 @@ fn parse_body_syntax(
     // Whether the last token is `::` or `.`, after which a name goes on a
     // path or names a field or method.
     let mut after_path = false;
+    // Whether the last token is a number, which a type's name after it
+    // suffixes (`3u8`, `1.5f32`).
+    let mut after_number = false;
     let mut visibility = None;
     // The delimiter depths inside the braces of open struct literals, as
     // `S { x: 1 }`, which ends an expression as `1` does.
@@ -6272,6 +6294,7 @@ fn parse_body_syntax(
             })
             && let Some((token, position)) = input.peek()
             && begins_operand(token)
+            && !(after_number && literal_suffix(token))
         {
             return Err(unexpected(
                 format!("expected `{{`, found {}", found(token)),
@@ -6326,6 +6349,7 @@ fn parse_body_syntax(
                 };
             after_pub = matches!(token, Token::Pub);
             after_path = matches!(token, Token::DoubleColon | Token::Period);
+            after_number = matches!(token, Token::IntegerConstant(_) | Token::FloatConstant(_));
             after_extern = matches!(token, Token::Identifier(name) if name.as_str() == "extern");
             let depth = scan.delimiter_depth;
             match token {
@@ -6713,6 +6737,16 @@ fn begins_operand(token: &Token) -> bool {
     }
 }
 
+/// A numeric type's name, which suffixes the number before it.
+fn literal_suffix(token: &Token) -> bool {
+    matches!(token, Token::Identifier(name) if matches!(
+        name.as_str(),
+        "i8" | "i16" | "i32" | "i64" | "i128" | "isize"
+            | "u8" | "u16" | "u32" | "u64" | "u128" | "usize"
+            | "f32" | "f64"
+    ))
+}
+
 /// A private top-level `fn`: a typed item, as in Rust.
 fn parse_private_function(
     input: &mut TokenStream,
@@ -6793,6 +6827,9 @@ pub(super) fn body_token(token: Token, position: Position) -> crate::item::BodyT
         Token::True => (Kind::Value(crate::item::constant::Value::Bool(true)), 4),
         Token::False => (Kind::Value(crate::item::constant::Value::Bool(false)), 5),
         Token::CharConstant(value) => (Kind::Value(crate::item::constant::Value::Char(value)), 0),
+        Token::FloatConstant(value) => {
+            (Kind::Value(crate::item::constant::Value::Float(value.0)), 0)
+        }
         Token::Plus | Token::UnaryPlus => (Kind::Operator(crate::item::constant::Operator::Add), 1),
         Token::Minus | Token::UnaryMinus => {
             (Kind::Operator(crate::item::constant::Operator::Subtract), 1)

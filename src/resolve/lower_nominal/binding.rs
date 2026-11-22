@@ -283,6 +283,8 @@ impl<'a> Parser<'a> {
         // `let r = &mut place;` keeps the borrow: `r` is the place.
         let borrowing =
             matches!(self.peek(), Token::Ampersand) && matches!(self.peek_second(), Token::Mut);
+        // Where the place `&mut` borrows starts.
+        let borrowed = self.input.clone().nth(2).map(|(_, at)| at);
         let borrowed_value = matches!(self.peek(), Token::Ampersand | Token::And);
         let moved_borrow = matches!(self.peek(), Token::Identifier(ref alias) if self.aliases.contains_key(alias.as_str()))
             && matches!(self.peek_second(), Token::SemiColon);
@@ -560,6 +562,14 @@ impl<'a> Parser<'a> {
                 }
                 let mut indexes = origin::Fragment::default();
                 let lvalue = self.hoist_indexes(lvalue, &mut indexes);
+                if let Lvalue::Nested(nested) = &lvalue
+                    && let Some(chain) = lvalue::chain_of(nested)
+                    && borrowing
+                    && let Some(borrowed) = borrowed
+                {
+                    let written = span(borrowed, value.span.end());
+                    indexes.push(places::bounds_checks(&chain, written));
+                }
                 let rendered = self.with_field_entries(pending, indexes);
                 if !rendered.is_empty() {
                     self.write_output(rendered, value.span);
@@ -623,6 +633,10 @@ impl<'a> Parser<'a> {
             // borrow is made, into a local the place then names (T392).
             let mut indexes = origin::Fragment::default();
             let place = self.hoist_chain(place, &mut indexes);
+            if borrowing && let Some(borrowed) = borrowed {
+                let written = span(borrowed, value.span.end());
+                indexes.push(places::bounds_checks(&place, written));
+            }
             if !indexes.is_empty() {
                 self.write_output(indexes, value.span);
             }

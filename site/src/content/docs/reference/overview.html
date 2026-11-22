@@ -94,6 +94,7 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</c
   <li><strong>Width on your own <code>Display</code>.</strong> rawr pads a user <code>Display</code> impl&rsquo;s output to the width in <code>{:&gt;6}</code>. Rust ignores the width unless the impl calls <code>f.pad</code>.</li>
   <li><strong>Drops in a panic.</strong> rawr stops at a panic without running <code>drop</code>. Rust runs it for each value the panic unwinds past.</li>
   <li><strong>A large integer in generic code.</strong> Inside a generic function, adding or multiplying <code>i128</code> or <code>u128</code> values through <code>T: Add</code> panics when both values fit an <code>i64</code> and the result doesn&rsquo;t. Rust gives the result.</li>
+  <li><strong>A <code>RefCell</code> borrow in an expression.</strong> A <code>borrow()</code> or <code>borrow_mut()</code> used as a temporary ends where rawr reads it, as in <code>add(*c.borrow(), { *c.borrow_mut() = 5; 1 })</code>. Rust keeps the temporary to the end of the statement, so the later <code>borrow_mut()</code> panics.</li>
   <li><strong>Arithmetic on literals alone.</strong> An operation whose operands are all unsuffixed literals is computed as an <code>i64</code>. So <code>let x: i128 = 10_000_000_000 * 10_000_000_000;</code> panics where Rust gives the result. A suffix, as in <code>10_000_000_000i128</code>, gives Rust&rsquo;s result.</li>
 </ul>
 <h3 id="refused">Code that rawr refuses rather than run differently</h3>

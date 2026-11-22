@@ -474,7 +474,7 @@ impl Parser<'_> {
     pub(super) fn scalar_trace(
         &self,
         tests: bool,
-        binding: Option<(&ImmutableString, Span)>,
+        binding: Option<(&ImmutableString, Span, super::branch::Bound)>,
         written: &Ty,
     ) -> PatternTrace {
         let mut trace = PatternTrace::default();
@@ -489,12 +489,33 @@ impl Parser<'_> {
         match binding {
             // Below a `&mut`, rawr binds the value it refers to, which Rust
             // binds as the reference: the loans it keeps are left to rustc.
-            Some((_, span)) if !derefs.is_empty() && !self.shared_references(written) => {
+            Some((_, span, _)) if !derefs.is_empty() && !self.shared_references(written) => {
                 trace.unmodeled = Some(("a binding of a matched reference's value", span));
+            }
+            // `ref v` and `ref mut v` borrow the subject as written.
+            Some((
+                name,
+                span,
+                bound @ (super::branch::Bound::Shared | super::branch::Bound::Unique),
+            )) => {
+                let mutable = bound == super::branch::Bound::Unique;
+                trace.parts.push(Part {
+                    path: Vec::new(),
+                    regions: Vec::new(),
+                    kind: PartKind::Bind {
+                        name: name.clone(),
+                        span,
+                        by_ref: Some(mutable),
+                        ty: Ty::Reference {
+                            mutable,
+                            target: Box::new(written.clone()),
+                        },
+                    },
+                });
             }
             // The binding is the subject as written, `&T` included, and
             // holds its loans.
-            Some((name, span)) => trace.parts.push(Part {
+            Some((name, span, _)) => trace.parts.push(Part {
                 path: Vec::new(),
                 regions: Vec::new(),
                 kind: PartKind::Bind {
