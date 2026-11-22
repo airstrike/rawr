@@ -1440,12 +1440,14 @@ fn parse_macro_rules(
         end = expect(input, Token::SemiColon, "after a macro definition")?;
     }
     let rules = crate::resolve::macro_rules::Rules::from_tokens(&tokens).map_err(|malformed| {
-        PERR::Unexpected {
+        PERR::Resolution(crate::resolve::Error::Macro {
             message: malformed.message().into(),
             label: malformed.label().into(),
+            note: malformed.note().map(Into::into),
             help: malformed.help().map(Into::into),
-            span: Span::new(malformed.at(), after(malformed.at(), 1)),
-        }
+            at: Span::new(malformed.at(), after(malformed.at(), 1)),
+            fragment: None,
+        })
         .into_err(malformed.at())
     })?;
     // A call where an item goes expands with it from here on.

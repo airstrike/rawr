@@ -84,13 +84,14 @@ impl Parser<'_> {
             let end = self.expect(Token::SemiColon, "';' after a macro definition")?;
             tokens.push((Token::SemiColon, end));
         }
-        let rules =
-            macro_rules::Rules::from_tokens(&tokens).map_err(|malformed| Error::Syntax {
-                message: malformed.message().into(),
-                label: malformed.label().into(),
-                help: malformed.help().map(Into::into),
-                at: point_span(malformed.at()),
-            })?;
+        let rules = macro_rules::Rules::from_tokens(&tokens).map_err(|malformed| Error::Macro {
+            message: malformed.message().into(),
+            label: malformed.label().into(),
+            note: malformed.note().map(Into::into),
+            help: malformed.help().map(Into::into),
+            at: point_span(malformed.at()),
+            fragment: None,
+        })?;
         let name = ImmutableString::from(rules.name());
         self.local_macros.push((name, Shared::new(rules)));
         Ok(())
@@ -413,6 +414,21 @@ impl Parser<'_> {
         let expansion = rules
             .expand(&input, krate, name_span.start(), end, self.temporaries)
             .map_err(|failure| {
+                if let macro_rules::Failure::Unparsed(unparsed) = &failure {
+                    let (at, underlined) = unparsed.at();
+                    let (fragment, written) = unparsed.fragment();
+                    return Error::Macro {
+                        message: failure.to_string().into(),
+                        label: unparsed.label().into(),
+                        note: None,
+                        help: None,
+                        at: span(at, text_end(at, underlined)),
+                        fragment: Some((
+                            span(fragment, text_end(fragment, written)),
+                            unparsed.fragment_label().into(),
+                        )),
+                    };
+                }
                 let (label, at) = match &failure {
                     macro_rules::Failure::NoRules(Some((token, position))) => (
                         "no rules expected this token in macro call",
@@ -421,7 +437,9 @@ impl Parser<'_> {
                     macro_rules::Failure::NoRules(None) => {
                         ("missing tokens in macro arguments", call)
                     }
-                    macro_rules::Failure::Transcription(_) => ("", call),
+                    macro_rules::Failure::Transcription(_) | macro_rules::Failure::Unparsed(_) => {
+                        ("", call)
+                    }
                 };
                 Error::Syntax {
                     message: failure.to_string().into(),

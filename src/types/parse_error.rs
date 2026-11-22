@@ -521,7 +521,8 @@ impl fmt::Display for ParseErrorType {
                 crate::resolve::Error::UnsupportedNominalSyntax { construct, .. } => {
                     write!(f, "{}", crate::resolve::Unsupported(construct))
                 }
-                crate::resolve::Error::Syntax { message, .. } => f.write_str(message),
+                crate::resolve::Error::Syntax { message, .. }
+                | crate::resolve::Error::Macro { message, .. } => f.write_str(message),
                 crate::resolve::Error::UnlabeledJumpInWhileCondition { .. } => f.write_str(
                     "`break` or `continue` with no label in the condition of a `while` loop",
                 ),

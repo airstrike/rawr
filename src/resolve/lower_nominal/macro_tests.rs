@@ -575,6 +575,7 @@ fn a_fragment_its_follow_set_refuses_is_rustcs_error() {
             report.contains(&format!("not allowed after `{fragment}` fragments")),
             "{report}"
         );
+        assert!(report.contains("= note: allowed there are: "), "{report}");
     };
     refused(
         "macro_rules! a { ($e:expr foo) => {}; }\nfn main() {}",
@@ -605,6 +606,53 @@ fn a_fragment_its_follow_set_refuses_is_rustcs_error() {
         ),
         "ok\n"
     );
+}
+
+/// A fragment the call's tokens start but don't finish is rustc's parser
+/// error, labelled at the matcher's fragment, and no later rule is tried
+/// (#2511). A call whose tokens don't start the fragment is still a
+/// no-rules error.
+#[test]
+fn a_fragment_that_starts_but_does_not_parse_is_rustcs_parser_error() {
+    let two = "macro_rules! two { ($a:expr) => { $a }; (1 +) => { 0 }; }\n";
+    let report = report(&format!("{two}fn main() {{ let _ = two!(1 +); }}"));
+    assert_eq!(
+        report.lines().next(),
+        Some("error: expected expression, found end of macro arguments"),
+        "{report}"
+    );
+    assert!(report.contains("expected expression"), "{report}");
+    assert!(
+        report.contains("while parsing argument for this `expr` macro fragment"),
+        "{report}"
+    );
+    let message = |definition: &str, call: &str| {
+        refused(&format!(
+            "macro_rules! m {{ ({definition}) => {{}}; }}\nfn main() {{ m!({call}); }}"
+        ))
+        .0
+    };
+    assert_eq!(
+        message("$a:expr", "a + fn"),
+        "expected expression, found keyword `fn`"
+    );
+    assert_eq!(
+        message("[$a:expr]", "[1 +]"),
+        "expected expression, found `]`"
+    );
+    assert_eq!(message("$a:expr", "1 as"), "expected type, found `<eof>`");
+    assert_eq!(message("$a:ty", "&"), "expected type, found `<eof>`");
+    assert_eq!(
+        message("$a:pat", "Some(1) |"),
+        "expected pattern, found `<eof>`"
+    );
+    assert_eq!(
+        message("$a:path", "a::"),
+        "expected identifier, found `<eof>`"
+    );
+    assert_eq!(message("$a:item", "1"), "expected an item keyword");
+    assert_eq!(message("$a:expr", "fn"), "no rules expected keyword `fn`");
+    assert_eq!(message("$a:ident", "1"), "no rules expected `1`");
 }
 
 /// A call no rule matches names a keyword, a reserved word and a lifetime
