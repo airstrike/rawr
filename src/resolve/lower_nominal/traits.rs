@@ -1010,7 +1010,7 @@ impl<'a> Parser<'a> {
             return crate::resolve::Receiver {
                 kind,
                 declared: found.clone(),
-                found,
+                found: Some(found),
                 definition: None,
             };
         }
@@ -1033,7 +1033,7 @@ impl<'a> Parser<'a> {
         crate::resolve::Receiver {
             kind,
             declared,
-            found,
+            found: Some(found),
             definition: self.models.name_declared_here(model),
         }
     }

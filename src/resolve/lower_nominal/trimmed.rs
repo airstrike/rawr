@@ -75,6 +75,25 @@ pub(super) fn declared(definition: &'static str, models: &Models) -> String {
     format!("{name}<{}>", parameters.join(", "))
 }
 
+/// The std type defined at `definition` as rustc names a value of it whose
+/// parameters are all lifetimes, each elided: `Chars<'_>`. `None` for one
+/// with a type or const parameter, whose arguments a value has.
+pub(super) fn elided(definition: &'static str, models: &Models) -> Option<String> {
+    let item = std_table::item(definition)?;
+    let mut lifetimes = 0;
+    for parameter in item.generics() {
+        if parameter.kind != std_table::ParameterKind::Lifetime {
+            return None;
+        }
+        lifetimes += 1;
+    }
+    let name = std_name(definition, models);
+    if lifetimes == 0 {
+        return Some(name.into_owned());
+    }
+    Some(format!("{name}<{}>", vec!["'_"; lifetimes].join(", ")))
+}
+
 /// The shortest stable public std path of `definition`, read once per
 /// definition: rustc's visible path of a std type.
 fn public_path(definition: &'static str) -> Option<&'static str> {

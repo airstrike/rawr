@@ -354,7 +354,8 @@ fn sourced_builder(error: &resolve::Error, source: &Source, primary: Span) -> Bu
             format!(
                 "the method `{member}` exists for {} `{}`, but its trait bounds were not \
                  satisfied",
-                receiver.kind, receiver.found
+                receiver.kind,
+                receiver.found.as_ref().unwrap_or(&receiver.declared)
             ),
         );
     }
@@ -2165,7 +2166,7 @@ fn primary_label(
         } => Some(
             format!(
                 "method cannot be called on `{}` due to unsatisfied trait bounds",
-                receiver.found
+                receiver.found.as_ref().unwrap_or(&receiver.declared)
             )
             .into(),
         ),
@@ -2174,8 +2175,9 @@ fn primary_label(
         } => {
             let item = Missing::of(error, source, primary).map_or("method", |missing| missing.item);
             // rustc drops a method's label where it suggests a similar one.
+            let found = receiver.found.as_ref()?;
             (item != "method" || similar.is_none())
-                .then(|| format!("{item} not found in `{}`", receiver.found).into())
+                .then(|| format!("{item} not found in `{found}`").into())
         }
         resolve::Error::MovedValue {
             previous_iteration: true,

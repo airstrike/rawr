@@ -144,7 +144,7 @@ impl<'a> Parser<'a> {
             receiver: Box::new(crate::resolve::Receiver {
                 kind,
                 declared: name.as_str().into(),
-                found: name.into(),
+                found: Some(name.into()),
                 definition: None,
             }),
             similar: None,
@@ -216,7 +216,7 @@ impl<'a> Parser<'a> {
             receiver: Box::new(crate::resolve::Receiver {
                 kind,
                 declared,
-                found,
+                found: Some(found),
                 definition: None,
             }),
             similar: None,
@@ -274,6 +274,7 @@ impl<'a> Parser<'a> {
             let mut from_call = false;
             if let Some((receiver, member)) = called.take() {
                 self.finish_method_call(&receiver, &member, &value);
+                self.name_iterator(receiver.ty(), &member, &mut value);
                 from_call = true;
             }
             // A `&mut` a value stores, read from its field or element and
@@ -1178,7 +1179,7 @@ impl<'a> Parser<'a> {
                         receiver: Box::new(crate::resolve::Receiver {
                             kind: bounded.sort(&self.models),
                             declared: name.clone(),
-                            found: name,
+                            found: Some(name),
                             definition: None,
                         }),
                         similar: None,

@@ -43,6 +43,9 @@ pub(super) struct Pipeline {
     exact: bool,
     /// Which of `DoubleEndedIterator`'s and `Peekable`'s methods it has.
     traits: ty::Traits,
+    /// The std struct of its outermost adapter or its source, where rawr
+    /// knows it: `Map` of `v.iter().map(f)`, `slice::Iter` of `v.iter()`.
+    std: Option<&'static str>,
 }
 
 #[derive(Clone)]
@@ -371,6 +374,7 @@ impl Parser<'_> {
             reversible: None,
             exact: false,
             traits: ty::Traits::ANY,
+            std: None,
         };
         Ok((pipeline, *item))
     }
@@ -517,10 +521,9 @@ impl Parser<'_> {
             values: value.rendered_source(),
             array: false,
         };
-        let pipeline = self.source_pipeline(source);
-        let mut expr = self.iterator_expr(pipeline, Ty::Char, span(value.span.start(), end));
-        expr.ty = Ty::Iter(Box::new(Ty::Char), Some(CHARS), ty::Traits::ANY);
-        expr
+        let mut pipeline = self.source_pipeline(source);
+        pipeline.std = Some(CHARS);
+        self.iterator_expr(pipeline, Ty::Char, span(value.span.start(), end))
     }
 
     /// `low..high`, `low..=high` and `low..`: std's range values, each with
@@ -601,6 +604,23 @@ impl Parser<'_> {
         expr
     }
 
+    /// `value`, a call of `member` on `receiver` that rawr made a chain of
+    /// no std struct, as the iterator of the struct std declares the method
+    /// returns: `slice::Iter` of `v.iter()`, `hash_map::Keys` of `m.keys()`.
+    pub(super) fn name_iterator(&mut self, receiver: &Ty, member: &str, value: &mut ParsedExpr) {
+        let Ty::Iter(item, None, traits) = self.inference.resolve(&value.ty) else {
+            return;
+        };
+        let receiver = self.inference.resolve(receiver);
+        let Some(std) = std_method::iterator_struct(&receiver, member) else {
+            return;
+        };
+        value.ty = Ty::Iter(item, Some(std), traits);
+        if let Some(pipeline) = self.pipelines.get_mut(value.source.as_str()) {
+            pipeline.std = Some(std);
+        }
+    }
+
     /// Keep a parenthesized iterator's chain: `(0..n).map(f)`.
     pub(super) fn keep_pipeline(&mut self, before: &str, after: &ParsedExpr) {
         if let Some(pipeline) = self.pipelines.get(before).cloned() {
@@ -623,6 +643,7 @@ impl Parser<'_> {
             reversible: None,
             exact: false,
             traits: ty::Traits::ANY,
+            std: None,
         };
         let (header, entry) = match &source {
             Source::Values { values, .. } => (
@@ -853,6 +874,7 @@ impl Parser<'_> {
             reversible: None,
             exact: false,
             traits: ty::Traits::ANY,
+            std: None,
         }
     }
 
@@ -1073,7 +1095,7 @@ impl Parser<'_> {
         expression: Span,
     ) -> ParsedExpr {
         let source = self.lazy_value(&pipeline);
-        let ty = Ty::Iter(Box::new(item), None, pipeline.traits);
+        let ty = Ty::Iter(Box::new(item), pipeline.std, pipeline.traits);
         let expr = self.operator_expr(source, ty, expression);
         self.pipelines
             .insert(expr.source.as_str().to_string(), pipeline);
@@ -1190,12 +1212,13 @@ impl Parser<'_> {
         {
             return Some((pipeline.clone(), item));
         }
-        if let Ty::Iter(_, _, traits) = ty {
+        if let Ty::Iter(_, std, traits) = ty {
             let source = Source::Items {
                 values: value.rendered_source(),
             };
             let mut pipeline = self.source_pipeline(source);
             pipeline.traits = traits;
+            pipeline.std = std;
             return Some((pipeline, item));
         }
         let range = range::parts(&ty).map(|(kind, _)| kind);
@@ -1522,6 +1545,40 @@ impl Parser<'_> {
         }
     }
 
+    /// rustc's E0599 for the method `member` the iterator `chain` lacks: by
+    /// its std struct with the struct's declared parameters where rawr
+    /// knows it, "found for struct `TakeWhile<I, P>`", else by its items.
+    /// No label, which would name the struct's arguments, its inner
+    /// iterator and closure, which rawr doesn't keep.
+    fn missing_iterator_method(
+        &self,
+        chain: &Ty,
+        member: ImmutableString,
+        reference: Span,
+    ) -> Error {
+        let owner = chain.name(&self.models);
+        let Ty::Iter(_, Some(std), _) = chain else {
+            return Error::UnknownMember {
+                owner,
+                member,
+                reference,
+            };
+        };
+        Error::NoItem {
+            owner,
+            member,
+            reference,
+            receiver: Box::new(crate::resolve::Receiver {
+                kind: "struct",
+                declared: super::trimmed::declared(std, &self.models).into(),
+                found: None,
+                definition: None,
+            }),
+            similar: None,
+            unsatisfied: None,
+        }
+    }
+
     /// An iterator method on `value`: an adaptor extends its chain, a
     /// consumer runs it.
     pub(super) fn parse_iterator_method(
@@ -1537,17 +1594,18 @@ impl Parser<'_> {
         // A method of a trait or adapter the std struct the chain stands
         // for doesn't implement: rustc's E0599, and E0277 for `rev`'s
         // `Self: DoubleEndedIterator` (#792).
-        let chain = Ty::Iter(Box::new(item.clone()), None, pipeline.traits);
+        let chain = Ty::Iter(Box::new(item.clone()), pipeline.std, pipeline.traits);
         if std_method::withheld(&chain, &member) {
-            return Err(Error::UnknownMember {
-                owner: chain.name(&self.models),
-                member,
-                reference: member_span,
-            });
+            return Err(self.missing_iterator_method(&chain, member, member_span));
         }
         if member.as_str() == "rev" && !pipeline.traits.double_ended() {
+            // A range by its own type, `std::ops::RangeFrom<{integer}>`.
+            let receiver = match self.inference.resolve(&value.ty) {
+                Ty::Iter(..) => chain.clone(),
+                ty => ty,
+            };
             return Err(Error::MissingCapability {
-                owner: chain.name(&self.models),
+                owner: receiver.name(&self.models),
                 capability: "DoubleEndedIterator".into(),
                 operation: member_span,
                 derive: false,
@@ -1558,6 +1616,7 @@ impl Parser<'_> {
             });
         }
         pipeline.traits = pipeline.traits.after(&member, pipeline.exact);
+        pipeline.std = std_method::iterator_struct(&chain, &member);
         // Items with drop glue may only go on to an owner: a container, or
         // a closure's parameter.
         if !matches!(member.as_str(), "collect" | "for_each" | "map" | "fold")
@@ -2671,11 +2730,7 @@ impl Parser<'_> {
                         reference: member_span,
                     });
                 }
-                return Err(Error::UnknownMember {
-                    owner: Ty::iter(item).name(&self.models),
-                    member,
-                    reference: member_span,
-                });
+                return Err(self.missing_iterator_method(&chain, member, member_span));
             }
         };
         Ok(self.operator_expr(source.surrounded("(", ")"), ty, expression))
@@ -2755,6 +2810,7 @@ impl Parser<'_> {
             let mut reversed = self.walked_backwards(None, &pipeline, item);
             reversed.exact = pipeline.exact;
             reversed.traits = pipeline.traits;
+            reversed.std = pipeline.std;
             reversed.outer = pipeline.outer;
             return reversed;
         };
@@ -2775,6 +2831,7 @@ impl Parser<'_> {
         reversed.item = pipeline.item;
         reversed.exact = pipeline.exact;
         reversed.traits = pipeline.traits;
+        reversed.std = pipeline.std;
         reversed.outer = pipeline.outer;
         reversed
     }
@@ -2799,6 +2856,7 @@ impl Parser<'_> {
             reversible: None,
             exact: false,
             traits: ty::Traits::ANY,
+            std: None,
         };
         let (header, entry) = match source {
             Some(Source::Range {

@@ -121,7 +121,11 @@ pub(super) fn steps(ty: &Ty) -> Vec<Step> {
         // and adapter it implements (#792).
         Ty::Iter(_, std, traits) => std
             .iter()
-            .chain(ITERATOR.iter().filter(|owner| offered(*traits, owner)))
+            .chain(
+                ITERATOR
+                    .iter()
+                    .filter(|owner| offered(*traits, owner) && Some(**owner) != *std),
+            )
             .map(|owner| Step {
                 owner,
                 ty: ty.clone(),
@@ -245,6 +249,53 @@ pub(super) fn withheld(ty: &Ty, member: &str) -> bool {
         && ITERATOR
             .iter()
             .any(|owner| !offered(*traits, owner) && stable(owner, member).is_some())
+}
+
+/// The std struct of the iterator the method `member` of `receiver`
+/// returns, as std declares it: `core::slice::iter::Iter` of `v.iter()`,
+/// `core::iter::adapters::map::Map` of a chain's `map`, and through
+/// `IntoIterator` for it, `alloc::vec::into_iter::IntoIter` of a `Vec`'s
+/// `into_iter`. `None` where its output is no std struct, as `by_ref`'s
+/// `&mut Self` is.
+pub(super) fn iterator_struct(receiver: &Ty, member: &str) -> Option<&'static str> {
+    if member == "into_iter" {
+        return into_iterator(receiver);
+    }
+    let mut native = receiver;
+    while let Ty::Reference { target, .. } = native {
+        native = target;
+    }
+    let found = inherent(native, member)?;
+    let output = std_table::Declared::parse(found.item.declaration())?.output?;
+    struct_of(std_table::written(output))
+}
+
+/// The `IntoIter` of std's `IntoIterator` for `receiver`: an iterator's
+/// own struct, `slice::Iter` of a `&Vec<T>`, `vec::IntoIter` of a `Vec<T>`.
+fn into_iterator(receiver: &Ty) -> Option<&'static str> {
+    let key = match receiver {
+        Ty::Iter(_, std, _) => return *std,
+        Ty::Reference { mutable: false, .. } => "&",
+        Ty::Reference { mutable: true, .. } => "&mut",
+        Ty::Array {
+            kind: sequence::Kind::Array(_),
+            ..
+        } => "[;]",
+        ty => std_impl::std_definition(ty)?.0,
+    };
+    let found = std_table::impls("core::iter::traits::collect::IntoIterator", key)
+        .find(|found| fits(&std_table::written(found.self_ty), receiver))?;
+    struct_of(std_table::written(found.associated("IntoIter")?))
+}
+
+/// The std struct the type `written` names: `core::slice::iter::Iter` of
+/// `std::slice::Iter<'_, T>`.
+fn struct_of(written: Written) -> Option<&'static str> {
+    let Written::Path { path, .. } = written else {
+        return None;
+    };
+    let definition = std_table::definition_of(path)?;
+    (std_table::item(definition)?.kind == "struct").then_some(definition)
 }
 
 /// The name a trait's definition ends in: `Iterator` of

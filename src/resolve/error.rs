@@ -2438,8 +2438,11 @@ pub struct Receiver {
     /// The type as the message names it: a struct or enum with its
     /// declared parameters, `G<T>`.
     pub declared: ImmutableString,
-    /// The type as the label names it, the one found: `G<i32>`.
-    pub found: ImmutableString,
+    /// The type as the label names it, the one found: `G<i32>`. `None`
+    /// where rawr can't name it as rustc does, as an iterator chain's
+    /// `TakeWhile<std::slice::Iter<'_, {integer}>, {closure@..}>`: no
+    /// label then.
+    pub found: Option<ImmutableString>,
     /// The struct's or enum's name where the program declares it, in the
     /// error's file: rustc marks its definition.
     pub definition: Option<Span>,

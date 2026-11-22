@@ -429,7 +429,7 @@ impl<'a> Parser<'a> {
                 receiver: Box::new(crate::resolve::Receiver {
                     kind: receiver_ty.sort(&self.models),
                     declared: name.clone(),
-                    found: name,
+                    found: Some(name),
                     definition: None,
                 }),
                 similar: None,
