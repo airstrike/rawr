@@ -5291,4 +5291,26 @@ main();
         output,
         "hi h\u{fffd}i borrowed owned\n\"h\u{fffd}i\" 2 true\n"
     );
+    // A path's and an `OsString`'s `to_string_lossy` is std's `Cow<str>`
+    // too, which an `io::Error` takes as its message.
+    let output = printed(
+        r#"
+use std::borrow::Cow;
+use std::ffi::OsString;
+use std::path::Path;
+fn main() {
+    let a = Path::new("x").to_string_lossy().into_owned();
+    let os = OsString::from("z");
+    let c: Cow<str> = os.to_string_lossy();
+    let d: String = Path::new("y").to_string_lossy().to_string();
+    let e = Path::new("w").to_string_lossy();
+    println!("{a} {c} {d} {} {} {:?}", e.len(), e == "w", e);
+    let error = std::io::Error::other(Path::new("bad").to_string_lossy());
+    let kind = std::io::Error::new(std::io::ErrorKind::NotFound, String::from("gone"));
+    println!("{} {}", error, kind);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "x z y 1 true \"w\"\nbad gone\n");
 }

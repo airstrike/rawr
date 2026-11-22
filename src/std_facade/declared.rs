@@ -1092,7 +1092,7 @@ pub(super) static STEPS: &[Step] = &[
         path: "path::PathBuf::to_string_lossy",
         kind: Kind::Method(Mode::Shared),
         inputs: &[],
-        output: Ty::Builtin(Builtin::String),
+        output: Ty::Builtin(Builtin::Text),
     },
     Step::Item {
         path: "path::PathBuf::display",
@@ -1125,7 +1125,7 @@ pub(super) static STEPS: &[Step] = &[
         path: "ffi::OsString::to_string_lossy",
         kind: Kind::Method(Mode::Shared),
         inputs: &[],
-        output: Ty::Builtin(Builtin::String),
+        output: Ty::Builtin(Builtin::Text),
     },
     Step::Item {
         path: "io::ErrorKind::NotFound",
@@ -1383,6 +1383,12 @@ pub(super) static STEPS: &[Step] = &[
         output: Ty::Registered("io::Error"),
     },
     Step::Item {
+        path: "io::Error::new",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Registered("io::ErrorKind"), Ty::Builtin(Builtin::Text)],
+        output: Ty::Registered("io::Error"),
+    },
+    Step::Item {
         path: "io::Error::other",
         kind: Kind::AssociatedFunction,
         inputs: &[Ty::Reference {
@@ -1395,6 +1401,12 @@ pub(super) static STEPS: &[Step] = &[
         path: "io::Error::other",
         kind: Kind::AssociatedFunction,
         inputs: &[Ty::Builtin(Builtin::String)],
+        output: Ty::Registered("io::Error"),
+    },
+    Step::Item {
+        path: "io::Error::other",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Builtin(Builtin::Text)],
         output: Ty::Registered("io::Error"),
     },
     Step::Item {

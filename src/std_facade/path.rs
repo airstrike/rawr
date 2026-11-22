@@ -97,6 +97,16 @@ fn text(value: &str) -> Dynamic {
     Dynamic::from(ImmutableString::from(value))
 }
 
+/// std's `Cow<str>` of a `to_string_lossy`, as a program's `Cow<str>` is
+/// at runtime: borrowed of valid text, owned of a replaced one.
+fn lossy(value: std::borrow::Cow<'_, str>) -> Dynamic {
+    use crate::resolve::lower_nominal::cow::Value;
+    Dynamic::from(match value {
+        std::borrow::Cow::Borrowed(borrowed) => Value::Borrowed(text(borrowed)),
+        std::borrow::Cow::Owned(owned) => Value::Owned(text(&owned)),
+    })
+}
+
 fn os_text(value: Option<&std::ffi::OsStr>) -> Dynamic {
     crate::option::from(value.map(std::ffi::OsStr::to_os_string))
 }
@@ -253,8 +263,8 @@ pub(super) fn bind(binds: &mut impl super::Bind) {
         ))
     });
     bind("path::PathBuf::to_string_lossy", |args| {
-        Ok(text(
-            &read::<PathBuf>(args[0], "PathBuf")?.to_string_lossy(),
+        Ok(lossy(
+            read::<PathBuf>(args[0], "PathBuf")?.to_string_lossy(),
         ))
     });
     bind("path::PathBuf::display", |args| {
@@ -273,8 +283,8 @@ pub(super) fn bind(binds: &mut impl super::Bind) {
         Ok(crate::option::from(os.to_str().map(ImmutableString::from)))
     });
     bind("ffi::OsString::to_string_lossy", |args| {
-        Ok(text(
-            &read::<OsString>(args[0], "OsString")?.to_string_lossy(),
+        Ok(lossy(
+            read::<OsString>(args[0], "OsString")?.to_string_lossy(),
         ))
     });
 }
