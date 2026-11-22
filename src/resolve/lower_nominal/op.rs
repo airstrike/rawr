@@ -817,6 +817,7 @@ impl PreludeOp {
                 TypeId::of::<crate::INT>(),
                 TypeId::of::<Dynamic>(),
                 TypeId::of::<Dynamic>(),
+                TypeId::of::<Dynamic>(),
             ],
             Self::IntMethod => vec![
                 TypeId::of::<crate::INT>(),
@@ -1341,7 +1342,7 @@ impl PreludeOp {
             Self::StrMethod => {
                 let text = args[0].clone_cast::<ImmutableString>();
                 let code = usize::try_from(args[1].as_int().unwrap_or_default()).unwrap_or(0);
-                return str_method(&text, code, &args[2].clone(), &args[3].clone());
+                return str_method(&text, code, [&*args[2], &*args[3], &*args[4]]);
             }
             Self::SetAlgebra | Self::KeyedRange => {
                 return keyed_query(self, args, &Keys::new(&comparison, shape, flags, false))

@@ -107,9 +107,27 @@ impl<'a> Parser<'a> {
         else {
             return error;
         };
-        let Some(form) = crate::std_facade::held_forms(owner).first().copied() else {
+        let forms = crate::std_facade::held_forms(owner);
+        let Some(form) = forms.first().copied() else {
             return error;
         };
+        // A stable function std declares on a type the held one stands
+        // for, as `Path::strip_prefix` of a `PathBuf`, which the facade
+        // doesn't bind yet.
+        for form in &forms {
+            let declared = crate::std_table::path(form, crate::std_table::Namespace::Type)
+                .and_then(|path| crate::std_table::item(&format!("{}::{member}", path.definition)));
+            if let Some(item) = declared
+                && item.kind == "assoc-fn"
+                && item.stability == crate::std_table::Stability::Stable
+            {
+                let name = form.rsplit("::").next().unwrap_or(form);
+                return Error::NotYet {
+                    path: format!("{name}::{member}").into(),
+                    reference: *reference,
+                };
+            }
+        }
         let kind = match crate::std_table::path(form, crate::std_table::Namespace::Type) {
             Some(path) if path.kind == "enum" => "enum",
             Some(path) if path.kind == "struct" => "struct",
@@ -1570,7 +1588,8 @@ impl<'a> Parser<'a> {
                 continue;
             }
             if builtin.is_text()
-                || matches!(&builtin, Ty::Reference { target, .. } if target.is_text())
+                || matches!(&builtin, Ty::Reference { target, .. }
+                    if target.is_text() || **target == Ty::UnsizedStr)
                 || member == "to_string"
                     && matches!(
                         without_references(&number),
@@ -2455,7 +2474,10 @@ impl<'a> Parser<'a> {
         match open {
             Some(inclusive) => {
                 self.next();
-                let high = if matches!(self.peek(), Token::RightBracket | Token::RightParen) {
+                let high = if matches!(
+                    self.peek(),
+                    Token::RightBracket | Token::RightParen | Token::Comma
+                ) {
                     Ok(None)
                 } else {
                     self.parse_expr().map(Some)

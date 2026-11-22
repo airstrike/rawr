@@ -97,12 +97,45 @@ fn text(value: &str) -> Dynamic {
     Dynamic::from(ImmutableString::from(value))
 }
 
+/// std's `Cow<str>` of a `to_string_lossy`, as a program's `Cow<str>` is
+/// at runtime: borrowed of valid text, owned of a replaced one.
+fn lossy(value: std::borrow::Cow<'_, str>) -> Dynamic {
+    use crate::resolve::lower_nominal::cow::Value;
+    Dynamic::from(match value {
+        std::borrow::Cow::Borrowed(borrowed) => Value::Borrowed(text(borrowed)),
+        std::borrow::Cow::Owned(owned) => Value::Owned(text(&owned)),
+    })
+}
+
 fn os_text(value: Option<&std::ffi::OsStr>) -> Dynamic {
     crate::option::from(value.map(std::ffi::OsStr::to_os_string))
 }
 
+/// Whether a file system entry is of the kind a query asks for.
+type Holds = fn(&std::fs::Metadata) -> bool;
+
+/// What the file system holds at a path: std's `Path::exists`, `is_file`
+/// and `is_dir`, each `false` where the path can't be read.
+const QUERIES: &[(&str, Holds)] = &[
+    ("exists", |_| true),
+    ("is_file", std::fs::Metadata::is_file),
+    ("is_dir", std::fs::Metadata::is_dir),
+];
+
 /// Bind the types' items.
 pub(super) fn bind(binds: &mut impl super::Bind) {
+    for (name, holds) in QUERIES {
+        binds.with_context(&format!("path::PathBuf::{name}"), move |call, args| {
+            let path = read::<PathBuf>(args[0], "PathBuf")?;
+            let found = call
+                .access()
+                .read(&path)
+                .and_then(|()| std::fs::metadata(&path));
+            Ok(Dynamic::from_bool(
+                found.is_ok_and(|metadata| holds(&metadata)),
+            ))
+        });
+    }
     type Callback = fn(&mut [&mut Dynamic]) -> Result<Dynamic, Box<EvalAltResult>>;
     let mut bind = |path: &str, callback: Callback| binds.plain(path, callback);
     bind("path::PathBuf::new", |args| match args {
@@ -130,6 +163,67 @@ pub(super) fn bind(binds: &mut impl super::Bind) {
         path.push(pushed);
         Ok(Dynamic::UNIT)
     });
+    bind("path::PathBuf::set_extension", |args| {
+        let extension = os_like(args[1])?;
+        let mut path = args[0]
+            .write_lock::<PathBuf>()
+            .ok_or_else(|| error("expected `PathBuf`"))?;
+        Ok(Dynamic::from_bool(path.set_extension(extension)))
+    });
+    bind("path::PathBuf::set_file_name", |args| {
+        let name = os_like(args[1])?;
+        let mut path = args[0]
+            .write_lock::<PathBuf>()
+            .ok_or_else(|| error("expected `PathBuf`"))?;
+        path.set_file_name(name);
+        Ok(Dynamic::UNIT)
+    });
+    bind("path::PathBuf::pop", |args| {
+        let mut path = args[0]
+            .write_lock::<PathBuf>()
+            .ok_or_else(|| error("expected `PathBuf`"))?;
+        Ok(Dynamic::from_bool(path.pop()))
+    });
+    bind("path::PathBuf::with_extension", |args| {
+        let extension = os_like(args[1])?;
+        Ok(Dynamic::from(
+            read::<PathBuf>(args[0], "PathBuf")?.with_extension(extension),
+        ))
+    });
+    bind("path::PathBuf::with_file_name", |args| {
+        let name = os_like(args[1])?;
+        Ok(Dynamic::from(
+            read::<PathBuf>(args[0], "PathBuf")?.with_file_name(name),
+        ))
+    });
+    bind("path::PathBuf::starts_with", |args| {
+        let base = path_like(args[1])?;
+        Ok(Dynamic::from_bool(
+            read::<PathBuf>(args[0], "PathBuf")?.starts_with(base),
+        ))
+    });
+    bind("path::PathBuf::ends_with", |args| {
+        let child = path_like(args[1])?;
+        Ok(Dynamic::from_bool(
+            read::<PathBuf>(args[0], "PathBuf")?.ends_with(child),
+        ))
+    });
+    bind("path::PathBuf::is_absolute", |args| {
+        Ok(Dynamic::from_bool(
+            read::<PathBuf>(args[0], "PathBuf")?.is_absolute(),
+        ))
+    });
+    bind("path::PathBuf::is_relative", |args| {
+        Ok(Dynamic::from_bool(
+            read::<PathBuf>(args[0], "PathBuf")?.is_relative(),
+        ))
+    });
+    bind("path::PathBuf::has_root", |args| {
+        Ok(Dynamic::from_bool(
+            read::<PathBuf>(args[0], "PathBuf")?.has_root(),
+        ))
+    });
+    bind("path::PathBuf::as_path", |args| Ok(args[0].clone()));
     bind("path::PathBuf::join", |args| {
         let joined = path_like(args[1])?;
         Ok(Dynamic::from(
@@ -169,8 +263,8 @@ pub(super) fn bind(binds: &mut impl super::Bind) {
         ))
     });
     bind("path::PathBuf::to_string_lossy", |args| {
-        Ok(text(
-            &read::<PathBuf>(args[0], "PathBuf")?.to_string_lossy(),
+        Ok(lossy(
+            read::<PathBuf>(args[0], "PathBuf")?.to_string_lossy(),
         ))
     });
     bind("path::PathBuf::display", |args| {
@@ -189,8 +283,8 @@ pub(super) fn bind(binds: &mut impl super::Bind) {
         Ok(crate::option::from(os.to_str().map(ImmutableString::from)))
     });
     bind("ffi::OsString::to_string_lossy", |args| {
-        Ok(text(
-            &read::<OsString>(args[0], "OsString")?.to_string_lossy(),
+        Ok(lossy(
+            read::<OsString>(args[0], "OsString")?.to_string_lossy(),
         ))
     });
 }

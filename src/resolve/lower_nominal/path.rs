@@ -2247,6 +2247,34 @@ impl<'a> Parser<'a> {
             );
             return Ok(self.operator_expr(source, ty, expression));
         }
+        // `String::from_utf8_lossy(bytes)`: a `Cow<str>`, borrowed of valid
+        // UTF-8 and owned with each invalid sequence replaced.
+        if builtin == Ty::String
+            && member.as_str() == "from_utf8_lossy"
+            && let [bytes] = arguments.as_mut_slice()
+        {
+            let expected = Ty::Reference {
+                mutable: false,
+                target: Box::new(Ty::sequence(sequence::Kind::Slice, Ty::Int(Int::U8))),
+            };
+            self.coerce_expr(&expected, bytes)?;
+            let code = STR_PIECES
+                .iter()
+                .position(|name| *name == "from_utf8_lossy")
+                .expect("a listed piece")
+                .to_string();
+            let source = self.prelude_op(
+                PreludeOp::StrPieces,
+                [
+                    bytes.rendered_source(),
+                    code.into(),
+                    "()".into(),
+                    "()".into(),
+                ],
+            );
+            let ty = Ty::Cow(Box::new(Ty::UnsizedStr));
+            return Ok(self.operator_expr(source, ty, expression));
+        }
         if member.as_str() == "from"
             && let [argument] = arguments.as_mut_slice()
         {

@@ -7119,3 +7119,313 @@ main();
          ExitCode(unix_exit_status(4)) ExitCode(unix_exit_status(9)) true\n"
     );
 }
+
+/// What `source` prints, run with `access`.
+fn printed_with(source: &str, access: crate::Access) -> String {
+    let lines = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let mut engine = Engine::new();
+    engine.set_access(access);
+    let sink = lines.clone();
+    engine.on_output(move |_, text| sink.lock().unwrap().push_str(text));
+    engine.run(source).unwrap_or_else(|error| panic!("{error}"));
+    lines.lock().unwrap().clone()
+}
+
+#[test]
+fn str_matches_match_indices_and_replacen_run_as_stds() {
+    // A `&str` or `char` pattern's matches, their byte offsets, and the
+    // first `n` replaced (#2090).
+    let output = printed(
+        r#"
+fn main() {
+    let t = "abcXXabcYYabc";
+    let v: Vec<&str> = t.matches("abc").collect();
+    let w: Vec<(usize, &str)> = t.match_indices("abc").collect();
+    println!("{:?} {:?}", v, w);
+    println!("{} {} {}", t.replacen("abc", "-", 2), t.replacen('X', "", 1), t.matches('Y').count());
+    let owned = String::from("a,b,,c");
+    let at: Vec<usize> = owned.match_indices(',').map(|(i, _)| i).collect();
+    println!("{:?} {}", at, owned.replacen(",", ";", 0));
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "[\"abc\", \"abc\", \"abc\"] [(0, \"abc\"), (5, \"abc\"), (10, \"abc\")]\n\
+         -XX-YYabc abcXabcYYabc 2\n[1, 3, 4] a,b,,c\n"
+    );
+}
+
+#[test]
+fn string_drain_and_replace_range_change_the_string_as_stds() {
+    // std's `String::drain` and `replace_range` of a `RangeBounds<usize>`
+    // (#2521).
+    let output = printed(
+        r#"
+fn main() {
+    let mut s = String::from("hello");
+    s.replace_range(..2, "x");
+    let mut h = String::from("hello he");
+    let d: String = h.drain(..2).collect();
+    println!("{} {} {}", s, h, d);
+    let mut t = String::from("abcdef");
+    let r = 1..=2;
+    t.replace_range(r, "XYZ");
+    let tail: Vec<char> = t.drain(4..).collect();
+    println!("{} {:?}", t, tail);
+    t.replace_range(.., "all");
+    println!("{}", t);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "xllo llo he he\naXYZ ['d', 'e', 'f']\nall\n");
+    // A field's and an element's string change in place.
+    let output = printed(
+        r#"
+struct Named { name: String }
+fn main() {
+    let mut n = Named { name: String::from("héllo") };
+    let gone: String = n.name.drain(1..3).collect();
+    n.name.replace_range(0..1, "J");
+    let mut v = vec![String::from("abc")];
+    v[0].replace_range(1.., "Z");
+    println!("{} {} {:?}", n.name, gone, v);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "Jllo é [\"aZ\"]\n");
+    assert_eq!(
+        panicked("fn main() {\n    let mut s = String::from(\"héllo\");\n    s.drain(..2);\n}\n"),
+        "thread 'main' panicked at main.rs:3:7:\nassertion failed: self.is_char_boundary(end)"
+    );
+    let report = refused("fn main() { let s = String::from(\"hello\"); s.drain(..2); }");
+    assert!(
+        report.starts_with(
+            "error[E0596]: cannot borrow `s` as mutable, as it is not declared as mutable"
+        ),
+        "{report}"
+    );
+}
+
+/// What `source` prints, run with `access`.
+fn printed_with(source: &str, access: crate::Access) -> String {
+    let lines = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let mut engine = Engine::new();
+    engine.set_access(access);
+    let sink = lines.clone();
+    engine.on_output(move |_, text| sink.lock().unwrap().push_str(text));
+    engine.run(source).unwrap_or_else(|error| panic!("{error}"));
+    lines.lock().unwrap().clone()
+}
+
+#[test]
+fn std_path_and_path_buf_methods_run_as_stds() {
+    // `Path::new`, its readers and file system queries, and `PathBuf`'s
+    // changes (#2087). A path the program may not read is no file.
+    let directory = std::env::temp_dir().join(format!("rawr-path-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(directory.join("bar.txt"), "x").unwrap();
+    let source = format!(
+        r#"
+use std::path::{{Path, PathBuf}};
+fn main() {{
+    let p = Path::new("/tmp/foo/bar.txt");
+    println!("{{:?}} {{:?}} {{:?}} {{:?}}", p.extension(), p.file_name(), p.file_stem(), p.parent());
+    let j = p.parent().unwrap().join("baz.rs");
+    println!("{{}} {{}} {{}}", p.display(), j.display(), p.with_extension("md").display());
+    let mut b = PathBuf::from("/tmp");
+    b.push("x.txt");
+    println!("{{}} {{:?}}", b.set_extension("md"), b);
+    b.set_file_name("y");
+    println!("{{:?}}", b);
+    let popped = (b.pop(), b.pop());
+    println!("{{:?}} {{:?}}", popped, b);
+    let q: &Path = b.as_path();
+    println!("{{}} {{}} {{}}", q.is_absolute(), Path::new("a/b").is_relative(), q.starts_with("/"));
+    let dir = PathBuf::from({directory:?});
+    let file = dir.join("bar.txt");
+    println!("{{}} {{}} {{}}", dir.exists(), dir.is_dir(), dir.is_file());
+    println!("{{}} {{}} {{}}", file.exists(), file.is_file(), file.with_file_name("none").exists());
+}}
+main();
+"#
+    );
+    let output = printed_with(&source, crate::Access::all());
+    let denied = printed(&source);
+    std::fs::remove_dir_all(&directory).unwrap();
+    assert_eq!(
+        output,
+        "Some(\"txt\") Some(\"bar.txt\") Some(\"bar\") Some(\"/tmp/foo\")\n\
+         /tmp/foo/bar.txt /tmp/foo/baz.rs /tmp/foo/bar.md\n\
+         true \"/tmp/x.md\"\n\"/tmp/y\"\n(true, true) \"/\"\n\
+         true true true\ntrue true false\ntrue true false\n"
+    );
+    assert!(
+        denied.ends_with("false false false\nfalse false false\n"),
+        "{denied}"
+    );
+    // `Path::new(&S)` of a borrowed `String`, and a `&Path` given back
+    // owned.
+    let output = printed(
+        r#"
+use std::path::{Path, PathBuf};
+fn name(p: &Path) -> String {
+    p.file_name().unwrap().to_string_lossy().to_string()
+}
+fn main() {
+    let s = String::from("/a/b.rs");
+    let p = Path::new(&s);
+    let owned: PathBuf = p.to_path_buf();
+    let again = PathBuf::from(p);
+    let t = &s;
+    println!("{} {} {:?} {} {}", name(p), name(&owned), again, p == owned.as_path(), Path::new(t).display());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "b.rs b.rs \"/a/b.rs\" true /a/b.rs\n");
+    // A method std declares that rawr doesn't run is no unknown member.
+    let report = refused(
+        "use std::path::Path;\nfn main() { let p = Path::new(\"/a/b\"); p.strip_prefix(\"/a\"); }",
+    );
+    assert!(
+        report.starts_with("error: rawr doesn't run `Path::strip_prefix` yet"),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_mut_str_of_a_string_has_strs_methods() {
+    // `&mut *s`, `as_mut_str()` and a `&mut String` given for a `&mut str`
+    // lend the `String`'s text, which `str`'s own changes write (#821).
+    let output = printed(
+        r#"
+fn shout(r: &mut str) {
+    r.make_ascii_uppercase();
+}
+fn main() {
+    let mut s = String::from("abc");
+    let r: &mut str = &mut *s;
+    r.make_ascii_uppercase();
+    println!("{}", s);
+    let mut t = String::from("xyz");
+    shout(&mut t);
+    t.make_ascii_lowercase();
+    let mut u = String::from("Hello");
+    u.as_mut_str().make_ascii_lowercase();
+    println!("{} {}", t, u);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "ABC\nxyz hello\n");
+    // A `str` has none of a `String`'s changes, and a `&str` changes
+    // nothing.
+    for (program, expected) in [
+        (
+            "fn f(r: &mut str) { r.push_str(\"x\"); }\nfn main() {}\n",
+            "error[E0599]: no method named `push_str` found for mutable reference `&mut str` in \
+             the current scope",
+        ),
+        (
+            "fn main() { let s = \"abc\"; s.make_ascii_uppercase(); }",
+            "error[E0596]: cannot borrow `*s` as mutable, as it is behind a `&` reference",
+        ),
+        (
+            "fn main() { let s = String::from(\"a\"); s.make_ascii_uppercase(); }",
+            "error[E0596]: cannot borrow `s` as mutable, as it is not declared as mutable",
+        ),
+    ] {
+        let report = refused(program);
+        assert!(report.starts_with(expected), "{report}");
+    }
+}
+
+#[test]
+fn text_and_sequence_comparisons_are_stds_impls() {
+    // `trim` gives a `&str`, which a `String` is compared with only by
+    // `PartialEq`, and an array is no `PartialEq<Vec<U>>` (#703).
+    let output = printed(
+        r#"
+fn main() {
+    let s = String::from("abc");
+    let v = vec![1, 2];
+    let a = [1, 2];
+    println!("{} {} {}", s.as_str() < "b", s == " abc ".trim(), " abc ".trim() == s);
+    println!("{} {} {} {} {}", v == a, &v[..] == v, v[..] == v, v == &a[..], a == v[..]);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "true true true\ntrue true true true true\n");
+    for (program, expected) in [
+        (
+            "fn main() { let s = String::from(\"abc\"); println!(\"{}\", s < \" a \".trim()); }",
+            "error[E0308]: mismatched types",
+        ),
+        (
+            "fn main() { let s = String::from(\"abc\"); println!(\"{}\", \" a \".trim() < s); }",
+            "error[E0308]: mismatched types",
+        ),
+        (
+            "fn main() { let a = [1, 2]; let v = vec![1, 2]; println!(\"{}\", a == v); }",
+            "error[E0277]: can't compare `[{integer}; 2]` with `Vec<{integer}>`",
+        ),
+    ] {
+        let report = refused(program);
+        assert!(report.starts_with(expected), "{report}");
+    }
+}
+
+#[test]
+fn string_from_utf8_lossy_is_a_cow_of_the_text() {
+    // Borrowed of valid UTF-8, owned with U+FFFD for an invalid sequence.
+    let output = printed(
+        r#"
+use std::borrow::Cow;
+fn main() {
+    let good = vec![104, 105];
+    let bad = [104, 0xff, 105];
+    let a = String::from_utf8_lossy(&good);
+    let b = String::from_utf8_lossy(&bad);
+    let kind = |c: &Cow<str>| match c {
+        Cow::Borrowed(_) => "borrowed",
+        Cow::Owned(_) => "owned",
+    };
+    println!("{} {} {} {}", a, b, kind(&a), kind(&b));
+    let owned: String = b.into_owned();
+    println!("{:?} {} {}", owned, a.len(), a == "hi");
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "hi h\u{fffd}i borrowed owned\n\"h\u{fffd}i\" 2 true\n"
+    );
+    // A path's and an `OsString`'s `to_string_lossy` is std's `Cow<str>`
+    // too, which an `io::Error` takes as its message.
+    let output = printed(
+        r#"
+use std::borrow::Cow;
+use std::ffi::OsString;
+use std::path::Path;
+fn main() {
+    let a = Path::new("x").to_string_lossy().into_owned();
+    let os = OsString::from("z");
+    let c: Cow<str> = os.to_string_lossy();
+    let d: String = Path::new("y").to_string_lossy().to_string();
+    let e = Path::new("w").to_string_lossy();
+    println!("{a} {c} {d} {} {} {:?}", e.len(), e == "w", e);
+    let error = std::io::Error::other(Path::new("bad").to_string_lossy());
+    let kind = std::io::Error::new(std::io::ErrorKind::NotFound, String::from("gone"));
+    println!("{} {}", error, kind);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "x z y 1 true \"w\"\nbad gone\n");
+}
