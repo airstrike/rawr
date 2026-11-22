@@ -833,6 +833,17 @@ impl Parser<'_> {
 /// yet. Which impls exist is the table's to say.
 pub(super) fn runs_from(target: &Ty, source: &Ty) -> Option<Option<PreludeOp>> {
     let text = |ty: &Ty| matches!(ty, Ty::String | Ty::Str);
+    // A text, or a reference to one: `&str`, `String`, `&String`.
+    let text_value = |ty: &Ty| match ty {
+        Ty::Reference { target, .. } => text(target),
+        ty => text(ty),
+    };
+    // A sequence, or a reference to one: `[T; N]`, `&[T]`, `&Vec<T>`.
+    // Every sequence is an array at runtime, and a reference its value.
+    let sequence = |ty: &Ty| match ty {
+        Ty::Reference { target, .. } => matches!(**target, Ty::Array { .. }),
+        ty => matches!(ty, Ty::Array { .. }),
+    };
     // One runtime form: a literal of a kind still to be inferred takes the
     // kind the impl names.
     let same = |a: &Ty, b: &Ty| {
@@ -841,6 +852,7 @@ pub(super) fn runs_from(target: &Ty, source: &Ty) -> Option<Option<PreludeOp>> {
                 (a, b),
                 (Ty::Int(_), Ty::Int(_)) | (Ty::Float(_), Ty::Float(_))
             )
+            || matches!(a, Ty::Array { .. }) && sequence(b)
     };
     match (target, source) {
         _ if target == source => Some(None),
@@ -851,8 +863,13 @@ pub(super) fn runs_from(target: &Ty, source: &Ty) -> Option<Option<PreludeOp>> {
         (Ty::Int(_), Ty::Int(_)) => Some(None),
         // An `f32` is an `f64` rounded at runtime.
         (Ty::Float(Float::F64), Ty::Float(_)) => Some(None),
-        // Every sequence is an array at runtime.
-        (Ty::Array { .. }, Ty::Array { .. }) => Some(None),
+        // `u32::from(c)` is the char's scalar value, and `char::from(b)`
+        // the char of a byte's.
+        (Ty::Int(_), Ty::Char) => Some(Some(PreludeOp::IntFromChar)),
+        (Ty::Char, Ty::Int(_)) => Some(Some(PreludeOp::CharFromByte)),
+        // A text's bytes are an array of integers at runtime.
+        (Ty::Array { .. }, source) if text_value(source) => Some(Some(PreludeOp::StrBytes)),
+        (Ty::Array { .. }, source) if sequence(source) => Some(None),
         // A `Cow` of a reference borrows it, and of a value owns it.
         (Ty::Cow(_), Ty::Str | Ty::Reference { .. }) => Some(Some(PreludeOp::CowBorrowed)),
         (Ty::Cow(_), _) => Some(Some(PreludeOp::CowOwned)),

@@ -700,12 +700,17 @@ pub(super) fn write_into_dispatchers(
 /// `(target, source, op)` witness codes: `From<bool> for i64` and `f64`,
 /// `From<u8> for f64` and the other integers a float holds exactly (which
 /// of them std has is checked where the bound is), `From<char> for
-/// String`. (`From<&str> for String` is the value itself.)
-pub(super) const BUILTIN_CONVERSIONS: [(crate::INT, crate::INT, PreludeOp); 4] = [
+/// String`, `From<char> for u32` and its wider kin, `From<u8> for char`
+/// and `From<&str> for Vec<u8>`. (`From<&str> for String` is the value
+/// itself.)
+pub(super) const BUILTIN_CONVERSIONS: [(crate::INT, crate::INT, PreludeOp); 7] = [
     (-2, -5, PreludeOp::IntFromBool),
     (-3, -5, PreludeOp::FloatFromBool),
     (-3, -2, PreludeOp::FloatFromInt),
     (-4, -6, PreludeOp::StringFromChar),
+    (-2, -6, PreludeOp::IntFromChar),
+    (-6, -2, PreludeOp::CharFromByte),
+    (-8, -4, PreludeOp::StrBytes),
 ];
 
 /// The builtin conversions from `source`: each target's code and op.

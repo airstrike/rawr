@@ -9081,3 +9081,37 @@ main();
          (Some(2), Some(4))\nx 6\nSome(10)\nSome(1)\nNone\nSome(1) Some(2)\nSome(3)\n"
     );
 }
+
+#[test]
+fn std_from_runs_char_byte_text_and_slice_conversions() {
+    // std's `From<char> for u32`, `From<u8> for char`, `From<&str> for
+    // Vec<u8>`, `From<&[T]> for Vec<T>` and `From<Vec<T>> for Box<[T]>`,
+    // by path, by `into` and through a generic bound (#763).
+    let output = printed(
+        r#"
+fn wide<T: From<char>>(c: char) -> T { T::from(c) }
+fn code<T: Into<u32>>(x: T) -> u32 { x.into() }
+fn bytes<T: Into<Vec<u8>>>(x: T) -> Vec<u8> { x.into() }
+fn main() {
+    let v: Vec<u8> = "hi".into();
+    let s: &[i32] = &[1, 2];
+    let b: Box<[i32]> = vec![3, 4].into();
+    println!("{} {} {:?} {:?} {:?}", u32::from('a'), char::from(66u8), v, Vec::from("ab"), Vec::from(s));
+    let c: char = 97u8.into();
+    let w: u64 = wide('b');
+    println!("{c} {w} {} {:?} {:?} {:?}", code('c'), bytes("de"), Vec::<u8>::from(String::from("f")), b);
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "97 B [104, 105] [97, 98] [1, 2]\na 98 99 [100, 101] [102] [3, 4]\n"
+    );
+    // std has no `From<char> for i32`.
+    let report = refused("fn main() { let x: i32 = 'a'.into(); }\nmain();\n");
+    assert!(
+        report.starts_with("error[E0277]: the trait bound `i32: From<char>` is not satisfied"),
+        "{report}"
+    );
+}

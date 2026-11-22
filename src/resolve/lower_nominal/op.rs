@@ -199,6 +199,10 @@ pub(super) enum PreludeOp {
     FloatFromBool,
     FloatFromInt,
     StringFromChar,
+    /// `u32::from(char)` and its wider kin: the char's scalar value.
+    IntFromChar,
+    /// `char::from(u8)`: the char of that scalar value.
+    CharFromByte,
     /// `<str as AsRef<[u8]>>::as_ref`: a text's bytes, which rawr holds
     /// as an array of integers.
     StrBytes,
@@ -501,6 +505,8 @@ impl PreludeOp {
             Self::FloatFromBool => "from.f64-bool",
             Self::FloatFromInt => "from.f64-int",
             Self::StringFromChar => "from.string-char",
+            Self::IntFromChar => "from.int-char",
+            Self::CharFromByte => "from.char-u8",
             Self::StrBytes => "str.bytes",
             Self::FormatFloat => "format.float",
             Self::FormatRadix => "format.radix",
@@ -734,7 +740,8 @@ impl PreludeOp {
             Self::CowValue => vec![TypeId::of::<cow::Value>()],
             Self::IntFromBool | Self::FloatFromBool => vec![TypeId::of::<bool>()],
             Self::FloatFromInt => vec![TypeId::of::<crate::INT>()],
-            Self::StringFromChar => vec![TypeId::of::<char>()],
+            Self::StringFromChar | Self::IntFromChar => vec![TypeId::of::<char>()],
+            Self::CharFromByte => vec![TypeId::of::<crate::INT>()],
             Self::StrBytes => vec![TypeId::of::<ImmutableString>()],
             Self::FormatFloat => vec![
                 TypeId::of::<crate::FLOAT>(),
@@ -1069,6 +1076,15 @@ impl PreludeOp {
             Self::StringFromChar => {
                 let value = args[0].as_char().unwrap_or_default();
                 return Ok(Dynamic::from(ImmutableString::from(value.to_string())));
+            }
+            Self::IntFromChar => {
+                let value = args[0].as_char().unwrap_or_default();
+                return Ok(crate::INT::from(u32::from(value)).into());
+            }
+            Self::CharFromByte => {
+                let value = args[0].as_int().unwrap_or_default();
+                let byte = u8::try_from(value).map_err(|_| invariant("a `u8` past its range"))?;
+                return Ok(Dynamic::from_char(char::from(byte)));
             }
             Self::StrBytes => {
                 let text = args[0].clone_cast::<ImmutableString>();
