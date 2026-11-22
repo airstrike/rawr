@@ -110,7 +110,7 @@ impl<'a> Parser<'a> {
         };
         let forms = crate::std_facade::held_forms(owner);
         let Some(form) = forms.first().copied() else {
-            return error;
+            return self.native_no_item(error);
         };
         // A stable function std declares on a type the held one stands
         // for, as `Path::strip_prefix` of a `PathBuf`, which the facade
@@ -134,7 +134,7 @@ impl<'a> Parser<'a> {
             Some(path) if path.kind == "struct" => "struct",
             _ => return error,
         };
-        let Some(name) = super::ty::std_type_name(owner, &self.models) else {
+        let Some(name) = super::trimmed::std_type_name(owner, &self.models) else {
             return error;
         };
         Error::NoItem {
@@ -145,6 +145,78 @@ impl<'a> Parser<'a> {
                 kind,
                 declared: name.as_str().into(),
                 found: name.into(),
+                definition: None,
+            }),
+            similar: None,
+            unsatisfied: None,
+        }
+    }
+
+    /// A method a native std type lacks, as rustc's E0599 names it: by
+    /// std's kind of the type, and, where it derefs to no other type, by its
+    /// definition's parameters, "found for struct `std::ops::Range<Idx>`",
+    /// else as the label names it, "found for struct `Vec<{integer}>`".
+    /// Any other error as it is, and so is a method of a std trait's name.
+    fn native_no_item(&self, error: Error) -> Error {
+        let Error::UnknownMember { reference, .. } = &error else {
+            return error;
+        };
+        match self.std_receivers.get(&reference.start()) {
+            Some(ty) => self.std_no_method(ty, error),
+            None => error,
+        }
+    }
+
+    /// `error`, a method the receiver `ty` of a std type, or a reference
+    /// to one, lacks, as rustc's E0599 names it (`native_no_item`): a
+    /// reference as it is, "found for reference `&std::ops::Range<i32>`".
+    pub(super) fn std_no_method(&self, ty: &Ty, error: Error) -> Error {
+        let Error::UnknownMember {
+            owner,
+            member,
+            reference,
+        } = &error
+        else {
+            return error;
+        };
+        let Some((definition, _)) = std_impl::std_definition(without_references(ty)) else {
+            return error;
+        };
+        let Some(kind) = crate::std_table::item(definition).and_then(|item| match item.kind {
+            "struct" => Some("struct"),
+            "enum" => Some("enum"),
+            _ => None,
+        }) else {
+            return error;
+        };
+        // A std trait's method, which rustc reports by the trait: its
+        // bounds unmet (`sum` of a `Range<{float}>`), or its trait unused.
+        if !crate::std_table::trait_functions(member).is_empty() {
+            return error;
+        }
+        let found = ty.name(&self.models);
+        let (kind, declared) = if matches!(ty, Ty::Reference { .. }) {
+            (ty.sort(&self.models), found.clone())
+        } else {
+            let derefs = crate::std_table::impls("core::ops::deref::Deref", definition)
+                .next()
+                .is_some();
+            let inherent = crate::std_table::item(&format!("{definition}::{member}")).is_some();
+            let declared = if derefs || inherent {
+                found.clone()
+            } else {
+                super::trimmed::declared(definition, &self.models).into()
+            };
+            (kind, declared)
+        };
+        Error::NoItem {
+            owner: owner.clone(),
+            member: member.clone(),
+            reference: *reference,
+            receiver: Box::new(crate::resolve::Receiver {
+                kind,
+                declared,
+                found,
                 definition: None,
             }),
             similar: None,
@@ -775,6 +847,13 @@ impl<'a> Parser<'a> {
             }
             self.std_probed
                 .insert(member_span.start(), without_references(&builtin).clone());
+            if matches!(
+                self.peek(),
+                Token::LeftParen | Token::Unit | Token::DoubleColon
+            ) {
+                self.std_receivers
+                    .insert(member_span.start(), self.inference.resolve(&value.ty));
+            }
             // std's `&mut self` method on a local not declared `mut`
             // (rustc's E0596), as its declaration takes its receiver.
             if matches!(self.peek(), Token::LeftParen | Token::Unit)

@@ -5,6 +5,7 @@ pub(crate) mod block;
 pub(crate) mod borrowck;
 mod error;
 pub(crate) mod extern_prelude;
+pub(crate) mod forced_trim;
 mod forward;
 mod fragment;
 pub(crate) mod imports;

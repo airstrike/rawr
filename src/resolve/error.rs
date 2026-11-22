@@ -3036,11 +3036,14 @@ impl PatternTypes {
                 elements(arity),
                 elements(found)
             ),
-            None => format!(
-                "expected {}, found {}",
-                Described(&self.expected),
-                Described(&self.found)
-            ),
+            None => {
+                let (expected, found) = super::forced_trim::pair(&self.expected, &self.found);
+                format!(
+                    "expected {}, found {}",
+                    Described(&expected),
+                    Described(&found)
+                )
+            }
         }
     }
 

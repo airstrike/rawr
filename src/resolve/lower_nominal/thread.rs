@@ -52,18 +52,17 @@ impl Kind {
         })
     }
 
-    /// The type's name, as rustc writes it with `inner`.
-    pub(super) fn name(self, inner: &str) -> String {
+    /// The type's name, as rustc writes it with `inner`
+    /// (`trimmed::std_name`).
+    pub(super) fn name(self, inner: &str, models: &Models) -> String {
+        let Some((definition, _)) = self.definition() else {
+            return "Box<dyn Any + Send>".into();
+        };
+        let head = super::trimmed::std_name(definition, models);
         match self {
-            Self::JoinHandle => format!("JoinHandle<{inner}>"),
-            Self::Sender => format!("Sender<{inner}>"),
-            Self::SyncSender => format!("SyncSender<{inner}>"),
-            Self::Receiver => format!("Receiver<{inner}>"),
-            Self::SendError => format!("SendError<{inner}>"),
-            Self::Panic => "Box<dyn Any + Send>".into(),
-            Self::Scope => "Scope<'_, '_>".into(),
-            Self::ScopedJoinHandle => format!("ScopedJoinHandle<'_, {inner}>"),
-            Self::PoisonError => format!("PoisonError<{inner}>"),
+            Self::Scope => format!("{head}<'_, '_>"),
+            Self::ScopedJoinHandle => format!("{head}<'_, {inner}>"),
+            _ => format!("{head}<{inner}>"),
         }
     }
 
