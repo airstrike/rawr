@@ -5503,6 +5503,36 @@ fn erase_fn_bounds(
     output: &mut Option<type_ref::Type>,
     outlives: &[(crate::item::Name, crate::item::Name)],
 ) {
+    // `I: Iterator` with no `Item = T`: `I::Item` is a parameter of its
+    // own, as a `where I::Item: ..` clause lifts it.
+    for index in 0..generics.len() {
+        let Some(bound) = generics[index].bounds.iter().find(|bound| {
+            bound.segments.split_last().is_some_and(|(last, prefix)| {
+                iterator_trait(&last.name.text).is_some()
+                    && prefix
+                        .iter()
+                        .all(|module| matches!(module.name.text.as_str(), "std" | "core" | "iter"))
+            })
+        }) else {
+            continue;
+        };
+        let trait_name = bound.segments[bound.segments.len() - 1].name.clone();
+        let named = generics[index]
+            .projections
+            .iter()
+            .any(|(owner, associated, _)| {
+                owner.text == trait_name.text && associated.text == "Item"
+            });
+        if !named {
+            let item = crate::item::Name {
+                text: "Item".into(),
+                span: bound.span,
+            };
+            let base = generics[index].name.clone();
+            associated_parameter(generics, &base, Some(trait_name), &item)
+                .expect("`associated_parameter` fails only for a bound naming no trait");
+        }
+    }
     generics.retain(|generic| {
         // `I: Iterator<Item = T>` (or `IntoIterator`): `impl Iterator<Item =
         // T>` wherever `I` is written, and `T` for `I::Item`.

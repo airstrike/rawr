@@ -318,7 +318,7 @@ impl<'a> Parser<'a> {
                     })?;
             let place = crate::resolve::Bound {
                 bound,
-                callee,
+                callee: Some(callee),
                 argument: this.whole_expression(argument.span),
             };
             Some(crate::resolve::Required {
@@ -731,6 +731,33 @@ impl<'a> Parser<'a> {
             let code = match self.inference.resolve(&ty) {
                 Ty::Int(Int::Var(_)) => kind_code(Ty::Int(Int::I32)),
                 ty => kind_code(ty),
+            };
+            let replacement = format!("{code:<width$}", width = placeholder.len());
+            self.output.replace_same_length(&placeholder, &replacement);
+            for closure in &mut self.lifted {
+                closure.body.replace_same_length(&placeholder, &replacement);
+            }
+        }
+        for pending in std::mem::take(&mut self.pending_operands) {
+            let super::operator::PendingOperands {
+                placeholder,
+                ty,
+                at,
+            } = pending;
+            let code = match self.inference.resolve(&ty) {
+                Ty::Int(Int::Var(_)) => kind_code(Ty::Int(Int::I32)),
+                Ty::Int(kind) if !kind.wide() && !matches!(kind, Int::U64 | Int::Usize) => {
+                    kind_code(Ty::Int(kind))
+                }
+                Ty::Float(Float::Var(_)) => kind_code(Ty::Float(Float::F64)),
+                ty @ Ty::Float(_) => kind_code(ty),
+                ty => {
+                    return Err(Error::TypeMismatch {
+                        expected: Ty::Int(Int::I64).name(&self.models),
+                        actual: ty.name(&self.models),
+                        expression: at,
+                    });
+                }
             };
             let replacement = format!("{code:<width$}", width = placeholder.len());
             self.output.replace_same_length(&placeholder, &replacement);
@@ -1200,6 +1227,73 @@ impl<'a> Parser<'a> {
             }
         }
         Ok(substitution)
+    }
+
+    /// rustc's E0599 for an inherent method whose impl's bounds the
+    /// receiver's type arguments don't meet, at `substitution`: the probe
+    /// passes the method by (`S(Opaque).show()` of `impl<T: Debug> S<T>`).
+    /// An argument inference has not settled is the bound's to check later.
+    pub(super) fn impl_bounds_met(
+        &self,
+        definition: &method::Definition,
+        substitution: &BTreeMap<ImmutableString, Ty>,
+        receiver: &Ty,
+        member_span: Span,
+    ) -> Result<(), Error> {
+        if definition.trait_name().is_some() {
+            return Ok(());
+        }
+        let generics = definition.generics();
+        let impl_generics = &generics[..generics.len() - definition.own_generics().len()];
+        let mut bounds = Vec::new();
+        for generic in impl_generics {
+            let Some(ty) = substitution.get(&generic.name.text) else {
+                continue;
+            };
+            let ty = self.inference.resolve(ty);
+            if contains_inference(&ty) || contains(&ty, &|ty| matches!(ty, Ty::Param(..))) {
+                continue;
+            }
+            let unmet = |trait_name: ImmutableString, bound: Span| crate::resolve::UnmetBound {
+                ty: ty.name(&self.models),
+                derive: matches!(ty, Ty::Script(..)) && crate::resolve::derivable(&trait_name),
+                trait_name,
+                bound,
+                declared: self.declared_name(&ty),
+            };
+            for (kind, bound) in &generic.written {
+                if !self.type_provides(&ty, *kind) {
+                    bounds.push(unmet(kind.name().into(), *bound));
+                }
+            }
+            // A generic trait's bound is its arguments' to check.
+            for name in generic.traits.iter().filter(|name| {
+                !generic
+                    .trait_arguments
+                    .iter()
+                    .any(|(bound, _)| *bound == name.text)
+            }) {
+                if !self.type_implements(&ty, &name.text) {
+                    bounds.push(unmet(name.text.clone(), name.span));
+                }
+            }
+        }
+        // A bound a std type misses through its own (`Vec<Opaque>: Debug`)
+        // is rustc's requirement chain, which the later check reports.
+        if bounds.is_empty() || bounds.iter().any(|unmet| unmet.declared.is_none()) {
+            return Ok(());
+        }
+        Err(Error::NoItem {
+            owner: definition.owner_name().into(),
+            member: definition.name().into(),
+            reference: member_span,
+            receiver: Box::new(self.receiver(definition.owner(), receiver)),
+            similar: None,
+            unsatisfied: Some(Box::new(crate::resolve::UnmetBounds {
+                owner: definition.owner_span(),
+                bounds: bounds.into_boxed_slice(),
+            })),
+        })
     }
 }
 

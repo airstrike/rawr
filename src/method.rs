@@ -79,6 +79,9 @@ pub(crate) struct Definition {
     impl_generics: usize,
     /// The owner's type arguments in the impl header: `T` of `impl<T> Pair<T>`.
     owner_arguments: Box<[type_ref::Type]>,
+    /// Where the impl header writes its self type: `S<T>` of `impl<T>
+    /// S<T>`.
+    owner_span: Span,
     /// The owner type of an impl for a builtin type (`i64`, `Vec<T>`);
     /// `owner` is then `type_def::Id::builtin`.
     builtin_owner: Option<type_ref::Type>,
@@ -159,6 +162,7 @@ impl Definition {
             formatter: function.formatter.clone(),
             impl_generics: 0,
             owner_arguments: Box::default(),
+            owner_span: Span::NONE,
             builtin_owner: None,
             body_text: None,
             lifetimes: function.lifetimes.clone(),
@@ -187,17 +191,20 @@ impl Definition {
         self.builtin_owner.as_ref()
     }
 
-    /// This method in `impl<generics> Owner<owner_arguments>`.
+    /// This method in `impl<generics> Owner<owner_arguments>`, the self
+    /// type written at `owner_span`.
     pub(crate) fn in_generic_impl(
         mut self,
         impl_generics: &[resolve::item::Generic],
         owner_arguments: Box<[type_ref::Type]>,
+        owner_span: Span,
     ) -> Self {
         let mut generics = impl_generics.to_vec();
         generics.extend(self.generics.iter().cloned());
         self.generics = generics.into_boxed_slice();
         self.impl_generics = impl_generics.len();
         self.owner_arguments = owner_arguments;
+        self.owner_span = owner_span;
         self
     }
 
@@ -221,6 +228,11 @@ impl Definition {
     /// The method's own generic parameters, which its turbofish names.
     pub(crate) fn own_generics(&self) -> &[resolve::item::Generic] {
         &self.generics[self.impl_generics..]
+    }
+
+    /// Where the impl header writes its self type.
+    pub(crate) const fn owner_span(&self) -> Span {
+        self.owner_span
     }
 
     /// The owner's type arguments in the impl header.

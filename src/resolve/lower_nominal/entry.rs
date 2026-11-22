@@ -618,8 +618,8 @@ pub(super) fn lower_with_context(
         ]
     }));
     // `type Output: Clone;`: each impl's associated type has its trait's
-    // bounds, and its owner the trait's supertraits, as Rust checks at the
-    // impl.
+    // bounds, its owner the trait's supertraits, and its trait arguments
+    // the trait's bounds on its parameters, as Rust checks at the impl.
     for shell in program.items.iter() {
         let item::Kind::Impl(implementation) = &shell.kind else {
             continue;
@@ -629,6 +629,9 @@ pub(super) fn lower_with_context(
                 models.traits.get(&name.text).is_some_and(|(_, declared)| {
                     !declared.supertraits.1.is_empty()
                         || declared.supertraits.0.iter().next().is_some()
+                        || declared.generics.iter().any(|generic| {
+                            generic.bounds.iter().next().is_some() || !generic.traits.is_empty()
+                        })
                 })
             }
             _ => false,

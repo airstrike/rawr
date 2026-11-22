@@ -633,14 +633,16 @@ impl Error {
     }
 }
 
-/// A bound the program writes on a function's generic parameter, and the
-/// call whose argument doesn't meet it, as rustc's E0277 marks them.
+/// A bound the program writes on a function's or a trait's generic
+/// parameter, and the call argument or impl header that doesn't meet it,
+/// as rustc's E0277 marks them.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Bound {
     /// The bound: `Display` of `T: Display`.
     pub bound: Span,
-    /// The callee as the call names it.
-    pub callee: Span,
+    /// The callee as the call names it, or `None` for an impl header's
+    /// trait path, which no call needs.
+    pub callee: Option<Span>,
     /// The argument whose type the parameter is.
     pub argument: Span,
 }
@@ -1147,6 +1149,10 @@ pub enum Error {
         /// An item of the type whose name is like `member`, which rustc
         /// suggests.
         similar: Option<Box<Similar>>,
+        /// The impl's bounds the receiver's type arguments don't meet,
+        /// where the impl has the method: rustc's "the method exists but
+        /// its trait bounds were not satisfied".
+        unsatisfied: Option<Box<UnmetBounds>>,
     },
     /// A path names no item of a module that exists, as rustc's E0425
     /// "cannot find function `load` in module `google`": an item the crate
@@ -2376,6 +2382,31 @@ pub struct Similar {
     pub declared: Span,
     /// How rustc shows it.
     pub shown: Shown,
+}
+
+/// The impl bounds a method's receiver doesn't meet, as rustc's E0599
+/// notes them.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct UnmetBounds {
+    /// The impl's self type: `S<T>` of `impl<T: Debug> S<T>`.
+    pub owner: Span,
+    /// Each bound unmet, in the order the impl writes them.
+    pub bounds: Box<[UnmetBound]>,
+}
+
+/// An impl's bound a type argument doesn't meet: `Opaque: Debug`.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct UnmetBound {
+    /// The type argument, as rustc names it.
+    pub ty: ImmutableString,
+    /// The bound's trait.
+    pub trait_name: ImmutableString,
+    /// Where the impl writes the bound.
+    pub bound: Span,
+    /// The type argument's name where the program declares it.
+    pub declared: Option<Span>,
+    /// Whether the trait derives for it, as rustc suggests.
+    pub derive: bool,
 }
 
 /// How rustc shows a [`Similar`] item.

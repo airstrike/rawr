@@ -39,7 +39,7 @@ pub use error::{
     Import, Imported, Instead, Lint, MacroScope, Missing, MissingImpl, MoveCause, MovedPlace,
     MutBinding, Opaqueness, OwningParameter, PatternOrigin, PatternTypes, Placeholder, Private,
     Receiver, Referent, Required, Requirement, Shown, Similar, Site, Uncovered, Unexpected,
-    Unresolved,
+    UnmetBound, UnmetBounds, Unresolved,
 };
 pub use imports::{Candidate, Imports};
 use std::collections::BTreeMap;
@@ -3878,7 +3878,11 @@ fn resolve_methods(
                 };
                 let key = crate::item::Key::associated(owner.key(), member, kind);
                 let mut definition = method::Definition::new(id, key, owner, &function, source)
-                    .in_generic_impl(&item.generics, owner_arguments(&item.owner))
+                    .in_generic_impl(
+                        &item.generics,
+                        owner_arguments(&item.owner),
+                        item.owner.span(),
+                    )
                     .with_trait(name.text.clone())
                     .with_trait_arguments(arguments.clone());
                 if from_trait {
@@ -3973,7 +3977,11 @@ fn resolve_methods(
                 };
                 let key = crate::item::Key::associated(owner.key(), member, kind);
                 let definition = method::Definition::new(id, key, owner, function, shell.source)
-                    .in_generic_impl(&item.generics, owner_arguments(&item.owner))
+                    .in_generic_impl(
+                        &item.generics,
+                        owner_arguments(&item.owner),
+                        item.owner.span(),
+                    )
                     .with_trait(name.text.clone())
                     .with_trait_arguments(arguments.clone());
                 function.body.lowering = item::Lowering::NominalMethod(id);
@@ -4024,7 +4032,7 @@ fn resolve_methods(
                         .any(|ty| names_in_host_type(ty, &generic.name.text, false, host));
             }
             let definition = method::Definition::new(id, key, owner, function, shell.source)
-                .in_generic_impl(&generics, owner_arguments(&item.owner));
+                .in_generic_impl(&generics, owner_arguments(&item.owner), item.owner.span());
             function.body.lowering = item::Lowering::NominalMethod(id);
             methods.push(definition);
         }

@@ -129,6 +129,7 @@ impl<'a> Parser<'a> {
                 definition: None,
             }),
             similar: None,
+            unsatisfied: None,
         }
     }
 
@@ -1006,6 +1007,7 @@ impl<'a> Parser<'a> {
                             definition: None,
                         }),
                         similar: None,
+                        unsatisfied: None,
                     });
                 }
                 if member.as_str() != "clone" || !arguments.is_empty() {
@@ -1676,6 +1678,7 @@ impl<'a> Parser<'a> {
                                     Some(args.len()),
                                 ),
                                 member,
+                                unsatisfied: None,
                             }));
                     }
                 };
@@ -1993,6 +1996,7 @@ impl<'a> Parser<'a> {
                 Some(&value.ty),
                 span(member_span.start(), end),
             )?;
+            self.impl_bounds_met(&definition, &substitution, &value.ty, member_span)?;
             self.require_arguments(
                 &definition,
                 &mut args,

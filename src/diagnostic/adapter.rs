@@ -342,6 +342,22 @@ fn sourced_builder(error: &resolve::Error, source: &Source, primary: Span) -> Bu
             imports: imports.clone(),
         });
     }
+    if let resolve::Error::NoItem {
+        member,
+        receiver,
+        unsatisfied: Some(_),
+        ..
+    } = error
+    {
+        return Report::error(
+            code::RESOLVE_NO_METHOD,
+            format!(
+                "the method `{member}` exists for {} `{}`, but its trait bounds were not \
+                 satisfied",
+                receiver.kind, receiver.found
+            ),
+        );
+    }
     if let Some(missing) = Missing::of(error, source, primary) {
         return Report::error(
             code::RESOLVE_NO_METHOD,
@@ -614,6 +630,35 @@ impl<'a> Missing<'a> {
     }
 }
 
+/// Each declared type an impl's unmet bounds name, with its bounds as
+/// rustc's label lists them: sorted, `Opaque: Clone`.
+fn unmet_by_type(unsatisfied: &resolve::UnmetBounds) -> Vec<(Span, Vec<String>)> {
+    let mut types: Vec<(Span, Vec<String>)> = Vec::new();
+    for unmet in &unsatisfied.bounds {
+        let Some(declared) = unmet.declared else {
+            continue;
+        };
+        let bound = format!("`{}: {}`", unmet.ty, unmet.trait_name);
+        match types.iter_mut().find(|(span, _)| *span == declared) {
+            Some((_, bounds)) => bounds.push(bound),
+            None => types.push((declared, vec![bound])),
+        }
+    }
+    for (_, bounds) in &mut types {
+        bounds.sort();
+    }
+    types
+}
+
+/// `a`, `a or b`, `a, b or c`, as rustc's labels list alternatives.
+fn or_list(items: &[String]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} or {last}", rest.join(", ")),
+    }
+}
+
 /// How source names a member: `value.member()`, `value.member` or
 /// `Type::member`.
 enum Member {
@@ -819,6 +864,20 @@ fn resolution_report_with_sources(
             ),
         )?;
     }
+    // rustc marks each type that misses a bound the method's impl needs.
+    if let resolve::Error::NoItem {
+        unsatisfied: Some(unsatisfied),
+        ..
+    } = error
+    {
+        for (declared, bounds) in unmet_by_type(unsatisfied) {
+            builder = builder.secondary(
+                source.clone(),
+                super::definition::header(&source, declared),
+                Some(format!("doesn't satisfy {}", or_list(&bounds)).into()),
+            )?;
+        }
+    }
     // rustc labels each operand with its type, and an assignment's left
     // operand with the operator it can't use.
     if let resolve::Error::BinaryOperation { operation, .. } = error {
@@ -836,10 +895,10 @@ fn resolution_report_with_sources(
             builder = builder.secondary(source.clone(), span, Some(label))?;
         }
     }
-    if let Some(place) = bound_place(error) {
+    if let Some(callee) = bound_place(error).and_then(|place| place.callee) {
         builder = builder.secondary(
             source.clone(),
-            place.callee,
+            callee,
             Some("required by a bound introduced by this call".into()),
         )?;
     }
@@ -1140,6 +1199,38 @@ fn sections(error: &resolve::Error, source: &Source) -> Vec<Section> {
                 );
             }
             sections
+        }
+        // The impl's bounds the receiver misses, where the impl writes
+        // them, and its self type.
+        resolve::Error::NoItem {
+            unsatisfied: Some(unsatisfied),
+            ..
+        } => {
+            let mut named = unsatisfied
+                .bounds
+                .iter()
+                .map(|unmet| format!("`{}: {}`", unmet.ty, unmet.trait_name))
+                .collect::<Vec<_>>();
+            named.sort();
+            let message = match &named[..] {
+                [one] => format!("trait bound {one} was not satisfied"),
+                many => format!(
+                    "the following trait bounds were not satisfied:\n{}",
+                    many.join("\n")
+                ),
+            };
+            let section =
+                unsatisfied
+                    .bounds
+                    .iter()
+                    .fold(Section::note(message), |section, unmet| {
+                        section.primary(
+                            source.clone(),
+                            unmet.bound,
+                            Some("unsatisfied trait bound introduced here".into()),
+                        )
+                    });
+            vec![section.secondary(source.clone(), unsatisfied.owner, None)]
         }
         // A similar item the call can't take in place, at its definition.
         resolve::Error::NoItem {
@@ -1460,6 +1551,34 @@ fn suggestion(error: &resolve::Error, source: &Source) -> Result<Option<Suggesti
             }
             None => Ok(None),
         },
+        // The derives the first type that misses them takes.
+        resolve::Error::NoItem {
+            unsatisfied: Some(unsatisfied),
+            ..
+        } => {
+            let Some((owner, declared, mut derived)) =
+                unsatisfied.bounds.iter().find_map(|unmet| {
+                    let declared = unmet.declared?;
+                    let derived = unsatisfied
+                        .bounds
+                        .iter()
+                        .filter(|other| other.ty == unmet.ty && other.derive)
+                        .map(|other| other.trait_name.as_str())
+                        .collect::<Vec<_>>();
+                    (!derived.is_empty()).then_some((&unmet.ty, declared, derived))
+                })
+            else {
+                return Ok(None);
+            };
+            derived.sort_unstable();
+            let derived = derived.join(", ");
+            above(
+                &format!("consider annotating `{owner}` with `#[derive({derived})]`"),
+                &format!("#[derive({derived})]"),
+                super::definition::span(source, declared).start(),
+                source,
+            )
+        }
         resolve::Error::NoItem {
             similar: Some(similar),
             ..
@@ -1897,6 +2016,17 @@ fn primary_label(
         }
         resolve::Error::MemberKind { field: true, .. } => Some("field, not a method".into()),
         resolve::Error::NoItem {
+            receiver,
+            unsatisfied: Some(_),
+            ..
+        } => Some(
+            format!(
+                "method cannot be called on `{}` due to unsatisfied trait bounds",
+                receiver.found
+            )
+            .into(),
+        ),
+        resolve::Error::NoItem {
             receiver, similar, ..
         } => {
             let item = Missing::of(error, source, primary).map_or("method", |missing| missing.item);
@@ -2248,6 +2378,14 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
                     "the trait `Sized` is not implemented for `{owner}`"
                 )),
                 _ => builder,
+            };
+            // `Debug`'s own note for a type the program declares.
+            let builder = if capability == "Debug" && *derive {
+                builder.note(format!(
+                    "add `#[derive(Debug)]` to `{owner}` or manually `impl Debug for {owner}`"
+                ))
+            } else {
+                builder
             };
             let builder = super::requirement::lines(chain.requirements())
                 .into_iter()

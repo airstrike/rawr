@@ -3711,6 +3711,7 @@ main();
   |             |
   |             required by a bound introduced by this call
   |
+  = note: add `#[derive(Debug)]` to `Opaque` or manually `impl Debug for Opaque`
 help: the trait `Summary` is conditionally implemented for `Wrapper<T>`
  --> <script>:7:1
   |
@@ -3756,6 +3757,7 @@ main();
   |                              |
   |                              required by a bound introduced by this call
   |
+  = note: add `#[derive(Debug)]` to `Opaque` or manually `impl Debug for Opaque`
 help: the trait `Summary` is conditionally implemented for `Wrapper<T>`
  --> <script>:6:1
   |
@@ -3906,6 +3908,7 @@ note: required by a bound in `show`
   |             |
   |             required by a bound introduced by this call
   |
+  = note: add `#[derive(Debug)]` to `Opaque` or manually `impl Debug for Opaque`
   = note: required for `({integer}, Opaque)` to implement `Debug`
   = note: 1 redundant requirement hidden
   = note: required for `Option<({integer}, Opaque)>` to implement `Debug`
@@ -3938,6 +3941,7 @@ note: required by a bound in `show`
     assert!(
         report.contains(
             r#"  = help: the trait `Debug` is not implemented for `Opaque`
+  = note: add `#[derive(Debug)]` to `Opaque` or manually `impl Debug for Opaque`
 note: required for `W<Opaque>` to implement `Debug`
  --> <script>:5:8
   |
@@ -5553,6 +5557,198 @@ main();
         let report = refused(program);
         assert!(
             report.starts_with("error[E0382]: borrow of moved value: `r`"),
+            "{report}"
+        );
+    }
+}
+
+#[test]
+fn an_untyped_closure_adds_at_the_type_its_call_gives() {
+    // `a + b` of two closure parameters nothing has typed waits for the
+    // call, as rustc's obligation does, and is checked at that kind
+    // (#2512). The output is rustc's.
+    let output = printed(
+        r#"
+fn main() {
+    let f = |a, b| a + b;
+    let g = |a, b| a * b;
+    println!("{} {} {}", (|a, b| a + b)(3, 3), f(3, 3), g(2.5, 2.0));
+    println!("{} {}", (|a, b| a - b)(7u8, 2), (|a, b| a + b)(1.5f32, 0.1));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "6 6 5\n5 1.6\n");
+    let error = Engine::new()
+        .run("fn main() { let f = |a, b| a + b; let x: i8 = f(100i8, 100); println!(\"{}\", x); }\nmain();\n")
+        .expect_err("an `i8` sum past 127 panics");
+    assert!(
+        error.to_string().contains("attempt to add with overflow"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_program_traits_generic_method_through_its_path_takes_its_turbofish() {
+    // `Conv::conv::<u16>(&s)` and `<S as Conv>::conv` of a generic method
+    // run the impl's body at the call's type (#2513). The output is
+    // rustc's.
+    let output = printed(
+        r#"
+struct S(u8);
+trait Conv { fn conv<T: From<u8>>(&self) -> T; }
+impl Conv for S { fn conv<T: From<u8>>(&self) -> T { T::from(self.0) } }
+fn main() {
+    let s = S(3);
+    let b: f64 = Conv::conv(&s);
+    println!("{} {:?} {}", Conv::conv::<u16>(&s), b, <S as Conv>::conv::<u32>(&s));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "3 3.0 3\n");
+}
+
+#[test]
+fn a_trait_for_str_is_called_through_its_path_on_a_str() {
+    // `Shout::shout("hi")` takes `"hi"` as `&Self` of `impl Shout for str`,
+    // as `<str as ToString>::to_string("x")` does std's (#2514). The
+    // output is rustc's.
+    let output = printed(
+        r#"
+trait Shout { fn shout(&self) -> String; }
+impl Shout for str { fn shout(&self) -> String { self.to_uppercase() } }
+impl Shout for i32 { fn shout(&self) -> String { format!("{}!", self) } }
+fn main() {
+    println!("{} {} {}", Shout::shout("hi"), Shout::shout(&5), <str as Shout>::shout("x"));
+    println!("{}", <str as ToString>::to_string("y"));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "HI 5! X\ny\n");
+}
+
+#[test]
+fn an_iterator_parameter_with_no_item_written_has_its_methods() {
+    // `I: Iterator` with no `Item = T` has `I::Item` as a parameter of its
+    // own, so `i.count()` and `i.collect()` are the iterator's (#2507).
+    // The output is rustc's.
+    let output = printed(
+        r#"
+use std::fmt::Debug;
+fn count<I: Iterator>(i: I) -> usize { i.count() }
+fn listed<I>(i: I) -> Vec<I::Item> where I: Iterator, I::Item: Debug { i.collect() }
+fn first<I: IntoIterator>(i: I) -> Option<I::Item> { i.into_iter().next() }
+fn main() {
+    println!("{} {:?} {:?}", count([1, 2].iter()), listed(vec![3, 4].into_iter()), first(vec!["a"]));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "2 [3, 4] Some(\"a\")\n");
+}
+
+#[test]
+fn a_method_whose_impl_bounds_fail_exists_but_is_e0599() {
+    // rustc's probe finds `show` of `impl<T: Debug> S<T>` and refuses it
+    // for `S<Opaque>` (#2504).
+    let report = refused(
+        r#"use std::fmt::Debug;
+struct Opaque;
+struct S<T>(T);
+impl<T: Debug> S<T> { fn show(&self) { println!("{:?}", self.0); } }
+fn main() { S(Opaque).show(); }
+main();
+"#,
+    );
+    assert!(
+        report.starts_with(
+            r#"error[E0599]: the method `show` exists for struct `S<Opaque>`, but its trait bounds were not satisfied
+ --> <script>:5:23
+  |
+2 | struct Opaque;
+  | ------------- doesn't satisfy `Opaque: Debug`
+3 | struct S<T>(T);
+  | ----------- method `show` not found for this struct
+4 | impl<T: Debug> S<T> { fn show(&self) { println!("{:?}", self.0); } }
+5 | fn main() { S(Opaque).show(); }
+  |                       ^^^^ method cannot be called on `S<Opaque>` due to unsatisfied trait bounds
+  |
+note: trait bound `Opaque: Debug` was not satisfied
+ --> <script>:4:9
+  |
+4 | impl<T: Debug> S<T> { fn show(&self) { println!("{:?}", self.0); } }
+  |         ^^^^^  ----
+  |         |
+  |         unsatisfied trait bound introduced here
+help: consider annotating `Opaque` with `#[derive(Debug)]`
+"#
+        ),
+        "{report}"
+    );
+    // Two bounds of one type are listed together, and the derive names
+    // both.
+    let report = refused(
+        r#"use std::fmt::Debug;
+struct Opaque;
+struct S<T>(T);
+impl<T: Debug + Clone> S<T> { fn show(&self) { println!("{:?}", self.0); } }
+fn main() { let s = S(Opaque); let r = &s; r.show(); }
+main();
+"#,
+    );
+    assert!(
+        report.starts_with(
+            r#"error[E0599]: the method `show` exists for reference `&S<Opaque>`, but its trait bounds were not satisfied
+ --> <script>:5:46
+  |
+2 | struct Opaque;
+  | ------------- doesn't satisfy `Opaque: Clone` or `Opaque: Debug`
+...
+5 | fn main() { let s = S(Opaque); let r = &s; r.show(); }
+  |                                              ^^^^ method cannot be called on `&S<Opaque>` due to unsatisfied trait bounds
+  |
+note: the following trait bounds were not satisfied:
+      `Opaque: Clone`
+      `Opaque: Debug`
+ --> <script>:4:9
+  |
+4 | impl<T: Debug + Clone> S<T> { fn show(&self) { println!("{:?}", self.0); } }
+  |         ^^^^^   ^^^^^  ----
+  |         |       |
+  |         |       unsatisfied trait bound introduced here
+  |         unsatisfied trait bound introduced here
+help: consider annotating `Opaque` with `#[derive(Clone, Debug)]`
+"#
+        ),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_traits_bounds_on_its_parameters_are_checked_at_its_impls() {
+    // `impl Show<Opaque> for A` of `trait Show<T> where T: Debug` is
+    // refused at its header, as rustc refuses it (#2505).
+    for (bound, column) in [("<T> where T: Debug", 24), ("<T: Debug>", 15)] {
+        let report = refused(&format!(
+            "use std::fmt::Debug;\nstruct Opaque;\nstruct A;\ntrait Show{bound} {{ fn show(&self) {{}} }}\nimpl Show<Opaque> for A {{}}\nfn main() {{}}\nmain();\n"
+        ));
+        let expected = format!(
+            r#"error[E0277]: `Opaque` doesn't implement `Debug`
+ --> <script>:5:6
+  |
+5 | impl Show<Opaque> for A {{}}
+  |      ^^^^^^^^^^^^ the trait `Debug` is not implemented for `Opaque`
+  |
+  = note: add `#[derive(Debug)]` to `Opaque` or manually `impl Debug for Opaque`
+note: required by a bound in `Show`
+ --> <script>:4:{column}
+"#
+        );
+        assert!(report.starts_with(&expected), "{report}");
+        assert!(
+            report.contains("required by this bound in `Show`\nhelp: consider annotating `Opaque` with `#[derive(Debug)]`\n"),
             "{report}"
         );
     }

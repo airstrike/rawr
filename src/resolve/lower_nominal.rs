@@ -868,6 +868,10 @@ struct Parser<'a> {
     /// settled: each placeholder, written over with the kind's code once
     /// it has (`i32` when nothing binds it, as in Rust).
     pending_int_kinds: Vec<(String, Ty)>,
+    /// Arithmetic whose operands' type inference had not settled (`|a, b|
+    /// a + b`, before the call gives `a` and `b`), as rustc's obligation
+    /// waits for it.
+    pending_operands: Vec<operator::PendingOperands>,
     /// Integer literals past `i64` whose kind inference had not settled:
     /// each must fit the kind it settles on.
     pending_wide_literals: Vec<PendingWide>,
@@ -1162,6 +1166,7 @@ impl<'a> Parser<'a> {
             template_params: std::cell::RefCell::new(Box::default()),
             witnessed_ops: BTreeMap::new(),
             pending_int_kinds: Vec::new(),
+            pending_operands: Vec::new(),
             pending_wide_literals: Vec::new(),
             pending_float_kinds: Vec::new(),
             pending_defaults: Vec::new(),
