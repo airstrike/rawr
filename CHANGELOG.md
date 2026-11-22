@@ -6,6 +6,12 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors.
 
+## 0.5.6 (2026-11-21)
+
+- A `where` clause bounds an associated type (`I::Item: AsRef<dyn Item>`, `<I as IntoIterator>::Item: Debug`) or any other type (`Vec<T>: Debug`, `&'a T: Display`), as rustc reads it: the body may rely on the bound, and each call checks it with rustc's E0277. The playground has a new example, "Traits: Display, Add, Iterator, dyn". (#383)
+- A generic bounded by `FromStr` parses in its body with `s.parse()` or `T::from_str(s)`, and calls at `u8`, `i64`, `f64`, `String`, `bool` and `char` meet the bound by std's impls. Each integer kind parses as its own type, so `"300"` into `u8` fails as in rustc. (#2464, #2465)
+- The borrow checker checks a function body against every lifetime in its signature, with variance, as rustc does: a returned `&'a &'a T` is no longer accepted as `&'a &'static T`, `&mut`, `Cell` and the structs that hold them are invariant, and bounds implied by parameter types, such as `'b: 'a` from `&'a &'b T`, make code legal as in rustc. (#170)
+
 ## 0.5.5 (2026-11-21)
 
 - An impl of a native trait through its module, as `impl page::Page for BadgePage` after `use crate::page::{self}`, compiles as rustc resolves it, instead of being refused with E0404. (#2452)
