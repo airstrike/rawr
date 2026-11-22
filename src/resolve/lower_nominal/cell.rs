@@ -842,8 +842,12 @@ impl Parser<'_> {
     /// declaration: each drops its guard, a `Ref` or a `RefMut` whose `Drop`
     /// uses the borrow, where it ends.
     pub(super) fn cell_guard_drops(&self, declared: &[Span]) -> Vec<Span> {
+        // An imported method's borrow guard is no `Ref`: a crate's `&mut T`
+        // output, as `get_mut(&mut self) -> &mut Pixel` gives, has no drop,
+        // and its borrow ends where the local is last used.
         self.cell_guards
             .values()
+            .filter(|(.., native)| !native)
             .map(|(declaration, ..)| *declaration)
             .chain(self.assigned_guards.iter().copied())
             .filter(|declaration| declared.contains(declaration))
