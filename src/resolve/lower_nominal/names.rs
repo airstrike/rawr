@@ -24,6 +24,11 @@ impl<'a> Parser<'a> {
         }
         let written = crate::tokenizer::raw_names(name);
         let reference = Span::new(at.start(), text_end(at.start(), &written));
+        if let Some(error) =
+            self.trait_as_value(name, "function, tuple struct or tuple variant", reference)
+        {
+            return Some(error);
+        }
         if let Some(error) = self.std_not_yet(&written, reference) {
             return Some(error);
         }
@@ -196,6 +201,41 @@ impl<'a> Parser<'a> {
             found: "macro",
             name: written.as_ref().into(),
             reference,
+            annotation: None,
+        })
+    }
+
+    /// rustc's E0423 for a trait's name used where a function or a value
+    /// is `expected`: the program's own trait in scope, or std's, as
+    /// `Fn("main")` or `let c = Clone;`.
+    pub(super) fn trait_as_value(
+        &self,
+        name: &str,
+        expected: &'static str,
+        reference: Span,
+    ) -> Option<Error> {
+        let written = crate::tokenizer::raw_names(name);
+        let std_trait = || {
+            let first = name.split("::").next().unwrap_or(name);
+            let binding = self.models.import(first);
+            let binding = binding.map(|binding| binding.qualified.as_str());
+            crate::resolve::std_path::qualified(&written, binding).is_some_and(|path| {
+                crate::std_table::path(&path, crate::std_table::Namespace::Type)
+                    .is_some_and(|path| path.kind == "trait")
+            })
+        };
+        let single = !name.contains("::");
+        let is_trait = single && self.models.crate_trait_in_scope(name) || std_trait();
+        // rustc offers the `:` only for a lone name that starts the value.
+        let annotation = self
+            .unannotated_let
+            .filter(|between| single && between.end() == reference.start());
+        is_trait.then(|| Error::WrongKind {
+            expected,
+            found: "trait",
+            name: written.as_ref().into(),
+            reference,
+            annotation,
         })
     }
 
@@ -228,6 +268,9 @@ impl<'a> Parser<'a> {
         if let Some(error) = self.module_value(name, reference) {
             return error;
         }
+        if let Some(error) = self.trait_as_value(name, "value", reference) {
+            return error;
+        }
         if let Some(error) = self.std_not_yet(&written, reference) {
             return error;
         }
@@ -241,6 +284,7 @@ impl<'a> Parser<'a> {
                 found: "struct",
                 name: written.as_ref().into(),
                 reference,
+                annotation: None,
             };
         }
         Error::UnknownVariable {

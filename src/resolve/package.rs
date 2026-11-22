@@ -909,6 +909,14 @@ impl<'a> Resolver<'a> {
                             call.owner_span,
                             &mut active,
                         )
+                        .map_err(|failure| {
+                            self.missing_segment(
+                                &unit.context,
+                                path,
+                                |index| written_segment(path, call.path_span, index),
+                                failure,
+                            )
+                        })
                         .map_err(|failure| self.through_private(&unit.context, &call, failure))?
                     {
                         Target::Type(type_ref::Target::Script { identity, .. }) => {
@@ -939,6 +947,14 @@ impl<'a> Resolver<'a> {
                 match self
                     .resolve_path(&unit.context, path, call.path_span, &mut active)
                     .map_err(|failure| self.not_in_module(&unit.context, &call, failure))
+                    .map_err(|failure| {
+                        self.missing_segment(
+                            &unit.context,
+                            path,
+                            |index| written_segment(path, call.path_span, index),
+                            failure,
+                        )
+                    })
                     .map_err(|failure| self.through_private(&unit.context, &call, failure))
                     .map_err(|failure| self.private_value(&unit.context, &call, failure))?
                 {
@@ -2620,7 +2636,14 @@ impl<'a> Resolver<'a> {
                     } else {
                         "type"
                     };
-                    self.unresolved_type_path(context, path, noun, failure)
+                    let failure = self.unresolved_type_path(context, path, noun, failure);
+                    // A segment's span where the path resolves as written.
+                    let segment_span = |index: usize| {
+                        (*segments == *written)
+                            .then(|| path.segments.get(index).map(|segment| segment.name.span))
+                            .flatten()
+                    };
+                    self.missing_segment(context, segments, segment_span, failure)
                 })?;
             // An impl's trait path that names another item: rustc's E0404. A
             // trait of std or of a Rust crate, native code's included, is a
@@ -3928,6 +3951,45 @@ impl<'a> Resolver<'a> {
         }
     }
 
+    /// rustc's E0433 for `path`, written at `written` in a body or a type,
+    /// that `failure` refuses as an unresolved import where a module on the
+    /// way has no module of the next segment's name: "cannot find `c` in
+    /// `a`" at that segment, not the E0432 of an unresolved `use`. A miss
+    /// of the last segment is the item's own error (`not_in_module`).
+    fn missing_segment(
+        &self,
+        context: &Context,
+        path: &[ImmutableString],
+        segment_span: impl Fn(usize) -> Option<Span>,
+        failure: Failure,
+    ) -> Failure {
+        let Error::UnknownImport {
+            missing: Unresolved::Path,
+            ..
+        } = failure.error
+        else {
+            return failure;
+        };
+        let Some((end, reference)) = self
+            .found_module(context, path)
+            .filter(|end| end + 1 < path.len())
+            .and_then(|end| Some((end, segment_span(end)?)))
+        else {
+            return failure;
+        };
+        let (segment, module) = (&path[end], &path[end - 1]);
+        Failure {
+            error: Error::StdPath {
+                code: "E0433",
+                message: format!("cannot find `{segment}` in `{module}`").into(),
+                label: Some(format!("could not find `{segment}` in `{module}`").into()),
+                note: None,
+                reference,
+            },
+            ..failure
+        }
+    }
+
     fn unknown_import(
         &self,
         context: &Context,
@@ -4276,6 +4338,26 @@ impl<'a> Resolver<'a> {
             imports: Box::default(),
         }
     }
+}
+
+/// The span of `path`'s segment at `index`, where `written` is `path` as
+/// written on one line with no blanks: `None` where it is written another
+/// way.
+fn written_segment(path: &[ImmutableString], written: Span, index: usize) -> Option<Span> {
+    let start = written.start();
+    if text_end(start, &path.join("::")) != written.end() {
+        return None;
+    }
+    let segment = path.get(index)?;
+    let before = path[..index]
+        .iter()
+        .map(|segment| segment.chars().count() + 2)
+        .sum::<usize>();
+    let mut at = start;
+    for _ in 0..before {
+        at.advance();
+    }
+    Some(Span::new(at, text_end(at, segment)))
 }
 
 /// The position `text` ends at when it starts at `position` on one line.

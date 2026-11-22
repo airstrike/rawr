@@ -989,7 +989,12 @@ impl<'a> Parser<'a> {
         });
         let dereferenced = matches!(self.peek(), Token::Multiply);
         let value_start = self.flow().value_start();
+        let between = annotation
+            .is_none()
+            .then(|| span(syntax.span().end(), self.position()));
+        let outer_let = std::mem::replace(&mut self.unannotated_let, between);
         let value = self.parse_expr_expecting(expected.as_ref());
+        self.unannotated_let = outer_let;
         self.mutable_borrow = outer;
         let mut value = value?;
         self.subject_deref = dereferenced;
@@ -2922,18 +2927,25 @@ impl<'a> Parser<'a> {
                 // `T { .. }` of a tuple or unit variant matches any payload.
                 let rest = *rest || variant.payload.is_empty();
                 let names = declared.iter().map(|field| field.text.as_str());
-                field_order(definition.name(), names, written, rest, syntax.variant_span)?
-                    .into_iter()
-                    .map(|index| index.map_or(&discard, |index| &syntax.payload[index]))
-                    .chain(std::iter::repeat_n(
-                        &discard,
-                        if declared.is_empty() {
-                            variant.payload.len()
-                        } else {
-                            0
-                        },
-                    ))
-                    .collect()
+                field_order(
+                    definition.name(),
+                    Some(&syntax.variant),
+                    names,
+                    written,
+                    rest,
+                    syntax.variant_span,
+                )?
+                .into_iter()
+                .map(|index| index.map_or(&discard, |index| &syntax.payload[index]))
+                .chain(std::iter::repeat_n(
+                    &discard,
+                    if declared.is_empty() {
+                        variant.payload.len()
+                    } else {
+                        0
+                    },
+                ))
+                .collect()
             }
             (None, Some(_)) if !variant.payload.is_empty() => {
                 return Err(Error::InvalidMatch {
@@ -3160,7 +3172,7 @@ impl<'a> Parser<'a> {
             .map(|(name, name_span, _)| (name.clone(), *name_span))
             .collect::<Vec<_>>();
         let declared = item.fields.iter().map(|field| field.name.text.as_str());
-        let order = field_order(definition.name(), declared, &names, rest, span)?;
+        let order = field_order(definition.name(), None, declared, &names, rest, span)?;
         for (name, name_span) in &names {
             if let Some(field) = item.fields.iter().find(|field| field.name.text == *name)
                 && !self.models.sees_field(&item.key, field)

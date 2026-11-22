@@ -1654,6 +1654,25 @@ fn suggestion(error: &resolve::Error, source: &Source) -> Result<Option<Suggesti
             after(member_span(error)),
             "()",
         ),
+        resolve::Error::UnknownField {
+            reference,
+            hint: resolve::FieldHint::Similar(similar),
+            ..
+        } => suggestion(
+            "a field with a similar name exists",
+            Style::Verbose,
+            *reference,
+            similar,
+        ),
+        resolve::Error::WrongKind {
+            annotation: Some(between),
+            ..
+        } => suggestion(
+            "you might have meant to use `:` for type annotation",
+            Style::Verbose,
+            *between,
+            ": ",
+        ),
         resolve::Error::WrongKind {
             expected: "function",
             found: "macro",
@@ -2038,6 +2057,17 @@ fn primary_label(
         resolve::Error::SelfOutsideImpl { parameter, .. } => {
             Some(resolve::SelfOutside(*parameter).label().into())
         }
+        resolve::Error::UnknownField {
+            owner,
+            pattern,
+            hint,
+            ..
+        } => Some(owner.label(*pattern, hint).into()),
+        // rustc's `:` help stands in for the label.
+        resolve::Error::WrongKind {
+            annotation: Some(_),
+            ..
+        } => None,
         resolve::Error::WrongKind { expected, .. } => Some(format!("not a {expected}").into()),
         resolve::Error::Unimplemented { label, .. } => Some(label.clone()),
         resolve::Error::UnsharedStatic { ty, .. } => {
@@ -2170,7 +2200,15 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
             }
             _ => code::RESOLVE_DUPLICATE_MEMBER,
         },
-        resolve::Category::UnknownMember => code::RESOLVE_UNKNOWN_MEMBER,
+        resolve::Category::UnknownMember => match error {
+            resolve::Error::UnknownField {
+                owner,
+                field,
+                pattern,
+                ..
+            } => code::std_path(owner.missing(field, *pattern).0),
+            _ => code::RESOLVE_UNKNOWN_MEMBER,
+        },
         resolve::Category::NotInModule => code::RESOLVE_NOT_IN_MODULE,
         resolve::Category::UnknownFunction => code::RESOLVE_UNKNOWN_FUNCTION,
         resolve::Category::UnknownVariable => code::RESOLVE_UNKNOWN_VARIABLE,
@@ -2317,6 +2355,9 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
             note: Some(note),
             ..
         } if *code != "E0364" => builder.note(note.clone()),
+        resolve::Error::UnknownField { hint, .. } if let Some(note) = hint.note() => {
+            builder.note(note)
+        }
         // After the enum's note, when it has one (`sections`).
         // Each `#[non_exhaustive]` enum the first witness's `_` stands for
         // follows the type, as rustc notes it.
@@ -2784,6 +2825,12 @@ fn resolution_message(error: &resolve::Error) -> String {
         } => resolve::unscoped_method(kind, owner, member),
         resolve::Error::InvalidAssignee { .. } => resolve::INVALID_ASSIGNEE.to_string(),
         resolve::Error::StdPath { message, .. } => message.to_string(),
+        resolve::Error::UnknownField {
+            owner,
+            field,
+            pattern,
+            ..
+        } => owner.missing(field, *pattern).1,
         resolve::Error::UnknownTrait { name, .. } => {
             format!("cannot find trait `{name}` in this scope")
         }

@@ -268,7 +268,7 @@ fn construction_shape_and_types_are_compile_checked() {
     let cases = [
         ("struct Pair { left: i64, right: bool } Pair { left: 1 }", Category::InvalidConstruction, "missing field `right`"),
         ("struct Pair { left: i64 } Pair { left: 1, left: 2 }", Category::InvalidConstruction, "initialized more than once"),
-        ("struct Pair { left: i64 } Pair { left: 1, missing: 2 }", Category::UnknownMember, "Pair::missing"),
+        ("struct Pair { left: i64 } Pair { left: 1, missing: 2 }", Category::UnknownMember, "struct `Pair` has no field named `missing`"),
         ("struct Pair { left: i64 } Pair { left: true }", Category::TypeMismatch, "expected `i64`, found `bool`"),
         ("enum Message { Move(i64, bool) } Message::Move(1)", Category::ArgumentCount, "this enum variant takes 2 arguments but 1 argument was supplied"),
         ("enum Message { Move(i64) } Message::Move(true)", Category::TypeMismatch, "expected `i64`, found `bool`"),

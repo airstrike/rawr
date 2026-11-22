@@ -45,12 +45,15 @@ impl<'a> Parser<'a> {
                 | Error::UnknownMember { .. }
                 | Error::NotInModule { .. }),
             ) if error.primary_span().start() <= reference.end() => {
-                let expected = match next {
-                    Some(Token::LeftParen) => "function",
-                    _ => "value",
+                let (expected, called) = match next {
+                    Some(Token::LeftParen) => {
+                        ("function", "function, tuple struct or tuple variant")
+                    }
+                    _ => ("value", "value"),
                 };
                 Err(self
-                    .std_not_yet(&path, reference)
+                    .trait_as_value(&path, called, reference)
+                    .or_else(|| self.std_not_yet(&path, reference))
                     .or_else(|| self.macro_without_bang(&path, expected, reference))
                     .unwrap_or_else(|| self.std_no_item(error)))
             }
@@ -1507,12 +1510,16 @@ impl<'a> Parser<'a> {
                     )
                 })
                 .collect::<Vec<_>>();
+            let owner = crate::resolve::FieldOwner {
+                variant: true,
+                name: format!("{}::{}", definition.name(), declaration.name.text).into(),
+            };
             let helper = self.push_op(Op::Enum {
                 definition: definition.clone(),
                 item: Box::new(item),
                 variant,
             });
-            let (source, end) = self.parse_named_values(&definition, &fields, &helper)?;
+            let (source, end) = self.parse_named_values(&definition, owner, &fields, &helper)?;
             return Ok(self.operator_expr(source, enum_ty, span(owner_span.start(), end)));
         }
         if !matches!(self.peek(), Token::LeftParen | Token::Unit)

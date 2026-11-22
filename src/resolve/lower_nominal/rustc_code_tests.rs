@@ -5248,3 +5248,174 @@ fn a_trait_another_module_declares_is_e0405_without_a_use() {
         "{child}"
     );
 }
+
+#[test]
+fn a_try_block_is_e0658() {
+    // The whole block is marked, with the feature's issue (#1198).
+    let shown = rendered("fn main() {\n    let x: Option<i32> = try { Some(1)? };\n}\n");
+    let expected = [
+        "error[E0658]: `try` expression is experimental",
+        " --> main.rs:2:26",
+        "  |",
+        "2 |     let x: Option<i32> = try { Some(1)? };",
+        "  |                          ^^^^^^^^^^^^^^^^",
+        "  |",
+        "  = note: see issue #154391 <https://github.com/rust-lang/rust/issues/154391> for more \
+         information",
+    ]
+    .join("\n");
+    assert_eq!(shown.trim_end(), expected);
+}
+
+#[test]
+fn a_trait_called_as_a_function_is_e0423() {
+    // rustc offers `:` for a lone trait name that starts an unannotated
+    // `let`'s value, and labels the name anywhere else (#1200).
+    let shown = rendered("fn main() {\n    let f = Fn(\"main\");\n}\n");
+    let expected = [
+        "error[E0423]: expected function, tuple struct or tuple variant, found trait `Fn`",
+        " --> main.rs:2:13",
+        "  |",
+        "2 |     let f = Fn(\"main\");",
+        "  |             ^^",
+        "  |",
+        "help: you might have meant to use `:` for type annotation",
+        "  |",
+        "2 -     let f = Fn(\"main\");",
+        "2 +     let f: Fn(\"main\");",
+        "  |",
+    ]
+    .join("\n");
+    assert_eq!(shown.trim_end(), expected);
+    let labeled = [
+        ("fn main() {\n    Fn(1);\n}\n", "Fn", "    ^^"),
+        (
+            "fn main() {\n    let f: i32 = Fn(1);\n}\n",
+            "Fn",
+            "                 ^^",
+        ),
+        (
+            "fn main() {\n    let f = 1 + Fn(1);\n}\n",
+            "Fn",
+            "                ^^",
+        ),
+        (
+            "fn main() {\n    let f = std::ops::Fn(1);\n}\n",
+            "std::ops::Fn",
+            "            ^^^^^^^^^^^^",
+        ),
+    ];
+    for (source, name, marker) in labeled {
+        let shown = rendered(source);
+        assert!(
+            shown.starts_with(&format!(
+                "error[E0423]: expected function, tuple struct or tuple variant, found trait \
+                 `{name}`\n"
+            )) && shown.contains(&format!(
+                "  | {marker} not a function, tuple struct or tuple variant\n"
+            )) && !shown.contains("help:"),
+            "{shown}"
+        );
+    }
+    // The program's own trait, and a trait as a value.
+    let own = rendered("trait T {}\nfn main() {\n    let (a, b) = T(1);\n}\n");
+    assert!(
+        own.starts_with(
+            "error[E0423]: expected function, tuple struct or tuple variant, found trait `T`\n"
+        ) && own.contains("3 +     let (a, b): T(1);\n"),
+        "{own}"
+    );
+    let value = rendered("fn main() {\n    let c =  Clone;\n}\n");
+    assert!(
+        value.starts_with("error[E0423]: expected value, found trait `Clone`\n")
+            && value.contains("2 +     let c: Clone;\n"),
+        "{value}"
+    );
+}
+
+#[test]
+fn a_path_through_a_module_with_a_missing_middle_segment_is_e0433() {
+    // rustc marks the segment the path stops at, in a body or a type
+    // (#1397).
+    let module =
+        "mod a {\n    pub mod b {\n        pub struct S;\n        pub fn f() {}\n    }\n}\n";
+    let cases = [
+        ("a::c::f();", 8, "^", "c", "a"),
+        ("a::b::c::f();", 11, "^", "c", "b"),
+        ("let x: a::c::S = a::b::S;", 15, "^", "c", "a"),
+        ("std::nope::f();", 10, "^^^^", "nope", "std"),
+    ];
+    for (body, column, marker, segment, parent) in cases {
+        let shown = rendered(&format!("{module}fn main() {{\n    {body}\n}}\n"));
+        let expected = [
+            format!("error[E0433]: cannot find `{segment}` in `{parent}`"),
+            format!(" --> main.rs:8:{column}"),
+            "  |".to_string(),
+            format!("8 |     {body}"),
+            format!(
+                "  | {}{marker} could not find `{segment}` in `{parent}`",
+                " ".repeat(column - 1)
+            ),
+        ]
+        .join("\n");
+        assert_eq!(shown.trim_end(), expected, "{body}");
+    }
+}
+
+#[test]
+fn an_unknown_field_in_a_literal_or_a_pattern_is_e0560_e0559_or_e0026() {
+    // On a qualified type as on a plain one, with rustc's note or its
+    // similar name (#1399).
+    let declared = "mod m {\n    pub struct P { pub x: i32 }\n    pub enum E { V { a: i32 } }\n}\n\
+                    struct Q { x: i32, w: i32, long_name: i32 }\n";
+    let shown = |body: &str| rendered(&format!("{declared}fn main() {{\n    {body}\n}}\n"));
+    let literal = shown("let p = m::P { x: 1, y: 2 };");
+    let expected = [
+        "error[E0560]: struct `P` has no field named `y`",
+        " --> main.rs:7:26",
+        "  |",
+        "7 |     let p = m::P { x: 1, y: 2 };",
+        "  |                          ^ `P` does not have this field",
+        "  |",
+        "  = note: all struct fields are already assigned",
+    ]
+    .join("\n");
+    assert_eq!(literal.trim_end(), expected);
+    let variant = shown("let e = m::E::V { a: 1, b: 2 };");
+    assert!(
+        variant.starts_with("error[E0559]: variant `E::V` has no field named `b`\n")
+            && variant.contains("^ `E::V` does not have this field\n"),
+        "{variant}"
+    );
+    let available = shown("let q = Q { x: 1, zzz: 2 };");
+    assert!(
+        available.contains("^^^ `Q` does not have this field\n")
+            && available.contains("  = note: available fields are: `w`, `long_name`\n"),
+        "{available}"
+    );
+    let similar = shown("let q = Q { x: 1, y: 2, long_name: 3 };");
+    assert!(
+        similar.contains("^ unknown field\n")
+            && similar.contains("help: a field with a similar name exists\n")
+            && similar.contains("7 +     let q = Q { x: 1, w: 2, long_name: 3 };\n"),
+        "{similar}"
+    );
+    let pattern = shown("let p = m::P { x: 1 };\n    let m::P { x, z } = p;");
+    let expected = [
+        "error[E0026]: struct `P` does not have a field named `z`",
+        " --> main.rs:8:19",
+        "  |",
+        "8 |     let m::P { x, z } = p;",
+        "  |                   ^ struct `P` does not have this field",
+    ]
+    .join("\n");
+    assert_eq!(pattern.trim_end(), expected);
+    // The one field a pattern leaves unmentioned, when its name is like it.
+    let similar = shown("let e = m::E::V { a: 1 };\n    let m::E::V { b, .. } = e;");
+    assert!(
+        similar.starts_with("error[E0026]: variant `E::V` does not have a field named `b`\n")
+            && similar.contains("^ variant `E::V` does not have this field\n")
+            && similar.contains("8 +     let m::E::V { a, .. } = e;\n"),
+        "{similar}"
+    );
+}

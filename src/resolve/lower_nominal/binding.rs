@@ -315,7 +315,12 @@ impl<'a> Parser<'a> {
             None
         };
         let outer_chosen = std::mem::replace(&mut self.chosen, chosen);
+        let between = annotation
+            .is_none()
+            .then(|| span(binding.end(), self.position()));
+        let outer_let = std::mem::replace(&mut self.unannotated_let, between);
         let value = self.parse_expr_expecting(annotation.as_ref());
+        self.unannotated_let = outer_let;
         let chosen = std::mem::replace(&mut self.chosen, outer_chosen);
         self.closure_hint = None;
         self.mutable_borrow = outer;
