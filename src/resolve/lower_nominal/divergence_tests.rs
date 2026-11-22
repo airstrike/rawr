@@ -5015,3 +5015,141 @@ main();
         );
     }
 }
+
+#[test]
+fn str_matches_match_indices_and_replacen_run_as_stds() {
+    // A `&str` or `char` pattern's matches, their byte offsets, and the
+    // first `n` replaced (#2090).
+    let output = printed(
+        r#"
+fn main() {
+    let t = "abcXXabcYYabc";
+    let v: Vec<&str> = t.matches("abc").collect();
+    let w: Vec<(usize, &str)> = t.match_indices("abc").collect();
+    println!("{:?} {:?}", v, w);
+    println!("{} {} {}", t.replacen("abc", "-", 2), t.replacen('X', "", 1), t.matches('Y').count());
+    let owned = String::from("a,b,,c");
+    let at: Vec<usize> = owned.match_indices(',').map(|(i, _)| i).collect();
+    println!("{:?} {}", at, owned.replacen(",", ";", 0));
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "[\"abc\", \"abc\", \"abc\"] [(0, \"abc\"), (5, \"abc\"), (10, \"abc\")]\n\
+         -XX-YYabc abcXabcYYabc 2\n[1, 3, 4] a,b,,c\n"
+    );
+}
+
+#[test]
+fn string_drain_and_replace_range_change_the_string_as_stds() {
+    // std's `String::drain` and `replace_range` of a `RangeBounds<usize>`
+    // (#2521).
+    let output = printed(
+        r#"
+fn main() {
+    let mut s = String::from("hello");
+    s.replace_range(..2, "x");
+    let mut h = String::from("hello he");
+    let d: String = h.drain(..2).collect();
+    println!("{} {} {}", s, h, d);
+    let mut t = String::from("abcdef");
+    let r = 1..=2;
+    t.replace_range(r, "XYZ");
+    let tail: Vec<char> = t.drain(4..).collect();
+    println!("{} {:?}", t, tail);
+    t.replace_range(.., "all");
+    println!("{}", t);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "xllo llo he he\naXYZ ['d', 'e', 'f']\nall\n");
+    // A field's and an element's string change in place.
+    let output = printed(
+        r#"
+struct Named { name: String }
+fn main() {
+    let mut n = Named { name: String::from("héllo") };
+    let gone: String = n.name.drain(1..3).collect();
+    n.name.replace_range(0..1, "J");
+    let mut v = vec![String::from("abc")];
+    v[0].replace_range(1.., "Z");
+    println!("{} {} {:?}", n.name, gone, v);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "Jllo é [\"aZ\"]\n");
+    assert_eq!(
+        panicked("fn main() {\n    let mut s = String::from(\"héllo\");\n    s.drain(..2);\n}\n"),
+        "thread 'main' panicked at main.rs:3:7:\nassertion failed: self.is_char_boundary(end)"
+    );
+    let report = refused("fn main() { let s = String::from(\"hello\"); s.drain(..2); }");
+    assert!(
+        report.starts_with(
+            "error[E0596]: cannot borrow `s` as mutable, as it is not declared as mutable"
+        ),
+        "{report}"
+    );
+}
+
+/// What `source` prints, run with `access`.
+fn printed_with(source: &str, access: crate::Access) -> String {
+    let lines = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let mut engine = Engine::new();
+    engine.set_access(access);
+    let sink = lines.clone();
+    engine.on_output(move |_, text| sink.lock().unwrap().push_str(text));
+    engine.run(source).unwrap_or_else(|error| panic!("{error}"));
+    lines.lock().unwrap().clone()
+}
+
+#[test]
+fn std_path_and_path_buf_methods_run_as_stds() {
+    // `Path::new`, its readers and file system queries, and `PathBuf`'s
+    // changes (#2087). A path the program may not read is no file.
+    let directory = std::env::temp_dir().join(format!("rawr-path-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(directory.join("bar.txt"), "x").unwrap();
+    let source = format!(
+        r#"
+use std::path::{{Path, PathBuf}};
+fn main() {{
+    let p = Path::new("/tmp/foo/bar.txt");
+    println!("{{:?}} {{:?}} {{:?}} {{:?}}", p.extension(), p.file_name(), p.file_stem(), p.parent());
+    let j = p.parent().unwrap().join("baz.rs");
+    println!("{{}} {{}} {{}}", p.display(), j.display(), p.with_extension("md").display());
+    let mut b = PathBuf::from("/tmp");
+    b.push("x.txt");
+    println!("{{}} {{:?}}", b.set_extension("md"), b);
+    b.set_file_name("y");
+    println!("{{:?}}", b);
+    let popped = (b.pop(), b.pop());
+    println!("{{:?}} {{:?}}", popped, b);
+    let q: &Path = b.as_path();
+    println!("{{}} {{}} {{}}", q.is_absolute(), Path::new("a/b").is_relative(), q.starts_with("/"));
+    let dir = PathBuf::from({directory:?});
+    let file = dir.join("bar.txt");
+    println!("{{}} {{}} {{}}", dir.exists(), dir.is_dir(), dir.is_file());
+    println!("{{}} {{}} {{}}", file.exists(), file.is_file(), file.with_file_name("none").exists());
+}}
+main();
+"#
+    );
+    let output = printed_with(&source, crate::Access::all());
+    let denied = printed(&source);
+    std::fs::remove_dir_all(&directory).unwrap();
+    assert_eq!(
+        output,
+        "Some(\"txt\") Some(\"bar.txt\") Some(\"bar\") Some(\"/tmp/foo\")\n\
+         /tmp/foo/bar.txt /tmp/foo/baz.rs /tmp/foo/bar.md\n\
+         true \"/tmp/x.md\"\n\"/tmp/y\"\n(true, true) \"/\"\n\
+         true true true\ntrue true false\ntrue true false\n"
+    );
+    assert!(
+        denied.ends_with("false false false\nfalse false false\n"),
+        "{denied}"
+    );
+}

@@ -22,6 +22,11 @@ fn read<R>(value: Dynamic, visit: impl FnOnce(&str) -> RawrResultOf<R>) -> RawrR
     visit(&text)
 }
 
+/// The text a native String place, or a string, holds.
+pub(crate) fn copied(value: &Dynamic) -> RawrResultOf<String> {
+    read(value.clone(), |text| Ok(text.to_owned()))
+}
+
 fn boundary(value: &str, at: usize, allow_end: bool) -> RawrResultOf<()> {
     if !value.is_char_boundary(at) || (!allow_end && at == value.len()) {
         return Err(failure(
@@ -185,6 +190,17 @@ impl Policy for Text {
                 let value = value.write()?;
                 boundary(value, at, true)?;
                 Self::into_dynamic(value.split_off(at), witness)
+            }
+            // The chars of the bytes `low..high`, a window `String::drain`
+            // checked.
+            Operation::Drain => {
+                let (low, high) = (index(arguments, 0)?, index(arguments, 1)?);
+                let value = value.write()?;
+                boundary(value, low, true)?;
+                boundary(value, high, true)?;
+                Ok(Dynamic::from_array(
+                    value.drain(low..high).map(Dynamic::from_char).collect(),
+                ))
             }
             Operation::Clear => {
                 value.write()?.clear();

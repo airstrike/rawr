@@ -2392,7 +2392,10 @@ impl<'a> Parser<'a> {
         match open {
             Some(inclusive) => {
                 self.next();
-                let high = if matches!(self.peek(), Token::RightBracket | Token::RightParen) {
+                let high = if matches!(
+                    self.peek(),
+                    Token::RightBracket | Token::RightParen | Token::Comma
+                ) {
                     Ok(None)
                 } else {
                     self.parse_expr().map(Some)

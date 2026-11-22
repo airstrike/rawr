@@ -396,6 +396,24 @@ pub(super) static STEPS: &[Step] = &[
         target: Ty::Result(&Ty::Parameter("T"), &Ty::Registered("io::Error")),
     },
     Step::Item {
+        path: "path::PathBuf::exists",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Builtin(Builtin::Bool),
+    },
+    Step::Item {
+        path: "path::PathBuf::is_file",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Builtin(Builtin::Bool),
+    },
+    Step::Item {
+        path: "path::PathBuf::is_dir",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Builtin(Builtin::Bool),
+    },
+    Step::Item {
         path: "path::PathBuf::new",
         kind: Kind::AssociatedFunction,
         inputs: &[],
@@ -655,6 +673,309 @@ pub(super) static STEPS: &[Step] = &[
         kind: Kind::Method(Mode::Mutable),
         inputs: &[Ty::Builtin(Builtin::String)],
         output: Ty::Unit,
+    },
+    Step::Item {
+        path: "path::PathBuf::set_extension",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Registered("ffi::OsString"),
+        }],
+        output: Ty::Builtin(Builtin::Bool),
+    },
+    Step::Item {
+        path: "path::PathBuf::set_extension",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Builtin(Builtin::String),
+        }],
+        output: Ty::Builtin(Builtin::Bool),
+    },
+    Step::Item {
+        path: "path::PathBuf::set_extension",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Registered("path::PathBuf"),
+        }],
+        output: Ty::Builtin(Builtin::Bool),
+    },
+    Step::Item {
+        path: "path::PathBuf::set_extension",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Registered("ffi::OsString")],
+        output: Ty::Builtin(Builtin::Bool),
+    },
+    Step::Item {
+        path: "path::PathBuf::set_extension",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Builtin(Builtin::String)],
+        output: Ty::Builtin(Builtin::Bool),
+    },
+    Step::Item {
+        path: "path::PathBuf::set_extension",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Registered("path::PathBuf")],
+        output: Ty::Builtin(Builtin::Bool),
+    },
+    Step::Item {
+        path: "path::PathBuf::set_file_name",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Registered("ffi::OsString"),
+        }],
+        output: Ty::Unit,
+    },
+    Step::Item {
+        path: "path::PathBuf::set_file_name",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Builtin(Builtin::String),
+        }],
+        output: Ty::Unit,
+    },
+    Step::Item {
+        path: "path::PathBuf::set_file_name",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Registered("path::PathBuf"),
+        }],
+        output: Ty::Unit,
+    },
+    Step::Item {
+        path: "path::PathBuf::set_file_name",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Registered("ffi::OsString")],
+        output: Ty::Unit,
+    },
+    Step::Item {
+        path: "path::PathBuf::set_file_name",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Builtin(Builtin::String)],
+        output: Ty::Unit,
+    },
+    Step::Item {
+        path: "path::PathBuf::set_file_name",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Registered("path::PathBuf")],
+        output: Ty::Unit,
+    },
+    Step::Item {
+        path: "path::PathBuf::pop",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[],
+        output: Ty::Builtin(Builtin::Bool),
+    },
+    Step::Item {
+        path: "path::PathBuf::with_extension",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Registered("ffi::OsString"),
+        }],
+        output: Ty::Registered("path::PathBuf"),
+    },
+    Step::Item {
+        path: "path::PathBuf::with_extension",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Builtin(Builtin::String),
+        }],
+        output: Ty::Registered("path::PathBuf"),
+    },
+    Step::Item {
+        path: "path::PathBuf::with_extension",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Registered("path::PathBuf"),
+        }],
+        output: Ty::Registered("path::PathBuf"),
+    },
+    Step::Item {
+        path: "path::PathBuf::with_extension",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[Ty::Registered("ffi::OsString")],
+        output: Ty::Registered("path::PathBuf"),
+    },
+    Step::Item {
+        path: "path::PathBuf::with_extension",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[Ty::Builtin(Builtin::String)],
+        output: Ty::Registered("path::PathBuf"),
+    },
+    Step::Item {
+        path: "path::PathBuf::with_extension",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[Ty::Registered("path::PathBuf")],
+        output: Ty::Registered("path::PathBuf"),
+    },
+    Step::Item {
+        path: "path::PathBuf::with_file_name",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Registered("ffi::OsString"),
+        }],
+        output: Ty::Registered("path::PathBuf"),
+    },
+    Step::Item {
+        path: "path::PathBuf::with_file_name",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Builtin(Builtin::String),
+        }],
+        output: Ty::Registered("path::PathBuf"),
+    },
+    Step::Item {
+        path: "path::PathBuf::with_file_name",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Registered("path::PathBuf"),
+        }],
+        output: Ty::Registered("path::PathBuf"),
+    },
+    Step::Item {
+        path: "path::PathBuf::with_file_name",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[Ty::Registered("ffi::OsString")],
+        output: Ty::Registered("path::PathBuf"),
+    },
+    Step::Item {
+        path: "path::PathBuf::with_file_name",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[Ty::Builtin(Builtin::String)],
+        output: Ty::Registered("path::PathBuf"),
+    },
+    Step::Item {
+        path: "path::PathBuf::with_file_name",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[Ty::Registered("path::PathBuf")],
+        output: Ty::Registered("path::PathBuf"),
+    },
+    Step::Item {
+        path: "path::PathBuf::starts_with",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Registered("ffi::OsString"),
+        }],
+        output: Ty::Builtin(Builtin::Bool),
+    },
+    Step::Item {
+        path: "path::PathBuf::starts_with",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Registered("path::PathBuf"),
+        }],
+        output: Ty::Builtin(Builtin::Bool),
+    },
+    Step::Item {
+        path: "path::PathBuf::starts_with",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Builtin(Builtin::String),
+        }],
+        output: Ty::Builtin(Builtin::Bool),
+    },
+    Step::Item {
+        path: "path::PathBuf::starts_with",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[Ty::Registered("path::PathBuf")],
+        output: Ty::Builtin(Builtin::Bool),
+    },
+    Step::Item {
+        path: "path::PathBuf::starts_with",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[Ty::Registered("ffi::OsString")],
+        output: Ty::Builtin(Builtin::Bool),
+    },
+    Step::Item {
+        path: "path::PathBuf::starts_with",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[Ty::Builtin(Builtin::String)],
+        output: Ty::Builtin(Builtin::Bool),
+    },
+    Step::Item {
+        path: "path::PathBuf::ends_with",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Registered("ffi::OsString"),
+        }],
+        output: Ty::Builtin(Builtin::Bool),
+    },
+    Step::Item {
+        path: "path::PathBuf::ends_with",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Registered("path::PathBuf"),
+        }],
+        output: Ty::Builtin(Builtin::Bool),
+    },
+    Step::Item {
+        path: "path::PathBuf::ends_with",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Builtin(Builtin::String),
+        }],
+        output: Ty::Builtin(Builtin::Bool),
+    },
+    Step::Item {
+        path: "path::PathBuf::ends_with",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[Ty::Registered("path::PathBuf")],
+        output: Ty::Builtin(Builtin::Bool),
+    },
+    Step::Item {
+        path: "path::PathBuf::ends_with",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[Ty::Registered("ffi::OsString")],
+        output: Ty::Builtin(Builtin::Bool),
+    },
+    Step::Item {
+        path: "path::PathBuf::ends_with",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[Ty::Builtin(Builtin::String)],
+        output: Ty::Builtin(Builtin::Bool),
+    },
+    Step::Item {
+        path: "path::PathBuf::is_absolute",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Builtin(Builtin::Bool),
+    },
+    Step::Item {
+        path: "path::PathBuf::is_relative",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Builtin(Builtin::Bool),
+    },
+    Step::Item {
+        path: "path::PathBuf::has_root",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Builtin(Builtin::Bool),
+    },
+    Step::Item {
+        path: "path::PathBuf::as_path",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Reference {
+            mutable: false,
+            target: &Ty::Registered("path::PathBuf"),
+        },
     },
     Step::Item {
         path: "path::PathBuf::join",
