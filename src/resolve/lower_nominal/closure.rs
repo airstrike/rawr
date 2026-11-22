@@ -310,6 +310,15 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Whether the innermost closure captures the local `name` declared at
+    /// `declaration`: a local of its own body that shadows a capture
+    /// (`let c = c.borrow();`) is not one.
+    pub(super) fn captured_here(&self, name: &str, declaration: Span) -> bool {
+        self.closures
+            .last()
+            .is_some_and(|scope| scope.outer.get(name) == Some(&declaration))
+    }
+
     /// `|a, b: T| body`, `move |..| ..` or `|| ..`. A closure that captures
     /// nothing is a function item; one that captures is a `fn` value whose
     /// captures are shared with its scope, or copied into it with `move`.

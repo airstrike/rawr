@@ -10453,3 +10453,28 @@ main();
         );
     }
 }
+
+#[test]
+fn a_closure_local_that_shadows_a_capture_is_the_closure_s_own_borrow() {
+    // `let c = c.borrow();` in a closure binds a `Ref` of the captured
+    // cell, and `c` after it is that `Ref`, not the capture (#2229).
+    let output = printed(
+        r#"
+use std::cell::RefCell;
+use std::rc::Rc;
+struct Counted { n: i32 }
+impl Counted { fn get(&self) -> i32 { self.n } }
+fn main() {
+    let c = Rc::new(RefCell::new(Counted { n: 3 }));
+    let f = move || { let c = c.borrow(); c.get() };
+    let b = RefCell::new(Counted { n: 2 });
+    let g = || { let b = b.borrow(); let n = b.get(); drop(b); n };
+    let h = || { let mut b = b.borrow_mut(); b.n += 1; b.n };
+    println!("{} {} {}", f(), g(), h());
+    println!("{}", b.borrow().n);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "3 2 3\n3\n");
+}
