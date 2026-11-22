@@ -6,6 +6,19 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors.
 
+## 0.5.19 (2026-11-22)
+
+- The borrow checker now reports rustc's E0597 for a local borrowed into a `let` typed `&'static T` or `&'a T`, and E0106 for a field that leaves out its type's lifetime. (#129, #160)
+- Calls through a generic bound or a trait object, and a function's `&mut` parameter that stores another argument's borrow, now keep their borrows as rustc's checker does. (#132)
+- A closure that moves out a capture where an `Fn` or `FnMut` closure is needed is now rustc's E0507 instead of failing at run time. (#193)
+- std's From conversions of char to u32, u8 to char, text to Vec<u8>, slices to Vec and Vec to Box<[T]> run, by path, by into() and through a generic Into bound. (#763)
+- TryFrom::try_from, FromIterator::from_iter, Sum::sum and Product::product run by path, Vec::from_iter and String::from_iter run, and Add::add, Neg::neg and Not::not are their operators. (#759)
+- A closure passed to a std method returns its Fn bound's output, so its body coerces to it as rustc's does. (#804)
+- Closures passed to Cell and RefCell methods take std's parameter types, and Cell::update runs. (#803)
+- An iterator has peek only after peekable(), and next_back and rev only where std's adapter chain is double-ended: v.iter().peek() is E0599 and (0..).rev() E0277, as in rustc. (#792)
+- std's iterator structs (vec::IntoIter, slice::Iter, Chars, Peekable and the plain adapters) are types, and an IntoIterator impl with its own IntoIter runs. (#760)
+- Values of sum, partition, unzip and turbofish collect keep the items' borrows std's Sum, Extend and FromIterator impls say, so mutating the source while they live is E0502. (#793)
+
 ## 0.5.18 (2026-11-22)
 
 - A pattern naming a float constant matches its value, and a suffixed number can end a match or if head. (#2508)
