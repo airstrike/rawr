@@ -1343,17 +1343,14 @@ pub(crate) fn summary(
 /// Where each region position of a field's type `ty` sits in the crate type
 /// that declares it (T127): the field's position and the type's, or `None`
 /// for a `'static` position. The type's lifetime parameters are `regions`'
-/// and its type parameters `parameters`. `None` when a position is neither,
-/// or the type bounds its lifetimes, which these facts don't read.
+/// and its type parameters `parameters`. `None` when a position is neither.
+/// A value stored at a position is at the ones [`outlived`] gives too.
 pub(crate) fn field_positions(
     ty: &Type,
     regions: &crate::resolve::item::TypeRegions,
     parameters: &[ImmutableString],
     declared: &dyn Fn(&Target) -> Option<usize>,
 ) -> Option<Vec<(Path, Option<Path>)>> {
-    if regions.bounded {
-        return None;
-    }
     let mut reader = Reader {
         lifetimes: &regions.written,
         declared,
@@ -1380,6 +1377,41 @@ pub(crate) fn field_positions(
             }
             Region::Elided(_) | Region::Captures | Region::Unknown => None,
         })
+        .collect()
+}
+
+/// The lifetime positions of a crate type that its declared bounds put a
+/// value at `at` in as well, `at` being a position [`field_positions`]
+/// gives: `'b: 'a` puts what is in `'b` in `'a` too, and `T: 'a` what is
+/// in `T`, through each bound that chains on (`'c: 'b` with `'b: 'a`).
+pub(crate) fn outlived(
+    regions: &crate::resolve::item::TypeRegions,
+    parameters: &[ImmutableString],
+    at: Path,
+) -> Vec<Path> {
+    let mut steps = at.steps();
+    let start = match (steps.next(), steps.next()) {
+        (Some(Step::Lifetime(index)), None) => regions.params.get(index as usize),
+        (Some(Step::Arg(index)), None) => parameters.get(index as usize),
+        _ => None,
+    };
+    let Some(start) = start else {
+        return Vec::new();
+    };
+    let mut reached = vec![start];
+    let mut next = 0;
+    while let Some(&longer) = reached.get(next) {
+        next += 1;
+        for (bounded, shorter) in &regions.bounds {
+            if bounded == longer && !reached.contains(&shorter) {
+                reached.push(shorter);
+            }
+        }
+    }
+    reached[1..]
+        .iter()
+        .filter_map(|name| regions.params.iter().position(|param| param == *name))
+        .map(|index| Path::of(&[Step::Lifetime(index as u8)]))
         .collect()
 }
 

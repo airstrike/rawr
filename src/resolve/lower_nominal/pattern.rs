@@ -2374,9 +2374,11 @@ impl<'a> Parser<'a> {
                             span: *name_span,
                             mutable: false,
                         };
-                        // A subslice is not a place these facts name.
-                        self.trace_unmodeled("a slice pattern binding its middle", *name_span);
-                        let traced = self.begin_trace();
+                        let step = self.trace_enter(borrows::slice_middle(
+                            before.len(),
+                            after.len(),
+                            length,
+                        ));
                         let resolved = self.resolve_child_pattern_in_mode(
                             &binding,
                             &middle,
@@ -2385,7 +2387,7 @@ impl<'a> Parser<'a> {
                             bound_names,
                             binding_declarations,
                         );
-                        self.end_trace(traced);
+                        self.trace_leave(step);
                         Some(Box::new(resolved?.0))
                     }
                     Some(_) => Some(Box::new(NominalPattern::Discard {

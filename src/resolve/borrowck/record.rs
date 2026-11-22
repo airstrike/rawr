@@ -128,6 +128,9 @@ pub(crate) struct Recorder {
     /// Expressions that are places although the lowering gave them no
     /// place of its own (`*r` of a shared `r`).
     places: BTreeSet<Span>,
+    /// The values a deref coercion reads through what they refer to: `&r`
+    /// of a `&Vec` where a `&Vec` is taken.
+    deref_coerced: BTreeSet<Span>,
     /// Where each two-phase `&mut` borrow for a call is activated, by the
     /// use it reserved.
     activations: BTreeMap<Point, Point>,
@@ -242,6 +245,7 @@ impl Default for Recorder {
             operands: Vec::new(),
             index_loans: BTreeMap::new(),
             places: BTreeSet::new(),
+            deref_coerced: BTreeSet::new(),
             activations: BTreeMap::new(),
             arguments: BTreeMap::new(),
             everywhere: None,
@@ -528,9 +532,11 @@ impl Recorder {
     /// The function returns `held`, its value spanning `span`, here: it
     /// flows into its output's region. A returned borrow of one of its own
     /// locals is rustc's E0515 ([`super::check`]). A borrow of a reference
-    /// itself may be a deref coercion's reborrow of what it refers to,
-    /// which these facts do not tell apart. These two notes read the flows
-    /// through any position, more than the check finds.
+    /// itself may be a deref coercion's reborrow of what it refers to. The
+    /// returned value that is that borrow (`&r`) and that no deref coercion
+    /// read through is a borrow of `r` itself. These facts do not tell the
+    /// others apart. The note reads the flows through any position, more
+    /// than the check finds.
     pub(crate) fn give_back(&mut self, held: &[(Path, Origin)], span: Span) {
         if self.constant {
             return;
@@ -549,13 +555,19 @@ impl Recorder {
         self.body.returned.push(local);
         self.flow_into(local, held);
         let returned = super::reaches(&self.body, &[local]);
-        if self
-            .body
-            .loans
-            .iter()
-            .zip(returned)
-            .any(|(loan, returned)| returned && loan.of_reference && loan.capture == Capture::No)
-        {
+        let coerced = self.deref_coerced.contains(&span);
+        let mut unmodeled = false;
+        for (loan, returned) in self.body.loans.iter_mut().zip(returned) {
+            if !returned || !loan.of_reference || loan.capture != Capture::No {
+                continue;
+            }
+            if loan.span == span && !coerced {
+                loan.of_reference = false;
+            } else {
+                unmodeled = true;
+            }
+        }
+        if unmodeled {
             self.unmodeled("a borrow of a reference that a function returns", span);
         }
     }
@@ -875,6 +887,12 @@ impl Recorder {
     /// The expression spanning `span` is a place (`*r`).
     pub(crate) fn mark_place(&mut self, span: Span) {
         self.places.insert(span);
+    }
+
+    /// A deref coercion reads the value spanning `span` through what it
+    /// refers to.
+    pub(crate) fn deref_coerced(&mut self, span: Span) {
+        self.deref_coerced.insert(span);
     }
 
     /// Whether the expression spanning `span` is a place [`mark_place`]
@@ -2049,6 +2067,8 @@ pub(crate) fn place_origin(place: &Place) -> Origin {
             Projection::Deref | Projection::Index | Projection::ConstantIndex { .. } => {
                 path = path.push(Step::Arg(0));
             }
+            // A subslice holds what its slice holds, where it does.
+            Projection::Subslice { .. } => {}
             Projection::Field(_) | Projection::Downcast(_) => {
                 return region::narrow(Origin::Local(place.local, path), Path::OWN);
             }
@@ -2074,7 +2094,10 @@ fn capture_place(
         .position(|step| {
             matches!(
                 step,
-                Projection::Index | Projection::ConstantIndex { .. } | Projection::Downcast(_)
+                Projection::Index
+                    | Projection::ConstantIndex { .. }
+                    | Projection::Subslice { .. }
+                    | Projection::Downcast(_)
             )
         })
         .unwrap_or(place.projection.len());

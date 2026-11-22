@@ -378,14 +378,14 @@ pub(crate) struct Enum {
 
 /// What the borrow checker reads of a crate type's lifetimes (T127): its
 /// lifetime parameters by name, in order, the lifetimes written in its
-/// fields' types by where they are written, and whether it bounds them
-/// (`'b: 'a`, `T: 'a`).
+/// fields' types by where they are written, and the outlives bounds it
+/// declares on them: `('b, 'a)` for `'b: 'a`, and `(T, 'a)` for `T: 'a`.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 #[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(crate) struct TypeRegions {
     pub params: Box<[crate::ImmutableString]>,
     pub written: Lifetimes,
-    pub bounded: bool,
+    pub bounds: Box<[(crate::ImmutableString, crate::ImmutableString)]>,
 }
 
 impl TypeRegions {
@@ -405,7 +405,11 @@ impl TypeRegions {
                 .map(|name| name.text.clone())
                 .collect(),
             written,
-            bounded: !lifetimes.bounds.is_empty(),
+            bounds: lifetimes
+                .bounds
+                .iter()
+                .map(|(longer, shorter)| (longer.text.clone(), shorter.text.clone()))
+                .collect(),
         }
     }
 }

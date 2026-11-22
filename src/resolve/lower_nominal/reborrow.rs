@@ -152,16 +152,47 @@ impl Parser<'_> {
         }
     }
 
-    /// Whether a `let` or a `for` ahead, before the block ends, binds the
-    /// name `root`.
+    /// Whether a `let`, a `for` or a closure's parameter ahead, before the
+    /// block ends, binds the name `root`.
     pub(super) fn root_shadowed_later(&self, root: &str) -> bool {
         let mut ahead = self.input.clone();
         let mut depth = 0usize;
         // The depth of the pattern of a `let` or a `for` being read.
         let mut pattern: Option<usize> = None;
+        // The depth of the closure parameters being read, between their
+        // `|`s, and whether a parameter's type is being read.
+        let mut parameters: Option<usize> = None;
+        let mut typed = false;
         let mut previous = Token::EOF;
         while let Some((token, _)) = ahead.next() {
+            if let Some(inner) = parameters.as_mut() {
+                match &token {
+                    Token::EOF => return false,
+                    Token::Pipe if *inner == 0 => parameters = None,
+                    Token::LeftParen | Token::LeftBracket => *inner += 1,
+                    Token::RightParen | Token::RightBracket => *inner = inner.saturating_sub(1),
+                    Token::Colon if *inner == 0 => typed = true,
+                    Token::Comma if *inner == 0 => typed = false,
+                    Token::Identifier(identifier)
+                        if identifier.as_str() == root
+                            && !typed
+                            && !matches!(previous, Token::Period | Token::DoubleColon)
+                            && !matches!(ahead.peek(), Some((Token::DoubleColon, _))) =>
+                    {
+                        return true;
+                    }
+                    _ => {}
+                }
+                previous = token;
+                continue;
+            }
             match &token {
+                // A `|` after an operand is `BitOr`. Anywhere else it opens
+                // a closure's parameters.
+                Token::Pipe if !ends_operand(&previous) => {
+                    parameters = Some(0);
+                    typed = false;
+                }
                 Token::EOF => return false,
                 Token::Let | Token::For => pattern = Some(0),
                 Token::LeftBrace | Token::MapStart | Token::LeftParen | Token::LeftBracket => {
@@ -498,6 +529,27 @@ impl Parser<'_> {
                 && !self.cell_guards.contains_key(name.as_str());
         local.then_some((name, place))
     }
+}
+
+/// Whether `token` may end an operand, so that a `|` after it is `BitOr`.
+fn ends_operand(token: &Token) -> bool {
+    if let Token::Identifier(name) = token {
+        return name.as_str() != "move";
+    }
+    matches!(
+        token,
+        Token::IntegerConstant(_)
+            | Token::FloatConstant(_)
+            | Token::CharConstant(_)
+            | Token::StringConstant(_)
+            | Token::ByteStringConstant(_)
+            | Token::ByteConstant(_)
+            | Token::True
+            | Token::False
+            | Token::RightParen
+            | Token::RightBracket
+            | Token::RightBrace
+    )
 }
 
 #[cfg(test)]

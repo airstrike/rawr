@@ -140,6 +140,21 @@ pub(super) fn slice_element(
     }
 }
 
+/// The subslice a slice pattern's `rest @ ..` binds, between its `before`
+/// and `after` elements, of an array of `length` or of a slice, as rustc
+/// places it.
+pub(super) fn slice_middle(before: usize, after: usize, length: Option<usize>) -> Projection {
+    let (to, from_end) = match length {
+        Some(length) => (length - after, false),
+        None => (after, true),
+    };
+    Projection::Subslice {
+        from: before as u32,
+        to: to as u32,
+        from_end,
+    }
+}
+
 impl Parser<'_> {
     /// Starts collecting what the pattern about to be resolved does to its
     /// subject's parts; the trace it replaces, for [`Parser::end_trace`].
@@ -160,6 +175,7 @@ impl Parser<'_> {
             Projection::Deref | Projection::Index | Projection::ConstantIndex { .. } => {
                 TraceRegion::At(path(&[Step::Arg(0)]))
             }
+            Projection::Subslice { .. } => TraceRegion::At(Path::ROOT),
             Projection::Field(_) | Projection::Downcast(_) => TraceRegion::Unknown,
         };
         self.trace_enter_at(step, region)
@@ -471,11 +487,13 @@ impl Parser<'_> {
             });
         }
         match binding {
-            // Rawr binds the value below a reference, which Rust binds as
-            // the reference: the loans it keeps are left to rustc.
-            Some((_, span)) if !derefs.is_empty() => {
+            // Below a `&mut`, rawr binds the value it refers to, which Rust
+            // binds as the reference: the loans it keeps are left to rustc.
+            Some((_, span)) if !derefs.is_empty() && !self.shared_references(written) => {
                 trace.unmodeled = Some(("a binding of a matched reference's value", span));
             }
+            // The binding is the subject as written, `&T` included, and
+            // holds its loans.
             Some((name, span)) => trace.parts.push(Part {
                 path: Vec::new(),
                 regions: Vec::new(),
@@ -525,6 +543,21 @@ impl Parser<'_> {
             let local = flow.local(&binding.name, binding.span);
             flow.take(local, &[], true);
         }
+    }
+
+    /// Whether `ty` is a reference, and each reference on the way to the
+    /// value it refers to is shared: `&i64`, `&&String`.
+    pub(super) fn shared_references(&self, ty: &Ty) -> bool {
+        let mut ty = self.inference.resolve(ty);
+        let mut reference = false;
+        while let Ty::Reference { mutable, target } = ty {
+            if mutable {
+                return false;
+            }
+            reference = true;
+            ty = self.inference.resolve(&target);
+        }
+        reference
     }
 
     /// The steps through each reference `ty` is below.
@@ -905,6 +938,19 @@ impl Parser<'_> {
                 if !outlives.contains(&bound) {
                     outlives.push(bound);
                 }
+            }
+        }
+        // A bound the type declares between its lifetimes (`'b: 'a`) is
+        // implied where it is named, as its fields' are.
+        let lifetime = |name: &ImmutableString| {
+            let index = regions.params.iter().position(|param| param == name)?;
+            u8::try_from(index).ok()
+        };
+        for (longer, shorter) in &regions.bounds {
+            if let (Some(longer), Some(shorter)) = (lifetime(longer), lifetime(shorter))
+                && !outlives.contains(&(longer, shorter))
+            {
+                outlives.push((longer, shorter));
             }
         }
         visiting.borrow_mut().pop();
@@ -1299,6 +1345,56 @@ impl Parser<'_> {
         variant: Option<&str>,
         slot: usize,
     ) -> Option<Vec<(Path, Option<Path>)>> {
+        let (regions, parameters, ty) = self.field_type(definition, variant, slot)?;
+        signature::field_positions(ty, regions, &parameters, &|target| {
+            self.declared_lifetimes(target)
+        })
+    }
+
+    /// What a value holding `held` puts in a value of the crate type
+    /// `definition` as its field `slot` (of `variant`, for an enum): what
+    /// it holds at each of the field's region positions, placed at the
+    /// type's, and what it holds at `'static` ones. A bound the type
+    /// declares (`'b: 'a`, `T: 'a`) puts it in the positions it bounds too.
+    /// `None` for a field these facts can't place.
+    pub(super) fn field_stored(
+        &self,
+        held: &[(Path, Origin)],
+        definition: type_def::Id,
+        variant: Option<&str>,
+        slot: usize,
+    ) -> Option<(Held, Held)> {
+        let positions = self.field_positions(definition, variant, slot)?;
+        let (regions, parameters, _) = self.field_type(definition, variant, slot)?;
+        let mut placed = Held::new();
+        let mut statics = Held::new();
+        for (field, at) in positions {
+            let part = region::sub(held, field);
+            let Some(at) = at else {
+                statics.extend(part);
+                continue;
+            };
+            for bounded in signature::outlived(regions, &parameters, at) {
+                placed.extend(region::place(&region::collapse(&part), bounded));
+            }
+            placed.extend(region::place(&part, at));
+        }
+        Some((placed, statics))
+    }
+
+    /// The field `slot` (of `variant`, for an enum) of the crate type
+    /// `definition`: the type's regions, its type parameters' names, and
+    /// the field's type.
+    fn field_type(
+        &self,
+        definition: type_def::Id,
+        variant: Option<&str>,
+        slot: usize,
+    ) -> Option<(
+        &crate::resolve::item::TypeRegions,
+        Vec<ImmutableString>,
+        &type_ref::Type,
+    )> {
         let (regions, generics, ty) = match self.models.definition(definition) {
             Nominal::Struct { item, .. } => {
                 (&item.regions, &item.generics, &item.fields.get(slot)?.ty)
@@ -1311,13 +1407,11 @@ impl Parser<'_> {
                 (&item.regions, &item.generics, variant.payload.get(slot)?)
             }
         };
-        let parameters: Vec<ImmutableString> = generics
+        let parameters = generics
             .iter()
             .map(|generic| generic.name.text.clone())
             .collect();
-        signature::field_positions(ty, regions, &parameters, &|target| {
-            self.declared_lifetimes(target)
-        })
+        Some((regions, parameters, ty))
     }
 
     /// Where a `for` loop's element sits in the value it iterates, of type
@@ -1520,15 +1614,10 @@ impl Parser<'_> {
                 Slot::At(at) => origins.extend(region::place(&held, at)),
                 Slot::Whole => origins.extend(held),
                 Slot::Field(definition, variant, index) => {
-                    match self.field_positions(definition, variant, index) {
-                        Some(positions) => {
-                            for (field, at) in positions {
-                                let part = region::sub(&held, field);
-                                match at {
-                                    Some(at) => origins.extend(region::place(&part, at)),
-                                    None => statics.extend(part),
-                                }
-                            }
+                    match self.field_stored(&held, definition, variant, index) {
+                        Some((placed, forever)) => {
+                            origins.extend(placed);
+                            statics.extend(forever);
                         }
                         None => origins.extend(region::collapse(&held)),
                     }
@@ -2055,17 +2144,9 @@ impl Parser<'_> {
         whole: Span,
     ) -> bool {
         if let Lvalue::Field(field) = lvalue
-            && let Some(positions) = self.field_positions(field.definition.id(), None, field.slot)
+            && let Some((placed, statics)) =
+                self.field_stored(held, field.definition.id(), None, field.slot)
         {
-            let mut placed = Held::new();
-            let mut statics = Held::new();
-            for (field_at, at) in positions {
-                let part = region::sub(held, field_at);
-                match at {
-                    Some(at) => placed.extend(region::place(&part, at)),
-                    None => statics.extend(part),
-                }
-            }
             if !statics.is_empty() {
                 self.flow().forever(&statics);
             }

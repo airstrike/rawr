@@ -1475,8 +1475,6 @@ impl<'a> Parser<'a> {
             ..
         }) = rest
         {
-            // A subslice is not a place these facts name.
-            self.trace_unmodeled("a slice pattern binding its middle", *span);
             let middle = Ty::Array {
                 element: element.clone(),
                 kind: sequence::Kind::array(length - fixed),
@@ -1488,9 +1486,13 @@ impl<'a> Parser<'a> {
             };
             let helper = self.push_op(Op::Prelude(PreludeOp::Slice));
             let path = format!("{helper}({path}, {}, {}, false)", before.len(), trailing);
-            let traced = self.begin_trace();
+            let step = self.trace_enter(borrows::slice_middle(
+                before.len(),
+                after.len(),
+                Some(length),
+            ));
             let destructured = self.destructure_into(&binding, &path, &middle, statements);
-            self.end_trace(traced);
+            self.trace_leave(step);
             destructured?;
         }
         Ok(())
