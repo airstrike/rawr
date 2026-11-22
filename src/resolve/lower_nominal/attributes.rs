@@ -300,8 +300,6 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    /// One statement a false `#[cfg(..)]` leaves out: through its `;`, or
-    /// through the `}` that ends a block, `if`, `match` or loop.
     /// Whether a macro call in braces is next, `path! { .. }`, which ends a
     /// statement at its `}` as a block does.
     fn braced_call_ahead(&self) -> bool {
@@ -324,6 +322,9 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// One statement a false `#[cfg(..)]` leaves out: through its `;`, or
+    /// through the `}` that ends a block, `if`, `match`, loop or macro call
+    /// in braces.
     pub(super) fn skip_statement(&mut self) -> Result<(), Error> {
         let start = self.position();
         let braced = match self.peek() {

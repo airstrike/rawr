@@ -1929,6 +1929,73 @@ fn parse_cfg_predicate(input: &mut TokenStream) -> ParseResult<bool> {
     Ok(FEATURES.with_borrow(|features| features.cfg(&name.text, None, TEST.get())))
 }
 
+/// Pass over one statement of a block that a `cfg` leaves out: through its
+/// `;`, or the `}` that ends a block-like one (a block, an `if`, a loop, a
+/// `match`, a macro call in braces). A tail left out ends before the `}`
+/// of its block, which stays.
+fn skip_statement(input: &mut TokenStream) -> ParseResult<()> {
+    let braced_start = match input.peek() {
+        Some((Token::LeftBrace | Token::If | Token::For | Token::While | Token::Loop, _)) => true,
+        Some((Token::Reserved(word), _)) => matches!(word.as_str(), "match" | "unsafe"),
+        _ => false,
+    };
+    // Whether the tokens so far are a path and its `!`, so a `{` group
+    // next is a macro call in braces.
+    let mut call_head = !braced_start;
+    let mut after_bang = false;
+    let mut depth = 0usize;
+    loop {
+        if depth == 0 && matches!(input.peek(), Some((Token::RightBrace | Token::EOF, _))) {
+            return Ok(());
+        }
+        let (token, _) = input.next().expect("token streams always end with EOF");
+        match token {
+            // The call's group closes the statement.
+            Token::LeftBrace | Token::MapStart if depth == 0 && call_head && after_bang => {
+                return skip_group_rest(input, 1);
+            }
+            Token::LeftBrace | Token::LeftParen | Token::LeftBracket | Token::MapStart => {
+                depth += 1;
+            }
+            Token::RightParen | Token::RightBracket => depth = depth.saturating_sub(1),
+            Token::RightBrace => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 && braced_start && !matches!(input.peek(), Some((Token::Else, _))) {
+                    return Ok(());
+                }
+            }
+            Token::SemiColon if depth == 0 => return Ok(()),
+            _ => {}
+        }
+        after_bang = matches!(token, Token::Bang);
+        call_head &= matches!(
+            token,
+            Token::Identifier(_) | Token::DoubleColon | Token::Bang
+        );
+    }
+}
+
+/// Pass over the rest of a group opened `depth` deep, through its close.
+fn skip_group_rest(input: &mut TokenStream, mut depth: usize) -> ParseResult<()> {
+    while depth > 0 {
+        match input.next().expect("token streams always end with EOF") {
+            (Token::LeftBrace | Token::LeftParen | Token::LeftBracket | Token::MapStart, _) => {
+                depth += 1;
+            }
+            (Token::RightBrace | Token::RightParen | Token::RightBracket, _) => depth -= 1,
+            (Token::EOF, position) => {
+                return Err(PERR::MissingToken(
+                    Token::RightBrace.into(),
+                    "to close a macro call".into(),
+                )
+                .into_err(position));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 /// Pass over one item's tokens: up to a `;` or the `}` closing its body.
 /// Returns where the item ends.
 fn skip_item(input: &mut TokenStream) -> ParseResult<Position> {
@@ -6100,7 +6167,7 @@ fn parse_body_syntax(
             // a macro call's items with it, as rustc does.
             if !attributes.is_empty() {
                 if cfg_disabled(&attributes) {
-                    skip_item(input)?;
+                    skip_statement(input)?;
                     after_name = false;
                 }
                 continue;
