@@ -8,6 +8,16 @@
   },
   "releases": [
     {
+      "version": "0.5.14",
+      "date": "2026-11-22",
+      "entries": [
+        {"text":"A non-exhaustive match or a refutable pattern names rustc's integer and char ranges below a constructor, such as `Some(2_i32..=i32::MAX)`, in rustc's order; a constant's path is a pattern and a range end (`i32::MIN..=-5`, `LO..=9`), and a pattern naming a `const` matches its value instead of binding a name.","issues":[1287,1306,1288]},
+        {"text":"A match on a type with no values, such as `Infallible`, needs no arms; function parameters take struct patterns and literals; and matches on crate enums and structs cover them by the patterns below their fields, with rustc's witnesses.","issues":[620,1307,812,1972,1308,342]},
+        {"text":"A `macro_rules!` fragment is one of Rust's (an `expr` keeps a closure's commas, an `if` or a struct expression), a matcher its follow set refuses is rustc's error, `$(+ $x)*` expands inside a separated repetition, and hygiene leaves fields, paths and methods alone while renaming match-arm bindings and format captures.","issues":[237,2202,2068,2201]},
+        {"text":"`#[cfg_attr]` nests and applies `cfg` and `default` to fields and variants, an attribute nothing in scope declares is rustc's \"cannot find attribute\", and a program's macros defined before a `mod` work in that module's marked files.","issues":[603,604,2190]}
+      ]
+    },
+    {
       "version": "0.5.13",
       "date": "2026-11-22",
       "entries": [
