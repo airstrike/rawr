@@ -38,6 +38,14 @@ pub struct Allocation {
 #[derive(Clone)]
 pub struct Counted(crate::Shared<Allocation>);
 
+/// `Rc`, `Arc` or a `Weak` of one, as a body's path names it before an
+/// associated function: `Rc::<str>::from` writes its target.
+pub(super) struct Path {
+    pub(super) counter: Counter,
+    pub(super) weak: bool,
+    pub(super) element: Option<Ty>,
+}
+
 /// A `Weak`: the allocation while a `Counted` of it is alive. `Weak::new`
 /// has none.
 #[derive(Clone)]
@@ -339,17 +347,21 @@ impl Parser<'_> {
         Ok(self.inference.resolve(&element))
     }
 
-    /// `Rc::member` or `Weak::member` (`weak`), after the path: std's
+    /// `Rc::member` or `Weak::member` of `path`, after the path: std's
     /// associated functions rawr runs (D711's execution mapping for `Rc`,
     /// `Arc` and their `Weak`s). Any other std has is the not-yet error.
     pub(super) fn parse_counted_path(
         &mut self,
-        counter: Counter,
-        weak: bool,
+        path: Path,
         member: ImmutableString,
         name_span: Span,
         member_span: Span,
     ) -> Result<ParsedExpr, Error> {
+        let Path {
+            counter,
+            weak,
+            element,
+        } = path;
         let (rc_path, weak_path) = counter.std_paths();
         let (owner, path) = if weak {
             ("Weak", weak_path)
@@ -397,6 +409,14 @@ impl Parser<'_> {
         if !runs || !matches!(self.peek(), Token::LeftParen | Token::Unit) {
             return Err(self.counted_unknown(owner, path, &member, member_span));
         }
+        // A written target is read by `new` and `from`, the functions
+        // that make a pointer.
+        if element.is_some() && (weak || !matches!(member.as_str(), "new" | "from")) {
+            return Err(Error::NotYet {
+                path: format!("{owner}::<T>::{member}").into(),
+                reference: member_span,
+            });
+        }
         let (mut arguments, end) =
             self.parse_borrowing_arguments(&format!("`{owner}` arguments"))?;
         let call = span(name_span.start(), end);
@@ -421,6 +441,9 @@ impl Parser<'_> {
         let pointer = |element: Ty| Ty::Counted(counter, Box::new(element));
         match member.as_str() {
             "new" => {
+                if let Some(element) = &element {
+                    self.coerce_expr(element, &mut argument)?;
+                }
                 let element = self.inference.resolve(&argument.ty);
                 let ty = pointer(element);
                 // A value with drop glue in an `Rc` or `Arc` is refused
@@ -430,14 +453,27 @@ impl Parser<'_> {
                 let source = self.prelude_op(PreludeOp::CountedNew, [argument.rendered_source()]);
                 Ok(self.operator_expr(source, ty, call))
             }
-            // `Rc::from(value)`, by std's `impl From<T> for Rc<T>`.
+            // `Rc::from(value)`, by std's `impl From<T> for Rc<T>`, or by
+            // its impl for the target the turbofish or the use gives, as
+            // `Rc<str>`'s `From<&str>`.
             "from" => {
-                let element = self.inference.resolve(&argument.ty);
-                let ty = pointer(element.clone());
-                let Some(Some(op)) = self.std_conversion(&ty, &element) else {
-                    return Err(self.conversion_not_yet(&ty, &element, call).unwrap_or_else(
-                        || self.counted_unknown(owner, path, &member, member_span),
-                    ));
+                let source = self.inference.resolve(&argument.ty);
+                let hinted = self
+                    .collect_hint
+                    .as_ref()
+                    .filter(|(_, depth)| *depth == self.expression_stack.len())
+                    .map(|(target, _)| self.inference.resolve(target))
+                    .and_then(|target| match target {
+                        Ty::Counted(hinted, element) if hinted == counter => Some(*element),
+                        _ => None,
+                    });
+                let ty = pointer(element.or(hinted).unwrap_or_else(|| source.clone()));
+                let Some(Some(op)) = self.std_conversion(&ty, &source) else {
+                    return Err(self
+                        .conversion_not_yet(&ty, &source, call)
+                        .unwrap_or_else(|| {
+                            self.counted_unknown(owner, path, &member, member_span)
+                        }));
                 };
                 self.needs_drop(&ty, call)?;
                 self.move_local(&mut argument)?;

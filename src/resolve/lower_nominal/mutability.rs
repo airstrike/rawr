@@ -409,6 +409,19 @@ impl<'a> Parser<'a> {
         if !place.starts_with(name.as_str()) && !place.starts_with('*') {
             return None;
         }
+        // `&mut *w` of a program type borrows `w` itself, which its
+        // `deref_mut` takes `&mut`, as rustc says.
+        if let Ty::Script(..) = ty
+            && let Some(dereferenced) = place.strip_prefix('*')
+            && dereferenced.trim_start() == name.as_str()
+        {
+            return Some(Error::immutable_borrow(
+                name.as_str(),
+                name.as_str(),
+                operand.span,
+                binding.declaration,
+            ));
+        }
         let array = matches!(
             ty,
             Ty::Array {

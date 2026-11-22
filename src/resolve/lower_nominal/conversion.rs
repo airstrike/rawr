@@ -501,6 +501,35 @@ impl<'a> Parser<'a> {
         Some((forms, self.models.item_owner(&path).cloned()))
     }
 
+    /// The one form of `forms`, a facade type `source`'s own `into`s, whose
+    /// output `target` fits gives `target` its types, as rustc selects the
+    /// one impl: `Vec::from(bytes)` is a `Vec<u8>` by the crate's
+    /// `From<Bytes> for Vec<u8>`.
+    pub(super) fn settle_source_into(
+        &mut self,
+        target: &Ty,
+        source: &Ty,
+        forms: &[crate::host::item::Definition],
+    ) {
+        let gives = |parser: &mut Self, item: &crate::host::item::Definition| {
+            parser
+                .instantiate_host_signature(item, Some(source), Some(&[]), Span::NONE)
+                .is_ok_and(|signature| parser.unify_type(&signature.output, target))
+        };
+        let fitting = forms
+            .iter()
+            .filter(|item| {
+                let checkpoint = self.inference.checkpoint();
+                let fits = gives(self, item);
+                self.inference.rollback(checkpoint);
+                fits
+            })
+            .collect::<Vec<_>>();
+        if let [item] = fitting[..] {
+            gives(self, item);
+        }
+    }
+
     /// Whether one of the facade type `source`'s own `into` forms gives
     /// `target`: a crate's `impl From<Its> for PathBuf` is the `into` of
     /// core's blanket `Into` on `Its`, as `From<Degrees> for f32` is, and
@@ -555,11 +584,26 @@ impl<'a> Parser<'a> {
     /// converts into where its template bounds it by `Into<U>`
     /// (`Instances::conversions`).
     pub(super) fn instance_into_target(&self, value: &ParsedExpr) -> Option<Ty> {
-        if self.instance_conversions.is_empty() || !value.is_local() {
+        if self.instance_conversions.is_empty() {
             return None;
         }
-        let declaration = self.bindings.get(value.source.as_str())?.declaration;
-        self.instance_conversions.get(&declaration).cloned()
+        if value.is_local()
+            && let Some(binding) = self.bindings.get(value.source.as_str())
+            && let Some(target) = self.instance_conversions.get(&binding.declaration)
+        {
+            return Some(target.clone());
+        }
+        // A value of the parameter's type reached another way, as `let p =
+        // path; p.into()` or a tuple's field: its type is the generic's,
+        // whose bound rustc reads.
+        let ty = self.inference.resolve(&value.ty);
+        self.bindings
+            .values()
+            .filter_map(|binding| {
+                let target = self.instance_conversions.get(&binding.declaration)?;
+                (self.inference.resolve(&binding.ty) == ty).then(|| target.clone())
+            })
+            .next()
     }
 
     /// Keep the `into` of the imported type `ty` as a miss when none of

@@ -4,7 +4,9 @@
 // satisfies. A crate's impl of a std trait for a std type Rawr's std holds
 // is seen as rustc sees it: through the program's function's, its
 // method's and the crate's `impl Into<PathBuf>`, by `.into()` into a
-// `PathBuf` and by `PathBuf::from`.
+// `PathBuf` and by `PathBuf::from`. A value of the generic's type that
+// reaches `.into()` by another binding or a tuple converts by the bound
+// too (#1720).
 
 use std::path::PathBuf;
 
@@ -13,6 +15,13 @@ use events::named::{owned, picked};
 fn loaded(path: impl Into<PathBuf>) -> String {
     let path = path.into();
     format!("loaded {}", path.display())
+}
+
+fn moved<P: Into<PathBuf>>(path: P) -> String {
+    let held = path;
+    let pair = (held, 1);
+    let path = pair.0.into();
+    format!("moved {}", path.display())
 }
 
 struct Folder {
@@ -36,4 +45,6 @@ fn main() {
     let folder = Folder { name: "docs" };
     println!("{}", folder.opened(picked("f.txt")));
     println!("{}", folder.opened("g.txt"));
+    println!("{}", moved(picked("h.txt")));
+    println!("{}", moved("i.txt"));
 }

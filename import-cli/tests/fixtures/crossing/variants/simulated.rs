@@ -2,11 +2,11 @@
 // iced_test's `ui.simulate(click())` (#1679): `simulate` takes `impl
 // IntoIterator<Item = Event>`, and the opaque `impl Iterator<Item =
 // Event>` that `click()` gives fills it as itself, as every iterator is
-// its own `IntoIterator`.
+// its own `IntoIterator`. `Simulator<'_, Message>` takes its theme and
+// renderer from the struct's defaults (#459).
 
 use events::simulator::{self, simulator, Simulator};
-use events::widgets::{button, column, text, Renderer, Widget};
-use events::Theme;
+use events::widgets::{button, column, text, Widget};
 
 #[derive(Default)]
 struct Counter {
@@ -38,7 +38,7 @@ impl Counter {
 
 fn main() {
     let mut counter = Counter::default();
-    let mut ui: Simulator<'_, Message, Theme, Renderer> = simulator(counter.view());
+    let mut ui: Simulator<'_, Message> = simulator(counter.view());
     ui.point_at("Increment");
     println!("simulated {:?}", ui.simulate(simulator::click()));
     ui.point_at("Decrement");

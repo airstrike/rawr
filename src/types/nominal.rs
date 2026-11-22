@@ -262,7 +262,9 @@ pub(crate) fn matches_type(value: &Dynamic, ty: &type_ref::Type) -> bool {
                 // `std::time`'s types are Rust's at runtime.
                 "Duration" => value.is::<std::time::Duration>(),
                 "Instant" => value.is::<crate::Instant>(),
-                "String" => value.is_string(),
+                // A `Box<str>`'s `str` is its text at runtime, as a
+                // `String` is.
+                "String" | crate::resolve::type_ref::UNSIZED_STR => value.is_string(),
                 // `ParseIntError` and its kin are their messages at runtime.
                 "ParseIntError" | "ParseFloatError" | "ParseBoolError" | "ParseCharError"
                 | "TryFromIntError" => value.is_string(),

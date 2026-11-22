@@ -718,6 +718,15 @@ pub(super) fn debug_typed(
     }
 }
 
+/// What a pointer's `target` writes as: a `Box<str>`'s or an `Rc<str>`'s
+/// text is the `&str` it derefs to, which is sized.
+fn pointee(target: Ty) -> Ty {
+    match target {
+        Ty::UnsizedStr => Ty::Str,
+        target => target,
+    }
+}
+
 /// Whether a local of type `ty` prints otherwise by its type than by its
 /// runtime value alone: a tuple (an array at runtime), an `Ordering` (an
 /// integer), an unsigned 64-bit integer, an `f32` or a parse error (its
@@ -1680,11 +1689,11 @@ impl<'a> Parser<'a> {
                 }
                 ty = match ty {
                     Ty::Reference { target, .. } | Ty::Boxed(target) => {
-                        self.inference.resolve(&target)
+                        pointee(self.inference.resolve(&target))
                     }
                     Ty::Counted(_, target) => {
                         self.counted_value(argument);
-                        self.inference.resolve(&target)
+                        pointee(self.inference.resolve(&target))
                     }
                     other => {
                         ty = other;
@@ -2222,11 +2231,11 @@ impl<'a> Parser<'a> {
                 }
                 ty = match ty {
                     Ty::Reference { target, .. } | Ty::Boxed(target) => {
-                        self.inference.resolve(&target)
+                        pointee(self.inference.resolve(&target))
                     }
                     Ty::Counted(_, target) => {
                         name = self.counted_call(PreludeOp::CountedGet, name, []);
-                        self.inference.resolve(&target)
+                        pointee(self.inference.resolve(&target))
                     }
                     other => {
                         ty = other;
@@ -2885,13 +2894,13 @@ impl<'a> Parser<'a> {
         }
         Ok(match &ty {
             Ty::Reference { target, .. } | Ty::Boxed(target) => {
-                self.debug_source(target, value, span)?
+                self.debug_source(&pointee(self.inference.resolve(target)), value, span)?
             }
             // An `Rc` or `Arc` writes its value's `Debug`, and a `Weak`
             // `(Weak)`, as std's do.
             Ty::Counted(_, target) => {
                 let value = self.counted_call(PreludeOp::CountedGet, value, []);
-                self.debug_source(target, value, span)?
+                self.debug_source(&pointee(self.inference.resolve(target)), value, span)?
             }
             Ty::Weak(..) => origin::Fragment::plain("\"(Weak)\""),
 

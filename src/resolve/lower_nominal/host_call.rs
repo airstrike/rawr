@@ -66,6 +66,7 @@ impl<'a> Parser<'a> {
         });
         #[cfg(feature = "rust-import")]
         self.fix_bounds_by_impls(&item, &requirements, &operands, call)?;
+        self.keep_host_bounds(&item, &requirements, call);
         Ok(self.push_op(Op::Intrinsic {
             operation: Box::new(IntrinsicOperation {
                 facade,
@@ -77,6 +78,48 @@ impl<'a> Parser<'a> {
                 span: call,
             }),
         }))
+    }
+
+    /// Keeps each type argument of the call of `item` at `call` that a
+    /// bound holds of, with the bound's trait (`host_bounds`): a std
+    /// trait its requirements name, as the `S: Default` a derived
+    /// `Default` impl puts on `Rgb<S, T>`, or a crate trait its relations
+    /// name, as iced's `Theme: Catalog` of `button`.
+    fn keep_host_bounds(
+        &mut self,
+        item: &crate::host::item::Definition,
+        requirements: &[(ImmutableString, Ty, capability::Set)],
+        call: Span,
+    ) {
+        for (_, ty, required) in requirements {
+            if let Some(capability) = required
+                .iter()
+                .find(|capability| *capability != capability::Kind::Static)
+            {
+                self.host_bounds
+                    .push((ty.clone(), capability.name().into(), call));
+            }
+        }
+        #[cfg(feature = "rust-import")]
+        for relation in item.signature().relations() {
+            let Some((_, ty, _)) = requirements
+                .iter()
+                .find(|(name, ..)| name.as_str() == relation.parameter())
+            else {
+                continue;
+            };
+            let path = match (relation.std_trait(), relation.trait_identity()) {
+                (Some(path), _) => Some(ImmutableString::from(path)),
+                (None, Some(identity)) => self.models.host.trait_name(&identity),
+                (None, None) => None,
+            };
+            if let Some(path) = path {
+                let name = path.rsplit("::").next().unwrap_or(&path).into();
+                self.host_bounds.push((ty.clone(), name, call));
+            }
+        }
+        #[cfg(not(feature = "rust-import"))]
+        let _ = item;
     }
 
     pub(super) fn symbolic_expr(
@@ -425,7 +468,7 @@ impl<'a> Parser<'a> {
             self.collect_iterable(expected, argument);
             if !profile_mapper {
                 self.fill_fn_bound(expected, argument);
-                self.coerce_expr(expected, argument)?;
+                self.coerce_crate_argument(expected, argument)?;
             }
             self.lend_guarded_place(expected, argument);
             if item.imported_identity().is_some() && !argument.ty.is_imported_static_operand() {
@@ -1879,7 +1922,7 @@ impl<'a> Parser<'a> {
             }
             self.collect_iterable(expected, argument);
             self.fill_fn_bound(expected, argument);
-            self.coerce_expr(expected, argument)?;
+            self.coerce_crate_argument(expected, argument)?;
             self.lend_guarded_place(expected, argument);
             if item.imported_identity().is_some() {
                 self.consume_imported_value(argument, &item.path(), call)?;

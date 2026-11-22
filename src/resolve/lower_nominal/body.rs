@@ -839,8 +839,18 @@ impl<'a> Parser<'a> {
             let Some(unknown) = unknown.into_inner() else {
                 continue;
             };
-            let needed = local.value.unwrap_or(local.declaration);
-            if let Some(error) = self.unsettled(&unknown, needed, None) {
+            // A crate call's type argument its item's bound holds of is
+            // rustc's E0283 at the call, the bound's obligation ambiguous.
+            let bounded = self
+                .host_bounds
+                .iter()
+                .find(|(ty, ..)| self.inference.resolve(ty) == unknown)
+                .map(|(_, bound, call)| (bound.to_string(), *call));
+            let error = match bounded {
+                Some((bound, call)) => self.unsettled(&unknown, call, Some(bound)),
+                None => self.unsettled(&unknown, local.value.unwrap_or(local.declaration), None),
+            };
+            if let Some(error) = error {
                 return Err(error);
             }
         }

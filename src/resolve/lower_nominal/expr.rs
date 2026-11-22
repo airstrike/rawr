@@ -412,6 +412,7 @@ impl<'a> Parser<'a> {
                 self.lent_mut_field = lent;
                 let mut operand =
                     operand.map_err(|error| self.borrowed_operand(error, lone, start))?;
+                let deref = self.lent_deref.take();
                 // Through the operand's last token, a `(place)`'s `)` too.
                 let whole = span(start, self.written_end());
                 if operand.lvalue.is_none() {
@@ -458,6 +459,13 @@ impl<'a> Parser<'a> {
                     mutable: true,
                     target: Box::new(self.inference.resolve(&operand.ty)),
                 };
+                if let Some((target, call)) = deref {
+                    let ty = Ty::Reference {
+                        mutable: true,
+                        target: Box::new(target),
+                    };
+                    self.apply_derefs(&mut operand, vec![call], ty)?;
+                }
                 operand.span = whole;
                 return Ok(operand.retain_origin());
             }
@@ -514,6 +522,14 @@ impl<'a> Parser<'a> {
             let reference = matches!(self.inference.resolve(&operand.ty), Ty::Reference { .. });
             self.flow().deref(operand.span.start(), start, reference);
             let had_place = operand.lvalue.is_some() || self.flow().is_place(operand.span);
+            // `&mut *w` of a program type is `DerefMut::deref_mut(&mut w)`,
+            // which the `&mut` makes of the place `w`.
+            if self.lent_mut_field == Some(start)
+                && let Some(deref) = self.lent_program_deref(&operand)?
+            {
+                self.lent_deref = Some(deref);
+                return Ok(operand);
+            }
             // `*w` of a program type is `*Deref::deref(&w)`, and
             // `*DerefMut::deref_mut(&mut w)` where it is assigned, as
             // rustc's place deref is.
@@ -1639,6 +1655,18 @@ impl<'a> Parser<'a> {
                 let ty = Ty::sequence(kind, self.inference.fresh());
                 let Some(op) = self.std_conversion(&ty, &value.ty) else {
                     let source = self.inference.resolve(&value.ty);
+                    // `Vec::from(bytes)`: a crate's `impl From<Bytes> for
+                    // Vec<u8>`, which is the argument's own `into` (core's
+                    // blanket `Into`), as `PathBuf::from(handle)` is.
+                    if self.source_into(&ty, &source) {
+                        let (forms, owner) = self.conversion_forms(&source).unwrap_or_default();
+                        self.settle_source_into(&ty, &source, &forms);
+                        let [value] = <[ParsedExpr; 1]>::try_from(arguments)
+                            .unwrap_or_else(|_| unreachable!("the call's one argument"));
+                        let value = self.parse_target_into(value, &source, forms, owner, end);
+                        self.unify_type(&value.ty, &ty);
+                        return Ok(value);
+                    }
                     if let Some(error) = self.conversion_not_yet(&ty, &source, call) {
                         return Err(error);
                     }
@@ -1709,8 +1737,31 @@ impl<'a> Parser<'a> {
             for _ in 0..=consumed {
                 self.next();
             }
+            // `Rc::<str>::from(text)`: the pointer's target, written.
+            let element = if matches!(self.peek(), Token::LessThan) {
+                self.next();
+                let at = self.position();
+                let [element] =
+                    <[Ty; 1]>::try_from(self.parse_turbofish_types()?).map_err(|types| {
+                        Error::InvalidTypeArguments {
+                            ty: name.clone(),
+                            expected: 1,
+                            actual: types.len(),
+                            reference: Span::new(at, at),
+                        }
+                    })?;
+                self.expect(Token::DoubleColon, "'::' after the pointer's type argument")?;
+                Some(element)
+            } else {
+                None
+            };
             let (member, member_span) = self.expect_member_name()?;
-            return self.parse_counted_path(counter, weak, member, name_span, member_span);
+            let path = counted::Path {
+                counter,
+                weak,
+                element,
+            };
+            return self.parse_counted_path(path, member, name_span, member_span);
         }
         // `Box::new(value)`: the value itself at runtime.
         if matches!(self.peek(), Token::DoubleColon)

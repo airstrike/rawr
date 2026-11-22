@@ -824,15 +824,33 @@ impl<'a> Parser<'a> {
         Ok(None)
     }
 
+    /// `argument` coerced to `expected`, a crate call's input
+    /// (`crate_argument`).
+    pub(super) fn coerce_crate_argument(
+        &mut self,
+        expected: &Ty,
+        argument: &mut ParsedExpr,
+    ) -> Result<Option<String>, Error> {
+        let outer = std::mem::replace(&mut self.crate_argument, true);
+        let coerced = self.coerce_expr(expected, argument);
+        self.crate_argument = outer;
+        coerced
+    }
+
     /// iced's `impl IntoIterator<Item = Element>`, a facade slice of
     /// Elements: an array or an iterator of Elements is taken as the slice,
-    /// as `column([a, b])` takes `[Element; 2]`.
+    /// as `column([a, b])` takes `[Element; 2]`. Only a crate call's
+    /// argument is one: elsewhere a slice of Elements is the `Vec` it
+    /// says, which no array is (rustc's E0308).
     pub(super) fn coerce_children(
         &mut self,
         source: &Ty,
         target: &Ty,
         value: &mut ParsedExpr,
     ) -> Result<bool, Error> {
+        if !self.crate_argument {
+            return Ok(false);
+        }
         let Ty::Array {
             element: target_element,
             kind: sequence::Kind::Vec,

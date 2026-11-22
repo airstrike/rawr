@@ -13,4 +13,8 @@ fn main() {
     let bytes: &Bytes = &shot.rgba;
     println!("{} {:?}", bytes.len(), bytes.first());
     println!("{}", shot.rgba.len());
+    let copied = shot.rgba.to_vec();
+    let owned = Vec::from(shot.rgba.clone());
+    let into: Vec<u8> = shot.rgba.into();
+    println!("{copied:?} {owned:?} {into:?}");
 }

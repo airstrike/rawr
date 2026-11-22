@@ -967,10 +967,28 @@ fn resolve_path(
         (Target::Builtin, name) => super::std_path::arity(name),
         _ => None,
     };
+    // `Box<str>`, `Rc<str>` and `Arc<str>` point at the unsized `str`,
+    // which no `&str` stands for.
+    let pointer = target == Target::Builtin && matches!(name.as_str(), "Box" | "Rc" | "Arc");
     let mut position = 0;
     for segment in parsed.segments {
         for argument in segment.arguments {
             match argument {
+                item::type_ref::Argument::Type(item::type_ref::Type::Path(path))
+                    if pointer
+                        && path.segments.len() == 1
+                        && path.segments[0].name.text == UNSIZED_STR
+                        && path.segments[0].arguments.is_empty()
+                        && !types.contains_key(UNSIZED_STR) =>
+                {
+                    arguments.push(Argument::Type(Type::Path(Path {
+                        name: UNSIZED_STR.into(),
+                        target: Target::Builtin,
+                        arguments: Box::default(),
+                        span: path.span,
+                    })));
+                    position += 1;
+                }
                 item::type_ref::Argument::Type(ty) => {
                     let resolved = resolve(
                         ty,

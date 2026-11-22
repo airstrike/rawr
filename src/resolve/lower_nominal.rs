@@ -622,6 +622,10 @@ struct Parser<'a> {
     /// field read there, as `&mut pixel.0`, is a place the call writes
     /// through (`read_imported_field`).
     lent_mut_field: Option<Position>,
+    /// The `DerefMut` call of a program type's `*w` under `&mut`, which
+    /// the `&mut` makes of its `&mut w`, as rustc's `&mut *w` is
+    /// `DerefMut::deref_mut(&mut w)`.
+    lent_deref: Option<(Ty, std_impl::DerefCall)>,
     /// The chains bound to immutable locals, by name: each use of the
     /// local runs its chain.
     bound_iterators: BTreeMap<ImmutableString, BoundIterator>,
@@ -946,6 +950,16 @@ struct Parser<'a> {
     /// `Default::default()` calls whose type inference fixes later:
     /// `(placeholder, type, span)`, written over with the type's default.
     pending_defaults: Vec<(String, Ty, Span)>,
+    /// Each crate call's type argument a bound of the item holds of, with
+    /// the bound's trait and the call: one inference leaves open is
+    /// rustc's E0283, as the bound's obligation stays ambiguous, where an
+    /// unbounded one is its E0282.
+    host_bounds: Vec<(Ty, ImmutableString, Span)>,
+    /// Whether the value being coerced is a crate call's argument, where
+    /// a slice of a crate's widgets stands for an `impl IntoIterator`
+    /// parameter that an array or an iterator of them fills
+    /// (`coerce_children`).
+    crate_argument: bool,
     no_struct: bool,
     /// The second `>` of a `>>` closing nested generic arguments.
     split_angle: Option<Position>,
@@ -1162,6 +1176,7 @@ impl<'a> Parser<'a> {
             stored_inputs: false,
             lent_field: None,
             lent_mut_field: None,
+            lent_deref: None,
             bound_iterators: BTreeMap::new(),
             held_iter_mut: BTreeMap::new(),
             pending_iter_mut: None,
@@ -1260,6 +1275,8 @@ impl<'a> Parser<'a> {
             pending_wide_literals: Vec::new(),
             pending_float_kinds: Vec::new(),
             pending_defaults: Vec::new(),
+            host_bounds: Vec::new(),
+            crate_argument: false,
             no_struct: false,
             split_angle: None,
             block_statement: None,

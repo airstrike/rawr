@@ -778,6 +778,18 @@ fn a_crates_from_impl_converts_a_methods_output() {
     );
 }
 
+/// An array of Elements widens to iced's slice of them only at a crate
+/// call's `impl IntoIterator<Item = Element>`: a `let` that annotates a
+/// `Vec` of them is rustc's E0308 (#737).
+#[test]
+fn an_array_of_elements_is_no_vec_outside_a_crate_call() {
+    let stderr = rejected_as_cargo("children_vec.rs", "E0308");
+    assert!(
+        stderr.contains("mismatched types") && stderr.contains("main.rs:14:47"),
+        "{stderr}"
+    );
+}
+
 /// A crate trait's own `into` out of scope leaves `gauge.into()` the
 /// `Into::into` of the crate's `From<Gauge>` impls, which the target picks
 /// (D741). The output is `cargo run`'s.
@@ -1563,6 +1575,18 @@ fn an_associated_function_of_a_blanket_impl_runs_on_each_type_it_applies_to() {
     assert_eq!(rawr, "hsl 220 1 0.625\nrgb 0.5000001 0.25 1\nhsl 0 1 0.5");
 }
 
+/// `Rgb { red: 1.0, ..Rgb::default() }` with nothing that fixes the
+/// color's standard is rustc's E0283 at the `let` (#611): palette's derived
+/// `Default` bounds the standard, so its obligation stays ambiguous.
+#[test]
+fn a_struct_update_from_an_unfixed_default_is_ambiguous() {
+    let stderr = rejected_as_cargo("palette_untyped.rs", "E0283");
+    assert!(
+        stderr.contains("type annotations needed") && stderr.contains("main.rs:9:9"),
+        "{stderr}"
+    );
+}
+
 /// iced's color_palette (#628): `Rgb::from_color(lab)` goes through
 /// palette's `impl<S> FromColorUnclamped<Lab<<S::Space as
 /// RgbSpace>::WhitePoint, f32>> for Rgb<S, f32>`. The projection of a
@@ -1942,8 +1966,10 @@ fn a_closure_over_a_lifetime_carrying_candidate_fills_a_selector() {
 
 /// iced_test's `ui.simulate(click())` (#1679): the opaque `impl
 /// Iterator<Item = Event>` `click()` gives fills `simulate`'s `impl
-/// IntoIterator<Item = Event>`, from a call and from a local. The output
-/// is `cargo run`'s.
+/// IntoIterator<Item = Event>`, from a call and from a local. The
+/// annotation `Simulator<'_, Message>` fills the theme and renderer from
+/// the struct's defaults, as rustc does (#459). The output is `cargo
+/// run`'s.
 #[test]
 fn an_opaque_iterator_fills_an_iterable_parameter() {
     let (rawr, cargo) = both_printed("simulated.rs", "");
@@ -3286,7 +3312,9 @@ fn string_like_generics_take_what_their_bounds_impls_take() {
 /// Rawr's std holds, seen as rustc sees it: a program function's and
 /// method's `impl Into<PathBuf>`, compiled at each caller's type, and the
 /// crate's take a `Picked` and a literal, and `.into()` into a `PathBuf`
-/// and `PathBuf::from` call the crate's impl. The output is `cargo run`'s.
+/// and `PathBuf::from` call the crate's impl. A value of the generic's
+/// type that reaches `.into()` by another binding and a tuple converts by
+/// the bound too (#1720). The output is `cargo run`'s.
 #[test]
 fn a_crates_from_impl_for_a_held_std_type_is_callable() {
     let (rawr, cargo) = both_printed("picked.rs", "");
@@ -3294,7 +3322,7 @@ fn a_crates_from_impl_for_a_held_std_type_is_callable() {
     assert_eq!(
         rawr,
         "loaded picked/a.txt\nloaded b.txt\npicked/c.txt\npicked/d.txt\npicked/e/owned\n\
-         docs opened picked/f.txt\ndocs opened g.txt"
+         docs opened picked/f.txt\ndocs opened g.txt\nmoved picked/h.txt\nmoved i.txt"
     );
 }
 
