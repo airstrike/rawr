@@ -61,6 +61,21 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 BUILD = os.path.join(ROOT, "target", "borrowck")
 
 
+def own_line(span, path):
+    """The line of `span` in the program at `path`: a span inside a macro
+    another file defines (std's `vec!`) is followed out through each
+    expansion to its call in the program, as rawr marks it."""
+    while span.get("expansion") and not same_file(span.get("file_name", ""), path):
+        span = span["expansion"]["span"]
+    return span["line_start"]
+
+
+def same_file(name, path):
+    """Whether rustc's `file_name`, relative to the build directory or
+    absolute, is the program at `path`."""
+    return os.path.abspath(os.path.join(BUILD, name)) == os.path.abspath(path)
+
+
 def verdict(path):
     os.makedirs(BUILD, exist_ok=True)
     binary = os.path.join(BUILD, "case")
@@ -87,7 +102,7 @@ def verdict(path):
         if code == "error" and message.get("message") == "lifetime may not live long enough":
             code = "lifetime"
         spans = [span for span in message.get("spans", []) if span.get("is_primary")]
-        line = spans[0]["line_start"] if spans else 0
+        line = own_line(spans[0], path) if spans else 0
         codes.append(f"{code}:{line}")
     if codes or compiled.returncode != 0:
         return " ".join(codes) or "error:0"
