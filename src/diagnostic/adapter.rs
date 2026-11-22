@@ -516,6 +516,22 @@ fn bound_place(error: &resolve::Error) -> Option<&resolve::Bound> {
     }
 }
 
+/// Whether `error`, rustc's E0277, is a `value.into()` whose target has no
+/// `From` impl for the value: its one requirement is the `Into` std's
+/// blanket impl would give the value.
+fn into_bound(error: &resolve::Error) -> bool {
+    match error {
+        resolve::Error::MissingCapability {
+            capability, chain, ..
+        } => {
+            capability.starts_with("From<")
+                && matches!(chain.requirements(), [requirement]
+                    if requirement.site.is_none() && requirement.trait_name.starts_with("Into<"))
+        }
+        _ => false,
+    }
+}
+
 /// The placeholder that formats the value `error`, rustc's E0277, says
 /// lacks a trait.
 fn formatting(error: &resolve::Error) -> Option<&resolve::Placeholder> {
@@ -1368,10 +1384,15 @@ fn sections(error: &resolve::Error, source: &Source) -> Vec<Section> {
             ..
         } => {
             let help = declared
-                .filter(|_| capability == "Display")
+                .filter(|_| capability == "Display" || into_bound(error))
                 .map(|declared| {
+                    let written = if capability == "Display" {
+                        "std::fmt::Display"
+                    } else {
+                        capability.as_str()
+                    };
                     let help = Section::help(format!(
-                        "the trait `std::fmt::Display` is not implemented for `{owner}`"
+                        "the trait `{written}` is not implemented for `{owner}`"
                     ))
                     .primary(
                         source.clone(),
@@ -1380,6 +1401,11 @@ fn sections(error: &resolve::Error, source: &Source) -> Vec<Section> {
                     );
                     match formatting(error) {
                         Some(_) => help.followed(DEBUG_INSTEAD),
+                        None if into_bound(error) => {
+                            super::requirement::lines(chain.requirements())
+                                .into_iter()
+                                .fold(help, Section::followed)
+                        }
                         None => help,
                     }
                 });
@@ -2073,6 +2099,19 @@ fn primary_label(
         resolve::Error::UnsharedStatic { ty, .. } => {
             Some(resolve::Unsatisfied(ty, "Sync").to_string().into())
         }
+        // At `into`, the program's own type's help at its definition.
+        resolve::Error::MissingCapability {
+            owner,
+            capability,
+            declared,
+            ..
+        } if into_bound(error) => Some(
+            match declared {
+                Some(_) => "unsatisfied trait bound".to_owned(),
+                None => format!("the trait `{capability}` is not implemented for `{owner}`"),
+            }
+            .into(),
+        ),
         // At an argument a bound needs, as the trait's own wording has it.
         resolve::Error::MissingCapability {
             owner, capability, ..
@@ -2513,9 +2552,15 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
             } else {
                 builder
             };
-            let builder = super::requirement::lines(chain.requirements())
-                .into_iter()
-                .fold(builder, Builder::note);
+            // An `into`'s requirement follows the help at the definition
+            // (`sections`) when there is one.
+            let builder = if into_bound(error) && declared.is_some() {
+                builder
+            } else {
+                super::requirement::lines(chain.requirements())
+                    .into_iter()
+                    .fold(builder, Builder::note)
+            };
             let builder = match required_by {
                 Some(resolve::Required { item, place: None }) => {
                     builder.note(format!("required by a bound in `{item}`"))

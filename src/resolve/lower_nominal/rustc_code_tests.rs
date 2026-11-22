@@ -5419,3 +5419,36 @@ fn an_unknown_field_in_a_literal_or_a_pattern_is_e0560_e0559_or_e0026() {
         "{similar}"
     );
 }
+
+#[test]
+fn an_into_to_a_type_with_no_from_impl_for_the_value_is_e0277() {
+    // At `into`, with the help at the target's definition and the `Into`
+    // the blanket impl would give (#671).
+    let shown = rendered("struct A;\nstruct B;\nfn main() {\n    let b: B = A.into();\n}\n");
+    let expected = [
+        "error[E0277]: the trait bound `B: From<A>` is not satisfied",
+        " --> main.rs:4:18",
+        "  |",
+        "4 |     let b: B = A.into();",
+        "  |                  ^^^^ unsatisfied trait bound",
+        "  |",
+        "help: the trait `From<A>` is not implemented for `B`",
+        " --> main.rs:2:1",
+        "  |",
+        "2 | struct B;",
+        "  | ^^^^^^^^",
+        "  = note: required for `A` to implement `Into<B>`",
+    ]
+    .join("\n");
+    assert_eq!(shown.trim_end(), expected);
+    // An integer literal is `{integer}`, and an argument's target too.
+    let literal = rendered("struct B;\nfn take(_b: B) {}\nfn main() {\n    take(5.into());\n}\n");
+    assert!(
+        literal
+            .starts_with("error[E0277]: the trait bound `B: From<{integer}>` is not satisfied\n")
+            && literal
+                .contains("4 |     take(5.into());\n  |            ^^^^ unsatisfied trait bound\n")
+            && literal.ends_with("  = note: required for `{integer}` to implement `Into<B>`\n"),
+        "{literal}"
+    );
+}

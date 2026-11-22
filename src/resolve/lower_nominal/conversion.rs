@@ -1368,18 +1368,7 @@ impl<'a> Parser<'a> {
                         {
                             return Err(error);
                         }
-                        let (source, target) =
-                            (source.name(&self.models), target.name(&self.models));
-                        return Err(Error::InvalidMethodCall {
-                            owner: source.clone(),
-                            method: "into".into(),
-                            reason: format!(
-                                "`{target}` has no `From<{source}>`, so `{source}` does not convert \
-                                 into it (E0277)"
-                            )
-                            .into(),
-                            call: conversion.span,
-                        });
+                        return Err(self.unconverted(&target, &source, conversion.span));
                     }
                 }
             } else if let Ty::Param(param, _) = &target
@@ -1444,16 +1433,7 @@ impl<'a> Parser<'a> {
                 {
                     return Err(error);
                 }
-                return Err(Error::MissingCapability {
-                    owner: target.name(&self.models),
-                    capability: format!("From<{}>", self.fallback_name(&conversion.source)).into(),
-                    operation: conversion.span,
-                    derive: matches!(target, Ty::Script(..)),
-                    declared: self.declared_name(&target),
-                    required_by: None,
-                    formatted: None,
-                    chain: crate::resolve::Chain::default(),
-                });
+                return Err(self.unconverted(&target, &conversion.source, conversion.span));
             };
             let helper = if helper.ends_with(", ") {
                 helper
@@ -1607,6 +1587,51 @@ impl<'a> Parser<'a> {
             value.ty = target;
         }
         Ok(value.retain_origin())
+    }
+}
+
+impl Parser<'_> {
+    /// rustc's E0277 for `value.into()`, written at `call` through `into`,
+    /// where `target` has no `From` impl that takes `source`: at `into`,
+    /// noting the `Into` std's blanket impl would give `source`.
+    pub(super) fn unconverted(&self, target: &Ty, source: &Ty, call: Span) -> Error {
+        let target_name = target.name(&self.models);
+        let source_name = self.inference.resolve(source).name(&self.models);
+        let requirement = crate::resolve::Requirement {
+            ty: source_name.clone(),
+            trait_name: format!("Into<{target_name}>").into(),
+            site: None,
+        };
+        Error::MissingCapability {
+            owner: target_name,
+            capability: format!("From<{source_name}>").into(),
+            operation: into_name(call),
+            derive: false,
+            declared: self.declared_name(target),
+            required_by: None,
+            formatted: None,
+            chain: crate::resolve::Chain::new(Box::new([requirement])),
+        }
+    }
+}
+
+/// The `into` that ends `call`, a `value.into` on one line; `call` itself
+/// where it isn't one.
+fn into_name(call: Span) -> Span {
+    let end = call.end();
+    match (end.line(), end.position()) {
+        (Some(line), Some(column))
+            if call.start().line() == Some(line)
+                && call
+                    .start()
+                    .position()
+                    .is_some_and(|start| start + 4 <= column) =>
+        {
+            let line = u16::try_from(line).unwrap_or(u16::MAX);
+            let start = u16::try_from(column - 4).unwrap_or(u16::MAX);
+            Span::new(Position::new(line, start), end)
+        }
+        _ => call,
     }
 }
 
