@@ -1558,7 +1558,13 @@ impl<'a> Parser<'a> {
                 };
                 // rustc coerces the argument to the type the expectation
                 // gives it, a sized one (`rvalue_hint`), and reports it there.
-                if let Some(Some(input)) = expected_inputs.get(index)
+                // An `impl IntoIterator` parameter takes an iterable that
+                // isn't an iterator yet as the iterator over it
+                // (`coerce_argument`), as `[a, b]` is.
+                let iterable = parameter.ty.iterator_item().is_some()
+                    && !matches!(self.inference.resolve(&argument.ty), Ty::Iter(..));
+                if !iterable
+                    && let Some(Some(input)) = expected_inputs.get(index)
                     && let Some(mismatch) = self.coerce_expected_input(input, &expected, argument)
                     && !unsized_hint(&self.inference.resolve(input))
                     && !shared_generic(&function.definition.parameters, index)
