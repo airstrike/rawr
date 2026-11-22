@@ -7,7 +7,10 @@ use crate::{capability, diagnostic, host, receiver, ImmutableString};
 #[doc(hidden)]
 pub mod runner;
 
+#[cfg(not(target_arch = "wasm32"))]
+mod copied;
 mod kept;
+mod unresolved;
 
 pub use kept::Kept;
 
@@ -286,24 +289,27 @@ impl crate::Engine {
                         .with_rust_macro_calls(unexpanded)
                         .with_rust_misses(misses));
                 }
-                if let Some(report) = imported_resolution_report(&failure, &sources, &paths)
-                    .map_err(super::Error::diagnostic)?
+                if let Some(report) =
+                    imported_resolution_report(&failure, &sources, &paths, &project)
+                        .map_err(super::Error::diagnostic)?
                 {
                     return Err(super::Error::import_diagnostic(report));
                 }
                 let demand = match rust_miss(contract, &failure.error) {
-                    Some(Miss::Unresolved(message)) => {
+                    Some(Miss::Unresolved(import)) => {
                         let source = sources
                             .get(failure.primary.index())
                             .ok_or(diagnostic::Error::EmptySourceIdentity)
                             .map_err(super::Error::diagnostic)?;
-                        let report = diagnostic::Report::error(
-                            diagnostic::code::RESOLVE_UNKNOWN_IMPORT,
-                            message,
-                        )
-                        .primary(source.clone(), failure.error.primary_span(), None)
-                        .map_err(super::Error::diagnostic)?
-                        .finish();
+                        let at = failure.error.primary_span();
+                        let report = match &failure.error {
+                            crate::resolve::Error::UnknownImport { .. }
+                            | crate::resolve::Error::UnknownImports { .. } => {
+                                import.report(source, at)
+                            }
+                            _ => import.plain(source, at),
+                        }
+                        .map_err(super::Error::diagnostic)?;
                         return Err(super::Error::import_diagnostic(report));
                     }
                     Some(Miss::Demand(path, through_alias, member)) => {
@@ -434,8 +440,9 @@ impl crate::Engine {
                     }
                     _ => None,
                 };
-                if let Some(report) = imported_lowering_report(&evidence, &error, &sources, &paths)
-                    .map_err(super::Error::diagnostic)?
+                if let Some(report) =
+                    imported_lowering_report(&evidence, &error, &sources, &paths, &project)
+                        .map_err(super::Error::diagnostic)?
                 {
                     let error = super::Error::import_diagnostic(report);
                     return Err(proving(match demand {
@@ -522,7 +529,7 @@ impl crate::Engine {
                         .try_reserve_exact(retained.len())
                         .map_err(|_| super::Error::import(Error::Allocation))?;
                     outcomes.extend(retained);
-                    let report = augment_external(report.clone(), outcomes, &paths)
+                    let report = augment_external(report.clone(), outcomes, &paths, &project)
                         .map_err(super::Error::diagnostic)?
                         .unwrap_or(report);
                     return Err(super::Error::import_diagnostic(report));
@@ -890,6 +897,7 @@ fn imported_resolution_report(
     failure: &crate::resolve::package::Failure,
     sources: &[diagnostic::Source],
     paths: &ImportedPaths<'_>,
+    project: &std::path::Path,
 ) -> Result<Option<diagnostic::Report>, diagnostic::Error> {
     let crate::resolve::Error::UnknownImport {
         path, reference, ..
@@ -911,7 +919,7 @@ fn imported_resolution_report(
             .cloned();
         let report =
             diagnostic::Report::from_resolution(primary.clone(), secondary, &failure.error)?;
-        return augment_external(report, outcomes, paths);
+        return augment_external(report, outcomes, paths, project);
     };
     let outcomes = paths.outcomes(path.as_str());
     if outcomes.len() == 0 {
@@ -983,7 +991,8 @@ fn imported_resolution_report(
     external.dedup();
     builder.reserve_external_labels(external.len())?;
     for (span, message) in external {
-        builder = builder.secondary_external(external_position(span)?, Some(message.into()));
+        builder =
+            builder.secondary_external(external_position(span, project)?, Some(message.into()));
     }
     Ok(Some(builder.finish()))
 }
@@ -1097,9 +1106,18 @@ fn unavailable_evidence<'contract>(
     Some(evidence)
 }
 
+/// The place of `span`, the program's own file for a span in rawr's copy of
+/// the program's crate under `project`, as rustc names the program's code.
 fn external_position(
     span: &rawr_import::api::model::Span,
+    project: &std::path::Path,
 ) -> Result<diagnostic::ExternalPosition, diagnostic::Error> {
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(position) = copied::program(span, project) {
+        return position;
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = project;
     let bytes = span.byte_range();
     let (start, end) = span.positions();
     diagnostic::ExternalPosition::checked(span.file(), bytes.start, bytes.end, start, end)
@@ -1143,7 +1161,7 @@ enum Miss {
     Demand(String, bool, bool),
     /// The dependency's name index has no such path: a Rust-style
     /// unresolved import, never retried.
-    Unresolved(String),
+    Unresolved(unresolved::Import),
 }
 
 fn rust_miss(
@@ -1194,16 +1212,8 @@ fn rust_miss(
         return Some(Miss::Demand(path, through_alias, true));
     }
     match contract.rust_lookup(&path) {
-        Some(Lookup::Missing {
-            parent,
-            missing,
-            suggestion,
-        }) => {
-            let mut message = format!("unresolved import `{path}`: no `{missing}` in `{parent}`");
-            if let Some(suggestion) = suggestion {
-                message.push_str(&format!("; did you mean `{suggestion}`?"));
-            }
-            Some(Miss::Unresolved(message))
+        Some(missing @ Lookup::Missing { .. }) => {
+            unresolved::Import::from_lookup(path, missing).map(Miss::Unresolved)
         }
         Some(Lookup::ThroughCrate) => Some(Miss::Demand(path, true, false)),
         _ => Some(Miss::Demand(path, through_alias, false)),
@@ -1366,6 +1376,7 @@ fn imported_lowering_report(
     error: &crate::ParseError,
     sources: &[diagnostic::Source],
     paths: &ImportedPaths<'_>,
+    project: &std::path::Path,
 ) -> Result<Option<diagnostic::Report>, diagnostic::Error> {
     let crate::ParseErrorType::Resolution(resolution) = error.err_type() else {
         return Ok(None);
@@ -1400,13 +1411,14 @@ fn imported_lowering_report(
         }
         crate::resolve::LoweringEvidence::Unmapped(_) => return Ok(None),
     };
-    augment_external(report, outcomes, paths)
+    augment_external(report, outcomes, paths, project)
 }
 
 fn augment_external(
     report: diagnostic::Report,
     outcomes: Vec<rawr_import::classify::Outcome<'_>>,
     paths: &ImportedPaths<'_>,
+    project: &std::path::Path,
 ) -> Result<Option<diagnostic::Report>, diagnostic::Error> {
     let mut spans = Vec::new();
     let span_capacity = outcomes
@@ -1495,7 +1507,7 @@ fn augment_external(
     }
     builder.reserve_external_labels(spans.len())?;
     for (span, _, label) in spans {
-        builder = builder.secondary_external(external_position(span)?, Some(label.into()));
+        builder = builder.secondary_external(external_position(span, project)?, Some(label.into()));
     }
     Ok(Some(builder.finish()))
 }

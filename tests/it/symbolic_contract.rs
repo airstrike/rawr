@@ -259,8 +259,9 @@ fn a_typo_in_a_demanded_path_is_unresolved_without_demand() {
         Err(error) => error,
     };
     assert_eq!(error.rust_miss(), None, "a path the index lacks is never demanded");
-    let message = error.to_string();
-    assert!(message.contains("unresolved import `app::widget::buton`") && message.contains("did you mean `button`?"), "{message}");
+    let shown = rawr::diagnostic::render(&error.report().expect("the miss has a report"));
+    assert!(shown.starts_with("error[E0432]: unresolved import `app::widget::buton`\n"), "{shown}");
+    assert!(shown.contains("no `buton` in `widget`") && shown.contains("a similar name exists in the module: `button`"), "{shown}");
 }
 
 /// A glob import demands every public name of its module, so names it
