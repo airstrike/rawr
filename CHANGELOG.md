@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors.
+- `thread_local!` runs as std's: keys where an item goes and in bodies are `LocalKey<T>`, each thread makes its own value at its first access, `with`, `with_borrow`, `with_borrow_mut`, `get`, `set`, `take`, `replace` and `update` run as std defines them, a reload keeps each thread's value while its initializer is unchanged, and a thread's values drop as it ends, the last made first. (#1765)
 
 ## 0.5.20 (2026-11-22)
 
