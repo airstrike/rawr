@@ -6,6 +6,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors.
 
+## 0.5.10 (2026-11-22)
+
+- A generic call whose `T::zero()` or `T::default()` needs the type an `impl Trait` value hides now runs, as rustc does, even when the caller comes first in the file. (#2491)
+- An `impl Trait` value is `Send` exactly when the value it hides is: moving one that holds an `Rc` into `std::thread::spawn` is rustc's E0277. (#2494; part of #2480)
+
 ## 0.5.9 (2026-11-21)
 
 - A function written `-> impl Trait` returns its own opaque type, known by every written bound as rustc knows it: `impl A + B`, `impl Clone`, `impl Copy`, `impl PartialEq`, `impl Default`, `impl Into<String>`, and traits with `-> Self`, generic, static or by-value methods all run. Two different hidden types in one body, an inherent call on the hidden type, naming the hidden type, and mixing two functions' opaque types are rustc's E0308 and E0599. (#2490; part of #2480)

@@ -8,6 +8,14 @@
   },
   "releases": [
     {
+      "version": "0.5.10",
+      "date": "2026-11-22",
+      "entries": [
+        {"text":"A generic call whose `T::zero()` or `T::default()` needs the type an `impl Trait` value hides now runs, as rustc does, even when the caller comes first in the file.","issues":[2491]},
+        {"text":"An `impl Trait` value is `Send` exactly when the value it hides is: moving one that holds an `Rc` into `std::thread::spawn` is rustc's E0277.","issues":[2494],"refs":[2480]}
+      ]
+    },
+    {
       "version": "0.5.9",
       "date": "2026-11-21",
       "entries": [

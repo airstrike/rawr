@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
-  "updated": "2026-11-21",
-  "version": "0.5.9",
+  "updated": "2026-11-22",
+  "version": "0.5.10",
   "examples": {
     "running": 55,
     "total": 56,
@@ -11,6 +11,14 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors."],"entries":[]},
     "releases": [
+      {
+        "version": "0.5.10",
+        "date": "2026-11-22",
+        "entries": [
+          {"text":"A generic call whose `T::zero()` or `T::default()` needs the type an `impl Trait` value hides now runs, as rustc does, even when the caller comes first in the file.","issues":[2491]},
+          {"text":"An `impl Trait` value is `Send` exactly when the value it hides is: moving one that holds an `Rc` into `std::thread::spawn` is rustc's E0277.","issues":[2494],"refs":[2480]}
+        ]
+      },
       {
         "version": "0.5.9",
         "date": "2026-11-21",
@@ -6143,9 +6151,12 @@
     {"issue":2488,"title":"Mark the branch a returned if or match takes its borrow from","state":"open","category":"Divergences from rustc"},
     {"issue":2489,"title":"Suggest a named lifetime for two elided ones, as rustc does","state":"open","category":"Divergences from rustc"},
     {"issue":2490,"title":"A function written `-> impl Trait` returns its own opaque type, known by every written bound as…","state":"closed","category":"Divergences from rustc","release":"0.5.9"},
-    {"issue":2491,"title":"A static trait function through a generic parameter filled by an opaque output runs","state":"open","category":"Divergences from rustc"},
+    {"issue":2491,"title":"A static trait function through a generic parameter filled by an opaque output runs","state":"closed","category":"Divergences from rustc","release":"0.5.10"},
     {"issue":2492,"title":"An opaque output's identity includes its function's generic arguments, and its bounds may name them","state":"open","category":"Divergences from rustc"},
-    {"issue":2493,"title":"iced's pokedex draws a different frame under rawr each night, where cargo's is the same","state":"open","category":"iced examples"}
+    {"issue":2493,"title":"iced's pokedex draws a different frame under rawr each night, where cargo's is the same","state":"open","category":"iced examples"},
+    {"issue":2494,"title":"An `impl Trait` value is `Send` exactly when the value it hides is: moving one that holds an…","state":"closed","category":"Divergences from rustc","release":"0.5.10"},
+    {"issue":2495,"title":"E0277 for a non-Send capture names the capture's type, not the type that isn't Send","state":"open","category":"Divergences from rustc"},
+    {"issue":2496,"title":"Auto-trait leakage beyond thread closures: a generic call's `T: Send` and spawn's output","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -8776,8 +8787,11 @@
             {"number":2484,"title":"std::fmt::Arguments as a written type is unsupported, so write_fmt can't be called or overridden directly","state":"open"},
             {"number":2485,"title":"A `Box<dyn Trait>` isn't checked for `Send` where a thread needs it","state":"open"},
             {"number":2490,"title":"A function written `-> impl Trait` returns its own opaque type, known by every written bound as…","state":"closed"},
-            {"number":2491,"title":"A static trait function through a generic parameter filled by an opaque output runs","state":"open"},
-            {"number":2492,"title":"An opaque output's identity includes its function's generic arguments, and its bounds may name them","state":"open"}
+            {"number":2491,"title":"A static trait function through a generic parameter filled by an opaque output runs","state":"closed"},
+            {"number":2492,"title":"An opaque output's identity includes its function's generic arguments, and its bounds may name them","state":"open"},
+            {"number":2494,"title":"An `impl Trait` value is `Send` exactly when the value it hides is: moving one that holds an…","state":"closed"},
+            {"number":2495,"title":"E0277 for a non-Send capture names the capture's type, not the type that isn't Send","state":"open"},
+            {"number":2496,"title":"Auto-trait leakage beyond thread closures: a generic call's `T: Send` and spawn's output","state":"open"}
           ]
         },
         {
