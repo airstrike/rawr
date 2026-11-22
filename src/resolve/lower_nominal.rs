@@ -502,6 +502,9 @@ struct Parser<'a> {
     /// pattern and the value, as rustc's E0423 for a trait's name there
     /// offers to make it a `:` (`WrongKind::annotation`).
     unannotated_let: Option<Span>,
+    /// The `let` being read that writes its type, which rustc's E0308 at
+    /// its value labels "expected due to this" (`let_mismatch`).
+    annotated_let: Option<binding::AnnotatedLet>,
     /// The lifetimes the `for<'a>` binders around the body type being
     /// read bind, which are elided ones (`for<'a> fn(&'a T)`).
     bound_lifetimes: Vec<ImmutableString>,
@@ -796,6 +799,10 @@ struct Parser<'a> {
     /// Each method call's receiver type, references and all, by its
     /// member's position: what rustc's E0599 names (`native_no_item`).
     std_receivers: BTreeMap<Position, Ty>,
+    /// Each method call's receiver that auto-derefs through a `Box`, the
+    /// box's type by its member's position: what rustc's E0599 names
+    /// (`boxed_no_item`).
+    boxed_receivers: BTreeMap<Position, Ty>,
     /// The turbofish of the host function call whose signature is being
     /// instantiated (`rand::random::<f64>()`).
     host_turbofish: Option<Vec<Ty>>,
@@ -1103,6 +1110,7 @@ impl<'a> Parser<'a> {
             forward_spec: false,
             closure_hint: None,
             unannotated_let: None,
+            annotated_let: None,
             bound_lifetimes: Vec::new(),
             expansions: 0,
             expansion_ends: Vec::new(),
@@ -1198,6 +1206,7 @@ impl<'a> Parser<'a> {
             spliced_turbofish: BTreeMap::new(),
             std_probed: BTreeMap::new(),
             std_receivers: BTreeMap::new(),
+            boxed_receivers: BTreeMap::new(),
             host_turbofish: None,
             explicit_trait_arguments: None,
             binding_mode: std::cell::Cell::new(None),

@@ -1171,6 +1171,19 @@ pub enum Error {
         /// What rustc says of the fields the owner does declare.
         hint: FieldHint,
     },
+    /// `value.field` where a std type has no field of that name, which
+    /// rustc refuses (E0609) naming the value's type as it is.
+    NoField {
+        /// The value's type, as rustc names it: `&Option<i32>`.
+        owner: ImmutableString,
+        /// The missing field.
+        field: ImmutableString,
+        /// The field's name in the source.
+        reference: Span,
+        /// The type's public fields, in declared order, which rustc's note
+        /// lists: `start` and `end` of a `Range`.
+        available: Box<[ImmutableString]>,
+    },
     /// `value.member(..)` or `Type::member` where the program's own
     /// struct or enum, or a reference to one, has no item of that name,
     /// which rustc refuses (E0599) naming the type's kind and marking its
@@ -1259,6 +1272,9 @@ pub enum Error {
     /// An argument whose type is not the one its parameter takes, rustc's
     /// E0308 at the argument: "arguments to this function are incorrect".
     ArgumentMismatch(Box<ArgumentMismatch>),
+    /// A `let`'s value whose type is not its written one, rustc's E0308 at
+    /// the value beside the written type: "expected due to this".
+    LetMismatch(Box<LetMismatch>),
     /// A type mismatch where one type or both are a function's opaque
     /// output (D1109), which rustc's label describes as "opaque type".
     OpaqueMismatch {
@@ -2037,6 +2053,7 @@ impl Error {
             Self::DuplicateMember { .. } => Category::DuplicateMember,
             Self::UnknownMember { .. }
             | Self::UnknownField { .. }
+            | Self::NoField { .. }
             | Self::NoItem { .. }
             | Self::MemberKind { .. } => Category::UnknownMember,
             Self::NotInModule { .. } => Category::NotInModule,
@@ -2055,6 +2072,7 @@ impl Error {
             Self::InvalidConstruction { .. } => Category::InvalidConstruction,
             Self::TypeMismatch { .. }
             | Self::ArgumentMismatch(_)
+            | Self::LetMismatch(_)
             | Self::OpaqueMismatch { .. }
             | Self::Unboxed { .. } => Category::TypeMismatch,
             Self::IfWithoutElse { .. } => Category::IfWithoutElse,
@@ -2137,6 +2155,7 @@ impl Error {
             | Self::UnboundAlternative { name, .. } => name.as_str(),
             Self::UnknownField { owner, .. } => owner.name.as_str(),
             Self::UnknownMember { owner, .. }
+            | Self::NoField { owner, .. }
             | Self::NoItem { owner, .. }
             | Self::MemberKind { owner, .. }
             | Self::InvalidConstruction { owner, .. }
@@ -2153,6 +2172,7 @@ impl Error {
             | Self::Unboxed { expected, .. }
             | Self::IfWithoutElse { expected, .. } => expected.as_str(),
             Self::ArgumentMismatch(mismatch) => mismatch.expected.as_str(),
+            Self::LetMismatch(mismatch) => mismatch.expected.as_str(),
             Self::ReturnWithoutValue { output, .. } => output.as_str(),
             Self::ImmutableBinding { binding, .. } => binding.as_str(),
             Self::InvalidImplOwner { owner, .. }
@@ -2215,6 +2235,7 @@ impl Error {
             Self::DuplicateMember { declaration, .. } => *declaration,
             Self::UnknownMember { reference, .. }
             | Self::UnknownField { reference, .. }
+            | Self::NoField { reference, .. }
             | Self::NoItem { reference, .. }
             | Self::MemberKind { reference, .. }
             | Self::NotInModule { reference, .. }
@@ -2238,6 +2259,7 @@ impl Error {
             | Self::Unboxed { expression, .. }
             | Self::IfWithoutElse { expression, .. } => *expression,
             Self::ArgumentMismatch(mismatch) => mismatch.argument,
+            Self::LetMismatch(mismatch) => mismatch.expression,
             Self::ReturnWithoutValue { at, .. } => *at,
             Self::ImmutableBinding { mutation, .. } => *mutation,
             Self::InvalidImplOwner { reference, .. } => *reference,
@@ -2350,6 +2372,7 @@ impl Error {
             | Self::LoweringUnavailable { .. } => None,
             Self::UnknownMember { .. }
             | Self::UnknownField { .. }
+            | Self::NoField { .. }
             | Self::NoItem { .. }
             | Self::MemberKind { .. }
             | Self::NotInModule { .. }
@@ -2390,6 +2413,7 @@ impl Error {
             | Self::OverflowingLiteral { .. }
             | Self::KnownPanic { .. } => None,
             Self::ArgumentMismatch(mismatch) => Some(mismatch.callee),
+            Self::LetMismatch(mismatch) => Some(mismatch.written),
             Self::UnlabeledJumpInWhileCondition { .. } => None,
             Self::InvalidImplOwner { .. }
             | Self::InvalidMethodCall { .. }
@@ -2499,6 +2523,11 @@ pub enum Shown {
     /// At its definition, a method whose parameters the call's arguments
     /// don't fit: "but with different arguments".
     DifferentArguments,
+}
+
+/// rustc's E0609 message for the field `field` the type `owner` lacks.
+pub(crate) fn no_field(owner: &str, field: &str) -> String {
+    format!("no field `{field}` on type `{owner}`")
 }
 
 /// rustc's E0599 message for the method `member` of a trait out of scope,
@@ -2724,19 +2753,38 @@ impl FieldHint {
         if names.is_empty() {
             return Some("all struct fields are already assigned".into());
         }
-        // rustc's name series: five names and a count of the rest, or six.
-        let limit = if names.len() == 6 { 6 } else { 5 };
-        let mut series = names
-            .iter()
-            .take(limit)
-            .map(|name| format!("`{name}`"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        if names.len() > limit {
-            series = format!("{series} ... and {} others", names.len() - limit);
-        }
-        Some(format!("available fields are: {series}"))
+        Some(format!("available fields are: {}", name_series(names)))
     }
+}
+
+/// rustc's name series: five names and a count of the rest, or six.
+fn name_series(names: &[ImmutableString]) -> String {
+    let limit = if names.len() == 6 { 6 } else { 5 };
+    let series = names
+        .iter()
+        .take(limit)
+        .map(|name| format!("`{name}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if names.len() > limit {
+        return format!("{series} ... and {} others", names.len() - limit);
+    }
+    series
+}
+
+/// rustc's E0609 note of the fields `available` beside the field `field`
+/// a type lacks: none where one is like `field`, which rustc offers in its
+/// place, or where there are none.
+pub(crate) fn available_fields(field: &str, available: &[ImmutableString]) -> Option<String> {
+    let names = available
+        .iter()
+        .map(ImmutableString::as_str)
+        .collect::<Vec<_>>();
+    if available.is_empty() || super::similar::best(&names, field).is_some() {
+        return None;
+    }
+    let is = if available.len() == 1 { " is" } else { "s are" };
+    Some(format!("available field{is}: {}", name_series(available)))
 }
 
 /// Where a pattern that must match every value is written, as rustc names
@@ -3053,15 +3101,41 @@ impl PatternTypes {
     /// rustc's note: "expected type `{integer}`" over "found tuple
     /// `(_, _)`", the shorter lead padded so the types line up.
     pub(crate) fn note(&self) -> Option<String> {
-        let (expected, found) = self.sorts?;
-        let expected = format!("expected {expected}");
-        let found = format!("found {found}");
-        let width = expected.len().max(found.len());
-        Some(format!(
-            "{expected:>width$} `{}`\n{found:>width$} `{}`",
-            self.expected, self.found
-        ))
+        Some(sorted_note(self.sorts?, &self.expected, &self.found))
     }
+}
+
+/// A `let`'s value of another type than the one its `let` writes.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct LetMismatch {
+    /// The written type's name.
+    pub expected: ImmutableString,
+    /// The value's type's name.
+    pub actual: ImmutableString,
+    /// The value.
+    pub expression: Span,
+    /// The written type.
+    pub written: Span,
+    /// rustc's sorts of the two types in its "expected .. found" note
+    /// (`struct`, `enum`), or `None` where rustc writes no note.
+    pub sorts: Option<(&'static str, &'static str)>,
+}
+
+impl LetMismatch {
+    /// rustc's note: "expected struct `Vec<i32>`" over "found struct
+    /// `Vec<u8>`".
+    pub(crate) fn note(&self) -> Option<String> {
+        Some(sorted_note(self.sorts?, &self.expected, &self.actual))
+    }
+}
+
+/// rustc's "expected .. found" note of the types `expected` and `found`,
+/// of the sorts `sorts`, the shorter lead padded so the types line up.
+fn sorted_note(sorts: (&str, &str), expected: &str, found: &str) -> String {
+    let lead = format!("expected {}", sorts.0);
+    let trail = format!("found {}", sorts.1);
+    let width = lead.len().max(trail.len());
+    format!("{lead:>width$} `{expected}`\n{trail:>width$} `{found}`")
 }
 
 /// What gave the value a pattern matches its type, which rustc labels
@@ -3528,6 +3602,16 @@ impl fmt::Display for Written<'_> {
                 let (code, message) = owner.missing(field, *pattern);
                 write!(formatter, "{message} at {reference} ({code})")
             }
+            Error::NoField {
+                owner,
+                field,
+                reference,
+                ..
+            } => write!(
+                formatter,
+                "{} at {reference} (E0609)",
+                no_field(owner, field)
+            ),
             Error::NoItem {
                 member,
                 reference,
@@ -3678,6 +3762,11 @@ impl fmt::Display for Written<'_> {
                 formatter,
                 "mismatched types at {}: expected `{}`, found `{}` (E0308)",
                 mismatch.argument, mismatch.expected, mismatch.actual
+            ),
+            Error::LetMismatch(mismatch) => write!(
+                formatter,
+                "mismatched types at {}: expected `{}`, found `{}` (E0308)",
+                mismatch.expression, mismatch.expected, mismatch.actual
             ),
             Error::IfWithoutElse {
                 expected,

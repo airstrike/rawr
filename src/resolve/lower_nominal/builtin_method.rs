@@ -222,7 +222,21 @@ impl<'a> Parser<'a> {
                         reference,
                     ));
                 }
-                _ => return Err(unknown(self)),
+                _ => {
+                    // The public fields std declares, which rustc lists.
+                    let available: &[&str] = match kind {
+                        range::Kind::Range => &["start", "end"],
+                        range::Kind::From => &["start"],
+                        range::Kind::To | range::Kind::ToInclusive => &["end"],
+                        range::Kind::Inclusive | range::Kind::Full => &[],
+                    };
+                    return Err(Error::NoField {
+                        owner: range.name(&self.models),
+                        field: member,
+                        reference: member_span,
+                        available: available.iter().map(|name| (*name).into()).collect(),
+                    });
+                }
             };
             let end = text_end(member_span.start(), &member);
             let source = self.prelude_op(

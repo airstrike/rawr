@@ -1247,6 +1247,7 @@ fn diagnostic_path(error: &crate::resolve::Error) -> Option<(String, ImportedNam
     match error {
         R::InvalidTypeArguments { ty, .. } => Some((ty.to_string(), ImportedNamespace::Type)),
         R::UnknownMember { owner, .. }
+        | R::NoField { owner, .. }
         | R::NoItem { owner, .. }
         | R::InvalidConstruction { owner, .. }
         | R::MissingCapability { owner, .. }
@@ -1282,6 +1283,14 @@ fn diagnostic_path(error: &crate::resolve::Error) -> Option<(String, ImportedNam
             ImportedNamespace::Type,
         )),
         R::ArgumentMismatch(mismatch) => Some((
+            if mismatch.actual.contains("::") {
+                mismatch.actual.to_string()
+            } else {
+                mismatch.expected.to_string()
+            },
+            ImportedNamespace::Type,
+        )),
+        R::LetMismatch(mismatch) => Some((
             if mismatch.actual.contains("::") {
                 mismatch.actual.to_string()
             } else {

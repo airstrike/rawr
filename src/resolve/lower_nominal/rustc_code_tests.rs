@@ -5578,3 +5578,155 @@ fn an_into_to_a_std_type_lists_its_from_impls() {
         "{path}"
     );
 }
+
+/// rustc's report of the one error in `main.rs`, whose line `line` is
+/// `text`, as the lines `head` before the source and `under` below it.
+fn report_lines(head: &[&str], line: usize, text: &str, under: &[&str]) -> String {
+    let mut lines: Vec<String> = head.iter().map(|line| (*line).to_owned()).collect();
+    lines.push("  |".into());
+    lines.push(format!("{line} | {text}"));
+    lines.extend(under.iter().map(|line| (*line).to_owned()));
+    lines.join("\n")
+}
+
+/// A field of a std type that has none is rustc's E0609 at the field,
+/// naming the value's type as it is, with the public fields a range has
+/// in a note. What `rustc --edition 2021` reports.
+#[test]
+fn a_field_a_std_type_lacks_is_e0609() {
+    let marked = "  |               ^ unknown field";
+    for (before, line, owner, note) in [
+        (
+            "let o: Option<i32> = Some(1);",
+            "let a = o.x;",
+            "Option<i32>",
+            None,
+        ),
+        (
+            "let c = std::cmp::Ordering::Less;",
+            "let a = c.x;",
+            "std::cmp::Ordering",
+            None,
+        ),
+        (
+            "let o: Option<i32> = Some(1);\n    let o = &o;",
+            "let a = o.x;",
+            "&Option<i32>",
+            None,
+        ),
+        ("let v = vec![1];", "let a = v.x;", "Vec<{integer}>", None),
+        (
+            "let r = 0..3;",
+            "let a = r.x;",
+            "std::ops::Range<{integer}>",
+            Some("available fields are: `start`, `end`"),
+        ),
+        (
+            "let r = ..3;",
+            "let a = r.x;",
+            "RangeTo<{integer}>",
+            Some("available field is: `end`"),
+        ),
+    ] {
+        let source = format!("fn main() {{\n    {before}\n    {line}\n}}\n");
+        let at = source
+            .lines()
+            .position(|text| text.ends_with(line))
+            .unwrap_or(0)
+            + 1;
+        let note = note.map(|note| format!("  |\n  = note: {note}"));
+        let expected = report_lines(
+            &[
+                &format!("error[E0609]: no field `x` on type `{owner}`"),
+                &format!(" --> main.rs:{at}:15"),
+            ],
+            at,
+            &format!("    {line}"),
+            &std::iter::once(marked)
+                .chain(note.as_deref())
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(rendered(&source).trim_end(), expected, "{source}");
+    }
+}
+
+/// A method a `Box<T>`'s `T` lacks is rustc's E0599 naming the box, as
+/// `Box` derefs to `T`. What `rustc --edition 2021` reports.
+#[test]
+fn a_method_a_boxed_value_lacks_names_the_box() {
+    let expected = report_lines(
+        &[
+            "error[E0599]: no method named `nope` found for struct `Box<P>` in the current scope",
+            " --> main.rs:4:7",
+        ],
+        4,
+        "    b.nope();",
+        &["  |       ^^^^ method not found in `Box<P>`"],
+    );
+    let source = "struct P;\nfn main() {\n    let b = Box::new(P);\n    b.nope();\n}\n";
+    assert_eq!(rendered(source).trim_end(), expected);
+    let shown = rendered("fn main() {\n    let b = Box::new(5);\n    b.nope();\n}\n");
+    assert!(
+        shown.starts_with(
+            "error[E0599]: no method named `nope` found for struct `Box<{integer}>` in the \
+             current scope\n"
+        ),
+        "{shown}"
+    );
+}
+
+/// A `let`'s value of another type than its written one is rustc's E0308
+/// at the value, beside the written type, with the "expected .. found"
+/// note where the types aren't simple. What `rustc --edition 2021`
+/// reports.
+#[test]
+fn a_lets_value_of_another_type_is_labelled_beside_its_written_type() {
+    let check = |line: usize, text: &str, under: &[&str]| {
+        let source = if line == 3 {
+            format!("struct S;\nfn main() {{\n    {text}\n}}\n")
+        } else {
+            format!("fn main() {{\n    {text}\n}}\n")
+        };
+        let column = text.find(" = ").map_or(0, |at| at + 8);
+        let expected = report_lines(
+            &[
+                "error[E0308]: mismatched types",
+                &format!(" --> main.rs:{line}:{column}"),
+            ],
+            line,
+            &format!("    {text}"),
+            under,
+        );
+        assert_eq!(rendered(&source).trim_end(), expected, "{text}");
+    };
+    check(
+        2,
+        "let x: i32 = \"a\";",
+        &[
+            "  |            ---   ^^^ expected `i32`, found `&str`",
+            "  |            |",
+            "  |            expected due to this",
+        ],
+    );
+    check(
+        2,
+        "let a: Vec<i32> = Vec::<u8>::new();",
+        &[
+            "  |            --------   ^^^^^^^^^^^^^^^^ expected `Vec<i32>`, found `Vec<u8>`",
+            "  |            |",
+            "  |            expected due to this",
+            "  |",
+            "  = note: expected struct `Vec<i32>`",
+            "             found struct `Vec<u8>`",
+        ],
+    );
+    check(
+        3,
+        "let c: S = 5;",
+        &[
+            "  |            -   ^ expected `S`, found integer",
+            "  |            |",
+            "  |            expected due to this",
+        ],
+    );
+}
