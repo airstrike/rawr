@@ -814,12 +814,28 @@ pub(super) enum Parameter {
     /// (an argument's `impl Trait`, a `where` bound's type, a projection).
     Declared,
     /// A function's `-> impl Bounds` (D1109), which no caller chooses and
-    /// its function's body fills: its name is the text rustc prints. With
-    /// the type arguments of the type parameters it captures, in the order
-    /// `item::OpaqueOutput::captured` names them: two calls taking
-    /// different ones return different types, as rustc's `wrap::<Sq>` and
-    /// `wrap::<Ci>` opaque types are.
-    Opaque(type_ref::Opaque, Box<[Ty]>),
+    /// its function's body fills: its name is the text rustc prints. Boxed,
+    /// so a `Ty` stays as small as its other variants make it.
+    Opaque(Box<Captured>),
+}
+
+/// Which opaque output a [`Parameter::Opaque`] is, with the type arguments
+/// of the type parameters it captures, in the order
+/// `item::OpaqueOutput::captured` names them: two calls taking different
+/// ones return different types, as rustc's `wrap::<Sq>` and `wrap::<Ci>`
+/// opaque types are.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
+pub(super) struct Captured {
+    pub(super) opaque: type_ref::Opaque,
+    pub(super) arguments: Box<[Ty]>,
+}
+
+impl Parameter {
+    /// The opaque output `opaque` at `arguments`.
+    pub(super) fn opaque(opaque: type_ref::Opaque, arguments: Box<[Ty]>) -> Self {
+        Self::Opaque(Box::new(Captured { opaque, arguments }))
+    }
 }
 
 impl Ty {
@@ -1199,7 +1215,7 @@ impl Ty {
                 type_ref::Target::Opaque(opaque) => Self::Param(
                     path.name.clone(),
                     opaque.map_or(Parameter::Declared, |opaque| {
-                        Parameter::Opaque(
+                        Parameter::opaque(
                             opaque,
                             path.arguments
                                 .iter()
@@ -2134,9 +2150,8 @@ pub(super) fn contains(ty: &Ty, leaf: &dyn Fn(&Ty) -> bool) -> bool {
             Ty::Array { element, .. } | Ty::Option(element) => inside(element),
             Ty::Result(ok, err) => inside(ok) || inside(err),
             Ty::Tuple(members) | Ty::Keyed(_, members) => members.iter().any(inside),
-            Ty::Host { arguments, .. } | Ty::Param(_, Parameter::Opaque(_, arguments)) => {
-                arguments.iter().any(inside)
-            }
+            Ty::Host { arguments, .. } => arguments.iter().any(inside),
+            Ty::Param(_, Parameter::Opaque(captured)) => captured.arguments.iter().any(inside),
             Ty::Callable { inputs, output, .. }
             | Ty::Fn { inputs, output }
             | Ty::FnItem { inputs, output, .. }

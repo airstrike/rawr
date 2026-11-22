@@ -94,14 +94,15 @@ impl<'a> Parser<'a> {
             // One function's opaque output at two calls is one type when
             // their type arguments are (D1109).
             (
-                Ty::Param(_, Parameter::Opaque(expected_opaque, expected_arguments)),
-                Ty::Param(_, Parameter::Opaque(actual_opaque, actual_arguments)),
-            ) if expected_opaque == actual_opaque
-                && expected_arguments.len() == actual_arguments.len() =>
+                Ty::Param(_, Parameter::Opaque(expected_captured)),
+                Ty::Param(_, Parameter::Opaque(actual_captured)),
+            ) if expected_captured.opaque == actual_captured.opaque
+                && expected_captured.arguments.len() == actual_captured.arguments.len() =>
             {
-                expected_arguments
+                expected_captured
+                    .arguments
                     .iter()
-                    .zip(actual_arguments.iter())
+                    .zip(actual_captured.arguments.iter())
                     .all(|(expected, actual)| self.unify_type(expected, actual))
             }
             (

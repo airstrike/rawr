@@ -1454,14 +1454,13 @@ impl<'a> Parser<'a> {
         );
         // One function's opaque output at two type arguments: rustc's label
         // names the arguments that differ (`expected `Sq`, found `Ci``).
-        while let (
-            Ty::Param(_, Parameter::Opaque(want, wanted)),
-            Ty::Param(_, Parameter::Opaque(have, had)),
-        ) = (&expected, &actual)
-            && want == have
-            && let Some((wanted, had)) = wanted
+        while let (Ty::Param(_, Parameter::Opaque(want)), Ty::Param(_, Parameter::Opaque(have))) =
+            (&expected, &actual)
+            && want.opaque == have.opaque
+            && let Some((wanted, had)) = want
+                .arguments
                 .iter()
-                .zip(had.iter())
+                .zip(have.arguments.iter())
                 .find(|(wanted, had)| wanted != had)
         {
             (expected, actual) = (wanted.clone(), had.clone());

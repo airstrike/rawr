@@ -65,8 +65,7 @@ impl<'a> Parser<'a> {
         let outputs = Shared::clone(&self.models.opaque_outputs);
         let mut hidden = BTreeMap::new();
         for (opaque, opaque_output) in outputs.iter() {
-            let own =
-                |ty: &Ty| matches!(ty, Ty::Param(_, Parameter::Opaque(own, _)) if own == opaque);
+            let own = |ty: &Ty| matches!(ty, Ty::Param(_, Parameter::Opaque(own)) if own.opaque == *opaque);
             if !contains(&ty, &own) {
                 continue;
             }
@@ -80,7 +79,7 @@ impl<'a> Parser<'a> {
             return;
         }
         self.return_ty = Some(substitute(&ty, &|ty| match ty {
-            Ty::Param(_, Parameter::Opaque(opaque, _)) => hidden.get(opaque).cloned(),
+            Ty::Param(_, Parameter::Opaque(captured)) => hidden.get(&captured.opaque).cloned(),
             _ => None,
         }));
         self.hidden_outputs = hidden;
@@ -612,10 +611,10 @@ impl<'a> Parser<'a> {
             // An opaque output's witness is its hidden type's, which the
             // generated text reads once every body is checked (D1109),
             // given its type arguments' for a hidden type that is one.
-            Ty::Param(_, Parameter::Opaque(opaque, arguments)) => {
-                let [source, line, column, index] = opaque.numbers();
+            Ty::Param(_, Parameter::Opaque(captured)) => {
+                let [source, line, column, index] = captured.opaque.numbers();
                 let arguments = self
-                    .opaque_argument_witnesses(arguments, parameter, span)
+                    .opaque_argument_witnesses(&captured.arguments, parameter, span)
                     .iter()
                     .map(|witness| witness.as_deref().unwrap_or("()"))
                     .collect::<Vec<_>>()
@@ -750,14 +749,14 @@ impl<'a> Parser<'a> {
                 ty = self.inference.resolve(target);
             }
             let witness = self.witness(&ty, &parameter, span)?;
-            if let Ty::Param(_, Parameter::Opaque(opaque, arguments)) = &ty {
+            if let Ty::Param(_, Parameter::Opaque(captured)) = &ty {
                 let arguments = self
-                    .opaque_argument_witnesses(arguments, &parameter, span)
+                    .opaque_argument_witnesses(&captured.arguments, &parameter, span)
                     .iter()
                     .map(Option::is_some)
                     .collect();
                 self.witnessed_opaques.push(Witnessed {
-                    opaque: *opaque,
+                    opaque: captured.opaque,
                     span,
                     arguments,
                 });
@@ -1215,11 +1214,12 @@ pub(super) fn substitute(ty: &Ty, replaced: &dyn Fn(&Ty) -> Option<Ty>) -> Ty {
         |types: &[Ty]| -> Box<[Ty]> { types.iter().map(|ty| substitute(ty, replaced)).collect() };
     match ty {
         // An opaque output's type arguments too (`impl Into<T>` at `T`).
-        Ty::Param(name, Parameter::Opaque(opaque, arguments)) => {
-            replaced(ty).unwrap_or_else(|| {
-                Ty::Param(name.clone(), Parameter::Opaque(*opaque, each(arguments)))
-            })
-        }
+        Ty::Param(name, Parameter::Opaque(captured)) => replaced(ty).unwrap_or_else(|| {
+            Ty::Param(
+                name.clone(),
+                Parameter::opaque(captured.opaque, each(&captured.arguments)),
+            )
+        }),
         Ty::Param(..) => replaced(ty).unwrap_or_else(|| ty.clone()),
         Ty::Option(element) => Ty::Option(Box::new(substitute(element, replaced))),
         Ty::Boxed(target) => Ty::Boxed(Box::new(substitute(target, replaced))),

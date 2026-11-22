@@ -1171,10 +1171,10 @@ fn sent_hidden(
     }
     // At its type arguments: `wrap::<Rc<f64>>`'s hidden `T` is `Rc<f64>`.
     let reveal = |ty: &Ty| match ty {
-        Ty::Param(_, super::ty::Parameter::Opaque(opaque, arguments)) => {
-            let hidden = revealed.get(opaque)?.as_ref()?;
-            let output = models.opaque_outputs.get(opaque)?;
-            let substitution = super::generics::opaque_substitution(output, arguments);
+        Ty::Param(_, super::ty::Parameter::Opaque(captured)) => {
+            let hidden = revealed.get(&captured.opaque)?.as_ref()?;
+            let output = models.opaque_outputs.get(&captured.opaque)?;
+            let substitution = super::generics::opaque_substitution(output, &captured.arguments);
             Some(super::generics::instantiate(hidden, &substitution))
         }
         _ => None,

@@ -380,12 +380,13 @@ impl Inference {
                     .map(|(name, ty)| (name.clone(), self.resolve(ty)))
                     .collect(),
             ),
-            Ty::Param(name, Parameter::Opaque(opaque, arguments)) if !arguments.is_empty() => {
+            Ty::Param(name, Parameter::Opaque(captured)) if !captured.arguments.is_empty() => {
                 Ty::Param(
                     name.clone(),
-                    Parameter::Opaque(
-                        *opaque,
-                        arguments
+                    Parameter::opaque(
+                        captured.opaque,
+                        captured
+                            .arguments
                             .iter()
                             .map(|argument| self.resolve(argument))
                             .collect(),
@@ -459,14 +460,15 @@ impl Inference {
             }
             // `impl Named<Out = i64>`: its written binding (D1109).
             // At its call's type arguments (`impl Iterator<Item = T>`).
-            Ty::Param(_, Parameter::Opaque(opaque, arguments)) => {
-                if let Some(output) = self.opaque_outputs.get(opaque)
+            Ty::Param(_, Parameter::Opaque(captured)) => {
+                if let Some(output) = self.opaque_outputs.get(&captured.opaque)
                     && let Some((_, _, ty)) =
                         output.bounds.projections.iter().find(|(bound, item, _)| {
                             bound.text == *trait_name && item.text == *name
                         })
                 {
-                    let substitution = super::generics::opaque_substitution(output, arguments);
+                    let substitution =
+                        super::generics::opaque_substitution(output, &captured.arguments);
                     return self.resolve(&super::generics::instantiate(
                         &Ty::from_resolved(ty),
                         &substitution,

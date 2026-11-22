@@ -1538,8 +1538,8 @@ impl<'a> Parser<'a> {
                         .get(name)
                         .map(|traits| traits.to_vec())
                         .unwrap_or_default(),
-                    Parameter::Opaque(opaque, _) => self
-                        .opaque_bounds(opaque)
+                    Parameter::Opaque(captured) => self
+                        .opaque_bounds(&captured.opaque)
                         .map(|generic| {
                             generic
                                 .traits
@@ -1795,13 +1795,13 @@ impl<'a> Parser<'a> {
     pub(super) fn bound_trait_arguments(&self, ty: &Ty, trait_name: &str) -> Vec<Box<[Ty]>> {
         match ty {
             // `impl Into<T>` at its call's `T` (D1109).
-            Ty::Param(_, Parameter::Opaque(opaque, captured)) => self
+            Ty::Param(_, Parameter::Opaque(captured)) => self
                 .models
                 .opaque_outputs
-                .get(opaque)
+                .get(&captured.opaque)
                 .into_iter()
                 .flat_map(|output| {
-                    let substitution = opaque_substitution(output, captured);
+                    let substitution = opaque_substitution(output, &captured.arguments);
                     output
                         .bounds
                         .trait_arguments
