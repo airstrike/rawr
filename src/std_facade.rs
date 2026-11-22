@@ -15,15 +15,18 @@
 //! ([`step`]): a start reads nothing of the table (#1526).
 
 mod case;
+mod command;
 mod cursor;
 #[cfg(test)]
 mod declare;
 mod declared;
 mod env;
+mod file;
 mod fmt;
 mod fs;
 mod held;
 mod io;
+mod metadata;
 mod num;
 pub(crate) mod panic;
 mod path;
@@ -195,6 +198,9 @@ fn build() -> Result<facade::Definition, host::Error> {
     io::register_debug();
     env::register_debug();
     process::register_debug();
+    command::register_debug();
+    file::register_debug();
+    metadata::register_debug();
     cursor::register_debug();
     num::register_debug();
     fmt::register_debug();
@@ -215,6 +221,9 @@ fn held() -> Vec<held::Held> {
         io::HELD.as_slice(),
         env::HELD.as_slice(),
         process::HELD.as_slice(),
+        command::HELD.as_slice(),
+        file::HELD.as_slice(),
+        metadata::HELD.as_slice(),
         cursor::HELD.as_slice(),
         case::HELD.as_slice(),
         num::HELD.as_slice(),
@@ -234,7 +243,10 @@ fn bind(binds: &mut impl Bind) {
     cursor::bind(binds);
     env::bind(binds);
     fs::bind(binds);
+    file::bind(binds);
+    metadata::bind(binds);
     process::bind(binds);
+    command::bind(binds);
     num::bind(binds);
     fmt::bind(binds);
     panic::bind(binds);

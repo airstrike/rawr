@@ -1,7 +1,8 @@
 //! std's `io::Error` and `io::ErrorKind` for Rawr code. An error is Rust's
 //! own `std::io::Error`, which a crate's code takes and borrows as it is.
-//! `stdin()` reads the process's stdin through Rust's own, and `stdout()`
-//! flushes Rust's own. Nothing here reads or writes a file.
+//! `stdin()` reads the process's stdin through Rust's own. `stdout()` and
+//! `stderr()` write where the program's `print!` and `eprint!` do, and
+//! flush Rust's own. Nothing here reads or writes a file.
 
 use std::io::ErrorKind;
 use std::sync::{Arc, Mutex};
@@ -9,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use super::held::{self, Held};
 use crate::{capability, Dynamic, EvalAltResult, ImmutableString, Position};
 
-/// What rawr runs for a stream's value, `Stdin` or `Stdout`, which holds
+/// What rawr runs for a stream's value, `Stdin`, `Stdout` or `Stderr`, which holds
 /// nothing of its own.
 const STREAM: &[capability::Kind] = &[
     capability::Kind::Default,
@@ -23,7 +24,7 @@ const STREAM: &[capability::Kind] = &[
 ];
 
 /// The types the module holds.
-pub(super) const HELD: [Held; 4] = [
+pub(super) const HELD: [Held; 5] = [
     Held::Value(held::Value {
         std: "std::io::Error",
         parameters: &[],
@@ -90,6 +91,19 @@ pub(super) const HELD: [Held; 4] = [
         crosses: false,
         runs: STREAM,
     }),
+    Held::Value(held::Value {
+        std: "std::io::Stderr",
+        parameters: &[],
+        lent: &[],
+        also: &["std::io::StderrLock"],
+        register: |builder, path, parameters, capabilities| {
+            builder
+                .default_value_type::<Stderr>(path, parameters, capabilities)
+                .map(drop)
+        },
+        crosses: false,
+        runs: STREAM,
+    }),
 ];
 
 /// std's `Stdin`, and its `StdinLock`: the process's stdin, read through
@@ -100,6 +114,10 @@ pub(crate) struct Stdin;
 /// std's `Stdout`, and its `StdoutLock`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Stdout;
+
+/// std's `Stderr`, and its `StderrLock`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Stderr;
 
 /// Rust's `std::io::Error`, which is not `Clone`. A Rawr value is a handle
 /// to the error's one place, so copies of the value share it. Native code
@@ -219,16 +237,58 @@ pub(super) fn appended(
     ]))
 }
 
-/// Bind `stdin()`, `stdout()` and their methods.
+/// Bind `Write`'s methods of the output stream at `path`, `io::Stdout` or
+/// `io::Stderr`, which write where the program's `print!` or `eprint!`
+/// does and flush Rust's own stream.
+fn bind_writer(
+    binds: &mut impl super::Bind,
+    path: &str,
+    output: crate::Output,
+    flush: fn() -> std::io::Result<()>,
+) {
+    binds.with_context(&format!("{path}::write"), move |call, args| {
+        let bytes = super::fs::contents(args[1])?;
+        call.write(output, &String::from_utf8_lossy(&bytes));
+        Ok(crate::result::ok(Dynamic::from_int(
+            crate::INT::try_from(bytes.len()).unwrap_or(crate::INT::MAX),
+        )))
+    });
+    binds.with_context(&format!("{path}::write_all"), move |call, args| {
+        let bytes = super::fs::contents(args[1])?;
+        call.write(output, &String::from_utf8_lossy(&bytes));
+        Ok(crate::result::ok(Dynamic::UNIT))
+    });
+    binds.with_context(&format!("{path}::write_fmt"), move |call, args| {
+        let text = read_value::<ImmutableString>(args[1], "Arguments")?;
+        call.write(output, &text);
+        Ok(crate::result::ok(Dynamic::UNIT))
+    });
+    binds.plain(&format!("{path}::flush"), move |_| {
+        Ok(match flush() {
+            Ok(()) => crate::result::ok(Dynamic::UNIT),
+            Err(error) => crate::result::err(made(error)),
+        })
+    });
+}
+
+/// Bind `stdin()`, `stdout()`, `stderr()` and their methods.
 fn bind_streams(binds: &mut impl super::Bind) {
     use std::io::{BufRead as _, Read as _, Write as _};
 
+    bind_writer(binds, "io::Stdout", crate::Output::Stdout, || {
+        std::io::stdout().flush()
+    });
+    bind_writer(binds, "io::Stderr", crate::Output::Stderr, || {
+        std::io::stderr().flush()
+    });
     type Callback = fn(&mut [&mut Dynamic]) -> Result<Dynamic, Box<EvalAltResult>>;
     let mut bind = |path: &str, callback: Callback| binds.plain(path, callback);
     bind("io::stdin", |_| Ok(Dynamic::from(Stdin)));
     bind("io::stdout", |_| Ok(Dynamic::from(Stdout)));
+    bind("io::stderr", |_| Ok(Dynamic::from(Stderr)));
     bind("io::Stdin::lock", |_| Ok(Dynamic::from(Stdin)));
     bind("io::Stdout::lock", |_| Ok(Dynamic::from(Stdout)));
+    bind("io::Stderr::lock", |_| Ok(Dynamic::from(Stderr)));
     bind("io::Stdin::read_line", |args| {
         appended(args[1], |text| std::io::stdin().lock().read_line(text))
     });
@@ -245,12 +305,6 @@ fn bind_streams(binds: &mut impl super::Bind) {
             })
             .collect::<crate::Array>();
         Ok(Dynamic::from(lines))
-    });
-    bind("io::Stdout::flush", |_| {
-        Ok(match std::io::stdout().flush() {
-            Ok(()) => crate::result::ok(Dynamic::UNIT),
-            Err(error) => crate::result::err(made(error)),
-        })
     });
 }
 

@@ -215,7 +215,7 @@ impl Proof {
             args,
             model,
             None,
-            &crate::Access::NONE,
+            None,
         )
     }
 
@@ -227,7 +227,7 @@ impl Proof {
         args: &mut [&mut Dynamic],
         model: &crate::program::model::Model,
         equal: Option<&host::runtime::Equal<'_>>,
-        access: &crate::Access,
+        engine: Option<&crate::Engine>,
     ) -> RawrResult {
         if args.len() != self.operands.len() {
             return Err(EvalAltResult::ErrorRuntime(
@@ -265,7 +265,7 @@ impl Proof {
         // A field a pattern borrows is lent to the call alone.
         let result = crate::scope::opened(args, &mut |args| {
             crate::std_facade::panic::calling(self.caller.as_deref(), || {
-                runtime.invoke(requirement, args, invocation, equal, access)
+                runtime.invoke(requirement, args, invocation, equal, engine)
             })
         });
 
@@ -634,7 +634,7 @@ mod tests {
                     &mut [&mut value],
                     &empty_model(),
                     None,
-                    &crate::Access::NONE,
+                    None,
                 )
                 .unwrap()
                 .as_int()

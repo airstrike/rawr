@@ -23,7 +23,7 @@ pub struct Call<'a> {
     invocation: Option<&'a invocation::Proof>,
     event_mapper: Option<&'a [u8; 16]>,
     equal: Option<&'a Equal<'a>>,
-    access: &'a crate::Access,
+    engine: Option<&'a crate::Engine>,
 }
 
 enum Operation<'a> {
@@ -84,7 +84,7 @@ impl<'a> Call<'a> {
             invocation,
             event_mapper: None,
             equal: None,
-            access: &crate::access::NONE,
+            engine: None,
         }
     }
 
@@ -99,7 +99,7 @@ impl<'a> Call<'a> {
             invocation: None,
             event_mapper: None,
             equal: None,
-            access: &crate::access::NONE,
+            engine: None,
         }
     }
 
@@ -126,7 +126,7 @@ impl<'a> Call<'a> {
             invocation: None,
             event_mapper: None,
             equal: None,
-            access: &crate::access::NONE,
+            engine: None,
         }
     }
 
@@ -137,9 +137,9 @@ impl<'a> Call<'a> {
         self
     }
 
-    /// This call, made by a program that may reach `access`.
-    pub(super) const fn with_access(mut self, access: &'a crate::Access) -> Self {
-        self.access = access;
+    /// This call, made by a program `engine` runs.
+    pub(super) const fn with_engine(mut self, engine: Option<&'a crate::Engine>) -> Self {
+        self.engine = engine;
         self
     }
 
@@ -149,8 +149,17 @@ impl<'a> Call<'a> {
     /// as the operating system would. A call from Rust, with no program,
     /// may reach nothing.
     #[must_use]
-    pub const fn access(&self) -> &crate::Access {
-        self.access
+    pub fn access(&self) -> &crate::Access {
+        self.engine
+            .map_or(&crate::access::NONE, crate::Engine::access)
+    }
+
+    /// Write `text` to the calling program's `output`, where its `print!`
+    /// writes. A call from Rust, with no program, writes nowhere.
+    pub fn write(&self, output: crate::Output, text: &str) {
+        if let Some(write) = self.engine.and_then(|engine| engine.output.as_ref()) {
+            write(output, text);
+        }
     }
 
     /// Whether `lhs == rhs`, as Rust's `PartialEq` of the calling program

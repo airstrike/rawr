@@ -1116,7 +1116,7 @@ impl Registry {
         args: &mut [&mut Dynamic],
         invocation: Option<&invocation::Proof>,
         equal: Option<&Equal<'_>>,
-        access: &crate::Access,
+        engine: Option<&crate::Engine>,
     ) -> Result<Dynamic, Box<EvalAltResult>> {
         let binding = match requirement.bound.get(self.witness) {
             Some(binding) => binding,
@@ -1148,7 +1148,7 @@ impl Registry {
                 Call::structural(self.witness, operands, output, requirement.receiver)
             }
         }
-        .with_access(access);
+        .with_engine(engine);
         binding.invoke(&call, args)
     }
 

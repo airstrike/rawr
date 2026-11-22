@@ -8508,3 +8508,236 @@ fn refused_as(cases: &[(&str, &str)]) {
         );
     }
 }
+
+#[test]
+fn a_cows_to_mut_makes_it_owned_with_nothing_written() {
+    // std's `to_mut` clones a borrowed value into the `Cow` at the call,
+    // through a local, a `&mut` parameter and a field (#818).
+    let output = printed(
+        r#"
+use std::borrow::Cow;
+struct Holder<'a> {
+    c: Cow<'a, str>,
+}
+fn touch(c: &mut Cow<str>) {
+    let _ = c.to_mut();
+}
+fn main() {
+    let mut c: Cow<str> = Cow::Borrowed("x");
+    let _ = c.to_mut();
+    let mut d: Cow<str> = Cow::Borrowed("y");
+    d.to_mut().push('!');
+    let mut e: Cow<str> = Cow::Borrowed("z");
+    touch(&mut e);
+    let mut h = Holder { c: Cow::Borrowed("w") };
+    h.c.to_mut();
+    let v = [1, 2];
+    let mut s: Cow<[i32]> = Cow::Borrowed(&v);
+    s.to_mut().push(3);
+    println!(
+        "{} {d} {} {} {} {} {s:?}",
+        matches!(c, Cow::Owned(_)),
+        matches!(d, Cow::Owned(_)),
+        matches!(e, Cow::Owned(_)),
+        matches!(h.c, Cow::Owned(_)),
+        matches!(s, Cow::Owned(_)),
+    );
+}
+main();
+"#,
+    );
+    assert_eq!(output, "true y! true true true true [1, 2, 3]\n");
+}
+
+#[test]
+fn std_writes_into_stdout_and_stderr_by_io_write() {
+    // `write!` and `writeln!` into any writer expression are its
+    // `write_fmt`, as rustc expands them, and `Stdout`, `Stderr` and their
+    // locks write where `print!` and `eprint!` do (#2089).
+    let output = printed(
+        r#"
+use std::io::Write;
+fn emit<W: Write>(w: &mut W, n: i32) -> std::io::Result<()> {
+    writeln!(w, "n = {n}")
+}
+fn main() {
+    writeln!(std::io::stdout().lock(), "a {}", 1).unwrap();
+    let mut out = std::io::stdout();
+    write!(out, "b ").unwrap();
+    writeln!(&mut out, "c").unwrap();
+    out.flush().unwrap();
+    let mut lock = std::io::stdout().lock();
+    lock.write_all(b"d\n").unwrap();
+    println!("{:?}", lock.write(b"e\n").unwrap());
+    writeln!(std::io::stderr(), "f").unwrap();
+    let mut buffer: Vec<u8> = Vec::new();
+    emit(&mut buffer, 2).unwrap();
+    print!("{}", String::from_utf8(buffer).unwrap());
+    let _ = writeln!(std::io::stdout());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "a 1\nb c\nd\ne\n2\nf\nn = 2\n\n");
+    // Without `io::Write` in scope, rustc's E0599 at the writer, which
+    // suggests `io`'s `Write`.
+    let report = refused("fn main() {\n    writeln!(std::io::stdout(), \"x\").unwrap();\n}\n");
+    assert!(
+        report.starts_with("error[E0599]: cannot write into `Stdout`"),
+        "{report}"
+    );
+    assert!(report.contains("1 + use std::io::Write;"), "{report}");
+}
+
+#[test]
+fn std_command_runs_a_process_its_engine_grants() {
+    // std's `Command` builds in place, through a chain on a temporary and
+    // through a local, and its `status` is the child's (#2082).
+    let program = r#"
+use std::process::Command;
+fn main() {
+    let ok = Command::new("sh").arg("-c").arg("exit 0").status().unwrap();
+    let status = Command::new("sh")
+        .arg("-c")
+        .arg("test \"$X\" = y && test \"$(pwd)\" = / && exit 3")
+        .env("X", "y")
+        .current_dir("/")
+        .status()
+        .unwrap();
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c");
+    cmd.arg("exit 4");
+    let code = cmd.status().unwrap().code();
+    let program = Command::new("ls");
+    println!(
+        "{} {:?} {} {:?} {status} {:?}",
+        ok.success(),
+        ok.code(),
+        status.success(),
+        code,
+        program.get_program()
+    );
+    let missing = Command::new("no-such-program-rawr").status();
+    println!("{:?}", missing.map_err(|e| e.kind()));
+}
+main();
+"#;
+    assert_eq!(
+        printed_with(program, crate::Access::all()),
+        "true Some(0) false Some(4) exit status: 3 \"ls\"\nErr(NotFound)\n"
+    );
+    // A program its engine doesn't grant the process is refused as the
+    // operating system would refuse it.
+    let output = printed(
+        "fn main() {\n    let run = std::process::Command::new(\"true\").status();\n    \
+         println!(\"{:?}\", run.map_err(|e| e.kind()));\n}\nmain();\n",
+    );
+    assert_eq!(output, "Err(PermissionDenied)\n");
+}
+
+#[test]
+fn std_items_by_their_paths_and_impls() {
+    // `std::rc::Rc::new` by its full path (#1253), `SystemTime`'s `Ord`
+    // (#1471) and `SeekFrom`'s tuple variants built by their paths (#1978).
+    let output = printed(
+        r#"
+use std::io::{Cursor, Read, Seek, SeekFrom};
+use std::time::{SystemTime, UNIX_EPOCH};
+fn need(r: std::rc::Rc<i32>) -> i32 {
+    *r
+}
+fn main() {
+    let b = std::rc::Rc::clone(&std::rc::Rc::new(3));
+    println!("{} {} {}", need(std::rc::Rc::new(1)), std::sync::Arc::new(2), b);
+    let now = SystemTime::now();
+    let ordered = (now >= UNIX_EPOCH, UNIX_EPOCH < now, now.max(UNIX_EPOCH) == now);
+    println!("{:?} {:?}", ordered, UNIX_EPOCH.cmp(&now));
+    let mut c = Cursor::new(vec![1u8, 2, 3, 4, 5]);
+    let at = c.seek(SeekFrom::Start(2)).unwrap();
+    let from = std::io::SeekFrom::End(-1);
+    c.seek(from).unwrap();
+    let mut rest = Vec::new();
+    c.read_to_end(&mut rest).unwrap();
+    println!("{at} {from:?} {rest:?}");
+}
+main();
+"#,
+    );
+    assert_eq!(output, "1 2 3\n(true, true, true) Less\n2 End(-1) [5]\n");
+}
+
+#[test]
+fn std_files_directories_and_metadata_run_as_stds() {
+    // std's `File` and `OpenOptions` read, write, append and seek; `fs`'s
+    // `metadata`, `read_dir` and `canonicalize` read the file system as far
+    // as the program's access reaches (#646).
+    let directory = std::env::temp_dir().join(format!("rawr-file-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    let source = format!(
+        r#"
+use std::fs::{{self, File, OpenOptions}};
+use std::io::{{Read, Seek, SeekFrom, Write}};
+use std::path::PathBuf;
+fn main() {{
+    let dir = PathBuf::from({directory:?});
+    fs::create_dir_all(&dir).unwrap();
+    let p = dir.join("a.txt");
+    let mut f = File::create(&p).unwrap();
+    f.write_all(b"one\n").unwrap();
+    writeln!(f, "two").unwrap();
+    drop(f);
+    let mut f = OpenOptions::new().append(true).open(&p).unwrap();
+    f.write(b"three\n").unwrap();
+    drop(f);
+    let mut s = String::new();
+    File::open(&p).unwrap().read_to_string(&mut s).unwrap();
+    print!("{{s}}");
+    let m = fs::metadata(&p).unwrap();
+    println!("{{}} {{}} {{}} {{}}", m.len(), m.is_file(), m.is_dir(), m.file_type().is_file());
+    fs::write(dir.join("b.txt"), "x").unwrap();
+    let mut names: Vec<String> = fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    for entry in fs::read_dir(&dir).unwrap() {{
+        let entry = entry.unwrap();
+        if entry.path().ends_with("b.txt") {{
+            let kind = entry.file_type().unwrap();
+            println!("{{:?}} {{}} {{}}", names, entry.metadata().unwrap().len(), kind.is_dir());
+        }}
+    }}
+    let mut f = File::open(&p).unwrap();
+    f.seek(SeekFrom::Start(4)).unwrap();
+    let mut rest = Vec::new();
+    f.read_to_end(&mut rest).unwrap();
+    println!("{{}} {{}}", rest.len(), f.stream_position().unwrap());
+    let mut options = OpenOptions::new();
+    options.write(true);
+    let missing = options.open(dir.join("c.txt")).map_err(|e| e.kind()).err();
+    options.create(true);
+    options.open(dir.join("c.txt")).unwrap().write_all(b"hi").unwrap();
+    let found = fs::canonicalize(dir.join(".").join("c.txt")).unwrap();
+    println!("{{:?}} {{}} {{}}", missing, fs::read_to_string(&found).unwrap(), found.ends_with("c.txt"));
+    let gone = File::open(dir.join("nope")).map_err(|e| e.kind()).err();
+    println!("{{:?}}", gone);
+}}
+main();
+"#
+    );
+    let output = printed_with(&source, crate::Access::all());
+    std::fs::remove_dir_all(&directory).unwrap();
+    assert_eq!(
+        output,
+        "one\ntwo\nthree\n14 true false true\n[\"a.txt\", \"b.txt\"] 1 false\n\
+         10 14\nSome(NotFound) hi true\nSome(NotFound)\n"
+    );
+    // A program its engine doesn't grant the files is refused as the
+    // operating system would refuse it.
+    let output = printed(
+        "fn main() {\n    let opened = std::fs::File::open(\"/\").map_err(|e| e.kind());\n    \
+         let listed = std::fs::read_dir(\"/\").map(|_| ()).map_err(|e| e.kind());\n    \
+         println!(\"{:?} {:?}\", opened.err(), listed);\n}\nmain();\n",
+    );
+    assert_eq!(output, "Some(PermissionDenied) Err(PermissionDenied)\n");
+}

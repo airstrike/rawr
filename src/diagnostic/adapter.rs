@@ -1760,11 +1760,12 @@ fn suggestion(error: &resolve::Error, source: &Source) -> Result<Option<Suggesti
         }
         resolve::Error::UnscopedWrite {
             placement: Some(at),
+            writer,
             ..
         } => above(
             "trait `Write` which provides `write_fmt` is implemented but not in scope; perhaps \
              you want to import it",
-            "use std::fmt::Write;",
+            &format!("use {writer};"),
             *at,
             source,
         ),
