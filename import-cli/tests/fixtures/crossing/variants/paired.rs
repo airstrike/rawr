@@ -76,4 +76,8 @@ fn main() {
     // A chain of adaptors, and a provided method that consumes.
     let evens = (1..=6).filter(|n| n % 2 == 0).chain(10..12);
     println!("{}", evens.tally());
+
+    // A clone the crate makes part way through goes on from there.
+    let tens = (1..=3).map(|n| n * 10);
+    println!("{:?}", events::paired::rests(tens));
 }

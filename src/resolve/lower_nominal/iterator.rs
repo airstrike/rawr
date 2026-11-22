@@ -429,6 +429,9 @@ impl Parser<'_> {
             span: value.span,
             header: value.span,
             held: origin::Fragment::default(),
+            // A crate may clone the iterator part way through, as a Rust
+            // iterator's clone copies its state (#1056).
+            frames: crate::eval::machine::Frames::Copied,
         });
         let mut prelude = std::mem::take(&mut value.prelude);
         prelude.push(code);

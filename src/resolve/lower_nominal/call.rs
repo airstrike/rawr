@@ -1176,6 +1176,7 @@ impl<'a> Parser<'a> {
             span: value.span,
             header: value.span,
             held: origin::Fragment::default(),
+            frames: crate::eval::machine::Frames::Resumed,
         });
         value.prelude = origin::Fragment::default();
         value.source = origin::Fragment::plain("()");

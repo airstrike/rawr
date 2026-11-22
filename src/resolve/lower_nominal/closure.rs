@@ -45,6 +45,10 @@ pub(super) struct Lifted {
     /// it is written (`places::held`), run before its captures are read:
     /// the handles are among its captures.
     pub(super) held: origin::Fragment,
+    /// What becomes of its body's suspended frames, when it suspends: a
+    /// step a crate pulls from is copied with the iterator a crate clones
+    /// (#1056), and any other body resumes each once.
+    pub(super) frames: crate::eval::machine::Frames,
 }
 
 /// An executable callable for a lifted closure.
@@ -53,6 +57,8 @@ pub(crate) struct Callable {
     pub(crate) arity: usize,
     pub(crate) dispatch: ImmutableString,
     pub(crate) source: crate::program::source::Id,
+    /// What becomes of its body's suspended frames ([`Lifted::frames`]).
+    pub(crate) frames: crate::eval::machine::Frames,
 }
 
 /// The host type a host callable returns, and how many type arguments it
@@ -1185,6 +1191,7 @@ impl<'a> Parser<'a> {
                     span: expression,
                     header,
                     held: Self::held_setup(&scope.held),
+                    frames: crate::eval::machine::Frames::Resumed,
                 });
                 Ty::FnItem {
                     key: Box::new(key),

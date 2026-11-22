@@ -44,7 +44,8 @@ pub(crate) struct Machine {
 }
 
 /// What becomes of a body's suspended frames.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
 pub(crate) enum Frames {
     /// Each resumes once, as an async body's does: a `for` loop's cursor
     /// holds only what it has left to walk.

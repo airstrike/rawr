@@ -80,6 +80,7 @@ pub(super) fn write_closures(
             value,
             dispatch,
             source,
+            frames: closure.frames,
         });
     }
 }
