@@ -3668,3 +3668,431 @@ main();
         Ok("2 1\n"),
     );
 }
+
+#[test]
+fn a_where_clause_of_an_impl_struct_or_trait_bounds_another_type() {
+    // rustc reads `where Vec<T>: Debug` on an impl, a struct and a trait as
+    // on a function: the body assumes it, and a use proves it (#2470).
+    let output = printed(
+        r#"
+use std::fmt::Debug;
+struct S<T>(T);
+impl<T> S<T> where Vec<T>: Debug {
+    fn show(&self, v: Vec<T>) { println!("{:?}", v); }
+}
+struct P<T>(T) where Vec<T>: Debug;
+trait Show<T> where Vec<T>: Debug {
+    fn show(&self, v: Vec<T>) { println!("{:?}", v); }
+}
+struct A;
+impl Show<i32> for A {}
+fn main() {
+    S(1).show(vec![1, 2]);
+    let p = P(3);
+    println!("{}", p.0);
+    A.show(vec![4]);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "[1, 2]\n3\n[4]\n");
+    // Building the struct proves its clause.
+    let report = refused(
+        r#"
+use std::fmt::Debug;
+struct Opaque;
+struct P<T>(T) where Vec<T>: Debug;
+fn main() { let p = P(Opaque); let _ = p; }
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0277]: `Opaque` doesn't implement `Debug`"),
+        "{report}"
+    );
+    assert!(
+        report.contains("  = note: required for `Vec<Opaque>` to implement `Debug`\n"),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_bound_met_through_a_conditional_impl_proves_the_impls_own_bounds() {
+    // rustc proves `Wrapper<Opaque>: Summary` through `impl<T: Debug>
+    // Summary for Wrapper<T>`, whose `Opaque: Debug` fails (#2471).
+    let program = |derive: &str| {
+        format!(
+            r#"
+use std::fmt::Debug;
+{derive}
+struct Opaque;
+struct Wrapper<T>(T);
+trait Summary {{ fn s(&self) -> String; }}
+impl<T: Debug> Summary for Wrapper<T> {{ fn s(&self) -> String {{ format!("w({{:?}})", self.0) }} }}
+fn sum<W: Summary>(w: W) {{ println!("{{}}", w.s()); }}
+fn main() {{ sum(Wrapper(Opaque)); }}
+main();
+"#
+        )
+    };
+    assert_eq!(printed(&program("#[derive(Debug)]")), "w(Opaque)\n");
+    let report = refused(&program(""));
+    assert!(
+        report.starts_with(
+            r#"error[E0277]: `Opaque` doesn't implement `Debug`
+ --> <script>:9:25
+  |
+9 | fn main() { sum(Wrapper(Opaque)); }
+  |             ---         ^^^^^^ the trait `Debug` is not implemented for `Opaque`
+  |             |
+  |             required by a bound introduced by this call
+  |
+help: the trait `Summary` is conditionally implemented for `Wrapper<T>`
+ --> <script>:7:1
+  |
+7 | impl<T: Debug> Summary for Wrapper<T> { fn s(&self) -> String { format!("w({:?})", self.0) } }
+  | ^^^^^^^^-----^^^^^^^^^^^^^^^^^^^^^^^^
+  |         |
+  |         unsatisfied requirement introduced here: `Opaque: Debug`
+note: required for `Wrapper<Opaque>` to implement `Summary`
+ --> <script>:7:16
+  |
+7 | impl<T: Debug> Summary for Wrapper<T> { fn s(&self) -> String { format!("w({:?})", self.0) } }
+  |         -----  ^^^^^^^     ^^^^^^^^^^
+  |         |
+  |         unsatisfied trait bound introduced here
+note: required by a bound in `sum`
+ --> <script>:8:11
+  |
+8 | fn sum<W: Summary>(w: W) { println!("{}", w.s()); }
+  |           ^^^^^^^ required by this bound in `sum`
+help: consider annotating `Opaque` with `#[derive(Debug)]`
+"#
+        ),
+        "{report}"
+    );
+    // A `where` clause on another type: the innermost type it needs.
+    let report = refused(
+        r#"
+use std::fmt::Debug;
+struct Opaque;
+struct Wrapper<T>(T);
+trait Summary { fn s(&self) -> String; }
+impl<T> Summary for Wrapper<T> where Vec<T>: Debug { fn s(&self) -> String { String::from("w") } }
+fn sum<W: Summary>(w: W) { println!("{}", w.s()); }
+fn main() { sum(Wrapper(1)); sum(Wrapper(Opaque)); }
+main();
+"#,
+    );
+    assert!(report.starts_with(r#"error[E0277]: `Opaque` doesn't implement `Debug`
+ --> <script>:8:34
+  |
+8 | fn main() { sum(Wrapper(1)); sum(Wrapper(Opaque)); }
+  |                              --- ^^^^^^^^^^^^^^^ the trait `Debug` is not implemented for `Opaque`
+  |                              |
+  |                              required by a bound introduced by this call
+  |
+help: the trait `Summary` is conditionally implemented for `Wrapper<T>`
+ --> <script>:6:1
+  |
+6 | impl<T> Summary for Wrapper<T> where Vec<T>: Debug { fn s(&self) -> String { String::from("w") } }
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^-----
+  |                                              |
+  |                                              unsatisfied requirement introduced here: `Vec<Opaque>: Debug`
+  = note: required for `Vec<Opaque>` to implement `Debug`
+note: required for `Wrapper<Opaque>` to implement `Summary`
+ --> <script>:6:9
+  |
+6 | impl<T> Summary for Wrapper<T> where Vec<T>: Debug { fn s(&self) -> String { String::from("w") } }
+  |         ^^^^^^^     ^^^^^^^^^^               ----- unsatisfied trait bound introduced here
+note: required by a bound in `sum`
+ --> <script>:7:11
+  |
+7 | fn sum<W: Summary>(w: W) { println!("{}", w.s()); }
+  |           ^^^^^^^ required by this bound in `sum`
+help: consider annotating `Opaque` with `#[derive(Debug)]`
+"#), "{report}");
+}
+
+#[test]
+fn a_hand_written_std_impl_holds_where_its_own_bounds_do() {
+    // `impl<T> Debug for W<T>` asks nothing of `T`, and `impl<T: Clone>
+    // Debug for W<T>` asks `Clone`, not `Debug` (#2471).
+    let program = |bound: &str, main: &str| {
+        format!(
+            r#"
+use std::fmt;
+#[derive(Debug)]
+struct Opaque;
+struct W<T>(T);
+impl<T{bound}> fmt::Debug for W<T> {{ fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {{ write!(f, "W") }} }}
+fn show<T: fmt::Debug>(t: T) {{ println!("{{:?}}", t); }}
+fn main() {{ {main} }}
+main();
+"#
+        )
+    };
+    let main = "show(W(Opaque)); println!(\"{:?}\", vec![W(Opaque)]);";
+    assert_eq!(printed(&program("", main)), "W\n[W]\n");
+    let report = refused(&program(": Clone", "show(W(Opaque));"));
+    assert!(report.starts_with(r#"error[E0277]: the trait bound `Opaque: Clone` is not satisfied
+ --> <script>:8:20
+  |
+8 | fn main() { show(W(Opaque)); }
+  |             ----   ^^^^^^ the trait `Clone` is not implemented for `Opaque`
+  |             |
+  |             required by a bound introduced by this call
+  |
+help: the trait `Debug` is conditionally implemented for `W<T>`
+ --> <script>:6:1
+  |
+6 | impl<T: Clone> fmt::Debug for W<T> { fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { write!(f, "W") } }
+  | ^^^^^^^^-----^^^^^^^^^^^^^^^^^^^^^
+  |         |
+  |         unsatisfied requirement introduced here: `Opaque: Clone`
+note: required for `W<Opaque>` to implement `Debug`
+ --> <script>:6:16
+  |
+6 | impl<T: Clone> fmt::Debug for W<T> { fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { write!(f, "W") } }
+  |         -----  ^^^^^^^^^^     ^^^^
+  |         |
+  |         unsatisfied trait bound introduced here
+note: required by a bound in `show`
+ --> <script>:7:12
+  |
+7 | fn show<T: fmt::Debug>(t: T) { println!("{:?}", t); }
+  |            ^^^^^^^^^^ required by this bound in `show`
+help: consider annotating `Opaque` with `#[derive(Clone)]`
+"#), "{report}");
+    // A formatted value proves the impl it formats by.
+    let report = refused(&program(": Clone", "println!(\"{:?}\", W(Opaque));"));
+    assert!(report.starts_with(r#"error[E0277]: the trait bound `Opaque: Clone` is not satisfied
+ --> <script>:8:30
+  |
+8 | fn main() { println!("{:?}", W(Opaque)); }
+  |                       ----   ^^^^^^^^^ the trait `Clone` is not implemented for `Opaque`
+  |                       |
+  |                       required by this formatting parameter
+  |
+help: the trait `Debug` is conditionally implemented for `W<T>`
+ --> <script>:6:1
+  |
+6 | impl<T: Clone> fmt::Debug for W<T> { fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { write!(f, "W") } }
+  | ^^^^^^^^-----^^^^^^^^^^^^^^^^^^^^^
+  |         |
+  |         unsatisfied requirement introduced here: `Opaque: Clone`
+note: required for `W<Opaque>` to implement `Debug`
+ --> <script>:6:16
+  |
+6 | impl<T: Clone> fmt::Debug for W<T> { fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { write!(f, "W") } }
+  |         -----  ^^^^^^^^^^     ^^^^
+  |         |
+  |         unsatisfied trait bound introduced here
+help: consider annotating `Opaque` with `#[derive(Clone)]`
+"#), "{report}");
+}
+
+#[test]
+fn an_unmet_bound_names_the_innermost_type_with_each_impl_that_needed_it() {
+    // rustc names `Opaque` of `Option<Vec<Opaque>>: Debug`, and each std
+    // impl that needed it, folding a run of one trait's (#2472).
+    let program = |main: &str| {
+        format!(
+            r#"
+use std::fmt::Debug;
+struct Opaque;
+#[derive(Debug)]
+struct W<T>(T);
+fn show<T: Debug>(t: T) {{ println!("{{:?}}", t); }}
+fn main() {{ {main} }}
+main();
+"#
+        )
+    };
+    let report = refused(&program("show(Some(vec![Opaque]));"));
+    assert!(
+        report.starts_with(
+            r#"error[E0277]: `Opaque` doesn't implement `Debug`
+ --> <script>:7:23
+  |
+7 | fn main() { show(Some(vec![Opaque])); }
+  |             ----      ^^^^^^^^^^^^ the trait `Debug` is not implemented for `Opaque`
+  |             |
+  |             required by a bound introduced by this call
+  |
+"#
+        ),
+        "{report}"
+    );
+    assert!(
+        report.contains(
+            r#"  = note: required for `Vec<Opaque>` to implement `Debug`
+  = note: 1 redundant requirement hidden
+  = note: required for `Option<Vec<Opaque>>` to implement `Debug`
+note: required by a bound in `show`
+"#
+        ),
+        "{report}"
+    );
+    let report = refused(&program("show(Some((1, Opaque)));"));
+    assert!(
+        report.contains(
+            r#"7 | fn main() { show(Some((1, Opaque))); }
+  |             ----          ^^^^^^ the trait `Debug` is not implemented for `Opaque`
+  |             |
+  |             required by a bound introduced by this call
+  |
+  = note: required for `({integer}, Opaque)` to implement `Debug`
+  = note: 1 redundant requirement hidden
+  = note: required for `Option<({integer}, Opaque)>` to implement `Debug`
+note: required by a bound in `show`
+"#
+        ),
+        "{report}"
+    );
+    // A derive bounds its parameters.
+    let report = refused(&program("show(vec![W(Opaque)]);"));
+    assert!(
+        report.contains(
+            r#"note: required for `W<Opaque>` to implement `Debug`
+ --> <script>:5:8
+  |
+4 | #[derive(Debug)]
+  |          ----- in this derive macro expansion
+5 | struct W<T>(T);
+  |        ^ - type parameter would need to implement `Debug`
+  = help: consider manually implementing `Debug` to avoid undesired bounds
+  = note: 1 redundant requirement hidden
+  = note: required for `Vec<W<Opaque>>` to implement `Debug`
+note: required by a bound in `show`
+"#
+        ),
+        "{report}"
+    );
+    // A formatted value, which a derive's bound also refuses.
+    let report = refused(&program("let v = vec![W(Opaque)]; println!(\"{:?}\", v);"));
+    assert!(
+        report.contains(
+            r#"  = help: the trait `Debug` is not implemented for `Opaque`
+note: required for `W<Opaque>` to implement `Debug`
+ --> <script>:5:8
+  |
+4 | #[derive(Debug)]
+  |          ----- in this derive macro expansion
+5 | struct W<T>(T);
+  |        ^ - type parameter would need to implement `Debug`
+  = help: consider manually implementing `Debug` to avoid undesired bounds
+  = note: 1 redundant requirement hidden
+  = note: required for `Vec<W<Opaque>>` to implement `Debug`
+"#
+        ),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_program_display_impl_holds_where_its_own_bounds_do() {
+    // `impl<T: Display> Display for Shown<T>` asks `Display` of `T`, which
+    // a formatted value and a bound both prove (#2471).
+    let program = |main: &str| {
+        format!(
+            r#"
+use std::fmt::{{self, Display}};
+struct Opaque;
+struct Shown<T>(T);
+impl<T: Display> Display for Shown<T> {{ fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {{ write!(f, "<{{}}>", self.0) }} }}
+fn show<T: Display>(t: T) {{ println!("{{}}", t); }}
+fn main() {{ {main} }}
+main();
+"#
+        )
+    };
+    assert_eq!(
+        printed(&program("show(Shown(3)); println!(\"{}\", Shown(\"t\"));")),
+        "<3>\n<t>\n"
+    );
+    let report = refused(&program("println!(\"{}\", Shown(Opaque));"));
+    assert_eq!(
+        report,
+        r#"error[E0277]: `Opaque` doesn't implement `std::fmt::Display`
+ --> <script>:7:28
+  |
+7 | fn main() { println!("{}", Shown(Opaque)); }
+  |                       --   ^^^^^^^^^^^^^ `Opaque` cannot be formatted with the default formatter
+  |                       |
+  |                       required by this formatting parameter
+  |
+help: the trait `std::fmt::Display` is not implemented for `Opaque`
+ --> <script>:3:1
+  |
+3 | struct Opaque;
+  | ^^^^^^^^^^^^^
+  = note: in format strings you may be able to use `{:?}` (or {:#?} for pretty-print) instead
+help: the trait `std::fmt::Display` is conditionally implemented for `Shown<T>`
+ --> <script>:5:1
+  |
+5 | impl<T: Display> Display for Shown<T> { fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { write!(f, "<{}>", self.0) } }
+  | ^^^^^^^^-------^^^^^^^^^^^^^^^^^^^^^^
+  |         |
+  |         unsatisfied requirement introduced here: `Opaque: std::fmt::Display`
+note: required for `Shown<Opaque>` to implement `std::fmt::Display`
+ --> <script>:5:18
+  |
+5 | impl<T: Display> Display for Shown<T> { fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { write!(f, "<{}>", self.0) } }
+  |         -------  ^^^^^^^     ^^^^^^^^
+  |         |
+  |         unsatisfied trait bound introduced here"#
+    );
+    let report = refused(&program("show(Shown(Opaque));"));
+    assert!(
+        report.starts_with(
+            r#"error[E0277]: `Opaque` doesn't implement `std::fmt::Display`
+ --> <script>:7:24
+  |
+7 | fn main() { show(Shown(Opaque)); }
+  |             ----       ^^^^^^ unsatisfied trait bound
+  |             |
+  |             required by a bound introduced by this call
+  |
+help: the trait `std::fmt::Display` is not implemented for `Opaque`
+"#
+        ),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_conditional_impl_holds_through_generic_and_blanket_bounds() {
+    // An impl's bound met by a caller's own bound, a blanket impl, a
+    // reference, an opaque output or a nested impl, as rustc proves each.
+    let output = printed(
+        r#"
+use std::fmt::Debug;
+trait Two { fn two(&self) -> i32 { 2 } }
+impl<X: Debug> Two for X {}
+trait Summary { fn s(&self) -> String; }
+struct Wrapper<T>(T);
+impl<T: Debug> Summary for Wrapper<T> { fn s(&self) -> String { format!("w({:?})", self.0) } }
+struct Twice<T>(T);
+impl<T: Two> Summary for Twice<T> { fn s(&self) -> String { format!("{}", self.0.two()) } }
+impl Summary for i32 { fn s(&self) -> String { String::from("i") } }
+struct Pair<A, B>(A, B);
+impl<A: Summary, B: Summary> Summary for Pair<A, B> { fn s(&self) -> String { format!("{}{}", self.0.s(), self.1.s()) } }
+fn sum<W: Summary>(w: W) { println!("{}", w.s()); }
+fn outer<U: Debug>(u: U) { sum(Wrapper(u)); }
+fn via_ref<U: Debug>(u: &U) { sum(Wrapper(u)); }
+fn make() -> impl Debug { 7 }
+fn main() {
+    outer(1);
+    via_ref(&"r");
+    sum(Wrapper(make()));
+    sum(Twice(1));
+    sum(Pair(Pair(1, Twice(2)), Wrapper(vec![Some(3)])));
+    let boxed: Box<dyn Summary> = Box::new(Wrapper(4));
+    println!("{}", boxed.s());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "w(1)\nw(\"r\")\nw(7)\n2\ni2w([Some(3)])\nw(4)\n");
+}

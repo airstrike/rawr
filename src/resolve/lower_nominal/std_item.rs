@@ -510,6 +510,7 @@ impl<'a> Parser<'a> {
                         declared: self.declared_name(&target),
                         required_by: None,
                         formatted: None,
+                        chain: Box::default(),
                     });
                 }
                 self.default_source(&target, call)?
@@ -577,6 +578,7 @@ impl<'a> Parser<'a> {
                         declared: self.declared_name(&target),
                         required_by: None,
                         formatted: None,
+                        chain: Box::default(),
                     });
                 }
                 let new = self.temporary("new");

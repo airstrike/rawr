@@ -4,6 +4,7 @@
 use super::literal;
 use super::lvalue::Lvalue;
 use super::models::{Models, Nominal};
+use super::obligation::Obligation;
 use super::op::{Op, PreludeOp};
 use super::ty::{contains_inference, CellKind, Float, Int, Ty};
 use super::{
@@ -1678,7 +1679,7 @@ impl<'a> Parser<'a> {
                 source.push_text(";\n");
                 names.push(temporary);
             }
-            types.push((ty, argument.span));
+            types.push((ty, self.whole_expression(argument.span)));
         }
         placed.literal = template_span;
         placed.placeholders = placeholders
@@ -1711,6 +1712,7 @@ impl<'a> Parser<'a> {
                     declared: None,
                     required_by: None,
                     formatted: None,
+                    chain: Box::default(),
                 });
             }
             let name = origin::Fragment::plain(names[index].as_str());
@@ -1812,7 +1814,7 @@ impl<'a> Parser<'a> {
                     precision.as_deref().unwrap_or("-1"),
                 ));
                 self.debug_spec = Some(parts);
-                let rendered = self.debug_source(&ty, name, at);
+                let rendered = self.debug_argument(&ty, name, at);
                 self.debug_spec = None;
                 let rendered = rendered?;
                 if spec.alternate {
@@ -1890,7 +1892,7 @@ impl<'a> Parser<'a> {
                         {
                             return Err(self.unsupported("a `{:?}` width on a compound value"));
                         }
-                        let rendered = self.debug_source(&ty, name, at)?;
+                        let rendered = self.debug_argument(&ty, name, at)?;
                         if spec.alternate {
                             self.prelude_op(PreludeOp::PrettyDebug, [rendered])
                         } else {
@@ -2149,6 +2151,13 @@ impl<'a> Parser<'a> {
     /// rustc's E0277 for a value of `ty`, which has no `Display`, at `at`
     /// in a `format!`.
     fn undisplayable(&self, ty: &Ty, at: Span) -> Error {
+        // The program's impl, whose own bounds the type's arguments fail:
+        // the innermost type they need it of.
+        if let Ty::Script(id, _) = ty
+            && self.models.implements("Display", *id)
+        {
+            return self.unmet_bound(ty, Obligation::Trait("Display".into()), at, None);
+        }
         Error::MissingCapability {
             owner: ty.name(&self.models),
             capability: "Display".into(),
@@ -2157,6 +2166,7 @@ impl<'a> Parser<'a> {
             declared: self.declared_name(ty),
             required_by: None,
             formatted: None,
+            chain: Box::default(),
         }
     }
 
@@ -2230,7 +2240,7 @@ impl<'a> Parser<'a> {
                     });
                 }
                 _ if pending.debug => {
-                    let rendered = self.debug_source(&ty, name, pending.span)?;
+                    let rendered = self.debug_argument(&ty, name, pending.span)?;
                     if pending.alternate {
                         self.prelude_op(PreludeOp::PrettyDebug, [rendered])
                     } else {
@@ -2260,9 +2270,10 @@ impl<'a> Parser<'a> {
             return Some(self.error_text(value, false));
         }
         match ty {
-            Ty::Script(id, _) => self
+            Ty::Script(id, arguments) => self
                 .models
                 .std_impl(*id, "Display", "fmt")
+                .filter(|_| self.impl_holds("Display", *id, arguments))
                 .map(|definition| Self::std_call(definition, value, &["\"\"".into()])),
             Ty::Param(..) | Ty::Projection(..) | Ty::Dyn(..)
                 if self.type_implements(ty, "Display") =>
@@ -2298,7 +2309,10 @@ impl<'a> Parser<'a> {
             return false;
         }
         match ty {
-            Ty::Script(id, _) => self.models.std_impl(*id, "Display", "fmt").is_some(),
+            Ty::Script(id, arguments) => {
+                self.models.std_impl(*id, "Display", "fmt").is_some()
+                    && self.impl_holds("Display", *id, arguments)
+            }
             Ty::Param(..) | Ty::Projection(..) | Ty::Dyn(..) => self.type_implements(ty, "Display"),
             _ => false,
         }
@@ -2710,6 +2724,37 @@ impl<'a> Parser<'a> {
         Ok(source)
     }
 
+    /// [`Self::debug_source`] of a format argument, whose missing `Debug`
+    /// rustc reports at the innermost type that lacks it, with each impl
+    /// that needed it: `Opaque` of a `Vec<Opaque>`.
+    fn debug_argument(
+        &mut self,
+        ty: &Ty,
+        value: origin::Fragment,
+        span: Span,
+    ) -> Result<origin::Fragment, Error> {
+        self.debug_source(ty, value, span).map_err(|mut error| {
+            if let Error::MissingCapability {
+                owner,
+                capability,
+                chain,
+                ..
+            } = &mut error
+                && !self.type_provides(ty, capability::Kind::Debug)
+            {
+                // The chain from the argument's own type, which an error
+                // from inside it starts short of.
+                let unmet = self.unmet(ty, Obligation::Capability(capability::Kind::Debug));
+                if unmet.ty.name(&self.models) == *owner
+                    && unmet.obligation.name() == capability.as_str()
+                {
+                    *chain = unmet.chain;
+                }
+            }
+            error
+        })
+    }
+
     /// A `String` expression rendering `value` of type `ty` as Rust's
     /// `{:?}` does, when `ty` is `Debug`.
     pub(super) fn debug_source(
@@ -2739,6 +2784,19 @@ impl<'a> Parser<'a> {
             this.type_provides(ty, capability::Kind::Debug)
         }) {
             return self.debug_source(&parameter, value, span);
+        }
+        // A derive or an impl whose own bounds the type's arguments fail:
+        // `W<Opaque>` of `#[derive(Debug)] struct W<T>(T)`.
+        if matches!(ty, Ty::Script(..)) && !self.type_provides(&ty, capability::Kind::Debug) {
+            let error = self.unmet_bound(
+                &ty,
+                Obligation::Capability(capability::Kind::Debug),
+                span,
+                None,
+            );
+            if matches!(&error, Error::MissingCapability { chain, .. } if !chain.is_empty()) {
+                return Err(error);
+            }
         }
         if let Some(spec) = self.debug_spec.clone() {
             // A leaf under a `{:?}` spec: a number, `bool` or `()` takes it.
@@ -2810,6 +2868,7 @@ impl<'a> Parser<'a> {
                         declared: self.declared_name(&ty),
                         required_by: None,
                         formatted: None,
+                        chain: Box::default(),
                     });
                 }
                 if self.models.std_traits.contains("Debug") {
@@ -3028,6 +3087,7 @@ impl<'a> Parser<'a> {
                     declared: self.declared_name(&ty),
                     required_by: None,
                     formatted: None,
+                    chain: Box::default(),
                 })
             }
         })

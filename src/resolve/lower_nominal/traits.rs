@@ -1166,7 +1166,11 @@ impl<'a> Parser<'a> {
                         .iter()
                         .any(|parent| parent == trait_name)
             }
-            Ty::Script(id, _) if self.models.implements(trait_name, *id) => true,
+            // The program's impl, where its own bounds hold of the type's
+            // arguments.
+            Ty::Script(id, arguments) if self.models.implements(trait_name, *id) => {
+                self.impl_holds(trait_name, *id, arguments)
+            }
             // Rawr's iterator type: a `Range`, a chain, `impl Iterator`.
             Ty::Iter(..) if is_iterator_trait(trait_name) => true,
             // An integer range a crate holds by value, as itertools'
@@ -1600,6 +1604,7 @@ impl<'a> Parser<'a> {
                     declared: self.declared_name(&owner),
                     required_by: None,
                     formatted: None,
+                    chain: Box::default(),
                 });
             }
             // `impl Both<i64> for C` needs `C: Convert<i64>` for `trait
@@ -1631,6 +1636,7 @@ impl<'a> Parser<'a> {
                         declared: self.declared_name(&owner),
                         required_by: None,
                         formatted: None,
+                        chain: Box::default(),
                     });
                 }
             }
@@ -1684,6 +1690,7 @@ impl<'a> Parser<'a> {
                         trait_name.text, name.text
                     ))),
                     formatted: None,
+                    chain: Box::default(),
                 });
             }
             self.check_associated_equalities(&trait_name.text, name, &ty, &owner)?;

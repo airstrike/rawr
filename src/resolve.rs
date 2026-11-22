@@ -35,7 +35,7 @@ pub use error::{
     Callee, Category, Cloning, Detail, Error, Expansion, Fields, Import, Imported, Instead, Lint,
     MacroScope, Missing, MissingImpl, MoveCause, MovedPlace, MutBinding, Opaqueness,
     OwningParameter, PatternOrigin, PatternTypes, Placeholder, Private, Receiver, Referent,
-    Required, Shown, Similar, Uncovered, Unexpected, Unresolved,
+    Required, Requirement, Shown, Similar, Site, Uncovered, Unexpected, Unresolved,
 };
 pub use imports::{Candidate, Imports};
 use std::collections::BTreeMap;
@@ -2552,8 +2552,9 @@ fn resolve_item(
         ),
         crate::item::Parsed::Struct(parsed) => {
             let (definition, key) = declared_type(&parsed.name, types);
-            let (scope, generics) = generic_scope(
+            let (scope, generics, where_bounds) = bounded_scope(
                 parsed.generics,
+                parsed.where_bounds,
                 types,
                 host,
                 #[cfg(feature = "rust-import")]
@@ -2607,6 +2608,7 @@ fn resolve_item(
                 key,
                 name: parsed.name,
                 generics,
+                where_bounds,
                 lifetimes: parsed.lifetimes.params.len(),
                 regions,
                 fields: fields.into_boxed_slice(),
@@ -2615,8 +2617,9 @@ fn resolve_item(
         }
         crate::item::Parsed::Enum(parsed) => {
             let (definition, key) = declared_type(&parsed.name, types);
-            let (scope, generics) = generic_scope(
+            let (scope, generics, where_bounds) = bounded_scope(
                 parsed.generics,
+                parsed.where_bounds,
                 types,
                 host,
                 #[cfg(feature = "rust-import")]
@@ -2675,6 +2678,7 @@ fn resolve_item(
                 key,
                 name: parsed.name,
                 generics,
+                where_bounds,
                 lifetimes: parsed.lifetimes.params.len(),
                 regions,
                 variants: variants.into_boxed_slice(),
@@ -5420,6 +5424,46 @@ type GenericScope = (
 /// The type names in scope inside an item declaring `generics` (when it
 /// declares any), and its parameters with their bounds. Rawr's bounds are
 /// the built-in derivable traits; it has no user traits.
+/// A [`GenericScope`] with the parameters lifted for a type's `where`
+/// bounds on other types apart.
+type BoundedScope = (
+    Option<BTreeMap<ImmutableString, type_ref::Target>>,
+    Box<[item::Generic]>,
+    Box<[item::Generic]>,
+);
+
+/// [`generic_scope`] of a type's `generics` and the parameters lifted for
+/// its `where` bounds on other types, which name them: each resolved, the
+/// lifted ones apart.
+fn bounded_scope(
+    generics: Box<[crate::item::GenericParam]>,
+    where_bounds: Box<[crate::item::GenericParam]>,
+    types: &BTreeMap<ImmutableString, type_ref::Target>,
+    host: &host::Registry,
+    #[cfg(feature = "rust-import")] native: Option<native::Site<'_>>,
+) -> Result<BoundedScope, Error> {
+    let declared = generics.len();
+    let all = generics
+        .into_vec()
+        .into_iter()
+        .chain(where_bounds.into_vec())
+        .collect();
+    let (scope, resolved) = generic_scope(
+        all,
+        types,
+        host,
+        #[cfg(feature = "rust-import")]
+        native,
+    )?;
+    let mut resolved = resolved.into_vec();
+    let bounds = resolved.split_off(declared.min(resolved.len()));
+    Ok((
+        scope,
+        resolved.into_boxed_slice(),
+        bounds.into_boxed_slice(),
+    ))
+}
+
 fn generic_scope(
     generics: Box<[crate::item::GenericParam]>,
     types: &BTreeMap<ImmutableString, type_ref::Target>,

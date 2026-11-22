@@ -79,6 +79,7 @@ impl Parser<'_> {
                         declared: None,
                         required_by: None,
                         formatted: None,
+                        chain: Box::default(),
                     });
                 }
                 let source = value.rendered_source();

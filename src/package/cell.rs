@@ -557,9 +557,9 @@ record! {
     item::Use { scope, header, tree, span }
     item::UseMember { name, alias }
     item::GenericParam { name, bounds, projections, default, lifted, constant, fixed }
-    item::Struct { header, name, generics, lifetimes, fields, form, span }
+    item::Struct { header, name, generics, where_bounds, lifetimes, fields, form, span }
     item::Field { name, ty, span, attributes, visibility }
-    item::Enum { header, name, generics, lifetimes, variants, span }
+    item::Enum { header, name, generics, where_bounds, lifetimes, variants, span }
     item::Variant {
         name, payload, fields, default, discriminant, span, attributes, field_attributes,
     }

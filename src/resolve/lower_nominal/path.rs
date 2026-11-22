@@ -642,6 +642,7 @@ impl<'a> Parser<'a> {
                             declared: None,
                             required_by: None,
                             formatted: None,
+                            chain: Box::default(),
                         });
                     };
                     self.coerce_expr(&from, argument)?;
@@ -1298,6 +1299,7 @@ impl<'a> Parser<'a> {
                     declared: None,
                     required_by: None,
                     formatted: None,
+                    chain: Box::default(),
                 });
             };
             self.coerce_expr(&from, argument)?;
@@ -2361,6 +2363,7 @@ impl<'a> Parser<'a> {
                 declared: None,
                 required_by: None,
                 formatted: None,
+                chain: Box::default(),
             });
         }
         // A crate trait's function without `self` for this type.

@@ -1053,6 +1053,7 @@ impl<'a> Parser<'a> {
                         declared: self.declared_name(target.as_ref()),
                         required_by: None,
                         formatted: None,
+                        chain: Box::default(),
                     });
                 }
                 source.push_text(o.as_str());
@@ -1337,6 +1338,7 @@ impl<'a> Parser<'a> {
                     declared: this.declared_name(&this.inference.resolve(ty)),
                     required_by: None,
                     formatted: None,
+                    chain: Box::default(),
                 })
             }
         };
@@ -1738,6 +1740,7 @@ impl<'a> Parser<'a> {
                             declared: None,
                             required_by: None,
                             formatted: None,
+                            chain: Box::default(),
                         }
                     })?;
                 let helper = self.push_op(Op::Default {
@@ -1786,6 +1789,7 @@ impl<'a> Parser<'a> {
                             declared: self.declared_name(&ty),
                             required_by: None,
                             formatted: None,
+                            chain: Box::default(),
                         });
                     }
                     // An imported type's `default` comes from its crate's
@@ -1812,6 +1816,7 @@ impl<'a> Parser<'a> {
                     declared: self.declared_name(&ty),
                     required_by: None,
                     formatted: None,
+                    chain: Box::default(),
                 })
             }
         })

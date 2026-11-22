@@ -1017,6 +1017,7 @@ impl Parser<'_> {
             declared: None,
             required_by: None,
             formatted: None,
+            chain: Box::default(),
         }
     }
 
@@ -1334,6 +1335,7 @@ impl Parser<'_> {
                         declared: None,
                         required_by: None,
                         formatted: None,
+                        chain: Box::default(),
                     });
                 }
                 return Ok(self.adapted(pipeline, item, expression));

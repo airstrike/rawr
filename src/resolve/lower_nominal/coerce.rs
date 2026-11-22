@@ -419,6 +419,7 @@ impl<'a> Parser<'a> {
                     declared: self.declared_name(from_error.as_ref()),
                     required_by: None,
                     formatted: None,
+                    chain: Box::default(),
                 });
             };
             let mut boxed = origin::Fragment::plain(format!("{{ let {result} = "));
@@ -467,6 +468,7 @@ impl<'a> Parser<'a> {
                     declared: self.declared_name(&source),
                     required_by: None,
                     formatted: None,
+                    chain: Box::default(),
                 });
             };
             *value = self.operator_expr(object, target, value.span);
@@ -652,6 +654,7 @@ impl<'a> Parser<'a> {
                     declared: self.declared_name(&concrete),
                     required_by: None,
                     formatted: None,
+                    chain: Box::default(),
                 });
             }
             // `dyn Shape<Output = i64>`: the type's `Output` is `i64`.
@@ -1179,6 +1182,7 @@ impl<'a> Parser<'a> {
                         declared: None,
                         required_by: None,
                         formatted: None,
+                        chain: Box::default(),
                     });
                 };
                 let item = crate::item::Value::new(

@@ -2,6 +2,7 @@
 //! shares, and each nominal type's model.
 
 use super::inference::AssociatedTypes;
+use super::obligation;
 use super::ty::Ty;
 use super::{
     function_name, inherit_block_names, inherit_names, instance_text, is_iterator_trait,
@@ -139,6 +140,10 @@ pub(super) struct Tables {
     /// The trait arguments of each `impl Trait<A> for Owner` of a generic
     /// trait, with the impl's own parameters.
     pub(super) impl_arguments: BTreeMap<(ImmutableString, type_def::Id), ImplArguments>,
+    /// The bounds each `impl Trait for Owner<..>` asks of the owner's
+    /// arguments, by trait and owner: `T: Debug` of `impl<T: Debug> Summary
+    /// for Wrapper<T>`.
+    pub(super) impl_bounds: BTreeMap<(ImmutableString, type_def::Id), Vec<obligation::Impl>>,
     /// The distinct argument lists without parameters of each generic
     /// trait's impls: one dispatcher per instance.
     pub(super) trait_instances: BTreeMap<ImmutableString, Vec<Box<[type_ref::Type]>>>,
@@ -675,6 +680,7 @@ impl Models {
 
         let mut associated = AssociatedTypes::default();
         let mut impl_arguments = BTreeMap::<(ImmutableString, type_def::Id), ImplArguments>::new();
+        let mut impl_bounds = BTreeMap::<_, Vec<obligation::Impl>>::new();
         let mut trait_instances = BTreeMap::<ImmutableString, Vec<Box<[type_ref::Type]>>>::new();
         for shell in program.items.iter() {
             let item::Kind::Impl(implementation) = &shell.kind else {
@@ -714,6 +720,15 @@ impl Models {
                 })
                 .collect();
             impls.insert((name.text.clone(), *definition));
+            impl_bounds
+                .entry((name.text.clone(), *definition))
+                .or_default()
+                .push(obligation::Impl::new(
+                    shell.source,
+                    implementation,
+                    name.span,
+                    parameters.clone(),
+                ));
             if !trait_arguments.is_empty() {
                 impl_arguments
                     .entry((name.text.clone(), *definition))
@@ -998,6 +1013,7 @@ impl Models {
                 })
                 .collect(),
             impl_arguments,
+            impl_bounds,
             trait_instances,
             associated: Shared::new(associated),
             std_traits,
@@ -1718,6 +1734,23 @@ impl Nominal {
         match self {
             Self::Struct { item, .. } => &item.regions.params,
             Self::Enum { item, .. } => &item.regions.params,
+        }
+    }
+
+    /// The type's header: its attributes, its derives among them.
+    pub(super) fn header(&self) -> &crate::item::Header {
+        match self {
+            Self::Struct { item, .. } => &item.header,
+            Self::Enum { item, .. } => &item.header,
+        }
+    }
+
+    /// The parameters lifted for the type's `where` bounds on other types
+    /// (`Vec<T>: Debug`), which building a value checks.
+    pub(super) fn where_bounds(&self) -> &[item::Generic] {
+        match self {
+            Self::Struct { item, .. } => &item.where_bounds,
+            Self::Enum { item, .. } => &item.where_bounds,
         }
     }
 

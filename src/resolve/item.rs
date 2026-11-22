@@ -334,6 +334,9 @@ pub(crate) struct Struct {
     pub key: type_def::Key,
     pub name: crate::item::Name,
     pub generics: Box<[Generic]>,
+    /// The parameters lifted for its `where` bounds on other types
+    /// (`Vec<T>: Debug`), which building a value checks.
+    pub where_bounds: Box<[Generic]>,
     /// How many lifetime parameters it declares.
     pub lifetimes: usize,
     pub regions: TypeRegions,
@@ -364,6 +367,9 @@ pub(crate) struct Enum {
     pub key: type_def::Key,
     pub name: crate::item::Name,
     pub generics: Box<[Generic]>,
+    /// The parameters lifted for its `where` bounds on other types
+    /// (`Vec<T>: Debug`), which building a value checks.
+    pub where_bounds: Box<[Generic]>,
     /// How many lifetime parameters it declares.
     pub lifetimes: usize,
     pub regions: TypeRegions,

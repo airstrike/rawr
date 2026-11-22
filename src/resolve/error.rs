@@ -509,6 +509,48 @@ pub struct Required {
     pub place: Option<Box<Bound>>,
 }
 
+/// An impl that needs a trait of a type for another type to implement a
+/// trait, as rustc's E0277 notes it: "required for `Vec<Opaque>` to
+/// implement `Debug`".
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct Requirement {
+    /// The type the impl is for, as rustc names it: `Vec<Opaque>`.
+    pub ty: ImmutableString,
+    /// The trait the impl gives it: `Debug`.
+    pub trait_name: ImmutableString,
+    /// The impl, when the program writes it; std's has no place shown.
+    pub site: Option<Box<Site>>,
+}
+
+/// Where the program writes an impl a [`Requirement`] names.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub enum Site {
+    /// `impl<T: Debug> Summary for Wrapper<T>`.
+    Impl {
+        /// From `impl` through its `where` clause.
+        header: Span,
+        /// The trait as the header writes it.
+        trait_path: Span,
+        /// The type the impl is for, as the header writes it: `Wrapper<T>`.
+        owner: Span,
+        /// That type as rustc names it in the help: `Wrapper<T>`.
+        written: ImmutableString,
+        /// The bound the type's argument fails: `Debug` of `T: Debug`.
+        bound: Span,
+    },
+    /// `#[derive(Debug)] struct W<T>(T);`, which bounds each parameter.
+    Derive {
+        /// The trait in the `#[derive]`.
+        derive: Span,
+        /// The type's name.
+        name: Span,
+        /// The parameter whose argument fails the trait.
+        parameter: Span,
+        /// The type as rustc names it in the help: `W<T>`.
+        written: ImmutableString,
+    },
+}
+
 impl Required {
     /// A bound of `item`, which the program doesn't write.
     pub(crate) fn by(item: impl Into<ImmutableString>) -> Self {
@@ -541,19 +583,26 @@ pub struct Placeholder {
 
 impl Error {
     /// The error with the placeholder that formats its value, where it is
-    /// the value's missing `Display` or `Debug` and `placed`, each format
-    /// argument's span, trait and placeholder, has one for the value.
+    /// the value's missing `Display` or `Debug`, or what an impl of it
+    /// needed, and `placed`, each format argument's span, trait and
+    /// placeholder, has one for the value.
     #[must_use]
     pub(crate) fn formatted(mut self, placed: &[(Span, &str, Placeholder)]) -> Self {
         if let Self::MissingCapability {
             capability,
             operation,
             formatted: formatted @ None,
+            chain,
             ..
         } = &mut self
-            && let Some((.., placeholder)) = placed
-                .iter()
-                .find(|(argument, name, _)| argument == operation && *name == capability.as_str())
+            && let Some((.., placeholder)) = placed.iter().find(|(argument, name, _)| {
+                // The trait the value is formatted with is the outermost
+                // the chain needed.
+                let formatting = chain
+                    .last()
+                    .map_or(capability.as_str(), |outermost| &outermost.trait_name);
+                argument == operation && *name == formatting
+            })
         {
             *formatted = Some(Box::new(*placeholder));
         }
@@ -1272,6 +1321,10 @@ pub enum Error {
         /// The format string's placeholder that formats the value with the
         /// trait.
         formatted: Option<Box<Placeholder>>,
+        /// The impls that needed the trait of the type, innermost first,
+        /// when the bound is on a type that holds it: `Vec<Opaque>` of
+        /// `Opaque` in `Vec<Opaque>: Debug`.
+        chain: Box<[Requirement]>,
     },
     /// A statically-known nominal enum match has an invalid pattern set.
     InvalidMatch {

@@ -150,12 +150,17 @@ fn sectioned_group(section: &Section) -> Group<'_> {
             .path(shown(source.identity()))
             .annotations(annotations)
     });
+    let helps = section
+        .helps()
+        .iter()
+        .map(|help| Level::HELP.message(help.as_str()));
     let notes = section
         .notes()
         .iter()
         .map(|note| Level::NOTE.message(note.as_str()));
     Group::with_title(level.secondary_title(section.message()))
         .elements(snippets)
+        .elements(helps)
         .elements(notes)
 }
 

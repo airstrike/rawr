@@ -1135,6 +1135,7 @@ fn sections(error: &resolve::Error, source: &Source) -> Vec<Section> {
             capability,
             declared,
             required_by,
+            chain,
             ..
         } => {
             let help = declared
@@ -1166,7 +1167,8 @@ fn sections(error: &resolve::Error, source: &Source) -> Vec<Section> {
                 ),
                 _ => None,
             };
-            help.into_iter().chain(bound).collect()
+            let chain = super::requirement::sections(chain, owner, capability, source);
+            help.into_iter().chain(chain).chain(bound).collect()
         }
         // The program's own type an operator's trait has no impl for.
         resolve::Error::BinaryOperation { operation, .. } => operation
@@ -1747,7 +1749,9 @@ fn primary_label(
                     "`{owner}` cannot be formatted using `{{:?}}` because it doesn't implement \
                      `Debug`"
                 ),
-                _ => format!("`{owner}` cannot be formatted with the default formatter"),
+                "Display" => format!("`{owner}` cannot be formatted with the default formatter"),
+                // What the impl the value formats by needed of it.
+                _ => format!("the trait `{capability}` is not implemented for `{owner}`"),
             }
             .into(),
         ),
@@ -2061,6 +2065,7 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
             derive,
             declared,
             required_by,
+            chain,
             ..
         } => {
             // A type the program declares in this file shows the derive as
@@ -2088,6 +2093,9 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
                 )),
                 _ => builder,
             };
+            let builder = super::requirement::lines(chain)
+                .into_iter()
+                .fold(builder, Builder::note);
             let builder = match required_by {
                 Some(resolve::Required { item, place: None }) => {
                     builder.note(format!("required by a bound in `{item}`"))
@@ -2603,6 +2611,7 @@ mod tests {
             declared: None,
             required_by: None,
             formatted: None,
+            chain: Box::default(),
         };
 
         let report = Report::from_resolution(source.clone(), None, &missing("FromStr", true))

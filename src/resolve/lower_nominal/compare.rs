@@ -1152,6 +1152,7 @@ impl<'a> Parser<'a> {
                 declared: self.declared_name(&ty),
                 required_by: None,
                 formatted: None,
+                chain: Box::default(),
             });
         };
         let [first, second, third] = names;
@@ -1484,6 +1485,7 @@ impl<'a> Parser<'a> {
                         declared: self.declared_name(&ty),
                         required_by: None,
                         formatted: None,
+                        chain: Box::default(),
                     });
                 }
                 self.prelude_op(PreludeOp::GenericEqual, [lhs, rhs])
@@ -1499,6 +1501,7 @@ impl<'a> Parser<'a> {
                         declared: self.declared_name(&ty),
                         required_by: None,
                         formatted: None,
+                        chain: Box::default(),
                     });
                 }
                 if self.models.std_traits.contains("PartialEq") {
@@ -1523,6 +1526,7 @@ impl<'a> Parser<'a> {
                         declared: self.declared_name(ty),
                         required_by: None,
                         formatted: None,
+                        chain: Box::default(),
                     });
                 }
                 self.prelude_op(PreludeOp::GenericEqual, [lhs, rhs])

@@ -1502,6 +1502,7 @@ impl<'a> Parser<'a> {
                         declared: None,
                         required_by: None,
                         formatted: None,
+                        chain: Box::default(),
                     });
                 }
                 let ty = self.inference.resolve(&ty);
@@ -1901,6 +1902,7 @@ impl<'a> Parser<'a> {
                     declared: None,
                     required_by: None,
                     formatted: None,
+                    chain: Box::default(),
                 });
             }
             self.capture_witnesses();

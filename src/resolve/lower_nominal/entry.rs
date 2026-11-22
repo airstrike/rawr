@@ -1214,6 +1214,7 @@ fn sent_hidden(
                         declared: None,
                         required_by: Some(crate::resolve::Required::by(send.item.clone())),
                         formatted: None,
+                        chain: Box::default(),
                     }
                     .into(),
                 ));

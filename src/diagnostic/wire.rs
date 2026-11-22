@@ -68,6 +68,7 @@ impl Report {
                 "help": section.level() == Level::Help,
                 "message": section.message(),
                 "labels": section.labels().iter().map(label).collect::<Vec<_>>(),
+                "helps": section.helps().iter().map(crate::ImmutableString::as_str).collect::<Vec<_>>(),
                 "notes": section.notes().iter().map(crate::ImmutableString::as_str).collect::<Vec<_>>(),
             })
         });
@@ -242,6 +243,10 @@ fn section(value: &Value, sources: &[Source]) -> Result<Section, Error> {
         .get("labels")
         .and_then(Value::as_array)
         .ok_or(malformed.clone())?;
+    let helps = value
+        .get("helps")
+        .and_then(Value::as_array)
+        .ok_or(malformed.clone())?;
     let notes = value
         .get("notes")
         .and_then(Value::as_array)
@@ -256,6 +261,9 @@ fn section(value: &Value, sources: &[Source]) -> Result<Section, Error> {
                     LabelKind::Secondary => section.secondary(source, span, message),
                 })
             })?;
+    let section = helps.iter().try_fold(section, |section, help| {
+        Ok::<_, Error>(section.helped(string(help, "section")?))
+    })?;
     notes.iter().try_fold(section, |section, note| {
         Ok(section.followed(string(note, "section")?))
     })
