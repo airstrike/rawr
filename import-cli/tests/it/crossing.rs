@@ -1563,6 +1563,18 @@ fn an_associated_function_of_a_blanket_impl_runs_on_each_type_it_applies_to() {
     assert_eq!(rawr, "hsl 220 1 0.625\nrgb 0.5000001 0.25 1\nhsl 0 1 0.5");
 }
 
+/// `Rgb { red: 1.0, ..Rgb::default() }` with nothing that fixes the
+/// color's standard is rustc's E0283 at the `let` (#611): palette's derived
+/// `Default` bounds the standard, so its obligation stays ambiguous.
+#[test]
+fn a_struct_update_from_an_unfixed_default_is_ambiguous() {
+    let stderr = rejected_as_cargo("palette_untyped.rs", "E0283");
+    assert!(
+        stderr.contains("type annotations needed") && stderr.contains("main.rs:9:9"),
+        "{stderr}"
+    );
+}
+
 /// iced's color_palette (#628): `Rgb::from_color(lab)` goes through
 /// palette's `impl<S> FromColorUnclamped<Lab<<S::Space as
 /// RgbSpace>::WhitePoint, f32>> for Rgb<S, f32>`. The projection of a

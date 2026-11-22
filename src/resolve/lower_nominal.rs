@@ -947,6 +947,11 @@ struct Parser<'a> {
     /// `Default::default()` calls whose type inference fixes later:
     /// `(placeholder, type, span)`, written over with the type's default.
     pending_defaults: Vec<(String, Ty, Span)>,
+    /// Each crate call's type argument a bound of the item holds of, with
+    /// the bound's trait and the call: one inference leaves open is
+    /// rustc's E0283, as the bound's obligation stays ambiguous, where an
+    /// unbounded one is its E0282.
+    host_bounds: Vec<(Ty, ImmutableString, Span)>,
     no_struct: bool,
     /// The second `>` of a `>>` closing nested generic arguments.
     split_angle: Option<Position>,
@@ -1259,6 +1264,7 @@ impl<'a> Parser<'a> {
             pending_wide_literals: Vec::new(),
             pending_float_kinds: Vec::new(),
             pending_defaults: Vec::new(),
+            host_bounds: Vec::new(),
             no_struct: false,
             split_angle: None,
             block_statement: None,

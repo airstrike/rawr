@@ -66,6 +66,17 @@ fn call_facade() -> facade::Definition {
                 .imported(selector(4)),
         )
         .unwrap();
+    let mut made = signature::Builder::new();
+    made.type_parameter("T", &[crate::capability::Kind::Default])
+        .unwrap();
+    made.output(type_ref::Type::parameter("T").unwrap());
+    builder
+        .item(
+            item::Definition::function("made", made.finish())
+                .unwrap()
+                .imported(selector(6)),
+        )
+        .unwrap();
     let mut idle = signature::Builder::new();
     idle.output(type_ref::Type::builtin(type_ref::Builtin::I64));
     builder
@@ -1267,4 +1278,33 @@ pub fn run() -> i64 {
     let reached = reached.lock().unwrap();
     assert_eq!(reached.len(), collected.uses.len());
     assert!(keys.iter().all(|(_, key)| reached.contains(key)));
+}
+
+/// A crate call's type argument nothing fixes is rustc's E0283 where the
+/// item bounds it, as `made<T: Default>() -> T` does and a derived
+/// `Default` impl bounds `Rgb<S, T>`'s `S` (#611): the bound's obligation
+/// stays ambiguous, and rustc notes the bound. With no bound, as
+/// `make<T>() -> T`, it is E0282.
+#[test]
+fn an_unfixed_crate_type_argument_is_ambiguous_by_its_bound() {
+    let mut engine = Engine::new();
+    engine.register_host_facade(call_facade()).unwrap();
+    for (source, code, notes) in [
+        (
+            "pub fn run() { let made = native::made(); }",
+            "E0283",
+            &["the type must implement `Default`"][..],
+        ),
+        ("pub fn run() { let made = native::make(); }", "E0282", &[]),
+    ] {
+        let error = engine
+            .compile_executable(source)
+            .map(|_| ())
+            .expect_err(source);
+        let file = crate::diagnostic::Source::new("main.rs", source).unwrap();
+        let report = crate::diagnostic::Report::from_parse(file, &error).unwrap();
+        assert_eq!(report.code().as_str(), code, "{source}");
+        assert_eq!(report.message(), "type annotations needed", "{source}");
+        assert_eq!(report.notes().collect::<Vec<_>>(), notes, "{source}");
+    }
 }
