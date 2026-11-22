@@ -173,6 +173,8 @@ impl<'a> Parser<'a> {
         let mut called: Option<(borrows::CallReceiver, ImmutableString)> = None;
         // Whether `value` is a method call's value, which is no place of a
         // local's even where the lowering keeps it as one (`v.last_mut()`).
+        // Whether the last step read a field or an element.
+        let mut projected = false;
         loop {
             if let Some(boxed) = rebox.take() {
                 value.ty = boxed;
@@ -182,11 +184,25 @@ impl<'a> Parser<'a> {
                 self.finish_method_call(&receiver, &member, &value);
                 from_call = true;
             }
+            // A `&mut` a value stores, read from its field or element and
+            // used: the place it refers to; a new one assigned keeps the
+            // field (`stored.rs`).
+            if std::mem::take(&mut projected)
+                && !matches!(self.peek(), Token::Equals)
+                && matches!(
+                    self.inference.resolve(&value.ty),
+                    Ty::Reference { mutable: true, .. }
+                )
+                && value.lvalue.is_some()
+            {
+                value = self.through_stored(value);
+            }
             // The second field of `t.0.1`, which reads as one number.
             let pending = self.pending_member.take();
             if pending.is_none() && matches!(self.peek(), Token::LeftBracket) {
                 let base = (value.span, value.ty.clone());
                 value = self.parse_index(value)?;
+                projected = true;
                 self.flow().index_end(value.span.start());
                 self.part_of(
                     (base.0, &base.1),
@@ -327,6 +343,7 @@ impl<'a> Parser<'a> {
                     &value,
                     crate::resolve::borrowck::Projection::Field(member.clone()),
                 );
+                projected = true;
             }
             // An `Rc`'s, `Arc`'s or `Weak`'s own method; any other member of
             // an `Rc` or `Arc` is its value's, through std's `Deref`.

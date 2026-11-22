@@ -311,11 +311,49 @@ impl<'a> Parser<'a> {
         {
             self.closure_hint = Some(inputs);
         }
+        let chosen = if block_like {
+            self.choose_ahead()
+        } else {
+            None
+        };
+        let outer_chosen = std::mem::replace(&mut self.chosen, chosen);
         let value = self.parse_expr_expecting(annotation.as_ref());
+        let chosen = std::mem::replace(&mut self.chosen, outer_chosen);
         self.closure_hint = None;
         self.mutable_borrow = outer;
         let mut value = value?;
         self.frame_value(&mut value);
+        // `let r = if c { &mut a } else { &mut b };`: `r` holds where the
+        // place the run chose is (`chosen.rs`).
+        if let Some(chosen) = chosen {
+            let chose = chosen
+                .chose()
+                .map_err(|refused| Error::UnsupportedNominalSyntax {
+                    construct:
+                        "a `&mut` chosen by a branch, of a place that is not a local of the \
+                            body or a part of one: not supported in Rawr yet"
+                            .into(),
+                    source: refused,
+                })?;
+            if chose {
+                if let Some(annotation) = &annotation {
+                    self.coerce_expr(annotation, &mut value)?;
+                }
+                let mut rendered = origin::Fragment::plain(format!("let {name} = "));
+                rendered.push(value.rendered_source());
+                rendered.push_text(";");
+                let rendered = self.with_field_entries(pending, rendered);
+                self.write_output(rendered, span(start, value.span.end()));
+                self.entry_aliases.remove(&name);
+                self.bound_value(&name, name_span, &value, value_start);
+                self.select_local(name, name_span, value.ty.clone(), mutable);
+                self.last_type = Ty::Unit;
+                self.last_expression = None;
+                return self
+                    .consume_binding_terminator(start, let_keyword)
+                    .map(|_| ());
+            }
+        }
         if moved_reference
             && matches!(
                 self.inference.resolve(&value.ty),
@@ -587,6 +625,11 @@ impl<'a> Parser<'a> {
 
         if let Some(expected) = &annotation {
             self.coerce_expr(expected, &mut value)?;
+        }
+        // `let o = v.last_mut();`: `o` holds `Some` of the reference to
+        // the element's place (`stored.rs`).
+        if matches!(self.inference.resolve(&value.ty), Ty::Option(_)) {
+            self.store_borrow(&mut value)?;
         }
 
         self.consume_imported_value(&value, &name, value.span)?;

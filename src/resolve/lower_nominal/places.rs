@@ -1400,6 +1400,10 @@ impl Parser<'_> {
         proof: &mut NominalPattern,
         bindings: &[PatternBinding],
     ) -> Result<Option<PlacePattern>, Error> {
+        // A value holding stored `&mut`s gives its references by value.
+        if self.holds_stored(subject) {
+            return Ok(None);
+        }
         // `o.as_mut()` lends its place as `&mut o` does (`lend_place`).
         let lent = match &subject.lvalue {
             None => self.lent_places.get(&subject.span).cloned(),
@@ -1871,10 +1875,24 @@ fn mark_parts(
 /// option's `Some` value: what a script function's `&mut` output names
 /// below the place it was called on.
 pub(super) fn path_invoke(op: PreludeOp, args: &mut FnCallArgs) -> RawrResult {
-    let path = args[1]
+    let mut path = args[1]
         .as_array_ref()
         .map_err(|_| invariant("a place's path is not an array at runtime"))?
         .clone();
+    // A path that starts at a handle (a stored `&mut` the function gave,
+    // D1113) reaches its place below the handle, not the receiver.
+    if path.first().is_some_and(Dynamic::is_shared) {
+        let mut handle = path.remove(0);
+        let mut guard = handle
+            .write_lock::<Dynamic>()
+            .ok_or_else(|| invariant("a stored `&mut`'s place is held"))?;
+        let mut path = Dynamic::from_array(path);
+        let mut forwarded: Vec<&mut Dynamic> = vec![&mut *guard, &mut path];
+        if let Some(value) = args.get_mut(2) {
+            forwarded.push(value);
+        }
+        return path_invoke(op, &mut forwarded);
+    }
     if matches!(op, PreludeOp::PathSet) {
         let value = args[2].take();
         // A native place is stored into where it is (D651): its own
@@ -1986,7 +2004,10 @@ impl Parser<'_> {
         mut value: ParsedExpr,
         block_like: bool,
     ) -> Result<ParsedExpr, Error> {
-        if !self.place_output || !self.closures.is_empty() {
+        if !self.place_output {
+            return Ok(self.chosen_place(value, block_like));
+        }
+        if !self.closures.is_empty() {
             return Ok(value);
         }
         let Some(output) = self.place_output(&value.ty) else {
@@ -2131,6 +2152,13 @@ impl Parser<'_> {
             construct: construct.to_string().into(),
             source: at,
         };
+        // `&mut *self.a` of a `&mut` field: the reference's own path, from
+        // its handle, which the caller reaches as it is (`stored.rs`).
+        if Self::stored_place(place)
+            && let Some(located) = self.place_located(place)
+        {
+            return Ok(located.surrounded("(", ")"));
+        }
         if place.binding().as_str() != "self" {
             return Err(unsupported(
                 "returning a `&mut` borrowed from a value other than `self` (or a free \
@@ -2271,6 +2299,9 @@ impl Parser<'_> {
             None => None,
         };
         let Some(lvalue) = lvalue else {
+            if let Some(held) = self.held_receiver(value) {
+                return Ok(held);
+            }
             return Err(Error::UnsupportedNominalSyntax {
                 construct: "a call returning `&mut` on a value that is not a local, a field \
                             or an element"
@@ -2280,6 +2311,47 @@ impl Parser<'_> {
         };
         self.require_mutable_binding(lvalue.binding(), value.span)?;
         Ok(lvalue)
+    }
+
+    /// The place of `value`, a temporary of its own (`Config::new()` in
+    /// `Config::new().time().build()`) that a call returning `&mut` is
+    /// made on: a hidden local of the statement holds it, given the value
+    /// where the place is first reached, as rustc keeps the temporary to
+    /// the statement's end (T2074). `None` for a reference, whose referent
+    /// is elsewhere, or a value in an async body.
+    fn held_receiver(&mut self, value: &ParsedExpr) -> Option<Lvalue> {
+        if self.in_async_body()
+            || matches!(
+                self.inference.resolve(&value.ty),
+                Ty::Reference { .. } | Ty::Unknown
+            )
+        {
+            return None;
+        }
+        let held: ImmutableString = self.temporary("receiver").into();
+        self.field_entries.push((
+            origin::Fragment::plain(format!("let {held} = (); ")),
+            origin::Fragment::default(),
+        ));
+        self.bindings.insert(
+            held.clone(),
+            Binding {
+                ty: value.ty.clone(),
+                mutable: true,
+                available: true,
+                declaration: value.span,
+                kind: BindingKind::Local,
+            },
+        );
+        let mut setup = origin::Fragment::plain(format!("{held} = "));
+        setup.push(value.rendered_source());
+        setup.push_text(";");
+        Some(Lvalue::Nested(Box::new(lvalue::Nested {
+            binding: held.clone(),
+            base: origin::Fragment::plain(held.as_str()),
+            steps: vec![PlaceStep::Setup(setup)],
+            ty: value.ty.clone(),
+        })))
     }
 
     /// The value of `call`, a call on the place `receiver` (written as

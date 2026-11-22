@@ -518,7 +518,13 @@ impl Engine {
             path.pop();
         }
         let (root, steps) = Self::path_parts(&path).ok_or_else(missing)?;
-        let target = Self::place_at(scope, this_ptr, &root, &steps, holder, expr)?;
+        let target = if root.is_shared() {
+            // A stored `&mut` (D1113) reaches its place below its handle.
+            let index = scope.search(holder).ok_or_else(missing)?;
+            Self::reach_stored(scope.get_mut_by_index(index), &steps, holder, expr)?
+        } else {
+            Self::place_at(scope, this_ptr, &root, &steps, holder, expr)?
+        };
         let place = target.as_ref();
         let Some((low, high, inclusive)) = window else {
             let place = place.read_lock::<Dynamic>().ok_or_else(missing)?;

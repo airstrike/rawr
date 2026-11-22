@@ -727,67 +727,87 @@ impl Engine {
         .map(|(v, ..)| v)
     }
 
-    /// `x[i].method(.., closure, ..)` (or `x[i][j]..`) of a local `x` a
-    /// closure captured, which is shared: the part is lent alone, a cell of
-    /// its own for the call, so a closure the call runs reaches the local's
-    /// other parts, as Rust's disjoint borrows of them allow (T178). The
-    /// part is moved into the cell and back, not copied. `None` for any
-    /// other chain, which is evaluated as before.
+    /// `x[i].method(..)` (or `x[i][j]..`) of a local `x` that is shared (a
+    /// closure captured it, or a stored `&mut` borrows a part of it), or
+    /// `r.method(..)` and `r[i].method(..)` of the place a `&mut` reaches
+    /// below a shared handle (`KEYWORD_THROUGH`, `KEYWORD_HELD`): the part
+    /// is lent alone, a cell of its own for the call, so what the call runs
+    /// reaches the root's other parts, as Rust's disjoint borrows of them
+    /// allow (T178, D591.3, D1113). It is lent so where a closure is passed
+    /// or the method is the program's own; a native method reaches nothing
+    /// else. The part is moved into the cell and back, not copied. `None`
+    /// for any other chain, which is evaluated as before.
     fn lent_part_call(
         &self,
         global: &mut GlobalRuntimeState,
         caches: &mut Caches,
         scope: &mut Scope,
-        this_ptr: Option<&mut Dynamic>,
+        mut this_ptr: Option<&mut Dynamic>,
         root: &Expr,
         parent: &Expr,
         rhs: &Expr,
         idx_values: &mut FnArgsVec<Dynamic>,
     ) -> RawrResultOf<Option<Dynamic>> {
-        if !matches!(parent, Expr::Index(..)) || !idx_values.iter().any(Dynamic::is_fnptr) {
-            return Ok(None);
-        }
         // The index steps down to the method call: `[i]`, then `[j]`, ..
         let mut steps = 0;
-        let mut node = rhs;
-        let call = loop {
-            match node {
-                Expr::Index(x, ..) => {
-                    steps += 1;
-                    node = &x.rhs;
+        let call = match parent {
+            Expr::Dot(..) if matches!(rhs, Expr::MethodCall(..)) => parent,
+            Expr::Index(..) => {
+                let mut node = rhs;
+                loop {
+                    match node {
+                        Expr::Index(x, ..) => {
+                            steps += 1;
+                            node = &x.rhs;
+                        }
+                        Expr::Dot(x, ..) if matches!(x.rhs, Expr::MethodCall(..)) => {
+                            steps += 1;
+                            break node;
+                        }
+                        _ => return Ok(None),
+                    }
                 }
-                Expr::Dot(x, ..) if matches!(x.rhs, Expr::MethodCall(..)) => {
-                    steps += 1;
-                    break node;
-                }
-                _ => return Ok(None),
             }
+            _ => return Ok(None),
         };
         let Expr::Dot(dot, ..) = call else {
+            return Ok(None);
+        };
+        let Expr::MethodCall(method, ..) = &dot.rhs else {
             return Ok(None);
         };
         if idx_values.len() < steps {
             return Ok(None);
         }
+        let closure = idx_values.iter().any(Dynamic::is_fnptr);
         let indexes: FnArgsVec<Dynamic> = idx_values.iter().rev().take(steps).cloned().collect();
-        let mut shared = match root {
-            Expr::ThisPtr(..) => match this_ptr {
-                Some(this) if this.is_shared() => this.clone(),
-                _ => return Ok(None),
-            },
-            Expr::Variable(..) => match self.search_namespace(global, caches, scope, None, root)? {
-                Target::SharedValue { shared_value, .. } => shared_value,
-                _ => return Ok(None),
-            },
-            _ => return Ok(None),
-        };
-        let pos = dot.lhs.start_position();
-        let race = || -> crate::RawrError { ERR::ErrorDataRace(String::new(), pos).into() };
         let mut cell = {
-            let mut guard = shared.write_lock::<Dynamic>().ok_or_else(race)?;
-            let Some(part) = Self::part_at(&mut guard, &indexes) else {
+            let mut target = match root {
+                Expr::ThisPtr(..) => match this_ptr.as_deref_mut() {
+                    Some(this) if this.is_shared() => Target::try_from(this)?,
+                    _ => return Ok(None),
+                },
+                Expr::Variable(..) => {
+                    self.search_namespace(global, caches, scope, this_ptr.as_deref_mut(), root)?
+                }
+                _ => return Ok(None),
+            };
+            // A whole shared local is lent as it is; a stored `&mut`'s
+            // place is a part below its handle.
+            let below = match &target {
+                Target::SharedValue { .. } => !indexes.is_empty(),
+                Target::SharedPart { .. } => true,
+                _ => false,
+            };
+            if !below {
+                return Ok(None);
+            }
+            let Some(part) = Self::part_at(target.as_mut(), &indexes) else {
                 return Ok(None);
             };
+            if !closure && !self.calls_script(global, method, part) {
+                return Ok(None);
+            }
             if !part.is_shared() {
                 *part = part.take().into_shared();
             }
@@ -812,12 +832,42 @@ impl Engine {
         });
         drop(cell);
         // The part is plain again where it is, once nothing else holds it.
-        if let Some(mut guard) = shared.write_lock::<Dynamic>()
-            && let Some(part) = Self::part_at(&mut guard, &indexes)
+        let again = match root {
+            Expr::ThisPtr(..) => this_ptr.map(Target::try_from).transpose(),
+            _ => self
+                .search_namespace(global, caches, scope, this_ptr, root)
+                .map(Some),
+        };
+        if let Ok(Some(mut target)) = again
+            && let Some(part) = Self::part_at(target.as_mut(), &indexes)
         {
             part.unshare_if_unique();
         }
         result.map(|(value, _)| Some(value))
+    }
+
+    /// Whether `call`, a method call on `receiver`, calls one of the
+    /// program's own functions, which may reach any place, and not a
+    /// native one.
+    fn calls_script(
+        &self,
+        global: &GlobalRuntimeState,
+        call: &crate::ast::FnCallExpr,
+        receiver: &Dynamic,
+    ) -> bool {
+        if call.hashes.is_native_only() {
+            return false;
+        }
+        let hash = call.hashes.script();
+        let typed =
+            crate::func::calc_typed_method_hash(hash, self.map_type_name(receiver.type_name()));
+        global.lib.iter().any(|module| {
+            [typed, hash].into_iter().any(|hash| {
+                module
+                    .get_fn(hash)
+                    .is_some_and(crate::func::RawrFunc::is_script)
+            })
+        })
     }
 
     /// The element or field of `value` that `indexes` reach, itself,

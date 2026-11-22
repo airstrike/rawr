@@ -151,6 +151,10 @@ impl Comparison<'_, '_> {
         shape: &Shape,
     ) -> Compared<Option<std::cmp::Ordering>> {
         use std::cmp::Ordering;
+        // A stored `&mut` compares what it refers to (D1113).
+        if let Some((lhs, rhs)) = stored_referents(lhs, rhs) {
+            return self.compare(&lhs, &rhs, shape);
+        }
         if let Some((place, other, reversed)) = crate::place::get(lhs)
             .map(|place| (place, rhs, false))
             .or_else(|| crate::place::get(rhs).map(|place| (place, lhs, true)))
@@ -350,6 +354,10 @@ impl Comparison<'_, '_> {
 
     /// Rust's `PartialEq` of `lhs` and `rhs`.
     pub(super) fn equal(&self, lhs: &Dynamic, rhs: &Dynamic) -> Compared<bool> {
+        // A stored `&mut` compares what it refers to (D1113).
+        if let Some((lhs, rhs)) = stored_referents(lhs, rhs) {
+            return self.equal(&lhs, &rhs);
+        }
         if let Some((place, other, reversed)) = crate::place::get(lhs)
             .map(|place| (place, rhs, false))
             .or_else(|| crate::place::get(rhs).map(|place| (place, lhs, true)))
@@ -1812,4 +1820,18 @@ pub(super) fn allowed_type(allowed: &[Ty], ty: &Ty) -> bool {
         (Ty::Int(_), Ty::Int(_)) | (Ty::Float(_), Ty::Float(_)) => true,
         (allowed, ty) => allowed == ty,
     })
+}
+
+/// What `lhs` and `rhs` refer to when either is a stored `&mut`
+/// (`__rawr_ref`), each read; `None` when neither is one.
+fn stored_referents(lhs: &Dynamic, rhs: &Dynamic) -> Option<(Dynamic, Dynamic)> {
+    let left = crate::Engine::stored_referent(lhs);
+    let right = crate::Engine::stored_referent(rhs);
+    if left.is_none() && right.is_none() {
+        return None;
+    }
+    Some((
+        left.unwrap_or_else(|| lhs.clone()),
+        right.unwrap_or_else(|| rhs.clone()),
+    ))
 }

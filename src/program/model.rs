@@ -1000,6 +1000,15 @@ impl Model {
         {
             return self.validate_type(value, target, shared);
         }
+        // A `&mut` field holds the reference to its place (D1113): the
+        // shared handle of the place's local, then the path below it.
+        if let type_ref::Type::Reference { mutable: true, .. } = expected
+            && value
+                .as_array_ref()
+                .is_ok_and(|path| path.first().is_some_and(Dynamic::is_shared))
+        {
+            return Ok(());
+        }
         if let Some((ok, err)) = expected.result_elements() {
             return match crate::result::read(value) {
                 Some(Ok(inner)) => self.validate_type(&inner, ok, shared),

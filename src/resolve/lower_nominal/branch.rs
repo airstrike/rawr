@@ -88,6 +88,8 @@ impl<'a> Parser<'a> {
         match self.inference.resolve(expected) {
             Ty::Unit => NominalPayloadType::Unit,
             Ty::Param(..) | Ty::Infer(_) => NominalPayloadType::Any,
+            // A stored `&mut` is the reference to its place (`stored.rs`).
+            Ty::Reference { mutable: true, .. } => NominalPayloadType::Any,
             Ty::Script(definition, ..) => {
                 let definition = self.models.definition(definition).definition();
                 NominalPayloadType::Script {
@@ -451,6 +453,8 @@ impl<'a> Parser<'a> {
                 if let Some(arm_place) = &arm_place {
                     self.bind_parts(arm_place);
                 }
+                let stored = self.holds_stored(&place);
+                self.bind_stored(stored, &resolved.bindings);
                 let bound = resolved
                     .bindings
                     .iter()
@@ -581,9 +585,10 @@ impl<'a> Parser<'a> {
 
         let end = self.expect(Token::RightBrace, "'}' to close a match")?;
         self.flow().join(&arm_ends);
-        let arm_spans: Vec<Span> = arms
+        let arm_spans: Vec<(Span, borrowck::Block)> = arms
             .iter()
             .map(|(_, _, action, _)| action.value.span)
+            .zip(arm_ends.iter().copied())
             .collect();
         self.flow()
             .either(span(match_span.start(), end), &arm_spans);
@@ -783,6 +788,7 @@ impl<'a> Parser<'a> {
             .map_err(|error| error.matched(|| self.subject_origin(&subject)))?;
         let trace = std::mem::take(&mut resolved.trace);
         self.pattern_facts(trace, &matched, subject.span, &resolved.bindings)?;
+        let stored = self.holds_stored(&subject);
         let place = self.pattern_place(&subject, &mut resolved.proof, &resolved.bindings)?;
         // The condition's scope: the value made for it, then its bindings,
         // which the caller closes after the consequent or body.
@@ -819,6 +825,7 @@ impl<'a> Parser<'a> {
         if let Some(place) = &place {
             self.bind_parts(place);
         }
+        self.bind_stored(stored, &resolved.bindings);
         let bound = resolved
             .bindings
             .iter()
@@ -1009,9 +1016,10 @@ impl<'a> Parser<'a> {
         }
         let end = self.expect(Token::RightBrace, "'}' to close a match")?;
         self.flow().join(&arm_ends);
-        let arm_spans: Vec<Span> = arms
+        let arm_spans: Vec<(Span, borrowck::Block)> = arms
             .iter()
             .map(|(_, _, action)| action.value.span)
+            .zip(arm_ends.iter().copied())
             .collect();
         self.flow()
             .either(span(match_span.start(), end), &arm_spans);
@@ -1378,9 +1386,10 @@ impl<'a> Parser<'a> {
         }
         let end = self.expect(Token::RightBrace, "'}' to close a match")?;
         self.flow().join(&arm_ends);
-        let arm_spans: Vec<Span> = arms
+        let arm_spans: Vec<(Span, borrowck::Block)> = arms
             .iter()
             .map(|(_, _, action)| action.value.span)
+            .zip(arm_ends.iter().copied())
             .collect();
         self.flow()
             .either(span(match_span.start(), end), &arm_spans);
@@ -1821,8 +1830,13 @@ impl<'a> Parser<'a> {
         )?;
         let [consequent, alternative] = branches;
         let span = span(if_span.start(), alternative.syntax.end());
-        self.flow()
-            .either(span, &[consequent.value.span, alternative.value.span]);
+        self.flow().either(
+            span,
+            &[
+                (consequent.value.span, consequent_end),
+                (alternative.value.span, alternative_end),
+            ],
+        );
         let (hit, value) = (self.temporary("hit"), self.temporary("chain"));
         let mut source =
             origin::Fragment::plain(format!("{{\nlet {hit} = false;\nlet {value} = ();\n"));
@@ -1975,8 +1989,13 @@ impl<'a> Parser<'a> {
         )?;
         let [consequent, alternative] = branches;
         let span = span(if_span.start(), alternative.syntax.end());
-        self.flow()
-            .either(span, &[consequent.value.span, alternative.value.span]);
+        self.flow().either(
+            span,
+            &[
+                (consequent.value.span, consequent_end),
+                (alternative.value.span, alternative_end),
+            ],
+        );
         if let Some((subject, arm, binds)) = pattern {
             let matched = if after.is_empty() {
                 String::new()

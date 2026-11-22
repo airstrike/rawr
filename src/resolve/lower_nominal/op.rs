@@ -2495,13 +2495,13 @@ impl ExecutableOp {
             Self::Struct { item, .. } => item
                 .fields
                 .iter()
-                .map(|field| Ty::from_resolved(&field.ty).type_id(models))
+                .map(|field| stored_type_id(&Ty::from_resolved(&field.ty), models))
                 .map(place_operand)
                 .collect(),
             Self::Enum { item, variant, .. } => item.variants[*variant]
                 .payload
                 .iter()
-                .map(|ty| Ty::from_resolved(ty).type_id(models))
+                .map(|ty| stored_type_id(&Ty::from_resolved(ty), models))
                 .map(place_operand)
                 .collect(),
             Self::Clone { definition } | Self::Debug { definition } => {
@@ -2978,4 +2978,13 @@ fn static_layout(layout: &Dynamic) -> Option<(usize, Box<[usize]>)> {
     let size = words.next()??;
     let offsets = words.collect::<Option<Box<[usize]>>>()?;
     Some((size, offsets))
+}
+
+/// The runtime type of a part of type `ty` a value is built of: a `&mut`
+/// is a reference to its place (`stored.rs`), or a crate's own value.
+fn stored_type_id(ty: &Ty, models: &Models) -> TypeId {
+    match ty {
+        Ty::Reference { mutable: true, .. } => TypeId::of::<Dynamic>(),
+        ty => ty.type_id(models),
+    }
 }

@@ -899,7 +899,14 @@ pub(crate) fn type_supports(
             | Kind::Hash => type_supports(target, capability, resolved),
             _ => false,
         },
-        type_ref::Type::Reference { .. } => false,
+        // A `&mut T` derives the comparison and `Debug` traits from `T`,
+        // read through the reference (D1113).
+        type_ref::Type::Reference { target, .. } => match capability {
+            Kind::Debug | Kind::PartialEq | Kind::Eq | Kind::PartialOrd | Kind::Ord => {
+                type_supports(target, capability, resolved)
+            }
+            _ => false,
+        },
         // `Option<T>` is `Default`, and otherwise derives from `T`.
         type_ref::Type::Path(_) if let Some(element) = ty.option_element() => {
             capability == Kind::Default || type_supports(element, capability, resolved)

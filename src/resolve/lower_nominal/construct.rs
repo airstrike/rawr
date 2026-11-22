@@ -167,7 +167,8 @@ impl<'a> Parser<'a> {
         } else {
             self.next();
             while !matches!(self.peek(), Token::RightParen) {
-                args.push(self.parse_expr_expecting(inputs.get(args.len()))?);
+                let expected = inputs.get(args.len());
+                args.push(self.parse_stored(|parser| parser.parse_expr_expecting(expected))?);
                 if matches!(self.peek(), Token::Comma) {
                     self.next();
                 } else {
@@ -392,6 +393,7 @@ impl<'a> Parser<'a> {
             .iter()
             .map(|element| self.inference.resolve(&element.ty))
             .collect::<Vec<_>>();
+        let hint_given = hint.clone();
         let (element, skip) = match (hint, elements.first()) {
             (Some(hint), _) => (hint, 0),
             (None, Some(_)) if let Some(pointer) = self.fn_choice(&types) => (pointer, 0),
@@ -410,6 +412,7 @@ impl<'a> Parser<'a> {
         }
         for value in &mut elements {
             self.move_local(value)?;
+            self.move_unless_reborrowed(value, hint_given.as_ref());
         }
         let parts: Vec<_> = elements
             .iter()
@@ -516,7 +519,7 @@ impl<'a> Parser<'a> {
             }
             self.start_element(elements.len());
             let outer = std::mem::replace(&mut self.no_struct, false);
-            let element = self.parse_expr();
+            let element = self.parse_stored(Self::parse_expr);
             self.no_struct = outer;
             elements.push(element?);
             if matches!(self.peek(), Token::SemiColon) && elements.len() == 1 {
@@ -770,7 +773,7 @@ impl<'a> Parser<'a> {
         if !matches!(self.peek(), Token::LeftParen) {
             return Ok(self.prelude_function(variant, ok, err, start));
         }
-        let (mut arguments, end) = self.parse_call_arguments("prelude variant arguments")?;
+        let (mut arguments, end) = self.parse_borrowing_arguments("prelude variant arguments")?;
         let expression = span(start.start(), end);
         let [value] = arguments.as_mut_slice() else {
             return Err(Error::argument_count(
@@ -781,6 +784,11 @@ impl<'a> Parser<'a> {
                 expression,
             ));
         };
+        // `Some(&mut self.a)` an `Option<&mut T>` output returns gives its
+        // path (`places::returned_place`).
+        if !self.place_output {
+            self.store_borrow(value)?;
+        }
         let stored = match variant {
             Prelude::Some | Prelude::None => "stored in an `Option`",
             Prelude::Ok | Prelude::Err => "stored in a `Result`",
@@ -934,9 +942,11 @@ impl<'a> Parser<'a> {
                     .iter()
                     .find(|known| known.name.text == field)
                     .map(|known| instantiate(&Ty::from_resolved(&known.ty), &substitution));
-                self.parse_expr_expecting(expected.as_ref())?
+                self.parse_stored(|parser| parser.parse_expr_expecting(expected.as_ref()))?
             } else {
-                self.parse_name_primary(field.clone(), field_span)?
+                let mut value = self.parse_name_primary(field.clone(), field_span)?;
+                self.store_borrow(&mut value)?;
+                value
             };
             if values.insert(field.clone(), (value, field_span)).is_some() {
                 return Err(Error::InvalidConstruction {

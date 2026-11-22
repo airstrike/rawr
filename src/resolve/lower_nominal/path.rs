@@ -1562,7 +1562,7 @@ impl<'a> Parser<'a> {
         } else if matches!(self.peek(), Token::LeftParen) {
             self.next();
             while !matches!(self.peek(), Token::RightParen) {
-                args.push(self.parse_expr()?);
+                args.push(self.parse_stored(Self::parse_expr)?);
                 if matches!(self.peek(), Token::Comma) {
                     self.next();
                 } else {
