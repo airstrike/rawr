@@ -103,8 +103,9 @@ pub(super) struct Tables {
     /// of the trait's path, as the name the trait is known by.
     qualified_traits: BTreeMap<(crate::program::source::Id, Span), ImmutableString>,
     /// The name each source writes a crate trait by, when another module's
-    /// trait has that name too, with the path the trait is known by.
-    trait_names: BTreeMap<(crate::program::source::Id, ImmutableString), ImmutableString>,
+    /// trait has that name too, with the path the trait is known by, and
+    /// each name a block's trait has there, with its block.
+    trait_names: BTreeMap<(crate::program::source::Id, ImmutableString), crate::resolve::Known>,
     /// The app crate whose shadow holds an async `main`'s entry (D513.4).
     pub(super) entry_crate: Option<ImmutableString>,
     /// The marked types the runner holds as their mirrors in rawr's copy
@@ -403,7 +404,10 @@ impl Models {
                 )?,
                 _ => crate::resolve::std_trait::by_path(&segments)?,
             };
-            Some((ImmutableString::from(name), Some(definition)))
+            Some((
+                ImmutableString::from(crate::resolve::std_trait::known(definition)),
+                Some(definition),
+            ))
         });
         for (name, definition) in
             std::iter::once((ImmutableString::from("Error"), None)).chain(named)
@@ -1719,11 +1723,28 @@ impl Models {
         self.functions_by_key.get(key)
     }
 
-    /// The path the crate trait this source names `name` is known by, when
-    /// another module's trait has that name too, as `panel::Shape` of
-    /// `Shape` in `mod panel`.
-    pub(super) fn trait_name(&self, name: &str) -> Option<&ImmutableString> {
-        self.trait_names.get(&(self.context, name.into()))
+    /// The path the crate trait this source names `name` at `at` is known
+    /// by, when another trait has that name too, as `panel::Shape` of
+    /// `Shape` in `mod panel`: the innermost block's around `at` that
+    /// declares one, as `first::Shape` in `fn first`'s body, else the
+    /// module's.
+    pub(super) fn trait_name(&self, name: &str, at: Position) -> Option<&ImmutableString> {
+        let known = self.trait_names.get(&(self.context, name.into()))?;
+        known
+            .iter()
+            .filter(|(block, _)| {
+                block.is_none_or(|block| crate::resolve::block::contains(block, at))
+            })
+            .max_by_key(|(block, _)| block.map(|block| block.start()))
+            .map(|(_, path)| path)
+    }
+
+    /// Whether `trait_name` is a native crate's trait, by its full path
+    /// (`type_ref::is_native_trait`), and none the program knows by a path:
+    /// `home::Shape`, `first::Shape` and `std::io::Write` are the
+    /// program's and std's (#758).
+    pub(super) fn native_trait(&self, trait_name: &str) -> bool {
+        type_ref::is_native_trait(trait_name) && !self.traits.contains_key(trait_name)
     }
 
     /// The crate trait the path at `span` names through a module, as

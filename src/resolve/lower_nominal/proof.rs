@@ -761,7 +761,7 @@ impl<'a> Parser<'a> {
             // a `Box` of one is: native code makes it (#1304).
             Ty::Counted(_, inner)
                 if matches!(self.inference.resolve(&inner),
-                    Ty::Dyn(name, ..) if type_ref::is_native_trait(&name)) =>
+                    Ty::Dyn(name, ..) if self.models.native_trait(&name)) =>
             {
                 self.proven_type(&inner, operation, span)?
             }
@@ -933,7 +933,7 @@ impl<'a> Parser<'a> {
             // A crate's trait object (D872): a program's value coerced to
             // it, or one native code gave, which the adapter takes at its
             // exact type.
-            Ty::Dyn(name, ..) if type_ref::is_native_trait(&name) => intrinsic::Type::Object(name),
+            Ty::Dyn(name, ..) if self.models.native_trait(&name) => intrinsic::Type::Object(name),
             // `3` of `Buf<3>`, among a type's arguments.
             Ty::Const(value) => intrinsic::Type::Constant(value),
             Ty::Param(..) | Ty::Projection(..) | Ty::Weak(..) | Ty::Dyn(..) => {

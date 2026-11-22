@@ -238,3 +238,89 @@ run()
         .unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(value, "12 7");
 }
+
+#[test]
+fn language_two_bodies_declare_traits_of_one_name() {
+    // Each body's `Shape` is its own trait, beside the module's: its impl,
+    // its bound, its path call, its `<T as Shape>` call and its trait
+    // object are the block's (#1708). rustc prints `12 circlecircle 3`.
+    let output = printed(
+        r#"
+trait Shape {
+    fn sides(&self) -> u32;
+}
+
+struct Triangle;
+
+impl Shape for Triangle {
+    fn sides(&self) -> u32 {
+        3
+    }
+}
+
+fn first() -> u32 {
+    trait Shape {
+        fn size(&self) -> u32;
+    }
+    struct Square;
+    impl Shape for Square {
+        fn size(&self) -> u32 {
+            4
+        }
+    }
+    fn twice<T: Shape>(shape: &T) -> u32 {
+        shape.size() * 2
+    }
+    Shape::size(&Square) + twice(&Square)
+}
+
+fn second() -> String {
+    trait Shape {
+        fn name(&self) -> String;
+    }
+    struct Circle;
+    impl Shape for Circle {
+        fn name(&self) -> String {
+            "circle".to_string()
+        }
+    }
+    let shape: &dyn Shape = &Circle;
+    <Circle as Shape>::name(&Circle) + &shape.name()
+}
+
+fn main() {
+    println!("{} {} {}", first(), second(), Triangle.sides());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "12 circlecircle 3\n");
+}
+
+#[test]
+fn language_a_block_s_trait_is_named_by_its_body_s_path() {
+    // rustc never trims a block's item to its name: error[E0277]: the
+    // trait bound `u8: first::Shape` is not satisfied.
+    let report = refused(
+        r#"
+fn first() -> u32 {
+    trait Shape {
+        fn size(&self) -> u32;
+    }
+    fn need<T: Shape>(t: T) -> u32 {
+        t.size()
+    }
+    need(5u8)
+}
+
+fn main() {
+    println!("{}", first());
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0277]: the trait bound `u8: first::Shape` is not satisfied"),
+        "{report}"
+    );
+}

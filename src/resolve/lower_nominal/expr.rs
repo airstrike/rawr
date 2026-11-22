@@ -892,7 +892,7 @@ impl<'a> Parser<'a> {
                 // `<C as Shape>` of the module's `Shape`, when another
                 // module's trait has that name too.
                 if segments == 1
-                    && let Some(known) = self.models.trait_name(&trait_name)
+                    && let Some(known) = self.models.trait_name(&trait_name, trait_span.start())
                 {
                     trait_name = known.clone();
                 }
@@ -944,10 +944,14 @@ impl<'a> Parser<'a> {
                     Ty::UnsizedStr => Ty::Str,
                     self_ty => self_ty,
                 };
+                // `<B as io::Write>`: the std trait the path names, by the
+                // name the program knows it by.
                 if !through_crate
                     && !self.ufcs_trait(&trait_name)
-                    && let Some(std_name) = crate::resolve::std_trait::anywhere(&trait_name)
-                        .and_then(|definition| definition.rsplit("::").next())
+                    && let Some(std_name) = self
+                        .written_std_trait(&written)
+                        .or_else(|| crate::resolve::std_trait::anywhere(&trait_name))
+                        .map(crate::resolve::std_trait::known)
                 {
                     return self.parse_typed_std_trait_call(
                         std_name,
@@ -2215,7 +2219,7 @@ impl<'a> Parser<'a> {
         // `Shape::area(&c)`, `Convert::<i64>::convert(&c)`: a crate trait's
         // function called by path. A name another module's trait has too
         // is the trait this module declares or imports by it.
-        let known = self.models.trait_name(&name).cloned();
+        let known = self.models.trait_name(&name, name_span.start()).cloned();
         if matches!(self.peek(), Token::DoubleColon)
             && (known.is_some()
                 || self.ufcs_trait(&name)

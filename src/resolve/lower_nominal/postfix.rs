@@ -1133,7 +1133,7 @@ impl<'a> Parser<'a> {
                 // input is the receiver: native code calls it through the
                 // trait, which dispatches it by the object's vtable (#1593).
                 #[cfg(feature = "rust-import")]
-                if type_ref::is_native_trait(trait_name)
+                if self.models.native_trait(trait_name)
                     && matches!(self.peek(), Token::LeftParen | Token::Unit)
                 {
                     let path = rawr_import::surface::object::path(trait_name, &member);
@@ -1163,7 +1163,7 @@ impl<'a> Parser<'a> {
                 }
                 // A native trait's methods are the crate's, which rawr
                 // doesn't call through a trait object yet.
-                if type_ref::is_native_trait(trait_name) {
+                if self.models.native_trait(trait_name) {
                     return Err(Error::UnsupportedNominalSyntax {
                         construct: crate::resolve::Unsupported::said(format!(
                             "calling `{member}` of the native trait object `{}` is not supported yet",

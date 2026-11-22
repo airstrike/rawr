@@ -72,6 +72,66 @@ pub(crate) fn module_segment(name: &ImmutableString, ordinal: Option<u32>) -> Im
     }
 }
 
+/// The path rustc prints a block's item `name` by, through the items whose
+/// bodies hold `block`, outermost first: `first::Shape` of a trait in `fn
+/// first`'s body, `S::m::Shape` in an inherent method's,
+/// `<S as Clone>::clone::Shape` in a trait impl's and `T::m::Shape` in a
+/// trait's provided function. rustc never trims a block's item to its
+/// name, as it trims only the items a path reaches.
+pub(crate) fn owner_path(items: &[Parsed], block: Span, name: &str) -> String {
+    let mut owners = Vec::new();
+    for parsed in items {
+        match parsed {
+            Parsed::Function(function) if encloses(function.body_span, block) => {
+                owners.push((function.body_span.start(), function.name.text.to_string()));
+            }
+            Parsed::Impl(item) => {
+                let owner = written_name(&item.owner);
+                let owner = match item.trait_.as_ref().and_then(|path| path.segments.last()) {
+                    Some(implemented) => format!("<{owner} as {}>", implemented.name.text),
+                    None => owner,
+                };
+                for function in item.functions.iter() {
+                    if encloses(function.body_span, block) {
+                        let path = format!("{owner}::{}", function.name.text);
+                        owners.push((function.body_span.start(), path));
+                    }
+                }
+            }
+            Parsed::Trait(item) => {
+                for (function, provided) in item.functions.iter().zip(item.provided.iter()) {
+                    if *provided && encloses(function.body_span, block) {
+                        let path = format!("{}::{}", item.name.text, function.name.text);
+                        owners.push((function.body_span.start(), path));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    owners.sort_by_key(|(start, _)| *start);
+    owners
+        .into_iter()
+        .map(|(_, owner)| owner)
+        .chain(std::iter::once(name.to_owned()))
+        .collect::<Vec<_>>()
+        .join("::")
+}
+
+/// The name rustc prints an impl's owner by in a path: its path's last
+/// segment (`S` of `crate::S`).
+fn written_name(owner: &crate::item::type_ref::Type) -> String {
+    match owner {
+        crate::item::type_ref::Type::Path(path) => path
+            .segments
+            .last()
+            .map_or_else(String::new, |segment| segment.name.text.to_string()),
+        crate::item::type_ref::Type::Reference { target, .. } => written_name(target),
+        crate::item::type_ref::Type::Unit(_) => "()".to_owned(),
+        crate::item::type_ref::Type::Tuple { .. } => "_".to_owned(),
+    }
+}
+
 /// The name an item declares, in either namespace.
 fn name(parsed: &Parsed) -> Option<&ImmutableString> {
     match parsed {

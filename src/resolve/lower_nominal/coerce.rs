@@ -553,7 +553,7 @@ impl<'a> Parser<'a> {
             // handle and calls the impl's functions through it (#1264). A
             // shared borrow of it is that stand-in lent for the call that
             // takes it, which shares the value with the program (#1304).
-            if type_ref::is_native_trait(&trait_name)
+            if self.models.native_trait(&trait_name)
                 && matches!(
                     target,
                     Ty::Boxed(_) | Ty::Counted(..) | Ty::Reference { mutable: false, .. }
@@ -579,7 +579,7 @@ impl<'a> Parser<'a> {
             // tagged with its type, which the runner's adapter coerces
             // where native code takes the object.
             #[cfg(feature = "rust-import")]
-            if type_ref::is_native_trait(&trait_name)
+            if self.models.native_trait(&trait_name)
                 && let Some(tag) =
                     self.native_implementor(&concrete, &trait_name, &dyn_arguments(&bindings))
             {
@@ -599,7 +599,7 @@ impl<'a> Parser<'a> {
             // adapter makes into the closure the impl calls.
             // A borrow or a box of a callable is the callable at runtime.
             #[cfg(feature = "rust-import")]
-            if type_ref::is_native_trait(&trait_name)
+            if self.models.native_trait(&trait_name)
                 && matches!(target, Ty::Boxed(_) | Ty::Reference { .. })
                 && matches!(
                     concrete,
@@ -662,7 +662,7 @@ impl<'a> Parser<'a> {
             }
             // Making a native trait's object of anything else, a borrow or
             // a counted pointer of the program's type, is not done yet.
-            if type_ref::is_native_trait(&trait_name) {
+            if self.models.native_trait(&trait_name) {
                 return Err(Error::UnsupportedNominalSyntax {
                     construct: crate::resolve::Unsupported::said(format!(
                         "coercing `{}` to the native trait object `{}` is not supported yet",

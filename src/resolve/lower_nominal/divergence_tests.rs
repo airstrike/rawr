@@ -12242,3 +12242,122 @@ fn a_thread_local_call_std_has_no_rule_for_is_rustcs_error() {
         );
     }
 }
+
+#[test]
+fn language_io_write_and_fmt_write_are_two_traits() {
+    // `io::Write` and `fmt::Write` are two std traits of one name: each
+    // impl, bound and trait object is its own trait's (#758). rustc prints
+    // `text 7`.
+    let output = printed(
+        r#"
+use std::fmt;
+use std::io::{self, Write};
+
+struct Text(String);
+struct Bytes(Vec<u8>);
+
+impl fmt::Write for Text {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        self.0.push_str(s);
+        Ok(())
+    }
+}
+
+impl Write for Bytes {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn fill<W: fmt::Write>(out: &mut W) {
+    out.write_str("text").unwrap();
+}
+
+fn put<W: io::Write>(out: &mut W) {
+    out.write_all(b"bytes").unwrap();
+}
+
+fn main() {
+    let mut text = Text(String::new());
+    fill(&mut text);
+    let mut bytes = Bytes(Vec::new());
+    put(&mut bytes);
+    bytes.write_all(b"!").unwrap();
+    let sink: &mut dyn io::Write = &mut bytes;
+    sink.write_all(b"?").unwrap();
+    println!("{} {}", text.0, bytes.0.len());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "text 7\n");
+}
+
+#[test]
+fn language_a_bound_by_io_write_refuses_a_fmt_write_type_e0277() {
+    // A type that implements `fmt::Write` alone doesn't meet `io::Write`
+    // (#758): error[E0277]: the trait bound `A: std::io::Write` is not
+    // satisfied.
+    let report = refused(
+        r#"
+use std::fmt;
+use std::io;
+
+struct A(String);
+
+impl fmt::Write for A {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        self.0.push_str(s);
+        Ok(())
+    }
+}
+
+fn takes<W: io::Write>(_w: W) {}
+
+fn main() {
+    takes(A(String::new()));
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0277]: the trait bound `A: std::io::Write` is not satisfied"),
+        "{report}"
+    );
+}
+
+#[test]
+fn language_a_std_trait_a_path_names_is_not_in_scope_by_its_name_e0405() {
+    // An impl that names `std::fmt::Display` by its path brings no
+    // `Display` into scope (#758): error[E0405]: cannot find trait
+    // `Display` in this scope.
+    let report = refused(
+        r#"
+struct P;
+
+impl std::fmt::Display for P {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "p")
+    }
+}
+
+fn show<T: Display>(t: T) -> String {
+    format!("{}", t)
+}
+
+fn main() {
+    println!("{}", show(P));
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0405]: cannot find trait `Display` in this scope"),
+        "{report}"
+    );
+    assert!(report.contains(":10:12"), "{report}");
+}

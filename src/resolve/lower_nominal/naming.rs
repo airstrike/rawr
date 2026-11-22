@@ -181,13 +181,25 @@ pub(super) fn generic_parse_head(param: &str) -> String {
 }
 
 /// A trait's name as a generated name holds it: a trait known by its path,
-/// `home::IntoView`, as `home__IntoView`.
+/// `home::IntoView`, as `home__IntoView`, and each other character no
+/// identifier holds as `_`, as `<S as Clone>::clone::Shape` of a block's
+/// trait has them.
 fn identifier(trait_name: &str) -> std::borrow::Cow<'_, str> {
-    if trait_name.contains("::") {
-        trait_name.replace("::", "__").into()
-    } else {
-        trait_name.into()
+    if trait_name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        return trait_name.into();
     }
+    trait_name
+        .replace("::", "__")
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .into()
 }
 
 /// The text of a generic trait's argument list: `i64, String`.

@@ -54,7 +54,7 @@ pub(super) fn impl_surface_type(
         Ty::Reference {
             mutable: false,
             target,
-        } if lends_object(&Inference::default(), target) => {
+        } if lends_object(&Inference::default(), models, target) => {
             instance_surface_type(&Inference::default(), models, target)?
         }
         Ty::Reference { mutable, target } => Type::Borrowed {
@@ -346,12 +346,12 @@ pub(super) fn imported_surface_type(
         // A crate's trait object (D872): `dyn Trait` itself where a `&T`
         // takes it, as the `&dyn Trait` input a call reads as `&impl
         // Trait` is, and `Box<dyn Trait>`.
-        Ty::Dyn(name, bindings, _) if crate::resolve::type_ref::is_native_trait(name) => {
+        Ty::Dyn(name, bindings, _) if models.native_trait(name) => {
             native_object(inference, models, name, bindings, operation, imported)?
         }
         Ty::Boxed(inner) | Ty::Counted(_, inner)
             if matches!(inference.resolved_ref(inner),
-                Ty::Dyn(name, ..) if crate::resolve::type_ref::is_native_trait(name)) =>
+                Ty::Dyn(name, ..) if models.native_trait(name)) =>
         {
             let Type::Object(object) =
                 imported_surface_type(inference, models, inner, operation, imported)?
@@ -412,7 +412,7 @@ pub(super) fn imported_surface_type(
         Ty::Reference {
             mutable: false,
             target,
-        } if lends_object(inference, target) => {
+        } if lends_object(inference, models, target) => {
             imported_surface_type(inference, models, target, operation, imported)?
         }
         // A type argument `&[u8]` or `&str`, as `Reader<&'a [u8]>` names
@@ -542,9 +542,9 @@ fn is_core_future(proof: &super::ty::HostTyProof) -> bool {
 /// Whether `target`, what a shared reference borrows, is a crate trait's
 /// object, so the reference is the object's shared pointer (D872).
 #[cfg(feature = "rust-import")]
-fn lends_object(inference: &Inference, target: &Ty) -> bool {
+fn lends_object(inference: &Inference, models: &Models, target: &Ty) -> bool {
     matches!(inference.resolved_ref(target),
-        Ty::Dyn(name, ..) if crate::resolve::type_ref::is_native_trait(name))
+        Ty::Dyn(name, ..) if models.native_trait(name))
 }
 
 /// The pointer a crate's trait object owned by `ty`, a `Box`, `Rc` or
@@ -1127,20 +1127,18 @@ pub(super) fn instance_surface_type(
                 .collect::<Option<_>>()?,
         },
         // A crate's trait object, as `imported_surface_type` has it (D872).
-        Ty::Dyn(name, bindings, _) if crate::resolve::type_ref::is_native_trait(name) => {
-            shared_object(
-                models,
-                name,
-                native_object_identity(models, name, bindings)?,
-                super::dyn_arguments(bindings)
-                    .iter()
-                    .map(|argument| instance_surface_type(inference, models, argument))
-                    .collect::<Option<_>>()?,
-            )
-        }
+        Ty::Dyn(name, bindings, _) if models.native_trait(name) => shared_object(
+            models,
+            name,
+            native_object_identity(models, name, bindings)?,
+            super::dyn_arguments(bindings)
+                .iter()
+                .map(|argument| instance_surface_type(inference, models, argument))
+                .collect::<Option<_>>()?,
+        ),
         Ty::Boxed(inner) | Ty::Counted(_, inner)
             if matches!(inference.resolved_ref(inner),
-                Ty::Dyn(name, ..) if crate::resolve::type_ref::is_native_trait(name)) =>
+                Ty::Dyn(name, ..) if models.native_trait(name)) =>
         {
             let Type::Object(object) = instance_surface_type(inference, models, inner)? else {
                 return None;
@@ -1211,7 +1209,9 @@ pub(super) fn instance_surface_type(
         Ty::Reference {
             mutable: false,
             target,
-        } if lends_object(inference, target) => instance_surface_type(inference, models, target)?,
+        } if lends_object(inference, models, target) => {
+            instance_surface_type(inference, models, target)?
+        }
         // A type argument `&[u8]` or `&str`, as `Reader<&'a [u8]>` names
         // (D558 tier 1).
         Ty::Reference {
