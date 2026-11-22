@@ -114,7 +114,20 @@ impl<'a> Parser<'a> {
             let Some((Token::DoubleColon, _)) = next else {
                 break;
             };
-            let Some((Token::Identifier(segment), position)) = ahead.clone().next() else {
+            // `super::super::f` goes on through its second `super`.
+            let leading = path.split("::").all(|segment| segment == "super");
+            let Some((segment, position)) =
+                ahead
+                    .clone()
+                    .next()
+                    .and_then(|(token, position)| match token {
+                        Token::Identifier(segment) => Some((segment, position)),
+                        Token::Reserved(keyword) if leading && keyword.as_str() == "super" => {
+                            Some((keyword, position))
+                        }
+                        _ => None,
+                    })
+            else {
                 break;
             };
             ahead.next();
@@ -700,6 +713,24 @@ impl<'a> Parser<'a> {
             item: item.into(),
             reference: path_span,
         })
+    }
+
+    /// The tokens of the std path the path at `span` names through this
+    /// crate's imports, written from std's root (`::std::fmt::Formatter`
+    /// of `super::fmt::Formatter` after the parent's `use std::fmt;`), as
+    /// the resolver spells it. `None` for any other path.
+    pub(super) fn std_spelled(&self, span: Span) -> Option<Vec<(Token, Position)>> {
+        let spelled = self.models.qualified_rust(span)?;
+        if !crate::std_table::is_root(spelled.first()?) {
+            return None;
+        }
+        let at = span.start();
+        let mut tokens = Vec::with_capacity(spelled.len() * 2);
+        for segment in spelled {
+            tokens.push((Token::DoubleColon, at));
+            tokens.push((Token::Identifier(Box::new(segment.as_str().into())), at));
+        }
+        Some(tokens)
     }
 
     /// The std path `name`, whose first segment is `first`, names through a

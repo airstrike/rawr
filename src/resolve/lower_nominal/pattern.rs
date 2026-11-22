@@ -1529,6 +1529,15 @@ impl<'a> Parser<'a> {
             let first_span = segments[0].1;
             let (last, last_span) = &segments[segments.len() - 1];
             let last_end = text_end(last_span.start(), last);
+            // A std path through this crate's imports, as
+            // `super::Ordering::Less` after the parent's `use
+            // std::cmp::Ordering;`, is std's.
+            if !mutable
+                && let Some(tokens) = self.std_spelled(Span::new(first_span.start(), last_end))
+            {
+                self.splice_tokens(tokens);
+                return self.parse_pattern_no_alt();
+            }
             if let Some(spelled) = self
                 .models
                 .qualified_rust(Span::new(first_span.start(), last_end))

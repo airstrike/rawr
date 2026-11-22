@@ -367,6 +367,13 @@ impl<'a> Parser<'a> {
                 name_span = Span::new(name_span.start(), text_end(segment_span.start(), &segment));
                 last = Span::new(segment_span.start(), name_span.end());
             }
+            // A std type through this crate's imports, as
+            // `super::HashMap<K, V>` after the parent's `use
+            // std::collections::HashMap;`, is std's path.
+            if let Some(tokens) = self.std_spelled(name_span) {
+                self.splice_tokens(tokens);
+                return self.parse_local_type();
+            }
             // A crate's re-export of a std type is that type, as serde's
             // `__private::Formatter` is `core::fmt::Formatter` (#593).
             if let Some(std) = self.std_alias(&first, &name) {
