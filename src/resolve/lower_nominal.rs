@@ -188,7 +188,7 @@ pub(super) use entry::runtime_entry;
 #[cfg(feature = "rust-import")]
 pub(crate) use entry::with_uses;
 pub(crate) use entry::Output;
-use entry::{expand_imported_variants, trait_objects, use_blocks, Lowered};
+use entry::{expand_imported_variants, trait_objects, use_blocks, Hidden, Lowered};
 use expr::ParsedExpr;
 use format::PANIC_MACROS;
 use from_str::{parse_text, ParseError};
@@ -244,8 +244,8 @@ use naming::{
     instance_placeholder, instance_text, lent_text_placeholder, method_name, pattern_name,
     static_dispatcher_name, static_instance_dispatcher_name, static_instance_placeholder,
     text_into_placeholder, trait_dispatcher_name, witness_placeholder, witness_variable,
-    CLOSURE_SENTINEL, DEFAULT_DISPATCHER, FALLBACK_INSTANCE, METHOD_SENTINEL, PRIVATE_PREFIX,
-    SENTINEL,
+    CLOSURE_SENTINEL, DEFAULT_DISPATCHER, FALLBACK_INSTANCE, HIDDEN_DISPATCHER, METHOD_SENTINEL,
+    PRIVATE_PREFIX, SENTINEL,
 };
 pub(crate) use naming::{function_display_name, private_function_name, PRIVATE_METHOD};
 #[cfg(test)]
@@ -414,6 +414,13 @@ struct Parser<'a> {
     /// that has one, by the closure's span: what `std::thread::spawn`
     /// refuses (`thread.rs`).
     unsent_captures: BTreeMap<Span, closure::Unsent>,
+    /// Each closure's captures whose type holds an opaque output (D1109),
+    /// which is `Send` as its hidden type is, known once every body is
+    /// checked.
+    opaque_captures: BTreeMap<Span, Vec<closure::Unsent>>,
+    /// Each thread's closure capturing an opaque output, whose `Send` bound
+    /// is checked once every body is.
+    opaque_sends: Vec<entry::HiddenSend>,
     /// A local a closure that isn't `move` borrows, of each closure that
     /// borrows one, by the closure's span: what a `'static` bound refuses
     /// (rustc's E0373), as `std::thread::spawn`'s does.
@@ -839,6 +846,9 @@ struct Parser<'a> {
     /// Each witness placeholder with the type its parameter, named as
     /// declared, takes at the call.
     pending_witnesses: Vec<(String, ImmutableString, Ty, Span, bool)>,
+    /// Each opaque output a generic call here takes as a type argument,
+    /// whose witness is its hidden type's (D1109), and where.
+    witnessed_opaques: Vec<(type_ref::Opaque, Span)>,
     /// This body's generic parameters a signature names inside a host
     /// type, in declaration order: each host operation here takes their
     /// witnesses after its operands.
@@ -1004,6 +1014,8 @@ impl<'a> Parser<'a> {
             known_values: BTreeMap::new(),
             known_indices: Vec::new(),
             unsent_captures: BTreeMap::new(),
+            opaque_captures: BTreeMap::new(),
+            opaque_sends: Vec::new(),
             borrowed_captures: BTreeMap::new(),
             deferred: BTreeMap::new(),
             uninitialized: Vec::new(),
@@ -1137,6 +1149,7 @@ impl<'a> Parser<'a> {
             pending_traits: Vec::new(),
             pending_projections: Vec::new(),
             pending_witnesses: Vec::new(),
+            witnessed_opaques: Vec::new(),
             host_witnesses: Vec::new(),
             template_params: std::cell::RefCell::new(Box::default()),
             witnessed_ops: BTreeMap::new(),

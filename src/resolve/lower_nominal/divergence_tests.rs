@@ -2776,3 +2776,79 @@ main();
         "{report}"
     );
 }
+
+#[test]
+fn a_generic_filled_by_an_opaque_output_dispatches_on_its_hidden_type() {
+    // rustc dispatches `T::zero()` on the hidden type of the opaque type
+    // that fills `T`, which the caller still knows only by its bounds (#2491).
+    let output = printed(
+        r#"
+trait Zero { fn zero() -> Self; fn val(&self) -> i64; }
+struct Z(i64);
+impl Zero for Z { fn zero() -> Self { Z(0) } fn val(&self) -> i64 { self.0 } }
+fn make() -> impl Zero { Z(5) }
+fn same<T: Zero>(_: &T) -> T { T::zero() }
+fn main() {
+    let a = make();
+    let b = same(&a);
+    println!("{} {}", a.val(), b.val());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "5 0\n");
+    // A function written after its caller, and a builtin hidden type.
+    let output = printed(
+        r#"
+fn main() {
+    let n = number();
+    let z = zeroed(&n);
+    let b = same(&make());
+    println!("{} {} {}", n, z, b.val());
+}
+trait Zero { fn zero() -> Self; fn val(&self) -> i64; }
+#[derive(Default)]
+struct Z(i64);
+impl Zero for Z { fn zero() -> Self { Z(1) } fn val(&self) -> i64 { self.0 } }
+fn zeroed<T: Default>(_: &T) -> T { T::default() }
+fn same<T: Zero>(_: &T) -> T { T::zero() }
+fn number() -> impl Default + std::fmt::Display { 7 }
+fn make() -> impl Zero { Z(5) }
+main();
+"#,
+    );
+    assert_eq!(output, "7 0 1\n");
+}
+
+#[test]
+fn an_opaque_output_is_send_as_its_hidden_type_is() {
+    // rustc's auto traits see through an opaque type to its hidden type.
+    let program = |field: &str, value: &str| {
+        format!(
+            r#"
+use std::rc::Rc;
+trait Shape {{ fn area(&self) -> f64; }}
+struct Sq({field});
+impl Shape for Sq {{ fn area(&self) -> f64 {{ 2.0 }} }}
+fn make() -> impl Shape {{ Sq({value}) }}
+fn main() {{
+    let s = make();
+    let h = std::thread::spawn(move || s.area());
+    println!("{{}}", h.join().unwrap());
+}}
+main();
+"#
+        )
+    };
+    assert_eq!(printed(&program("f64", "2.0")), "2\n");
+    // rawr names the hidden type, as it names a captured `Sq` itself.
+    let report = refused(&program("Rc<f64>", "Rc::new(2.0)"));
+    assert!(
+        report.starts_with("error[E0277]: `Sq` cannot be sent between threads safely"),
+        "{report}"
+    );
+    assert!(
+        report.contains("required by a bound in `std::thread::spawn`"),
+        "{report}"
+    );
+}

@@ -81,6 +81,21 @@ impl<'a> Parser<'a> {
         self.hidden_outputs = hidden;
     }
 
+    /// The hidden type this body filled each of its function's opaque
+    /// outputs with, and the opaque outputs its generic calls took as type
+    /// arguments (D1109).
+    pub(super) fn hidden(&mut self) -> Hidden {
+        Hidden {
+            filled: self
+                .hidden_outputs
+                .iter()
+                .map(|(opaque, hidden)| (*opaque, self.inference.resolve(hidden)))
+                .collect(),
+            witnessed: std::mem::take(&mut self.witnessed_opaques),
+            sends: std::mem::take(&mut self.opaque_sends),
+        }
+    }
+
     /// Fresh types for `generics` at one use, with their bounds pending.
     pub(super) fn fresh_generics(
         &mut self,
@@ -589,6 +604,12 @@ impl<'a> Parser<'a> {
             Ty::Param(name, Parameter::Declared) if self.has_witness(name) => {
                 witness_variable(name)
             }
+            // An opaque output's witness is its hidden type's, which the
+            // generated text reads once every body is checked (D1109).
+            Ty::Param(_, Parameter::Opaque(opaque)) => {
+                let [source, line, column, index] = opaque.numbers();
+                format!("{HIDDEN_DISPATCHER}({source},{line},{column},{index})")
+            }
             Ty::Infer(_) => {
                 return Err(Error::TypeAnnotationsNeeded {
                     parameter: parameter.into(),
@@ -696,6 +717,9 @@ impl<'a> Parser<'a> {
                 ty = self.inference.resolve(target);
             }
             let witness = self.witness(&ty, &parameter, span)?;
+            if let Ty::Param(_, Parameter::Opaque(opaque)) = ty {
+                self.witnessed_opaques.push((opaque, span));
+            }
             if witness.len() > placeholder.len() {
                 return Err(Error::UnsupportedNominalSyntax {
                     construct: "a generic parameter name this long as a `Default` witness".into(),

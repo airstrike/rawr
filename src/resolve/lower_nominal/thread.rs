@@ -487,6 +487,20 @@ impl Parser<'_> {
                 formatted: None,
             });
         }
+        // A captured opaque output is `Send` as its hidden type is (D1109).
+        for unsent in self
+            .opaque_captures
+            .get(&closure.span)
+            .cloned()
+            .unwrap_or_default()
+        {
+            self.opaque_sends.push(super::entry::HiddenSend {
+                ty: unsent.ty,
+                borrowed: unsent.borrowed,
+                closure: closure.span,
+                item: spawner.path().into(),
+            });
+        }
         self.pending_bounds
             .push((output.clone(), capability::Kind::Send, call, None));
         Ok(output)
