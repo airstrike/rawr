@@ -5172,6 +5172,14 @@ main();
 "#,
     );
     assert_eq!(output, "b.rs b.rs \"/a/b.rs\" true /a/b.rs\n");
+    // A method std declares that rawr doesn't run is no unknown member.
+    let report = refused(
+        "use std::path::Path;\nfn main() { let p = Path::new(\"/a/b\"); p.strip_prefix(\"/a\"); }",
+    );
+    assert!(
+        report.starts_with("error: rawr doesn't run `Path::strip_prefix` yet"),
+        "{report}"
+    );
 }
 
 #[test]
