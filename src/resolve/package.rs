@@ -2615,8 +2615,18 @@ impl<'a> Resolver<'a> {
                     };
                     self.unresolved_type_path(context, path, noun, failure)
                 })?;
-            // An impl's trait path that names another item: rustc's E0404.
-            if traits.contains(&path.span) && !matches!(target, Target::Trait(_)) {
+            // An impl's trait path that names another item: rustc's E0404. A
+            // trait of std or of a Rust crate, native code's included, is a
+            // module of its host (`use rand::Rng;`), so a module is another
+            // item only when the program declares it.
+            let names_trait = match target {
+                Target::Trait(_) => true,
+                Target::Module | Target::HostModuleItem { .. } => {
+                    !self.names_script_module(context, segments, &mut BTreeSet::new())
+                }
+                Target::Type(_) | Target::Item(_) | Target::HostItem { .. } => false,
+            };
+            if traits.contains(&path.span) && !names_trait {
                 return Err(Failure {
                     primary: context.source,
                     secondary: None,
