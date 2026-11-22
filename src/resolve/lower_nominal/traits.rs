@@ -1010,17 +1010,27 @@ impl<'a> Parser<'a> {
     /// for T`) whose where-clauses hold for `ty`, as rustc's probe finds it
     /// for a type no other impl gives `member`.
     pub(super) fn blanket_method(&mut self, ty: &Ty, member: &str) -> Option<method::Definition> {
+        let mut fitting = self.blanket_methods(ty, member);
+        let definition = fitting.pop()?;
+        fitting.is_empty().then_some(definition)
+    }
+
+    /// Each function `member` of a blanket impl whose where-clauses hold
+    /// for `ty`.
+    pub(super) fn blanket_methods(&mut self, ty: &Ty, member: &str) -> Vec<method::Definition> {
         let owner = type_def::Id::builtin(crate::resolve::BLANKET_OWNER);
-        let definitions = self
+        let Some(definitions) = self
             .models
             .trait_methods
-            .get(&(owner, member.into()))?
-            .clone();
-        let mut fitting = definitions
+            .get(&(owner, member.into()))
+            .cloned()
+        else {
+            return Vec::new();
+        };
+        definitions
             .into_iter()
-            .filter(|definition| self.blanket_fits(definition, ty, None));
-        let definition = fitting.next()?;
-        fitting.next().is_none().then_some(definition)
+            .filter(|definition| self.blanket_fits(definition, ty, None))
+            .collect()
     }
 
     /// Whether a blanket impl of `trait_name` at `arguments` holds for
@@ -1686,14 +1696,14 @@ impl<'a> Parser<'a> {
             }
         }
         let owner = Ty::from_resolved(&implementation.owner);
-        for (name, ty) in &implementation.associated {
+        for (name, written) in &implementation.associated {
             let Some((bounds, traits)) = self
                 .associated_bounds(&trait_name.text, &name.text)
                 .cloned()
             else {
                 continue;
             };
-            let ty = Ty::from_resolved(ty);
+            let ty = Ty::from_resolved(written);
             // `type Item: Into<String>;`: the generic trait's instance, its
             // `Self` the impl's owner.
             let instances = self.associated_bound_instances(&trait_name.text, &name.text, &owner);
@@ -1737,7 +1747,16 @@ impl<'a> Parser<'a> {
                     chain: crate::resolve::Chain::default(),
                 });
             }
-            self.check_associated_equalities(&trait_name.text, name, &ty, &owner)?;
+            let arguments = impl_arguments
+                .iter()
+                .map(Ty::from_resolved)
+                .collect::<Vec<_>>();
+            let assigned = Assigned {
+                name,
+                ty: &ty,
+                written: written.span(),
+            };
+            self.check_associated_equalities(&trait_name.text, &assigned, &owner, &arguments)?;
         }
         Ok(())
     }
@@ -1745,14 +1764,15 @@ impl<'a> Parser<'a> {
     /// The impl's associated type `ty` for `name` has the types its trait's
     /// bound equalities name (rustc's E0271): `type Fore = Range<usize>;`
     /// for `type Fore: Iterator<Item = Self::For>;` needs `type For =
-    /// usize;`.
+    /// usize;`. A generic trait's parameters are the impl's `arguments`.
     pub(super) fn check_associated_equalities(
         &mut self,
         trait_name: &ImmutableString,
-        name: &crate::item::Name,
-        ty: &Ty,
+        assigned: &Assigned<'_>,
         owner: &Ty,
+        arguments: &[Ty],
     ) -> Result<(), Error> {
+        let Assigned { name, ty, written } = *assigned;
         let Some(equalities) = self
             .inference
             .associated
@@ -1762,7 +1782,10 @@ impl<'a> Parser<'a> {
         else {
             return Ok(());
         };
-        let substitution = BTreeMap::from([(ImmutableString::from("Self"), owner.clone())]);
+        let mut substitution = BTreeMap::from([(ImmutableString::from("Self"), owner.clone())]);
+        if let Some(parameters) = self.inference.associated.trait_parameters.get(trait_name) {
+            substitution.extend(parameters.iter().cloned().zip(arguments.iter().cloned()));
+        }
         for (bound, item, expected) in equalities.iter() {
             let expected = instantiate(&Ty::from_resolved(expected), &substitution);
             let actual = if is_iterator_trait(bound) && item == "Item" {
@@ -1796,15 +1819,25 @@ impl<'a> Parser<'a> {
                 Ty::Projection(Box::new(ty.clone()), bound.clone(), item.clone())
             };
             if !self.unify_type(&expected, &actual) {
-                return Err(Error::TypeMismatch {
-                    expected: format!(
-                        "{} (`<{} as {bound}>::{item}`)",
-                        self.inference.resolve(&expected).name(&self.models),
-                        ty.name(&self.models)
+                let (expected, actual, ty) = (
+                    self.inference.resolve(&expected).name(&self.models),
+                    self.inference.resolve(&actual).name(&self.models),
+                    ty.name(&self.models),
+                );
+                let message = if is_iterator_trait(bound) && item == "Item" {
+                    format!(
+                        "expected `{ty}` to be an iterator that yields `{expected}`, but it \
+                         yields `{actual}`"
                     )
-                    .into(),
-                    actual: self.inference.resolve(&actual).name(&self.models),
-                    expression: name.span,
+                } else {
+                    format!("type mismatch resolving `<{ty} as {bound}>::{item} == {expected}`")
+                };
+                return Err(Error::StdPath {
+                    code: "E0271",
+                    message: message.into(),
+                    label: Some(format!("expected `{expected}`, found `{actual}`").into()),
+                    note: None,
+                    reference: written,
                 });
             }
         }
@@ -2047,4 +2080,13 @@ fn implementor_tag(ty: &crate::host::type_ref::Type) -> Option<String> {
         _ => return None,
     };
     rawr_import::classify::representability::object::tag(&converted)
+}
+
+/// An impl's associated type: its name, its type, and where the impl
+/// writes the type.
+#[derive(Clone, Copy)]
+pub(super) struct Assigned<'a> {
+    pub(super) name: &'a crate::item::Name,
+    pub(super) ty: &'a Ty,
+    pub(super) written: Span,
 }

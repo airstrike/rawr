@@ -817,6 +817,22 @@ impl<'a> Parser<'a> {
         if !matches!(self.peek(), Token::LeftParen) {
             return Ok(self.prelude_function(variant, ok, err, start));
         }
+        // The payload is expected to be what the variant's expected type
+        // holds: `Err(Fail::fail("y"))` as a `Result<(), E1>` reads its
+        // payload as an `E1`.
+        let expected_payload = match (variant, self.coercion_target()) {
+            (Prelude::Some, Some(Ty::Option(payload)))
+            | (Prelude::Ok, Some(Ty::Result(payload, _)))
+            | (Prelude::Err, Some(Ty::Result(_, payload)))
+                if inferred =>
+            {
+                Some(*payload)
+            }
+            _ => None,
+        };
+        if let Some(payload) = &expected_payload {
+            self.argument_hints = vec![Some(payload.clone())];
+        }
         let (mut arguments, end) = self.parse_borrowing_arguments("prelude variant arguments")?;
         let expression = span(start.start(), end);
         let [value] = arguments.as_mut_slice() else {
@@ -846,6 +862,15 @@ impl<'a> Parser<'a> {
         };
         if variant == Prelude::Err && inferred {
             self.box_returned_error(value)?;
+        }
+        // An error where a `Box<dyn Error>` is expected is boxed as the box
+        // coerces, or is rustc's E0308 at the error: an arm's `Err(e)` too,
+        // which the arms' type would otherwise box.
+        if variant == Prelude::Err
+            && let Some(payload) = &expected_payload
+            && self.boxed_std_error(payload)
+        {
+            self.coerce_expr(payload, value)?;
         }
         match variant {
             Prelude::Err => self.err_payloads.insert(start.start(), value.span),

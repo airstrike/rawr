@@ -1122,7 +1122,7 @@ impl<'a> Parser<'a> {
             // value no impl or inherent function of that name is for, as
             // `vec.into_view()` of a crate's `IntoView`.
             if matches!(self.peek(), Token::LeftParen | Token::Unit)
-                && let Some(definition) = self.blanket_receiver(&builtin, &member)
+                && let Some(definition) = self.blanket_receiver(&builtin, &member, member_span)?
             {
                 value = self.call_blanket_method(value, &definition, &member, member_span)?;
                 continue;
@@ -1946,19 +1946,21 @@ impl<'a> Parser<'a> {
 
     /// The blanket impl's function `member` a call on `receiver` reaches:
     /// one whose where-clauses hold for it, where neither its own type's
-    /// impls nor its inherent or iterator methods have `member`.
+    /// impls nor its inherent or iterator methods have `member`. Two that
+    /// hold are rustc's E0034 at `member_span`.
     pub(super) fn blanket_receiver(
         &mut self,
         receiver: &Ty,
         member: &ImmutableString,
-    ) -> Option<method::Definition> {
+        member_span: Span,
+    ) -> Result<Option<method::Definition>, Error> {
         let owner = type_def::Id::builtin(crate::resolve::BLANKET_OWNER);
         if !self
             .models
             .trait_methods
             .contains_key(&(owner, member.clone()))
         {
-            return None;
+            return Ok(None);
         }
         let bare = without_references(receiver).clone();
         let own = owner_id(&bare).is_some_and(|id| {
@@ -1971,9 +1973,22 @@ impl<'a> Parser<'a> {
         let iterator =
             matches!(bare, Ty::Iter(..)) && std_method::iterator(member, |_| true).is_some();
         if own || iterator || std_method::inherent(&bare, member).is_some() {
-            return None;
+            return Ok(None);
         }
-        self.blanket_method(receiver, member)
+        let mut fitting = self.blanket_methods(receiver, member);
+        if fitting.len() > 1 {
+            fitting.retain(|definition| self.trait_in_scope(definition));
+        }
+        if fitting.len() > 1 {
+            return Err(Error::StdPath {
+                code: "E0034",
+                message: "multiple applicable items in scope".into(),
+                label: Some(format!("multiple `{member}` found").into()),
+                note: None,
+                reference: Span::new(member_span.start(), text_end(member_span.start(), member)),
+            });
+        }
+        Ok(fitting.pop())
     }
 
     /// `value.member(args)` through the blanket impl's function
@@ -2052,9 +2067,19 @@ impl<'a> Parser<'a> {
                 )
                 .map(Ok);
         }
-        if let Some(definition) =
-            self_typed.or_else(|| self.probed_method(owner, &member, &value.ty))
-        {
+        let found = match self_typed {
+            Some(definition) => Some(definition),
+            None => self.probed_method(owner, &member, &value.ty),
+        };
+        // Blanket impls of two traits that give one name: the one whose
+        // where-clauses hold for the receiver, as rustc's probe takes it.
+        let found = match found {
+            None if owner.builtin_code() == Some(crate::resolve::BLANKET_OWNER) => {
+                self.blanket_method(&value.ty, &member)
+            }
+            found => found,
+        };
+        if let Some(definition) = found {
             let summary = self.method_summary(&definition);
             self.note_call(end, summary);
             let Some(mode) = definition.receiver() else {
@@ -4272,6 +4297,41 @@ impl<'a> Parser<'a> {
             source.push_text(format!(" }} else {{ {drops}return "));
             let error = self.prelude_op(PreludeOp::UnwrapErr, [operand.as_str().into()]);
             let converted = origin::Fragment::call(method_name(&conversion), [error]);
+            let returned = self.prelude_op(PreludeOp::Err, [converted]);
+            source.push(self.copied_return(returned.clone()).unwrap_or(returned));
+            source.push_text("; } }");
+            return Ok(self.operator_expr(source.surrounded("(", ")"), element, expression));
+        }
+        // `?` converts through std's `From` too: `ok_or("missing")?` in a
+        // body returning `Result<_, String>` returns `Err(String::from(e))`.
+        if let (Ty::Result(_, error), Ty::Result(_, returned)) = (
+            self.inference.resolve(&early),
+            self.inference.resolve(&output),
+        ) && !matches!(*error, Ty::Infer(_))
+            && !matches!(*returned, Ty::Infer(_) | Ty::Host { .. })
+            && !self.unifies(&returned, &error)
+            && let Some(op) = self.std_conversion(&returned, &error)
+        {
+            let ok = self.inference.fresh();
+            self.unify_type(&output, &Ty::Result(Box::new(ok), returned));
+            let mut value = value;
+            self.move_out_value(&mut value)?;
+            let drops = self.temporary_drops_here() + self.exit_drops(self.drop_base)?.as_str();
+            let operand = self.temporary("try");
+            let mut source = origin::Fragment::plain(format!("{{ let {operand} = "));
+            source.push(value.rendered_source());
+            source.push_text("; if ");
+            let test = self.prelude_op(is, [operand.as_str().into()]);
+            source.push(test);
+            source.push_text(" { ");
+            let unwrapped = self.prelude_op(unwrap, [operand.as_str().into()]);
+            source.push(unwrapped);
+            source.push_text(format!(" }} else {{ {drops}return "));
+            let error = self.prelude_op(PreludeOp::UnwrapErr, [operand.as_str().into()]);
+            let converted = match op {
+                Some(op) => self.prelude_op(op, [error]),
+                None => error,
+            };
             let returned = self.prelude_op(PreludeOp::Err, [converted]);
             source.push(self.copied_return(returned.clone()).unwrap_or(returned));
             source.push_text("; } }");

@@ -3394,6 +3394,10 @@ fn parse_function_rest(
         &mut lifetimes,
         Some(&mut others),
     )?;
+    let sized_self = others.iter().find_map(|bound| match bound.subject {
+        Subject::SizedSelf(span) => Some(span),
+        _ => None,
+    });
     lift_where_bounds(&mut generics, &mut lifetimes, others)?;
     lift_impl_parameters(&mut generics, &mut parameters);
     erase_fn_bounds(
@@ -3424,6 +3428,7 @@ fn parse_function_rest(
             constant: false,
             static_item: false,
             asynchronous: false,
+            sized_self,
             span: Span::new(start, semicolon.end()),
         });
     }
@@ -3449,6 +3454,7 @@ fn parse_function_rest(
         constant: false,
         static_item: false,
         asynchronous: false,
+        sized_self,
         span,
     })
 }
@@ -3617,6 +3623,31 @@ fn parse_bounds_with(
         }
         if matches!(input.peek(), Some((Token::Apostrophe, _))) {
             lifetimes.push(parse_lifetime(input)?.name);
+        } else if let Some((Token::Reserved(symbol), position)) = input.peek()
+            && symbol.as_str() == "?"
+        {
+            // `T: ?Sized`: the default `Sized` bound relaxed, which bounds
+            // nothing. rustc relaxes no other trait.
+            let position = *position;
+            input.next();
+            let mut split = None;
+            let relaxed = parse_path_bindings(input, &mut split, None)?;
+            if !is_sized_trait(&relaxed) {
+                return Err(PERR::Unexpected {
+                    message: "bound modifier `?` can only be applied to `Sized`".into(),
+                    label: String::new(),
+                    help: None,
+                    span: Span::new(position, relaxed.span.end()),
+                }
+                .into_err(position));
+            }
+            match closing.as_deref_mut() {
+                Some(closing) if split.is_some() => {
+                    *closing = split;
+                    return Ok(bounds);
+                }
+                _ => reject_split(split)?,
+            }
         } else if skip_precise_capture(input, closing.as_deref_mut())?.is_some() {
         } else if let Some((Token::Identifier(name) | Token::Reserved(name), position)) =
             input.peek()
@@ -3792,6 +3823,28 @@ fn parse_where_with(
                 continue;
             }
         };
+        // A method's `where Self: Sized`: it is no method of `dyn Trait`.
+        if name.text == "Self"
+            && self_bounds.is_none()
+            && projections.is_empty()
+            && bounded.is_empty()
+            && bounds.iter().any(is_sized_trait)
+            && bounds
+                .iter()
+                .all(|bound| is_sized_trait(bound) || is_auto_trait(bound))
+            && let Some(others) = others.as_deref_mut()
+        {
+            others.push(WhereBound {
+                subject: Subject::SizedSelf(name.span),
+                bounds,
+                projections,
+                lifetimes: bounded,
+            });
+            if matches!(input.peek(), Some((Token::Comma, _))) {
+                input.next();
+            }
+            continue;
+        }
         outlives.extend(bounded.into_iter().map(|lifetime| (name.clone(), lifetime)));
         if name.text == "Self"
             && let Some(supertraits) = self_bounds.as_deref_mut()
@@ -3912,6 +3965,9 @@ enum Subject {
     },
     /// Any other type: `Vec<T>`, `&'a T`, `i32`.
     Type(type_ref::Type),
+    /// `Self` of a function's `where Self: Sized`, bounded only by `Sized`
+    /// and auto traits, where it is written.
+    SizedSelf(Span),
 }
 
 /// The parameter, the written trait and the associated type of `predicate`
@@ -4014,6 +4070,8 @@ fn lift_where_bounds(
                 name,
             } => associated_parameter(generics, &base, trait_name, &name)?,
             Subject::Type(ty) => fixed_parameter(generics, ty),
+            // `Self` is no parameter of the function's.
+            Subject::SizedSelf(_) => continue,
         };
         let generic = &mut generics[parameter];
         let mut bounds = generic.bounds.to_vec();
@@ -4447,6 +4505,7 @@ fn parse_associated_const(
             constant: true,
             static_item: false,
             asynchronous: false,
+            sized_self: None,
             span: Span::new(start, semicolon.end()),
         });
     }
@@ -4499,6 +4558,7 @@ fn finish_associated_const(
         constant: true,
         static_item: false,
         asynchronous: false,
+        sized_self: None,
         span,
     })
 }
@@ -4548,6 +4608,7 @@ fn parse_const_rest(
         constant: true,
         static_item: false,
         asynchronous: false,
+        sized_self: None,
         span,
     })
 }
@@ -5497,7 +5558,7 @@ fn parse_fn_signature(
 /// A generic parameter bounded by `Fn(A) -> B` is that function type, as
 /// Rawr has one function type: each use of the parameter in the signature
 /// is replaced by it, bounded by the parameter's `outlives` bounds, and the
-/// parameter is dropped.
+/// parameter is fixed to it.
 fn erase_fn_bounds(
     generics: &mut Vec<crate::item::GenericParam>,
     parameters: &mut [crate::item::Parameter],
@@ -5534,7 +5595,7 @@ fn erase_fn_bounds(
                 .expect("`associated_parameter` fails only for a bound naming no trait");
         }
     }
-    generics.retain(|generic| {
+    for generic in generics.iter_mut() {
         // `I: Iterator<Item = T>` (or `IntoIterator`): `impl Iterator<Item =
         // T>` wherever `I` is written, and `T` for `I::Item`.
         let iterator = generic.bounds.iter().find_map(|bound| {
@@ -5548,7 +5609,7 @@ fn erase_fn_bounds(
             })?;
             modules.then(|| iterator_type(name, item.clone(), bound.span))
         });
-        if let Some(replacement) = iterator {
+        let replacement = if let Some(replacement) = iterator {
             let type_ref::Type::Path(path) = &replacement else {
                 unreachable!("an iterator type is a path");
             };
@@ -5563,35 +5624,41 @@ fn erase_fn_bounds(
                 replace_item_projection(ty, &generic.name.text, item);
                 replace_named(ty, &generic.name.text, &replacement);
             }
-            return false;
-        }
-        let Some(bound) = generic.bounds.iter().find(|bound| {
-            matches!(&bound.segments[..], [segment] if type_ref::is_fn_type(&segment.name.text))
-        }) else {
-            return true;
+            replacement
+        } else {
+            let Some(bound) = generic.bounds.iter().find(|bound| {
+                matches!(&bound.segments[..], [segment] if type_ref::is_fn_type(&segment.name.text))
+            }) else {
+                continue;
+            };
+            let mut bound = bound.clone();
+            for (_, lifetime) in outlives
+                .iter()
+                .filter(|(parameter, _)| parameter.text == generic.name.text)
+            {
+                bound_fn_type(
+                    &mut bound,
+                    type_ref::Lifetime {
+                        name: lifetime.clone(),
+                        span: lifetime.span,
+                    },
+                );
+            }
+            let replacement = type_ref::Type::Path(bound);
+            for parameter in parameters.iter_mut() {
+                replace_named(&mut parameter.ty, &generic.name.text, &replacement);
+            }
+            if let Some(output) = output {
+                replace_named(output, &generic.name.text, &replacement);
+            }
+            replacement
         };
-        let mut bound = bound.clone();
-        for (_, lifetime) in outlives
-            .iter()
-            .filter(|(parameter, _)| parameter.text == generic.name.text)
-        {
-            bound_fn_type(
-                &mut bound,
-                type_ref::Lifetime {
-                    name: lifetime.clone(),
-                    span: lifetime.span,
-                },
-            );
-        }
-        let replacement = type_ref::Type::Path(bound);
-        for parameter in parameters.iter_mut() {
-            replace_named(&mut parameter.ty, &generic.name.text, &replacement);
-        }
-        if let Some(output) = output {
-            replace_named(output, &generic.name.text, &replacement);
-        }
-        false
-    });
+        // The parameter stays a slot of the turbofish, as rustc counts it
+        // (`each::<usize, _>(..)`), which the replacement fills.
+        generic.bounds = Box::default();
+        generic.projections = Box::default();
+        generic.fixed = Some(replacement);
+    }
 }
 
 /// Replace each path `name::Item` in `ty` with `item`.

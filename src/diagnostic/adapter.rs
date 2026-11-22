@@ -2158,6 +2158,9 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Category::Redefined => code::RESOLVE_REDEFINED,
         resolve::Category::UnknownType => match error {
             resolve::Error::UnknownType { path: true, .. } => code::RESOLVE_FAILED_PATH,
+            resolve::Error::UnknownType { name, .. } if name.as_str() == "Self" => {
+                code::RESOLVE_SELF_OUTSIDE
+            }
             _ => code::RESOLVE_UNKNOWN_TYPE,
         },
         resolve::Category::UnknownImport => code::RESOLVE_UNKNOWN_IMPORT,

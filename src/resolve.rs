@@ -2953,17 +2953,6 @@ fn resolve_item(
                         .collect::<Result<Box<[_]>, _>>()
                 })
                 .collect::<Result<Box<[_]>, _>>()?;
-            // A projection does not carry its trait's arguments, which such
-            // an equality's type may name.
-            if !trait_generics.is_empty()
-                && let Some((_, name, _)) = associated_equalities.iter().flatten().next()
-            {
-                return Err(Error::UnsupportedNominalSyntax {
-                    construct: "an equality in the bounds of a generic trait's associated type"
-                        .into(),
-                    source: name.span,
-                });
-            }
             item::Kind::Trait(item::Trait {
                 header: parsed.header,
                 name: parsed.name,
@@ -3048,6 +3037,15 @@ fn resolve_function(
         return Err(Error::SelfOutsideImpl {
             reference,
             parameter: true,
+        });
+    }
+    // `fn f() where Self: Sized`: no `Self` outside an impl or a trait.
+    if !inside_impl && let Some(reference) = parsed.sized_self {
+        return Err(Error::UnknownType {
+            name: "Self".into(),
+            reference,
+            path: false,
+            imports: Box::default(),
         });
     }
     erase_trait_generics(&mut parsed, types, host);
@@ -3185,6 +3183,7 @@ fn resolve_function(
         opaque: Box::default(),
         opaque_outputs,
         formatter,
+        sized_self: parsed.sized_self,
     })
 }
 
@@ -6137,7 +6136,12 @@ fn dyn_own_incompatibility(
             reference: span,
         });
     }
-    for function in &declared.functions {
+    // A method `where Self: Sized` is no method of `dyn Trait`.
+    for function in declared
+        .functions
+        .iter()
+        .filter(|function| function.sized_self.is_none())
+    {
         let member = &function.name.text;
         if function.body.constant {
             return Some(error(member, "it contains this associated const"));
