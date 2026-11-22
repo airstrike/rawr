@@ -6723,9 +6723,11 @@ fn language_impl_trait_parameters() {
          fn show(a: &impl Animal) -> String { a.name() } pub fn run() -> i64 { show(&Rock); 0 } run()",
     );
     assert!(unbounded.contains("Animal"), "{unbounded}");
-    let returned =
-        rejected("fn f() -> impl std::fmt::Display { 3 } pub fn run() -> i64 { 0 } run()");
-    assert!(returned.contains("return type"), "{returned}");
+    // rustc runs a return type's `impl Display` (#2462).
+    let returned = run_string(
+        "fn f() -> impl std::fmt::Display { 3 } pub fn run() -> String { format!(\"{}\", f()) } run()",
+    );
+    assert_eq!(returned, "3");
 }
 
 #[test]
