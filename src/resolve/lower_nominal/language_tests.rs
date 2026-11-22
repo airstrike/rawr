@@ -9080,14 +9080,14 @@ fn language_type_aliases() {
 
 #[test]
 fn language_field_and_variant_attributes_are_inert() {
-    // Derive helpers such as `#[serde(..)]` mean nothing to Rawr, as rustc
+    // Documentation and lint attributes mean nothing to Rawr, as rustc
     // leaves them inert. `#[cfg(..)]` still leaves a field out.
     let value = run(r#"
         #[derive(Debug, Clone, Default)]
         struct Task {
-            #[serde(default = "Uuid::new_v4")]
+            #[doc = "The task's id."]
             id: i64,
-            #[serde(skip)]
+            #[deprecated]
             #[allow(dead_code)]
             pub weight: i64,
             #[cfg(test)]
@@ -9096,7 +9096,7 @@ fn language_field_and_variant_attributes_are_inert() {
         struct Pair(#[allow(unused)] i64, i64);
         #[derive(Debug, Clone, Copy, PartialEq, Default)]
         enum Filter {
-            #[serde(rename = "all")]
+            #[doc(alias = "all")]
             #[default]
             All,
             Done { #[allow(unused)] count: i64 },

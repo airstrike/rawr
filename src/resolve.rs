@@ -1,10 +1,12 @@
 //! Promotion of parsed Rawr units into opaque resolved programs.
 
+pub(crate) mod attribute;
 pub(crate) mod block;
 pub(crate) mod borrowck;
 mod error;
 pub(crate) mod extern_prelude;
 mod forward;
+mod fragment;
 pub(crate) mod imports;
 mod infinite;
 mod intrinsic;

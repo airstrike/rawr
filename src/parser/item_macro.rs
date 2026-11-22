@@ -26,15 +26,16 @@ pub(super) struct Layout {
     rules: Vec<(ImmutableString, Shared<Rules>)>,
     /// The macros a block defines, visible to its end, innermost last.
     local: Vec<(ImmutableString, Shared<Rules>)>,
-    /// How many expansions are made, which keeps each one's locals apart.
-    hygiene: usize,
     /// How many expansions the one being parsed is inside.
     depth: usize,
 }
 
 /// The first number a laid-out expansion's locals are renamed apart by,
 /// past those the lowering gives the calls it expands itself, whose
-/// locals a laid-out expansion's tokens may sit beside.
+/// locals a laid-out expansion's tokens may sit beside. Each expansion's
+/// number is this and the line it is laid out from, which no other
+/// expansion of the file has, so the expansions a later parse lays out
+/// after the file's (`resume`) keep their locals apart from those too.
 const HYGIENE: usize = 1 << 24;
 
 /// How many expansions deep a call is laid out: a deeper one is left
@@ -77,7 +78,6 @@ pub(super) fn begin(source: &str) -> Option<Layout> {
         expansions: Vec::new(),
         rules: INHERITED.take(),
         local: Vec::new(),
-        hygiene: HYGIENE,
         depth: 0,
     };
     LAYOUT.replace(Some(layout))
@@ -169,10 +169,7 @@ pub(super) fn lay_out(
     if in_body && !rules.may_declare(&input) {
         return None;
     }
-    let hygiene = with(|layout| {
-        layout.hygiene += 1;
-        (layout.depth < DEPTH).then_some(layout.hygiene)
-    })??;
+    let hygiene = with(|layout| (layout.depth < DEPTH).then_some(HYGIENE + layout.lines + 1))??;
     let expansion = rules.expand(&input, krate, *at, *end, hygiene).ok()?;
     let (text, mark) = place(
         &render(&expansion),
@@ -339,4 +336,46 @@ pub(crate) fn laid_out(expansions: &[Expansion]) -> Option<Span> {
         Position::new(line, 1),
         Position::new(u16::MAX, u16::MAX),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The text the call `call` of `rules` lays out after `text`, a file's
+    /// with `expansions` laid out already, and the file's text and
+    /// expansions after it.
+    #[cfg(feature = "rust-import")]
+    fn lay_out_after(
+        rules: &Rules,
+        call: &str,
+        text: &str,
+        expansions: &[Expansion],
+    ) -> (String, String, Box<[Expansion]>) {
+        let outer = resume(text, expansions);
+        let tokens = crate::resolve::lower_nominal::lex_rust(&crate::Engine::new_raw(), call)
+            .into_iter()
+            .filter(|(token, _)| *token != Token::EOF)
+            .collect::<Vec<_>>();
+        let (laid, _) = lay_out(rules, &tokens, "crate", false, false).expect("the call expands");
+        let (text, expansions) = finish(outer).expect("the call is laid out");
+        (laid, text, expansions)
+    }
+
+    /// Each expansion laid out after a file's renames its locals apart
+    /// from every other's, a later parse's (`resume`) too (#2201).
+    #[cfg(feature = "rust-import")]
+    #[test]
+    fn each_laid_out_expansion_keeps_its_locals_apart() {
+        let rules = Rules::parse("macro_rules! m { () => { fn f() { let x = 1; } }; }").unwrap();
+        let (first, text, expansions) = lay_out_after(&rules, "m!()", "m!();", &[]);
+        let (second, ..) = lay_out_after(&rules, "m!()", &text, &expansions);
+        let local = |laid: &str| {
+            laid.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .find(|word| word.starts_with("__rawr_macro"))
+                .map(str::to_owned)
+        };
+        assert!(local(&first).is_some(), "{first}");
+        assert_ne!(local(&first), local(&second), "{first}\n{second}");
+    }
 }

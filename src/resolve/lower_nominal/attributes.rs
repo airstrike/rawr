@@ -337,15 +337,21 @@ impl<'a> Parser<'a> {
         };
         match name.as_str() {
             "not" | "all" | "any" => {
-                self.expect(Token::LeftParen, "`(` after a `cfg` operator")?;
                 let mut values = Vec::new();
-                while !matches!(self.peek(), Token::RightParen) {
-                    values.push(self.cfg_predicate()?);
-                    if matches!(self.peek(), Token::Comma) {
-                        self.next();
+                // `all()` and `any()`, whose `()` the lexer reads as one
+                // token.
+                if matches!(self.peek(), Token::Unit) {
+                    self.next();
+                } else {
+                    self.expect(Token::LeftParen, "`(` after a `cfg` operator")?;
+                    while !matches!(self.peek(), Token::RightParen) {
+                        values.push(self.cfg_predicate()?);
+                        if matches!(self.peek(), Token::Comma) {
+                            self.next();
+                        }
                     }
+                    self.next();
                 }
-                self.next();
                 match name.as_str() {
                     "not" if values.len() == 1 => Ok(!values[0]),
                     "not" => Err(Error::UnsupportedNominalSyntax {

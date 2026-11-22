@@ -3119,3 +3119,85 @@ main();
     );
     assert_eq!(output, "3 Some(1) [\"a\"]\n");
 }
+
+#[test]
+fn cfg_attr_applies_its_attributes_to_items_fields_and_variants() {
+    // `#[cfg_attr(..)]` applies what it lists where its predicate holds,
+    // a `cfg_attr` among them under its own too, on an item, a field and a
+    // variant, and `all()` and `any()` hold and fail as rustc's do (#603).
+    // The output is rustc's.
+    let output = printed(
+        r#"
+#[cfg_attr(all(), derive(Debug, Clone))]
+struct P { x: i32 }
+#[cfg_attr(all(), cfg_attr(all(), derive(Debug)))]
+struct S;
+#[derive(Debug)]
+struct F { a: i32, #[cfg(any())] b: i32, #[cfg_attr(all(), cfg(any()))] c: i32 }
+#[derive(Debug)]
+enum E { A, #[cfg(any())] B, C(#[cfg(any())] u8, i32), D { #[cfg_attr(all(), cfg(any()))] x: i32, y: i32 } }
+#[derive(Debug, Default)]
+enum G { #[cfg_attr(all(), default)] H, I }
+fn main() {
+    let n = match E::A { E::A => 0, E::C(v) => v, E::D { y } => y };
+    println!("{:?} {:?} {:?} {}", P { x: 1 }.clone(), S, F { a: 2 }, n);
+    println!("{:?} {:?} {:?} {}", E::C(3), E::D { y: 4 }, G::default(), cfg!(all()) && !cfg!(any()));
+    let _ = G::I;
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "P { x: 1 } S F { a: 2 } 0\nC(3) D { y: 4 } H true\n"
+    );
+    // A `cfg_attr` whose predicate fails applies nothing.
+    let report = refused(
+        r#"
+#[cfg_attr(all(), cfg_attr(any(), derive(Debug)))]
+struct T;
+fn main() { println!("{:?}", T); }
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0277]: `T` doesn't implement `Debug`"),
+        "{report}"
+    );
+}
+
+#[test]
+fn an_attribute_no_derive_declares_is_rustcs_error() {
+    // A derive helper such as `#[serde(..)]` with only std's derives on the
+    // item names nothing in scope (#604).
+    for source in [
+        "#[derive(Debug)]\nstruct S { #[serde(default)] a: i32 }\nfn main() {}\nmain();\n",
+        "#[serde(rename_all = \"camelCase\")]\nstruct S;\nfn main() {}\nmain();\n",
+        "enum E { #[serde(rename = \"x\")] A }\nfn main() {}\nmain();\n",
+        "fn main() { #[derive(Debug)] struct L { #[serde(skip)] a: i32 } }\nmain();\n",
+    ] {
+        let report = refused(source);
+        assert!(
+            report.starts_with("error: cannot find attribute `serde` in this scope"),
+            "{report}"
+        );
+    }
+    // rustc's own attributes and a tool's are in scope.
+    let output = printed(
+        r#"
+#[rustfmt::skip]
+#[must_use]
+#[inline]
+#[deprecated(note = "x")]
+#[doc = "d"]
+fn f() -> i32 { 1 }
+#[repr(u8)]
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+enum E { #[default] A }
+fn main() { println!("{} {:?}", f(), E::A); }
+main();
+"#,
+    );
+    assert_eq!(output, "1 A\n");
+}
