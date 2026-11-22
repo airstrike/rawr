@@ -188,10 +188,15 @@ impl<A: document::Admission> Parser<'_, '_, A> {
 
     fn removable_slash(&self, path_start: usize) -> bool {
         let text = self.output.as_bytes();
-        text[..text.len() - 1]
+        let last = text.len() - 1;
+        // The root slash stays, and the search never leaves the path.
+        if last <= path_start {
+            return false;
+        }
+        text[path_start..last]
             .iter()
             .rposition(|&b| b == b'/')
-            .is_some_and(|position| position >= path_start && !path_drive(&text[position..]))
+            .is_some_and(|slash| !path_drive(&text[path_start + slash..]))
     }
 
     pub(super) fn shorten(&mut self, scheme: Scheme, path_start: usize) -> Parse<()> {

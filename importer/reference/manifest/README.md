@@ -60,6 +60,11 @@ resolved registry version/checksum to occur in the original lock, requires
 exact singleton interpreter packages, and permits only the two intended local
 packages. A mismatch is a preparation failure requiring root inspection before
 reference observations are accepted. No equivalence exception is built in.
+The one exception is `provenance.json`'s `advisory_updates`. Each one names a
+pinned Cargo version and the reviewed version and checksum that replace it for a
+security advisory. url 2.5.9 replaces 2.5.8 for RUSTSEC-2026-0592, and
+form_urlencoded 1.2.3 replaces 1.2.2 because url 2.5.9 requires it. The
+2026-11-22 re-execution with them reproduced `observations.jsonl` byte for byte.
 After successful verification, copy the generated isolated `Cargo.lock` beside
 this README. Subsequent bootstraps use that reviewed lock, and subsequent
 builds/runs must include `--locked`.

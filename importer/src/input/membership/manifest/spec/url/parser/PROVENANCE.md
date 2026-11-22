@@ -1,6 +1,6 @@
 # Complete pinned absolute URL parser
 
-This module specializes `url` 2.5.8's `Url::parse` with no base URL,
+This module specializes `url` 2.5.9's `Url::parse` with no base URL,
 `Context::UrlParser`, no query encoding override and no violation callback.
 It also contains only the reached `set_query(None)` and `set_fragment(None)`
 mutations. This produces typed scalar data, not package, host-lookup, filesystem,
@@ -9,44 +9,45 @@ the later compound-source reparse handling belongs to the caller.
 
 ## Source and licenses
 
-Upstream: <https://github.com/servo/rust-url/tree/v2.5.8>.
-Registry archive `url-2.5.8.crate` SHA-256:
-`ff67a8a4397373c3ef660812acab3268222035010ab8680ec4215f38ba3d0eed`.
+Upstream: <https://github.com/servo/rust-url/tree/v2.5.9>.
+Registry archive `url-2.5.9.crate` SHA-256:
+`f00cd2407bb42c0ef17be88d4cf020f5cceffd121665bac9b8b9493a369b3b1a`.
 The exact cached archive checksum and byte equality of the following cached
 source members against that archive were verified during extraction:
 
 | Member | SHA-256 |
 |---|---|
-| `src/parser.rs` | `2dd4210e1773fc5d3fdc15ce506ecff30dbf8eb358a79bbbc2835cc30d513c3a` |
-| `src/lib.rs` | `51f47a93654528f3b8cb92c94fc26ad25775860d84197fff0c3124a687f8c5e3` |
+| `src/parser.rs` | `9f868941a6291c323bf8020db4a733b0b460397b693164cb7da863e69ecfc69e` |
+| `src/lib.rs` | `208c0d522e74e04bafe1107b58acd2c932095b013a86de60e9126f15cb73f0c8` |
 | `src/host.rs` | `24bba45b14cb843ea0fe5c857284d458097a13a84847f5c6a15a14c9e1334335` |
-| `tests/urltestdata.json` | `58d67bea710d5f46324fe6841df5fd82090fe4ec2d882bc0fc7c1784d4771884` |
+| `tests/urltestdata.json` | `d2eef2efe1d230f86456b2910ddf268d755dcec4ee491efc1ecd7cf742d1499e` |
 
 The source is Copyright 2013–2016 The rust-url developers, dual MIT/Apache-2.0.
 The exact unchanged license texts are retained in `input/LICENSE-MIT` and
 `input/LICENSE-APACHE`. Original `tests/urltestdata.json` attributes its vectors
-to web-platform-tests commit `befe66343e5f21dc464c8c772c6d20695936714f`.
-`tests/inputs.json` retains all 819 object-row input strings, in source order,
+to web-platform-tests commit `876fe001f2279b96e7c6b9e8970dc92c484835ff`.
+`tests/inputs.json` retains all 869 object-row input strings, in source order,
 without the base or expected-output fields; JSON escaping changes only the
 file spelling. Its SHA-256 is
-`4c4e9ae7987308ff91214e29d67a61ff3f4d7b1c747d8da689f1ead7d46ffd07`.
+`f5d7411d1bc612e137d26482c978fa9ceed65a5209f270750e263d9e947f7f2e`.
 
 ## Reached correspondence
 
 | Contained code | Exact source |
 |---|---|
-| `parser.rs` absolute scheme dispatch | `parser.rs:379–510` |
-| `file.rs` every no-base file branch | `parser.rs:512–722,1057–1112` |
-| `authority.rs` credentials, host framing and ports | `parser.rs:844–1044,1082–1148,1817–1836` |
-| `path.rs` bulk segments, dot/drive handling and opaque paths | `parser.rs:1150–1444,1770–1797` |
-| `parser.rs::finish` leading empty-segment disambiguation | `parser.rs:1445–1512` |
-| `tail.rs` query and fragment | `parser.rs:1515–1623,1645–1695` |
-| `value.rs` getters, removal, opaque trailing spaces and order | `lib.rs:388–411,1028–1030,1442–1445,1582–1597,1637–1667,2840+` |
+| `parser.rs` absolute scheme dispatch | `parser.rs:374–499` |
+| `file.rs` every no-base file branch | `parser.rs:501–702,1037–1092` |
+| `authority.rs` credentials, host framing and ports | `parser.rs:824–1024,1062–1131,1807–1826` |
+| `path.rs` bulk segments, dot/drive handling and opaque paths | `parser.rs:1133–1434,1760–1787` |
+| `parser.rs::finish` leading empty-segment disambiguation | `parser.rs:1435–1502` |
+| `tail.rs` query and fragment | `parser.rs:1505–1613,1635–1685` |
+| `value.rs` getters, removal, opaque trailing spaces and order | `lib.rs:387–410,1027–1029,1441–1444,1581–1596,1636–1666,2839+` |
 
 All special schemes (`file`, `ftp`, `http`, `https`, `ws`, `wss`) and the complete
-other-scheme branch remain. Other schemes retain both authority/hierarchical
+other-scheme branch remain. A backslash ends a port only in a special
+scheme with a default port, as url 2.5.9 parses it. Other schemes retain both authority/hierarchical
 and opaque paths. File parsing preserves `localhost`, drive letters on all
-platforms, host removal, slash/backslash behavior and dot reductions. Username,
+platforms, a host kept before a drive letter, slash/backslash behavior and dot reductions. Username,
 host and path offset checks remain even when the contained caller does not
 retain those fields. Port conversion checks the same `u16` boundary and renders
 through a fixed five-byte local array with checked UTF-8 instead of upstream's
@@ -85,7 +86,7 @@ process, environment, graph-comparison, hash or graph-decode event is introduced
 
 Nine new tests compare actual contained parsing, all exposed components and both
 removal orders against the actual pinned dev-only `url::Url`. They include all
-819 WPT input spellings **interpreted without a base** (not the original WPT base
+869 WPT input spellings **interpreted without a base** (not the original WPT base
 expectations), 1,215 ASCII/Unicode state cases, every scheme family, credentials,
 ports, IPv4/IPv6, percent escapes, filtered hosts, file drives and dot segments.
 Separate tests cover normalized Eq/Ord, semantic retry, every recorded refusal,

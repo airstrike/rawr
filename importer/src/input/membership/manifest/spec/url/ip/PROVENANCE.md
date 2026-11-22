@@ -1,17 +1,17 @@
 # Pinned IP scalar correspondence
 
-These private transformations implement the IP portion of url 2.5.8. They do
+These private transformations implement the IP portion of url 2.5.9. They do
 not parse a whole host or URL, normalize domain names, resolve addresses, or
 establish package/source/owner authority. The caller supplies an already
 admitted native string and the same original Session.
 
-Source: registry crate `url-2.5.8`, archive SHA-256
-`ff67a8a4397373c3ef660812acab3268222035010ab8680ec4215f38ba3d0eed`.
+Source: registry crate `url-2.5.9`, archive SHA-256
+`f00cd2407bb42c0ef17be88d4cf020f5cceffd121665bac9b8b9493a369b3b1a`.
 `src/host.rs` SHA-256:
 `24bba45b14cb843ea0fe5c857284d458097a13a84847f5c6a15a14c9e1334335`.
 The verified archive/member provenance is recorded in the parent
 `spec/URL_CLOSURE.md`. The source is available locally at
-`~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/url-2.5.8/src/host.rs`.
+`~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/url-2.5.9/src/host.rs`.
 
 | Contained operation | Exact pinned source |
 |---|---|
@@ -96,8 +96,8 @@ that marker. The bridge calls the exact private writer. No percent decoding,
 IDNA processing or public Host preprocessing substitutes for these functions.
 
 The shim uses std::net::{Ipv4Addr,Ipv6Addr}, matching url's std cfg at
-`src/lib.rs:198–203`; `Cargo.toml:54–67` enables std by default. Without std,
-the same pinned source selects core::net at `lib.rs:204–207`. The shim retains
+`src/lib.rs:197–202`; `Cargo.toml:54–67` enables std by default. Without std,
+the same pinned source selects core::net at `lib.rs:203–206`. The shim retains
 the source's address construction, octet/segment access and standard IPv4
 Display; it does not run a network operation. The reference's original Vec and
 String operations are confined to cfg(test), outside production accounting.

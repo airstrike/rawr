@@ -100,12 +100,26 @@
       "checksum": "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
     },
     "url": {
-      "version": "2.5.8",
-      "checksum": "ff67a8a4397373c3ef660812acab3268222035010ab8680ec4215f38ba3d0eed"
+      "version": "2.5.9",
+      "checksum": "f00cd2407bb42c0ef17be88d4cf020f5cceffd121665bac9b8b9493a369b3b1a"
     },
     "winnow": {
       "version": "1.0.3",
       "checksum": "0592e1c9d151f854e6fd382574c3a0855250e1d9b2f99d9281c6e6391af352f1"
+    }
+  },
+  "advisory_updates": {
+    "url": {
+      "replaces": "2.5.8",
+      "version": "2.5.9",
+      "checksum": "f00cd2407bb42c0ef17be88d4cf020f5cceffd121665bac9b8b9493a369b3b1a",
+      "advisory": "RUSTSEC-2026-0592"
+    },
+    "form_urlencoded": {
+      "replaces": "1.2.2",
+      "version": "1.2.3",
+      "checksum": "afa489199eaffb1211795df1c6236ce1ad0d41a6fa45250add73e3b02420f06e",
+      "advisory": "RUSTSEC-2026-0592; url 2.5.9 requires form_urlencoded ^1.2.3"
     }
   },
   "source_verification": "Implementation author rehashed the retained Cargo archive and selected extracted members on 2026-09-05. prepare.py independently verifies the archive and all recorded schema members before materialization is accepted.",

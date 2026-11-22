@@ -69,7 +69,7 @@ At Cargo59800466c5c41c444d264b1010b4d57e85a7117f, `commands/package.rs:60–80` 
 rejects relative initial manifests and `:249–256` starts an empty package map.
 Each insertion at `:1878–1888` calls `SourceId::for_manifest_path` before
 `Package::new`; `core/source_id.rs:201–214` → `util/into_url.rs:30–34` → pinned
-url2.5.8 `lib.rs:2958–2960` rejects a non-absolute parent. `core/package.rs:103–108`
+url2.5.9 `lib.rs:2957–2959` rejects a non-absolute parent. `core/package.rs:103–108`
 stores the unchanged manifest path and `:137–138` returns that parent as root.
 `ops/cargo_package/mod.rs:211–217,272,295–303` selects, clones and sorts those map
 entries; `:475–488` passes the original package to list_files. Loading the path

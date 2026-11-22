@@ -52,7 +52,7 @@
   },
   {
     "name": "form_urlencoded",
-    "version": "1.2.2",
+    "version": "1.2.3",
     "features": [
       "alloc",
       "std"
@@ -421,7 +421,7 @@
   },
   {
     "name": "url",
-    "version": "2.5.8",
+    "version": "2.5.9",
     "features": [
       "default",
       "std"

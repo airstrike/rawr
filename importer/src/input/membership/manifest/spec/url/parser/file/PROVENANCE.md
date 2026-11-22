@@ -1,7 +1,7 @@
 # Native Unix file URL construction
 
-The `Url::from_file_path` constructor follows pinned url 2.5.8
-`src/lib.rs:2553–2570,2948–2980` for Unix. License texts remain in the adjacent
+The `Url::from_file_path` constructor follows pinned url 2.5.9
+`src/lib.rs:2552–2569,2947–2979` for Unix. License texts remain in the adjacent
 parser/output directory. It allocates the initial `file://` serialization before
 rejecting a relative path, then traverses native components after the root.
 Each retained component gets a separator and SPECIAL_PATH_SEGMENT percent

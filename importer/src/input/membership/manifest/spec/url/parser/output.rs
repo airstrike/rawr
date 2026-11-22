@@ -265,8 +265,8 @@ impl Set {
             return true;
         }
         let fragment = matches!(byte, b' ' | b'"' | b'<' | b'>' | b'`');
-        let path = fragment || matches!(byte, b'#' | b'?' | b'{' | b'}');
         let query = matches!(byte, b' ' | b'"' | b'#' | b'<' | b'>');
+        let path = query || matches!(byte, b'?' | b'^' | b'`' | b'{' | b'}');
         match self {
             Self::Controls => false,
             Self::Fragment => fragment,
@@ -276,7 +276,7 @@ impl Set {
             Self::Userinfo => {
                 path || matches!(
                     byte,
-                    b'/' | b':' | b';' | b'=' | b'@' | b'[' | b'\\' | b']' | b'^' | b'|'
+                    b'/' | b':' | b';' | b'=' | b'@' | b'[' | b'\\' | b']' | b'|'
                 )
             }
             Self::Query => query,

@@ -4,28 +4,30 @@ Output owns charged transformation bytes, not a complete URL or original
 manifest proof. The public-within-parser surface has no arbitrary setters or
 unrestricted mutable storage.
 
-Source: `url` 2.5.8, registry archive SHA-256
-`ff67a8a4397373c3ef660812acab3268222035010ab8680ec4215f38ba3d0eed`.
-`url-2.5.8/src/parser.rs` has SHA-256
-`2dd4210e1773fc5d3fdc15ce506ecff30dbf8eb358a79bbbc2835cc30d513c3a`;
+Source: `url` 2.5.9, registry archive SHA-256
+`f00cd2407bb42c0ef17be88d4cf020f5cceffd121665bac9b8b9493a369b3b1a`.
+`url-2.5.9/src/parser.rs` has SHA-256
+`9f868941a6291c323bf8020db4a733b0b460397b693164cb7da863e69ecfc69e`;
 `src/lib.rs` has SHA-256
-`51f47a93654528f3b8cb92c94fc26ad25775860d84197fff0c3124a687f8c5e3`.
+`208c0d522e74e04bafe1107b58acd2c932095b013a86de60e9126f15cb73f0c8`.
 The verified archive/member provenance is recorded in `../../../URL_CLOSURE.md`.
 MIT/Apache-2.0 license texts are retained alongside this file.
 
 ## Correspondence
 
-- `parser.rs:19–35,44–45`: complete reached Controls, Fragment, Path, Userinfo,
-  Query and SpecialQuery sets. Non-ASCII bytes, C0 and DEL use uppercase `%HH`;
+- `parser.rs:19–38`: complete reached Controls, Fragment, Query, SpecialQuery,
+  Path and Userinfo sets. Path is Query plus `?`, `^`, a backtick, `{` and
+  `}`, so url 2.5.9 encodes `^` in paths. Non-ASCII bytes, C0 and DEL use
+  uppercase `%HH`;
   unselected ASCII (including existing percent escapes) passes unchanged.
   Setter-only PathSegment/SpecialPathSegment sets are not reached here.
-- `parser.rs:1209–1231,1427–1440,1544–1622,1645–1693`: path, opaque path, query
+- `parser.rs:1192–1214,1417–1430,1534–1612,1635–1683`: path, opaque path, query
   and fragment appends use those exact sets. Fixed iterator fragments replace
   implicit String extension, with no intermediate encoded allocation.
-- `parser.rs:1759–1766`: component offsets distinguish semantic u32 overflow
+- `parser.rs:1749–1756`: component offsets distinguish semantic u32 overflow
   from arithmetic/layout overflow. Successful inline offsets need no separate
   owned record; retaining the static semantic error costs one original item.
-- `parser.rs:1320–1348,1375–1380,1458–1499` and `lib.rs:388–409,1582–1669`:
+- `parser.rs:1303–1331,1358–1363,1448–1489` and `lib.rs:387–408,1581–1668`:
   reached truncation, path removal, slash-prefix insertion and tail removal can
   use UTF-8-preserving in-place shifts. The caller retains each exact state
   transition and offset update. Output alone does not implement those rules.

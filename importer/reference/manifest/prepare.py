@@ -76,6 +76,11 @@ def verify_lock(destination):
     verify_source(destination)
     pinned = tomllib.loads((destination / "cargo/Cargo.lock").read_text())["package"]
     known = {(p["name"], p["version"], p.get("source")): p.get("checksum") for p in pinned}
+    # An advisory update replaces one pinned Cargo version with its reviewed fix.
+    for name, update in PIN.get("advisory_updates", {}).items():
+        for (known_name, version, source), _ in list(known.items()):
+            if known_name == name and version == update["replaces"]:
+                known[(name, update["version"], source)] = update["checksum"]
     resolved = tomllib.loads((destination / "Cargo.lock").read_text())["package"]
     failures = []
     for package in resolved:
