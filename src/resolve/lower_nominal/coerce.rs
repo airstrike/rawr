@@ -666,9 +666,18 @@ impl<'a> Parser<'a> {
             // behind a reference or a box is the value with its type
             // (`any_object.rs`).
             let object = Ty::Dyn(trait_name.clone(), bindings.clone());
-            if matches!(target, Ty::Reference { .. }) && self.std_error(&object, false) {
-                let Some(converted) =
-                    self.error_object(&concrete, value.rendered_source(), false, value.span)?
+            if matches!(target, Ty::Reference { .. } | Ty::Counted(..))
+                && self.std_error(&object, false)
+            {
+                // An `Rc` or `Arc` of an error points at its error object,
+                // a pointer of its own whose counts start at the coercion.
+                let counted = matches!(target, Ty::Counted(..));
+                let error = if counted {
+                    self.counted_call(PreludeOp::CountedGet, value.rendered_source(), [])
+                } else {
+                    value.rendered_source()
+                };
+                let Some(mut converted) = self.error_object(&concrete, error, false, value.span)?
                 else {
                     return Err(Error::MissingCapability {
                         owner: concrete.name(&self.models),
@@ -681,6 +690,9 @@ impl<'a> Parser<'a> {
                         chain: crate::resolve::Chain::default(),
                     });
                 };
+                if counted {
+                    converted = self.prelude_op(PreludeOp::CountedNew, [converted]);
+                }
                 *value = self.operator_expr(converted, target, value.span);
                 return Ok(None);
             }

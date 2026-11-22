@@ -5141,7 +5141,7 @@ main();
 fn a_generic_error_boxes_by_its_bound() {
     // `E: Error` is `Debug` and `Display` through `Error`'s supertraits,
     // so a generic wrapper implements `Error` and lends its error as a
-    // `&dyn Error`.
+    // `&dyn Error`. An `Arc` of an error is an `Arc<dyn Error>`.
     let output = printed(
         r#"
 use std::error::Error;
@@ -5165,11 +5165,17 @@ fn main() {
     let e: Box<dyn Error> = Box::new(Context { what: "loading", inner: inner.clone() });
     println!("{} <- {}", e, e.source().unwrap());
     println!("{}", depth(&Context { what: "w", inner }));
+    let shared: std::sync::Arc<dyn Error + Send + Sync> =
+        std::sync::Arc::new(std::io::Error::other("shared"));
+    println!("{} {}", shared, std::sync::Arc::clone(&shared).to_string());
 }
 main();
 "#,
     );
-    assert_eq!(output, "loading <- invalid digit found in string\n1\n");
+    assert_eq!(
+        output,
+        "loading <- invalid digit found in string\n1\nshared shared\n"
+    );
 }
 
 #[test]
