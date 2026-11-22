@@ -36,6 +36,7 @@ mod time;
 pub(crate) use case::mapped as case_mapped;
 pub(crate) use fmt::alignment;
 pub(crate) use num::int_error_kind;
+pub(crate) use process::ExitCode;
 
 use crate::func::SendSync;
 use crate::host::{self, facade, runtime::Call};
@@ -192,6 +193,8 @@ pub(crate) fn definition() -> facade::Definition {
 fn build() -> Result<facade::Definition, host::Error> {
     path::register_debug();
     io::register_debug();
+    env::register_debug();
+    process::register_debug();
     cursor::register_debug();
     num::register_debug();
     fmt::register_debug();
@@ -210,6 +213,8 @@ fn held() -> Vec<held::Held> {
     [
         path::HELD.as_slice(),
         io::HELD.as_slice(),
+        env::HELD.as_slice(),
+        process::HELD.as_slice(),
         cursor::HELD.as_slice(),
         case::HELD.as_slice(),
         num::HELD.as_slice(),

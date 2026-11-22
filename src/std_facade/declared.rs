@@ -60,6 +60,7 @@ pub(super) static STEPS: &[Step] = &[
             capability::Kind::Debug,
             capability::Kind::Send,
             capability::Kind::Static,
+            capability::Kind::Error,
         ],
     },
     Step::Held {
@@ -143,6 +144,38 @@ pub(super) static STEPS: &[Step] = &[
     Step::Alias {
         path: "io::StdoutLock",
         target: "io::Stdout",
+    },
+    Step::Held {
+        std: "std::env::VarError",
+        capabilities: &[
+            capability::Kind::Debug,
+            capability::Kind::Clone,
+            capability::Kind::PartialEq,
+            capability::Kind::Eq,
+            capability::Kind::Send,
+            capability::Kind::Static,
+            capability::Kind::Error,
+        ],
+    },
+    Step::Variants {
+        path: "env::VarError",
+        variants: &[
+            ("NotPresent", &[]),
+            ("NotUnicode", &[Ty::Registered("ffi::OsString")]),
+        ],
+        non_exhaustive: false,
+    },
+    Step::Held {
+        std: "std::process::ExitCode",
+        capabilities: &[
+            capability::Kind::Default,
+            capability::Kind::Debug,
+            capability::Kind::Clone,
+            capability::Kind::Copy,
+            capability::Kind::PartialEq,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
     },
     Step::Held {
         std: "std::io::Cursor",
@@ -258,6 +291,7 @@ pub(super) static STEPS: &[Step] = &[
             capability::Kind::Eq,
             capability::Kind::Send,
             capability::Kind::Static,
+            capability::Kind::Error,
         ],
     },
     Step::Held {
@@ -270,6 +304,7 @@ pub(super) static STEPS: &[Step] = &[
             capability::Kind::Eq,
             capability::Kind::Send,
             capability::Kind::Static,
+            capability::Kind::Error,
         ],
     },
     Step::Variants {
@@ -287,6 +322,7 @@ pub(super) static STEPS: &[Step] = &[
             capability::Kind::Eq,
             capability::Kind::Send,
             capability::Kind::Static,
+            capability::Kind::Error,
         ],
     },
     Step::Variants {
@@ -323,6 +359,7 @@ pub(super) static STEPS: &[Step] = &[
             capability::Kind::Clone,
             capability::Kind::Send,
             capability::Kind::Static,
+            capability::Kind::Error,
         ],
     },
     Step::TypeAlias {
@@ -1294,6 +1331,138 @@ pub(super) static STEPS: &[Step] = &[
             &Ty::Registered("path::PathBuf"),
             &Ty::Registered("io::Error"),
         ),
+    },
+    Step::Item {
+        path: "env::var",
+        kind: Kind::Function,
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Registered("ffi::OsString"),
+        }],
+        output: Ty::Result(
+            &Ty::Builtin(Builtin::String),
+            &Ty::Registered("env::VarError"),
+        ),
+    },
+    Step::Item {
+        path: "env::var",
+        kind: Kind::Function,
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Builtin(Builtin::String),
+        }],
+        output: Ty::Result(
+            &Ty::Builtin(Builtin::String),
+            &Ty::Registered("env::VarError"),
+        ),
+    },
+    Step::Item {
+        path: "env::var",
+        kind: Kind::Function,
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Registered("path::PathBuf"),
+        }],
+        output: Ty::Result(
+            &Ty::Builtin(Builtin::String),
+            &Ty::Registered("env::VarError"),
+        ),
+    },
+    Step::Item {
+        path: "env::var",
+        kind: Kind::Function,
+        inputs: &[Ty::Registered("ffi::OsString")],
+        output: Ty::Result(
+            &Ty::Builtin(Builtin::String),
+            &Ty::Registered("env::VarError"),
+        ),
+    },
+    Step::Item {
+        path: "env::var",
+        kind: Kind::Function,
+        inputs: &[Ty::Builtin(Builtin::String)],
+        output: Ty::Result(
+            &Ty::Builtin(Builtin::String),
+            &Ty::Registered("env::VarError"),
+        ),
+    },
+    Step::Item {
+        path: "env::var",
+        kind: Kind::Function,
+        inputs: &[Ty::Registered("path::PathBuf")],
+        output: Ty::Result(
+            &Ty::Builtin(Builtin::String),
+            &Ty::Registered("env::VarError"),
+        ),
+    },
+    Step::Item {
+        path: "env::var_os",
+        kind: Kind::Function,
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Registered("ffi::OsString"),
+        }],
+        output: Ty::Option(&Ty::Registered("ffi::OsString")),
+    },
+    Step::Item {
+        path: "env::var_os",
+        kind: Kind::Function,
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Builtin(Builtin::String),
+        }],
+        output: Ty::Option(&Ty::Registered("ffi::OsString")),
+    },
+    Step::Item {
+        path: "env::var_os",
+        kind: Kind::Function,
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Registered("path::PathBuf"),
+        }],
+        output: Ty::Option(&Ty::Registered("ffi::OsString")),
+    },
+    Step::Item {
+        path: "env::var_os",
+        kind: Kind::Function,
+        inputs: &[Ty::Registered("ffi::OsString")],
+        output: Ty::Option(&Ty::Registered("ffi::OsString")),
+    },
+    Step::Item {
+        path: "env::var_os",
+        kind: Kind::Function,
+        inputs: &[Ty::Builtin(Builtin::String)],
+        output: Ty::Option(&Ty::Registered("ffi::OsString")),
+    },
+    Step::Item {
+        path: "env::var_os",
+        kind: Kind::Function,
+        inputs: &[Ty::Registered("path::PathBuf")],
+        output: Ty::Option(&Ty::Registered("ffi::OsString")),
+    },
+    Step::Item {
+        path: "env::VarError::NotPresent",
+        kind: Kind::AssociatedValue,
+        inputs: &[],
+        output: Ty::Registered("env::VarError"),
+    },
+    Step::Item {
+        path: "env::VarError::NotUnicode",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Registered("ffi::OsString")],
+        output: Ty::Registered("env::VarError"),
+    },
+    Step::Item {
+        path: "env::VarError::NotUnicode",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Option(&Ty::Registered("ffi::OsString")),
+    },
+    Step::Item {
+        path: "env::VarError::to_string",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Builtin(Builtin::String),
     },
     Step::Item {
         path: "fs::read",
@@ -2916,6 +3085,30 @@ pub(super) static STEPS: &[Step] = &[
         output: Ty::Builtin(Builtin::Never),
     },
     Step::Item {
+        path: "process::ExitCode::SUCCESS",
+        kind: Kind::AssociatedValue,
+        inputs: &[],
+        output: Ty::Registered("process::ExitCode"),
+    },
+    Step::Item {
+        path: "process::ExitCode::FAILURE",
+        kind: Kind::AssociatedValue,
+        inputs: &[],
+        output: Ty::Registered("process::ExitCode"),
+    },
+    Step::Item {
+        path: "process::ExitCode::from",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Registered("process::ExitCode")],
+        output: Ty::Registered("process::ExitCode"),
+    },
+    Step::Item {
+        path: "process::ExitCode::from",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Builtin(Builtin::U8)],
+        output: Ty::Registered("process::ExitCode"),
+    },
+    Step::Item {
         path: "num::IntErrorKind::Empty",
         kind: Kind::AssociatedValue,
         inputs: &[],
@@ -3241,10 +3434,6 @@ pub(super) static STEPS: &[Step] = &[
         std: "std::env::SplitPaths",
     },
     Step::StdAlias {
-        path: "env::VarError",
-        std: "std::env::VarError",
-    },
-    Step::StdAlias {
         path: "env::Vars",
         std: "std::env::Vars",
     },
@@ -3287,14 +3476,6 @@ pub(super) static STEPS: &[Step] = &[
     Step::StdAlias {
         path: "env::temp_dir",
         std: "std::env::temp_dir",
-    },
-    Step::StdAlias {
-        path: "env::var",
-        std: "std::env::var",
-    },
-    Step::StdAlias {
-        path: "env::var_os",
-        std: "std::env::var_os",
     },
     Step::StdAlias {
         path: "env::vars",
@@ -3955,10 +4136,6 @@ pub(super) static STEPS: &[Step] = &[
     Step::StdAlias {
         path: "process::CommandResolvedEnvs",
         std: "std::process::CommandResolvedEnvs",
-    },
-    Step::StdAlias {
-        path: "process::ExitCode",
-        std: "std::process::ExitCode",
     },
     Step::StdAlias {
         path: "process::ExitStatus",

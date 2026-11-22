@@ -368,6 +368,19 @@ impl<'a> Parser<'a> {
                 value = self.parse_builder_spawn(value, member_span)?;
                 continue;
             }
+            // `Box<dyn Any>::downcast` and `Box<dyn Error>::downcast`, the
+            // box's own (`any_object.rs`).
+            let receiver = self.inference.resolve(&value.ty);
+            if member.as_str() == "downcast"
+                && let Ty::Boxed(object) = &receiver
+                && (self.std_any(object, false) || self.std_error(object, false))
+            {
+                value = match self.parse_downcast(value, &receiver, &member, member_span)? {
+                    Ok(downcast) => downcast,
+                    Err(value) => value,
+                };
+                continue;
+            }
             // `Box<T>` auto-derefs for method calls and fields, as in Rust.
             if let Some((unboxed, boxed)) = self.unbox(&value.ty) {
                 // `boxed.as_ref()` is a reference to the boxed value, as
@@ -855,11 +868,33 @@ impl<'a> Parser<'a> {
                     continue;
                 }
             }
-            // std's `dyn Error`: its text and its `source`.
+            // std's `dyn Error`: its text, its `source` and its downcasts.
             if self.std_error(&builtin, true)
-                && matches!(self.peek(), Token::LeftParen | Token::Unit)
+                && matches!(
+                    self.peek(),
+                    Token::LeftParen | Token::Unit | Token::DoubleColon
+                )
             {
-                value = self.parse_error_member(value, member, member_span)?;
+                value = self.parse_error_member(value, &builtin, member, member_span)?;
+                continue;
+            }
+            // std's `dyn Any`: its downcasts.
+            if self.std_any(&builtin, true)
+                && matches!(
+                    self.peek(),
+                    Token::LeftParen | Token::Unit | Token::DoubleColon
+                )
+            {
+                value = match self.parse_downcast(value, &builtin, &member, member_span)? {
+                    Ok(downcast) => downcast,
+                    Err(_) => {
+                        return Err(Error::UnknownMember {
+                            owner: builtin.name(&self.models),
+                            member,
+                            reference: member_span,
+                        });
+                    }
+                };
                 continue;
             }
             // A trait object has only its trait's methods, dispatched by
@@ -4025,6 +4060,25 @@ impl<'a> Parser<'a> {
         let Some(output) = self.return_ty.clone() else {
             return Err(self.unsupported("`?` outside a function or closure"));
         };
+        // `s.parse()?` whose target only the expected type of the whole
+        // expression gives, as `let n: i32 = s.parse()?;`: rustc infers the
+        // target from it, which settles the error the `?` converts.
+        if let Ty::Result(_, error) = self.inference.resolve(&early)
+            && matches!(*error, Ty::Infer(_))
+            && self
+                .pending_parses
+                .iter()
+                .any(|(_, pending, ..)| self.inference.resolve(pending) == *error)
+            && let Some(expected) = self.branch_expectation()
+        {
+            let checkpoint = self.inference.checkpoint();
+            if self.unify_type(&expected, &element) {
+                self.inference.commit(checkpoint);
+                self.settle_parses()?;
+            } else {
+                self.inference.rollback(checkpoint);
+            }
+        }
         // `?` in a body returning `Result<_, Box<dyn Error>>` boxes an
         // error, a `&str` or a `String` as `dyn Error`, as its `From` impls do.
         if let (Ty::Result(_, error), Ty::Result(_, returned)) = (

@@ -16,6 +16,7 @@ const RUNS: &[capability::Kind] = &[
     capability::Kind::Eq,
     capability::Kind::Send,
     capability::Kind::Static,
+    capability::Kind::Error,
 ];
 
 /// The types the module holds.

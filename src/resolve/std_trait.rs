@@ -440,6 +440,13 @@ const BODIES: &[(&str, &str, &str)] = &[
     }",
     ),
     (
+        "core::error::Error",
+        "source",
+        "fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        None
+    }",
+    ),
+    (
         "core::iter::traits::iterator::Iterator",
         "by_ref",
         "fn by_ref(&mut self) -> &mut Self {

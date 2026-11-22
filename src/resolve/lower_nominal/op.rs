@@ -13,10 +13,11 @@ use super::wide::{integer_text, wide_value, Wide};
 #[cfg(feature = "rust-import")]
 use super::without_references;
 use super::{
-    cast_value, cell, char_method, collect_try, compare, counted, cow, drops, error_object,
-    instantiate, int_method, keyed_query, origin, parse_text, places, sequence, slice_value,
-    str_change, str_method, str_pieces, thread, time_method, vec_method, Models, Nominal,
-    ParsedExpr, CHAR_METHODS, COLLECT_OPTION, COLLECT_RESULT, PRIVATE_PREFIX, SLICE_CHUNKS,
+    any_object, cast_value, cell, char_method, collect_try, compare, counted, cow, drops,
+    error_object, instantiate, int_method, keyed_query, origin, parse_text, places, sequence,
+    slice_value, str_change, str_method, str_pieces, thread, time_method, vec_method, Models,
+    Nominal, ParsedExpr, CHAR_METHODS, COLLECT_OPTION, COLLECT_RESULT, PRIVATE_PREFIX,
+    SLICE_CHUNKS,
 };
 use crate::func::{FnCallArgs, NativeCallContext, RawrFunc};
 use crate::resolve::{intrinsic, item, type_ref};
@@ -276,10 +277,16 @@ pub(super) enum PreludeOp {
     CellNew,
     /// `Cell::new(value)`.
     PlainCellNew,
-    /// A `Box<dyn Error>` of its `Display` and `Debug` text, and one of
-    /// those texts (`error_object.rs`).
+    /// A `dyn Error` of an error, its type, its `Display` and `Debug` text
+    /// and its `source`; one of those texts; and its `source`
+    /// (`error_object.rs`).
     ErrorNew,
     ErrorText,
+    ErrorSource,
+    /// A `dyn Any` of a value and its type, and a downcast of a `dyn Any`
+    /// or a `dyn Error` (`any_object.rs`).
+    AnyNew,
+    Downcast,
     /// A `parse` error, whose kind its target's kind code gives, boxed as
     /// `dyn Error` by `?`.
     ErrorParse,
@@ -516,6 +523,9 @@ impl PreludeOp {
             Self::PlainCellNew => "cell.new_plain",
             Self::ErrorNew => "error.new",
             Self::ErrorText => "error.text",
+            Self::ErrorSource => "error.source",
+            Self::AnyNew => "any.new",
+            Self::Downcast => "any.downcast",
             Self::ErrorParse => "error.parse",
             Self::CellBorrow => "cell.borrow",
             Self::CellGet => "cell.get",
@@ -672,7 +682,8 @@ impl PreludeOp {
             | Self::CountedUnwrapOrClone
             | Self::WeakUpgrade
             | Self::WeakStrong
-            | Self::WeakWeakCount => vec![TypeId::of::<Dynamic>()],
+            | Self::WeakWeakCount
+            | Self::ErrorSource => vec![TypeId::of::<Dynamic>()],
             Self::CountedPtrEq | Self::WeakPtrEq => {
                 vec![TypeId::of::<Dynamic>(), TypeId::of::<Dynamic>()]
             }
@@ -681,8 +692,8 @@ impl PreludeOp {
             | Self::CellBorrow
             | Self::CellSet
             | Self::CellReplace
-            | Self::ErrorNew
             | Self::ErrorText
+            | Self::AnyNew
             | Self::ReferentStore => {
                 vec![TypeId::of::<Dynamic>(), TypeId::of::<Dynamic>()]
             }
@@ -691,6 +702,12 @@ impl PreludeOp {
                 TypeId::of::<INT>(),
                 TypeId::of::<Dynamic>(),
             ],
+            Self::Downcast => vec![
+                TypeId::of::<Dynamic>(),
+                TypeId::of::<ImmutableString>(),
+                TypeId::of::<INT>(),
+            ],
+            Self::ErrorNew => vec![TypeId::of::<Dynamic>(); 5],
             Self::CellUpdate => vec![
                 TypeId::of::<Dynamic>(),
                 TypeId::of::<Dynamic>(),
@@ -1381,7 +1398,10 @@ impl PreludeOp {
             | Self::CellRelease
             | Self::CellReplace
             | Self::CellClone => return cell::invoke(self, args),
-            Self::ErrorNew | Self::ErrorText => return error_object::invoke(self, args),
+            Self::ErrorNew | Self::ErrorText | Self::ErrorSource => {
+                return error_object::invoke(self, args);
+            }
+            Self::AnyNew | Self::Downcast => return any_object::invoke(self, args),
             Self::ErrorParse => {
                 return Ok(error_object::parsed(
                     &args[0].clone_cast::<ImmutableString>(),

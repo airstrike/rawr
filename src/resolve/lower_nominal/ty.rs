@@ -4,8 +4,8 @@
 #[cfg(feature = "rust-import")]
 use super::ImportedFunctionProof;
 use super::{
-    cell, counted, cow, dyn_arguments, error_object, range, range_type_id, sequence, thread,
-    Models, Nominal, ParseError, PreludeOp,
+    any_object, cell, counted, cow, dyn_arguments, error_object, range, range_type_id, sequence,
+    thread, Models, Nominal, ParseError, PreludeOp,
 };
 use crate::resolve::type_ref;
 use crate::types::nominal;
@@ -1499,6 +1499,12 @@ impl Ty {
             {
                 Some(TypeId::of::<error_object::ErrorObject>())
             }
+            // std's `dyn Any` is the value with its type a coercion makes.
+            Self::Dyn(name, bindings)
+                if name.as_str() == "Any" && bindings.is_empty() && models.std_trait("Any") =>
+            {
+                Some(TypeId::of::<any_object::AnyObject>())
+            }
             Self::Param(..)
             | Self::Projection(..)
             | Self::Dyn(..)
@@ -1548,6 +1554,7 @@ impl Ty {
             TypeId::of::<nominal::Struct>(),
             TypeId::of::<nominal::Enum>(),
             TypeId::of::<error_object::ErrorObject>(),
+            TypeId::of::<any_object::AnyObject>(),
         ]
         .into_iter()
     }

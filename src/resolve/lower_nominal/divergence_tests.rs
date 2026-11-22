@@ -5015,3 +5015,252 @@ main();
         );
     }
 }
+
+#[test]
+fn std_errors_box_walk_their_sources_and_downcast() {
+    // `?` boxes io, parse and the program's own errors as `dyn Error`,
+    // which keeps each error, its type and its `source`: a chain walks,
+    // `downcast_ref`, `is` and a box's `downcast` give the error back, and
+    // a `&e` is a `&dyn Error` (#798, #2091). A method's tail `match`
+    // coerces each arm to its output, and `let n: i32 = s.parse()?`
+    // converts the parse's error by `From`.
+    let output = printed(
+        r#"
+use std::error::Error;
+use std::fmt;
+use std::io;
+use std::num::ParseIntError;
+#[derive(Debug)]
+enum AppError {
+    Io(io::Error),
+    Parse(ParseIntError),
+    Config(String),
+}
+impl fmt::Display for AppError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AppError::Io(_) => write!(f, "io failed"),
+            AppError::Parse(_) => write!(f, "parse failed"),
+            AppError::Config(what) => write!(f, "bad config: {what}"),
+        }
+    }
+}
+impl Error for AppError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            AppError::Io(e) => Some(e),
+            AppError::Parse(e) => Some(e),
+            AppError::Config(_) => None,
+        }
+    }
+}
+impl From<ParseIntError> for AppError {
+    fn from(e: ParseIntError) -> Self {
+        AppError::Parse(e)
+    }
+}
+fn read_number(text: &str) -> Result<i32, AppError> {
+    let n: i32 = text.trim().parse()?;
+    if n < 0 {
+        return Err(AppError::Config(format!("{n} is negative")));
+    }
+    Ok(n)
+}
+fn report(e: &dyn Error) {
+    print!("{e}");
+    let mut cause = e.source();
+    while let Some(c) = cause {
+        print!(" <- {c}");
+        cause = c.source();
+    }
+    println!();
+}
+fn run(step: u8) -> Result<i32, Box<dyn Error>> {
+    match step {
+        0 => Ok(read_number("x1")?),
+        1 => Err(Box::new(AppError::Io(io::Error::new(io::ErrorKind::NotFound, "gone")))),
+        2 => Ok(read_number("-4")?),
+        3 => Ok("zz".parse::<i32>()?),
+        4 => Err(Box::new(io::Error::other("raw io"))),
+        _ => Err("plain text".into()),
+    }
+}
+fn main() {
+    for step in 0..6 {
+        let e = run(step).unwrap_err();
+        report(e.as_ref());
+        println!("{:?}", e);
+        if let Some(io) = e.downcast_ref::<io::Error>() {
+            println!("io {:?}", io.kind());
+        }
+        if let Some(p) = e.downcast_ref::<ParseIntError>() {
+            println!("parse {p}");
+        }
+        println!("{} {}", e.is::<AppError>(), e.is::<io::Error>());
+        match e.downcast::<AppError>() {
+            Ok(app) => println!("app {app}"),
+            Err(other) => println!("other {other}"),
+        }
+    }
+    report(&AppError::Parse("q".parse::<u8>().unwrap_err()));
+    println!("{:?}", read_number("7"));
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "parse failed <- invalid digit found in string\n\
+         Parse(ParseIntError { kind: InvalidDigit })\ntrue false\napp parse failed\n\
+         io failed <- gone\nIo(Custom { kind: NotFound, error: \"gone\" })\ntrue false\n\
+         app io failed\n\
+         bad config: -4 is negative\nConfig(\"-4 is negative\")\ntrue false\n\
+         app bad config: -4 is negative\n\
+         invalid digit found in string\nParseIntError { kind: InvalidDigit }\n\
+         parse invalid digit found in string\nfalse false\n\
+         other invalid digit found in string\n\
+         raw io\nCustom { kind: Other, error: \"raw io\" }\nio Other\nfalse true\n\
+         other raw io\n\
+         plain text\n\"plain text\"\nfalse false\nother plain text\n\
+         parse failed <- invalid digit found in string\nOk(7)\n"
+    );
+    // A `dyn Error`'s downcasts take an error type, as rustc's `T: Error`.
+    let report = refused(
+        "use std::error::Error;\n\
+         fn main() { let e: Box<dyn Error> = \"x\".into(); println!(\"{}\", e.is::<String>()); }",
+    );
+    assert!(
+        report.starts_with(
+            "error[E0277]: the trait bound `String: std::error::Error` is not satisfied"
+        ),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_generic_error_boxes_by_its_bound() {
+    // `E: Error` is `Debug` and `Display` through `Error`'s supertraits,
+    // so a generic wrapper implements `Error` and lends its error as a
+    // `&dyn Error`.
+    let output = printed(
+        r#"
+use std::error::Error;
+use std::fmt;
+#[derive(Debug)]
+struct Context<E> { what: &'static str, inner: E }
+impl<E: fmt::Display> fmt::Display for Context<E> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { write!(f, "{}", self.what) }
+}
+impl<E: Error + 'static> Error for Context<E> {
+    fn source(&self) -> Option<&(dyn Error + 'static)> { Some(&self.inner) }
+}
+fn depth<E: Error>(e: &E) -> usize {
+    let mut n = 0;
+    let mut cause = e.source();
+    while let Some(c) = cause { n += 1; cause = c.source(); }
+    n
+}
+fn main() {
+    let inner = "x".parse::<i32>().unwrap_err();
+    let e: Box<dyn Error> = Box::new(Context { what: "loading", inner: inner.clone() });
+    println!("{} <- {}", e, e.source().unwrap());
+    println!("{}", depth(&Context { what: "w", inner }));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "loading <- invalid digit found in string\n1\n");
+}
+
+#[test]
+fn dyn_any_downcasts_by_the_values_type() {
+    // A value boxed or lent as `dyn Any` keeps its type, which `is`,
+    // `downcast_ref` and a box's `downcast` compare (#1284).
+    let output = printed(
+        r#"
+use std::any::Any;
+#[derive(Debug)]
+struct Point { x: i32 }
+fn describe(value: &dyn Any) -> String {
+    if let Some(n) = value.downcast_ref::<i32>() {
+        format!("i32 {n}")
+    } else if let Some(s) = value.downcast_ref::<String>() {
+        format!("string {s}")
+    } else if let Some(p) = value.downcast_ref::<Point>() {
+        format!("point {}", p.x)
+    } else if value.is::<&str>() {
+        "a str".to_string()
+    } else {
+        "unknown".to_string()
+    }
+}
+fn main() {
+    let items: Vec<Box<dyn Any>> = vec![
+        Box::new(7i32),
+        Box::new(String::from("hi")),
+        Box::new(Point { x: 3 }),
+        Box::new("slice"),
+        Box::new(2.5f64),
+    ];
+    for item in &items {
+        println!("{}", describe(item.as_ref()));
+    }
+    println!("{}", describe(&41));
+    let sent: Box<dyn Any + Send> = Box::new(Point { x: 9 });
+    match sent.downcast::<Point>() {
+        Ok(p) => println!("got {:?}", p),
+        Err(_) => println!("not a point"),
+    }
+    let other: Box<dyn Any> = Box::new(1u8);
+    match other.downcast::<i32>() {
+        Ok(_) => println!("i32"),
+        Err(back) => println!("still any: {}", back.is::<u8>()),
+    }
+    println!("{:?}", items[0]);
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "i32 7\nstring hi\npoint 3\na str\nunknown\ni32 41\ngot Point { x: 9 }\n\
+         still any: true\nAny { .. }\n"
+    );
+}
+
+#[test]
+fn std_env_var_and_exit_code_run() {
+    // A program without the environment reads no variable, as `env!` has
+    // none: `VarError::NotPresent`, which boxes as a `dyn Error` (#645).
+    // An `ExitCode` is std's value (#2088).
+    let output = printed(
+        r#"
+use std::env::{self, VarError};
+use std::error::Error;
+use std::process::ExitCode;
+fn need() -> Result<String, Box<dyn Error>> {
+    Ok(env::var("RAWR_UNSET")?)
+}
+fn main() {
+    match env::var("HOME") {
+        Ok(v) => println!("set {v}"),
+        Err(VarError::NotPresent) => println!("not present"),
+        Err(VarError::NotUnicode(s)) => println!("bad {:?}", s),
+    }
+    let e = env::var("HOME").unwrap_err();
+    println!("{e} | {e:?} | {}", e == VarError::NotPresent);
+    println!("{:?} {:?}", env::var_os("HOME"), need().map_err(|e| e.to_string()));
+    let code = ExitCode::from(4);
+    let into: ExitCode = 9u8.into();
+    println!("{:?} {:?} {}", code, into, ExitCode::SUCCESS == ExitCode::from(0));
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "not present\nenvironment variable not found | NotPresent | true\n\
+         None Err(\"environment variable not found\")\n\
+         ExitCode(unix_exit_status(4)) ExitCode(unix_exit_status(9)) true\n"
+    );
+}

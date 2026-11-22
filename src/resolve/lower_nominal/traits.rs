@@ -1188,10 +1188,13 @@ impl<'a> Parser<'a> {
             {
                 true
             }
-            Ty::Param(..) | Ty::Projection(..) => self
-                .bound_traits(ty)
-                .iter()
-                .any(|bound| bound == trait_name),
+            // A bound or one of its supertraits: `E: Error` is `Display`.
+            Ty::Param(..) | Ty::Projection(..) => self.bound_traits(ty).iter().any(|bound| {
+                bound == trait_name
+                    || supertraits(&self.models, bound)
+                        .iter()
+                        .any(|parent| parent == trait_name)
+            }),
             // Rust's own `Display` impls.
             Ty::Int(_)
             | Ty::Float(_)

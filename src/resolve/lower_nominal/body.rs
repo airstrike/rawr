@@ -195,7 +195,12 @@ impl<'a> Parser<'a> {
                 _ if self.macro_definition_ahead() => self.parse_local_macro()?,
                 _ if self.macro_statement_ahead() => self.parse_macro_statement()?,
                 _ if self.nested_item_ahead() => self.skip_nested_item()?,
-                _ => self.parse_statement()?,
+                // The method's output reaches its tail, as a function's
+                // does: each arm of a tail `match` coerces to it.
+                _ => {
+                    let expected = self.tail_expected(Some(definition.output()));
+                    self.parse_tail_expecting(Some(&expected))?;
+                }
             }
         }
 

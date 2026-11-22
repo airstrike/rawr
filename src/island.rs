@@ -1087,7 +1087,7 @@ pub fn await_main(future: crate::future::Future) {
 }
 
 /// The Rawr `main`'s future as the native entry awaits it: its status is
-/// the process's, as `main`'s output gives Rust's (0, or 1 for an `Err`),
+/// the process's, as `main`'s output gives Rust's (`program::Termination`),
 /// and 101 when it fails.
 #[unsafe(no_mangle)]
 pub fn __rawr_island_main_v1() -> std::pin::Pin<Box<dyn std::future::Future<Output = i32> + Send>> {
@@ -1106,13 +1106,13 @@ pub fn __rawr_island_main_v1() -> std::pin::Pin<Box<dyn std::future::Future<Outp
         let _entered = crate::future::enter();
         crate::future::drain();
         script.poll_output(cx).map(|output| match output {
-            Ok(value) => match value.try_cast::<Result<Dynamic, Dynamic>>() {
-                Some(Err(error)) => {
-                    main_stderr(&format!("Error: {error:?}\n"));
-                    1
+            Ok(value) => {
+                let ended = crate::program::Termination::of(value);
+                if let Some(report) = ended.report() {
+                    main_stderr(&format!("{report}\n"));
                 }
-                _ => 0,
-            },
+                i32::from(ended.status())
+            }
             Err(error) => {
                 main_stderr(&main_panic(&error));
                 101

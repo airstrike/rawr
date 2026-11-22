@@ -39,6 +39,7 @@ pub(super) const HELD: [Held; 4] = [
             capability::Kind::Debug,
             capability::Kind::Send,
             capability::Kind::Static,
+            capability::Kind::Error,
         ],
     }),
     Held::Value(held::Value {
