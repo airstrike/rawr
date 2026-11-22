@@ -901,6 +901,11 @@ struct Builder<'a> {
     units: Vec<Unit>,
     packages: Vec<Package>,
     module_targets: BTreeMap<PathBuf, error::Label>,
+    /// The directory whose files a module's `mod name;` items name, where
+    /// it is not the one its path gives: a module `#[path]` puts in a file
+    /// owns that file's directory, as a `mod.rs` does (#605). Keyed by the
+    /// directory the module's path gives.
+    module_directories: BTreeMap<PathBuf, PathBuf>,
     active_modules: Vec<PathBuf>,
     /// The program's own macros of the modules around the one being
     /// loaded that are in its textual scope: those defined before its
@@ -935,6 +940,7 @@ impl<'a> Builder<'a> {
             units: Vec::new(),
             packages: Vec::new(),
             module_targets: BTreeMap::new(),
+            module_directories: BTreeMap::new(),
             active_modules: Vec::new(),
             inherited: Vec::new(),
             expanded: BTreeMap::new(),
@@ -1668,7 +1674,29 @@ impl<'a> Builder<'a> {
                 )?;
                 continue;
             }
-            match self.module_file(module_root, &child_modules, label)? {
+            // `#[path = "x.rs"] mod name;`: the file it names, whose
+            // directory the module owns (#605).
+            let attributed =
+                self.path_attribute(&module, module_root, &modules, &canonical, key != canonical);
+            let file = match attributed {
+                Some(path) => {
+                    if let Some(directory) = path.parent() {
+                        let mut given = module_root.to_path_buf();
+                        for segment in &child_modules {
+                            given.push(segment.as_str());
+                        }
+                        self.module_directories
+                            .insert(given, directory.to_path_buf());
+                    }
+                    if self.is_file(&path) {
+                        self.module_at(path)
+                    } else {
+                        ModuleFile::Missing(path)
+                    }
+                }
+                None => self.module_file(module_root, &child_modules, label)?,
+            };
+            match file {
                 ModuleFile::Missing(child_path) => {
                     self.load_module(
                         package,
@@ -1919,8 +1947,9 @@ impl<'a> Builder<'a> {
         modules: &[ImmutableString],
         declaration: error::Label,
     ) -> Result<ModuleFile, Error> {
-        let mut base = module_root.to_path_buf();
-        for segment in modules {
+        let (parent, name) = modules.split_at(modules.len().saturating_sub(1));
+        let mut base = self.module_directory(module_root, parent);
+        for segment in name {
             base.push(segment.as_str());
         }
         let found = [base.with_extension("rs"), base.join("mod.rs")]
@@ -1929,12 +1958,7 @@ impl<'a> Builder<'a> {
             .collect::<Vec<_>>();
         match found.as_slice() {
             [] => Ok(ModuleFile::Missing(base.with_extension("rs"))),
-            [path] => Ok(match self.read_to_string(path) {
-                Ok(text) if crate::project::is_marked(&text) => {
-                    ModuleFile::Marked(path.clone(), text)
-                }
-                _ => ModuleFile::Rust(path.clone()),
-            }),
+            [path] => Ok(self.module_at(path.clone())),
             [first, second, ..] => Err(Error::module(
                 self.evidence.clone(),
                 format!(
@@ -1948,6 +1972,68 @@ impl<'a> Builder<'a> {
                 None,
             )),
         }
+    }
+
+    /// The file at `path`, which a module's declaration names: marked, or
+    /// Rust's.
+    fn module_at(&self, path: PathBuf) -> ModuleFile {
+        match self.read_to_string(&path) {
+            Ok(text) if crate::project::is_marked(&text) => ModuleFile::Marked(path, text),
+            _ => ModuleFile::Rust(path),
+        }
+    }
+
+    /// The directory whose files the `mod name;` items of the module
+    /// `modules` name: the one its path gives below `module_root`, unless a
+    /// module on the way is in a file `#[path]` names, whose directory it
+    /// owns (`module_directories`).
+    fn module_directory(&self, module_root: &Path, modules: &[ImmutableString]) -> PathBuf {
+        let given = |count: usize| {
+            let mut directory = module_root.to_path_buf();
+            for segment in &modules[..count] {
+                directory.push(segment.as_str());
+            }
+            directory
+        };
+        for owned in (1..=modules.len()).rev() {
+            if let Some(directory) = self.module_directories.get(&given(owned)) {
+                let mut directory = directory.clone();
+                for segment in &modules[owned..] {
+                    directory.push(segment.as_str());
+                }
+                return directory;
+            }
+        }
+        given(modules.len())
+    }
+
+    /// The file a `#[path = ".."]` on the module `module` names, as rustc
+    /// reads it, in the module `modules` that `canonical` holds, whose own
+    /// text it is unless `inline`: from the directory of `canonical`, or,
+    /// inside an inline module, from the directory that module's files are
+    /// in. `None` for a module with no `#[path]`.
+    fn path_attribute(
+        &self,
+        module: &item::Module,
+        module_root: &Path,
+        modules: &[ImmutableString],
+        canonical: &Path,
+        inline: bool,
+    ) -> Option<PathBuf> {
+        let written = module.header.attributes.iter().find_map(|attribute| {
+            let value = attribute.text.strip_prefix("path")?.trim_start();
+            let value = value.strip_prefix('=')?.trim();
+            value
+                .strip_prefix('"')?
+                .strip_suffix('"')
+                .map(str::to_owned)
+        })?;
+        let directory = if inline {
+            self.module_directory(module_root, modules)
+        } else {
+            canonical.parent()?.to_path_buf()
+        };
+        Some(directory.join(written))
     }
 
     /// A native module that the crate root or a marked module declares. In

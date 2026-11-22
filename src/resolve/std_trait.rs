@@ -95,6 +95,11 @@ pub(crate) fn named<'a>(
     WRITTEN.with_borrow(|written| written.get(name).copied())
 }
 
+/// Whether the std trait `definition` is in the prelude every program sees.
+pub(crate) fn in_prelude(definition: &str) -> bool {
+    std_table::prelude(EDITION).any(|path| path.kind == "trait" && path.definition == definition)
+}
+
 /// The stable std trait whose last segment is `name`, wherever std declares
 /// it: `named`, else the first std module that has one (`std::error::Error`).
 /// For what rawr asks of a trait it already knows the program names, never

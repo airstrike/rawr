@@ -40,7 +40,7 @@ pub use error::{
     OwningParameter, PatternOrigin, PatternTypes, Placeholder, Private, Receiver, Referent,
     Required, Requirement, Shown, Similar, Site, Uncovered, Unexpected, Unresolved,
 };
-pub use imports::{Candidate, Imports};
+pub use imports::{Candidate, Direct, Imports};
 use std::collections::BTreeMap;
 
 pub(crate) struct LocatedError {

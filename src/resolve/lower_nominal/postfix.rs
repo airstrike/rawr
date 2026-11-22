@@ -91,8 +91,9 @@ impl<'a> Parser<'a> {
 
     /// The postfix operations after the primary `value`.
     pub(super) fn parse_postfix_of(&mut self, value: ParsedExpr) -> Result<ParsedExpr, Error> {
-        self.parse_postfix_steps(value)
-            .map_err(|error| self.std_no_item(self.inherent_not_yet(error)))
+        self.parse_postfix_steps(value).map_err(|error| {
+            self.std_no_item(self.unscoped_std_method(self.inherent_not_yet(error)))
+        })
     }
 
     /// A member a type of Rawr's std lacks, as rustc's E0599 names it: by

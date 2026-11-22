@@ -90,6 +90,7 @@ mod statement;
 mod std_impl;
 mod std_item;
 mod std_method;
+mod std_scope;
 mod surface;
 pub(crate) mod thread;
 mod time;

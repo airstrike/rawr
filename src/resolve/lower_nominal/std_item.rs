@@ -335,6 +335,16 @@ impl<'a> Parser<'a> {
         };
         let mem =
             |token: &Token| matches!(token, Token::Identifier(name) if name.as_str() == "mem");
+        // `mem::swap(..)` names the module a `use` binds, as rustc reads
+        // it: with none, `mem` names nothing (E0433, #808).
+        let module = |this: &Self| {
+            this.models.get("mem").is_none()
+                && this.models.function("mem").is_none()
+                && !this.bindings.contains_key("mem")
+                && this.models.import("mem").is_some_and(|binding| {
+                    matches!(binding.qualified.as_str(), "std::mem" | "core::mem")
+                })
+        };
         let (function, skip) = match name {
             "std" | "core"
                 if tokens[0] == Token::DoubleColon
@@ -343,9 +353,7 @@ impl<'a> Parser<'a> {
             {
                 (qualified(&tokens[3])?, 4)
             }
-            "mem" if tokens[0] == Token::DoubleColon && unbound(self, name) => {
-                (qualified(&tokens[1])?, 2)
-            }
+            "mem" if tokens[0] == Token::DoubleColon && module(self) => (qualified(&tokens[1])?, 2),
             name if unbound(self, name) => {
                 (function(&Token::Identifier(Box::new(name.into())))?, 0)
             }
@@ -648,6 +656,39 @@ impl<'a> Parser<'a> {
                 .crates
                 .as_ref()
                 .is_none_or(|crates| crates.reach(root, Span::default()).is_err())
+    }
+
+    /// rustc's E0433 for the path `segments`, whose first segment names
+    /// nothing in scope (`unresolved_root`), with the items it offers to
+    /// import (#808) where std has a module of that name: for a path of
+    /// three segments or more, the items named as its second, which the
+    /// path then names directly; for one of two, those modules. None for a
+    /// first segment no std module has, as `tokio` (#1149).
+    pub(super) fn unresolved_root_error(&self, segments: &[(ImmutableString, Span)]) -> Error {
+        let (root, root_span) = &segments[0];
+        let modules = crate::resolve::imports::std(root, Wanted::Path)
+            .filter(|candidate| candidate.noun == "module")
+            .collect::<Vec<_>>();
+        let imports = match segments {
+            _ if modules.is_empty() => Box::default(),
+            [_, (item, item_span), _, ..] => {
+                let mut candidates = self.own_candidates(item, Wanted::Path);
+                candidates.extend(crate::resolve::imports::std(item, Wanted::Path));
+                Imports::new(candidates, self.models.use_placement()).with_direct(
+                    crate::resolve::Direct {
+                        name: item.clone(),
+                        prefix: Span::new(root_span.start(), item_span.start()),
+                    },
+                )
+            }
+            _ => Imports::new(modules, self.models.use_placement()),
+        };
+        Error::UnknownType {
+            name: root.clone(),
+            reference: Span::new(root_span.start(), text_end(root_span.start(), root)),
+            path: true,
+            imports,
+        }
     }
 
     /// The std macro the path ahead names, from its first segment `first`,
