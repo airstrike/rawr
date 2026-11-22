@@ -10,6 +10,7 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
+use super::fragment::{Broken, Expected, Read};
 use crate::tokenizer::Token;
 use crate::{ImmutableString, Position};
 
@@ -18,6 +19,7 @@ use crate::{ImmutableString, Position};
 pub(crate) struct Malformed {
     message: ImmutableString,
     label: &'static str,
+    note: Option<&'static str>,
     help: Option<&'static str>,
     at: Position,
 }
@@ -28,8 +30,27 @@ pub(crate) enum Failure {
     /// No rule matches: the token the rule that got furthest stopped at, or
     /// `None` when it ran out of the call's tokens.
     NoRules(Option<(Token, Position)>),
+    /// A fragment that starts but doesn't parse, which is rustc's parser
+    /// error: no later rule is tried.
+    Unparsed(Unparsed),
     /// A transcription rustc refuses, in its words.
     Transcription(ImmutableString),
+}
+
+/// A fragment of a call that rustc's parser fails on: what it expected,
+/// what it found there, and the matcher's fragment it parsed for.
+#[derive(Clone, Debug)]
+pub(crate) struct Unparsed {
+    expected: Expected,
+    /// The token found, a group's closing delimiter, or `None` at the
+    /// call's end.
+    found: Option<Token>,
+    /// Where rustc points, and the text its label underlines there.
+    at: Position,
+    underlined: ImmutableString,
+    /// The matcher's `$name:specifier`, at its `$`.
+    fragment: (Position, ImmutableString),
+    specifier: &'static str,
 }
 
 /// One token tree: a token, or a delimited group of trees.
@@ -137,6 +158,8 @@ struct State {
     /// What closes the trees being matched: the call (`None`), or the
     /// group whose contents they are, at its closing delimiter.
     end: (Position, Option<Token>),
+    /// A fragment that started and didn't parse, which ends the match.
+    unparsed: Option<Unparsed>,
 }
 
 impl State {
@@ -184,9 +207,15 @@ impl Malformed {
         Self {
             message: message.into(),
             label,
+            note: None,
             help: None,
             at,
         }
+    }
+
+    /// rustc's note, when it gives one.
+    pub(crate) const fn note(&self) -> Option<&'static str> {
+        self.note
     }
 
     /// A fragment specifier rustc doesn't know, or one left out.
@@ -231,8 +260,95 @@ impl fmt::Display for Failure {
                 write!(formatter, "no rules expected {}", described(token))
             }
             Self::NoRules(None) => formatter.write_str("unexpected end of macro invocation"),
+            Self::Unparsed(unparsed) => write!(formatter, "{unparsed}"),
             Self::Transcription(message) => formatter.write_str(message),
         }
+    }
+}
+
+impl fmt::Display for Unparsed {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let noun = match self.expected {
+            Expected::Item => return formatter.write_str("expected an item keyword"),
+            Expected::Expression => "expression",
+            Expected::Type => "type",
+            Expected::Pattern => "pattern",
+            Expected::Identifier => "identifier",
+        };
+        match (&self.found, self.expected) {
+            (Some(token), _) => write!(formatter, "expected {noun}, found {}", described(token)),
+            (None, Expected::Expression) => {
+                write!(formatter, "expected {noun}, found end of macro arguments")
+            }
+            (None, _) => write!(formatter, "expected {noun}, found `<eof>`"),
+        }
+    }
+}
+
+impl Unparsed {
+    /// The failure `broken` describes, in `input`, whose trees `end`
+    /// closes, of the matcher's `fragment` written at `at`.
+    fn new(
+        broken: Broken,
+        input: &[Tree],
+        end: &(Position, Option<Token>),
+        (name, fragment, at): (&str, Fragment, Position),
+    ) -> Self {
+        let (found, at_found, underlined) = match input.get(broken.at()) {
+            Some(tree) => {
+                let token = first_token(tree).clone();
+                let underlined = text(&token);
+                (Some(token), tree_position(tree), underlined)
+            }
+            None => match (&end.1, input.last()) {
+                (Some(close), _) => (Some(close.clone()), end.0, text(close)),
+                // rustc points just past the last token for an expression,
+                // and at the last token for the rest.
+                (None, Some(last)) if broken.expected() == Expected::Expression => {
+                    (None, tree_end(last), " ".to_string())
+                }
+                (None, Some(last)) => (None, tree_position(last), text(first_token(last))),
+                (None, None) => (None, end.0, " ".to_string()),
+            },
+        };
+        Self {
+            expected: broken.expected(),
+            found,
+            at: at_found,
+            underlined: underlined.into(),
+            fragment: (at, format!("${name}:{}", fragment.specifier()).into()),
+            specifier: fragment.specifier(),
+        }
+    }
+
+    /// Where rustc points, and the text it underlines there.
+    pub(crate) fn at(&self) -> (Position, &str) {
+        (self.at, &self.underlined)
+    }
+
+    /// rustc's label under it, empty when it gives none.
+    pub(crate) const fn label(&self) -> &'static str {
+        match self.expected {
+            Expected::Item => "",
+            Expected::Expression => "expected expression",
+            Expected::Type => "expected type",
+            Expected::Pattern => "expected pattern",
+            Expected::Identifier => "expected identifier",
+        }
+    }
+
+    /// The matcher's fragment the argument was parsed for, written
+    /// `$name:specifier` at its `$`.
+    pub(crate) fn fragment(&self) -> (Position, &str) {
+        (self.fragment.0, &self.fragment.1)
+    }
+
+    /// rustc's label at the matcher's fragment.
+    pub(crate) fn fragment_label(&self) -> String {
+        format!(
+            "while parsing argument for this `{}` macro fragment",
+            self.specifier
+        )
     }
 }
 
@@ -557,6 +673,7 @@ impl Rules {
             repeated: Vec::new(),
             stop: None,
             end: (end, None),
+            unparsed: None,
         };
         for rule in &self.rules {
             state.bound.clear();
@@ -568,6 +685,9 @@ impl Rules {
                 &mut state,
                 &mut |rest, _, state| state.exhausted(rest),
             ) {
+                if let Some(unparsed) = state.unparsed.take() {
+                    return Err(Failure::Unparsed(unparsed));
+                }
                 continue;
             }
             let transcription = Transcription {
@@ -607,6 +727,20 @@ const fn tree_position(tree: &Tree) -> Position {
     match tree {
         Tree::Leaf(_, position) | Tree::Group(_, position, ..) => *position,
     }
+}
+
+/// Where `tree` ends: just past its last character.
+fn tree_end(tree: &Tree) -> Position {
+    let (mut position, written) = match tree {
+        Tree::Leaf(token, position) => (*position, text(token)),
+        Tree::Group(_, _, _, close) => (*close, String::from(" ")),
+    };
+    if !position.is_none() {
+        for _ in written.chars() {
+            position.advance();
+        }
+    }
+    position
 }
 
 fn patterns(trees: &[Tree]) -> Result<Vec<Pattern>, Malformed> {
@@ -745,14 +879,17 @@ fn check_follow<'a>(patterns: &'a [Pattern], after: &[Follower<'a>]) -> Result<(
                     .count();
                 let verb = if counted == 1 { "is" } else { "may be" };
                 let specifier = fragment.specifier();
-                return Err(Malformed::new(
-                    format!(
-                        "`${name}:{specifier}` {verb} followed by `{shown}`, which is not \
-                         allowed for `{specifier}` fragments"
-                    ),
-                    fragment.not_followed(),
-                    at,
-                ));
+                return Err(Malformed {
+                    note: fragment.allowed_after(),
+                    ..Malformed::new(
+                        format!(
+                            "`${name}:{specifier}` {verb} followed by `{shown}`, which is not \
+                             allowed for `{specifier}` fragments"
+                        ),
+                        fragment.not_followed(),
+                        at,
+                    )
+                });
             }
         }
     }
@@ -897,6 +1034,22 @@ impl Fragment {
             _ => "",
         }
     }
+
+    /// rustc's note listing what its follow set allows.
+    const fn allowed_after(self) -> Option<&'static str> {
+        match self {
+            Self::Expr | Self::Stmt => Some("allowed there are: `=>`, `,` or `;`"),
+            Self::Pat => Some("allowed there are: `=>`, `,`, `=`, `if`, `if let` or `in`"),
+            Self::PatParam => {
+                Some("allowed there are: `=>`, `,`, `=`, `|`, `if`, `if let` or `in`")
+            }
+            Self::Ty | Self::Path => Some(
+                "allowed there are: `{`, `[`, `=>`, `,`, `>`, `=`, `:`, `;`, `|`, `as` or `where`",
+            ),
+            Self::Vis => Some("allowed there are: `,`, an ident or a type"),
+            _ => None,
+        }
+    }
 }
 
 fn collect_depths(patterns: &[Pattern], depth: usize, depths: &mut Vec<(ImmutableString, usize)>) {
@@ -922,6 +1075,9 @@ fn matches(
     state: &mut State,
     then: &mut Continue<'_>,
 ) -> bool {
+    if state.unparsed.is_some() {
+        return false;
+    }
     let Some((first, rest)) = patterns.split_first() else {
         return then(input, indices, state);
     };
@@ -956,10 +1112,22 @@ fn matches(
                 false
             }
         },
-        Pattern::Fragment(name, fragment, _) => {
-            let Some(length) = super::fragment::length(*fragment, input) else {
-                state.stop_at(input);
-                return false;
+        Pattern::Fragment(name, fragment, at) => {
+            let length = match super::fragment::read(*fragment, input) {
+                Read::Taken(length) => length,
+                Read::Unstarted => {
+                    state.stop_at(input);
+                    return false;
+                }
+                Read::Broken(broken) => {
+                    state.unparsed = Some(Unparsed::new(
+                        broken,
+                        input,
+                        &state.end,
+                        (name, *fragment, *at),
+                    ));
+                    return false;
+                }
             };
             state.bound.push(Bound {
                 name: name.clone(),

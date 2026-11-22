@@ -1121,10 +1121,13 @@ fn app_library(entry: &super::graph::Package, module_root: &std::path::Path) -> 
     // The native modules a marked module declares, and the `use`
     // declarations of its that native paths go through (#1932).
     #[derive(Default)]
-    struct Node {
+    struct Node<'a> {
         file: bool,
+        /// The program's macros in a file's textual scope, which its
+        /// declaration comes after, as rustc has them in scope there.
+        macros: &'a [crate::ImmutableString],
         uses: Vec<String>,
-        children: BTreeMap<String, Node>,
+        children: BTreeMap<String, Node<'a>>,
     }
     let mut root = Node::default();
     for re_export in entry.re_exports() {
@@ -1144,13 +1147,19 @@ fn app_library(entry: &super::graph::Package, module_root: &std::path::Path) -> 
             node = node.children.entry(segment.to_string()).or_default();
         }
         node.file = true;
+        node.macros = module.macros();
     }
-    fn render(node: &Node, depth: usize, text: &mut String) {
+    fn render(node: &Node<'_>, depth: usize, text: &mut String) {
         let indent = "    ".repeat(depth);
         for declaration in &node.uses {
             text.push_str(&format!("{indent}{declaration}"));
         }
         for (name, child) in &node.children {
+            for definition in child.macros {
+                text.push_str(&format!(
+                    "{indent}#[allow(unused_macros)]\n{indent}{definition}\n"
+                ));
+            }
             if child.file {
                 text.push_str(&format!("{indent}pub mod {name};\n"));
             } else {
@@ -1990,6 +1999,58 @@ preview = ["dep:rawr-macros"]
         std::fs::remove_file(&path).unwrap();
         write("pub fn b() {}\n");
         assert_eq!(read().as_deref(), Some("pub fn b() {}\n"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// A native module a marked one declares sees the program's macros
+    /// its marked ancestors define before the `mod` items on the way to
+    /// it, as rustc's textual scope has them, and none defined after
+    /// (#2515): the generated library defines them before its declaration.
+    #[test]
+    fn a_native_module_sees_the_macros_defined_before_its_mod() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target/graph-tests")
+            .join(format!("native-macros-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src/a")).unwrap();
+        let files = [
+            (
+                "Cargo.toml",
+                "[package]\nname = \"scope\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[workspace]\n",
+            ),
+            (
+                "src/main.rs",
+                "// rawr\nmod early;\nmacro_rules! one { () => { 1 }; }\nmod a;\n\
+                 macro_rules! late { () => { 3 }; }\n\
+                 fn main() { println!(\"{} {}\", a::b::two(), early::zero()); }\n",
+            ),
+            ("src/early.rs", "pub fn zero() -> i32 { 0 }\n"),
+            (
+                "src/a.rs",
+                "// rawr\nmacro_rules! two { () => { one!() + one!() }; }\npub mod b;\n",
+            ),
+            ("src/a/b.rs", "pub fn two() -> i32 { two!() }\n"),
+        ];
+        for (path, text) in files {
+            std::fs::write(root.join(path), text).unwrap();
+        }
+        let mut answers = crate::project::cargo::Answers::new();
+        let target = crate::project::Target::discover(&root, &mut answers).unwrap();
+        let graph =
+            crate::package::Graph::load(&crate::Engine::new(), &target, &mut answers).unwrap();
+        let library = super::app_library(graph.entry_package(), Path::new("/src"));
+        let one = library
+            .find("macro_rules! one")
+            .unwrap_or_else(|| panic!("{library}"));
+        let two = library
+            .find("macro_rules! two")
+            .unwrap_or_else(|| panic!("{library}"));
+        let b = library
+            .find("pub mod b;")
+            .unwrap_or_else(|| panic!("{library}"));
+        assert!(one < two && two < b, "{library}");
+        // `early` is declared before any, and `late` defined after `a`.
+        assert_eq!(library.matches("macro_rules!").count(), 2, "{library}");
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

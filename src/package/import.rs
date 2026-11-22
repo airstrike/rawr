@@ -1329,6 +1329,7 @@ fn diagnostic_path(error: &crate::resolve::Error) -> Option<(String, ImportedNam
         | R::RepeatedRest { .. }
         | R::UnsupportedNominalSyntax { .. }
         | R::Syntax { .. }
+        | R::Macro { .. }
         | R::UnlabeledJumpInWhileCondition { .. }
         | R::AsyncMain { .. }
         | R::Unboxed { .. }

@@ -157,13 +157,14 @@ pub(super) fn lay_out(
     braced_statements: bool,
     in_body: bool,
 ) -> Option<(String, Mark)> {
-    let ((_, at), rest) = call.split_first()?;
+    let (_, at) = call.first()?;
     let (last, end) = call.last()?;
-    // The tokens inside the delimiters, after the name and `!`: none in
+    let bang = call.iter().position(|(token, _)| *token == Token::Bang)?;
+    // The tokens inside the delimiters, after the path and `!`: none in
     // `()`, which the lexer reads as one token.
     let inner = match last {
         Token::Unit => &[],
-        _ => rest.get(2..rest.len().checked_sub(1)?)?,
+        _ => call.get(bang + 2..call.len().checked_sub(1)?)?,
     };
     let input = macro_rules::trees(inner).ok()?;
     if in_body && !rules.may_declare(&input) {

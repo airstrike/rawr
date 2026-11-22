@@ -756,6 +756,10 @@ fn resolution_report_with_sources(
         resolve::Error::UnknownMacro { .. } => {
             "a macro with the same name exists, but it appears later".into()
         }
+        resolve::Error::Macro {
+            fragment: Some((_, label)),
+            ..
+        } => label.clone(),
         resolve::Error::Redefined {
             name,
             import,
@@ -1944,7 +1948,7 @@ fn primary_label(
     primary: Span,
 ) -> Option<crate::ImmutableString> {
     match error {
-        resolve::Error::Syntax { label, .. } => {
+        resolve::Error::Syntax { label, .. } | resolve::Error::Macro { label, .. } => {
             Some(label.clone()).filter(|label| !label.is_empty())
         }
         resolve::Error::UnknownMacro {
@@ -2348,6 +2352,16 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Error::Syntax {
             help: Some(help), ..
         } => builder.help(help.clone()),
+        resolve::Error::Macro { note, help, .. } => {
+            let builder = match note {
+                Some(note) => builder.note(note.clone()),
+                None => builder,
+            };
+            match help {
+                Some(help) => builder.help(help.clone()),
+                None => builder,
+            }
+        }
         resolve::Error::Outlives(reports) => {
             let builder = match reports.first().help() {
                 Some(help) => builder.help(help),
@@ -2857,7 +2871,9 @@ fn resolution_message(error: &resolve::Error) -> String {
         resolve::Error::UnsupportedNominalSyntax { construct, .. } => {
             resolve::Unsupported(construct).to_string()
         }
-        resolve::Error::Syntax { message, .. } => message.to_string(),
+        resolve::Error::Syntax { message, .. } | resolve::Error::Macro { message, .. } => {
+            message.to_string()
+        }
         resolve::Error::UnlabeledJumpInWhileCondition { .. } => {
             "`break` or `continue` with no label in the condition of a `while` loop".to_string()
         }

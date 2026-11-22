@@ -6,30 +6,90 @@
 use super::macro_rules::{Delimiter, Fragment, Tree};
 use crate::tokenizer::Token;
 
-/// How many trees at the start of `input` one `fragment` takes, or `None`
-/// when they do not start one.
-pub(crate) fn length(fragment: Fragment, input: &[Tree]) -> Option<usize> {
+/// How one `fragment` reads at the start of a call's input, as rustc's
+/// macro matcher reads it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Read {
+    /// It takes this many trees.
+    Taken(usize),
+    /// The first tree can't start one, so the rule doesn't match here.
+    Unstarted,
+    /// It starts but rustc's parser fails on it, which ends the expansion
+    /// with the parser's error rather than trying more rules.
+    Broken(Broken),
+}
+
+/// Where a fragment's parse failed: the tree it failed at, the input's
+/// length when it ran out, and what the parser expected there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Broken {
+    at: usize,
+    expected: Expected,
+}
+
+/// What rustc's parser expected where a fragment's parse failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Expected {
+    Expression,
+    Type,
+    Pattern,
+    Identifier,
+    /// An item's keyword, where an `item` fragment starts with none.
+    Item,
+}
+
+impl Broken {
+    /// The index of the tree the parse failed at, the input's length when
+    /// it ran out.
+    pub(crate) const fn at(self) -> usize {
+        self.at
+    }
+
+    pub(crate) const fn expected(self) -> Expected {
+        self.expected
+    }
+}
+
+/// How `fragment` reads at the start of `input`. Whether it starts is
+/// rustc's `nonterminal_may_begin_with`: a fragment that starts commits the
+/// matcher to rustc's parser, whose failure is an error. A failure whose
+/// expectation the reader doesn't know is read as no start, so the call is
+/// a no-rules error rather than a parser error rawr can't word.
+pub(crate) fn read(fragment: Fragment, input: &[Tree]) -> Read {
     let mut reader = Reader {
         trees: input,
         at: 0,
+        failed: None,
     };
-    match fragment {
-        Fragment::Tt => reader.bump_any()?,
-        Fragment::Ident => reader.ident()?,
-        Fragment::Literal => reader.literal()?,
-        Fragment::Lifetime => reader.lifetime()?,
-        Fragment::Block => reader.group(Delimiter::Brace)?,
-        Fragment::Vis => reader.vis(),
-        Fragment::Expr => reader.expr(Context::Fragment)?,
-        Fragment::Stmt => reader.stmt()?,
-        Fragment::Ty => reader.ty()?,
-        Fragment::Path => reader.type_path()?,
-        Fragment::Pat => reader.pat()?,
-        Fragment::PatParam => reader.pat_alternative()?,
-        Fragment::Item => reader.item()?,
-        Fragment::Meta => reader.meta()?,
+    if !reader.may_begin(fragment) {
+        return Read::Unstarted;
     }
-    Some(reader.at)
+    let read = match fragment {
+        Fragment::Tt => reader.bump_any(),
+        Fragment::Ident => reader.ident(),
+        Fragment::Literal => reader.literal(),
+        Fragment::Lifetime => reader.lifetime(),
+        Fragment::Block => reader.group(Delimiter::Brace),
+        Fragment::Vis => {
+            reader.vis();
+            Some(())
+        }
+        Fragment::Expr => reader.expr(Context::Fragment),
+        Fragment::Stmt => reader.stmt(),
+        Fragment::Ty => reader.ty(),
+        Fragment::Path => reader.type_path(),
+        Fragment::Pat => reader.pat(),
+        Fragment::PatParam => reader.pat_alternative(),
+        Fragment::Item => reader.item(),
+        Fragment::Meta => reader.meta(),
+    };
+    match (read, reader.failed) {
+        (Some(()), _) => Read::Taken(reader.at),
+        // The furthest failure is the one that stopped the read only when
+        // the read got no further.
+        (None, Some(broken)) if broken.at >= reader.at => Read::Broken(broken),
+        (None, _) => Read::Unstarted,
+    }
 }
 
 /// Whether `token` is a literal of Rust's.
@@ -97,11 +157,99 @@ const SUFFIXES: &[&str] = &[
 struct Reader<'a> {
     trees: &'a [Tree],
     at: usize,
+    /// The furthest place a parse found no start of what it expected.
+    failed: Option<Broken>,
 }
 
 impl<'a> Reader<'a> {
     fn tree(&self, ahead: usize) -> Option<&'a Tree> {
         self.trees.get(self.at + ahead)
+    }
+
+    /// Note that what the parse `expected` doesn't start here, unless a
+    /// parse already failed further on, and fail.
+    fn expected<T>(&mut self, expected: Expected) -> Option<T> {
+        if self.failed.is_none_or(|failed| self.at > failed.at) {
+            self.failed = Some(Broken {
+                at: self.at,
+                expected,
+            });
+        }
+        None
+    }
+
+    /// Whether the first tree may start `fragment`, as rustc's
+    /// `nonterminal_may_begin_with` decides. A call's or a group's end
+    /// starts none.
+    fn may_begin(&self, fragment: Fragment) -> bool {
+        let Some(tree) = self.tree(0) else {
+            return false;
+        };
+        let word = self.word(0);
+        let word = word.as_deref();
+        match fragment {
+            Fragment::Tt | Fragment::Item | Fragment::Stmt | Fragment::Vis => true,
+            Fragment::Ident => word.is_some_and(|word| word != "_"),
+            Fragment::Block => matches!(tree, Tree::Group(Delimiter::Brace, ..)),
+            Fragment::Lifetime => self.at_token(&Token::Apostrophe),
+            Fragment::Literal => {
+                self.token(0).is_some_and(is_literal)
+                    || matches!(self.token(0), Some(Token::Minus | Token::UnaryMinus))
+            }
+            Fragment::Path | Fragment::Meta => word.is_some() || self.at_token(&Token::DoubleColon),
+            // `let` and `const` are left out for compatibility, as in Rust
+            // 2021's `expr`.
+            Fragment::Expr => {
+                self.starts_expr(Context::Fragment) && !matches!(word, Some("let" | "const"))
+            }
+            Fragment::Ty => match tree {
+                Tree::Group(delimiter, ..) => *delimiter != Delimiter::Brace,
+                Tree::Leaf(..) => {
+                    matches!(
+                        self.token(0),
+                        Some(
+                            Token::Bang
+                                | Token::Multiply
+                                | Token::Ampersand
+                                | Token::And
+                                | Token::Apostrophe
+                                | Token::LessThan
+                                | Token::LeftShift
+                                | Token::DoubleColon
+                                | Token::Underscore
+                        )
+                    ) || self.at_question()
+                        || word.is_some_and(|word| {
+                            !NOT_OPERANDS.contains(&word)
+                                || matches!(word, "fn" | "impl" | "dyn" | "extern")
+                        })
+                }
+            },
+            Fragment::Pat | Fragment::PatParam => match tree {
+                Tree::Group(delimiter, ..) => *delimiter != Delimiter::Brace,
+                Tree::Leaf(token, _) => {
+                    word.is_some()
+                        || is_literal(token)
+                        || matches!(
+                            token,
+                            Token::Ampersand
+                                | Token::And
+                                | Token::Minus
+                                | Token::UnaryMinus
+                                | Token::Apostrophe
+                                | Token::LessThan
+                                | Token::LeftShift
+                                | Token::DoubleColon
+                                | Token::Underscore
+                                | Token::Bang
+                                | Token::ExclusiveRange
+                                | Token::InclusiveRange
+                        )
+                        || self.at_reserved("...")
+                        || fragment == Fragment::Pat && matches!(token, Token::Pipe)
+                }
+            },
+        }
     }
 
     fn token(&self, ahead: usize) -> Option<&'a Token> {
@@ -235,7 +383,8 @@ impl<'a> Reader<'a> {
             && matches!(
                 Reader {
                     trees: inner,
-                    at: 0
+                    at: 0,
+                    failed: None,
                 }
                 .word(0)
                 .as_deref(),
@@ -269,9 +418,11 @@ impl<'a> Reader<'a> {
 
     /// A path segment's name: any name or keyword a path may hold.
     fn segment(&mut self) -> Option<()> {
-        let word = self.word(0)?;
+        let Some(word) = self.word(0) else {
+            return self.expected(Expected::Identifier);
+        };
         if NOT_OPERANDS.contains(&word.as_str()) {
-            return None;
+            return self.expected(Expected::Identifier);
         }
         self.bump();
         Some(())
@@ -336,13 +487,15 @@ impl<'a> Reader<'a> {
     }
 
     fn ty_with(&mut self, bounded: bool) -> Option<()> {
-        match self.tree(0)? {
-            Tree::Group(Delimiter::Paren | Delimiter::Bracket, ..) => {
+        match self.tree(0) {
+            Some(Tree::Group(Delimiter::Paren | Delimiter::Bracket, ..)) => {
                 self.bump();
                 return Some(());
             }
-            Tree::Group(Delimiter::Brace, ..) => return None,
-            Tree::Leaf(..) => {}
+            None | Some(Tree::Group(Delimiter::Brace, ..)) => {
+                return self.expected(Expected::Type);
+            }
+            Some(Tree::Leaf(..)) => {}
         }
         match self.token(0)? {
             Token::Bang | Token::Underscore => {
@@ -367,7 +520,9 @@ impl<'a> Reader<'a> {
             Token::LessThan | Token::DoubleColon => return self.type_or_macro(),
             _ => {}
         }
-        let word = self.word(0)?;
+        let Some(word) = self.word(0) else {
+            return self.expected(Expected::Type);
+        };
         match word.as_str() {
             "fn" | "unsafe" | "extern" => {
                 self.bump();
@@ -574,7 +729,10 @@ impl<'a> Reader<'a> {
     }
 
     fn operand(&mut self, context: Context) -> Option<()> {
-        match self.tree(0)? {
+        let Some(tree) = self.tree(0) else {
+            return self.expected(Expected::Expression);
+        };
+        match tree {
             Tree::Group(..) => {
                 self.bump();
                 return Some(());
@@ -599,7 +757,9 @@ impl<'a> Reader<'a> {
             }
             Tree::Leaf(..) => {}
         }
-        let word = self.word(0)?;
+        let Some(word) = self.word(0) else {
+            return self.expected(Expected::Expression);
+        };
         match word.as_str() {
             "move" => self.closure(context),
             "async" => {
@@ -675,8 +835,8 @@ impl<'a> Reader<'a> {
                 }
                 Some(())
             }
-            "let" | "const" | "unsafe" | "try" | "static" => None,
-            word if NOT_OPERANDS.contains(&word) => None,
+            "let" | "const" | "unsafe" | "try" | "static" => self.expected(Expected::Expression),
+            word if NOT_OPERANDS.contains(&word) => self.expected(Expected::Expression),
             _ => self.path_operand(context),
         }
     }
@@ -716,13 +876,15 @@ impl<'a> Reader<'a> {
 
     /// A pattern with no `|` at its top level, as `pat_param` reads one.
     fn pat_alternative(&mut self) -> Option<()> {
-        match self.tree(0)? {
-            Tree::Group(Delimiter::Brace, ..) => return None,
-            Tree::Group(..) => {
+        match self.tree(0) {
+            None | Some(Tree::Group(Delimiter::Brace, ..)) => {
+                return self.expected(Expected::Pattern);
+            }
+            Some(Tree::Group(..)) => {
                 self.bump();
                 return Some(());
             }
-            Tree::Leaf(..) => {}
+            Some(Tree::Leaf(..)) => {}
         }
         match self.token(0)? {
             Token::Underscore => {
@@ -774,7 +936,7 @@ impl<'a> Reader<'a> {
             }
             return Some(());
         }
-        None
+        self.expected(Expected::Pattern)
     }
 
     fn at_reserved(&self, text: &str) -> bool {
@@ -855,7 +1017,12 @@ impl<'a> Reader<'a> {
     fn item(&mut self) -> Option<()> {
         self.attributes();
         self.vis();
-        let word = self.word(0)?;
+        let Some(word) = self.word(0) else {
+            return match self.tree(0) {
+                Some(_) => self.expected(Expected::Item),
+                None => None,
+            };
+        };
         if word == "macro_rules" && self.token(1) == Some(&Token::Bang) {
             self.at += 2;
             self.segment()?;
@@ -865,11 +1032,13 @@ impl<'a> Reader<'a> {
             self.bump();
             return self.item_end_after_call();
         }
-        let start = self.at;
+        let (start, failed) = (self.at, self.failed);
         if self.type_path().is_some() && self.macro_call() {
             return self.item_end_after_call();
         }
+        // A path that isn't a macro call's is no failure of the item's.
         self.at = start;
+        self.failed = failed;
         let semicolon_only = match word.as_str() {
             "const" => !matches!(
                 self.word(1).as_deref(),

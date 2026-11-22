@@ -1579,6 +1579,24 @@ pub enum Error {
         /// The token's span.
         at: Span,
     },
+    /// A `macro_rules!` definition or call rustc's macro expander refuses,
+    /// as it reports it: a syntax error's parts, with rustc's note and the
+    /// matcher's fragment it labels.
+    Macro {
+        /// The error, as rustc words it.
+        message: ImmutableString,
+        /// The label under the token, empty when rustc gives none.
+        label: ImmutableString,
+        /// rustc's note, when it gives one.
+        note: Option<ImmutableString>,
+        /// rustc's help, when it gives one.
+        help: Option<ImmutableString>,
+        /// The token's span.
+        at: Span,
+        /// The matcher's fragment a call's argument was parsed for, and
+        /// rustc's label at it.
+        fragment: Option<(Span, ImmutableString)>,
+    },
     /// A `break` or `continue` with no label in a `while` condition, which
     /// rustc refuses (E0590).
     UnlabeledJumpInWhileCondition {
@@ -2058,7 +2076,7 @@ impl Error {
             Self::SlicePattern { .. } => Category::InvalidMatch,
             Self::RepeatedRest { .. } => Category::Syntax,
             Self::UnsupportedNominalSyntax { .. } => Category::UnsupportedNominalSyntax,
-            Self::Syntax { .. } => Category::Syntax,
+            Self::Syntax { .. } | Self::Macro { .. } => Category::Syntax,
             Self::UnlabeledJumpInWhileCondition { .. } => Category::UnlabeledJumpInWhileCondition,
             Self::AsyncMain { .. } => Category::AsyncMain,
             Self::UnscopedWrite { .. } => Category::UnscopedWrite,
@@ -2141,7 +2159,9 @@ impl Error {
             Self::UnusedValue { value, .. } => value.as_str(),
             Self::SelfOutsideImpl { .. } => "self",
             Self::UnsupportedNominalSyntax { construct, .. } => construct.as_str(),
-            Self::Syntax { message, .. } | Self::Unimplemented { message, .. } => message.as_str(),
+            Self::Syntax { message, .. }
+            | Self::Macro { message, .. }
+            | Self::Unimplemented { message, .. } => message.as_str(),
             Self::UnsharedStatic { ty, .. } => ty.as_str(),
             Self::UnlabeledJumpInWhileCondition { keyword, .. } => keyword.as_str(),
             Self::AsyncMain { .. } => "main",
@@ -2243,6 +2263,7 @@ impl Error {
             Self::TypeAnnotationsNeeded { reference, .. } => *reference,
             Self::ArgumentCount { call, .. } => *call,
             Self::Syntax { at, .. }
+            | Self::Macro { at, .. }
             | Self::Unimplemented { at, .. }
             | Self::UnsharedStatic { at, .. }
             | Self::UnlabeledJumpInWhileCondition { at, .. }
@@ -2275,6 +2296,11 @@ impl Error {
                 *definition
             }),
             Self::InvalidDerive { declaration, .. } => Some(*declaration),
+            Self::Macro {
+                fragment: Some((fragment, _)),
+                ..
+            } => Some(*fragment),
+            Self::Macro { fragment: None, .. } => None,
             Self::ExpansionRequired { .. } => None,
             Self::DuplicateMember {
                 previous_declaration,
@@ -3803,7 +3829,9 @@ impl fmt::Display for Written<'_> {
             Error::UnsupportedNominalSyntax { construct, source } => {
                 write!(formatter, "{} at {source}", Unsupported(construct))
             }
-            Error::Syntax { message, .. } => formatter.write_str(message),
+            Error::Syntax { message, .. } | Error::Macro { message, .. } => {
+                formatter.write_str(message)
+            }
             Error::UnlabeledJumpInWhileCondition { .. } => formatter
                 .write_str("`break` or `continue` with no label in the condition of a `while` loop"),
             Error::AsyncMain { .. } => formatter.write_str(ASYNC_MAIN),

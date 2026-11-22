@@ -380,6 +380,74 @@ macro_rules! answer {
     assert_eq!(printed(source), "42\n");
 }
 
+/// A macro that calls itself through `$crate` where an item goes, with an
+/// internal rule per step, puts `#[cfg(..)]` on the call each step expands
+/// to, and so expands only the items of the branch whose `cfg` holds, as
+/// `cfg_if!`'s rules do (#2236). The output is rustc's.
+#[test]
+fn a_recursive_item_macro_keeps_the_items_whose_cfg_holds() {
+    let source = r#"
+#[macro_export]
+macro_rules! pick {
+    (if #[cfg( $($i_meta:tt)+ )] { $( $i_tokens:tt )* } $( else { $( $e_tokens:tt )* } )?) => {
+        $crate::pick! {
+            @__items () ;
+            (( $($i_meta)+ ) ( $( $i_tokens )* )),
+            $( (() ( $( $e_tokens )* )), )?
+        }
+    };
+    (@__items ( $( ($($_:tt)*) , )* ) ; ) => {};
+    (
+        @__items ( $( ($($no:tt)+) , )* ) ;
+        (( $( $($yes:tt)+ )? ) ( $( $tokens:tt )* )),
+        $( $rest:tt , )*
+    ) => {
+        #[cfg(all( $( $($yes)+ , )? not(any( $( $($no)+ ),* )) ))]
+        $crate::pick! { @__temp_group $( $tokens )* }
+        $crate::pick! {
+            @__items ( $( ($($no)+) , )* $( ($($yes)+) , )? ) ;
+            $( $rest , )*
+        }
+    };
+    (@__temp_group $( $tokens:tt )* ) => { $( $tokens )* };
+}
+pick! {
+    if #[cfg(unix)] {
+        fn kind() -> &'static str { "unix" }
+    } else {
+        fn kind() -> &'static str { "other" }
+    }
+}
+fn main() {
+    println!("{}", kind());
+}
+"#;
+    assert_eq!(printed(source), "unix\n");
+}
+
+/// In a body, `crate::name!` calls the program's `#[macro_export]` macro
+/// where an expression or a statement goes, and a call's `#[cfg(..)]`
+/// that doesn't hold leaves it and the items it expands to out, written
+/// or in an expansion. The output is rustc's.
+#[test]
+fn a_body_calls_an_exported_macro_by_its_crate_path_and_under_cfg() {
+    let source = "#[macro_export]\nmacro_rules! one { () => { 1 }; }\n\
+                  #[macro_export]\nmacro_rules! item { () => { fn f() -> i32 { 3 } }; }\n\
+                  fn main() { println!(\"{}\", crate::one!()); crate::item! {} println!(\"{}\", f()); }";
+    assert_eq!(printed(source), "1\n3\n");
+    let source = "#[macro_export]\nmacro_rules! item { () => { fn f() -> i32 { 3 } }; }\n\
+                  fn main() { #[cfg(windows)] crate::item! {} #[cfg(unix)] item! {} println!(\"{}\", f()); }";
+    assert_eq!(printed(source), "3\n");
+    let source = "macro_rules! wrap { ($($t:tt)*) => { #[cfg(unix)] inner! { $($t)* } }; }\n\
+                  macro_rules! inner { ($($t:tt)*) => { $($t)* }; }\n\
+                  fn main() { wrap! { fn f() -> i32 { 3 } } println!(\"{}\", f()); }";
+    assert_eq!(printed(source), "3\n");
+    let source = "macro_rules! wrap { ($($t:tt)*) => { #[cfg(windows)] inner! { $($t)* } inner! { $($t)* } }; }\n\
+                  macro_rules! inner { ($($t:tt)*) => { $($t)* }; }\n\
+                  fn main() { wrap! { fn f() -> i32 { 3 } } println!(\"{}\", f()); }";
+    assert_eq!(printed(source), "3\n");
+}
+
 #[test]
 fn a_call_no_rule_matches_is_rustcs_error() {
     let one = "macro_rules! one { ($x:ident) => { $x }; }\n";
@@ -575,6 +643,7 @@ fn a_fragment_its_follow_set_refuses_is_rustcs_error() {
             report.contains(&format!("not allowed after `{fragment}` fragments")),
             "{report}"
         );
+        assert!(report.contains("= note: allowed there are: "), "{report}");
     };
     refused(
         "macro_rules! a { ($e:expr foo) => {}; }\nfn main() {}",
@@ -605,6 +674,53 @@ fn a_fragment_its_follow_set_refuses_is_rustcs_error() {
         ),
         "ok\n"
     );
+}
+
+/// A fragment the call's tokens start but don't finish is rustc's parser
+/// error, labelled at the matcher's fragment, and no later rule is tried
+/// (#2511). A call whose tokens don't start the fragment is still a
+/// no-rules error.
+#[test]
+fn a_fragment_that_starts_but_does_not_parse_is_rustcs_parser_error() {
+    let two = "macro_rules! two { ($a:expr) => { $a }; (1 +) => { 0 }; }\n";
+    let report = report(&format!("{two}fn main() {{ let _ = two!(1 +); }}"));
+    assert_eq!(
+        report.lines().next(),
+        Some("error: expected expression, found end of macro arguments"),
+        "{report}"
+    );
+    assert!(report.contains("expected expression"), "{report}");
+    assert!(
+        report.contains("while parsing argument for this `expr` macro fragment"),
+        "{report}"
+    );
+    let message = |definition: &str, call: &str| {
+        refused(&format!(
+            "macro_rules! m {{ ({definition}) => {{}}; }}\nfn main() {{ m!({call}); }}"
+        ))
+        .0
+    };
+    assert_eq!(
+        message("$a:expr", "a + fn"),
+        "expected expression, found keyword `fn`"
+    );
+    assert_eq!(
+        message("[$a:expr]", "[1 +]"),
+        "expected expression, found `]`"
+    );
+    assert_eq!(message("$a:expr", "1 as"), "expected type, found `<eof>`");
+    assert_eq!(message("$a:ty", "&"), "expected type, found `<eof>`");
+    assert_eq!(
+        message("$a:pat", "Some(1) |"),
+        "expected pattern, found `<eof>`"
+    );
+    assert_eq!(
+        message("$a:path", "a::"),
+        "expected identifier, found `<eof>`"
+    );
+    assert_eq!(message("$a:item", "1"), "expected an item keyword");
+    assert_eq!(message("$a:expr", "fn"), "no rules expected keyword `fn`");
+    assert_eq!(message("$a:ident", "1"), "no rules expected `1`");
 }
 
 /// A call no rule matches names a keyword, a reserved word and a lifetime
