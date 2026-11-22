@@ -757,7 +757,7 @@ impl<'a> Parser<'a> {
                 }
                 // `for x in v` takes each element; `&v` and `v.iter()` borrow it.
                 let ty = match self.inference.resolve(&lhs.ty) {
-                    Ty::Iter(item, _) => *item,
+                    Ty::Iter(item, _, _) => *item,
                     Ty::Array { element, .. } => *element,
                     Ty::Keyed(kind, arguments) => keyed::keyed_item(kind, &arguments, None),
                     Ty::Reference { mutable, target } => match *target {

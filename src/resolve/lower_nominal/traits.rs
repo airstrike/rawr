@@ -1210,7 +1210,7 @@ impl<'a> Parser<'a> {
         let ty = self.inference.resolve(ty);
         let owner = impl_self_ty(definition, &substitution);
         let mut fits = match &owner {
-            Ty::Iter(item, _) => self
+            Ty::Iter(item, _, _) => self
                 .iterable_item(&ty)
                 .is_some_and(|found| self.unify_type(item, &found)),
             owner => self.unify_type(owner, &ty),
@@ -1271,7 +1271,7 @@ impl<'a> Parser<'a> {
     /// reference.
     pub(super) fn iterable_item(&self, ty: &Ty) -> Option<Ty> {
         Some(match self.inference.resolve(ty) {
-            Ty::Iter(item, _) => *item,
+            Ty::Iter(item, _, _) => *item,
             range if let Some(item) = self.stepped_item(&range) => item,
             Ty::Array { element, .. } => *element,
             Ty::Keyed(kind, arguments) => keyed::keyed_item(kind, &arguments, None),
@@ -1912,7 +1912,7 @@ impl<'a> Parser<'a> {
                 // (`Inference::project`), so the impl's type must be one.
                 let resolved = self.inference.resolve(ty);
                 let item = match &resolved {
-                    Ty::Iter(item, _) => Some((**item).clone()),
+                    Ty::Iter(item, _, _) => Some((**item).clone()),
                     // std's range of a `Step` type, its own `Iterator`.
                     range => self.stepped_item(range),
                 };

@@ -665,7 +665,7 @@ impl<'a> Parser<'a> {
         // An immutable local iterator stays its chain: what it evaluates is
         // evaluated here, and each use runs it.
         let bound = match self.inference.resolve(&ty) {
-            Ty::Iter(item, _) if !mutable && value.prelude.is_empty() => self
+            Ty::Iter(item, _, _) if !mutable && value.prelude.is_empty() => self
                 .pipelines
                 .get(value.source.as_str())
                 .cloned()

@@ -576,6 +576,68 @@ pub(super) enum Unassignable {
 /// process holds (`stored::text`).
 type Std = &'static str;
 
+/// Which of `DoubleEndedIterator`'s and `Peekable`'s methods an iterator
+/// value has (`Ty::Iter`), as std implements them for the adapter chain
+/// it stands for (#792): `v.iter().peekable()` has `peek` and `next_back`,
+/// `v.iter().take_while(f)` neither.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
+pub(super) struct Traits {
+    double_ended: bool,
+    peekable: bool,
+}
+
+impl Traits {
+    /// An iterator whose chain the lowering doesn't follow, which may be
+    /// walked from both ends.
+    pub(super) const ANY: Self = Self {
+        double_ended: true,
+        peekable: false,
+    };
+
+    /// An iterator walked only from its front, as `0..` is.
+    pub(super) const FORWARD: Self = Self {
+        double_ended: false,
+        peekable: false,
+    };
+
+    /// Whether it is a `DoubleEndedIterator`.
+    pub(super) const fn double_ended(self) -> bool {
+        self.double_ended
+    }
+
+    /// Whether it is a `Peekable`, which has `peek` and `next_if`.
+    pub(super) const fn peekable(self) -> bool {
+        self.peekable
+    }
+
+    /// The traits of the iterator std's `adapter` makes of one with these,
+    /// `exact` when that one is an `ExactSizeIterator`: `Peekable` keeps
+    /// both ends; `Take`, `Skip`, `Enumerate`, `Zip` and `StepBy` walk
+    /// from the back only an exact one; `TakeWhile`, `SkipWhile`,
+    /// `MapWhile`, `Scan` and `Cycle` never.
+    pub(super) fn after(self, adapter: &str, exact: bool) -> Self {
+        let double_ended = match adapter {
+            "take_while" | "skip_while" | "map_while" | "scan" | "cycle" => false,
+            "take" | "skip" | "enumerate" | "zip" | "step_by" => self.double_ended && exact,
+            _ => self.double_ended,
+        };
+        Self {
+            double_ended,
+            peekable: adapter == "peekable" || self.peekable && adapter == "by_ref",
+        }
+    }
+
+    /// The traits of `Chain` of an iterator with these and `other`: both
+    /// ends where both have them.
+    pub(super) const fn chained(self, other: Self) -> Self {
+        Self {
+            double_ended: self.double_ended && other.double_ended,
+            peekable: false,
+        }
+    }
+}
+
 /// Which `PartialEq` impl an `==` resolves to.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum PartialEqImpl {
@@ -829,6 +891,7 @@ pub(super) enum Ty {
             )
         )]
         Option<Std>,
+        Traits,
     ),
     /// `dyn Trait`, behind `&` or `Box`: a value of some type implementing
     /// the trait, whose methods dispatch by the value's runtime type.
@@ -899,7 +962,7 @@ impl Ty {
 
     /// Any iterator of `item`, as an adaptor makes.
     pub(super) fn iter(item: Ty) -> Self {
-        Self::Iter(Box::new(item), None)
+        Self::Iter(Box::new(item), None, Traits::ANY)
     }
 
     /// The sequence `kind` of `element`: `Vec<T>`, `[T]`, ..
@@ -1038,7 +1101,7 @@ impl Ty {
             | Self::Boxed(target)
             | Self::Counted(_, target)
             | Self::Weak(_, target)
-            | Self::Iter(target, _)
+            | Self::Iter(target, _, _)
             | Self::Reverse(target)
             | Self::Cow(target)
             | Self::Range(target)
@@ -1397,10 +1460,12 @@ impl Ty {
             }
             Self::Weak(_, target) => format!("Weak<{}>", target.name(models)).into(),
             // rustc names a std iterator by its struct: `Chars<'_>`.
-            Self::Iter(_, Some(std)) => {
+            Self::Iter(_, Some(std), _) => {
                 format!("{}<'_>", std.rsplit("::").next().unwrap_or(std)).into()
             }
-            Self::Iter(item, None) => format!("impl Iterator<Item = {}>", item.name(models)).into(),
+            Self::Iter(item, None, _) => {
+                format!("impl Iterator<Item = {}>", item.name(models)).into()
+            }
             Self::Reverse(inner) => format!("Reverse<{}>", inner.name(models)).into(),
             Self::Cow(borrowed) => format!("Cow<'_, {}>", borrowed.name(models)).into(),
             Self::Cell(kind, inner) => format!("{}<{}>", kind.name(), inner.name(models)).into(),
@@ -2063,7 +2128,7 @@ pub(super) fn same_inferred(left: &Ty, right: &Ty) -> bool {
                 left_counter == right_counter && compare(left, right, forward, reverse)
             }
             (Ty::Option(left), Ty::Option(right))
-            | (Ty::Iter(left, _), Ty::Iter(right, _))
+            | (Ty::Iter(left, _, _), Ty::Iter(right, _, _))
             | (Ty::Reverse(left), Ty::Reverse(right))
             | (Ty::Cow(left), Ty::Cow(right))
             | (Ty::Range(left), Ty::Range(right))
@@ -2220,7 +2285,7 @@ pub(super) fn contains(ty: &Ty, leaf: &dyn Fn(&Ty) -> bool) -> bool {
         || match ty {
             Ty::Reference { target, .. }
             | Ty::Boxed(target)
-            | Ty::Iter(target, _)
+            | Ty::Iter(target, _, _)
             | Ty::Reverse(target)
             | Ty::Cow(target)
             | Ty::Range(target)

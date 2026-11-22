@@ -837,7 +837,7 @@ impl<'a> Parser<'a> {
         };
         let target_element = self.inference.resolve(target_element);
         let source_element = match source {
-            Ty::Array { element, .. } | Ty::Iter(element, _) => self.inference.resolve(element),
+            Ty::Array { element, .. } | Ty::Iter(element, _, _) => self.inference.resolve(element),
             _ => return Ok(false),
         };
         let fixed = matches!(

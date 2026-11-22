@@ -329,7 +329,7 @@ impl Inference {
             Ty::Boxed(target) => Ty::Boxed(Box::new(self.resolve(target))),
             Ty::Counted(counter, target) => Ty::Counted(*counter, Box::new(self.resolve(target))),
             Ty::Weak(counter, target) => Ty::Weak(*counter, Box::new(self.resolve(target))),
-            Ty::Iter(item, std) => Ty::Iter(Box::new(self.resolve(item)), *std),
+            Ty::Iter(item, std, traits) => Ty::Iter(Box::new(self.resolve(item)), *std, *traits),
             Ty::Reverse(inner) => Ty::Reverse(Box::new(self.resolve(inner))),
             Ty::Cow(inner) => Ty::Cow(Box::new(self.resolve(inner))),
             Ty::Range(element) => Ty::Range(Box::new(self.resolve(element))),
@@ -493,7 +493,7 @@ impl Inference {
             // An associated iterator's opaque item (`<T::Fore as
             // Iterator>::Item`) is itself: resolving it reads the iterator
             // again.
-            Ty::Iter(item, _) if name.as_str() == "Item" && is_iterator_trait(trait_name) => {
+            Ty::Iter(item, _, _) if name.as_str() == "Item" && is_iterator_trait(trait_name) => {
                 return match &**item {
                     Ty::Projection(_, trait_name, name)
                         if name.as_str() == "Item" && is_iterator_trait(trait_name) =>

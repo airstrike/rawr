@@ -318,7 +318,7 @@ impl<'a> Parser<'a> {
             Ty::Boxed(boxed) => self.inference.resolve(&boxed),
             ty => ty,
         };
-        let (Ty::Iter(item, kind), true) = (iterator, place) else {
+        let (Ty::Iter(item, kind, traits), true) = (iterator, place) else {
             return Err(self
                 .unsupported("`&mut` borrow expressions other than a function's `&mut` argument"));
         };
@@ -339,7 +339,7 @@ impl<'a> Parser<'a> {
         )?;
         Ok(self.operator_expr(
             drained,
-            Ty::Iter(item, kind),
+            Ty::Iter(item, kind, traits),
             span(start, operand.span.end()),
         ))
     }

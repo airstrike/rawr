@@ -1381,7 +1381,9 @@ pub(super) fn substitute(ty: &Ty, replaced: &dyn Fn(&Ty) -> Option<Ty>) -> Ty {
             Ty::Counted(*counter, Box::new(substitute(target, replaced)))
         }
         Ty::Weak(counter, target) => Ty::Weak(*counter, Box::new(substitute(target, replaced))),
-        Ty::Iter(item, std) => Ty::Iter(Box::new(substitute(item, replaced)), *std),
+        Ty::Iter(item, std, traits) => {
+            Ty::Iter(Box::new(substitute(item, replaced)), *std, *traits)
+        }
         Ty::Reverse(inner) => Ty::Reverse(Box::new(substitute(inner, replaced))),
         Ty::Cow(inner) => Ty::Cow(Box::new(substitute(inner, replaced))),
         Ty::Range(element) => Ty::Range(Box::new(substitute(element, replaced))),

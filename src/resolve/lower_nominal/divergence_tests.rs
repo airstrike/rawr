@@ -9209,3 +9209,59 @@ main();
     );
     assert_eq!(output, "n [1, 2] [1] none\n");
 }
+
+#[test]
+fn an_iterator_has_peekable_and_double_ended_methods_only_where_std_gives_them() {
+    // `peek` is `Peekable`'s own, and `next_back` and `rev` need a
+    // `DoubleEndedIterator`: `v.iter()` has no `peek`, a `take_while` no
+    // `next_back`, and `0..` no `rev` (#792).
+    let output = printed(
+        r#"
+fn main() {
+    let v = vec![1, 2, 3];
+    let mut p = v.iter().peekable();
+    println!("{:?}", p.peek());
+    println!("{:?}", p.next());
+    let mut q = v.iter().map(|x| x * 2).peekable();
+    println!("{:?} {:?}", q.next_if(|x| *x == 2), q.next_if_eq(&5));
+    let back: Vec<i32> = v.iter().map(|x| x + 1).rev().collect();
+    let ends: Vec<&i32> = v.iter().peekable().rev().collect();
+    println!("{back:?} {ends:?} {:?}", (0..5).rev().next());
+    let mut r = (1..4).peekable();
+    let first = r.peek().copied();
+    println!("{first:?} {:?}", r.collect::<Vec<_>>());
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "Some(1)\nSome(1)\nSome(2) None\n[4, 3, 2] [3, 2, 1] Some(4)\nSome(1) [1, 2, 3]\n"
+    );
+    let refusal = |body: &str| refused(&format!("fn main() {{\n{body}\n}}\nmain();\n"));
+    let report = refusal("let v = vec![1, 2, 3];\nlet mut it = v.iter();\nit.peek();");
+    assert!(
+        report.starts_with("error[E0599]: no method named `peek` found for "),
+        "{report}"
+    );
+    let report = refusal(
+        "let v = vec![1, 2, 3];\nlet mut it = v.iter().peekable().map(|x| x * 2);\nit.peek();",
+    );
+    assert!(
+        report.starts_with("error[E0599]: no method named `peek` found for "),
+        "{report}"
+    );
+    let report = refusal(
+        "let v = vec![1, 2, 3];\nlet mut b = v.iter().take_while(|x| **x < 3);\nb.next_back();",
+    );
+    assert!(
+        report.starts_with("error[E0599]: no method named `next_back` found for "),
+        "{report}"
+    );
+    let report = refusal("let c: Vec<i32> = (0..).rev().take(2).collect();");
+    assert!(
+        report.starts_with("error[E0277]: the trait bound `")
+            && report.contains(": DoubleEndedIterator` is not satisfied"),
+        "{report}"
+    );
+}

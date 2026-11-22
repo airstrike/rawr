@@ -129,7 +129,7 @@ impl<'a> Parser<'a> {
                     && self.unify_type(expected_element, actual_element)
             }
             (Ty::Option(expected_element), Ty::Option(actual_element))
-            | (Ty::Iter(expected_element, _), Ty::Iter(actual_element, _))
+            | (Ty::Iter(expected_element, _, _), Ty::Iter(actual_element, _, _))
             | (Ty::Reverse(expected_element), Ty::Reverse(actual_element))
             | (Ty::Cow(expected_element), Ty::Cow(actual_element))
             | (Ty::Range(expected_element), Ty::Range(actual_element))

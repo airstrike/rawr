@@ -117,10 +117,11 @@ pub(super) fn steps(ty: &Ty) -> Vec<Step> {
                 sequence::Kind::Deque => vec![own("alloc::collections::vec_deque::VecDeque")],
             }
         }
-        // A std iterator struct's own methods, then any iterator's.
-        Ty::Iter(_, std) => std
+        // A std iterator struct's own methods, then those of the traits
+        // and adapter it implements (#792).
+        Ty::Iter(_, std, traits) => std
             .iter()
-            .chain(ITERATOR.iter())
+            .chain(ITERATOR.iter().filter(|owner| offered(*traits, owner)))
             .map(|owner| Step {
                 owner,
                 ty: ty.clone(),
@@ -220,6 +221,30 @@ pub(super) fn iterator(member: &str, implements: impl Fn(&str) -> bool) -> Optio
             rank: 0,
         })
     })
+}
+
+/// Whether an iterator with `traits` has the methods of `owner`, one of
+/// [`ITERATOR`]'s: `DoubleEndedIterator`'s where it is one, `Peekable`'s
+/// where it is one, and always `Iterator`'s and `IntoIterator`'s.
+fn offered(traits: super::ty::Traits, owner: &str) -> bool {
+    match trait_name(owner) {
+        "DoubleEndedIterator" => traits.double_ended(),
+        "Peekable" => traits.peekable(),
+        _ => true,
+    }
+}
+
+/// Whether `member` is a method of `DoubleEndedIterator` or `Peekable`
+/// that the iterator `ty` doesn't have (#792): `peek` of `v.iter()`,
+/// `next_back` of a `take_while`.
+pub(super) fn withheld(ty: &Ty, member: &str) -> bool {
+    let Ty::Iter(_, _, traits) = ty else {
+        return false;
+    };
+    inherent(ty, member).is_none()
+        && ITERATOR
+            .iter()
+            .any(|owner| !offered(*traits, owner) && stable(owner, member).is_some())
 }
 
 /// The name a trait's definition ends in: `Iterator` of
@@ -455,7 +480,7 @@ pub(super) fn arguments(receiver: &Ty, member: &str, fresh: &mut impl FnMut() ->
     let mut known = Known {
         types: Vec::new(),
         items: match native {
-            Ty::Iter(item, _) => Some((**item).clone()),
+            Ty::Iter(item, _, _) => Some((**item).clone()),
             _ => None,
         },
     };
@@ -739,7 +764,7 @@ fn fits(written: &Written, ty: &Ty) -> bool {
                 // An impl's parameter.
                 return true;
             };
-            if let Ty::Iter(_, Some(std)) = ty {
+            if let Ty::Iter(_, Some(std), _) = ty {
                 return definition == *std;
             }
             let Some((found, found_arguments)) = std_impl::std_definition(ty) else {
@@ -782,7 +807,7 @@ pub(super) fn summary(receiver: &Ty, output: &Ty, member: &str) -> Option<Summar
         next: 0,
         slice_output: holds_array(output),
         output_item: match output {
-            Ty::Iter(item, _) => Some((**item).clone()),
+            Ty::Iter(item, _, _) => Some((**item).clone()),
             _ => None,
         },
         substitution: Vec::new(),
@@ -812,7 +837,7 @@ pub(super) fn summary(receiver: &Ty, output: &Ty, member: &str) -> Option<Summar
     }
     let owner = match native {
         // `Self` of an iterator's method: what holds its items.
-        Ty::Iter(item, _) if ITERATOR.contains(&found.owner) => {
+        Ty::Iter(item, _, _) if ITERATOR.contains(&found.owner) => {
             let items = reader.items(item, "Self::Item");
             let own = reader.iterator_self(items);
             reader.iterator = Some(own.clone());
@@ -1888,16 +1913,25 @@ mod tests {
             Receiver::Mutable,
             &[tap(&[a0, own], receiver(&[a0, a0, own]))],
         );
-        // `Peekable::peek` borrows the iterator.
-        has(
-            "peek",
-            &Ty::Unknown,
-            Receiver::Mutable,
-            &[
-                tap(&[a0, own], receiver(&[own])),
-                tap(&[a0, a0, own], receiver(&[a0, a0, own])),
-            ],
+        // `Peekable::peek` borrows the iterator, a `Peekable`.
+        let peekable = Ty::Iter(
+            Box::new(reference.clone()),
+            None,
+            super::super::ty::Traits::ANY.after("peekable", true),
         );
+        let found = summary(&peekable, &Ty::Unknown, "peek").expect("peek");
+        assert_eq!(found.mode, Some(Receiver::Mutable));
+        let peeked = found.output.expect("peek");
+        for expected in [
+            tap(&[a0, own], receiver(&[own])),
+            tap(&[a0, a0, own], receiver(&[a0, a0, own])),
+        ] {
+            assert!(
+                peeked.contains(&expected),
+                "peek: {expected:?} in {peeked:?}"
+            );
+        }
+        assert!(summary(&refs, &Ty::Unknown, "peek").is_none());
         has(
             "by_ref",
             &Ty::Unknown,
