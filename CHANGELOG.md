@@ -5,6 +5,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors.
+
+## 0.5.17 (2026-11-22)
+
 - A `&mut` view of a collection's elements kept past its statement reaches them as rustc's does: `&mut v[a..b]`, `as_mut_slice()`, `make_contiguous()`, `split_at_mut`'s halves (side by side, from closures and scoped threads), `chunks_mut`'s chunks, `first_mut` and `last_mut` of a view, and a kept `iter_mut()` walked, zipped, reversed, enumerated, filtered, collected into a `Vec<&mut T>` or passed to a function. rustc's E0499 and E0502 hold while a view lives, and a view out of bounds panics with std's message. (#800, #806, #805)
 - A generic function picks a trait's impl by its type argument among f32 and f64, the integer kinds, and &str and String, as rustc does, including T::f() and T: Into<X> conversions. (#1177)
 - A generic body prints an f32 it is given as an f32, and prints floats with Rust's text and precision. (#1177)
@@ -14,6 +17,18 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - `write!` and `writeln!` into `std::io::stdout()`, `stderr()` and their locks run, by std's `io::Write`, and write where `print!` and `eprint!` do. Without `io::Write` in scope the error is rustc's E0599, which suggests `use std::io::Write;`. (#2089)
 - std's `fs::File` and `OpenOptions` read, write, append and seek files, and `fs::metadata`, `read_dir` and `canonicalize` run with `Metadata`, `FileType` and `DirEntry`, as far as the program's file access reaches. (#646)
 - std's `process::Command` builds a command (`arg`, `env`, `current_dir`) and runs it with `status`, giving its `ExitStatus`, for a program granted the process. (#2579; part of #2082)
+- A save or tree change during a start now says which file changed each time the program is prepared again. `status` reports whether a start is preparing, building or starting. The `cargo check` beside a run no longer stays defunct after it finishes. (#2571)
+- Impls for two instances of one type, such as `impl Describe for Foo<i32>` beside `Foo<i64>`, `Vec<i64>` beside `Vec<String>`, or inherent `impl Foo<i32>` beside `impl Foo<i64>`, are two impls, and each runs where rustc selects it: method calls, qualified paths, associated types and hand-written std impls. Reaching them through a generic parameter or a trait object is refused until values carry their type arguments. (#1178)
+- A `try` block is rustc's E0658, and a trait's name called or read as a value is E0423, with rustc's `:` help where it starts an unannotated `let`. (#1198, #1200)
+- A path through a module with a missing middle segment is E0433 at that segment, and std's E0433 marks the segment that misses. (#1397)
+- An unknown field in a struct literal or pattern is rustc's E0560, E0559 or E0026, with its note on the available fields or its similar-name help. (#1399)
+- A path like `mem::swap` with no `use` offers rustc's import of std's module. (#809)
+- `value.into()` to a program type with no `From` impl for the value is rustc's E0277 at `into`, with the help at the type's definition. (#2585; part of #671)
+- A macro call whose fragment starts but doesn't parse is rustc's parser error, as `expected expression, found end of macro arguments`, labelled at the matcher's fragment, and no later rule is tried. A follow-set error lists what rustc allows there. (#2511)
+- An unmarked module file sees the `macro_rules!` its parent defines before its `mod`, as cargo builds it. (#2515)
+- `cfg_if::cfg_if!` keeps the branch whose `cfg` holds: a macro call takes its attributes where an item goes, a statement's `#[cfg]` leaves out a call in braces, and `crate::name!` calls the program's exported macro in a body. (#2236)
+- Iterators that are passed, returned, stored or kept in a `let mut` are lazy, as std's are: an unbounded one passed to a function returns, and closures in `map` run when rustc runs them. `by_ref()`, `&mut it`, `peek` and clones part way through work on them. (#407)
+- A generic body iterates whatever iterator it holds at run time: an impl over `I: Iterator<Item = X>` has iterator methods on its `I` fields, and an associated iterator type set to a program's iterator struct or a range iterates. (#2507, #380)
 
 ## 0.5.16 (2026-11-22)
 
