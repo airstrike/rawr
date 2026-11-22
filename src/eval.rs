@@ -9,6 +9,7 @@ pub(crate) mod machine;
 pub(crate) mod stack;
 mod stmt;
 mod target;
+pub(crate) mod thread_local;
 pub(crate) mod threads;
 pub(crate) mod view;
 

@@ -2394,6 +2394,7 @@ pub(crate) fn std_thread_type(path: &str) -> Option<&'static str> {
         "std::sync::mpsc::Receiver" => Some(MPSC_RECEIVER),
         "std::sync::mpsc::SyncSender" => Some(MPSC_SYNC_SENDER),
         "std::thread::ScopedJoinHandle" => Some("ScopedJoinHandle"),
+        "std::thread::LocalKey" => Some("LocalKey"),
         "std::sync::PoisonError" => Some("PoisonError"),
         _ => None,
     }
@@ -3193,6 +3194,7 @@ fn resolve_function(
             syntax: parsed.body_syntax,
             constant: parsed.constant,
             static_item: parsed.static_item,
+            thread_local: parsed.thread_local,
             asynchronous: parsed.asynchronous,
             text: None,
             elide: None,

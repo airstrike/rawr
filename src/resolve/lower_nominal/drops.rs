@@ -91,6 +91,9 @@ pub(super) struct Scope {
     /// The borrow facts have the uses its drops make at its end already
     /// ([`Parser::block_drop_uses`]).
     uses_recorded: bool,
+    /// What ends the thread's thread-local values after the scope's own
+    /// drops: `main`'s body's (`end_main_thread`).
+    thread_end: Option<String>,
 }
 
 /// Where a block's tail temporaries drop before edition 2024: after the
@@ -941,6 +944,9 @@ impl Parser<'_> {
         let mut drops = self.local_drops(locals)?;
         drops.push_str(&self.temporary_drops(tail));
         drops.push_str(&self.local_drops(parameters)?);
+        if let Some(end) = &scope.thread_end {
+            drops.push_str(end);
+        }
         Ok(drops)
     }
 
@@ -953,8 +959,19 @@ impl Parser<'_> {
         let mut text = String::new();
         for scope in self.drop_scopes.iter().skip(depth).rev() {
             text.push_str(&self.local_drops(&scope.locals)?);
+            if let Some(end) = &scope.thread_end {
+                text.push_str(end);
+            }
         }
         Ok(text)
+    }
+
+    /// End the thread's thread-local values with `statement` after the
+    /// innermost scope's drops, at its end and at each jump out of it.
+    pub(super) fn end_thread_after_scope(&mut self, statement: String) {
+        if let Some(scope) = self.drop_scopes.last_mut() {
+            scope.thread_end = Some(statement);
+        }
     }
 
     /// `value` with `drops` after it: `{ let v = value; drops v }`.

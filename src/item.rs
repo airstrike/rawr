@@ -1194,6 +1194,9 @@ pub struct Function {
     /// `static NAME: T = value;`: a `constant` that is one place for the
     /// program's life, which no use moves out of and every thread shares.
     pub(crate) static_item: bool,
+    /// A key `thread_local!` declares: a `constant` of `LocalKey<T>`, `T`
+    /// its `output`, whose value each thread makes at its first access.
+    pub(crate) thread_local: bool,
     /// `async fn`: the declared output is the future's, and the body runs
     /// as an `async move` block.
     pub(crate) asynchronous: bool,

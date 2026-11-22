@@ -1933,7 +1933,7 @@ impl Type {
         if path.target != Target::Builtin
             || !matches!(
                 path.name.as_str(),
-                "JoinHandle" | super::MPSC_SENDER | super::MPSC_RECEIVER
+                "JoinHandle" | "LocalKey" | super::MPSC_SENDER | super::MPSC_RECEIVER
             )
         {
             return None;

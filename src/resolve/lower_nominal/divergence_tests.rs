@@ -11536,3 +11536,209 @@ main();
         "{report}"
     );
 }
+
+#[test]
+fn a_thread_local_key_is_each_threads_own_value() {
+    // `thread_local!` keys where an item goes, of `Cell`, `RefCell` and a
+    // plain value, with `const { .. }` and lazy initializers: each thread
+    // makes its own value at its first access, `set` makes it without the
+    // initializer, and a key passes as `&'static LocalKey<T>` (#1765). The
+    // output is rustc's.
+    let output = printed(
+        r#"
+use std::cell::{Cell, RefCell};
+use std::thread::LocalKey;
+thread_local! {
+    static COUNT: Cell<u32> = const { Cell::new(1) };
+    static NAMES: RefCell<Vec<String>> = RefCell::new(Vec::new());
+    pub static LOUD: Cell<i32> = { println!("init LOUD"); Cell::new(7) };
+}
+thread_local!(static PLAIN: i32 = 40 + 2);
+fn bump(key: &'static LocalKey<Cell<u32>>) -> u32 {
+    key.set(key.get() + 1);
+    key.get()
+}
+fn main() {
+    println!("{}", bump(&COUNT));
+    println!("{}", bump(&COUNT));
+    COUNT.with(|c| c.set(c.get() * 10));
+    println!("{}", COUNT.get());
+    NAMES.with_borrow_mut(|names| names.push("a".to_string()));
+    NAMES.with_borrow_mut(|names| names.push("b".to_string()));
+    let joined = NAMES.with_borrow(|names| names.join(","));
+    println!("{joined}");
+    LOUD.set(3);
+    println!("{}", LOUD.get());
+    println!("{}", LOUD.replace(4));
+    println!("{}", LOUD.take());
+    PLAIN.with(|p| println!("{p}"));
+    let seen = std::thread::spawn(|| {
+        let before = COUNT.get();
+        COUNT.set(100);
+        NAMES.with_borrow_mut(|names| names.push("t".into()));
+        let len = NAMES.with_borrow(|names| names.len());
+        (before, COUNT.get(), len, LOUD.get())
+    })
+    .join()
+    .unwrap();
+    println!("{:?}", seen);
+    println!("{} {:?}", COUNT.get(), NAMES.take());
+    let total = NAMES.with(|cell| cell.borrow().len());
+    println!("{total}");
+    println!("{:?}", COUNT);
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "2\n3\n30\na,b\n3\n3\n4\n42\ninit LOUD\n(1, 100, 1, 7)\n30 [\"a\", \"b\"]\n0\nLocalKey { .. }\n"
+    );
+}
+
+#[test]
+fn a_threads_thread_local_values_drop_as_it_ends_the_last_made_first() {
+    // A spawned thread's values drop as its closure returns, before its
+    // join does, and the main thread's after `main`'s locals, each thread's
+    // last made first, a struct's fields after it (#1765). The output is
+    // rustc's.
+    let output = printed(
+        r#"
+struct D(&'static str);
+impl Drop for D { fn drop(&mut self) { println!("drop {}", self.0); } }
+struct Pair { left: D, right: D }
+thread_local! {
+    static A: D = D("a");
+    static B: D = D("b");
+    static P: Pair = Pair { left: D("left"), right: D("right") };
+}
+fn main() {
+    let _local = D("local");
+    B.with(|d| println!("with {}", d.0));
+    A.with(|d| println!("with {}", d.0));
+    std::thread::spawn(|| {
+        A.with(|d| println!("t {}", d.0));
+        P.with(|p| println!("t {} {}", p.left.0, p.right.0));
+        B.with(|d| println!("t {}", d.0));
+        println!("end of closure");
+    }).join().unwrap();
+    println!("end of main");
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "with b\nwith a\nt a\nt left right\nt b\nend of closure\ndrop b\ndrop left\n\
+         drop right\ndrop a\nend of main\ndrop local\ndrop a\ndrop b\n"
+    );
+}
+
+#[test]
+fn a_thread_local_key_a_body_declares_is_named_in_its_block() {
+    // `thread_local!` in a body declares block-scoped keys, braced or in
+    // parentheses through `std::`, each thread's value its own (#1765).
+    // The output is rustc's.
+    let output = printed(
+        r#"
+use std::cell::Cell;
+fn next_id() -> u32 {
+    thread_local! {
+        static NEXT: Cell<u32> = const { Cell::new(0) };
+    }
+    NEXT.with(|next| {
+        let id = next.get();
+        next.set(id + 1);
+        id
+    })
+}
+fn main() {
+    std::thread_local!(static SEEN: Cell<bool> = Cell::new(false));
+    println!("{} {} {}", next_id(), next_id(), next_id());
+    let other = std::thread::spawn(|| (next_id(), next_id())).join().unwrap();
+    println!("{:?} {}", other, next_id());
+    SEEN.set(true);
+    println!("{}", SEEN.get());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "0 1 2\n(0, 1) 3\ntrue\n");
+}
+
+#[test]
+fn a_local_key_method_std_declares_for_another_inner_type_is_e0599() {
+    // `get` is `LocalKey<Cell<T>>`'s, `frob` no `LocalKey`'s, and `take`
+    // needs `T: Default`, as rustc reports them (#1765).
+    let program = |inner: &str, call: &str| {
+        format!(
+            "use std::cell::Cell;\nstruct S;\nthread_local! {{\n    static N: {inner};\n}}\n\
+             fn main() {{\n    let _ = N.{call};\n}}\nmain();\n"
+        )
+    };
+    let report = refused(&program("i32 = 1", "get()"));
+    assert!(
+        report.starts_with(
+            "error[E0599]: no method named `get` found for struct `LocalKey<i32>` in the current \
+             scope"
+        ),
+        "{report}"
+    );
+    assert!(
+        report.contains("method not found in `LocalKey<i32>`"),
+        "{report}"
+    );
+    let report = refused(&program("i32 = 1", "frob()"));
+    assert!(
+        report.starts_with(
+            "error[E0599]: no method named `frob` found for struct `LocalKey<T>` in the current \
+             scope"
+        ),
+        "{report}"
+    );
+    assert!(
+        report.contains("method not found in `LocalKey<i32>`"),
+        "{report}"
+    );
+    let report = refused(&program("Cell<S> = Cell::new(S)", "take()"));
+    assert!(
+        report.starts_with("error[E0277]: the trait bound `S: Default` is not satisfied"),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_thread_local_call_std_has_no_rule_for_is_rustcs_error() {
+    // What std's `thread_local!` matcher has no rule for: an item that is no
+    // `static`, where an item goes and in a body, and a key with no `;`
+    // before the next (#1765).
+    for (source, token, line) in [
+        (
+            "thread_local! {\n    fn x() {}\n}\nfn main() {}\nmain();\n",
+            "keyword `fn`",
+            2,
+        ),
+        (
+            "fn main() {\n    thread_local! {\n        let x = 1;\n    }\n}\nmain();\n",
+            "keyword `let`",
+            3,
+        ),
+        (
+            "thread_local! {\n    static X: i32 = 1\n    static Y: i32 = 2;\n}\nfn main() {}\n\
+             main();\n",
+            "keyword `static`",
+            3,
+        ),
+    ] {
+        let report = refused(source);
+        assert!(
+            report.starts_with(&format!("error: no rules expected {token}\n")),
+            "{report}"
+        );
+        assert!(report.contains(&format!(":{line}:")), "{report}");
+        assert!(
+            report.contains("no rules expected this token in macro call"),
+            "{report}"
+        );
+    }
+}

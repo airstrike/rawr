@@ -591,6 +591,10 @@ impl<'a> Parser<'a> {
             return Err(error);
         }
         let kept = self.kept_static_key(definition);
+        let local = definition.body.thread_local.then(|| {
+            let tokens: Vec<Token> = self.input.clone().map(|(token, _)| token).collect();
+            self.item_key(definition, &tokens)
+        });
         if definition.body.constant {
             // The initializer of `const NAME: T = value;` is a tail, whose
             // temporaries are promoted to `'static`.
@@ -617,6 +621,18 @@ impl<'a> Parser<'a> {
             let initializer = self.output.split_off(0).surrounded("{\n", "\n}");
             let read = self.kept_static(&key, initializer);
             self.output.push(read);
+            self.output.push_text("\n");
+        }
+        // A `thread_local!` key is its `LocalKey<T>`, whose initializer
+        // makes each thread's value.
+        if let Some(key) = local {
+            let ty = definition
+                .output
+                .as_ref()
+                .map_or(Ty::Unit, Ty::from_resolved);
+            let initializer = self.output.split_off(0);
+            let local_key = self.local_key(&key, initializer, &ty, definition.body.span)?;
+            self.output.push(local_key);
             self.output.push_text("\n");
         }
         if !definition.body.constant && !definition.body.asynchronous {
@@ -739,6 +755,7 @@ impl<'a> Parser<'a> {
                 .iter()
                 .map(|parameter| (parameter.name.text.clone(), parameter.name.span)),
         )?;
+        self.end_main_thread(definition);
         self.destructure_parameters(&definition.parameters, definition.body.span)?;
         self.open_formatter(definition.body.span);
 

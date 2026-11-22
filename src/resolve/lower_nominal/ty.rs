@@ -1658,6 +1658,7 @@ impl Ty {
                 thread::Kind::Panic => Some(TypeId::of::<thread::Panic>()),
                 // No value is made: no lock rawr runs is poisoned.
                 thread::Kind::PoisonError => Some(TypeId::of::<Dynamic>()),
+                thread::Kind::LocalKey => Some(TypeId::of::<crate::eval::thread_local::LocalKey>()),
             },
             Self::Option(_) => Some(TypeId::of::<crate::option::Value>()),
             Self::Result(..) => Some(TypeId::of::<crate::result::Value>()),

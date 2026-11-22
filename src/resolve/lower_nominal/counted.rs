@@ -992,7 +992,9 @@ impl Parser<'_> {
             // A `Mutex<T>` is `Sync` where `T` is `Send`, as a `Sender`
             // is; a `Receiver` never is.
             Ty::Cell(CellKind::Mutex, inner) => !self.not_send(&inner),
-            Ty::Thread(kind, inner) => kind.syncs() && !self.not_send(&inner),
+            Ty::Thread(kind, inner) => {
+                kind.always_syncs() || kind.syncs() && !self.not_send(&inner)
+            }
             Ty::Cell(..) | Ty::Counted(Counter::Rc, _) | Ty::Weak(Counter::Rc, _) => false,
             Ty::Counted(Counter::Arc, inner) | Ty::Weak(Counter::Arc, inner) => {
                 self.sync_in(&inner, visiting) && !self.not_send(&inner)

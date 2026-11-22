@@ -742,6 +742,10 @@ pub(crate) struct Body {
     /// A `static` item: a `constant` that is one place, which no use moves
     /// out of and every thread shares.
     pub static_item: bool,
+    /// A key `thread_local!` declares: a `constant` of `LocalKey<T>`, `T`
+    /// the declared output, whose value each thread makes at its first
+    /// access.
+    pub thread_local: bool,
     /// `async fn`: the body runs as an `async move` block.
     pub asynchronous: bool,
     /// The text `span` selects when Rawr wrote the body itself; `None`
