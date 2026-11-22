@@ -1912,7 +1912,7 @@ impl<'a> Parser<'a> {
             .map(|index| {
                 let parameter = parameters.get(index);
                 let ty = self.inference.resolve(&inputs[index]);
-                let open = matches!(ty, Ty::Infer(_) | Ty::Param(_) | Ty::Unknown);
+                let open = matches!(ty, Ty::Infer(_) | Ty::Param(..) | Ty::Unknown);
                 // rustc writes a type it knows whole, and the parameter's
                 // name for one it doesn't.
                 let placeholder = if ty == Ty::Unit {

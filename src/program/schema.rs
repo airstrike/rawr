@@ -304,6 +304,7 @@ fn collect_edges(
             match &path.target {
                 type_ref::Target::Builtin
                 | type_ref::Target::Parameter
+                | type_ref::Target::Opaque(_)
                 | type_ref::Target::Projection(..)
                 | type_ref::Target::Alias(_)
                 | type_ref::Target::Std(_) => {}
@@ -566,6 +567,7 @@ fn write_type(encoder: &mut Encoder, ty: &type_ref::Type) {
                     encoder.text(&path.name);
                 }
                 type_ref::Target::Parameter
+                | type_ref::Target::Opaque(_)
                 | type_ref::Target::Projection(..)
                 | type_ref::Target::Alias(_)
                 | type_ref::Target::Std(_) => {

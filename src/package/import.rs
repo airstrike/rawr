@@ -1267,6 +1267,9 @@ fn diagnostic_path(error: &crate::resolve::Error) -> Option<(String, ImportedNam
         )),
         R::TypeMismatch {
             expected, actual, ..
+        }
+        | R::OpaqueMismatch {
+            expected, actual, ..
         } => Some((
             if actual.contains("::") {
                 actual.to_string()

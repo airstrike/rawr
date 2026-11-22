@@ -5,8 +5,8 @@ use super::inference::AssociatedTypes;
 use super::ty::Ty;
 use super::{
     function_name, inherit_block_names, inherit_names, instance_text, is_iterator_trait,
-    item_generics, lex_rust, mentions_parameter, sequence, source_span, trait_objects, use_blocks,
-    ImplArguments,
+    item_generics, lex_rust, mentions_parameter, opaque_outputs, sequence, source_span,
+    trait_objects, use_blocks, ImplArguments,
 };
 use crate::resolve::{item, type_ref, Program};
 use crate::tokenizer::Token;
@@ -146,6 +146,9 @@ pub(super) struct Tables {
     pub(super) associated: Shared<AssociatedTypes>,
     /// The std traits among `traits` (`Clone`, `Display`, ..).
     pub(super) std_traits: BTreeSet<ImmutableString>,
+    /// Every function's opaque outputs by name (D1109): type parameters
+    /// no caller chooses, which every body knows by their bounds.
+    pub(super) opaque_outputs: Shared<BTreeMap<type_ref::Opaque, item::Generic>>,
     pub(super) functions: BTreeMap<(crate::program::source::Id, ImmutableString), ScriptFunction>,
     pub(super) functions_by_key: BTreeMap<crate::item::Key, ScriptFunction>,
     pub(super) sources: crate::program::source::Table,
@@ -330,22 +333,6 @@ impl Models {
                 bounds
                     .into_iter()
                     .filter(|name| program.std_traits().contains_key(name)),
-            )
-            // `fn shown() -> impl Display`: the object its output is
-            // (`type_ref::opaque_object`).
-            .chain(
-                program
-                    .items
-                    .iter()
-                    .flat_map(|shell| match &shell.kind {
-                        item::Kind::Function(function) => std::slice::from_ref(function),
-                        item::Kind::Impl(own) => &own.functions[..],
-                        item::Kind::Trait(own) => &own.functions[..],
-                        _ => &[],
-                    })
-                    .filter_map(|function| function.output.as_ref()?.dyn_trait())
-                    .filter(|name| program.std_traits().contains_key(*name))
-                    .map(ImmutableString::from),
             )
             .collect::<BTreeSet<_>>();
         let mut pending = used.iter().cloned().collect::<Vec<_>>();
@@ -1014,6 +1001,7 @@ impl Models {
             trait_instances,
             associated: Shared::new(associated),
             std_traits,
+            opaque_outputs: Shared::new(opaque_outputs(&program.items)),
             index_mut: program
                 .methods
                 .iter()

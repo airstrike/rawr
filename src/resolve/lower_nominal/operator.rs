@@ -647,7 +647,7 @@ impl<'a> Parser<'a> {
             if matches!(left, Ty::Int(_) | Ty::Float(_))
                 && !matches!(
                     right,
-                    Ty::Infer(_) | Ty::Param(_) | Ty::Projection(..) | Ty::Unknown
+                    Ty::Infer(_) | Ty::Param(..) | Ty::Projection(..) | Ty::Unknown
                 )
                 && !self.unifies(&left, &right)
             {
@@ -939,7 +939,7 @@ impl<'a> Parser<'a> {
         }
         // A generic bounded by the trait (`T: Add<Output = T>`): through
         // its dispatcher, whose fallback is the builtin operator.
-        if matches!(lhs_ty, Ty::Param(_) | Ty::Projection(..))
+        if matches!(lhs_ty, Ty::Param(..) | Ty::Projection(..))
             && self.type_implements(&lhs_ty, trait_name)
             && let Some((_, declared)) = self.models.traits.get(*trait_name).cloned()
             && let Some(function) = declared

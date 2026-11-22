@@ -796,6 +796,7 @@ impl Model {
                     self.default_nominal(identity, &nested.schema.clone(), active)
                 }
                 type_ref::Target::Parameter
+                | type_ref::Target::Opaque(_)
                 | type_ref::Target::Projection(..)
                 | type_ref::Target::Alias(_)
                 | type_ref::Target::Std(_) => Err(construction::Error::ValueType {

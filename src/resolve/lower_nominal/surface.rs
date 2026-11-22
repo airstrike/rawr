@@ -43,7 +43,7 @@ pub(super) fn impl_surface_type(
             .collect::<Option<Box<[_]>>>()
     };
     Some(match ty {
-        Ty::Param(name) => Type::Parameter(
+        Ty::Param(name, _) => Type::Parameter(
             u32::try_from(generics.iter().position(|generic| generic == name)?).ok()?,
         ),
         Ty::Unit => Type::Unit,

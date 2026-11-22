@@ -39,7 +39,7 @@ impl<'a> Parser<'a> {
             let known = match self.inference.resolve(&self_ty) {
                 _ if explicit.is_some() => explicit,
                 // Two bounds by the trait: inference picks.
-                ty @ (Ty::Param(_) | Ty::Projection(..)) => {
+                ty @ (Ty::Param(..) | Ty::Projection(..)) => {
                     let lists = self.bound_trait_arguments(&ty, trait_name);
                     (lists.len() == 1).then(|| lists[0].to_vec())
                 }
@@ -1019,7 +1019,7 @@ impl<'a> Parser<'a> {
                 return Err(missing(self, &self_ty));
             }
             let witness = match &self_ty {
-                Ty::Param(name) if self.type_implements(&self_ty, &trait_name) => {
+                Ty::Param(name, _) if self.type_implements(&self_ty, &trait_name) => {
                     self.capture_witnesses();
                     origin::Fragment::plain(witness_variable(name))
                 }
@@ -1208,7 +1208,7 @@ impl<'a> Parser<'a> {
                     (instances.len() == 1).then(|| instances.remove(0))
                 }
                 // Two bounds by the trait: inference picks.
-                ty @ (Ty::Param(_) | Ty::Projection(..)) => {
+                ty @ (Ty::Param(..) | Ty::Projection(..)) => {
                     let lists = self.bound_trait_arguments(&ty, trait_name);
                     (lists.len() == 1).then(|| lists[0].to_vec())
                 }

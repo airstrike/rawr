@@ -1685,6 +1685,12 @@ fn primary_label(
                 .undeclared()
                 .into(),
         ),
+        resolve::Error::OpaqueMismatch {
+            expected,
+            actual,
+            opaque,
+            ..
+        } => Some(opaque.label(expected, actual).into()),
         resolve::Error::TypeMismatch {
             expected, actual, ..
         }
@@ -2306,9 +2312,9 @@ fn resolution_message(error: &resolve::Error) -> String {
         resolve::Error::InvalidConstruction { owner, reason, .. } => {
             format!("invalid construction of `{owner}`: {reason}")
         }
-        resolve::Error::TypeMismatch { .. } | resolve::Error::Unboxed { .. } => {
-            "mismatched types".into()
-        }
+        resolve::Error::TypeMismatch { .. }
+        | resolve::Error::OpaqueMismatch { .. }
+        | resolve::Error::Unboxed { .. } => "mismatched types".into(),
         resolve::Error::IfWithoutElse { .. } => resolve::IF_WITHOUT_ELSE.into(),
         resolve::Error::ReturnWithoutValue { .. } => resolve::RETURN_WITHOUT_VALUE.into(),
         resolve::Error::ImmutableBinding { binding, .. } => {

@@ -962,11 +962,13 @@ impl Type {
             {
                 Ok(ty.clone())
             }
-            Target::Parameter | Target::Projection(..) | Target::Alias(_) | Target::Std(_) => {
-                Err(Error::Unsupported {
-                    ty: path.name.clone(),
-                })
-            }
+            Target::Parameter
+            | Target::Opaque(_)
+            | Target::Projection(..)
+            | Target::Alias(_)
+            | Target::Std(_) => Err(Error::Unsupported {
+                ty: path.name.clone(),
+            }),
             Target::Script { identity, .. } => {
                 Self::script_in(identity, &path.arguments, model, parameters)
             }

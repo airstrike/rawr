@@ -787,9 +787,10 @@ pub(super) enum Ty {
     /// With its associated type bindings by name (`dyn Shape<Output =
     /// i64>`), sorted.
     Dyn(ImmutableString, Box<[(ImmutableString, Ty)]>),
-    /// A generic type parameter of the item being checked: opaque, with
-    /// only its bounds' capabilities; any value at runtime.
-    Param(ImmutableString),
+    /// A generic type parameter of the item being checked, or a function's
+    /// opaque output, as `Parameter` says: by its name, opaque, with only
+    /// its bounds' capabilities; any value at runtime.
+    Param(ImmutableString, Parameter),
     /// The associated type `name` of a type's impl of a trait
     /// (`<T as Shape>::Output`, as base, trait, name): the impl's type once
     /// the type is known, else opaque with only the associated type's bounds
@@ -805,7 +806,29 @@ pub(super) enum Ty {
     Unknown,
 }
 
+/// What a [`Ty::Param`] is.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
+pub(super) enum Parameter {
+    /// A type parameter the item declares, or one the parser lifts for it
+    /// (an argument's `impl Trait`, a `where` bound's type, a projection).
+    Declared,
+    /// A function's `-> impl Bounds` (D1109), which no caller chooses and
+    /// its function's body fills: its name is the text rustc prints.
+    Opaque(type_ref::Opaque),
+}
+
 impl Ty {
+    /// The type parameter `name` the item declares.
+    pub(super) const fn param(name: ImmutableString) -> Self {
+        Self::Param(name, Parameter::Declared)
+    }
+
+    /// Whether this is a function's opaque output (D1109).
+    pub(super) const fn is_opaque(&self) -> bool {
+        matches!(self, Self::Param(_, Parameter::Opaque(_)))
+    }
+
     /// Any iterator of `item`, as an adaptor makes.
     pub(super) fn iter(item: Ty) -> Self {
         Self::Iter(Box::new(item), None)
@@ -869,12 +892,13 @@ impl Ty {
             Self::Fn { .. } | Self::FnChoice { .. } => "fn pointer",
             Self::FnItem { .. } => "fn item",
             Self::Dyn(..) => "trait object",
-            Self::Param(name)
+            Self::Param(_, Parameter::Opaque(_)) => "opaque type",
+            Self::Param(name, _)
                 if crate::item::type_ref::projection_parameter_name(name).is_some() =>
             {
                 "associated type"
             }
-            Self::Param(_) => "type parameter",
+            Self::Param(..) => "type parameter",
             _ => "type",
         }
     }
@@ -1006,7 +1030,7 @@ impl Ty {
             | Self::Arguments
             | Self::Script(..)
             | Self::Dyn(..)
-            | Self::Param(_)
+            | Self::Param(..)
             | Self::Const(_)
             | Self::Infer(_)
             | Self::Unknown => {}
@@ -1167,7 +1191,11 @@ impl Ty {
                         })
                         .collect(),
                 ),
-                type_ref::Target::Parameter => Self::Param(path.name.clone()),
+                type_ref::Target::Parameter => Self::param(path.name.clone()),
+                type_ref::Target::Opaque(opaque) => Self::Param(
+                    path.name.clone(),
+                    opaque.map_or(Parameter::Declared, Parameter::Opaque),
+                ),
                 type_ref::Target::Projection(base, trait_name) => Self::Projection(
                     Box::new(Self::from_resolved(base)),
                     trait_name.clone().unwrap_or_default(),
@@ -1330,7 +1358,7 @@ impl Ty {
                     .join(", ")
             )
             .into(),
-            Self::Param(name) => crate::item::type_ref::projection_parameter_name(name)
+            Self::Param(name, _) => crate::item::type_ref::projection_parameter_name(name)
                 .map_or_else(|| name.clone(), ImmutableString::from),
             Self::Const(name) => name.clone(),
             Self::Projection(base, _, name) => format!("{}::{name}", base.name(models)).into(),
@@ -1414,7 +1442,7 @@ impl Ty {
             {
                 Some(TypeId::of::<error_object::ErrorObject>())
             }
-            Self::Param(_)
+            Self::Param(..)
             | Self::Projection(..)
             | Self::Dyn(..)
             | Self::Const(_)
@@ -1577,7 +1605,7 @@ impl Ty {
             | Self::ParseError(_)
             | Self::Arguments
             | Self::Script(..)
-            | Self::Param(_)
+            | Self::Param(..)
             | Self::Projection(..)
             | Self::Reference { .. }
             | Self::Boxed(..)
@@ -2009,7 +2037,7 @@ pub(super) fn symbolic_input_type(ty: &type_ref::Type) -> Option<Ty> {
 #[cfg(feature = "rust-import")]
 pub(super) fn reaches_param(ty: &Ty) -> bool {
     match ty {
-        Ty::Param(_) => true,
+        Ty::Param(..) => true,
         Ty::Reference { target, .. }
         | Ty::Boxed(target)
         | Ty::Range(target)

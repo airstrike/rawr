@@ -1381,7 +1381,7 @@ impl<'a> Parser<'a> {
                         });
                     }
                 }
-            } else if let Ty::Param(param) = &target
+            } else if let Ty::Param(param, _) = &target
                 && let Some((_, from)) = self
                     .generic_from_sources(&conversion.source)
                     .into_iter()
@@ -1510,7 +1510,7 @@ impl<'a> Parser<'a> {
         };
         if matches!(
             self.inference.resolve(&argument.ty),
-            Ty::Param(_) | Ty::Projection(..) | Ty::Infer(_) | Ty::Unknown
+            Ty::Param(..) | Ty::Projection(..) | Ty::Infer(_) | Ty::Unknown
         ) {
             return Ok(());
         }

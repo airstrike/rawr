@@ -2601,3 +2601,178 @@ main();
         "('x', 'x') (1, \"a\", 2.5) [(1, 2)] (7,)\n(18446744073709551615, 'b') 1\n"
     );
 }
+
+#[test]
+fn an_impl_trait_output_is_its_functions_opaque_type() {
+    // rustc's `-> impl Shape` is a type known by its bounds alone, so a
+    // trait no `dyn` could name runs: a `-> Self` method returns the opaque
+    // type, and a generic method takes any argument (#2480).
+    let output = printed(
+        r#"
+trait Shape {
+    fn area(&self) -> f64;
+    fn scaled(&self, k: f64) -> Self;
+    fn tag<T: std::fmt::Debug>(&self, t: T) -> String { format!("{:?}", t) }
+}
+#[derive(Debug, Clone)]
+struct Sq(f64);
+impl Shape for Sq {
+    fn area(&self) -> f64 { self.0 * self.0 }
+    fn scaled(&self, k: f64) -> Self { Sq(self.0 * k) }
+}
+fn make() -> impl Shape { Sq(2.0) }
+fn twice(s: impl Shape) -> f64 { s.area() * 2.0 }
+fn main() {
+    let s = make();
+    println!("{} {}", s.area(), s.tag((1, "x")));
+    let b = s.scaled(3.0);
+    println!("{}", b.area());
+    println!("{}", twice(make()));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "4 (1, \"x\")\n36\n8\n");
+}
+
+#[test]
+fn an_impl_trait_output_has_each_of_its_bounds() {
+    // rustc's opaque type has every written bound, std's too: several
+    // traits, `Clone`, `Copy`, `PartialEq`, `Default`, `Into<String>`, an
+    // associated type, by-value `self`, and a trait with a static function
+    // (#2480).
+    let output = printed(
+        r#"
+trait Shape { fn area(&self) -> f64; }
+#[derive(Debug, Clone, PartialEq)] struct Sq(f64);
+impl Shape for Sq { fn area(&self) -> f64 { self.0 * self.0 } }
+fn make() -> impl Shape + std::fmt::Debug { Sq(2.0) }
+fn cloned() -> impl Clone { Sq(2.0) }
+fn equal() -> impl PartialEq { 3i64 }
+fn text() -> impl Into<String> { "hi" }
+fn sized() -> impl Sized { 3i64 }
+fn sent() -> impl Send { 3i64 }
+fn copied() -> impl Copy { 3i64 }
+fn defaulted() -> impl Default { 3i64 }
+fn main() {
+    let s = make();
+    println!("{} {:?}", s.area(), s);
+    let _t = cloned().clone();
+    let text: String = text().into();
+    let z = copied();
+    let (_w, _v) = (z, z);
+    let (_x, _y, _d) = (sized(), sent(), defaulted());
+    println!("{} {}", equal() == equal(), text);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "4 Sq(2.0)\ntrue hi\n");
+    let output = printed(
+        r#"
+trait Bag { type Item: std::fmt::Debug; fn get(&self) -> Self::Item; }
+struct B(i64);
+impl Bag for B { type Item = i64; fn get(&self) -> i64 { self.0 } }
+trait Eat { fn eat(self) -> i64; }
+struct A(i64);
+impl Eat for A { fn eat(self) -> i64 { self.0 } }
+trait Zero { fn zero() -> Self; fn val(&self) -> i64; }
+struct Z(i64);
+impl Zero for Z { fn zero() -> Self { Z(0) } fn val(&self) -> i64 { self.0 } }
+fn bag() -> impl Bag { B(3) }
+fn food() -> impl Eat { A(4) }
+fn zero() -> impl Zero { Z(5) }
+fn pair() -> impl std::fmt::Debug { (1, "x") }
+fn items() -> impl Iterator<Item = impl std::fmt::Display> { vec![1, 2].into_iter() }
+fn main() {
+    let x = bag().get();
+    let a = zero();
+    let z = Z::zero();
+    println!("{:?} {} {} {}", x, food().eat(), a.val(), z.val());
+    println!("{:?}", pair());
+    for x in items() { println!("{}", x); }
+}
+main();
+"#,
+    );
+    assert_eq!(output, "3 4 5 0\n(1, \"x\")\n1\n2\n");
+    // A generic function's, an inherent method's, a nested function's and a
+    // trait method's opaque output.
+    let output = printed(
+        r#"
+trait Shape { fn area(&self) -> f64; }
+struct Sq(f64);
+impl Shape for Sq { fn area(&self) -> f64 { self.0 * self.0 } }
+impl Sq { fn grown(&self) -> impl Shape { Sq(self.0 * 2.0) } }
+trait Grow { fn grow(&self) -> impl Shape; }
+impl Grow for Sq { fn grow(&self) -> impl Shape { Sq(self.0 + 1.0) } }
+fn wrap<T: Shape>(t: T) -> impl Shape { t }
+fn main() {
+    fn inner() -> impl Shape { Sq(5.0) }
+    let s = Sq(1.0);
+    println!("{} {} {} {}", wrap(Sq(3.0)).area(), s.grown().area(), s.grow().area(), inner().area());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "9 4 4 25\n");
+}
+
+#[test]
+fn an_impl_trait_output_is_known_only_by_its_bounds() {
+    // rustc fills an opaque type with one hidden type, which callers never
+    // see, and each function's opaque type is its own (#2480).
+    let program = |body: &str| {
+        format!(
+            r#"
+trait Shape {{ fn area(&self) -> f64; }}
+#[derive(Debug, Clone, PartialEq)] struct Sq(f64);
+#[derive(Debug, Clone, PartialEq)] struct Ci(f64);
+impl Shape for Sq {{ fn area(&self) -> f64 {{ self.0 * self.0 }} }}
+impl Shape for Ci {{ fn area(&self) -> f64 {{ 3.0 * self.0 * self.0 }} }}
+impl Sq {{ fn side(&self) -> f64 {{ self.0 }} }}
+{body}
+main();
+"#
+        )
+    };
+    let report = refused(&program(
+        "fn make(b: bool) -> impl Shape { if b { return Sq(1.0); } Ci(2.0) }\n\
+         fn main() { println!(\"{}\", make(true).area()); }",
+    ));
+    assert!(
+        report.starts_with("error[E0308]: mismatched types"),
+        "{report}"
+    );
+    assert!(report.contains("expected `Sq`, found `Ci`"), "{report}");
+    let report = refused(&program(
+        "fn make() -> impl Shape { Sq(2.0) }\n\
+         fn main() { let s = make(); println!(\"{}\", s.side()); }",
+    ));
+    assert!(
+        report
+            .starts_with("error[E0599]: no method named `side` found for opaque type `impl Shape`"),
+        "{report}"
+    );
+    let report = refused(&program(
+        "fn make() -> impl Shape { Sq(2.0) }\n\
+         fn main() { let s: Sq = make(); println!(\"{}\", s.area()); }",
+    ));
+    assert!(
+        report.starts_with("error[E0308]: mismatched types"),
+        "{report}"
+    );
+    assert!(
+        report.contains("expected `Sq`, found opaque type"),
+        "{report}"
+    );
+    let report = refused(&program(
+        "fn m1() -> impl Shape { Sq(2.0) }\n\
+         fn m2() -> impl Shape { Ci(2.0) }\n\
+         fn main() { let mut x = m1(); x = m2(); println!(\"{}\", x.area()); }",
+    ));
+    assert!(
+        report.starts_with("error[E0308]: mismatched types"),
+        "{report}"
+    );
+}

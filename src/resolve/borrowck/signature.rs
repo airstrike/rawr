@@ -289,7 +289,9 @@ impl Reader<'_> {
                         }
                         None => out.push((own, Region::Unknown)),
                     },
-                    Target::Parameter => out.push((at, Region::Parameter(path.name.clone()))),
+                    Target::Parameter | Target::Opaque(_) => {
+                        out.push((at, Region::Parameter(path.name.clone())))
+                    }
                     Target::Projection(..)
                     | Target::Alias(_)
                     | Target::Std(_)

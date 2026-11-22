@@ -1843,7 +1843,7 @@ impl<'a> Parser<'a> {
             && !self.bindings.contains_key(name.as_str())
         {
             self.next();
-            let param = Ty::Param(name.clone());
+            let param = Ty::param(name.clone());
             // `T::name(&t)`: a method of a trait bounding `T`, called as
             // `<T as Trait>::name(&t)` is (T376).
             if let Some((Token::Identifier(member), position)) = self.input.clone().next()

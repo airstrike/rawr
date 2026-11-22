@@ -51,6 +51,10 @@ pub(crate) enum Target {
     /// A generic type parameter of the enclosing item: any type, erased at
     /// runtime.
     Parameter,
+    /// A function's `-> impl Bounds` (D1109): a type parameter no caller
+    /// chooses, which its function's body fills. `None` until
+    /// `resolve_function` gives it its function, and outside an output.
+    Opaque(Option<Opaque>),
     /// The associated type named by the path's name of this type, which is a
     /// generic parameter or a script type: `T::Output`, `Self::Output`, and
     /// the trait declaring it: written (`<T as Shape>::Output`) or found
@@ -63,6 +67,33 @@ pub(crate) enum Target {
     /// it: to Rawr's type for it, or to Rawr's not-yet error (D712.1) for
     /// one it doesn't represent yet. Never a resolved path's target.
     Std(ImmutableString),
+}
+
+/// Which opaque output a [`Target::Opaque`] is: the `index`th `impl` its
+/// defining function's output writes, the function named at `function` in
+/// `source`.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
+pub(crate) struct Opaque {
+    source: crate::program::source::Id,
+    function: Span,
+    index: usize,
+}
+
+impl Opaque {
+    /// The `index`th opaque output of the function whose name is at
+    /// `function` in `source`.
+    pub(crate) const fn new(
+        source: crate::program::source::Id,
+        function: Span,
+        index: usize,
+    ) -> Self {
+        Self {
+            source,
+            function,
+            index,
+        }
+    }
 }
 
 /// A type alias's parameters and its target, resolved once in the module
@@ -1236,76 +1267,17 @@ pub(super) fn host_trait(
     (definition.role() == host::type_def::Role::Trait).then(|| definition.clone())
 }
 
-/// `impl Shape` of one program or std trait outside a parameter, as a
-/// return type writes it (#2462): what rustc knows of the opaque type, its
-/// bound's methods alone, which a trait object of the bound has (`dyn
-/// Shape`), dispatched by the hidden value's own type (#2099). Each
-/// `Shape<Output = i64>` binding is the object's. None for other bounds.
-fn opaque_object(
-    parsed: item::type_ref::Path,
-    types: &BTreeMap<ImmutableString, Target>,
-    host: &host::Registry,
-    #[cfg(feature = "rust-import")] native: Option<super::native::Site<'_>>,
-) -> Option<Result<Path, Error>> {
-    let [segment] = &parsed.segments[..] else {
-        return None;
-    };
-    let (mut traits, mut bindings) = (Vec::new(), Vec::new());
-    for argument in segment.arguments.iter() {
-        let item::type_ref::Argument::Type(item::type_ref::Type::Path(bound)) = argument else {
-            continue;
-        };
-        // `=Shape=Output<i64>`: the binding `=Output<i64>` of `Shape`.
-        if let [binding] = &bound.segments[..]
-            && let Some(rest) = binding
-                .name
-                .text
-                .strip_prefix(item::type_ref::BINDING_PREFIX)
-            && let Some((_, name)) = rest.split_once('=')
-        {
-            let mut binding = binding.clone();
-            binding.name.text = format!("{}{name}", item::type_ref::BINDING_PREFIX).into();
-            bindings.push(item::type_ref::Argument::Type(item::type_ref::Type::Path(
-                item::type_ref::Path {
-                    segments: Box::new([binding]),
-                    span: bound.span,
-                    global: false,
-                },
-            )));
-            continue;
-        }
-        traits.push(bound.clone());
-    }
-    let [bound] = &traits[..] else {
-        return None;
-    };
-    let mut segments = Vec::with_capacity(bound.segments.len() + 1);
-    segments.push(item::type_ref::Segment {
-        name: item::Name {
-            text: item::type_ref::DYN_SEGMENT.into(),
-            span: segment.name.span,
-        },
+/// `impl Shape + Debug` of program or std traits, as a function's output
+/// writes it: rustc's opaque type (D1109), a type parameter no caller
+/// chooses, known by its bounds alone. Its name is the text rustc prints
+/// (`impl Shape + Debug`), and `resolve_function` gives it its function.
+fn opaque_output(parsed: &item::type_ref::Path) -> Path {
+    Path {
+        target: Target::Opaque(None),
+        name: item::type_ref::opaque_text(parsed).into(),
         arguments: Box::default(),
-        span: segment.name.span,
-    });
-    segments.extend(bound.segments.iter().cloned());
-    if let Some(last) = segments.last_mut() {
-        let mut arguments = last.arguments.to_vec();
-        arguments.extend(bindings);
-        last.arguments = arguments.into_boxed_slice();
-    }
-    let object = item::type_ref::Path {
-        segments: segments.into_boxed_slice(),
         span: parsed.span,
-        global: false,
-    };
-    Some(resolve_path(
-        object,
-        types,
-        host,
-        #[cfg(feature = "rust-import")]
-        native,
-    ))
+    }
 }
 
 /// `impl Trait<..> + 'a` of a facade trait is the one type the trait
@@ -1411,14 +1383,7 @@ fn resolve_impl(
                 span,
             });
         }
-        return opaque_object(
-            parsed,
-            types,
-            host,
-            #[cfg(feature = "rust-import")]
-            native,
-        )
-        .unwrap_or_else(|| Err(unsupported()));
+        return Ok(opaque_output(&parsed));
     };
     let [projection] = definition.projections() else {
         return Err(unsupported());

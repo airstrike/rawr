@@ -447,6 +447,9 @@ impl fmt::Display for ParseErrorType {
                 crate::resolve::Error::TypeMismatch {
                     expected, actual, ..
                 }
+                | crate::resolve::Error::OpaqueMismatch {
+                    expected, actual, ..
+                }
                 | crate::resolve::Error::Unboxed {
                     expected, actual, ..
                 } => write!(f, "mismatched types: expected `{expected}`, found `{actual}`"),

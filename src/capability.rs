@@ -938,6 +938,7 @@ pub(crate) fn type_supports(
             // A generic parameter's capabilities are checked where it is
             // instantiated, as a derive's bounds are.
             type_ref::Target::Parameter
+            | type_ref::Target::Opaque(_)
             | type_ref::Target::Projection(..)
             | type_ref::Target::Alias(_)
             | type_ref::Target::Std(_) => true,

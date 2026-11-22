@@ -586,7 +586,7 @@ impl Parser<'_> {
                 .iter()
                 .map(|member| self.drop_uses_in(member, visiting))),
             // A generic or a trait object may have a `Drop` of its own.
-            Ty::Param(_) | Ty::Projection(..) | Ty::Dyn(..) | Ty::Infer(_) | Ty::Unknown
+            Ty::Param(..) | Ty::Projection(..) | Ty::Dyn(..) | Ty::Infer(_) | Ty::Unknown
                 if self.drops() =>
             {
                 (true, false)
@@ -755,7 +755,7 @@ impl Parser<'_> {
                 }
                 false
             }
-            Ty::Param(_) | Ty::Projection(..) | Ty::Dyn(..) | Ty::Infer(_) | Ty::Unknown => true,
+            Ty::Param(..) | Ty::Projection(..) | Ty::Dyn(..) | Ty::Infer(_) | Ty::Unknown => true,
             _ => false,
         })
     }

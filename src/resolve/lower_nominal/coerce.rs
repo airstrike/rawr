@@ -46,7 +46,7 @@ impl<'a> Parser<'a> {
     /// `value`, which code that doesn't know its type reads (a generic
     /// body, a trait object's `Debug`), with each unsigned integer and
     /// each tuple in it tagged as one (`compare::tag_unsigned`).
-    fn tag_shape(&mut self, value: &mut ParsedExpr) {
+    pub(super) fn tag_shape(&mut self, value: &mut ParsedExpr) {
         if Shape::with_tuples(&value.ty, &|ty| self.inference.resolve(ty)).is_plain() {
             return;
         }
@@ -59,6 +59,16 @@ impl<'a> Parser<'a> {
         value.prelude = origin::Fragment::default();
         value.source = origin::Fragment::call(&helper, [source]);
         value.source.cover(value.span);
+    }
+
+    /// `value`, returned where the output is an opaque type the body fills
+    /// (D1109), tagged as a value a generic body reads, so a caller that
+    /// knows it by its bounds writes its tuples and unsigned integers as
+    /// they are.
+    pub(super) fn tag_hidden_output(&mut self, value: &mut ParsedExpr) {
+        if !self.hidden_outputs.is_empty() {
+            self.tag_shape(value);
+        }
     }
 
     /// A `Box<dyn Fn>` or a `&dyn Fn` (or a box or reference of one, as
@@ -463,9 +473,7 @@ impl<'a> Parser<'a> {
             return Ok(None);
         }
         // Unsized coercion: `&T` to `&dyn Trait` and `Box<T>` to
-        // `Box<dyn Trait>` for a `T: Trait`; the value is unchanged. A
-        // value where a bare `dyn Trait` is taken is a return type's `impl
-        // Trait` (`type_ref::opaque_object`), its hidden value.
+        // `Box<dyn Trait>` for a `T: Trait`; the value is unchanged.
         let unsizing = match (&target, &source) {
             (
                 Ty::Reference {
@@ -483,7 +491,6 @@ impl<'a> Parser<'a> {
             {
                 Some((&**to, &**from))
             }
-            (Ty::Dyn(..), _) => Some((&target, &source)),
             _ => None,
         }
         .and_then(|(to, from)| {
@@ -658,7 +665,7 @@ impl<'a> Parser<'a> {
             }
             // `Box<dyn Debug>` of a tuple writes it as one: a box is its
             // value at runtime.
-            if matches!(target, Ty::Boxed(_) | Ty::Dyn(..)) {
+            if matches!(target, Ty::Boxed(_)) {
                 value.ty = concrete;
                 self.tag_shape(value);
             }
@@ -1386,6 +1393,7 @@ impl<'a> Parser<'a> {
         value.lvalue = None;
         let result = self.coerce_expr(expected, &mut value);
         result?;
+        self.tag_hidden_output(&mut value);
         self.returned(value.span, &value.ty);
         self.write_output(value.rendered_source(), value.span);
         self.last_type = value.ty;

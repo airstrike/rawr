@@ -35,6 +35,52 @@ impl<'a> Parser<'a> {
             .collect()
     }
 
+    /// The bounds of the item's type parameters `generics`, which its body
+    /// knows them by.
+    pub(super) fn read_generics(&mut self, generics: &[item::Generic]) {
+        self.generics = generics
+            .iter()
+            .map(|generic| (generic.name.text.clone(), generic.bounds))
+            .collect();
+        self.generic_traits = generic_traits(generics);
+        self.generic_trait_arguments = generic_trait_arguments(generics);
+        self.inference.equalities = generic_equalities(generics);
+    }
+
+    /// The bounds of the opaque output `opaque` (D1109), which every body
+    /// knows it by.
+    pub(super) fn opaque_bounds(&self, opaque: &type_ref::Opaque) -> Option<&item::Generic> {
+        self.models.opaque_outputs.get(opaque)
+    }
+
+    /// The body of a function whose output `output` writes opaque types
+    /// fills each with one hidden type, a fresh type whose bounds are
+    /// pending as a call's type parameters' are (D1109): every `return`
+    /// and the tail meet it, so a second hidden type is E0308.
+    pub(super) fn define_opaque_outputs(&mut self, output: &type_ref::Type) {
+        let ty = Ty::from_resolved(output);
+        let outputs = Shared::clone(&self.models.opaque_outputs);
+        let mut hidden = BTreeMap::new();
+        for (opaque, generic) in outputs.iter() {
+            let own = |ty: &Ty| matches!(ty, Ty::Param(_, Parameter::Opaque(own)) if own == opaque);
+            if !contains(&ty, &own) {
+                continue;
+            }
+            let fresh = self.fresh_generics(std::slice::from_ref(generic), output.span());
+            if let Some(fresh) = fresh.into_values().next() {
+                hidden.insert(*opaque, fresh);
+            }
+        }
+        if hidden.is_empty() {
+            return;
+        }
+        self.return_ty = Some(substitute(&ty, &|ty| match ty {
+            Ty::Param(_, Parameter::Opaque(opaque)) => hidden.get(opaque).cloned(),
+            _ => None,
+        }));
+        self.hidden_outputs = hidden;
+    }
+
     /// Fresh types for `generics` at one use, with their bounds pending.
     pub(super) fn fresh_generics(
         &mut self,
@@ -223,7 +269,7 @@ impl<'a> Parser<'a> {
             let named = generic
                 .fixed
                 .as_ref()
-                .map_or(Ty::Param(generic.name.text.clone()), Ty::from_resolved);
+                .map_or(Ty::param(generic.name.text.clone()), Ty::from_resolved);
             let (_, argument) =
                 function
                     .parameters
@@ -231,7 +277,7 @@ impl<'a> Parser<'a> {
                     .zip(arguments)
                     .find(|(declared, _)| {
                         contains(&Ty::from_resolved(&declared.ty), &|ty| {
-                            matches!(ty, Ty::Param(_)) && contains(&named, &|named| named == ty)
+                            matches!(ty, Ty::Param(..)) && contains(&named, &|named| named == ty)
                         })
                     })?;
             let place = crate::resolve::Bound {
@@ -278,7 +324,7 @@ impl<'a> Parser<'a> {
         self.assumed
             .iter()
             .find(|(fixed, _)| *fixed == ty)
-            .map(|(_, name)| Ty::Param(name.clone()))
+            .map(|(_, name)| Ty::param(name.clone()))
     }
 
     /// The parameter a `where` clause bounds `ty` as, when it has what
@@ -334,6 +380,14 @@ impl<'a> Parser<'a> {
 
     /// Check each pending generic bound against its now-known type.
     pub(super) fn finish_bounds(&mut self) -> Result<(), Error> {
+        // An opaque output's hidden literal is its fallback kind before its
+        // bounds are proved: `impl Display` of `42` is an `i32`.
+        for hidden in self.hidden_outputs.values().cloned().collect::<Vec<_>>() {
+            if let Some(fallback) = literal_fallback(&self.inference.resolve(&hidden)) {
+                let fits = self.unify_type(&hidden, &fallback);
+                debug_assert!(fits, "a literal unifies with its fallback kind");
+            }
+        }
         for (ty, kind, span, site) in std::mem::take(&mut self.pending_bounds) {
             let ty = self.inference.resolve(&ty);
             if matches!(ty, Ty::Infer(_) | Ty::Unknown) {
@@ -532,7 +586,9 @@ impl<'a> Parser<'a> {
             Ty::Script(id, _) => id.number().to_string(),
             // A const argument's witness is its value.
             Ty::Const(value) => value.to_string(),
-            Ty::Param(name) if self.has_witness(name) => witness_variable(name),
+            Ty::Param(name, Parameter::Declared) if self.has_witness(name) => {
+                witness_variable(name)
+            }
             Ty::Infer(_) => {
                 return Err(Error::TypeAnnotationsNeeded {
                     parameter: parameter.into(),
@@ -672,7 +728,7 @@ impl<'a> Parser<'a> {
                         call: span,
                     });
                 }
-                Ty::Param(name) => {
+                Ty::Param(name, _) => {
                     if !self.type_provides(&ty, capability::Kind::Default) {
                         return Err(Error::MissingCapability {
                             owner: name.clone(),
@@ -1073,7 +1129,7 @@ pub(super) fn written(generics: &[item::Generic]) -> impl Iterator<Item = &item:
 /// a value with only its bounds' methods.
 pub(super) fn bounded_value(ty: &Ty) -> Option<Ty> {
     match ty {
-        Ty::Param(_) | Ty::Projection(..) => Some(ty.clone()),
+        Ty::Param(..) | Ty::Projection(..) => Some(ty.clone()),
         Ty::Reference { target, .. } => bounded_value(target),
         _ => None,
     }
@@ -1081,55 +1137,54 @@ pub(super) fn bounded_value(ty: &Ty) -> Option<Ty> {
 
 /// `ty` with each generic parameter in `substitution` replaced.
 pub(super) fn instantiate(ty: &Ty, substitution: &BTreeMap<ImmutableString, Ty>) -> Ty {
-    let each = |types: &[Ty]| -> Box<[Ty]> {
-        types
-            .iter()
-            .map(|ty| instantiate(ty, substitution))
-            .collect()
-    };
+    substitute(ty, &|ty| match ty {
+        Ty::Param(name, Parameter::Declared) => substitution.get(name).cloned(),
+        _ => None,
+    })
+}
+
+/// `ty` with each type parameter `replaced` gives a type replaced.
+pub(super) fn substitute(ty: &Ty, replaced: &dyn Fn(&Ty) -> Option<Ty>) -> Ty {
+    let each =
+        |types: &[Ty]| -> Box<[Ty]> { types.iter().map(|ty| substitute(ty, replaced)).collect() };
     match ty {
-        Ty::Param(name) => substitution
-            .get(name)
-            .cloned()
-            .unwrap_or_else(|| ty.clone()),
-        Ty::Option(element) => Ty::Option(Box::new(instantiate(element, substitution))),
-        Ty::Boxed(target) => Ty::Boxed(Box::new(instantiate(target, substitution))),
+        Ty::Param(..) => replaced(ty).unwrap_or_else(|| ty.clone()),
+        Ty::Option(element) => Ty::Option(Box::new(substitute(element, replaced))),
+        Ty::Boxed(target) => Ty::Boxed(Box::new(substitute(target, replaced))),
         Ty::Counted(counter, target) => {
-            Ty::Counted(*counter, Box::new(instantiate(target, substitution)))
+            Ty::Counted(*counter, Box::new(substitute(target, replaced)))
         }
-        Ty::Weak(counter, target) => {
-            Ty::Weak(*counter, Box::new(instantiate(target, substitution)))
-        }
-        Ty::Iter(item, std) => Ty::Iter(Box::new(instantiate(item, substitution)), *std),
-        Ty::Reverse(inner) => Ty::Reverse(Box::new(instantiate(inner, substitution))),
-        Ty::Cow(inner) => Ty::Cow(Box::new(instantiate(inner, substitution))),
-        Ty::Range(element) => Ty::Range(Box::new(instantiate(element, substitution))),
-        Ty::InclusiveOf(element) => Ty::InclusiveOf(Box::new(instantiate(element, substitution))),
-        Ty::Cell(kind, inner) => Ty::Cell(*kind, Box::new(instantiate(inner, substitution))),
-        Ty::Thread(kind, inner) => Ty::Thread(*kind, Box::new(instantiate(inner, substitution))),
+        Ty::Weak(counter, target) => Ty::Weak(*counter, Box::new(substitute(target, replaced))),
+        Ty::Iter(item, std) => Ty::Iter(Box::new(substitute(item, replaced)), *std),
+        Ty::Reverse(inner) => Ty::Reverse(Box::new(substitute(inner, replaced))),
+        Ty::Cow(inner) => Ty::Cow(Box::new(substitute(inner, replaced))),
+        Ty::Range(element) => Ty::Range(Box::new(substitute(element, replaced))),
+        Ty::InclusiveOf(element) => Ty::InclusiveOf(Box::new(substitute(element, replaced))),
+        Ty::Cell(kind, inner) => Ty::Cell(*kind, Box::new(substitute(inner, replaced))),
+        Ty::Thread(kind, inner) => Ty::Thread(*kind, Box::new(substitute(inner, replaced))),
         Ty::Keyed(kind, arguments) => Ty::Keyed(
             *kind,
             arguments
                 .iter()
-                .map(|argument| instantiate(argument, substitution))
+                .map(|argument| substitute(argument, replaced))
                 .collect(),
         ),
         Ty::Dyn(trait_name, bindings) => Ty::Dyn(
             trait_name.clone(),
             bindings
                 .iter()
-                .map(|(name, ty)| (name.clone(), instantiate(ty, substitution)))
+                .map(|(name, ty)| (name.clone(), substitute(ty, replaced)))
                 .collect(),
         ),
         Ty::Result(ok, err) => Ty::Result(
-            Box::new(instantiate(ok, substitution)),
-            Box::new(instantiate(err, substitution)),
+            Box::new(substitute(ok, replaced)),
+            Box::new(substitute(err, replaced)),
         ),
         Ty::Array { element, kind } => Ty::Array {
-            element: Box::new(instantiate(element, substitution)),
+            element: Box::new(substitute(element, replaced)),
             kind: match kind {
                 sequence::Kind::Array(length) => {
-                    sequence::Kind::Array(length.mapped(|length| instantiate(length, substitution)))
+                    sequence::Kind::Array(length.mapped(|length| substitute(length, replaced)))
                 }
                 kind => kind.clone(),
             },
@@ -1137,11 +1192,11 @@ pub(super) fn instantiate(ty: &Ty, substitution: &BTreeMap<ImmutableString, Ty>)
         Ty::Tuple(members) => Ty::Tuple(each(members)),
         Ty::Reference { mutable, target } => Ty::Reference {
             mutable: *mutable,
-            target: Box::new(instantiate(target, substitution)),
+            target: Box::new(substitute(target, replaced)),
         },
         Ty::Fn { inputs, output } => Ty::Fn {
             inputs: each(inputs),
-            output: Box::new(instantiate(output, substitution)),
+            output: Box::new(substitute(output, replaced)),
         },
         Ty::FnItem {
             key,
@@ -1150,7 +1205,7 @@ pub(super) fn instantiate(ty: &Ty, substitution: &BTreeMap<ImmutableString, Ty>)
         } => Ty::FnItem {
             key: key.clone(),
             inputs: each(inputs),
-            output: Box::new(instantiate(output, substitution)),
+            output: Box::new(substitute(output, replaced)),
         },
         Ty::Host { proof, arguments } => Ty::Host {
             proof: proof.clone(),
@@ -1158,7 +1213,7 @@ pub(super) fn instantiate(ty: &Ty, substitution: &BTreeMap<ImmutableString, Ty>)
         },
         Ty::Script(id, arguments) => Ty::Script(*id, each(arguments)),
         Ty::Projection(base, trait_name, name) => Ty::Projection(
-            Box::new(instantiate(base, substitution)),
+            Box::new(substitute(base, replaced)),
             trait_name.clone(),
             name.clone(),
         ),
@@ -1283,26 +1338,46 @@ pub(super) fn static_trait(models: &Models, name: &str) -> bool {
 
 /// Every generic parameter list an item declares.
 pub(super) fn item_generics(kind: &item::Kind) -> Vec<&item::Generic> {
+    // A function's opaque outputs too, which bound its body's hidden types
+    // (D1109).
+    fn functions(functions: &[item::Function]) -> Vec<&item::Generic> {
+        functions
+            .iter()
+            .flat_map(|function| {
+                function
+                    .generics
+                    .iter()
+                    .chain(function.opaque_outputs.iter().map(|(_, generic)| generic))
+            })
+            .collect()
+    }
     match kind {
         item::Kind::Struct(item) => item.generics.iter().collect(),
         item::Kind::Enum(item) => item.generics.iter().collect(),
-        item::Kind::Function(item) => item.generics.iter().collect(),
+        item::Kind::Function(item) => functions(std::slice::from_ref(item)),
         item::Kind::Impl(item) => item
             .generics
             .iter()
-            .chain(
-                item.functions
-                    .iter()
-                    .flat_map(|function| function.generics.iter()),
-            )
+            .chain(functions(&item.functions))
             .collect(),
-        item::Kind::Trait(item) => item
-            .functions
-            .iter()
-            .flat_map(|function| function.generics.iter())
-            .collect(),
+        item::Kind::Trait(item) => functions(&item.functions),
         item::Kind::Use(_) => Vec::new(),
     }
+}
+
+/// Every opaque output of the program's functions (D1109), which
+/// any body reads as it reads its own type parameters.
+pub(super) fn opaque_outputs(items: &[item::Shell]) -> BTreeMap<type_ref::Opaque, item::Generic> {
+    items
+        .iter()
+        .flat_map(|shell| match &shell.kind {
+            item::Kind::Function(function) => std::slice::from_ref(function),
+            item::Kind::Impl(own) => &own.functions[..],
+            item::Kind::Trait(own) => &own.functions[..],
+            _ => &[],
+        })
+        .flat_map(|function| function.opaque_outputs.iter().cloned())
+        .collect()
 }
 
 /// `Iterator` and the traits whose `Item` is its own, which Rawr's iterator

@@ -432,6 +432,10 @@ pub(crate) fn declarations(
         if let Some(output) = &function.output {
             objects(output, named);
         }
+        // `-> impl Display`: its opaque type's bounds (D1109).
+        for (_, generic) in function.opaque_outputs.iter() {
+            named.extend(generic.traits.iter().map(|name| name.text.clone()));
+        }
     };
     for shell in items {
         match &shell.kind {

@@ -61,7 +61,7 @@ impl<'a> Parser<'a> {
         if self.host_witnesses.is_empty()
             && !matches!(
                 source,
-                Ty::Infer(_) | Ty::Param(_) | Ty::Projection(..) | Ty::Host { .. }
+                Ty::Infer(_) | Ty::Param(..) | Ty::Projection(..) | Ty::Host { .. }
             )
             && !source.is_text()
             && self.widget_erasure(&source).is_none()
@@ -991,6 +991,22 @@ impl<'a> Parser<'a> {
                 {
                     value = self.operator_expr(text, Ty::String, span(value.span.start(), end));
                     continue;
+                }
+                // rustc names a function's opaque output by its sort:
+                // "found for opaque type `impl Shape`" (D1109).
+                if (member.as_str() != "clone" || !arguments.is_empty()) && bounded.is_opaque() {
+                    return Err(Error::NoItem {
+                        owner: name.clone(),
+                        member,
+                        reference: member_span,
+                        receiver: Box::new(crate::resolve::Receiver {
+                            kind: bounded.sort(&self.models),
+                            declared: name.clone(),
+                            found: name,
+                            definition: None,
+                        }),
+                        similar: None,
+                    });
                 }
                 if member.as_str() != "clone" || !arguments.is_empty() {
                     return Err(Error::UnknownMember {
