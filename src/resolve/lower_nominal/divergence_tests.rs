@@ -3318,3 +3318,37 @@ main();
     );
     assert_eq!(output, "A1B2C #x1#y [z3]\n");
 }
+
+#[test]
+fn an_iterators_field_wins_over_its_method_of_the_name() {
+    // rustc reads `x.last` with no `(` as the field, through a `&mut` too,
+    // and `x.last()` as `Iterator::last`.
+    let output = printed(
+        r#"
+struct Lines { next: i64, last: i64, count: i64 }
+impl Iterator for Lines {
+    type Item = i64;
+    fn next(&mut self) -> Option<i64> {
+        if self.next > self.last {
+            return None;
+        }
+        self.count += 1;
+        self.next += 1;
+        Some(self.next - 1)
+    }
+}
+fn main() {
+    let mut l = Lines { next: 1, last: 4, count: 0 };
+    let first = l.next();
+    let fields = (l.next, l.last, l.count);
+    let r = &mut l;
+    let through = (r.next, r.last, r.count);
+    let last = Lines { next: 1, last: 3, count: 0 }.last();
+    let count = Lines { next: 2, last: 5, count: 0 }.count();
+    println!("{:?} {:?} {:?} {:?} {}", first, fields, through, last, count);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "Some(1) (2, 4, 1) (2, 4, 1) Some(3) 4\n");
+}

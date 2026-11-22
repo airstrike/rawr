@@ -1170,7 +1170,13 @@ impl<'a> Parser<'a> {
                 value = self.parse_lending(value, definition, method, end);
                 continue;
             }
-            if self.iterator_receiver(&builtin, &member) {
+            // An iterator's method is a call: `x.last` with no `(` is a
+            // field, which wins over a method of its name, as in Rust.
+            if matches!(
+                self.peek(),
+                Token::LeftParen | Token::Unit | Token::DoubleColon
+            ) && self.iterator_receiver(&builtin, &member)
+            {
                 value = self.parse_iterator_method(value, member, member_span)?;
                 continue;
             }
