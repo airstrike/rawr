@@ -309,87 +309,6 @@ impl Syntax {
             .count()
     }
 
-    /// The pattern of a value `witness` matches at the part written at
-    /// `at` (rustc's witness), every other part `_`; `None` when no part
-    /// of the pattern is at `at`.
-    pub(super) fn witness_at(&self, at: Span, witness: &str) -> Option<String> {
-        if self.span() == at {
-            return Some(witness.to_string());
-        }
-        let members = |members: &[Self]| {
-            let mut found = false;
-            let rendered = members
-                .iter()
-                .map(|member| match member.witness_at(at, witness) {
-                    Some(placed) => {
-                        found = true;
-                        placed
-                    }
-                    None if matches!(member, Self::Rest { .. }) => "..".to_string(),
-                    None => "_".to_string(),
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            found.then_some(rendered)
-        };
-        match self {
-            Self::Tuple { members: parts, .. } => Some(format!("({})", members(parts)?)),
-            Self::TupleStruct {
-                definition,
-                members: parts,
-                ..
-            } => Some(format!("{}({})", definition.name(), members(parts)?)),
-            Self::Enum(pattern) => {
-                let owner = pattern
-                    .owner
-                    .iter()
-                    .map(|(name, _)| name.as_str())
-                    .collect::<Vec<_>>()
-                    .join("::");
-                let path = if pattern.host_struct {
-                    owner
-                } else {
-                    format!("{owner}::{}", pattern.variant)
-                };
-                match &pattern.named {
-                    Some((names, _)) => {
-                        names
-                            .iter()
-                            .zip(pattern.payload.iter())
-                            .find_map(|((name, _), member)| {
-                                let placed = member.witness_at(at, witness)?;
-                                Some(format!("{path} {{ {name}: {placed}, .. }}"))
-                            })
-                    }
-                    None => Some(format!("{path}({})", members(&pattern.payload)?)),
-                }
-            }
-            Self::Prelude {
-                variant,
-                payload: Some(payload),
-                ..
-            } => Some(format!(
-                "{}({})",
-                variant.name(),
-                payload.witness_at(at, witness)?
-            )),
-            Self::Cow { owned, payload, .. } => Some(format!(
-                "Cow::{}({})",
-                if *owned { "Owned" } else { "Borrowed" },
-                payload.witness_at(at, witness)?
-            )),
-            Self::Reference {
-                mutable, pattern, ..
-            } => Some(format!(
-                "{}{}",
-                if *mutable { "&mut " } else { "&" },
-                pattern.witness_at(at, witness)?
-            )),
-            Self::At { pattern, .. } => pattern.witness_at(at, witness),
-            _ => None,
-        }
-    }
-
     /// Whether a `ref mut` binding is in the pattern.
     /// Where each name the pattern binds starts, when it destructures its
     /// value: `a` and `b` of `(a, b)`, and none for a lone `x`.
@@ -1239,6 +1158,9 @@ impl<'a> Parser<'a> {
     pub(super) fn parse_pattern_literal(
         &mut self,
     ) -> Result<Option<(ast::NominalLiteral, Ty, Span)>, Error> {
+        if let Some(constant) = self.parse_pattern_constant() {
+            return Ok(Some(constant));
+        }
         let negative = matches!(self.peek(), Token::Minus | Token::UnaryMinus);
         if !negative
             && !matches!(
@@ -1306,6 +1228,104 @@ impl<'a> Parser<'a> {
             ty,
             Span::new(start, text_end(position, &text)),
         )))
+    }
+
+    /// The value of the constant whose path is ahead, as a pattern matches
+    /// it: `i32::MIN`, `char::MAX`, the program's `const LO` or an
+    /// associated `Grid::TOP`, alone or at either end of a range. `None`,
+    /// with nothing read, where the tokens ahead are no such path.
+    fn parse_pattern_constant(&mut self) -> Option<(ast::NominalLiteral, Ty, Span)> {
+        let Token::Identifier(first) = self.peek() else {
+            return None;
+        };
+        // A name alone is a binding unless it names a constant.
+        if !matches!(self.peek_second(), Token::DoubleColon)
+            && !self
+                .models
+                .function(&first)
+                .is_some_and(|function| function.definition.body.constant)
+        {
+            return None;
+        }
+        let mut ahead = self.input.clone();
+        let mut segments = Vec::new();
+        loop {
+            let Some((Token::Identifier(name), at)) = ahead.next() else {
+                return None;
+            };
+            segments.push((name, at));
+            if !matches!(ahead.peek(), Some((Token::DoubleColon, _))) {
+                break;
+            }
+            ahead.next();
+        }
+        if matches!(
+            ahead.peek(),
+            Some((
+                Token::LeftParen | Token::Unit | Token::LeftBrace | Token::Bang,
+                _
+            ))
+        ) || matches!(ahead.peek(), Some((Token::Reserved(text), _)) if text.as_str() == "@")
+        {
+            return None;
+        }
+        let (value, ty) = match segments.as_slice() {
+            [(owner, _), (bound, _)] if matches!(bound.as_str(), "MIN" | "MAX") => {
+                let maximum = bound.as_str() == "MAX";
+                match owner.as_str() {
+                    "char" => {
+                        let value = if maximum { char::MAX } else { char::MIN };
+                        (ast::NominalLiteral::Char(value), Ty::Char)
+                    }
+                    owner => {
+                        let kind = Int::named(owner).filter(|kind| !kind.wide())?;
+                        let (min, max) = kind.full_range();
+                        let value = kind.store(if maximum { max } else { min });
+                        (ast::NominalLiteral::Int(value), Ty::Int(kind))
+                    }
+                }
+            }
+            [(owner, _), (member, _)] => {
+                let definition = self
+                    .named_model(owner)
+                    .and_then(|model| self.models.method(model.definition().id(), member))
+                    .filter(|definition| definition.constant())?;
+                let value = definition.integer()?;
+                (
+                    ast::NominalLiteral::Int(value),
+                    Ty::from_resolved(definition.output()),
+                )
+            }
+            [(name, _)] => {
+                let function = self
+                    .models
+                    .function(name)
+                    .filter(|function| function.definition.body.constant)?;
+                let ty = function
+                    .definition
+                    .output
+                    .as_ref()
+                    .map_or(Ty::Unit, Ty::from_resolved);
+                let literal = match self.constant_value(name, 0)? {
+                    crate::item::constant::Value::Integer(value) => {
+                        ast::NominalLiteral::Int(match ty {
+                            Ty::Int(kind) => kind.store(value),
+                            _ => crate::INT::try_from(value).ok()?,
+                        })
+                    }
+                    crate::item::constant::Value::Bool(value) => ast::NominalLiteral::Bool(value),
+                    crate::item::constant::Value::Char(value) => ast::NominalLiteral::Char(value),
+                };
+                (literal, ty)
+            }
+            _ => return None,
+        };
+        let (last, last_at) = segments.last().expect("a constant's path has a segment");
+        let span = Span::new(segments[0].1, text_end(*last_at, last));
+        for _ in 0..segments.len() * 2 - 1 {
+            self.next();
+        }
+        Some((value, ty, span))
     }
 
     /// A pattern without top-level alternatives, as closure parameters and
@@ -2091,7 +2111,11 @@ impl<'a> Parser<'a> {
                         inclusive: *inclusive,
                     },
                     coverage::Pattern::Constructor {
-                        key: coverage::Key::Range,
+                        key: coverage::Key::Range {
+                            low: low.as_ref().map(|(literal, _)| literal.clone()),
+                            high: high.as_ref().map(|(literal, _)| literal.clone()),
+                            inclusive: *inclusive,
+                        },
                         name: "..".into(),
                         payload: Box::default(),
                     },
@@ -3100,7 +3124,23 @@ impl<'a> Parser<'a> {
         model: Nominal,
         start: Span,
     ) -> Result<Syntax, Error> {
-        let (ty, substitution) = self.fresh_nominal(&model, start);
+        let (written, rest, end) = self.parse_field_patterns()?;
+        let span = closed(start.start(), end);
+        self.struct_pattern(model, start, written, rest, span)
+    }
+
+    /// The pattern `S { .. }` of the struct `model`, named at `path`,
+    /// whose `written` fields' patterns are in written order, `rest`
+    /// when `..` ends them: each declared field's pattern in order.
+    pub(super) fn struct_pattern(
+        &mut self,
+        model: Nominal,
+        path: Span,
+        written: Vec<(ImmutableString, Span, Syntax)>,
+        rest: bool,
+        span: Span,
+    ) -> Result<Syntax, Error> {
+        let (ty, substitution) = self.fresh_nominal(&model, path);
         let Nominal::Struct { definition, item } = model else {
             unreachable!("struct patterns are parsed for structs");
         };
@@ -3108,8 +3148,6 @@ impl<'a> Parser<'a> {
         // they are as they were (#1885).
         #[cfg(feature = "rust-import")]
         self.read_fields(&definition);
-        let (written, rest, end) = self.parse_field_patterns()?;
-        let span = closed(start.start(), end);
         let names = written
             .iter()
             .map(|(name, name_span, _)| (name.clone(), *name_span))
@@ -3213,6 +3251,78 @@ impl<'a> Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
+    /// The pattern syntax of the parameter pattern `path { fields }`: of
+    /// the program's struct, by its declaration; of a facade struct; else
+    /// of an enum's struct variant, which the coverage check refuses where
+    /// its enum has others (E0005).
+    fn parameter_struct_syntax(
+        &mut self,
+        path: &[crate::item::Name],
+        fields: &[(crate::item::Name, crate::item::ParameterPattern)],
+        rest: bool,
+        span: Span,
+    ) -> Result<Syntax, Error> {
+        let last = path.last().expect("a struct pattern has a path");
+        let path_span = Span::new(
+            path[0].span.start(),
+            text_end(last.span.start(), &last.text),
+        );
+        let mut written = Vec::with_capacity(fields.len());
+        for (name, pattern) in fields {
+            let pattern = self.parameter_pattern_syntax(pattern)?;
+            written.push((name.text.clone(), name.span, pattern));
+        }
+        let model = if path.len() == 1 {
+            self.named_model(&last.text)
+        } else {
+            self.models.qualified_owner(path_span).cloned()
+        };
+        if let Some(model @ Nominal::Struct { .. }) = model {
+            return self.struct_pattern(model, path_span, written, rest, span);
+        }
+        let segments = path
+            .iter()
+            .map(|name| (name.text.clone(), name.span))
+            .collect::<Vec<_>>();
+        let host_struct = matches!(
+            self.models.host.entry(&self.host_pattern_owner(&segments)),
+            Some(crate::host::Entry::Type(_) | crate::host::Entry::TypeAlias(_))
+        );
+        let (owner, owner_span) = if host_struct {
+            (&segments[..], path_span)
+        } else {
+            let [owner @ .., _] = &segments[..] else {
+                unreachable!("a struct pattern has a path");
+            };
+            let Some((end, end_span)) = owner.last() else {
+                return Err(Error::UnknownType {
+                    name: last.text.clone(),
+                    reference: path_span,
+                    path: false,
+                    imports: Box::default(),
+                });
+            };
+            (
+                owner,
+                Span::new(path[0].span.start(), text_end(end_span.start(), end)),
+            )
+        };
+        let (names, payload): (Vec<_>, Vec<_>) = written
+            .into_iter()
+            .map(|(name, at, pattern)| ((name, at), pattern))
+            .unzip();
+        Ok(Syntax::Enum(EnumSyntax {
+            span,
+            owner: owner.into(),
+            owner_span,
+            variant: last.text.clone(),
+            variant_span: last.span,
+            payload: payload.into_boxed_slice(),
+            named: Some((names.into_boxed_slice(), rest)),
+            host_struct,
+        }))
+    }
+
     /// The pattern syntax of a parameter pattern; a tuple struct's by its
     /// declaration.
     pub(super) fn parameter_pattern_syntax(
@@ -3226,6 +3336,38 @@ impl<'a> Parser<'a> {
                 mutable: *mutable,
             },
             crate::item::ParameterPattern::Discard(span) => Syntax::Discard { span: *span },
+            crate::item::ParameterPattern::Literal { literal, span } => {
+                let (literal, ty) = match literal {
+                    crate::item::PatternLiteral::Integer(value) => {
+                        // An `{integer}`, as an unsuffixed literal in a
+                        // body is (`literal_kind`).
+                        let id = self.inference.fresh_id();
+                        self.literal_kinds.push((id, true));
+                        self.literal_values.push((id, *value, *span));
+                        (ast::NominalLiteral::Int(*value), Ty::Int(Int::Var(id)))
+                    }
+                    crate::item::PatternLiteral::Char(value) => {
+                        (ast::NominalLiteral::Char(*value), Ty::Char)
+                    }
+                    crate::item::PatternLiteral::Bool(value) => {
+                        (ast::NominalLiteral::Bool(*value), Ty::Bool)
+                    }
+                    crate::item::PatternLiteral::Str(value) => {
+                        (ast::NominalLiteral::Str(value.clone()), Ty::Str)
+                    }
+                };
+                Syntax::Literal {
+                    literal,
+                    ty,
+                    span: *span,
+                }
+            }
+            crate::item::ParameterPattern::Struct {
+                path,
+                fields,
+                rest,
+                span,
+            } => self.parameter_struct_syntax(path, fields, *rest, *span)?,
             crate::item::ParameterPattern::Tuple { members, span } => Syntax::Tuple {
                 members: members
                     .iter()

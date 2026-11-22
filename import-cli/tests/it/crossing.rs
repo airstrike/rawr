@@ -3137,6 +3137,18 @@ fn a_let_on_a_crate_enums_only_variant_runs_unless_non_exhaustive() {
     assert!(stderr.contains("pattern `_` not covered"), "{stderr}");
 }
 
+/// A match on a crate enum covers a variant by the literals and ranges of
+/// its field's patterns, `On(true)` and `On(false)` together (#812), and a
+/// match on a crate struct covers it by its fields' patterns together,
+/// `Some(_)` and `None` (#1972), as rustc reads them. The output is `cargo
+/// run`'s.
+#[test]
+fn a_match_on_crate_values_covers_them_by_the_patterns_below() {
+    let (rawr, cargo) = both_printed("patterned.rs", "");
+    assert_eq!(rawr, cargo);
+    assert_eq!(rawr, "on off below zero above none\nsome on some off empty");
+}
+
 /// What `matched.rs` prints, as `cargo run` does.
 const MATCHED: &str = "ok 4\nclosed vent\nfailed\n\
                        door door door open\nclosed door\nfailed\n3 consumed refused\n\

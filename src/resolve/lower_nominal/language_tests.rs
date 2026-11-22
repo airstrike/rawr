@@ -2015,7 +2015,10 @@ fn language_patterns_literals_ranges_tuples_and_bindings() {
     let missing = rejected(
         "fn f(x: Option<i64>) -> i64 { match x { Some(0) => 0, None => 1 } } pub fn run() -> i64 { 0 } run()",
     );
-    assert!(missing.contains("`Some(_)` not covered"), "{missing}");
+    assert!(
+        missing.contains("`Some(i64::MIN..=-1_i64)` and `Some(1_i64..=i64::MAX)` not covered"),
+        "{missing}"
+    );
     let tuple = rejected(
         "fn f(p: (bool, bool)) -> i64 { match p { (true, _) => 0, (false, true) => 1 } } pub fn run() -> i64 { 0 } run()",
     );

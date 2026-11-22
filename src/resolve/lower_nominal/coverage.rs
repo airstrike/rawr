@@ -22,11 +22,27 @@ pub(super) enum Key {
     Prelude(Prelude),
     /// `Cow::Owned` (`true`) or `Cow::Borrowed`.
     Cow(bool),
-    /// A literal: of `bool`, one of its two values; otherwise one of
-    /// unboundedly many.
+    /// A literal: of `bool`, one of its two values; of an integer or a
+    /// `char`, the range of that one value (`Scalar::key_ordinals`);
+    /// otherwise one of unboundedly many.
     Literal(ast::NominalLiteral),
-    /// A range: never a complete set of values on its own.
-    Range,
+    /// A range pattern's bounds: of an integer or a `char`, the values
+    /// between them (`Scalar::key_ordinals`); of a float, never a complete
+    /// set of values on its own.
+    Range {
+        low: Option<ast::NominalLiteral>,
+        high: Option<ast::NominalLiteral>,
+        inclusive: bool,
+    },
+    /// The integers or `char`s whose ordinals are `low..=high`: one of the
+    /// ranges the patterns of a column split their type into, which each
+    /// of those patterns matches whole or not at all, as rustc splits them
+    /// (`Parser::column_constructors`).
+    Ordinals {
+        scalar: Scalar,
+        low: u128,
+        high: u128,
+    },
     /// A crate value's part tested at run time, which, as a range, is
     /// never a complete set of values on its own (`host_coverage`).
     Tested,
@@ -134,6 +150,11 @@ pub(super) fn specialize_coverage_pattern(
             },
             Key::SliceLength { length, open },
         ) => specialize_slice(*before, *rest, payload, *length, *open),
+        // A literal or a range matches each range of its column it holds.
+        (Pattern::Constructor { key, .. }, Key::Ordinals { scalar, low, high }) => scalar
+            .key_ordinals(key)
+            .filter(|(from, to)| from <= low && high <= to)
+            .map(|_| Vec::new()),
         (Pattern::Constructor { key, payload, .. }, constructor_key) if key == constructor_key => {
             Some(payload.to_vec())
         }
@@ -252,7 +273,7 @@ pub(super) fn bool_literals(syntax: &pattern::Syntax, seen: &mut [bool; 2]) {
 /// reads as ranges to name the values no arm matches as rustc does
 /// (E0004). Values are ordinals: an integer's in the order of its kind,
 /// a `char`'s its scalar value.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub(super) enum Scalar {
     Int(Int),
     Char,
@@ -369,21 +390,11 @@ impl Scalar {
                 high,
                 inclusive,
                 ..
-            } => {
-                let (min, max) = self.bounds();
-                let low = match low {
-                    Some((low, _)) => self.ordinal(low)?,
-                    None => min,
-                };
-                let high = match high {
-                    Some((high, _)) if *inclusive => self.ordinal(high)?,
-                    Some((high, _)) => self.ordinal(high)?.checked_sub(1)?,
-                    None => max,
-                };
-                if low <= high {
-                    covered.push((low, high));
-                }
-            }
+            } => covered.push(self.range(
+                low.as_ref().map(|(low, _)| low),
+                high.as_ref().map(|(high, _)| high),
+                *inclusive,
+            )?),
             pattern::Syntax::Binding { .. } | pattern::Syntax::Discard { .. } => {
                 covered.push(self.bounds());
             }
@@ -392,10 +403,81 @@ impl Scalar {
                     self.covered(alternative, covered)?;
                 }
             }
-            pattern::Syntax::At { pattern, .. } => self.covered(pattern, covered)?,
+            pattern::Syntax::At { pattern, .. } | pattern::Syntax::Reference { pattern, .. } => {
+                self.covered(pattern, covered)?;
+            }
             _ => return None,
         }
         Some(())
+    }
+
+    /// The ordinals of the range pattern `low..high`, or `low..=high` when
+    /// `inclusive`, an open end the type's bound; `None` for one that
+    /// matches nothing or whose ends aren't the type's.
+    fn range(
+        self,
+        low: Option<&ast::NominalLiteral>,
+        high: Option<&ast::NominalLiteral>,
+        inclusive: bool,
+    ) -> Option<(u128, u128)> {
+        let (min, max) = self.bounds();
+        let low = match low {
+            Some(low) => self.ordinal(low)?,
+            None => min,
+        };
+        let high = match high {
+            Some(high) if inclusive => self.ordinal(high)?,
+            Some(high) => self.ordinal(high)?.checked_sub(1)?,
+            None => max,
+        };
+        (low <= high).then_some((low, high))
+    }
+
+    /// The ordinals a coverage pattern's `key` matches: a literal's one, a
+    /// range pattern's, or a column's range's; `None` for any other key.
+    pub(super) fn key_ordinals(self, key: &Key) -> Option<(u128, u128)> {
+        match key {
+            Key::Literal(literal) => self.ordinal(literal).map(|ordinal| (ordinal, ordinal)),
+            Key::Range {
+                low,
+                high,
+                inclusive,
+            } => self.range(low.as_ref(), high.as_ref(), *inclusive),
+            Key::Ordinals { scalar, low, high } if *scalar == self => Some((*low, *high)),
+            _ => None,
+        }
+    }
+
+    /// The type's values split at each end of `ranges`, in order, so that
+    /// each of `ranges` holds a part whole or not at all: rustc's
+    /// constructors of an integer or `char` column. A `char`'s surrogates
+    /// are no values, so no part holds them.
+    pub(super) fn split(self, ranges: &[(u128, u128)]) -> Vec<(u128, u128)> {
+        let (min, max) = self.bounds();
+        let domains: &[(u128, u128)] = match self {
+            Self::Char => &[(0, 0xD7FF), (0xE000, max)],
+            Self::Int(_) => &[(min, max)],
+        };
+        // The ordinals a part starts at.
+        let mut starts = Vec::with_capacity(ranges.len() * 2);
+        for (low, high) in ranges {
+            starts.push(*low);
+            starts.extend(high.checked_add(1));
+        }
+        starts.sort_unstable();
+        starts.dedup();
+        let mut parts = Vec::new();
+        for &(from, to) in domains {
+            let mut low = from;
+            for &start in &starts {
+                if low < start && start <= to {
+                    parts.push((low, start - 1));
+                    low = start;
+                }
+            }
+            parts.push((low, to));
+        }
+        parts
     }
 
     /// The ranges of ordinals `covered` misses, in order. A `char`'s
@@ -437,37 +519,6 @@ pub(super) fn host_type_name(
         .unwrap_or_else(|| path.rsplit("::").next().unwrap_or_default().to_owned())
 }
 
-/// The facade enum's `variant`, written `name`, as rustc writes a witness
-/// of it: `_` in each field, or `missed` in the field at its index, as
-/// `Event::Pressed(_)` or `Event::Moved { x: 0_i32, .. }`.
-pub(super) fn variant_witness(
-    name: &str,
-    variant: &crate::host::type_def::Variant,
-    missed: Option<(usize, &String)>,
-) -> String {
-    let fields = variant.fields();
-    // A tuple variant's fields are named by their positions.
-    let tuple = fields
-        .first()
-        .is_some_and(|field| field.name().parse::<usize>().is_ok());
-    if fields.is_empty() {
-        return name.to_owned();
-    }
-    if !tuple {
-        return match missed {
-            Some((index, missed)) => format!("{name} {{ {}: {missed}, .. }}", fields[index].name()),
-            None => format!("{name} {{ .. }}"),
-        };
-    }
-    let members = (0..fields.len())
-        .map(|position| match missed {
-            Some((index, missed)) if index == position => missed.as_str(),
-            _ => "_",
-        })
-        .collect::<Vec<_>>();
-    format!("{name}({})", members.join(", "))
-}
-
 /// A pattern literal as Rust spells it.
 pub(super) fn render_literal(literal: &ast::NominalLiteral) -> String {
     match literal {
@@ -496,6 +547,20 @@ pub(super) fn render_constructor<T>(
 impl Pattern {
     pub(super) fn is_wildcard(&self) -> bool {
         matches!(self, Self::Wildcard)
+    }
+
+    /// Whether the pattern holds a crate part tested at run time, which
+    /// covers no whole value (`Parser::host_coverage`).
+    pub(super) fn tested(&self) -> bool {
+        match self {
+            Self::Wildcard => false,
+            Self::Constructor {
+                key: Key::Tested, ..
+            } => true,
+            Self::Constructor { payload, .. } | Self::Or(payload) => {
+                payload.iter().any(Self::tested)
+            }
+        }
     }
 
     /// This pattern with each crate part tested at run time matching
@@ -669,8 +734,21 @@ pub(super) fn specialize_coverage_candidate(
     specialized
 }
 
+/// The column types under `constructor` of the first column: its payload's,
+/// each behind a reference where the column's value is, as a part of a
+/// referenced value is never known to have values (`Parser::uninhabited`).
 pub(super) fn specialize_coverage_types(types: &[Ty], constructor: &Constructor) -> Vec<Ty> {
-    let mut specialized = constructor.payload.to_vec();
+    let mut specialized = match &types[0] {
+        Ty::Reference { .. } => constructor
+            .payload
+            .iter()
+            .map(|payload| Ty::Reference {
+                mutable: false,
+                target: Box::new(payload.clone()),
+            })
+            .collect(),
+        _ => constructor.payload.to_vec(),
+    };
     specialized.extend_from_slice(&types[1..]);
     specialized
 }
@@ -695,268 +773,46 @@ impl<'a> Parser<'a> {
         ty: &Ty,
         site: BindingSite,
     ) -> Result<(), Error> {
-        // A facade value's own checks name what it misses, below its
-        // variant too, as `Event::Pressed(1_i64..=i64::MAX)`, and what a
-        // facade part of it misses, in its place: rustc's
-        // `(Style { height: i64::MIN..=-1_i64, .. }, _)`, never `(_, _)`.
-        let mut witnesses = if matches!(self.referenced(ty), Ty::Host { .. }) {
-            Vec::new()
-        } else {
-            self.uncovered(syntax, &coverage.untested(), ty)
-        };
-        let checks = self.host_checks.borrow().clone();
-        for (_, check, check_ty, _) in checks {
-            if !witnesses.is_empty() {
-                break;
+        // A facade value's parts are tested at run time, so its pattern as
+        // written names what it misses, below its variant too, as
+        // `Event::Pressed(1_i64..=i64::MAX)`, and what a facade part of it
+        // misses, in its place: rustc's `(Style { height:
+        // i64::MIN..=-1_i64, .. }, _)`, never `(_, _)`.
+        let facade = matches!(self.referenced(ty), Ty::Host { .. });
+        let witnesses = if self.host_checks.borrow().is_empty() {
+            if facade {
+                Vec::new()
+            } else {
+                self.uncovered(syntax, &coverage.untested(), ty)
             }
-            // A facade part's witness in its place in the pattern, the
-            // rest of it `_`: `(Style { width: 0_i64, .. }, _)`.
-            let at = check.span();
-            let prefix = match syntax {
-                pattern::Syntax::Reference { .. } => String::new(),
-                _ => self.reference_prefix(ty),
-            };
-            witnesses = self
-                .host_uncovered(&check, &check_ty)?
-                .into_iter()
-                .map(|missed| match syntax.witness_at(at, &missed) {
-                    Some(placed) if syntax.span() != at => format!("{prefix}{placed}"),
-                    _ => missed,
-                })
-                .collect();
-        }
+        } else {
+            match self.host_rows_witnesses(&[syntax], ty, syntax.span())? {
+                Some(witnesses) => witnesses,
+                None if facade => vec![format!("{}_", self.reference_prefix(ty))],
+                None => self.uncovered(syntax, &coverage.untested(), ty),
+            }
+        };
         if witnesses.is_empty() {
             return Ok(());
         }
+        // The variant each witness names, as `E::B` of `&E::B(_)`.
+        let missed = witnesses.iter().filter_map(|witness| {
+            let witness = witness
+                .trim_start_matches(['&', ' '])
+                .trim_start_matches("mut ");
+            let head = witness.split(['(', ' ']).next()?;
+            head.contains("::")
+                .then(|| head.rsplit("::").next())
+                .flatten()
+        });
+        let uncovered = self.uncovered_type(ty, missed);
         Err(Error::Refutable {
-            witnesses: witnesses.into_iter().map(Into::into).collect(),
             ty: self.matched_type(ty),
             site,
             pattern: syntax.span(),
+            uncovered,
+            witnesses: witnesses.into_iter().map(Into::into).collect(),
         })
-    }
-
-    /// The values of `ty` that `syntax`, a pattern on a facade value, misses,
-    /// as rustc writes them: `Style { width: i64::MIN..=0_i64, .. }` for the
-    /// first field whose pattern misses some.
-    pub(super) fn host_uncovered(
-        &mut self,
-        syntax: &pattern::Syntax,
-        ty: &Ty,
-    ) -> Result<Vec<String>, Error> {
-        if !syntax.may_refute() {
-            return Ok(Vec::new());
-        }
-        let referenced = self.referenced(ty);
-        match syntax {
-            pattern::Syntax::At { pattern, .. } | pattern::Syntax::Reference { pattern, .. } => {
-                self.host_uncovered(pattern, &referenced)
-            }
-            pattern::Syntax::Enum(pattern)
-                if pattern.host_struct && matches!(referenced, Ty::Host { .. }) =>
-            {
-                let names = pattern
-                    .named
-                    .as_ref()
-                    .map(|(names, _)| names.as_ref())
-                    .unwrap_or_default();
-                let owner = pattern
-                    .owner
-                    .iter()
-                    .map(|(name, _)| name.as_str())
-                    .collect::<Vec<_>>()
-                    .join("::");
-                let prefix = self.reference_prefix(ty);
-                for ((field, at), member) in names.iter().zip(pattern.payload.iter()) {
-                    if !member.may_refute() {
-                        continue;
-                    }
-                    let value = origin::Fragment::plain("__rawr_field");
-                    let read = self.host_struct_field(value, &referenced, field, *at)?;
-                    let missed = self.host_uncovered(member, &read.ty)?;
-                    if !missed.is_empty() {
-                        return Ok(missed
-                            .into_iter()
-                            .map(|missed| format!("{prefix}{owner} {{ {field}: {missed}, .. }}"))
-                            .collect());
-                    }
-                }
-                Ok(Vec::new())
-            }
-            pattern::Syntax::Enum(written) if matches!(referenced, Ty::Host { .. }) => {
-                let prefix = self.reference_prefix(ty);
-                self.host_variant_uncovered(written, &referenced, &prefix, syntax.span())
-            }
-            // Any other refutable pattern on a facade value.
-            _ if matches!(referenced, Ty::Host { .. }) => {
-                Ok(vec![format!("{}_", self.reference_prefix(ty))])
-            }
-            _ => {
-                let checks = self.host_checks.borrow().len();
-                let resolved = self.resolve_root_pattern(syntax, ty);
-                self.host_checks.borrow_mut().truncate(checks);
-                Ok(self.uncovered(syntax, &resolved?.coverage, ty))
-            }
-        }
-    }
-
-    /// The values of the facade enum `referenced` that `written`, a pattern
-    /// on one of its variants, misses, as rustc lists them: each other
-    /// variant, then the first field of the written one whose pattern
-    /// misses some. A `#[non_exhaustive]` enum's is `_` alone, as its values
-    /// outside its variants, which a program outside its crate can't name,
-    /// are. `let Event::Pressed(label) = event` on an enum of that one
-    /// variant misses none (#1681).
-    fn host_variant_uncovered(
-        &mut self,
-        written: &pattern::EnumSyntax,
-        referenced: &Ty,
-        prefix: &str,
-        at: Span,
-    ) -> Result<Vec<String>, Error> {
-        let Ty::Host { proof, arguments } = referenced else {
-            return Ok(vec![format!("{prefix}_")]);
-        };
-        let definition = proof.definition.clone();
-        let crate::host::type_def::Shape::Enum {
-            variants,
-            non_exhaustive,
-        } = definition.shape()
-        else {
-            return Ok(vec![format!("{prefix}_")]);
-        };
-        if *non_exhaustive {
-            return Ok(vec![format!("{prefix}_")]);
-        }
-        let owner = host_type_name(&definition, &self.models);
-        let path: ImmutableString = definition.path().as_str().into();
-        let discard = pattern::Syntax::Discard { span: at };
-        let mut missed = Vec::new();
-        for variant in variants {
-            let name = format!("{prefix}{owner}::{}", variant.name());
-            if variant.name() != written.variant.as_str() {
-                missed.push(variant_witness(&name, variant, None));
-                continue;
-            }
-            let members = match &written.named {
-                Some((names, _)) => {
-                    let mut members = vec![&discard; variant.fields().len()];
-                    for ((field, _), member) in names.iter().zip(written.payload.iter()) {
-                        if let Some(index) = variant
-                            .fields()
-                            .iter()
-                            .position(|declared| declared.name() == field.as_str())
-                        {
-                            members[index] = member;
-                        }
-                    }
-                    members
-                }
-                None if written.payload.is_empty() => vec![&discard; variant.fields().len()],
-                None => tuple_members(&written.payload, variant.fields().len(), &discard)?,
-            };
-            let mut parameters = definition
-                .parameters()
-                .iter()
-                .cloned()
-                .zip(arguments.iter().cloned())
-                .collect();
-            for (index, (member, field)) in members.into_iter().zip(variant.fields()).enumerate() {
-                if !member.may_refute() {
-                    continue;
-                }
-                let field_ty = self.instantiate_host_type(
-                    field.ty(),
-                    &mut parameters,
-                    &path,
-                    at,
-                    proof.owner.as_ref(),
-                    Some(&definition),
-                )?;
-                let inner = self.host_uncovered(member, &field_ty)?;
-                if !inner.is_empty() {
-                    missed.extend(
-                        inner
-                            .iter()
-                            .map(|inner| variant_witness(&name, variant, Some((index, inner)))),
-                    );
-                    break;
-                }
-            }
-        }
-        Ok(missed)
-    }
-
-    /// rustc's witnesses of the values of `variant` of the facade enum
-    /// `ty`, written `name`, that a match's unguarded `arms` miss: below a
-    /// variant of one field the arms name, the field's values they all
-    /// miss, as `SeekFrom::Start(1_u64..=u64::MAX)` beside
-    /// `SeekFrom::Start(0)`; else `_` in each field, as
-    /// `SeekFrom::Current(_)`.
-    pub(super) fn host_variant_witnesses(
-        &mut self,
-        name: &str,
-        variant: &crate::host::type_def::Variant,
-        arms: &[pattern::Syntax],
-        ty: &Ty,
-        at: Span,
-    ) -> Result<Vec<String>, Error> {
-        fn members(syntax: &pattern::Syntax, variant: &str, found: &mut Vec<pattern::Syntax>) {
-            match syntax {
-                pattern::Syntax::Or { alternatives, .. } => {
-                    for alternative in alternatives {
-                        members(alternative, variant, found);
-                    }
-                }
-                pattern::Syntax::Enum(pattern)
-                    if pattern.variant.as_str() == variant && pattern.named.is_none() =>
-                {
-                    if let [member] = &*pattern.payload {
-                        found.push(member.clone());
-                    }
-                }
-                _ => {}
-            }
-        }
-        let whole = || vec![variant_witness(name, variant, None)];
-        let (Ty::Host { proof, arguments }, [field]) = (self.referenced(ty), variant.fields())
-        else {
-            return Ok(whole());
-        };
-        let mut found = Vec::new();
-        for arm in arms {
-            members(arm, variant.name(), &mut found);
-        }
-        if found.is_empty() {
-            return Ok(whole());
-        }
-        let definition = proof.definition.clone();
-        let mut parameters = definition
-            .parameters()
-            .iter()
-            .cloned()
-            .zip(arguments.iter().cloned())
-            .collect();
-        let field_ty = self.instantiate_host_type(
-            field.ty(),
-            &mut parameters,
-            definition.path().as_str(),
-            at,
-            proof.owner.as_ref(),
-            Some(&definition),
-        )?;
-        let written = pattern::Syntax::Or {
-            alternatives: found.into(),
-            span: at,
-        };
-        let inner = self.host_uncovered(&written, &field_ty)?;
-        if inner.is_empty() {
-            return Ok(whole());
-        }
-        Ok(inner
-            .iter()
-            .map(|inner| variant_witness(name, variant, Some((0, inner))))
-            .collect())
     }
 
     /// The patterns of the values of `ty` that `syntax`, whose coverage is
@@ -1024,6 +880,97 @@ impl<'a> Parser<'a> {
         refused
     }
 
+    /// Whether `ty`, not behind a reference, is an enum with variants,
+    /// whose empty match rustc refuses by naming them rather than calling
+    /// the type non-empty.
+    pub(super) fn enumerated(&self, ty: &Ty) -> bool {
+        match self.inference.resolve(ty) {
+            Ty::Option(_) | Ty::Result(..) | Ty::Cow(_) | Ty::Ordering => true,
+            ref polled if self.poll_output(polled).is_some() => true,
+            Ty::Host { proof, .. } => matches!(
+                proof.definition.shape(),
+                crate::host::type_def::Shape::Enum { variants, .. } if !variants.is_empty()
+            ),
+            Ty::Script(id, _) => matches!(
+                self.models.definition(id),
+                Nominal::Enum { item, .. } if !item.variants.is_empty()
+            ),
+            _ => false,
+        }
+    }
+
+    /// Whether `ty` has no values, as rustc's exhaustiveness sees it: `!`,
+    /// `Infallible`, an enum with no variants, or a type each of whose
+    /// constructors holds a part with none. A reference always has values,
+    /// so a part of a referenced value is never empty.
+    pub(super) fn uninhabited(&self, ty: &Ty) -> bool {
+        self.uninhabited_within(ty, 0)
+    }
+
+    fn uninhabited_within(&self, ty: &Ty, depth: usize) -> bool {
+        // A type that holds itself only behind a pointer, which has values.
+        const DEPTH: usize = 32;
+        if depth > DEPTH || matches!(self.inference.resolve(ty), Ty::Reference { .. }) {
+            return false;
+        }
+        self.coverage_constructors(ty).is_some_and(|constructors| {
+            constructors
+                .iter()
+                .all(|constructor| self.empty_constructor(constructor, depth + 1))
+        })
+    }
+
+    /// Whether `constructor` holds a part of a type with no values, so that
+    /// no value is of it and no witness names it, as `Err(_)` of a
+    /// `Result<T, Infallible>`.
+    fn empty_constructor(&self, constructor: &Constructor, depth: usize) -> bool {
+        constructor
+            .payload
+            .iter()
+            .any(|part| self.uninhabited_within(part, depth))
+    }
+
+    /// The constructors of a column of type `ty` whose patterns are
+    /// `heads`: an integer's or a `char`'s values split at the ends of the
+    /// literals and ranges among them (`Scalar::split`), else the type's
+    /// own (`coverage_constructors`) but those no value is of, which a part
+    /// of a referenced value has none of.
+    pub(super) fn column_constructors<'p>(
+        &self,
+        ty: &Ty,
+        heads: impl Iterator<Item = &'p Pattern>,
+    ) -> Option<Vec<Constructor>> {
+        let Some(scalar) = Scalar::of(&self.referenced(ty)) else {
+            let mut constructors = self.coverage_constructors(ty)?;
+            if !matches!(self.inference.resolve(ty), Ty::Reference { .. }) {
+                constructors.retain(|constructor| !self.empty_constructor(constructor, 0));
+            } else if constructors.is_empty() {
+                // A referenced value always has values, so of a type with
+                // no constructor only a wildcard covers it.
+                return None;
+            }
+            return Some(constructors);
+        };
+        let ranges = heads
+            .filter_map(|head| match head {
+                Pattern::Constructor { key, .. } => scalar.key_ordinals(key),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        Some(
+            scalar
+                .split(&ranges)
+                .into_iter()
+                .map(|(low, high)| Constructor {
+                    key: Key::Ordinals { scalar, low, high },
+                    name: scalar.witness(low, high).into(),
+                    payload: Box::default(),
+                    fields: None,
+                })
+                .collect(),
+        )
+    }
+
     pub(super) fn coverage_constructors(&self, ty: &Ty) -> Option<Vec<Constructor>> {
         let resolved = self.inference.resolve(ty);
         let prelude = |variant: Prelude, payload: &[Ty]| Constructor {
@@ -1034,6 +981,10 @@ impl<'a> Parser<'a> {
         };
         match resolved {
             Ty::Reference { target, .. } => return self.coverage_constructors(&target),
+            // Types with no values: no constructor.
+            Ty::Never | Ty::ParseError(super::from_str::ParseError::Infallible) => {
+                return Some(Vec::new());
+            }
             Ty::Bool => {
                 return Some(
                     [false, true]
@@ -1339,28 +1290,33 @@ impl<'a> Parser<'a> {
             return true;
         }
 
+        let scalar = Scalar::of(&self.referenced(&types[0])).is_some();
         match &candidate[0] {
-            // A slice pattern covers each length it matches.
-            Pattern::Constructor {
-                key: Key::Slice { .. },
-                ..
-            } => {
-                let Some(constructors) = self.coverage_constructors(&types[0]) else {
+            // A slice pattern covers each length it matches, and an
+            // integer's or a `char`'s literal or range each range of its
+            // column it holds.
+            Pattern::Constructor { key, .. } if scalar || matches!(key, Key::Slice { .. }) => {
+                let heads = rows.iter().map(|row| &row[0]).chain([&candidate[0]]);
+                let Some(constructors) = self.column_constructors(&types[0], heads) else {
                     return false;
                 };
-                constructors.iter().all(|constructor| {
-                    specialize_coverage_pattern(&candidate[0], constructor).is_none() || {
-                        let specialized_rows = specialize_coverage_rows(rows, constructor);
-                        let specialized_candidate =
-                            specialize_coverage_candidate(candidate, constructor);
-                        let specialized_types = specialize_coverage_types(types, constructor);
-                        self.coverage_pattern_is_covered(
-                            &specialized_types,
-                            &specialized_rows,
-                            &specialized_candidate,
-                        )
-                    }
-                })
+                let mut matched = constructors.iter().filter(|constructor| {
+                    specialize_coverage_pattern(&candidate[0], constructor).is_some()
+                });
+                let mut covers = |constructor: &Constructor| {
+                    let specialized_rows = specialize_coverage_rows(rows, constructor);
+                    let specialized_candidate =
+                        specialize_coverage_candidate(candidate, constructor);
+                    let specialized_types = specialize_coverage_types(types, constructor);
+                    self.coverage_pattern_is_covered(
+                        &specialized_types,
+                        &specialized_rows,
+                        &specialized_candidate,
+                    )
+                };
+                // A pattern that matches none of the column's values isn't
+                // one rawr reads, so it is never covered.
+                matched.next().is_some_and(&mut covers) && matched.all(covers)
             }
             Pattern::Constructor { key, .. } => {
                 let Some(constructor) =
@@ -1388,7 +1344,8 @@ impl<'a> Parser<'a> {
                 self.coverage_pattern_is_covered(&types[1..], &default_rows, &candidate[1..])
             }
             Pattern::Wildcard => {
-                let Some(constructors) = self.coverage_constructors(&types[0]) else {
+                let heads = rows.iter().map(|row| &row[0]);
+                let Some(constructors) = self.column_constructors(&types[0], heads) else {
                     let default_rows = default_coverage_rows(rows);
                     return self.coverage_pattern_is_covered(
                         &types[1..],
@@ -1435,11 +1392,13 @@ impl<'a> Parser<'a> {
         if rows.iter().any(|row| row.iter().all(Pattern::is_wildcard)) {
             return Vec::new();
         }
+        // Each head before each tail, the heads outermost, as rustc lists
+        // `(A, x)`, `(A, y)`, `(B, x)`.
         let prefixed = |heads: &[Witness], tails: Vec<Vec<Witness>>| {
-            tails
+            heads
                 .iter()
-                .flat_map(|tail| {
-                    heads.iter().map(move |head| {
+                .flat_map(|head| {
+                    tails.iter().map(move |tail| {
                         let mut witness = vec![head.clone()];
                         witness.extend_from_slice(tail);
                         witness
@@ -1447,7 +1406,8 @@ impl<'a> Parser<'a> {
                 })
                 .collect::<Vec<_>>()
         };
-        let Some(constructors) = self.coverage_constructors(&types[0]) else {
+        let heads = rows.iter().map(|row| &row[0]);
+        let Some(constructors) = self.column_constructors(&types[0], heads) else {
             let tails = self.coverage_witnesses(&types[1..], &default_coverage_rows(rows), false);
             let head = match without_references(&self.inference.resolve(&types[0])) {
                 Ty::Host { proof, .. }
@@ -1548,19 +1508,75 @@ impl<'a> Parser<'a> {
     }
 
     /// Whether the unguarded arms `rows` of a match on facade values, one
-    /// pattern for each of `tys` in each row, cover every value, as rustc
-    /// checks it: the arms on one variant of a facade enum cover it when
-    /// their patterns below it cover its fields together, so `A(B(x))` and
-    /// `A(C)` cover `A` when `B` and `C` are its field's variants.
+    /// pattern for each of `tys` in each row, cover every value
+    /// (`host_rows_witnesses`).
     pub(super) fn host_rows_cover(
         &mut self,
         rows: Vec<Vec<&pattern::Syntax>>,
         tys: &[Ty],
         at: Span,
     ) -> Result<bool, Error> {
+        let mut opaque = false;
+        Ok(self
+            .rows_witnesses(rows, tys, at, true, &mut opaque)?
+            .is_empty())
+    }
+
+    /// rustc's witnesses of the values of `ty` the patterns `arms` miss,
+    /// read from the patterns as written (`rows_witnesses`). `None` where
+    /// a part of a type they don't tell apart is refutable, which the
+    /// program's coverage, if it names any, names better.
+    pub(super) fn host_rows_witnesses(
+        &mut self,
+        arms: &[&pattern::Syntax],
+        ty: &Ty,
+        at: Span,
+    ) -> Result<Option<Vec<String>>, Error> {
+        let mut opaque = false;
+        let rows = arms.iter().map(|arm| vec![*arm]).collect();
+        let witnesses =
+            self.rows_witnesses(rows, std::slice::from_ref(ty), at, true, &mut opaque)?;
+        let prefix = self.reference_prefix(ty);
+        Ok((!opaque || witnesses.is_empty()).then(|| {
+            witnesses
+                .into_iter()
+                .map(|mut witness| format!("{prefix}{}", witness.swap_remove(0)))
+                .collect()
+        }))
+    }
+
+    /// rustc's witnesses of the values the patterns `rows`, one for each of
+    /// `tys` in each row, miss, read from the patterns as written where a
+    /// facade value's parts are tested at run time: the arms on one
+    /// constructor of a column cover it when their patterns below it cover
+    /// its fields together, so `A(B(x))` and `A(C)` cover `A` when `B` and
+    /// `C` are its field's variants, and `A(true)` and `A(false)` cover `A`
+    /// of a `bool`. As `coverage_witnesses` reports them: at the
+    /// `scrutinee` each missing constructor, below it `_` where the rows
+    /// name none, and the constructors no row names before, and without,
+    /// the ones some row names. `opaque` is set where a refutable pattern
+    /// is on a part of a type the patterns don't tell apart here.
+    fn rows_witnesses(
+        &mut self,
+        rows: Vec<Vec<&pattern::Syntax>>,
+        tys: &[Ty],
+        at: Span,
+        scrutinee: bool,
+        opaque: &mut bool,
+    ) -> Result<Vec<Vec<String>>, Error> {
         let Some((ty, rest)) = tys.split_first() else {
-            return Ok(!rows.is_empty());
+            return Ok(if rows.is_empty() {
+                vec![Vec::new()]
+            } else {
+                Vec::new()
+            });
         };
+        if rows
+            .iter()
+            .any(|row| row.iter().all(|pattern| matches_anything(pattern)))
+        {
+            return Ok(Vec::new());
+        }
         // Each row by its first pattern, past `name @` and `&`, with each
         // alternative of a `|` a row of its own.
         let mut spread = Vec::new();
@@ -1575,101 +1591,423 @@ impl<'a> Parser<'a> {
                     | pattern::Syntax::Reference { pattern, .. } => {
                         firsts.push(pattern);
                     }
-                    pattern::Syntax::Or { alternatives, .. } => firsts.extend(alternatives.iter()),
+                    pattern::Syntax::Or { alternatives, .. } => {
+                        firsts.extend(alternatives.iter().rev());
+                    }
                     _ => spread.push((first, tail.to_vec())),
                 }
             }
         }
-        let irrefutable = |pattern: &pattern::Syntax| {
-            matches!(
-                pattern,
-                pattern::Syntax::Binding { .. }
-                    | pattern::Syntax::Ref { .. }
-                    | pattern::Syntax::Discard { .. }
-                    | pattern::Syntax::Rest { .. }
-            )
+        // Each head before each tail, the heads outermost.
+        let prefixed = |heads: &[String], tails: Vec<Vec<String>>| {
+            heads
+                .iter()
+                .flat_map(|head| {
+                    tails.iter().map(move |tail| {
+                        let mut witness = vec![head.clone()];
+                        witness.extend_from_slice(tail);
+                        witness
+                    })
+                })
+                .collect::<Vec<_>>()
         };
-        let resolved = self.inference.resolve(ty);
-        let enumerated = match without_references(&resolved) {
-            // A `#[non_exhaustive]` enum's values are not told apart: only a
-            // wildcard covers them.
+        // The rows past a first pattern that matches anything.
+        let wild: Vec<Vec<&pattern::Syntax>> = spread
+            .iter()
+            .filter(|(first, _)| irrefutable_leaf(first))
+            .map(|(_, tail)| tail.clone())
+            .collect();
+        let splits = if spread.iter().any(|(first, _)| !irrefutable_leaf(first)) {
+            self.row_splits(ty, &spread, at)?
+        } else {
+            None
+        };
+        // Only a pattern that matches every value covers a type whose
+        // values are not told apart here.
+        let Some(splits) = splits else {
+            *opaque |= spread.iter().any(|(first, _)| !irrefutable_leaf(first));
+            let tails = self.rows_witnesses(wild, rest, at, false, opaque)?;
+            return Ok(prefixed(&["_".to_string()], tails));
+        };
+        let discard = pattern::Syntax::Discard { span: at };
+        let mut present = Vec::new();
+        let mut missing = Vec::new();
+        for split in splits {
+            let mut named = false;
+            for (first, _) in &spread {
+                named |= !irrefutable_leaf(first)
+                    && split
+                        .head
+                        .members(first, split.fields.len(), &discard)?
+                        .is_some();
+            }
+            if named {
+                present.push(split);
+            } else {
+                missing.push(split);
+            }
+        }
+        if !missing.is_empty() {
+            let tails = self.rows_witnesses(wild, rest, at, false, opaque)?;
+            if !tails.is_empty() {
+                let heads = if scrutinee || !present.is_empty() {
+                    missing
+                        .iter()
+                        .map(|split| {
+                            split
+                                .head
+                                .render(&vec!["_".to_string(); split.fields.len()])
+                        })
+                        .collect()
+                } else {
+                    vec!["_".to_string()]
+                };
+                return Ok(prefixed(&heads, tails));
+            }
+        }
+        let mut witnesses = Vec::new();
+        for Split { head, fields } in &present {
+            let mut specialized = Vec::new();
+            for (first, tail) in &spread {
+                let Some(members) = head.members(first, fields.len(), &discard)? else {
+                    continue;
+                };
+                specialized.push(members.into_iter().chain(tail.iter().copied()).collect());
+            }
+            let tys: Vec<Ty> = fields.iter().cloned().chain(rest.iter().cloned()).collect();
+            for mut witness in self.rows_witnesses(specialized, &tys, at, false, opaque)? {
+                let tail = witness.split_off(fields.len());
+                let mut combined = vec![head.render(&witness)];
+                combined.extend(tail);
+                witnesses.push(combined);
+            }
+        }
+        Ok(witnesses)
+    }
+
+    /// The constructors `host_rows_cover` splits a column of `ty` by, each
+    /// with its fields' types, where the column's first patterns `spread`
+    /// tell its values apart: a facade enum's variants, a facade struct
+    /// by the fields the patterns name, a tuple, `Option`'s and `Result`'s
+    /// variants, and a `bool`'s, an integer's or a `char`'s values its
+    /// literals and ranges split. `None` for any other type, or a
+    /// `#[non_exhaustive]` enum, whose values only a wildcard covers.
+    fn row_splits(
+        &mut self,
+        ty: &Ty,
+        spread: &[(&pattern::Syntax, Vec<&pattern::Syntax>)],
+        at: Span,
+    ) -> Result<Option<Vec<Split>>, Error> {
+        let column = self.referenced(ty);
+        let values = |constructors: Vec<Constructor>| {
+            constructors
+                .into_iter()
+                .map(|constructor| Split::of(Head::Values(constructor), Vec::new()))
+                .collect()
+        };
+        Ok(Some(match &column {
             Ty::Host { proof, arguments } => match proof.definition.shape() {
                 crate::host::type_def::Shape::Enum {
                     variants,
                     non_exhaustive: false,
-                } => Some((proof.clone(), arguments.clone(), variants.to_vec())),
-                _ => None,
-            },
-            _ => None,
-        };
-        let Some((proof, arguments, variants)) =
-            enumerated.filter(|_| spread.iter().any(|(first, _)| !irrefutable(first)))
-        else {
-            // Only a pattern that matches every value covers a type whose
-            // values are not told apart here.
-            let wild = spread
-                .into_iter()
-                .filter(|(first, _)| irrefutable(first))
-                .map(|(_, tail)| tail)
-                .collect();
-            return self.host_rows_cover(wild, rest, at);
-        };
-        let definition = proof.definition.clone();
-        let path: ImmutableString = definition.path().as_str().into();
-        let discard = pattern::Syntax::Discard { span: at };
-        for variant in &variants {
-            let mut parameters = definition
-                .parameters()
-                .iter()
-                .cloned()
-                .zip(arguments.iter().cloned())
-                .collect();
-            let mut fields = Vec::with_capacity(variant.fields().len());
-            for field in variant.fields() {
-                fields.push(self.instantiate_host_type(
-                    field.ty(),
-                    &mut parameters,
-                    &path,
-                    at,
-                    proof.owner.as_ref(),
-                    Some(&definition),
-                )?);
-            }
-            let mut specialized = Vec::new();
-            for (first, tail) in &spread {
-                let members = match first {
-                    pattern if irrefutable(pattern) => vec![&discard; fields.len()],
-                    pattern::Syntax::Enum(pattern)
-                        if pattern.variant.as_str() == variant.name() =>
-                    {
-                        match &pattern.named {
-                            Some((names, _)) => {
-                                let mut members = vec![&discard; fields.len()];
-                                for ((name, _), member) in names.iter().zip(pattern.payload.iter())
-                                {
-                                    if let Some(index) = variant
-                                        .fields()
-                                        .iter()
-                                        .position(|field| field.name() == name.as_str())
-                                    {
-                                        members[index] = member;
-                                    }
-                                }
-                                members
+                } => {
+                    let definition = proof.definition.clone();
+                    let owner = proof.owner.clone();
+                    let owner_name = host_type_name(&definition, &self.models);
+                    let path: ImmutableString = definition.path().as_str().into();
+                    let mut splits = Vec::with_capacity(variants.len());
+                    for variant in variants.iter() {
+                        let mut parameters = definition
+                            .parameters()
+                            .iter()
+                            .cloned()
+                            .zip(arguments.iter().cloned())
+                            .collect();
+                        let mut fields = Vec::with_capacity(variant.fields().len());
+                        for field in variant.fields() {
+                            fields.push(self.instantiate_host_type(
+                                field.ty(),
+                                &mut parameters,
+                                &path,
+                                at,
+                                owner.as_ref(),
+                                Some(&definition),
+                            )?);
+                        }
+                        let names = variant
+                            .fields()
+                            .iter()
+                            .map(|field| ImmutableString::from(field.name()))
+                            .collect();
+                        splits.push(Split {
+                            head: Head::Variant {
+                                name: variant.name().into(),
+                                written: format!("{owner_name}::{}", variant.name()).into(),
+                                fields: names,
+                            },
+                            fields,
+                        });
+                    }
+                    splits
+                }
+                crate::host::type_def::Shape::Enum { .. } => return Ok(None),
+                // A struct's declared fields, or, where the facade reads
+                // them by methods, the fields some pattern names; the
+                // others are `_` in each.
+                shape => {
+                    let written =
+                        ImmutableString::from(host_type_name(&proof.definition, &self.models));
+                    let mut names = match shape {
+                        crate::host::type_def::Shape::Struct { fields, .. } => fields
+                            .iter()
+                            .map(|field| (ImmutableString::from(field.name()), at))
+                            .collect(),
+                        _ => Vec::<(ImmutableString, Span)>::new(),
+                    };
+                    let complete = !names.is_empty();
+                    for (first, _) in spread {
+                        let pattern::Syntax::Enum(written) = first else {
+                            continue;
+                        };
+                        let Some((written, _)) =
+                            written.named.as_ref().filter(|_| written.host_struct)
+                        else {
+                            continue;
+                        };
+                        for (name, name_span) in written.iter() {
+                            if !names.iter().any(|(known, _)| known == name) {
+                                names.push((name.clone(), *name_span));
                             }
-                            None if pattern.payload.is_empty() => vec![&discard; fields.len()],
-                            None => tuple_members(&pattern.payload, fields.len(), &discard)?,
                         }
                     }
-                    _ => continue,
-                };
-                specialized.push(members.into_iter().chain(tail.iter().copied()).collect());
+                    if names.is_empty() {
+                        return Ok(None);
+                    }
+                    let mut fields = Vec::with_capacity(names.len());
+                    for (name, name_span) in &names {
+                        let value = origin::Fragment::plain("__rawr_field");
+                        fields.push(self.host_struct_field(value, &column, name, *name_span)?.ty);
+                    }
+                    vec![Split {
+                        head: Head::Struct {
+                            written,
+                            fields: names.into_iter().map(|(name, _)| name).collect(),
+                            complete,
+                        },
+                        fields,
+                    }]
+                }
+            },
+            Ty::Tuple(members) => vec![Split::of(Head::Tuple, members.to_vec())],
+            Ty::Option(element) => vec![
+                Split::of(Head::Prelude(Prelude::None), Vec::new()),
+                Split::of(Head::Prelude(Prelude::Some), vec![(**element).clone()]),
+            ],
+            Ty::Result(ok, err) => vec![
+                Split::of(Head::Prelude(Prelude::Ok), vec![(**ok).clone()]),
+                Split::of(Head::Prelude(Prelude::Err), vec![(**err).clone()]),
+            ],
+            Ty::Bool => values(self.coverage_constructors(&column).unwrap_or_default()),
+            _ if Scalar::of(&column).is_some() => {
+                let heads = spread
+                    .iter()
+                    .filter_map(|(first, _)| Head::value_pattern(first))
+                    .collect::<Vec<_>>();
+                values(
+                    self.column_constructors(&column, heads.iter())
+                        .unwrap_or_default(),
+                )
             }
-            let tys: Vec<Ty> = fields.into_iter().chain(rest.iter().cloned()).collect();
-            if !self.host_rows_cover(specialized, &tys, at)? {
-                return Ok(false);
-            }
+            _ => return Ok(None),
+        }))
+    }
+}
+
+/// Whether a pattern matches any value with no test: a binding, `ref`,
+/// `_` or `..`.
+fn irrefutable_leaf(pattern: &pattern::Syntax) -> bool {
+    matches!(
+        pattern,
+        pattern::Syntax::Binding { .. }
+            | pattern::Syntax::Ref { .. }
+            | pattern::Syntax::Discard { .. }
+            | pattern::Syntax::Rest { .. }
+    )
+}
+
+/// A constructor of a column of facade values' parts that
+/// `Parser::host_rows_cover` splits its rows by, with its fields' types.
+pub(super) struct Split {
+    head: Head,
+    fields: Vec<Ty>,
+}
+
+impl Split {
+    fn of(head: Head, fields: Vec<Ty>) -> Self {
+        Self { head, fields }
+    }
+}
+
+/// What a column's first patterns are tested against: a constructor of
+/// its type (`Split`).
+pub(super) enum Head {
+    /// A facade enum's variant, written `written` (`Event::Pressed`), with
+    /// its fields' names.
+    Variant {
+        name: ImmutableString,
+        written: ImmutableString,
+        fields: Box<[ImmutableString]>,
+    },
+    /// A facade struct written `written`, by its fields, which are its
+    /// declared ones when `complete`, else those some pattern names.
+    Struct {
+        written: ImmutableString,
+        fields: Box<[ImmutableString]>,
+        complete: bool,
+    },
+    Tuple,
+    Prelude(Prelude),
+    /// The values of a `bool`, an integer or a `char` a column's literals
+    /// and ranges split it into (`Parser::column_constructors`).
+    Values(Constructor),
+}
+
+impl Head {
+    /// The coverage of a literal or a range, which a column of `bool`s,
+    /// integers or `char`s splits by.
+    fn value_pattern(syntax: &pattern::Syntax) -> Option<Pattern> {
+        let key = match syntax {
+            pattern::Syntax::Literal { literal, .. } => Key::Literal(literal.clone()),
+            pattern::Syntax::Range {
+                low,
+                high,
+                inclusive,
+                ..
+            } => Key::Range {
+                low: low.as_ref().map(|(low, _)| low.clone()),
+                high: high.as_ref().map(|(high, _)| high.clone()),
+                inclusive: *inclusive,
+            },
+            _ => return None,
+        };
+        Some(Pattern::Constructor {
+            key,
+            name: ImmutableString::new(),
+            payload: Box::default(),
+        })
+    }
+
+    /// The patterns below this constructor of `first`, one for each of its
+    /// `arity` fields, `discard` where `first` names none; `None` where
+    /// `first` matches none of its values.
+    fn members<'s>(
+        &self,
+        first: &'s pattern::Syntax,
+        arity: usize,
+        discard: &'s pattern::Syntax,
+    ) -> Result<Option<Vec<&'s pattern::Syntax>>, Error> {
+        if irrefutable_leaf(first) {
+            return Ok(Some(vec![discard; arity]));
         }
-        Ok(true)
+        // The named fields of a struct or a struct variant in declaration
+        // order.
+        let named = |declared: &[ImmutableString],
+                     written: &'s [(ImmutableString, Span)],
+                     payload: &'s [pattern::Syntax]| {
+            let mut members = vec![discard; declared.len()];
+            for ((name, _), member) in written.iter().zip(payload) {
+                if let Some(index) = declared.iter().position(|field| field == name) {
+                    members[index] = member;
+                }
+            }
+            members
+        };
+        Ok(match (self, first) {
+            (Self::Variant { name, fields, .. }, pattern::Syntax::Enum(written))
+                if !written.host_struct && written.variant == *name =>
+            {
+                Some(match &written.named {
+                    Some((names, _)) => named(fields, names, &written.payload),
+                    None if written.payload.is_empty() => vec![discard; arity],
+                    None => tuple_members(&written.payload, arity, discard)?,
+                })
+            }
+            (Self::Struct { fields, .. }, pattern::Syntax::Enum(written))
+                if written.host_struct =>
+            {
+                let Some((names, _)) = &written.named else {
+                    return Ok(None);
+                };
+                Some(named(fields, names, &written.payload))
+            }
+            (Self::Tuple, pattern::Syntax::Tuple { members, .. }) => {
+                Some(tuple_members(members, arity, discard)?)
+            }
+            (
+                Self::Prelude(variant),
+                pattern::Syntax::Prelude {
+                    variant: written,
+                    payload,
+                    ..
+                },
+            ) if written == variant => Some(payload.iter().map(|payload| &**payload).collect()),
+            (Self::Values(constructor), first) => Self::value_pattern(first)
+                .and_then(|head| specialize_coverage_pattern(&head, constructor))
+                .map(|_| Vec::new()),
+            _ => None,
+        })
+    }
+
+    /// rustc's witness of this constructor over `payload`, one per field:
+    /// `Event::Pressed(_)`, `Style { width: 0_i64, .. }`, `(a, b)`.
+    fn render(&self, payload: &[String]) -> String {
+        // rustc names a struct's fields that aren't `_`, and `..` for the
+        // rest.
+        let named = |written: &str, fields: &[ImmutableString], complete: bool| {
+            let mut members = fields
+                .iter()
+                .zip(payload)
+                .filter(|(_, member)| member.as_str() != "_")
+                .map(|(field, member)| format!("{field}: {member}"))
+                .collect::<Vec<_>>();
+            if !complete || members.len() < fields.len() {
+                members.push("..".into());
+            }
+            format!("{written} {{ {} }}", members.join(", "))
+        };
+        match self {
+            Self::Variant {
+                written, fields, ..
+            } if fields.is_empty() => written.to_string(),
+            // A tuple variant's fields are named by their positions.
+            Self::Variant {
+                written, fields, ..
+            } if fields[0].parse::<usize>().is_ok() => {
+                format!("{written}({})", payload.join(", "))
+            }
+            Self::Variant {
+                written, fields, ..
+            } => named(written, fields, true),
+            Self::Struct {
+                written,
+                fields,
+                complete,
+            } => named(written, fields, *complete),
+            Self::Tuple if payload.len() == 1 => format!("({},)", payload[0]),
+            Self::Tuple => format!("({})", payload.join(", ")),
+            Self::Prelude(variant) => render_constructor(variant.name(), payload, String::clone),
+            Self::Values(constructor) => constructor.name.to_string(),
+        }
+    }
+}
+
+/// Whether a pattern matches any value with no test, past `name @` and
+/// `&`.
+fn matches_anything(pattern: &pattern::Syntax) -> bool {
+    match pattern {
+        pattern::Syntax::At { pattern, .. } | pattern::Syntax::Reference { pattern, .. } => {
+            matches_anything(pattern)
+        }
+        pattern => irrefutable_leaf(pattern),
     }
 }

@@ -28,7 +28,8 @@ pub(crate) use error::{
     derivable, unscoped_method, ArgumentCount, ArgumentSignature, ArrayLength, AssignTwice,
     CannotCompare, Described, NonExhaustive, NotFound, PatternFields, Qualified, Refutable,
     RepeatedRest, SelfOutside, SlicePattern, TypeNeeded, UnboundAlternative, Uninitialized,
-    Unsatisfied, Unsupported, ASYNC_MAIN, IF_WITHOUT_ELSE, INVALID_ASSIGNEE, RETURN_WITHOUT_VALUE,
+    Unsatisfied, Unsupported, ASYNC_MAIN, IF_WITHOUT_ELSE, INHABITED_REFERENCES, INVALID_ASSIGNEE,
+    RETURN_WITHOUT_VALUE,
 };
 pub use error::{
     Annotation, Arguments, Arms, Assignment, Beyond, BinaryOperation, BindingSite, Bound, Boxing,

@@ -7,7 +7,7 @@ impl Parser<'_> {
     /// The program's enum or struct `ty` is, behind any references, where
     /// this file declares it, with the declarations of an enum's variants
     /// `missed` names, as rustc's E0004 notes them.
-    fn uncovered_type<'m>(
+    pub(super) fn uncovered_type<'m>(
         &self,
         ty: &Ty,
         missed: impl Iterator<Item = &'m str>,
@@ -201,7 +201,10 @@ impl<'a> Parser<'a> {
             | Ty::Unit
             | Ty::Float(_)
             | Ty::Ordering
-            | Ty::Host { .. } => subject.rendered_source(),
+            | Ty::Host { .. }
+            // A type with no values, whose match has no arms.
+            | Ty::Never
+            | Ty::ParseError(ParseError::Infallible) => subject.rendered_source(),
             Ty::Script(definition_id, ..) => {
                 let Nominal::Enum { definition, item } =
                     self.models.definition(*definition_id).clone()
@@ -267,8 +270,13 @@ impl<'a> Parser<'a> {
         let mut arm_ends = Vec::new();
         let mut arms = Vec::new();
         let mut written_arms = Vec::new();
-        let coverage_types = vec![subject_ty.clone()];
+        // The value as matched, its references included: a referenced
+        // value always has values (`specialize_coverage_types`).
+        let coverage_types = vec![binding_ty.clone()];
         let mut coverage_rows = Vec::<Vec<coverage::Pattern>>::new();
+        // The unguarded arms' patterns, which name what a facade part's
+        // tests miss where their coverage can't (`host_rows_witnesses`).
+        let mut unguarded = Vec::new();
         let mut wildcard = false;
         let original_bindings = self.bindings.clone();
         let mut arm_bindings = Vec::new();
@@ -513,6 +521,7 @@ impl<'a> Parser<'a> {
                             .into_iter()
                             .map(|alternative| vec![alternative]),
                     );
+                    unguarded.push(syntax);
                 }
 
                 let label =
@@ -580,30 +589,60 @@ impl<'a> Parser<'a> {
             .either(span(match_span.start(), end), &arm_spans);
         if !wildcard {
             let witnesses = self.coverage_witnesses(&coverage_types, &coverage_rows, true);
-            if !witnesses.is_empty() {
-                let missed = witnesses
+            let mut sealed = Vec::new();
+            if let Some(first) = witnesses.first().and_then(|witness| witness.first()) {
+                first.sealed(&mut sealed);
+            }
+            let prefix = self.reference_prefix(&binding_ty);
+            let mut rendered = witnesses
+                .iter()
+                .map(|witness| {
+                    let witness = witness
+                        .first()
+                        .map_or_else(|| "_".to_string(), coverage::Witness::render);
+                    format!("{prefix}{witness}")
+                })
+                .collect::<Vec<_>>();
+            // A facade part tested at run time covers no whole value of its
+            // own (`host_coverage`): the arms' patterns as written tell what
+            // they miss, so `S { a: Some(_) }` and `S { a: None }` cover
+            // every value together.
+            if !rendered.is_empty()
+                && coverage_rows
                     .iter()
-                    .filter_map(|witness| match witness.first() {
-                        Some(coverage::Witness::Constructor { name, .. }) => {
-                            name.rsplit("::").next()
-                        }
-                        _ => None,
-                    });
-                let uncovered = self.uncovered_type(&binding_ty, missed);
-                let prefix = self.reference_prefix(&binding_ty);
-                let mut sealed = Vec::new();
-                if let Some(first) = witnesses.first().and_then(|witness| witness.first()) {
-                    first.sealed(&mut sealed);
-                }
-                let witnesses = witnesses
+                    .flatten()
+                    .any(coverage::Pattern::tested)
+                && let Some(written) = self.host_rows_witnesses(
+                    &unguarded.iter().collect::<Vec<_>>(),
+                    &binding_ty,
+                    match_span,
+                )?
+            {
+                rendered = written;
+            }
+            if !rendered.is_empty() {
+                // A match with no arms on a type that isn't an enum names
+                // no witness: rustc calls the type non-empty.
+                let non_empty = written_arms.is_empty() && !self.enumerated(&binding_ty);
+                // The variant each witness names, as `B` of `&E::B(_)`.
+                let missed = rendered
                     .iter()
-                    .map(|witness| {
-                        let rendered = witness
-                            .first()
-                            .map_or_else(|| "_".to_string(), coverage::Witness::render);
-                        format!("{prefix}{rendered}").into()
+                    .filter(|_| !non_empty)
+                    .filter_map(|witness| {
+                        let witness = witness.trim_start_matches(['&', ' ']);
+                        witness.trim_start_matches("mut ").split(['(', ' ']).next()
                     })
-                    .collect();
+                    .filter_map(|head| head.rsplit("::").next());
+                let uncovered = self.uncovered_type(&binding_ty, missed);
+                let witnesses = if non_empty {
+                    Box::default()
+                } else {
+                    rendered.into_iter().map(Into::into).collect()
+                };
+                let uninhabited_target = match self.inference.resolve(&binding_ty) {
+                    Ty::Reference { target, .. } => self.uninhabited(&target),
+                    _ => false,
+                };
                 return Err(Error::NonExhaustive {
                     witnesses,
                     ty: self.matched_type(&binding_ty),
@@ -611,6 +650,7 @@ impl<'a> Parser<'a> {
                     arms: self.written_arms(written_arms, scrutinee_span, end),
                     uncovered,
                     sealed: sealed.into(),
+                    uninhabited_target,
                 });
             }
         }
@@ -995,16 +1035,24 @@ impl<'a> Parser<'a> {
             };
             if !witnesses.is_empty() {
                 let prefix = self.reference_prefix(&written);
-                return Err(Error::NonExhaustive {
-                    witnesses: witnesses
+                // A match with no arms on a type that isn't an enum names
+                // no witness: rustc calls the type non-empty.
+                let witnesses = if written_arms.is_empty() {
+                    Box::default()
+                } else {
+                    witnesses
                         .iter()
                         .map(|witness| format!("{prefix}{witness}").into())
-                        .collect(),
+                        .collect()
+                };
+                return Err(Error::NonExhaustive {
+                    witnesses,
                     ty: self.matched_type(&written),
                     scrutinee: self.scrutinee_span(&subject),
                     arms: self.written_arms(written_arms, self.scrutinee_span(&subject), end),
                     uncovered: None,
                     sealed: Box::default(),
+                    uninhabited_target: false,
                 });
             }
         }
@@ -1354,41 +1402,36 @@ impl<'a> Parser<'a> {
                         match_span,
                     )?)
         {
-            // rustc's witnesses: each variant no arm covers, by the type's
-            // name; `_` where arms cover each variant only in part, and
-            // alone for a `#[non_exhaustive]` enum, whose values outside its
-            // variants no arm but a wildcard covers.
-            // A variant with fields is written with them, as
-            // `SeekFrom::Current(_)`, or with what the arms miss of them.
+            // rustc's witnesses: an imported enum's, of the values its
+            // patterns as written miss (`host_rows_witnesses`); a linked
+            // enum's variants no arm covers, by the type's name; `_` where
+            // arms cover each variant only in part, and alone for a
+            // `#[non_exhaustive]` enum, whose values outside its variants no
+            // arm but a wildcard covers.
             let owner = coverage::host_type_name(&proof.definition, &self.models);
             let prefix = self.reference_prefix(&written);
-            let declared = match proof.definition.shape() {
-                crate::host::type_def::Shape::Enum { variants, .. } => variants.to_vec(),
-                _ => Vec::new(),
-            };
+            let imported = matches!(
+                proof.definition.shape(),
+                crate::host::type_def::Shape::Enum { .. }
+            );
             let mut witnesses = Vec::<ImmutableString>::new();
-            for variant in variants
-                .iter()
-                .filter(|variant| !sealed && !covered.contains(variant))
+            if !sealed
+                && imported
+                && let Some(written) = self.host_rows_witnesses(
+                    &unguarded.iter().collect::<Vec<_>>(),
+                    &written,
+                    match_span,
+                )?
             {
-                let name = format!("{prefix}{owner}::{variant}");
-                match declared
-                    .iter()
-                    .find(|declared| declared.name() == variant.as_str())
-                {
-                    Some(declared) => witnesses.extend(
-                        self.host_variant_witnesses(
-                            &name,
-                            declared,
-                            &unguarded,
-                            &subject_ty,
-                            match_span,
-                        )?
-                        .into_iter()
-                        .map(ImmutableString::from),
-                    ),
-                    None => witnesses.push(name.into()),
-                }
+                witnesses = written.into_iter().map(Into::into).collect();
+            }
+            if !sealed && !imported {
+                witnesses.extend(
+                    variants
+                        .iter()
+                        .filter(|variant| !covered.contains(variant))
+                        .map(|variant| format!("{prefix}{owner}::{variant}").into()),
+                );
             }
             if witnesses.is_empty() {
                 witnesses.push(format!("{prefix}_").into());
@@ -1403,6 +1446,7 @@ impl<'a> Parser<'a> {
                     .then(|| ImmutableString::from(owner))
                     .into_iter()
                     .collect(),
+                uninhabited_target: false,
             });
         }
         let output = self.coerce_branches(

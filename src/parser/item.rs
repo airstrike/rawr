@@ -3297,10 +3297,10 @@ fn parse_function_rest(
                 }
                 _ => {
                     let parameter_name = parse_name(input, "as a function parameter")?;
-                    // `W(x): W`, a tuple struct's fields.
+                    // `W(x): W` or `S { x, .. }: S`, a struct's fields.
                     if matches!(
                         input.peek(),
-                        Some((Token::LeftParen | Token::DoubleColon, _))
+                        Some((Token::LeftParen | Token::LeftBrace | Token::DoubleColon, _))
                     ) {
                         let pattern = parse_tuple_struct_parameter(input, parameter_name)?;
                         parameters.push(parse_pattern_parameter(input, pattern, parameters.len())?);
@@ -4187,6 +4187,13 @@ fn parse_parameter_pattern(input: &mut TokenStream) -> ParseResult<crate::item::
                 span,
             })
         }
+        Token::IntegerConstant(_)
+        | Token::Minus
+        | Token::UnaryMinus
+        | Token::CharConstant(_)
+        | Token::StringConstant(_)
+        | Token::True
+        | Token::False => parse_parameter_literal(input),
         Token::Mut => {
             input.next();
             let name = parse_name(input, "after `mut` in a parameter pattern")?;
@@ -4205,15 +4212,49 @@ fn parse_parameter_pattern(input: &mut TokenStream) -> ParseResult<crate::item::
     }
 }
 
+/// A literal in a parameter pattern, `-1` and `'a'` among them.
+fn parse_parameter_literal(input: &mut TokenStream) -> ParseResult<crate::item::ParameterPattern> {
+    let (_, start) = input.peek().expect("token streams always end with EOF");
+    let start = *start;
+    let negative = matches!(input.peek(), Some((Token::Minus | Token::UnaryMinus, _)));
+    if negative {
+        input.next();
+    }
+    let (token, position) = input.next().expect("token streams always end with EOF");
+    let end = after(position, token.to_string().len());
+    let literal = match token {
+        Token::IntegerConstant(value) => {
+            crate::item::PatternLiteral::Integer(if negative { -value } else { value })
+        }
+        Token::CharConstant(value) if !negative => crate::item::PatternLiteral::Char(value),
+        Token::StringConstant(value) if !negative => {
+            crate::item::PatternLiteral::Str(value.as_str().into())
+        }
+        Token::True if !negative => crate::item::PatternLiteral::Bool(true),
+        Token::False if !negative => crate::item::PatternLiteral::Bool(false),
+        _ => {
+            return Err(
+                PERR::MissingToken("a literal".into(), "in a parameter pattern".into())
+                    .into_err(position),
+            )
+        }
+    };
+    Ok(crate::item::ParameterPattern::Literal {
+        span: Span::new(start, end),
+        literal,
+    })
+}
+
 /// After a parameter pattern's first name: `W(a, ..)` or `module::W(..)`
-/// of a tuple struct, else the binding `name`.
+/// of a tuple struct, `S { a, b: p, .. }` of a struct, else the binding
+/// `name`.
 fn parse_tuple_struct_parameter(
     input: &mut TokenStream,
     name: crate::item::Name,
 ) -> ParseResult<crate::item::ParameterPattern> {
     if !matches!(
         input.peek(),
-        Some((Token::LeftParen | Token::DoubleColon, _))
+        Some((Token::LeftParen | Token::LeftBrace | Token::DoubleColon, _))
     ) {
         return Ok(crate::item::ParameterPattern::Binding {
             name,
@@ -4225,6 +4266,9 @@ fn parse_tuple_struct_parameter(
     while matches!(input.peek(), Some((Token::DoubleColon, _))) {
         input.next();
         path.push(parse_name(input, "in a tuple struct pattern's path")?);
+    }
+    if matches!(input.peek(), Some((Token::LeftBrace, _))) {
+        return parse_struct_parameter(input, path, start);
     }
     expect(
         input,
@@ -4244,6 +4288,55 @@ fn parse_tuple_struct_parameter(
     Ok(crate::item::ParameterPattern::TupleStruct {
         path: path.into_boxed_slice(),
         members: members.into_boxed_slice(),
+        span: Span::new(start, after(close, 1)),
+    })
+}
+
+/// `{ a, mut b, c: p, .. }` after the `path` of a struct pattern parameter
+/// that starts at `start`.
+fn parse_struct_parameter(
+    input: &mut TokenStream,
+    path: Vec<crate::item::Name>,
+    start: Position,
+) -> ParseResult<crate::item::ParameterPattern> {
+    expect(input, Token::LeftBrace, "to open a struct pattern")?;
+    let mut fields = Vec::new();
+    let mut rest = false;
+    while !matches!(input.peek(), Some((Token::RightBrace, _))) {
+        if let Some((Token::ExclusiveRange, _)) = input.peek() {
+            input.next();
+            rest = true;
+            break;
+        }
+        let mutable = match input.peek() {
+            Some((Token::Mut, position)) => {
+                let position = *position;
+                input.next();
+                Some(position)
+            }
+            _ => None,
+        };
+        let name = parse_name(input, "as a field in a struct pattern")?;
+        let pattern = if mutable.is_none() && matches!(input.peek(), Some((Token::Colon, _))) {
+            input.next();
+            parse_parameter_pattern(input)?
+        } else {
+            crate::item::ParameterPattern::Binding {
+                name: crate::item::Name {
+                    span: Span::new(mutable.unwrap_or(name.span.start()), name.span.end()),
+                    ..name.clone()
+                },
+                mutable: mutable.is_some(),
+            }
+        };
+        fields.push((name, pattern));
+        consume_comma_or_end(input, Token::RightBrace, "between struct pattern fields")?;
+    }
+    let close = expect(input, Token::RightBrace, "to close a struct pattern")?;
+    Ok(crate::item::ParameterPattern::Struct {
+        path: path.into_boxed_slice(),
+        fields: fields.into_boxed_slice(),
+        rest,
         span: Span::new(start, after(close, 1)),
     })
 }
