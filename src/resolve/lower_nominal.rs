@@ -167,7 +167,7 @@ pub(crate) use cell::{cell_held, cell_lock, cell_new, is_cell};
 use closure::SELF_CAPTURE;
 pub(crate) use compare::equal_value;
 use compare::Shape;
-use compare::{allowed_type, COMPARISON};
+use compare::{allowed_type, comparison_method, COMPARISON};
 use conversion::{HostInto, PendingConversion, TextInto};
 use coverage::{
     bool_literals, field_order, reject_empty_range, scalar_text, tuple_members, Scalar,
@@ -262,7 +262,7 @@ use op::{
     probe_rank, receiver_rank, script_type, witness_code, ExecutableOp, InstantiatedHostSignature,
     IntrinsicOperation, Keys, Op, PreludeOp, ProjectionOperation, WitnessedOp,
     FLOAT_BINARY_METHODS, FLOAT_UNARY_METHODS, SHAPED_HASHED, SHAPED_OPTION, SHAPED_RESULT,
-    SHAPED_TOTAL,
+    SHAPED_TOTAL, SHAPED_TUPLES,
 };
 use operator::{cast_value, compound_operator, kind_code, unsigned_negation, unsigned_order};
 use pattern::{PatternBinding, Prelude};

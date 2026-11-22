@@ -5188,8 +5188,12 @@ fn trait_impl_functions(
         if !provided {
             continue;
         }
-        // A std trait's default is std's to run, never lowered here.
-        if declared.std.is_some() {
+        // A std trait's default is std's to run, never lowered here,
+        // unless rawr runs it from std's body (`std_trait::body`).
+        if declared
+            .std
+            .is_some_and(|definition| std_trait::body(definition, &required.name.text).is_none())
+        {
             continue;
         }
         // The default body, checked and lowered for this owner.

@@ -159,7 +159,8 @@ pub(crate) fn declaration(
             member.kind == "assoc-fn"
                 && member.provided()
                 && member.stability == Stability::Stable
-                && overridden.contains(&member.name())
+                && (overridden.contains(&member.name())
+                    || body(definition, member.name()).is_some())
         })
         .map(|member| member.name())
         .collect::<Vec<_>>();
@@ -182,7 +183,7 @@ fn resolve(
     provided: &[&str],
     host: &host::Registry,
 ) -> Option<item::Trait> {
-    let mut source = std_table::trait_source(definition, provided)?;
+    let mut source = std_table::trait_source(definition, provided, |name| body(definition, name))?;
     // rawr compares a value with one of its own type (#708, D711 step 3):
     // `PartialEq` and `PartialOrd` are read with their `Rhs` as `Self`.
     if SELF_ONLY.contains(&definition) {
@@ -251,8 +252,110 @@ fn resolve(
     // std's: no span of the program's.
     declared.name.span = Span::NONE;
     declared.std = Some(definition);
+    // The text std's bodies are read from (`body`).
+    declared.declaration = Some(source.into());
     Some(declared)
 }
+
+/// std's body of the provided function `name` of the std trait
+/// `definition`, which an impl of the program's that doesn't override it
+/// receives as a program trait's default (#2461): its declaration with the
+/// body, as std writes it where rawr runs what it calls.
+pub(crate) fn body(definition: &str, name: &str) -> Option<&'static str> {
+    BODIES
+        .iter()
+        .find(|(trait_, function, _)| *trait_ == definition && *function == name)
+        .map(|(_, _, body)| *body)
+}
+
+/// Each std trait's provided functions rawr runs from std's body (`body`),
+/// by the trait's definition and the function's name.
+const BODIES: &[(&str, &str, &str)] = &[
+    (
+        "core::io::write::Write",
+        "write_all",
+        r#"fn write_all(&mut self, mut buf: &[u8]) -> std::io::Result<()> {
+        while !buf.is_empty() {
+            match self.write(buf) {
+                Ok(0) => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::WriteZero,
+                        "failed to write whole buffer",
+                    ));
+                }
+                Ok(n) => buf = &buf[n..],
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(())
+    }"#,
+    ),
+    (
+        "std::io::Read",
+        "read_to_end",
+        r#"fn read_to_end(&mut self, buf: &mut Vec<u8>) -> std::io::Result<usize> {
+        let start = buf.len();
+        let mut chunk = [0u8; 32];
+        loop {
+            match self.read(&mut chunk) {
+                Ok(0) => return Ok(buf.len() - start),
+                Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(e) => return Err(e),
+            }
+        }
+    }"#,
+    ),
+    (
+        "std::io::Read",
+        "read_to_string",
+        r#"fn read_to_string(&mut self, buf: &mut String) -> std::io::Result<usize> {
+        let mut bytes = Vec::new();
+        let read = self.read_to_end(&mut bytes)?;
+        match String::from_utf8(bytes) {
+            Ok(text) => {
+                buf.push_str(&text);
+                Ok(read)
+            }
+            Err(_) => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "stream did not contain valid UTF-8",
+            )),
+        }
+    }"#,
+    ),
+    (
+        "std::io::Read",
+        "read_exact",
+        r#"fn read_exact(&mut self, buf: &mut [u8]) -> std::io::Result<()> {
+        let mut filled = 0;
+        while filled < buf.len() {
+            match self.read(&mut buf[filled..]) {
+                Ok(0) => break,
+                Ok(n) => filled += n,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(e) => return Err(e),
+            }
+        }
+        if filled == buf.len() {
+            Ok(())
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "failed to fill whole buffer",
+            ))
+        }
+    }"#,
+    ),
+    (
+        "core::fmt::Write",
+        "write_char",
+        "fn write_char(&mut self, c: char) -> std::fmt::Result {
+        self.write_str(&c.to_string())
+    }",
+    ),
+];
 
 /// `Self::Name` in `ty` as `<Self as trait_name>::Name` for each of the
 /// trait's own associated types `own`.

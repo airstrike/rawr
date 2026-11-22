@@ -832,6 +832,29 @@ impl<'a> Parser<'a> {
                     continue;
                 }
             }
+            // `a.lt(&b)` and kin through `PartialOrd`, whose provided
+            // methods are its `partial_cmp`'s, as `a < b` (#2461), unless
+            // the type has its own method of that name.
+            if let Some(operator) = comparison_method(&member)
+                && matches!(self.peek(), Token::LeftParen)
+            {
+                let receiver = without_references(&builtin).clone();
+                let own = owner_id(&receiver).is_some_and(|id| {
+                    self.models.method(id, &member).is_some()
+                        || self
+                            .models
+                            .trait_methods
+                            .contains_key(&(id, member.clone()))
+                });
+                if !own
+                    && !matches!(receiver, Ty::Host { .. })
+                    && (self.type_implements(&receiver, "PartialOrd")
+                        || self.std_ordered(&receiver, true))
+                {
+                    value = self.parse_comparison_method(value, receiver, operator, &member)?;
+                    continue;
+                }
+            }
             // std's `dyn Error`: its text and its `source`.
             if self.std_error(&builtin, true)
                 && matches!(self.peek(), Token::LeftParen | Token::Unit)
@@ -977,7 +1000,15 @@ impl<'a> Parser<'a> {
                     });
                 }
                 let param = bounded;
-                if !self.type_provides(&param, capability::Kind::Clone) {
+                // `r.clone()` of a `&T` whose `T` isn't `Clone` is the
+                // shared reference's own `Clone`: a copy of `r` (#2474).
+                let cloned = self.type_provides(&param, capability::Kind::Clone);
+                if !cloned && let Ty::Reference { mutable: false, .. } = builtin {
+                    let source = value.rendered_source();
+                    value = self.operator_expr(source, builtin, span(value.span.start(), end));
+                    continue;
+                }
+                if !cloned {
                     return Err(Error::MissingCapability {
                         owner: name,
                         capability: "Clone".into(),

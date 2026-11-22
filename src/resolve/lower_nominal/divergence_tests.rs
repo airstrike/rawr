@@ -2158,3 +2158,148 @@ fn signature_verdict(source: &str, verdict: Result<&str, &str>) {
 /// rustc's report of a region a function's body doesn't relate to its
 /// signature's as the types require.
 const NOT_LONG_ENOUGH: &str = "error: lifetime may not live long enough";
+
+#[test]
+fn a_program_impl_of_a_std_trait_has_its_provided_methods() {
+    // rustc gives an impl of `io::Write`, `fmt::Write`, `io::Read` and
+    // `PartialOrd` each provided method it doesn't override (#2461).
+    let output = printed(
+        r#"
+use std::io::{Read, Write};
+struct Buf { data: Vec<u8> }
+impl Write for Buf {
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        let n = b.len().min(2);
+        self.data.extend_from_slice(&b[..n]);
+        Ok(n)
+    }
+    fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+}
+struct Source { data: Vec<u8>, at: usize }
+impl Read for Source {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = (self.data.len() - self.at).min(buf.len()).min(2);
+        buf[..n].copy_from_slice(&self.data[self.at..self.at + n]);
+        self.at += n;
+        Ok(n)
+    }
+}
+fn main() {
+    let mut b = Buf { data: Vec::new() };
+    b.write_all(b"hi ").unwrap();
+    write!(b, "{}-{}", 1, 2).unwrap();
+    writeln!(b, "!").unwrap();
+    print!("{}", String::from_utf8(b.data).unwrap());
+    let mut r = Source { data: b"hello".to_vec(), at: 0 };
+    let mut text = String::new();
+    println!("{} {}", r.read_to_string(&mut text).unwrap(), text);
+    let mut r = Source { data: b"abc".to_vec(), at: 0 };
+    let (mut two, mut four) = ([0u8; 2], [0u8; 4]);
+    r.read_exact(&mut two).unwrap();
+    println!("{:?} {:?}", two, r.read_exact(&mut four).map_err(|e| e.kind()));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "hi 1-2!\n5 hello\n[97, 98] Err(UnexpectedEof)\n");
+    let output = printed(
+        r#"
+use std::fmt::Write;
+struct S { s: String }
+impl Write for S {
+    fn write_str(&mut self, t: &str) -> std::fmt::Result { self.s.push_str(t); Ok(()) }
+}
+#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Clone, Copy)]
+struct V(i32);
+#[derive(PartialEq, Debug)]
+struct F(f64);
+impl PartialOrd for F {
+    fn partial_cmp(&self, o: &Self) -> Option<std::cmp::Ordering> { self.0.partial_cmp(&o.0) }
+}
+fn less<T: PartialOrd>(a: &T, b: &T) -> bool { a.lt(b) }
+fn main() {
+    let mut s = S { s: String::new() };
+    write!(s, "x{}", 3).unwrap();
+    s.write_char('y').unwrap();
+    println!("{}", s.s);
+    let (a, b) = (V(1), V(2));
+    println!("{} {} {:?} {:?} {:?}", a.lt(&b), a.ge(&b), a.max(b), a.min(b), V(9).clamp(a, b));
+    println!("{} {} {}", F(1.0).le(&F(1.0)), F(2.0).gt(&F(f64::NAN)), 3.lt(&4));
+    println!("{} {} {}", less(&1, &2), less(&"b", &"a"), less(&a, &b));
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "x3y\ntrue false V(2) V(1) V(2)\ntrue false true\ntrue false true\n"
+    );
+}
+
+#[test]
+fn an_impl_trait_output_is_known_by_its_bound() {
+    // rustc runs a function written `-> impl Trait` of a program or std
+    // trait (#2462), and a method call on its value is the bound's, never
+    // the hidden type's inherent namesake (#2099).
+    let output = printed(
+        r#"
+use std::fmt::{Debug, Display};
+trait Shape { fn area(&self) -> f64; fn name(&self) -> String { String::from("shape") } }
+trait Build { fn build(&self) -> String; }
+trait Named { type Out; fn get(&self) -> Self::Out; }
+struct Sq(f64);
+struct Ci(f64);
+impl Sq { fn build(&self, extra: i32) -> String { format!("inherent {extra}") } }
+impl Build for Sq { fn build(&self) -> String { format!("trait {}", self.0) } }
+impl Shape for Sq { fn area(&self) -> f64 { self.0 * self.0 } fn name(&self) -> String { "square".into() } }
+impl Shape for Ci { fn area(&self) -> f64 { 3.0 * self.0 * self.0 } }
+impl Named for Sq { type Out = i64; fn get(&self) -> i64 { self.0 as i64 } }
+fn make(k: f64) -> impl Shape { if k > 1.0 { Sq(k) } else { Sq(1.0) } }
+fn builder() -> impl Build { Sq(1.0) }
+fn show(s: impl Shape) -> String { format!("{} {}", s.name(), s.area()) }
+fn twice(s: &impl Shape) -> f64 { s.area() * 2.0 }
+fn total<T: Shape>(v: &[T]) -> f64 { v.iter().map(|s| s.area()).sum() }
+fn shown() -> impl Display { 42 }
+fn debugged() -> impl Debug { (1, "a") }
+fn named() -> impl Named<Out = i64> { Sq(3.0) }
+fn main() {
+    let a = make(2.0);
+    println!("{} {} {} {}", a.name(), a.area(), twice(&a), builder().build());
+    println!("{} {}", show(make(3.0)), show(Ci(1.0)));
+    let shapes: Vec<Box<dyn Shape>> = vec![Box::new(Sq(1.0)), Box::new(Ci(1.0))];
+    println!("{}", shapes.iter().map(|s| s.name()).collect::<Vec<_>>().join(" "));
+    println!("{}", total(&[make(1.0), make(3.0)]));
+    println!("{} {:?} {}", shown(), debugged(), named().get() + 1);
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "square 4 8 trait 1\nsquare 9 shape 3\nsquare shape\n10\n42 (1, \"a\") 4\n"
+    );
+}
+
+#[test]
+fn a_generic_body_reads_its_value_as_rustc_does() {
+    // rustc clones the reference of `&T` for an unbounded `T` (#2474), and
+    // a generic value's or a trait object's `{:?}` of a tuple writes a
+    // tuple (#2473).
+    let output = printed(
+        r#"
+use std::fmt::Debug;
+fn d<U: Debug>(u: U) -> String { format!("{:?}", u) }
+fn f<T>(t: T) -> usize { let r = &t; let _c = r.clone(); 1 }
+fn main() {
+    println!("{} {} {} {}", d(('x', 'x')), d((1, "a", 2.5)), d(vec![(1, 2)]), d((7,)));
+    let boxed: Box<dyn Debug> = Box::new((u64::MAX, 'b'));
+    println!("{:?} {}", boxed, f(String::new()));
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "('x', 'x') (1, \"a\", 2.5) [(1, 2)] (7,)\n(18446744073709551615, 'b') 1\n"
+    );
+}

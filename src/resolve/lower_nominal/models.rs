@@ -331,6 +331,22 @@ impl Models {
                     .into_iter()
                     .filter(|name| program.std_traits().contains_key(name)),
             )
+            // `fn shown() -> impl Display`: the object its output is
+            // (`type_ref::opaque_object`).
+            .chain(
+                program
+                    .items
+                    .iter()
+                    .flat_map(|shell| match &shell.kind {
+                        item::Kind::Function(function) => std::slice::from_ref(function),
+                        item::Kind::Impl(own) => &own.functions[..],
+                        item::Kind::Trait(own) => &own.functions[..],
+                        _ => &[],
+                    })
+                    .filter_map(|function| function.output.as_ref()?.dyn_trait())
+                    .filter(|name| program.std_traits().contains_key(*name))
+                    .map(ImmutableString::from),
+            )
             .collect::<BTreeSet<_>>();
         let mut pending = used.iter().cloned().collect::<Vec<_>>();
         while let Some(name) = pending.pop() {

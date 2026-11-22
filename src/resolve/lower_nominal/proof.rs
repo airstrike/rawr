@@ -337,7 +337,13 @@ impl<'a> Parser<'a> {
                 kinds: kinds.map(|kind| kind_code(self.inference.resolve(&kind))),
             },
             Op::Shaped { op, ty, flags } => {
-                let shape = Shape::of(&ty, &|ty| self.inference.resolve(ty));
+                let resolve = |ty: &Ty| self.inference.resolve(ty);
+                let shape = if flags & SHAPED_TUPLES != 0 {
+                    Shape::with_tuples(&ty, &resolve)
+                } else {
+                    Shape::of(&ty, &resolve)
+                };
+                let flags = flags & !SHAPED_TUPLES;
                 let flags = if flags & SHAPED_HASHED != 0 && !self.hand_written_eq_inside(&ty) {
                     flags & !SHAPED_HASHED
                 } else {

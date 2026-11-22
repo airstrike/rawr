@@ -143,8 +143,9 @@ impl Parser<'_> {
     }
 
     /// `write!(w, ..)` into the local `w` of a type of the program's that
-    /// implements `std::fmt::Write`: std's `write_fmt`, which hands the
-    /// formatted text to the impl's `write_str`, as `w.write_str(&text)`.
+    /// implements `std::fmt::Write` or `std::io::Write`: std's `write_fmt`,
+    /// which hands the formatted text to the impl's `write_str`, as
+    /// `w.write_str(&text)`, or its bytes to `write_all`.
     /// After the macro's `(`; `None`, consuming nothing, for another target.
     fn write_into_program_writer(
         &mut self,
@@ -169,20 +170,27 @@ impl Parser<'_> {
             return Ok(None);
         };
         let id = *id;
-        let writes = self
-            .models
-            .trait_methods
-            .get(&(id, "write_str".into()))
-            .is_some_and(|definitions| {
-                definitions.iter().any(|definition| {
-                    definition
-                        .trait_name()
-                        .is_some_and(|name| name.as_str() == "Write")
+        let writes = |method: &str| {
+            self.models
+                .trait_methods
+                .get(&(id, method.into()))
+                .is_some_and(|definitions| {
+                    definitions.iter().any(|definition| {
+                        definition
+                            .trait_name()
+                            .is_some_and(|name| name.as_str() == "Write")
+                    })
                 })
-            });
-        if !writes {
+        };
+        // `std::fmt::Write`'s `write_str`, or `std::io::Write`'s
+        // `write_all` of the text's bytes (#2461).
+        let bytes = if writes("write_str") {
+            false
+        } else if writes("write_all") {
+            true
+        } else {
             return Ok(None);
-        }
+        };
         let (local_token, at) = self.next();
         if let Some(error) = self.unscoped_write(&ty, span(target_start, at)) {
             return Err(error);
@@ -196,15 +204,19 @@ impl Parser<'_> {
             (Vec::new(), close)
         };
         let identifier = |text: &str| Token::Identifier(Box::new(text.into()));
-        // `w.write_str(&(format!(..) + "\n"))`.
+        // `w.write_str(&(format!(..) + "\n"))`, or `w.write_all((format!(..)
+        // + "\n").as_bytes())`.
+        let method = if bytes { "write_all" } else { "write_str" };
         let mut tokens = vec![
             (local_token, at),
             (Token::Period, at),
-            (identifier("write_str"), at),
-            (Token::LeftParen, at),
-            (Token::Ampersand, at),
+            (identifier(method), at),
             (Token::LeftParen, at),
         ];
+        if !bytes {
+            tokens.push((Token::Ampersand, at));
+        }
+        tokens.push((Token::LeftParen, at));
         if arguments.is_empty() {
             tokens.push((Token::StringConstant(Box::new("".into())), at));
         } else {
@@ -222,7 +234,15 @@ impl Parser<'_> {
                 (Token::StringConstant(Box::new("\n".into())), close),
             ]);
         }
-        tokens.extend([(Token::RightParen, close), (Token::RightParen, close)]);
+        tokens.push((Token::RightParen, close));
+        if bytes {
+            tokens.extend([
+                (Token::Period, close),
+                (identifier("as_bytes"), close),
+                (Token::Unit, close),
+            ]);
+        }
+        tokens.push((Token::RightParen, close));
         let _ = name_span;
         self.splice_tokens(tokens);
         self.parse_primary().map(Some)

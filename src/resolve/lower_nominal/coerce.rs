@@ -34,23 +34,31 @@ impl<'a> Parser<'a> {
         // A `u64` or a `usize` passed where the parameter's type names a
         // generic (`T`, `&[T]`, `Option<T>`), which the body formats and
         // orders without its type: tagged, so it stays the unsigned number
-        // (`compare_value`, `Dynamic`'s `Display`).
+        // (`compare_value`, `Dynamic`'s `Display`). A tuple likewise stays
+        // a tuple to the body's `{:?}` (#2473).
         let mutable = matches!(parameter, type_ref::Type::Reference { mutable: true, .. });
-        if !mutable
-            && mentions_parameter(parameter)
-            && !Shape::of(&argument.ty, &|ty| self.inference.resolve(ty)).is_plain()
-        {
-            let helper = self.push_op(Op::Shaped {
-                op: PreludeOp::Unsigned,
-                ty: argument.ty.clone(),
-                flags: 0,
-            });
-            let value = argument.rendered_source();
-            argument.prelude = origin::Fragment::default();
-            argument.source = origin::Fragment::call(&helper, [value]);
-            argument.source.cover(argument.span);
+        if !mutable && mentions_parameter(parameter) {
+            self.tag_shape(argument);
         }
         Ok(())
+    }
+
+    /// `value`, which code that doesn't know its type reads (a generic
+    /// body, a trait object's `Debug`), with each unsigned integer and
+    /// each tuple in it tagged as one (`compare::tag_unsigned`).
+    fn tag_shape(&mut self, value: &mut ParsedExpr) {
+        if Shape::with_tuples(&value.ty, &|ty| self.inference.resolve(ty)).is_plain() {
+            return;
+        }
+        let helper = self.push_op(Op::Shaped {
+            op: PreludeOp::Unsigned,
+            ty: value.ty.clone(),
+            flags: SHAPED_TUPLES,
+        });
+        let source = value.rendered_source();
+        value.prelude = origin::Fragment::default();
+        value.source = origin::Fragment::call(&helper, [source]);
+        value.source.cover(value.span);
     }
 
     /// A `Box<dyn Fn>` or a `&dyn Fn` (or a box or reference of one, as
@@ -455,7 +463,9 @@ impl<'a> Parser<'a> {
             return Ok(None);
         }
         // Unsized coercion: `&T` to `&dyn Trait` and `Box<T>` to
-        // `Box<dyn Trait>` for a `T: Trait`; the value is unchanged.
+        // `Box<dyn Trait>` for a `T: Trait`; the value is unchanged. A
+        // value where a bare `dyn Trait` is taken is a return type's `impl
+        // Trait` (`type_ref::opaque_object`), its hidden value.
         let unsizing = match (&target, &source) {
             (
                 Ty::Reference {
@@ -466,13 +476,14 @@ impl<'a> Parser<'a> {
                     mutable: from_mutable,
                     target: from,
                 },
-            ) if !*to_mutable || *from_mutable => Some((to, from)),
-            (Ty::Boxed(to), Ty::Boxed(from)) => Some((to, from)),
+            ) if !*to_mutable || *from_mutable => Some((&**to, &**from)),
+            (Ty::Boxed(to), Ty::Boxed(from)) => Some((&**to, &**from)),
             (Ty::Counted(to_counter, to), Ty::Counted(from_counter, from))
                 if to_counter == from_counter =>
             {
-                Some((to, from))
+                Some((&**to, &**from))
             }
+            (Ty::Dyn(..), _) => Some((&target, &source)),
             _ => None,
         }
         .and_then(|(to, from)| {
@@ -644,6 +655,12 @@ impl<'a> Parser<'a> {
                 let projected =
                     Ty::Projection(Box::new(concrete.clone()), trait_name.clone(), name.clone());
                 self.require_type(bound, &projected, value.span)?;
+            }
+            // `Box<dyn Debug>` of a tuple writes it as one: a box is its
+            // value at runtime.
+            if matches!(target, Ty::Boxed(_) | Ty::Dyn(..)) {
+                value.ty = concrete;
+                self.tag_shape(value);
             }
             value.ty = target;
             return Ok(None);

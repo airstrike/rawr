@@ -580,7 +580,12 @@ pub(super) fn debug_text(value: &Dynamic, models: &Models, spec: Option<&DebugSp
                 .iter()
                 .map(|value| debug_value_spec(value, models, spec))
                 .collect::<Vec<_>>();
-            format!("[{}]", items.join(", "))
+            // A tuple a generic parameter took (`TUPLE_TAG`).
+            match (value.tag() == crate::types::dynamic::TUPLE_TAG, &items[..]) {
+                (true, [member]) => format!("({member},)"),
+                (true, _) => format!("({})", items.join(", ")),
+                (false, _) => format!("[{}]", items.join(", ")),
+            }
         }
         _ => match spec {
             Some(spec) => spec.leaf(value, DebugLeaf::of_value(value)),

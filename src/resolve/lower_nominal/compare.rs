@@ -32,8 +32,20 @@ impl Shape {
     /// The shape of `ty`, each part read through `resolve`. A crate type
     /// is plain: its fields carry their own shapes (`field_shape`).
     pub(super) fn of(ty: &Ty, resolve: &dyn Fn(&Ty) -> Ty) -> Self {
-        let of = |ty: &Ty| Self::of(ty, resolve);
+        Self::read(ty, resolve, false)
+    }
+
+    /// The shape of `ty` as `of` reads it, with each tuple kept, unsigned
+    /// or not: what a value passed to a generic parameter is tagged by,
+    /// so the body writes its tuples as tuples (`TUPLE_TAG`).
+    pub(super) fn with_tuples(ty: &Ty, resolve: &dyn Fn(&Ty) -> Ty) -> Self {
+        Self::read(ty, resolve, true)
+    }
+
+    fn read(ty: &Ty, resolve: &dyn Fn(&Ty) -> Ty, tuples: bool) -> Self {
+        let of = |ty: &Ty| Self::read(ty, resolve, tuples);
         let shape = match resolve(ty) {
+            Ty::Tuple(members) if tuples => return Self::Tuple(members.iter().map(of).collect()),
             Ty::Int(Int::U64 | Int::Usize) => Self::Unsigned,
             Ty::Reference { target, .. } | Ty::Boxed(target) | Ty::Counted(_, target) => {
                 of(&target)
@@ -449,8 +461,21 @@ impl Comparison<'_, '_> {
     }
 }
 
+/// The comparison operator `PartialOrd`'s provided method `member` (`lt`,
+/// `le`, `gt` or `ge`) compares by.
+pub(super) fn comparison_method(member: &str) -> Option<Token> {
+    Some(match member {
+        "lt" => Token::LessThan,
+        "le" => Token::LessThanEqualsTo,
+        "gt" => Token::GreaterThan,
+        "ge" => Token::GreaterThanEqualsTo,
+        _ => return None,
+    })
+}
+
 /// `value` with each integer its shape says is unsigned tagged as one
-/// (`UNSIGNED_TAG`), for a generic body that reads it without its type.
+/// (`UNSIGNED_TAG`), and each tuple as one (`TUPLE_TAG`), for a generic
+/// body that reads it without its type.
 pub(super) fn tag_unsigned(mut value: Dynamic, shape: &Shape) -> Dynamic {
     match shape {
         Shape::Plain => {}
@@ -470,6 +495,11 @@ pub(super) fn tag_unsigned(mut value: Dynamic, shape: &Shape) -> Dynamic {
             None => {}
         },
         Shape::Each(_) | Shape::Tuple(_) => {
+            if let Shape::Tuple(_) = shape
+                && value.is_array()
+            {
+                value.set_tag(crate::types::dynamic::TUPLE_TAG);
+            }
             if let Ok(mut array) = value.as_array_mut() {
                 for (index, element) in array.iter_mut().enumerate() {
                     let inner = match shape {
@@ -1203,6 +1233,39 @@ impl<'a> Parser<'a> {
         let value = ordering_discriminant(variant)?;
         self.ordering_path(path.iter().map(ImmutableString::as_str))
             .then_some((value, 2 * path.len(), end))
+    }
+
+    /// `a.lt(&b)`, `a.le(&b)`, `a.gt(&b)` or `a.ge(&b)` of a `compared`
+    /// value, after the method's name: std's provided methods of
+    /// `PartialOrd`, which compare as `operator` does.
+    pub(super) fn parse_comparison_method(
+        &mut self,
+        value: ParsedExpr,
+        compared: Ty,
+        operator: Token,
+        member: &str,
+    ) -> Result<ParsedExpr, Error> {
+        let (mut arguments, end) = self.parse_call_arguments("comparison arguments")?;
+        let call = span(value.span.start(), end);
+        let [other] = arguments.as_mut_slice() else {
+            return Err(Error::argument_count(
+                Callee::Method,
+                crate::resolve::Qualified(&compared.name(&self.models), member).to_string(),
+                1,
+                arguments.len(),
+                call,
+            ));
+        };
+        // `&Self`: the value a reference reads at runtime.
+        let mut other = other.clone();
+        while let Ty::Reference { target, .. } = self.inference.resolve(&other.ty) {
+            other.ty = *target;
+        }
+        let mut subject = value;
+        subject.ty = compared;
+        let mut compared = self.apply_binary(operator, None, subject, other)?;
+        compared.span = call;
+        Ok(compared)
     }
 
     /// `a.partial_cmp(&b)` and `a.cmp(&b)` on builtin values, compared by
