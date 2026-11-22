@@ -5083,7 +5083,7 @@ fn a_mut_stored_in_a_value_reaches_its_place() {
     // #2503); a derived `Debug` writes what each refers to.
     let output = printed(
         r#"
-#[derive(Debug)]
+#[derive(Debug, PartialEq, PartialOrd)]
 struct S<'a> { a: &'a mut i32 }
 struct D<'a>(&'a mut Vec<i32>);
 fn main() {
@@ -5091,6 +5091,10 @@ fn main() {
     let s = S { a: &mut x };
     *s.a += 5;
     println!("{:?}", s);
+    let mut z = 6;
+    let mut w = 7;
+    let (t, u) = (S { a: &mut z }, S { a: &mut w });
+    println!("{} {} {}", s == t, s == u, s < u);
     println!("{}", x);
     let mut v = vec![1];
     let d = D(&mut v);
@@ -5115,7 +5119,7 @@ fn main() {
 main();
 "#,
     );
-    assert_eq!(output, "S { a: 6 }\n6\n[1, 2]\n7\n16 16\n");
+    assert_eq!(output, "S { a: 6 }\ntrue false true\n6\n[1, 2]\n7\n16 16\n");
 }
 
 #[test]
