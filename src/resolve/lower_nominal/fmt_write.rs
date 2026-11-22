@@ -146,11 +146,16 @@ impl Parser<'_> {
         while let Ty::Reference { target, .. } = ty {
             ty = self.inference.resolve(&target);
         }
-        // A writer by an impl, its own or std's, or by a generic's bound. A
-        // std facade's writer (`Stdout`) is any target's, below, and a
-        // crate's has no `write_fmt` rawr runs yet.
+        // A writer by an impl, its own or std's, or by a generic's bound, of
+        // `io::Write` or `fmt::Write`. A std facade's writer (`Stdout`) is
+        // any target's, below, and a crate's has no `write_fmt` rawr runs
+        // yet.
         let writes = !matches!(ty, Ty::String | Ty::Str | Ty::Host { .. })
-            && (self.type_implements(&ty, "Write")
+            && (crate::std_table::traits_named("Write")
+                .iter()
+                .any(|definition| {
+                    self.type_implements(&ty, crate::resolve::std_trait::known(definition))
+                })
                 || super::op::owner_id(&ty).is_some_and(|owner| {
                     self.models
                         .trait_methods

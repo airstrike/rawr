@@ -18,8 +18,8 @@ const EDITION: &str = "2024";
 
 thread_local! {
     /// The std traits the program being resolved names by a path
-    /// (`std::ops::Deref`, `fmt::Write` after `use std::fmt;`), by their
-    /// last segment, which its bounds and impls carry.
+    /// (`std::ops::Deref`, `fmt::Write` after `use std::fmt;`), by the
+    /// name each is known by (`known`), which its bounds and impls carry.
     static WRITTEN: RefCell<BTreeMap<crate::ImmutableString, &'static str>> =
         const { RefCell::new(BTreeMap::new()) };
 
@@ -28,8 +28,8 @@ thread_local! {
     static WRITING: RefCell<Vec<Vec<Written>>> = const { RefCell::new(Vec::new()) };
 }
 
-/// One path's naming of a std trait: its last segment and the trait's
-/// definition.
+/// One path's naming of a std trait: the name it is known by and the
+/// trait's definition.
 pub(crate) type Written = (crate::ImmutableString, &'static str);
 
 /// Start resolving a program: no std trait is named by a path yet.
@@ -37,8 +37,8 @@ pub(crate) fn begin() {
     WRITTEN.with_borrow_mut(BTreeMap::clear);
 }
 
-/// The program names the std trait `definition` by a path whose last
-/// segment is `name`.
+/// The program names the std trait `definition`, known by `name`, by a
+/// path.
 pub(crate) fn written(name: &str, definition: &'static str) {
     let name = crate::ImmutableString::from(name);
     WRITING.with_borrow_mut(|writing| {
@@ -73,13 +73,17 @@ pub(crate) fn writing<T>(write: impl FnOnce() -> T) -> (T, Vec<Written>) {
 
 /// The stable std trait a program names `name` by, as rustc's scope has it:
 /// through a `use` that binds it (`use std::str::FromStr;`), the prelude
-/// (`Iterator`), or a path the program writes (`std::ops::Deref`). Its
+/// (`Iterator`), or a path the program writes (`std::ops::Deref`); or the
+/// one a name it is known by names (`std::io::Write`, `known`). Its
 /// definition: `core::str::traits::FromStr`. A bare name nothing brings
 /// into scope is none (rustc's E0405).
 pub(crate) fn named<'a>(
     name: &str,
     uses: impl IntoIterator<Item = (&'a str, &'a str)>,
 ) -> Option<&'static str> {
+    if name.contains("::") {
+        return std_table::stable_trait(name);
+    }
     for (binding, qualified) in uses {
         if binding == name
             && let Some(definition) = std_table::stable_trait(qualified)
@@ -93,6 +97,18 @@ pub(crate) fn named<'a>(
         return (found.stability == Stability::Stable).then_some(found.definition);
     }
     WRITTEN.with_borrow(|written| written.get(name).copied())
+}
+
+/// The name the program's items know the std trait `definition` by, as
+/// rustc prints it: its last segment, or its path where another std trait
+/// has that segment too, as `std::fmt::Write` beside `std::io::Write`. Two
+/// traits are two keys of every table that holds traits by name.
+pub(crate) fn known(definition: &str) -> &str {
+    let name = definition.rsplit("::").next().unwrap_or(definition);
+    if std_table::traits_named(name).len() > 1 {
+        return std_table::public_path(definition).unwrap_or(definition);
+    }
+    name
 }
 
 /// Whether the std trait `definition` is in the prelude every program sees.
@@ -112,9 +128,9 @@ pub(crate) fn anywhere(name: &str) -> Option<&'static str> {
     })
 }
 
-/// The definition of the stable std trait whose last segment is `name`, as
-/// a written path names it (`std::fmt::Display`, `fmt::Debug` after `use
-/// std::fmt;`).
+/// The definition of the stable std trait a written path names
+/// (`std::fmt::Display`, `fmt::Debug` after `use std::fmt;`), which the
+/// program then knows by its `known` name.
 pub(crate) fn by_path(segments: &[&str]) -> Option<&'static str> {
     let mut path = segments.to_vec();
     if !path.first().is_some_and(|root| std_table::is_root(root)) {
@@ -124,9 +140,7 @@ pub(crate) fn by_path(segments: &[&str]) -> Option<&'static str> {
         Ok(std_table::Resolved::Path(path))
             if path.kind == "trait" && path.stability == Stability::Stable =>
         {
-            if let Some(name) = segments.last() {
-                written(name, path.definition);
-            }
+            written(known(path.definition), path.definition);
             Some(path.definition)
         }
         _ => None,
@@ -530,16 +544,19 @@ pub(crate) fn impls(
         })
         .collect::<std::collections::BTreeSet<_>>();
     for (name, qualified) in uses(items) {
-        if traits.contains_key(&name) || declared.contains(&name) {
+        let Some(definition) = std_table::stable_trait(&qualified) else {
+            continue;
+        };
+        let known = crate::ImmutableString::from(self::known(definition));
+        if traits.contains_key(&known) || declared.contains(&name) {
             continue;
         }
-        if let Some(definition) = std_table::stable_trait(&qualified)
-            && IMPLS
-                .iter()
-                .any(|(implemented, _)| *implemented == definition)
+        if IMPLS
+            .iter()
+            .any(|(implemented, _)| *implemented == definition)
             && let Some(trait_) = declaration(definition, &[], host)
         {
-            traits.insert(name, trait_);
+            traits.insert(known, trait_);
         }
     }
     let mut shells = Vec::new();
@@ -568,8 +585,13 @@ pub(crate) fn impls(
             let item::Kind::Impl(implemented) = &mut shell.kind else {
                 continue;
             };
-            // std's, which rustc's orphan rule (E0117) doesn't refuse.
+            // std's, which rustc's orphan rule (E0117) doesn't refuse, of
+            // the trait by the name the program knows it by, which a path
+            // through std's facade would write as its last segment.
             implemented.std = Some(definition);
+            if let Some(item::TraitImpl::User { name: written, .. }) = &mut implemented.trait_ {
+                written.text = name.clone();
+            }
             let text = crate::ImmutableString::from(source);
             for function in implemented.functions.iter_mut() {
                 function.body.text = Some(text.clone());
@@ -737,11 +759,12 @@ pub(crate) fn declarations(
 }
 
 /// The trait of each trait object `ty` holds (`Display` of `Vec<Box<dyn
-/// Display>>`), which a std trait is when the program names no own.
+/// Display>>`), which a std trait is when the program names no own, and
+/// one known by its path (`dyn std::io::Write`).
 fn objects(ty: &super::type_ref::Type, named: &mut Vec<crate::ImmutableString>) {
     use super::type_ref::{Argument, Type};
     if let Some(name) = ty.dyn_trait()
-        && !super::type_ref::is_native_trait(name)
+        && (!super::type_ref::is_native_trait(name) || std_table::stable_trait(name).is_some())
     {
         named.push(name.into());
     }
@@ -945,5 +968,11 @@ mod tests {
         );
         assert_eq!(named("Deref", []), Some("core::ops::deref::Deref"));
         begin();
+        // Two std traits of one name are known by their paths, which name
+        // them back (#758); any other by its name.
+        assert_eq!(known("core::fmt::Write"), "std::fmt::Write");
+        assert_eq!(known("core::io::write::Write"), "std::io::Write");
+        assert_eq!(known("core::ops::deref::Deref"), "Deref");
+        assert_eq!(named("std::io::Write", []), Some("core::io::write::Write"));
     }
 }

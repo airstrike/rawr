@@ -82,6 +82,11 @@ impl LocatedError {
     }
 }
 
+/// The traits one source writes by one name, each by the name it is
+/// known by, with the block that declares it: `None` for the module's own
+/// or imported trait, which a block's of the name shadows in that block.
+pub(crate) type Known = Box<[(Option<Span>, ImmutableString)]>;
+
 /// A complete, successfully resolved Rawr compilation unit.
 ///
 /// Fields and construction remain private so an unresolved or partially
@@ -117,8 +122,8 @@ pub struct Program {
     qualified_traits: BTreeMap<(program::source::Id, Span), ImmutableString>,
     /// The name each source writes a crate trait by, when another module's
     /// trait has that name too, with the path the trait is known by
-    /// (`panel::IntoView`).
-    trait_names: BTreeMap<(program::source::Id, ImmutableString), ImmutableString>,
+    /// (`panel::IntoView`), and each name a block's trait has there.
+    trait_names: BTreeMap<(program::source::Id, ImmutableString), Known>,
     /// The app crate's name, when a marked root's `async fn main` names a
     /// runtime's entry, which the shadow crate holds (D513.4).
     entry_crate: Option<ImmutableString>,
@@ -5934,12 +5939,15 @@ fn resolve_trait(
     // of a facade trait script types may implement, by its declared name
     // through the scope (`impl component::Component<'a, M> for C`); an
     // unimported name is unknown once every item is resolved.
-    // `impl Convert<i64> for C`: a generic trait's arguments.
+    // `impl Convert<i64> for C`: a generic trait's arguments. A std trait
+    // the facade holds too is std's, by the name the program knows it by
+    // (`std::io::Write`), below.
     if let Some(last) = path.segments.last()
         && (path.segments.len() == 1
-            || type_ref::host_trait(&path, types, host).is_some_and(|definition| {
-                matches!(definition.shape(), host::type_def::Shape::Trait(_))
-            }))
+            || std_path::trait_path(&path.segments).is_none()
+                && type_ref::host_trait(&path, types, host).is_some_and(|definition| {
+                    matches!(definition.shape(), host::type_def::Shape::Trait(_))
+                }))
     {
         let arguments = last
             .arguments
@@ -5963,7 +5971,7 @@ fn resolve_trait(
     // A std trait by its path: `std::fmt::Display`, `fmt::Write` after
     // `use std::fmt;`, `std::convert::From<T>`.
     if let Some(last) = path.segments.last()
-        && std_path::trait_path(&path.segments).is_some()
+        && let Some(name) = std_path::trait_path(&path.segments)
     {
         let arguments = last
             .arguments
@@ -5979,10 +5987,7 @@ fn resolve_trait(
                 crate::item::type_ref::Argument::Lifetime(_) => None,
             })
             .collect::<Result<_, _>>()?;
-        return Ok(item::TraitImpl::User {
-            name: last.name.clone(),
-            arguments,
-        });
+        return Ok(item::TraitImpl::User { name, arguments });
     }
     // `impl canvas::Program<Message> for Arc`: a dependency's trait, by its
     // path from the crate's root once `use`s are followed

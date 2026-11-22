@@ -531,8 +531,9 @@ pub(crate) fn qualified(name: &str, binding: Option<&str>) -> Option<String> {
 }
 
 /// The std trait a bound or an impl names by its path, as
-/// `std::fmt::Display` or `fmt::Debug` (after `use std::fmt;`): its name,
-/// when it is a stable std trait (D711 step 2).
+/// `std::fmt::Display` or `fmt::Debug` (after `use std::fmt;`): the name it
+/// is known by at the path's last segment, when it is a stable std trait
+/// (D711 step 2): `std::io::Write` of `io::Write` beside `fmt::Write`.
 pub(crate) fn trait_path(segments: &[crate::item::type_ref::Segment]) -> Option<crate::item::Name> {
     let [prefix @ .., last] = segments else {
         return None;
@@ -544,5 +545,8 @@ pub(crate) fn trait_path(segments: &[crate::item::type_ref::Segment]) -> Option<
         .iter()
         .map(|segment| segment.name.text.as_str())
         .collect::<Vec<_>>();
-    super::std_trait::by_path(&written).map(|_| last.name.clone())
+    super::std_trait::by_path(&written).map(|definition| crate::item::Name {
+        text: super::std_trait::known(definition).into(),
+        span: last.name.span,
+    })
 }

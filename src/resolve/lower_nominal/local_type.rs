@@ -319,7 +319,26 @@ impl<'a> Parser<'a> {
                 first_span.start(),
                 text_end(trait_span.start(), &trait_name),
             );
-            let known = self.native_trait(&first, &written, path_span);
+            // `dyn Shape` of a block's or a module's trait whose name
+            // another trait has, `dyn home::Shape`, and `dyn io::Write`: the
+            // trait, by the name the program knows it by, before a native
+            // trait the facade holds at the path.
+            let segments = written
+                .split("::")
+                .map(ImmutableString::from)
+                .collect::<Vec<_>>();
+            let program = if first_span == trait_span {
+                self.models
+                    .trait_name(&trait_name, trait_span.start())
+                    .cloned()
+            } else {
+                self.models.qualified_trait(path_span).cloned()
+            }
+            .or_else(|| {
+                self.written_std_trait(&segments)
+                    .map(|definition| crate::resolve::std_trait::known(definition).into())
+            });
+            let known = program.or_else(|| self.native_trait(&first, &written, path_span));
             // A crate's path the facade doesn't have yet, as `dyn
             // $crate::Value` of a crate's macro names its own trait: asked
             // for as any missing path is, and known at the next check.
@@ -372,7 +391,7 @@ impl<'a> Parser<'a> {
             }
             // A crate trait's supertraits aren't known here.
             if let Ty::Dyn(name, _, auto) = &mut ty
-                && !type_ref::is_native_trait(name)
+                && !self.models.native_trait(name)
             {
                 *auto = ty::Auto::Written { send, sync };
             }
@@ -1304,7 +1323,7 @@ impl<'a> Parser<'a> {
             };
         }
         // A native trait's object: the crate checked the trait.
-        if !self.models.traits.contains_key(trait_name) && type_ref::is_native_trait(trait_name) {
+        if self.models.native_trait(trait_name) {
             bindings.extend(
                 positional
                     .into_iter()

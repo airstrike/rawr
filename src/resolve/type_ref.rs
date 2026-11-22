@@ -664,13 +664,17 @@ fn resolve_path(
         // as the resolver writes it (`package::write_native_trait_objects`).
         let last = &rest[rest.len() - 1];
         let name = native_trait(rest, host).unwrap_or_else(|| {
-            // `dyn std::fmt::Debug`: a std trait the program names by a path.
+            // `dyn std::fmt::Debug`: a std trait the program names by a
+            // path, by the name it is known by (`dyn io::Write` is
+            // `std::io::Write`'s).
             if rest.len() > 1 {
                 let segments = rest
                     .iter()
                     .map(|segment| segment.name.text.as_str())
                     .collect::<Vec<_>>();
-                super::std_trait::by_path(&segments);
+                if let Some(definition) = super::std_trait::by_path(&segments) {
+                    return super::std_trait::known(definition).into();
+                }
             }
             last.name.text.clone()
         });

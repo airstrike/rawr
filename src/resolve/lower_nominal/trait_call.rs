@@ -198,27 +198,7 @@ impl<'a> Parser<'a> {
         if segments.len() < 2 {
             return None;
         }
-        let written = segments
-            .iter()
-            .map(ImmutableString::as_str)
-            .collect::<Vec<_>>()
-            .join("::");
-        let binding = self
-            .models
-            .import(first)
-            .map(|binding| binding.qualified.as_str());
-        // The first segment through its `use`, else a root of std's or a
-        // name of the prelude: `Iterator::next` is
-        // `std::prelude::rust_2024::Iterator::next`.
-        let base = match binding {
-            Some(binding) => binding.to_owned(),
-            None if crate::std_table::is_root(first) => first.to_owned(),
-            None => crate::std_table::prelude("2024")
-                .find(|path| path.path.rsplit("::").next() == Some(first))?
-                .path
-                .to_owned(),
-        };
-        let qualified = format!("{base}{}", &written[first.len()..]);
+        let qualified = self.std_spelling(&segments)?;
         let parts = qualified.split("::").collect::<Vec<_>>();
         // Whether it is a value when not called: a method, or a function
         // of `std::cmp`.
@@ -239,7 +219,7 @@ impl<'a> Parser<'a> {
                     && member.stability == crate::std_table::Stability::Stable =>
                 {
                     (
-                        owner.definition.rsplit("::").next()?,
+                        crate::resolve::std_trait::known(owner.definition),
                         member.name(),
                         member.receiver().is_some(),
                     )
@@ -260,6 +240,43 @@ impl<'a> Parser<'a> {
             return None;
         }
         Some((trait_name, member, 2 * (segments.len() - 1)))
+    }
+
+    /// The std path a body's path `segments` spells: its first segment
+    /// through its `use`, else a root of std's or a name of the prelude,
+    /// then the rest: `Iterator::next` is
+    /// `std::prelude::rust_2024::Iterator::next`, and `io::Write` after
+    /// `use std::io;` is `std::io::Write`.
+    fn std_spelling(&self, segments: &[ImmutableString]) -> Option<String> {
+        let (first, rest) = segments.split_first()?;
+        let binding = self
+            .models
+            .import(first)
+            .map(|binding| binding.qualified.as_str());
+        let mut qualified = match binding {
+            // `use std::io;` binds the facade's module, which is std's.
+            Some(binding) => match binding.strip_prefix(crate::std_facade::ROOT) {
+                Some(rest) if rest.is_empty() || rest.starts_with("::") => format!("std{rest}"),
+                _ => binding.to_owned(),
+            },
+            None if crate::std_table::is_root(first) => first.to_string(),
+            None => crate::std_table::prelude("2024")
+                .find(|path| path.path.rsplit("::").next() == Some(first.as_str()))?
+                .path
+                .to_owned(),
+        };
+        for segment in rest {
+            qualified.push_str("::");
+            qualified.push_str(segment);
+        }
+        Some(qualified)
+    }
+
+    /// The stable std trait a body's path `segments` names (`io::Write`,
+    /// `Write` after `use std::io::Write;`), as std's table resolves it
+    /// through the module's `use`s and the prelude: its definition.
+    pub(super) fn written_std_trait(&self, segments: &[ImmutableString]) -> Option<&'static str> {
+        crate::std_table::stable_trait(&self.std_spelling(segments)?)
     }
 
     /// The std trait `trait_name`'s function `member`, as std's table

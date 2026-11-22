@@ -76,6 +76,9 @@ struct Table {
     /// Each type name, and the one type that has it, if one alone does
     /// (`sole_type`).
     type_names: OnceLock<HashMap<&'static str, Option<&'static str>>>,
+    /// The definitions of std's stable traits, by their last segment
+    /// (`traits_named`).
+    trait_names: OnceLock<HashMap<&'static str, Vec<&'static str>>>,
     /// The directory it was read from; `None` for the embedded table.
     directory: Option<PathBuf>,
 }
@@ -103,6 +106,7 @@ impl Table {
             impls: Lines::new(impls),
             trait_functions: OnceLock::new(),
             type_names: OnceLock::new(),
+            trait_names: OnceLock::new(),
             directory,
         }
     }
@@ -181,6 +185,25 @@ impl Table {
                     .or_insert(Some(definition));
             }
             definitions
+        })
+    }
+
+    /// The definitions of std's stable traits, by their last segment:
+    /// `core::fmt::Write` and `core::io::write::Write` of `Write`.
+    fn trait_names(&self) -> &HashMap<&'static str, Vec<&'static str>> {
+        self.trait_names.get_or_init(|| {
+            let mut names = HashMap::<&'static str, Vec<&'static str>>::new();
+            for item in self.items.0.iter().map(|line| item_line(line)) {
+                if item.kind == "trait" && item.stability == Stability::Stable {
+                    let name = item
+                        .definition
+                        .rsplit("::")
+                        .next()
+                        .unwrap_or(item.definition);
+                    names.entry(name).or_default().push(item.definition);
+                }
+            }
+            names
         })
     }
 
@@ -717,6 +740,15 @@ pub(crate) fn members(definition: &str) -> impl Iterator<Item = Item> {
 pub(crate) fn trait_functions(name: &str) -> &'static [Item] {
     Table::get()
         .trait_functions()
+        .get(name)
+        .map_or(&[], Vec::as_slice)
+}
+
+/// The definitions of std's stable traits whose last segment is `name`:
+/// one for most names, two for `Write` (`fmt`'s and `io`'s).
+pub(crate) fn traits_named(name: &str) -> &'static [&'static str] {
+    Table::get()
+        .trait_names()
         .get(name)
         .map_or(&[], Vec::as_slice)
 }

@@ -178,9 +178,10 @@ pub(super) fn std_type(definition: &str, arguments: &[Ty]) -> Option<Ty> {
     })
 }
 
-/// The last segment of a trait's definition: `PartialEq`.
+/// The name the program knows a std trait's definition by: `PartialEq`,
+/// `std::io::Write` (`std_trait::known`).
 fn trait_name(definition: &str) -> &str {
-    definition.rsplit("::").next().unwrap_or(definition)
+    crate::resolve::std_trait::known(definition)
 }
 
 /// What the solver asks of the program being lowered: the parser itself,

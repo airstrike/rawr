@@ -1,6 +1,7 @@
 //! Aggregate semantic resolution for a validated static package graph.
 
 mod kept;
+mod scope;
 mod tables;
 
 use std::cell::RefCell;
@@ -185,7 +186,8 @@ struct Resolver<'a> {
     /// has too, by its address, with the path it is known by, as rustc
     /// names it then: `home::IntoView` beside `panel::IntoView`, and
     /// `m::Display` beside std's. A trait whose name is the crate's only
-    /// one is known by its name.
+    /// one is known by its name, and a block's trait by its path through
+    /// the items around it (`first::Shape`).
     trait_names: BTreeMap<Address, ImmutableString>,
     /// Each name a signature may write a crate trait by: every crate
     /// trait's own name, and each name a `use` binds with `as`
@@ -559,16 +561,31 @@ impl<'a> Resolver<'a> {
                     continue;
                 }
                 if let crate::item::Parsed::Trait(declared) = parsed {
-                    let address = context.address(&declared.name.text);
-                    self.insert_declaration(
-                        address.clone(),
-                        Declaration {
-                            source: context.source,
-                            span: declared.name.span,
-                            reach: context.namespace.reach(declared.header.visibility.as_ref()),
-                            target: Target::Trait(address),
-                        },
-                    )?;
+                    match parsed.scope() {
+                        // A block's trait is its block's alone, at an
+                        // address no path writes, as a block's module is:
+                        // two bodies' `trait Shape` are two traits (#1708).
+                        Some(block) => {
+                            let segment =
+                                super::block::module_segment(&declared.name.text, ordinals[index]);
+                            let target = Target::Trait(context.address(&segment));
+                            declare_in_block(&mut blocks, block, context, &declared.name, target)?;
+                        }
+                        None => {
+                            let address = context.address(&declared.name.text);
+                            self.insert_declaration(
+                                address.clone(),
+                                Declaration {
+                                    source: context.source,
+                                    span: declared.name.span,
+                                    reach: context
+                                        .namespace
+                                        .reach(declared.header.visibility.as_ref()),
+                                    target: Target::Trait(address),
+                                },
+                            )?;
+                        }
+                    }
                 }
                 let id = crate::item::Id::from_index(next_item);
                 next_item += 1;
@@ -721,7 +738,8 @@ impl<'a> Resolver<'a> {
     /// with its path from its crate's root, its package's name first
     /// outside the entry package: a module's `Display` is `m::Display`, as
     /// rustc names it, and the bare name a scope without it writes is
-    /// std's.
+    /// std's. Each block's trait, with the path rustc prints it by
+    /// (`block::owner_path`).
     fn shared_trait_names(&self) -> BTreeMap<Address, ImmutableString> {
         let mut by_name = BTreeMap::<&str, Vec<&Address>>::new();
         for declaration in self.tables.declarations() {
@@ -732,7 +750,7 @@ impl<'a> Resolver<'a> {
                     .push(address);
             }
         }
-        by_name
+        let mut known = by_name
             .into_iter()
             .filter(|(name, addresses)| {
                 addresses.len() > 1 || super::std_trait::anywhere(name).is_some()
@@ -749,7 +767,59 @@ impl<'a> Resolver<'a> {
                     .join("::");
                 (address.clone(), path.into())
             })
-            .collect()
+            .collect::<BTreeMap<_, ImmutableString>>();
+        // A block's trait is known by the path through the items around
+        // it, as rustc prints it (`first::Shape`); two of one path are
+        // known through their modules too, and then by their blocks' own
+        // segments (#1708).
+        let mut blocks = Vec::new();
+        for unit in &self.units {
+            for (block, declared) in &unit.blocks {
+                for (name, (_, target)) in declared {
+                    if let Target::Trait(address) = target {
+                        let path = super::block::owner_path(unit.parsed.items(), *block, name);
+                        blocks.push((address.clone(), path));
+                    }
+                }
+            }
+        }
+        let mut taken = self
+            .tables
+            .declarations()
+            .filter_map(|declaration| match &declaration.target {
+                Target::Trait(address) => Some(
+                    known
+                        .get(address)
+                        .cloned()
+                        .unwrap_or_else(|| address.name.clone()),
+                ),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        let mut repeated = BTreeMap::<&str, usize>::new();
+        for (_, path) in &blocks {
+            *repeated.entry(path.as_str()).or_default() += 1;
+        }
+        let mut named = Vec::with_capacity(blocks.len());
+        for (address, path) in &blocks {
+            let mut path = ImmutableString::from(path.as_str());
+            if repeated[path.as_str()] > 1 || taken.contains(&path) {
+                let modules = address
+                    .modules
+                    .iter()
+                    .map(ImmutableString::as_str)
+                    .collect::<Vec<_>>();
+                if !modules.is_empty() {
+                    path = format!("{}::{path}", modules.join("::")).into();
+                }
+            }
+            if !taken.insert(path.clone()) {
+                path = address.name.clone();
+            }
+            named.push((address.clone(), path));
+        }
+        known.extend(named);
+        known
     }
 
     /// Each name a signature may write a crate trait by
@@ -773,7 +843,15 @@ impl<'a> Resolver<'a> {
             .flatten()
             .filter(|(name, path)| path.last() != Some(&name.text))
             .map(|(name, _)| name.text);
-        declared.chain(renamed).collect()
+        // A block's trait, by its own name.
+        let blocks = self
+            .units
+            .iter()
+            .flat_map(|unit| unit.blocks.values())
+            .flat_map(|declared| declared.iter())
+            .filter(|(_, (_, target))| matches!(target, Target::Trait(_)))
+            .map(|(name, _)| name.clone());
+        declared.chain(renamed).chain(blocks).collect()
     }
 
     /// Bind each glob import's names, a public glob's as re-exports, until
@@ -1375,21 +1453,10 @@ impl<'a> Resolver<'a> {
                 .unwrap_or(&types);
             // A block's items see the traits the blocks around them declare
             // or import, which the module's scope doesn't hold.
-            let scope = parsed.scope();
-            let block_binds = |name: &ImmutableString| {
-                scope.is_some_and(|here| {
-                    blocks.iter().any(|(block, declared)| {
-                        super::block::encloses(*block, here) && declared.contains_key(name)
-                    }) || uses.iter().flatten().any(|used| {
-                        used.header.scope.is_some()
-                            && sees(used.header.scope, scope)
-                            && (used.traits.contains(name)
-                                || used
-                                    .bindings
-                                    .iter()
-                                    .any(|binding| binding.name.text == *name))
-                    })
-                })
+            let around = scope::Around {
+                blocks,
+                uses: &uses,
+                scope: parsed.scope(),
             };
             let parsed = {
                 let mut parsed = parsed;
@@ -1397,7 +1464,7 @@ impl<'a> Resolver<'a> {
                 write_renamed_modules(&mut parsed, &modules);
                 self.write_native_trait_objects(context, &mut parsed, &modules);
                 self.write_outside_paths(context, &mut parsed);
-                self.write_trait_names(context, &mut parsed, &block_binds)
+                self.write_trait_names(context, &mut parsed, &around)
                     .map_err(|error| Failure {
                         primary: context.source,
                         secondary: None,
@@ -3102,17 +3169,18 @@ impl<'a> Resolver<'a> {
 
     /// The name each unit writes a trait of [`Resolver::trait_names`] by, its
     /// own or one it imports, with the path the trait is known by, so a
-    /// body's `Shape::size(&c)` calls the trait the module names.
-    fn source_trait_names(
-        &self,
-    ) -> BTreeMap<(program::source::Id, ImmutableString), ImmutableString> {
+    /// body's `Shape::size(&c)` calls the trait the module names; and each
+    /// trait a block declares, with its block, so a body's `Shape` in that
+    /// block is the block's (#1708).
+    fn source_trait_names(&self) -> BTreeMap<(program::source::Id, ImmutableString), super::Known> {
         let names = self
             .trait_names
             .keys()
             .map(|address| &address.name)
             .collect::<BTreeSet<_>>();
-        let mut known = BTreeMap::new();
+        let mut known = BTreeMap::<_, Vec<_>>::new();
         for unit in &self.units {
+            let source = program::source::Id::from_index(unit.context.source.index());
             for name in &names {
                 let path = ["self".into(), (*name).clone()];
                 let resolved =
@@ -3120,38 +3188,55 @@ impl<'a> Resolver<'a> {
                 if let Ok(Target::Trait(address)) = resolved
                     && let Some(path) = self.trait_names.get(&address)
                 {
-                    let source = program::source::Id::from_index(unit.context.source.index());
-                    known.insert((source, (*name).clone()), path.clone());
+                    known
+                        .entry((source, (*name).clone()))
+                        .or_default()
+                        .push((None, path.clone()));
+                }
+            }
+            for (block, declared) in &unit.blocks {
+                for (name, (_, target)) in declared {
+                    if let Target::Trait(address) = target
+                        && let Some(path) = self.trait_names.get(address)
+                    {
+                        known
+                            .entry((source, name.clone()))
+                            .or_default()
+                            .push((Some(*block), path.clone()));
+                    }
                 }
             }
         }
         known
+            .into_iter()
+            .map(|(key, names)| (key, names.into_boxed_slice()))
+            .collect()
     }
 
     /// Each path of `item`'s signatures and bounds that names a crate
     /// trait, through its module (`m::Shape`, `super::Shape`,
-    /// `crate::home::IntoView`) or by a name a `use` gives it (`Shape as
-    /// Outline`), written as the one segment the trait is known by
-    /// ([`Resolver::known_trait_name`]), its own arguments kept, as the
-    /// module's scope resolves it; and a trait declaration whose name
-    /// another module's trait has renamed to its path: two traits of one
-    /// name are two items, as rustc's are.
+    /// `crate::home::IntoView`), by a name a `use` gives it (`Shape as
+    /// Outline`) or as a block around the item declares it, written as the
+    /// one segment the trait is known by ([`Resolver::known_trait_name`]),
+    /// its own arguments kept, as the module's scope resolves it; a std
+    /// trait's name a `use` binds, written as the name the program knows
+    /// the trait by (`std::io::Write` of `Write` after `use
+    /// std::io::Write;`, `std_trait::known`); and a trait declaration whose
+    /// name another trait has renamed to its path: two traits of one name
+    /// are two items, as rustc's are.
     ///
-    /// A trait's place that writes a crate trait's name nothing in scope
-    /// binds (not the module's items, its `use`s and globs, the blocks
-    /// around the item, `block_binds`, or the prelude) is rustc's E0405:
-    /// a crate trait is named through the scope of the module naming it,
-    /// never by its name alone.
+    /// A trait's place that writes a crate or std trait's name nothing in
+    /// scope binds (not the module's items, its `use`s and globs, the
+    /// blocks around the item, or the prelude) is rustc's E0405: a trait is
+    /// named through the scope of the module naming it, never by its name
+    /// alone, nor by the path another item writes it by.
     fn write_trait_names(
         &self,
         context: &Context,
         item: &mut crate::item::Parsed,
-        block_binds: &impl Fn(&ImmutableString) -> bool,
+        around: &scope::Around<'_>,
     ) -> Result<(), Error> {
         use crate::item::type_ref::{Path, Segment, DYN_SEGMENT};
-        if self.trait_spellings.is_empty() {
-            return Ok(());
-        }
         let refused = RefCell::new(None);
         let path = |path: &mut Path, place: Place| {
             let skip = usize::from(
@@ -3164,34 +3249,47 @@ impl<'a> Resolver<'a> {
             let Some(last) = written.last() else {
                 return;
             };
-            if !self.trait_spellings.contains(&last.name.text) {
+            let std_name = !crate::std_table::traits_named(&last.name.text).is_empty();
+            if !self.trait_spellings.contains(&last.name.text) && !std_name {
                 return;
             }
-            let mut names = written
-                .iter()
-                .map(|segment| segment.name.text.clone())
-                .collect::<Vec<_>>();
-            if names.len() == 1 {
-                names.insert(0, "self".into());
-            }
-            let resolved = self.resolve_path(context, &names, path.span, &mut BTreeSet::new());
-            let address = match resolved {
-                Ok(Target::Trait(address)) => address,
-                Err(_)
-                    if place == Place::Trait
-                        && written.len() == 1
-                        && !self.tables.binds(&context.address(&last.name.text))
-                        && !block_binds(&last.name.text)
-                        && !prelude_trait(&last.name.text) =>
-                {
-                    refused
-                        .borrow_mut()
-                        .get_or_insert_with(|| super::unknown_trait(&last.name));
-                    return;
-                }
-                _ => return,
+            let (address, std) = match written {
+                [only] => (
+                    around.block_trait(&only.name.text).cloned(),
+                    around.std_trait(&only.name.text),
+                ),
+                _ => (None, None),
             };
-            let known = self.known_trait_name(address);
+            let known = match (address, std) {
+                (Some(address), _) => self.known_trait_name(address),
+                // `Write` after `use std::io::Write;` is `std::io::Write`.
+                (None, Some(definition)) => super::std_trait::known(definition).into(),
+                (None, None) => {
+                    let mut names = written
+                        .iter()
+                        .map(|segment| segment.name.text.clone())
+                        .collect::<Vec<_>>();
+                    if names.len() == 1 {
+                        names.insert(0, "self".into());
+                    }
+                    match self.resolve_path(context, &names, path.span, &mut BTreeSet::new()) {
+                        Ok(Target::Trait(address)) => self.known_trait_name(address),
+                        Err(_)
+                            if place == Place::Trait
+                                && written.len() == 1
+                                && !self.tables.binds(&context.address(&last.name.text))
+                                && !around.binds(&last.name.text)
+                                && !prelude_trait(&last.name.text) =>
+                        {
+                            refused
+                                .borrow_mut()
+                                .get_or_insert_with(|| super::unknown_trait(&last.name));
+                            return;
+                        }
+                        _ => return,
+                    }
+                }
+            };
             if let [only] = written
                 && only.name.text == known
             {
@@ -3213,7 +3311,11 @@ impl<'a> Resolver<'a> {
         };
         each_signature_path(item, &path);
         if let crate::item::Parsed::Trait(declared) = item {
-            if let Some(known) = self.trait_names.get(&context.address(&declared.name.text)) {
+            let address = around
+                .block_trait(&declared.name.text)
+                .cloned()
+                .unwrap_or_else(|| context.address(&declared.name.text));
+            if let Some(known) = self.trait_names.get(&address) {
                 declared.name.text = known.clone();
             }
             for bound in declared
