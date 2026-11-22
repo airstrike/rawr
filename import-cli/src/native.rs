@@ -619,6 +619,22 @@ impl Error {
         )
     }
 
+    /// The file a save changed after the program's files were read, when
+    /// [`Self::source_changed`].
+    pub(crate) fn changed_source(&self) -> Option<&std::path::Path> {
+        match self {
+            Self::Node(rawr_import::node::Error::SourceChanged(path))
+            | Self::Process(rawr_import::process::RunnerError::Node(
+                rawr_import::node::Error::SourceChanged(path),
+            ))
+            | Self::PinCleanup {
+                failure: rawr_import::node::Error::SourceChanged(path),
+                ..
+            } => Some(path),
+            _ => None,
+        }
+    }
+
     /// An input of the runner's build changed since its read set was
     /// sealed, as its start's one walk of it found (#1760).
     pub(crate) const fn read_set_stale(&self) -> bool {

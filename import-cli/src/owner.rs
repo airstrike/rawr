@@ -284,13 +284,16 @@ pub fn run_program(
     graph: Option<rawr::package::Graph>,
     profile: &dyn crate::Profile,
     arguments: &[std::ffi::OsString],
-    mut cargo: Option<rawr_cli::cargo::Pending>,
+    cargo: Option<rawr_cli::cargo::Pending>,
     handed: Option<rawr_cli::events::Handed>,
     answers: rawr::project::cargo::Answers,
 ) -> Result<i32, Option<diagnostic::Report>> {
     // Ctrl-C at the terminal ends the program with SIGINT, as a shell
     // reports it.
     const INTERRUPTED: i32 = 128 + 2;
+    // Cargo is reaped as it ends, not when the session first ends, so no
+    // finished check is left a zombie through a long start or run.
+    let mut cargo = cargo.map(Checking::start);
     let program = rawr_import::process::Arguments {
         name: rawr_cli::supervise::program_name(target),
         arguments: arguments.to_vec(),
@@ -343,7 +346,7 @@ pub fn run_program(
         let checked = if restarted {
             None
         } else {
-            let pending = cargo.take().map(rawr_cli::cargo::Pending::finish);
+            let pending = cargo.take().map(|checking| checking.finish().status);
             match &ran {
                 Err(unchecked) if unchecked.is_copy() && pending.is_none() => {
                     checked_now(&location(target), kept.cargo())
@@ -459,6 +462,8 @@ pub fn run_tests(
         output: None,
     };
     let lifecycle = rawr_import::process::Lifecycle::Run;
+    // Cargo is reaped as it ends, as for a run.
+    let cargo = cargo.map(Checking::start);
     let mut origin = Origin::graph(Some(graph));
     let mut kept = crate::Kept::with_cargo(answers);
     let cells = cells(target, profile, &mut kept);
@@ -483,7 +488,7 @@ pub fn run_tests(
             Err(unchecked) => break Err(unchecked),
         }
     };
-    let checked = cargo.map(rawr_cli::cargo::Pending::finish);
+    let checked = cargo.map(|checking| checking.finish().status);
     let checked = match (&ran, checked) {
         (Err(unchecked), None) if unchecked.is_copy() => {
             checked_now(&location(target), kept.cargo())
@@ -1465,9 +1470,7 @@ fn initial_watched_program(
             // the saved files.
             Err(error) if error.source_changed() => {
                 warn(adapter.withdraw(staged));
-                rawr_import::process::say(
-                    "rawr: the source changed as the program started; starting it again",
-                );
+                prepare_again(error.changed_source().unwrap_or(target_path));
                 initial = refresh_initial(
                     &mut lane,
                     target_path,
@@ -1527,9 +1530,6 @@ fn prepare_on_lane(
     source: &diagnostic::Source,
     mut kept: Option<&mut crate::Kept>,
 ) -> Result<Initial, Unchecked> {
-    // A save while the runner builds (D531.9): the build is kept, and the
-    // program is prepared again from the saved files.
-    let mut saved = None;
     // A cache entry that went stale before the runner's build used it
     // prepares again, whose lookups rebuild it (#613).
     let mut restarts = crate::Restarts::default();
@@ -1540,8 +1540,7 @@ fn prepare_on_lane(
         mut graph,
         mut prepared,
     } = origin;
-    loop {
-        let target = saved.as_ref().unwrap_or(target);
+    held_pass(target, prepare_again, |target| {
         let revision = lane
             .revision()
             .map_err(|error| framework(error, source.clone()))?;
@@ -1567,10 +1566,12 @@ fn prepare_on_lane(
         };
         let prepared = match prepared {
             Ok(prepared) => prepared,
-            Err(crate::Error::Rawr(error)) if error.source_changed() => {
-                saved = Some(discover(target, answers(&mut kept, &mut own_answers))?);
-                continue;
-            }
+            Err(crate::Error::Rawr(error)) => match error.changed_source() {
+                Some(changed) => {
+                    return Pass::saved(changed, target, answers(&mut kept, &mut own_answers));
+                }
+                None => return Err(unchecked(crate::Error::Rawr(error), source.clone())),
+            },
             Err(error) => return Err(unchecked(error, source.clone())),
         };
         let manifests = prepared.manifests.clone();
@@ -1581,7 +1582,7 @@ fn prepare_on_lane(
         let record = request.kept().ok();
         let generated = match request.generate() {
             Ok(generated) => generated,
-            Err(error) if restarts.again(&error) => continue,
+            Err(error) if restarts.again(&error) => return Ok(Pass::Stale),
             Err(error) => return Err(framework(error, source.clone()).into()),
         };
         // The API phase has ended; hand its freed allocator pages back before the build.
@@ -1593,13 +1594,13 @@ fn prepare_on_lane(
                 }
                 built
             }
-            Err(error) if restarts.again(&error) => continue,
+            Err(error) if restarts.again(&error) => return Ok(Pass::Stale),
             Err(error) => {
                 return Err(match settlement.drift_diagnostic() {
                     // A stale build-script run in the shared nightly
                     // directory may be why: it is cleaned, and preparing
                     // again extracts afresh (D742).
-                    Err(rerun) if restarts.again(&rerun) => continue,
+                    Err(rerun) if restarts.again(&rerun) => return Ok(Pass::Stale),
                     Err(rerun) => framework(explained(&error, &rerun), source.clone()),
                     Ok(Some(drift)) => framework(explained(&error, &drift), source.clone()),
                     Ok(None) => framework(error, source.clone()),
@@ -1612,29 +1613,89 @@ fn prepare_on_lane(
         // build scripts gave the nightly other outputs prepares again.
         match settlement.settle() {
             Ok(()) => {}
-            Err(error) if restarts.again(&error) => continue,
+            Err(error) if restarts.again(&error) => return Ok(Pass::Stale),
             Err(error) => return Err(framework(error, source.clone()).into()),
         }
         match built.retain_startup(&snapshot) {
-            Ok(()) => {
-                return Ok(Initial {
-                    built,
-                    snapshot,
-                    inputs,
-                    manifests,
-                });
+            Ok(()) => Ok(Pass::Held(Initial {
+                built,
+                snapshot,
+                inputs,
+                manifests,
+            })),
+            // A save while the runner built (D531.9): the build is kept,
+            // and the program is prepared again from the saved files.
+            Err(rawr_import::node::Error::SourceChanged(changed)) => {
+                Pass::saved(&changed, target, answers(&mut kept, &mut own_answers))
             }
-            Err(rawr_import::node::Error::SourceChanged(_)) => {
-                saved = Some(discover(target, answers(&mut kept, &mut own_answers))?);
-            }
-            Err(error) if restarts.again(&error) => {}
+            Err(error) if restarts.again(&error) => Ok(Pass::Stale),
             Err(error) => {
-                return Err(
-                    crate::report::failure(Task::Start, error, Some(source.clone())).into(),
-                );
+                Err(crate::report::failure(Task::Start, error, Some(source.clone())).into())
             }
         }
+    })
+}
+
+/// What one pass of a start's preparation came to.
+enum Pass<T> {
+    /// It holds.
+    Held(T),
+    /// A save landed as it ran (D531.9): `changed` is the file it changed,
+    /// and `target` the program as it is saved.
+    Saved {
+        changed: PathBuf,
+        target: rawr::project::Target,
+    },
+    /// It runs again from the same files: a cache entry it read went
+    /// stale (#613).
+    Stale,
+}
+
+impl<T> Pass<T> {
+    /// A save changed `changed` as the pass of `target` ran: the program
+    /// as it is saved, found again with `answers`.
+    fn saved(
+        changed: &Path,
+        target: &rawr::project::Target,
+        answers: &mut rawr::project::cargo::Answers,
+    ) -> Result<Self, Unchecked> {
+        Ok(Self::Saved {
+            changed: changed.to_path_buf(),
+            target: discover(target, answers)?,
+        })
     }
+}
+
+/// Run a start's passes from `target` to the first that holds. A save as
+/// one runs prepares the program again from the saved files (D531.9), from
+/// what the passes before it kept, as a reload does; `told` hears which
+/// file changed each time, so a writer that keeps rewriting one is seen.
+fn held_pass<T>(
+    target: &rawr::project::Target,
+    mut told: impl FnMut(&Path),
+    mut pass: impl FnMut(&rawr::project::Target) -> Result<Pass<T>, Unchecked>,
+) -> Result<T, Unchecked> {
+    let mut saved = None;
+    loop {
+        match pass(saved.as_ref().unwrap_or(target))? {
+            Pass::Held(held) => return Ok(held),
+            Pass::Saved { changed, target } => {
+                told(&changed);
+                saved = Some(target);
+            }
+            Pass::Stale => {}
+        }
+    }
+}
+
+/// Say that a save changed `changed` as the program started, so it is
+/// prepared again (D531.9): on stderr, every time, and to a supervising
+/// shell, whose status then says the session prepares.
+fn prepare_again(changed: &Path) {
+    let reason = format!("`{}` changed as the program started", changed.display());
+    rawr_import::process::say(format_args!("rawr: {reason}; preparing it again"));
+    rawr_cli::events::preparing(&reason);
+    rawr_import::progress::again();
 }
 
 /// The program as it is on disk now.
@@ -1841,5 +1902,49 @@ mod tests {
             shown,
             "error[E0425]: cannot find value `x`\n\nThis may be why: `ring` differs"
         );
+    }
+
+    /// A save as a start prepares the program (D531.9) prepares it once
+    /// more, from the saved file, and says which file changed (#2571).
+    #[test]
+    fn a_save_during_a_start_prepares_once_more_and_says_the_file() {
+        let root = std::env::temp_dir().join(format!("rawr-start-save-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"start-save\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        let main = root.join("src/main.rs");
+        std::fs::write(&main, "// rawr\nfn main() {}\n").unwrap();
+        let saved = "// rawr\nfn main() { println!(\"saved\"); }\n";
+        let mut answers = rawr::project::cargo::Answers::new();
+        let target = rawr::project::Target::discover(&root, &mut answers).unwrap();
+
+        let mut passes = 0;
+        let mut told = Vec::new();
+        let held = super::held_pass(
+            &target,
+            |changed| told.push(changed.to_path_buf()),
+            |target| {
+                passes += 1;
+                let read = std::fs::read_to_string(&main).unwrap();
+                // A writer in the tree saves as the first pass runs.
+                if passes == 1 {
+                    std::fs::write(&main, saved).unwrap();
+                }
+                if std::fs::read_to_string(&main).unwrap() == read {
+                    Ok(super::Pass::Held(read))
+                } else {
+                    super::Pass::saved(&main, target, &mut answers)
+                }
+            },
+        );
+        let held = held.map_err(super::Unchecked::into_report).unwrap();
+        assert_eq!(passes, 2, "one save prepares once more");
+        assert_eq!(held, saved, "the second pass reads the saved file");
+        assert_eq!(told, [main], "the save names the file it changed");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

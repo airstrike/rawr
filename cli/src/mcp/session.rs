@@ -1203,7 +1203,7 @@ impl Mirror {
         let building = self
             .session
             .building()
-            .filter(|_| phase == Phase::Building)
+            .filter(|_| phase.is_starting())
             .map(|status| json!({ "status": status }));
         json!({
             "root": Value::Null,

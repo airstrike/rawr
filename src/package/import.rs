@@ -86,8 +86,11 @@ pub enum Error {
     #[error(transparent)]
     Classification(#[from] rawr_import::classify::Error),
     /// A file of the program changed while it was built.
-    #[error("a source file changed during the build; run it again")]
-    SnapshotMismatch,
+    #[error("`{}` changed during the build; run it again", .path.display())]
+    SnapshotMismatch {
+        /// The file that changed, as it is on disk now.
+        path: std::path::PathBuf,
+    },
     /// The program uses a crate item that the build of its dependencies
     /// couldn't bind. `selector` is for tests and never shown.
     #[error("`{path}` is not supported in Rawr yet")]
@@ -210,8 +213,8 @@ impl crate::Engine {
         let project = graph.entry_package().root().to_path_buf();
         let current_source = crate::reload::source::Graph::from_package(&graph);
         let current_snapshot = crate::reload::source::Snapshot::from_graph(&current_source);
-        if !snapshot.exactly_matches(&current_snapshot) {
-            return Err(super::Error::import(Error::SnapshotMismatch));
+        if let Some(path) = snapshot.changed_in(&current_snapshot) {
+            return Err(super::Error::import(Error::SnapshotMismatch { path }));
         }
         took("loading");
 
@@ -5348,8 +5351,10 @@ mod tests {
     fn messages_name_the_program() {
         let cases = [
             (
-                Error::SnapshotMismatch,
-                "a source file changed during the build; run it again",
+                Error::SnapshotMismatch {
+                    path: "src/main.rs".into(),
+                },
+                "`src/main.rs` changed during the build; run it again",
             ),
             (
                 Error::UnmappedImportedUse {
