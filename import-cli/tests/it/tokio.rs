@@ -125,6 +125,44 @@ fn a_module_function_names_another_crates_type() {
     assert_eq!(stdout, "Georgia of 3\nInter of 2\nInter\n");
 }
 
+/// A use of a value after a crate method took it as its owned `self` is
+/// rustc's E0382, noted at the method's `self` in the crate's source
+/// (#695).
+#[test]
+fn a_move_by_a_crate_method_notes_its_self() {
+    let root = BORROWED.lease(&[(
+        "src/main.rs",
+        "// rawr\nfn main() {\n    let font = shelf::font(String::from(\"Inter\"), 1);\n    let family = font.into_family();\n    println!(\"{family} {}\", font.family);\n}\n",
+    )]);
+    // `run` reports rawr's own check, which `check` leaves to cargo's when
+    // cargo check fails too.
+    let run = crate::support::rawr_import()
+        .arg("run")
+        .arg(&*root)
+        .env("RAWR_HOME", crate::support::runtime_home())
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("RUSTFLAGS")
+        .env_remove("RAWR_VERBOSE")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(!run.status.success(), "{stderr}");
+    assert!(stderr.contains("error[E0382]"), "{stderr}");
+    // rawr's own check says it, before any native build.
+    assert!(!stderr.contains("could not compile"), "{stderr}");
+    assert!(!stderr.contains("could not build"), "{stderr}");
+    assert!(
+        stderr.contains(
+            "note: `Font::into_family` takes ownership of the receiver `self`, which moves `font`"
+        ),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("pub fn into_family(self) -> String {"),
+        "{stderr}"
+    );
+}
+
 /// A crate's `async fn` whose future borrows std's types and Rust's own
 /// leases each borrow to the future, whatever the type (#714): `&Path` and
 /// `&[u8]`, `&String`, `&Vec<u32>`, `&u32`, and a `Result<&Font, String>`

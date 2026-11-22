@@ -169,7 +169,9 @@ opaque.visible
         let report = error.report().expect("invalid imported grammar retains diagnostic evidence");
         assert!(matches!(error.category(), package::Category::Compilation | package::Category::Resolution), "{source}");
         assert!(!report.labels().is_empty(), "{source}");
-        assert!(!report.external_labels().is_empty(), "{source}");
+        // The crate's place is a label, or the note rustc gives at a moving
+        // method's `self`.
+        assert!(!report.external_labels().is_empty() || !report.sections().is_empty(), "{source}");
     }
 
     let stale = Fixture::new("use fixture::integer_only; integer_only()\n");

@@ -11,6 +11,13 @@ pub struct Font {
     pub bytes: Vec<u8>,
 }
 
+impl Font {
+    /// Its family's name, taking the font.
+    pub fn into_family(self) -> String {
+        self.family
+    }
+}
+
 /// A font of `family` with `size` bytes.
 pub fn font(family: String, size: u8) -> Font {
     Font {

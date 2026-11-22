@@ -10,6 +10,7 @@ pub mod runner;
 #[cfg(not(target_arch = "wasm32"))]
 mod copied;
 mod kept;
+mod moved_self;
 mod unresolved;
 
 pub use kept::Kept;
@@ -1274,6 +1275,13 @@ fn diagnostic_path(error: &crate::resolve::Error) -> Option<(String, ImportedNam
             Some((format!("{module}::{item}"), ImportedNamespace::Either))
         }
         R::ArgumentCount { name, .. } => Some((name.to_string(), ImportedNamespace::Value)),
+        // A crate method that took the moved value as its `self`.
+        R::MovedValue {
+            cause: Some(cause), ..
+        } if cause.receiver.is_some() => cause
+            .receiver
+            .as_ref()
+            .map(|method| (method.to_string(), ImportedNamespace::Value)),
         R::InvalidMethodCall { owner, method, .. }
         | R::InvalidMethodSignature { owner, method, .. } => Some((
             crate::resolve::Qualified(owner, method).to_string(),
@@ -1411,6 +1419,15 @@ fn imported_lowering_report(
         }
         crate::resolve::LoweringEvidence::Unmapped(_) => return Ok(None),
     };
+    if let crate::resolve::Error::MovedValue {
+        name,
+        cause: Some(cause),
+        ..
+    } = resolution
+        && let Some(method) = &cause.receiver
+    {
+        return moved_by_receiver(report, &outcomes, method, name, project);
+    }
     augment_external(report, outcomes, paths, project)
 }
 
@@ -1468,7 +1485,42 @@ fn augment_external(
     if spans.is_empty() && reasons.is_empty() {
         return Ok(None);
     }
+    let mut builder = rebuilt(&report)?;
+    for reason in reasons {
+        builder = builder.note(reason);
+    }
+    builder.reserve_external_labels(spans.len())?;
+    for (span, _, label) in spans {
+        builder = builder.secondary_external(external_position(span, project)?, Some(label.into()));
+    }
+    Ok(Some(builder.finish()))
+}
 
+/// `report`, a moved local's E0382, with rustc's note at the `self` of the
+/// crate method `method` whose call moved it, where the crate's source has
+/// it, from the method's outcome in `outcomes`.
+fn moved_by_receiver(
+    report: diagnostic::Report,
+    outcomes: &[rawr_import::classify::Outcome<'_>],
+    method: &str,
+    moved: &str,
+    project: &std::path::Path,
+) -> Result<Option<diagnostic::Report>, diagnostic::Error> {
+    let Some(origin) = outcomes
+        .iter()
+        .find_map(rawr_import::classify::Outcome::origin)
+    else {
+        return Ok(None);
+    };
+    let declaration = external_position(origin.declaration(), project)?;
+    let Some(note) = moved_self::note(method, moved, &declaration) else {
+        return Ok(None);
+    };
+    Ok(Some(rebuilt(&report)?.section(note)?.finish()))
+}
+
+/// A builder holding all of `report`, which a caller adds to.
+fn rebuilt(report: &diagnostic::Report) -> Result<diagnostic::Builder, diagnostic::Error> {
     let mut builder = diagnostic::Report::error(report.code(), report.message());
     for source in report.sources() {
         builder = builder.source(source.clone());
@@ -1496,20 +1548,13 @@ fn augment_external(
     for note in report.notes() {
         builder = builder.note(note);
     }
-    for reason in reasons {
-        builder = builder.note(reason);
-    }
     for section in report.sections() {
         builder = builder.section(section.clone())?;
     }
     for suggestion in report.suggestions() {
         builder = builder.suggestion(suggestion.clone());
     }
-    builder.reserve_external_labels(spans.len())?;
-    for (span, _, label) in spans {
-        builder = builder.secondary_external(external_position(span, project)?, Some(label.into()));
-    }
-    Ok(Some(builder.finish()))
+    Ok(builder)
 }
 
 fn diagnostic_outcomes<'contract>(
