@@ -423,6 +423,9 @@ impl fmt::Display for ParseErrorType {
                 crate::resolve::Error::BorrowConflict { message, code, .. } => {
                     write!(f, "{message} ({code})")
                 }
+                crate::resolve::Error::Outlives(report) => {
+                    write!(f, "{} ({})", report.message(), report.code())
+                }
                 crate::resolve::Error::ImmutableBorrow { message, .. } => {
                     write!(f, "{message} (E0596)")
                 }

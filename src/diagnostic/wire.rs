@@ -120,6 +120,7 @@ impl Report {
             "external": external.collect::<Vec<_>>(),
             "help": self.help(),
             "notes": self.notes().collect::<Vec<_>>(),
+            "closing_help": self.closing_help(),
             "sections": sections.collect::<Vec<_>>(),
             "suggestions": suggestions.collect::<Vec<_>>(),
         })
@@ -189,6 +190,9 @@ impl Report {
         }
         for note in list("notes")? {
             builder = builder.note(string(note, "note")?);
+        }
+        if let Some(help) = optional(value.get("closing_help"), "closing_help")? {
+            builder = builder.closing_help(help);
         }
         for section in list("sections")? {
             builder = builder.section(self::section(section, &sources)?)?;

@@ -128,12 +128,33 @@ struct Reader<'a> {
     declared: &'a dyn Fn(&Target) -> Option<usize>,
     /// Where a crate type is invariant.
     variance: Variance<'a>,
-    /// Where each elided lifetime is, by its number less one.
-    elided: Vec<Span>,
+    /// Each elided lifetime, by its number less one.
+    elided: Vec<Elision>,
     /// The positions read so far below which the type is invariant: what a
     /// `&mut` refers to, a cell's value, a crate type's invariant
     /// parameters.
-    invariant: Vec<Path>,
+    invariant: Vec<(Path, Invariance)>,
+}
+
+/// An elided lifetime of a signature: the type it is elided in, and
+/// whether that type is a `&mut`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Elision {
+    pub(crate) at: Span,
+    pub(crate) mutable: bool,
+}
+
+/// What makes a position of a type invariant, which rustc's notes on
+/// variance name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Invariance {
+    /// What a `&mut` refers to, of this type.
+    Referent(Type),
+    /// A type argument of this std cell or lock.
+    Cell(Type),
+    /// A lifetime or type argument of this crate type, at its position in
+    /// the type ([`Step::Lifetime`] or [`Step::Arg`]).
+    Nominal(Type, Path),
 }
 
 /// The positions of a crate type, each a [`Step::Lifetime`] or
@@ -167,7 +188,7 @@ impl Reader<'_> {
 
     /// An elided lifetime of the type at `at`.
     fn fresh(&mut self, at: Span) -> Region {
-        self.elided.push(at);
+        self.elided.push(Elision { at, mutable: false });
         Region::Elided(self.elided.len())
     }
 
@@ -189,9 +210,15 @@ impl Reader<'_> {
                 span,
             } => {
                 let region = self.lifetime(*lifetime, *span);
+                if let Region::Elided(number) = region {
+                    self.elided[number - 1].mutable = *mutable;
+                }
                 out.push((own, region));
                 if *mutable {
-                    self.invariant.push(at.push(Step::Arg(0)));
+                    self.invariant.push((
+                        at.push(Step::Arg(0)),
+                        Invariance::Referent((**target).clone()),
+                    ));
                 }
                 self.positions(target, at.push(Step::Arg(0)), output, out);
             }
@@ -275,17 +302,24 @@ impl Reader<'_> {
                 let script = matches!(path.target, Target::Script { .. });
                 if script {
                     let invariant = (self.variance)(&path.target);
-                    self.invariant
-                        .extend(invariant.into_iter().map(|below| at.join(below)));
+                    self.invariant.extend(
+                        invariant
+                            .into_iter()
+                            .map(|below| (at.join(below), Invariance::Nominal(ty.clone(), below))),
+                    );
                 }
-                let cell = path.target == Target::Builtin && invariant_builtin(&path.name);
+                let cell =
+                    (path.target == Target::Builtin && invariant_builtin(&path.name)).then_some(ty);
                 let mut written = 0;
                 let mut types = 0;
                 for argument in &path.arguments {
                     match argument {
                         Argument::Type(ty) => {
-                            if cell {
-                                self.invariant.push(at.push(Step::Arg(types)));
+                            if let Some(cell) = cell {
+                                self.invariant.push((
+                                    at.push(Step::Arg(types)),
+                                    Invariance::Cell(cell.clone()),
+                                ));
                             }
                             self.positions(ty, at.push(Step::Arg(types)), output, out);
                             types += 1;
@@ -419,10 +453,10 @@ struct Read {
     elided_to: Option<Region>,
     /// The inputs have regions the signature does not say.
     unknown: bool,
-    /// Where each elided lifetime is, by its number less one.
-    elided: Vec<Span>,
+    /// Each elided lifetime, by its number less one.
+    elided: Vec<Elision>,
     /// The output's positions below which it is invariant.
-    invariant: Vec<Path>,
+    invariant: Vec<(Path, Invariance)>,
 }
 
 fn read(
@@ -454,7 +488,13 @@ fn read(
                     let region = match &signature.lifetimes.receiver {
                         Some(name) if name == "static" => Region::Static,
                         Some(name) if name != "_" => Region::Named(name.clone()),
-                        _ => reader.fresh(Span::NONE),
+                        _ => {
+                            let fresh = reader.fresh(Span::NONE);
+                            if let Some(elision) = reader.elided.last_mut() {
+                                elision.mutable = mode == Receiver::Mutable;
+                            }
+                            fresh
+                        }
                     };
                     receiver_region = Some(region.clone());
                     let mut positions = vec![(Path::OWN, region)];
@@ -524,7 +564,7 @@ pub(crate) fn missing_lifetime(
         return None;
     }
     read.output.iter().find_map(|(_, region)| match region {
-        Region::Elided(number) => read.elided.get(number - 1).copied(),
+        Region::Elided(number) => read.elided.get(number - 1).map(|elision| elision.at),
         _ => None,
     })
 }
@@ -627,6 +667,9 @@ pub(crate) struct Own {
     pub(crate) receiver: Regions,
     pub(crate) parameters: Vec<Regions>,
     pub(crate) output: Output,
+    /// Each elided input lifetime, by its number less one: the receiver's
+    /// is at no place.
+    pub(crate) elided: Vec<Elision>,
 }
 
 /// A function's output, as what its body returns is checked against it.
@@ -634,9 +677,9 @@ pub(crate) struct Own {
 pub(crate) struct Output {
     /// Its regions, the elided ones given by elision.
     regions: Regions,
-    /// Its positions below which it is invariant: what is returned there
-    /// has its lifetimes exactly.
-    invariant: Vec<Path>,
+    /// Its positions below which it is invariant, and what makes each so:
+    /// what is returned there has its lifetimes exactly.
+    invariant: Vec<(Path, Invariance)>,
     bounds: Bounds,
 }
 
@@ -690,6 +733,7 @@ pub(crate) fn own(
             invariant: read.invariant,
             bounds,
         },
+        elided: read.elided,
     }
 }
 
@@ -699,18 +743,45 @@ pub(crate) fn own(
 pub(crate) enum Relation<'a> {
     /// As the output's type requires.
     Holds,
-    /// Not to this lifetime of the output's.
-    Broken(&'a Lifetime),
+    /// Not as the output's type requires.
+    Broken(Required<'a>),
     /// These facts can't tell: a lifetime the signature does not say, or
     /// several the value reaches without telling their positions apart.
     Unsaid,
 }
 
+/// What the output's type requires of an input's lifetime that the body
+/// returns in it, and the body breaks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Required<'a> {
+    /// The output's lifetime at the position.
+    pub(crate) output: &'a Lifetime,
+    /// Which must outlive which.
+    pub(crate) direction: Direction,
+    /// What makes the position invariant, where it is.
+    pub(crate) invariance: Option<&'a Invariance>,
+}
+
+/// Which of an input's lifetime and the output's must outlive the other.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Direction {
+    /// The input's must outlive the output's.
+    Input,
+    /// The output's must outlive the input's, at an invariant position.
+    Output,
+}
+
 impl Output {
+    /// What makes each of its invariant positions so.
+    pub(crate) fn invariances(&self) -> impl Iterator<Item = &Invariance> {
+        self.invariant.iter().map(|(_, invariance)| invariance)
+    }
+
     /// How `lifetime`, which an input holds and the body returns at the
     /// output's position `at`, relates to the output's lifetimes there. It
     /// must outlive each lifetime at or below `at`, and be the one at an
-    /// invariant position.
+    /// invariant position. Where it is neither, rustc reports the output's
+    /// first.
     pub(crate) fn relate(&self, lifetime: &Lifetime, at: Path) -> Relation<'_> {
         let at = self.within(at);
         let mut below: Vec<(Path, &Lifetime)> = Vec::new();
@@ -725,14 +796,30 @@ impl Output {
         if !exact && below.iter().any(|(_, output)| *output != below[0].1) {
             return Relation::Unsaid;
         }
-        let invariant = |path: Path| self.invariant.iter().any(|root| path.starts_with(*root));
+        let invariance = |path: Path| {
+            self.invariant
+                .iter()
+                .find(|(root, _)| exact && path.starts_with(*root))
+                .map(|(_, invariance)| invariance)
+        };
         below
             .into_iter()
-            .find(|&(path, output)| {
-                !self.bounds.outlives(lifetime, output)
-                    || exact && invariant(path) && !self.bounds.outlives(output, lifetime)
+            .find_map(|(path, output)| {
+                let invariance = invariance(path);
+                let direction = if invariance.is_some() && !self.bounds.outlives(output, lifetime) {
+                    Direction::Output
+                } else if !self.bounds.outlives(lifetime, output) {
+                    Direction::Input
+                } else {
+                    return None;
+                };
+                Some(Required {
+                    output,
+                    direction,
+                    invariance,
+                })
             })
-            .map_or(Relation::Holds, |(_, output)| Relation::Broken(output))
+            .map_or(Relation::Holds, Relation::Broken)
     }
 
     /// `at`, or the own region above it that holds it where the output's
@@ -774,7 +861,11 @@ pub(crate) fn invariant_in(
     reader.positions(ty, Path::ROOT, true, &mut positions);
     let mut invariant = Vec::new();
     for (path, region) in positions {
-        if !reader.invariant.iter().any(|root| path.starts_with(*root)) {
+        if !reader
+            .invariant
+            .iter()
+            .any(|(root, _)| path.starts_with(*root))
+        {
             continue;
         }
         let step = match &region {

@@ -992,6 +992,10 @@ pub enum Error {
         /// The borrow it conflicts with.
         borrow: Span,
     },
+    /// A value a function returns whose lifetimes don't relate to its own
+    /// signature's as the signature's types require, as rustc's borrow
+    /// checker reports it (T170).
+    Outlives(Box<super::outlives::Report>),
     /// A `&mut` borrow of a place that a local not declared `mut` owns,
     /// which rustc refuses (E0596 "cannot borrow `c` as mutable, as it is
     /// not declared as mutable"), suggesting `mut` where the local is
@@ -1833,7 +1837,9 @@ impl Error {
             Self::WrongKind { .. } => Category::WrongKind,
             Self::Unimplemented { .. } => Category::Unimplemented,
             Self::MovedValue { .. } => Category::MovedValue,
-            Self::BorrowConflict { .. } | Self::ImmutableBorrow { .. } => Category::BorrowConflict,
+            Self::BorrowConflict { .. } | Self::ImmutableBorrow { .. } | Self::Outlives(_) => {
+                Category::BorrowConflict
+            }
             Self::InvalidConstruction { .. } => Category::InvalidConstruction,
             Self::TypeMismatch { .. } | Self::Unboxed { .. } => Category::TypeMismatch,
             Self::IfWithoutElse { .. } => Category::IfWithoutElse,
@@ -1897,6 +1903,7 @@ impl Error {
             Self::BorrowConflict { message, .. } | Self::ImmutableBorrow { message, .. } => {
                 message.as_str()
             }
+            Self::Outlives(report) => report.name(),
             Self::UnknownImport { path, .. } | Self::InvalidImport { path, .. } => path.as_str(),
             Self::UnknownImports { imports } => imports[0].name(),
             Self::InvalidTypeArguments { ty, .. } => ty.as_str(),
@@ -1987,6 +1994,7 @@ impl Error {
             | Self::WrongKind { reference, .. } => *reference,
             Self::MovedValue { reference, .. } => *reference,
             Self::BorrowConflict { access, .. } | Self::ImmutableBorrow { access, .. } => *access,
+            Self::Outlives(report) => report.returned(),
             Self::InvalidConstruction { construction, .. } => *construction,
             Self::TypeMismatch { expression, .. }
             | Self::Unboxed { expression, .. }
@@ -2058,6 +2066,7 @@ impl Error {
             } => None,
             Self::MovedValue { moved, .. } => Some(*moved),
             Self::BorrowConflict { borrow, .. } => Some(*borrow),
+            Self::Outlives(_) => None,
             Self::DuplicateMethod {
                 previous_declaration,
                 ..
@@ -3170,6 +3179,13 @@ impl fmt::Display for Written<'_> {
             Error::ImmutableBorrow {
                 message, access, ..
             } => write!(formatter, "{message} at {access} (E0596)"),
+            Error::Outlives(report) => write!(
+                formatter,
+                "{} at {} ({})",
+                report.message(),
+                report.returned(),
+                report.code()
+            ),
             Error::InvalidConstruction {
                 owner,
                 reason,

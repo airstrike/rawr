@@ -1288,6 +1288,7 @@ fn diagnostic_path(error: &crate::resolve::Error) -> Option<(String, ImportedNam
         | R::ReturnWithoutValue { .. }
         | R::MovedValue { .. }
         | R::BorrowConflict { .. }
+        | R::Outlives(_)
         | R::ImmutableBorrow { .. }
         | R::InvalidImport { .. }
         | R::LoweringUnavailable { .. }

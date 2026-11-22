@@ -13,6 +13,7 @@ use crate::resolve::borrowck::{
     signature::{self, Input, Source, Summary, Tap},
     Access, Origin, Path, Place, Projection, Step,
 };
+use crate::resolve::outlives;
 use std::cell::RefCell;
 
 /// Where a part is in the value it is read from (T127).
@@ -711,8 +712,127 @@ impl Parser<'_> {
             .into_iter()
             .chain(named)
             .collect();
-        self.flow().own_signature(parameters, own.output);
+        let item = if receiver.is_some() {
+            outlives::Item::Method
+        } else if signature.lifetimes.owner.is_some() {
+            outlives::Item::AssociatedFunction
+        } else {
+            outlives::Item::Function
+        };
+        // The receiver's elided lifetime is at no place of its type.
+        let elided = own
+            .elided
+            .iter()
+            .map(|elision| {
+                let at = if elision.at.is_none() {
+                    receiver.unwrap_or(Span::NONE)
+                } else {
+                    elision.at
+                };
+                let mut end = at.start();
+                if !end.is_none() {
+                    end.advance();
+                }
+                outlives::Reference {
+                    ampersand: Span::new(at.start(), end),
+                    mutable: elision.mutable,
+                    receiver: elision.at.is_none(),
+                }
+            })
+            .collect();
+        let variances = own
+            .output
+            .invariances()
+            .filter_map(|invariance| Some((invariance.clone(), self.variance(invariance)?)))
+            .collect();
+        let names = borrowck::Names {
+            item,
+            declared: signature.lifetimes.declared.to_vec(),
+            elided,
+            variances,
+        };
+        self.flow().own_signature(parameters, own.output, names);
         Ok(())
+    }
+
+    /// Why a position of a signature's type is invariant, as rustc's notes
+    /// say: `None` for a crate type these facts don't name.
+    fn variance(&self, invariance: &signature::Invariance) -> Option<outlives::Variance> {
+        let argument = |ty: &type_ref::Type, at: usize| match ty {
+            type_ref::Type::Path(path) => path
+                .arguments
+                .iter()
+                .filter_map(|argument| match argument {
+                    type_ref::Argument::Type(ty) => Some(ty.erased()),
+                    type_ref::Argument::Lifetime(_) => None,
+                })
+                .nth(at),
+            _ => None,
+        };
+        Some(match invariance {
+            signature::Invariance::Referent(referent) => outlives::Variance::Referent {
+                referent: referent.erased().into(),
+            },
+            signature::Invariance::Cell(cell) => {
+                let type_ref::Type::Path(path) = cell else {
+                    return None;
+                };
+                // rustc names a lock by its path, which another type's
+                // name shares.
+                let prefix = match path.name.as_str() {
+                    "Mutex" | "RwLock" => "std::sync::",
+                    _ => "",
+                };
+                outlives::Variance::Argument {
+                    ty: format!("{prefix}{}", cell.erased()).into(),
+                    argument: argument(cell, 0)?.into(),
+                    kind: "struct",
+                    declared: format!("{prefix}{}<T>", path.name).into(),
+                    parameter: "T".into(),
+                }
+            }
+            signature::Invariance::Nominal(nominal, below) => {
+                let type_ref::Type::Path(type_ref::Path {
+                    target: type_ref::Target::Script { definition, .. },
+                    ..
+                }) = nominal
+                else {
+                    return None;
+                };
+                let (kind, name, regions, generics) = match self.models.definition(*definition) {
+                    Nominal::Struct { item, .. } => {
+                        ("struct", &item.name, &item.regions, &item.generics)
+                    }
+                    Nominal::Enum { item, .. } => {
+                        ("enum", &item.name, &item.regions, &item.generics)
+                    }
+                };
+                let parameters: Vec<String> = regions
+                    .params
+                    .iter()
+                    .map(|lifetime| format!("'{lifetime}"))
+                    .chain(generics.iter().map(|generic| generic.name.text.to_string()))
+                    .collect();
+                let (argument, parameter) = match below.steps().next() {
+                    Some(Step::Lifetime(index)) => (
+                        "'_".to_string(),
+                        format!("'{}", regions.params.get(usize::from(index))?),
+                    ),
+                    Some(Step::Arg(index)) => (
+                        argument(nominal, usize::from(index))?,
+                        generics.get(usize::from(index))?.name.text.to_string(),
+                    ),
+                    _ => return None,
+                };
+                outlives::Variance::Argument {
+                    ty: nominal.erased().into(),
+                    argument: argument.into(),
+                    kind,
+                    declared: format!("{}<{}>", name.text, parameters.join(", ")).into(),
+                    parameter: parameter.into(),
+                }
+            }
+        })
     }
 
     /// The positions of the crate type `target` below which its fields make
@@ -1865,6 +1985,14 @@ impl Parser<'_> {
         }
         match conflict {
             None => Ok(()),
+            Some(borrowck::Conflict {
+                report: Some(report),
+                ..
+            }) => {
+                // The facts give where the value's first and last tokens start.
+                let returned = self.expression_span(report.returned());
+                Err(Error::Outlives(Box::new((*report).returned_at(returned))))
+            }
             Some(conflict) => Err(Error::BorrowConflict {
                 code: conflict.code,
                 message: conflict.message.into(),

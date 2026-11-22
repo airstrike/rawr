@@ -1864,7 +1864,13 @@ fn f4<'a>(x: &'a Cell<u32>) -> &'static Cell<u32> { f3(&x) }
 fn main() { let c = Cell::new(7); let s = f4(&c); println!("{}", s.get()); }
 main();
 "#,
-        Err(NOT_LONG_ENOUGH),
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:4:65
+  |
+4 | fn f2<'a, 'b>(x: &'a &'a Cell<u32>) -> &'a &'static Cell<u32> { x }
+  |       -- lifetime `'a` defined here                             ^ returning this value requires that `'a` must outlive `'static`
+"#),
     );
     // rustc accepts `f1`, `f3` and `f4` against `f2`'s signature.
     signature_verdict(
@@ -1888,7 +1894,13 @@ fn f3<'a>(x: &'a &'a Cell<u32>) -> &'static Cell<u32> { f1(x) }
 fn main() { let c = Cell::new(7); let r = &c; println!("{}", f3(&r).get()); }
 main();
 "#,
-        Err(NOT_LONG_ENOUGH),
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:4:57
+  |
+4 | fn f3<'a>(x: &'a &'a Cell<u32>) -> &'static Cell<u32> { f1(x) }
+  |       -- lifetime `'a` defined here                     ^^^^^ returning this value requires that `'a` must outlive `'static`
+"#),
     );
 }
 
@@ -1902,7 +1914,17 @@ fn second<'a, 'b>(p: &Pair<'a, 'b>) -> &'b i32 { p.a }
 fn main() { let (x, y) = (1, 2); let p = Pair { a: &x, b: &y }; println!("{}", second(&p)); }
 main();
 "#,
-        Err(NOT_LONG_ENOUGH),
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:3:50
+  |
+3 | fn second<'a, 'b>(p: &Pair<'a, 'b>) -> &'b i32 { p.a }
+  |           --  -- lifetime `'b` defined here      ^^^ function was supposed to return data with lifetime `'b` but it is returning data with lifetime `'a`
+  |           |
+  |           lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'a: 'b`
+"#),
     );
     signature_verdict(
         r#"
@@ -1924,7 +1946,19 @@ impl<'a, 'b> P<'a, 'b> {
 fn main() { let (x, y) = (1, 2); let p = P { a: &x, b: &y }; println!("{} {}", p.get_b(), p.b); }
 main();
 "#,
-        Err(NOT_LONG_ENOUGH),
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:4:34
+  |
+3 | impl<'a, 'b> P<'a, 'b> {
+  |      --  -- lifetime `'b` defined here
+  |      |
+  |      lifetime `'a` defined here
+4 |     fn get_b(&self) -> &'b i32 { self.a }
+  |                                  ^^^^^^ method was supposed to return data with lifetime `'b` but it is returning data with lifetime `'a`
+  |
+  = help: consider adding the following bound: `'a: 'b`
+"#),
     );
     signature_verdict(
         r#"
@@ -1938,14 +1972,25 @@ main();
 "#,
         Ok("2 1\n"),
     );
-    // A tuple's members swapped.
+    // A tuple's members swapped. This is rustc's first report: it reports
+    // `'b: 'a` after it, which rawr does not.
     signature_verdict(
         r#"
 fn f<'a, 'b>(x: (&'a i32, &'b i32)) -> (&'b i32, &'a i32) { x }
 fn main() { let (a, b) = (1, 2); println!("{:?}", f((&a, &b))); }
 main();
 "#,
-        Err(NOT_LONG_ENOUGH),
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:2:61
+  |
+2 | fn f<'a, 'b>(x: (&'a i32, &'b i32)) -> (&'b i32, &'a i32) { x }
+  |      --  -- lifetime `'b` defined here                      ^ function was supposed to return data with lifetime `'b` but it is returning data with lifetime `'a`
+  |      |
+  |      lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'a: 'b`
+"#),
     );
     signature_verdict(
         r#"
@@ -1966,7 +2011,20 @@ fn f<'a, 'b>(x: &'a mut &'b i32) -> &'a mut &'a i32 { x }
 fn main() { let y = 1; let mut r = &y; *f(&mut r) = &2; println!("{}", r); }
 main();
 "#,
-        Err(NOT_LONG_ENOUGH),
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:2:55
+  |
+2 | fn f<'a, 'b>(x: &'a mut &'b i32) -> &'a mut &'a i32 { x }
+  |      --  -- lifetime `'b` defined here                ^ function was supposed to return data with lifetime `'b` but it is returning data with lifetime `'a`
+  |      |
+  |      lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'a: 'b`
+  = note: requirement occurs because of a mutable reference to `&i32`
+  = note: mutable references are invariant over their type parameter
+  = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance
+"#),
     );
     signature_verdict(
         r#"
@@ -1974,7 +2032,20 @@ fn f<'a, 'b>(x: &'a mut Vec<&'b i32>) -> &'a mut Vec<&'a i32> { x }
 fn main() { let y = 1; let mut v = vec![&y]; println!("{}", f(&mut v).len()); }
 main();
 "#,
-        Err(NOT_LONG_ENOUGH),
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:2:65
+  |
+2 | fn f<'a, 'b>(x: &'a mut Vec<&'b i32>) -> &'a mut Vec<&'a i32> { x }
+  |      --  -- lifetime `'b` defined here                          ^ function was supposed to return data with lifetime `'b` but it is returning data with lifetime `'a`
+  |      |
+  |      lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'a: 'b`
+  = note: requirement occurs because of a mutable reference to `Vec<&i32>`
+  = note: mutable references are invariant over their type parameter
+  = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance
+"#),
     );
     signature_verdict(
         r#"
@@ -1983,7 +2054,20 @@ fn f<'a, 'b: 'a>(x: &'a Cell<&'b i32>) -> &'a Cell<&'a i32> { x }
 fn main() { let y = 1; let c = Cell::new(&y); println!("{}", f(&c).get()); }
 main();
 "#,
-        Err(NOT_LONG_ENOUGH),
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:3:63
+  |
+3 | fn f<'a, 'b: 'a>(x: &'a Cell<&'b i32>) -> &'a Cell<&'a i32> { x }
+  |      --  -- lifetime `'b` defined here                        ^ function was supposed to return data with lifetime `'b` but it is returning data with lifetime `'a`
+  |      |
+  |      lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'a: 'b`
+  = note: requirement occurs because of the type `Cell<&i32>`, which makes the generic argument `&i32` invariant
+  = note: the struct `Cell<T>` is invariant over the parameter `T`
+  = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance
+"#),
     );
     // A struct whose field is a cell is invariant in its lifetime.
     signature_verdict(
@@ -1994,7 +2078,20 @@ fn f<'a, 'b: 'a>(x: &'a S<'b>) -> &'a S<'a> { x }
 fn main() { let y = 1; let s = S { c: Cell::new(&y) }; println!("{}", f(&s).c.get()); }
 main();
 "#,
-        Err(NOT_LONG_ENOUGH),
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:4:47
+  |
+4 | fn f<'a, 'b: 'a>(x: &'a S<'b>) -> &'a S<'a> { x }
+  |      --  -- lifetime `'b` defined here        ^ function was supposed to return data with lifetime `'b` but it is returning data with lifetime `'a`
+  |      |
+  |      lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'a: 'b`
+  = note: requirement occurs because of the type `S<'_>`, which makes the generic argument `'_` invariant
+  = note: the struct `S<'a>` is invariant over the parameter `'a`
+  = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance
+"#),
     );
     // rustc accepts each of these: a shared reference, the same lifetimes,
     // or a struct whose field is covariant.
@@ -2030,15 +2127,29 @@ fn f<'a>(x: &'a &'a i32) -> &'a &'static i32 { x }
 fn main() { let y = 1; let r = &y; println!("{}", f(&r)); }
 main();
 "#,
-        Err(NOT_LONG_ENOUGH),
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:2:48
+  |
+2 | fn f<'a>(x: &'a &'a i32) -> &'a &'static i32 { x }
+  |      -- lifetime `'a` defined here             ^ returning this value requires that `'a` must outlive `'static`
+"#),
     );
-    signature_verdict(
+    // rustc marks the branch's `x`, and rawr the whole `if`.
+    let report = refused(
         r#"
 fn f<'a, 'b>(x: Option<&'a i32>, y: &'b i32) -> Option<&'b i32> { if y > &0 { x } else { Some(y) } }
 fn main() { let (a, b) = (1, 2); println!("{:?}", f(Some(&a), &b)); }
 main();
 "#,
-        Err(NOT_LONG_ENOUGH),
+    );
+    assert!(
+        report.starts_with("error: lifetime may not live long enough"),
+        "{report}"
+    );
+    assert!(
+        report.contains("function was supposed to return data with lifetime `'b` but it is returning data with lifetime `'a`"),
+        "{report}"
     );
     // rustc's E0621 where the parameter's lifetime is elided.
     signature_verdict(
@@ -2047,7 +2158,18 @@ fn f<'a>(x: & &'a i32) -> &'a &'a i32 { x }
 fn main() { let y = 1; let r = &y; println!("{}", f(&r)); }
 main();
 "#,
-        Err("error[E0621]: explicit lifetime required in the type of `x`"),
+        Err(r#"
+error[E0621]: explicit lifetime required in the type of `x`
+ --> <script>:2:41
+  |
+2 | fn f<'a>(x: & &'a i32) -> &'a &'a i32 { x }
+  |                                         ^ lifetime `'a` required
+  |
+help: add explicit lifetime `'a` to the type of `x`
+  |
+2 | fn f<'a>(x: &'a &'a i32) -> &'a &'a i32 { x }
+  |              ++
+"#),
     );
     signature_verdict(
         r#"
@@ -2092,7 +2214,13 @@ fn f<'a>(x: &'a &'a i32) -> &'static i32 { &**x }
 fn main() { let y = 1; let r = &y; println!("{}", f(&r)); }
 main();
 "#,
-        Err(NOT_LONG_ENOUGH),
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:2:44
+  |
+2 | fn f<'a>(x: &'a &'a i32) -> &'static i32 { &**x }
+  |      -- lifetime `'a` defined here         ^^^^ returning this value requires that `'a` must outlive `'static`
+"#),
     );
     signature_verdict(
         r#"
@@ -2100,7 +2228,17 @@ fn first<'a, 'b>(_x: &'a Vec<i32>, y: &'b Vec<i32>) -> &'a i32 { &y[0] }
 fn main() { println!("{}", first(&vec![1], &vec![2])); }
 main();
 "#,
-        Err(NOT_LONG_ENOUGH),
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:2:66
+  |
+2 | fn first<'a, 'b>(_x: &'a Vec<i32>, y: &'b Vec<i32>) -> &'a i32 { &y[0] }
+  |          --  -- lifetime `'b` defined here                       ^^^^^ function was supposed to return data with lifetime `'a` but it is returning data with lifetime `'b`
+  |          |
+  |          lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'b: 'a`
+"#),
     );
     signature_verdict(
         r#"
@@ -2109,7 +2247,21 @@ impl S { fn pick<'a>(&self, _o: &'a str) -> &'a str { self.name.as_str() } }
 fn main() { let s = S { name: String::from("n") }; println!("{}", s.pick("x")); }
 main();
 "#,
-        Err(NOT_LONG_ENOUGH),
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:3:55
+  |
+3 | impl S { fn pick<'a>(&self, _o: &'a str) -> &'a str { self.name.as_str() } }
+  |                  --  -                                ^^^^^^^^^^^^^^^^^^ method was supposed to return data with lifetime `'a` but it is returning data with lifetime `'1`
+  |                  |   |
+  |                  |   let's call the lifetime of this reference `'1`
+  |                  lifetime `'a` defined here
+  |
+help: consider reusing a named lifetime parameter and update trait if needed
+  |
+3 | impl S { fn pick<'a>(&'a self, _o: &'a str) -> &'a str { self.name.as_str() } }
+  |                       ++
+"#),
     );
     // rustc accepts each: the reference reborrowed through outlives the
     // output.
@@ -2138,23 +2290,169 @@ main();
     );
 }
 
+#[test]
+fn a_lifetime_error_names_the_lifetimes_and_variance_rustc_names() {
+    // An elided lifetime is `'1`.
+    signature_verdict(
+        r#"fn f(x: &i32) -> &'static i32 { x }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:1:33
+  |
+1 | fn f(x: &i32) -> &'static i32 { x }
+  |         -                       ^ returning this value requires that `'1` must outlive `'static`
+  |         |
+  |         let's call the lifetime of this reference `'1`
+"#),
+    );
+    // The receiver's elided lifetime is its `&`'s.
+    signature_verdict(
+        r#"struct S(i32);
+impl S { fn h(&self) -> &'static i32 { &self.0 } }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:2:40
+  |
+2 | impl S { fn h(&self) -> &'static i32 { &self.0 } }
+  |               -                        ^^^^^^^ returning this value requires that `'1` must outlive `'static`
+  |               |
+  |               let's call the lifetime of this reference `'1`
+"#),
+    );
+    // An associated function without a receiver.
+    signature_verdict(
+        r#"struct S;
+impl S { fn g<'a, 'b>(x: &'a i32, _y: &'b i32) -> &'b i32 { x } }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:2:61
+  |
+2 | impl S { fn g<'a, 'b>(x: &'a i32, _y: &'b i32) -> &'b i32 { x } }
+  |               --  -- lifetime `'b` defined here             ^ associated function was supposed to return data with lifetime `'b` but it is returning data with lifetime `'a`
+  |               |
+  |               lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'a: 'b`
+"#),
+    );
+    // `'static` where a `&mut` makes the position invariant.
+    signature_verdict(
+        r#"fn f<'a>(x: &'a mut &'static i32) -> &'a mut &'a i32 { x }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:1:56
+  |
+1 | fn f<'a>(x: &'a mut &'static i32) -> &'a mut &'a i32 { x }
+  |      -- lifetime `'a` defined here                     ^ returning this value requires that `'a` must outlive `'static`
+  |
+  = note: requirement occurs because of a mutable reference to `&i32`
+  = note: mutable references are invariant over their type parameter
+  = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance
+"#),
+    );
+    // A crate enum's lifetime.
+    signature_verdict(
+        r#"use std::cell::Cell;
+enum E<'a> { C(Cell<&'a i32>) }
+fn f<'a, 'b: 'a>(x: &'a E<'b>) -> &'a E<'a> { x }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:3:47
+  |
+3 | fn f<'a, 'b: 'a>(x: &'a E<'b>) -> &'a E<'a> { x }
+  |      --  -- lifetime `'b` defined here        ^ function was supposed to return data with lifetime `'b` but it is returning data with lifetime `'a`
+  |      |
+  |      lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'a: 'b`
+  = note: requirement occurs because of the type `E<'_>`, which makes the generic argument `'_` invariant
+  = note: the enum `E<'a>` is invariant over the parameter `'a`
+  = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance
+"#),
+    );
+    // A crate struct's type parameter.
+    signature_verdict(
+        r#"use std::cell::Cell;
+struct W<T> { c: Cell<T> }
+fn f<'a, 'b: 'a>(x: &'a W<&'b i32>) -> &'a W<&'a i32> { x }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:3:57
+  |
+3 | fn f<'a, 'b: 'a>(x: &'a W<&'b i32>) -> &'a W<&'a i32> { x }
+  |      --  -- lifetime `'b` defined here                  ^ function was supposed to return data with lifetime `'b` but it is returning data with lifetime `'a`
+  |      |
+  |      lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'a: 'b`
+  = note: requirement occurs because of the type `W<&i32>`, which makes the generic argument `&i32` invariant
+  = note: the struct `W<T>` is invariant over the parameter `T`
+  = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance
+"#),
+    );
+    // A lock rustc names by its path.
+    signature_verdict(
+        r#"use std::sync::Mutex;
+fn f<'a, 'b: 'a>(x: &'a Mutex<&'b i32>) -> &'a Mutex<&'a i32> { x }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error: lifetime may not live long enough
+ --> <script>:2:65
+  |
+2 | fn f<'a, 'b: 'a>(x: &'a Mutex<&'b i32>) -> &'a Mutex<&'a i32> { x }
+  |      --  -- lifetime `'b` defined here                          ^ function was supposed to return data with lifetime `'b` but it is returning data with lifetime `'a`
+  |      |
+  |      lifetime `'a` defined here
+  |
+  = help: consider adding the following bound: `'a: 'b`
+  = note: requirement occurs because of the type `std::sync::Mutex<&i32>`, which makes the generic argument `&i32` invariant
+  = note: the struct `std::sync::Mutex<T>` is invariant over the parameter `T`
+  = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance
+"#),
+    );
+    // E0621 for a `&mut` parameter, which rustc doesn't suggest a lifetime for.
+    signature_verdict(
+        r#"fn f<'a>(x: &mut &'a i32) -> &'a mut &'a i32 { x }
+fn main() {}
+main();
+"#,
+        Err(r#"
+error[E0621]: explicit lifetime required in the type of `x`
+ --> <script>:1:48
+  |
+1 | fn f<'a>(x: &mut &'a i32) -> &'a mut &'a i32 { x }
+  |                                                ^ lifetime `'a` required
+  |
+  = help: see <https://doc.rust-lang.org/nomicon/borrow-splitting.html> for more information about lifetime errors related to mutable references
+"#),
+    );
+}
+
 /// rustc's verdict on `source`, whose functions are checked against their
-/// own signatures (#170): the report starts with `Err`'s, or the program
-/// prints `Ok`'s.
+/// own signatures (#170): `Err`'s report, or the program prints `Ok`'s.
 fn signature_verdict(source: &str, verdict: Result<&str, &str>) {
     match verdict {
         Ok(output) => assert_eq!(printed(source), output),
-        Err(report) => {
-            let refused = Engine::new()
-                .compile(source)
-                .err()
-                .unwrap_or_else(|| panic!("rustc refuses this program:{source}"))
-                .to_string();
-            assert!(refused.starts_with(report), "{refused}");
-        }
+        Err(report) => assert_eq!(refused(source).trim_end(), report.trim()),
     }
 }
-
-/// rustc's report of a region a function's body doesn't relate to its
-/// signature's as the types require.
-const NOT_LONG_ENOUGH: &str = "error: lifetime may not live long enough";
