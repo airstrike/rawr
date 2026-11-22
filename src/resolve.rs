@@ -5668,6 +5668,16 @@ fn generic_scope(
                 Some((kind, bound.span))
             })
             .collect();
+        // Each trait's name is at its last segment.
+        let written_traits = parameter
+            .bounds
+            .iter()
+            .filter_map(|bound| {
+                let last = &bound.segments.last()?.name;
+                let name = traits.iter().find(|name| name.span == last.span)?;
+                Some((name.text.clone(), bound.span))
+            })
+            .collect();
         arguments.push(trait_arguments);
         scope.insert(parameter.name.text.clone(), type_ref::Target::Parameter);
         let constant = parameter
@@ -5688,6 +5698,7 @@ fn generic_scope(
             bounds,
             written,
             traits,
+            written_traits,
             projections: Box::default(),
             trait_arguments: Box::default(),
             default: None,

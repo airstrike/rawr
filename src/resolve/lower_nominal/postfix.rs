@@ -127,6 +127,7 @@ impl<'a> Parser<'a> {
                 declared: name.clone(),
                 found: Some(name),
                 definition: None,
+                found_for: Box::default(),
             }),
             similar,
             unsatisfied: None,
@@ -203,6 +204,7 @@ impl<'a> Parser<'a> {
                 declared: declared.unwrap_or_else(|| name.clone()).as_str().into(),
                 found: Some(name.into()),
                 definition: None,
+                found_for: Box::default(),
             }),
             similar: None,
             unsatisfied: None,
@@ -266,6 +268,25 @@ impl<'a> Parser<'a> {
             };
             (kind, declared)
         };
+        // The impls for other instances that have the method, by their self
+        // types as rustc names them, sorted.
+        let mut found_for: Vec<ImmutableString> =
+            crate::std_table::items(&format!("{definition}::{member}"))
+                .filter(|item| {
+                    item.kind == "assoc-fn"
+                        && item.stability == crate::std_table::Stability::Stable
+                        && item.receiver().is_some()
+                })
+                .filter_map(|item| item.impl_self())
+                .map(|own| crate::resolve::forced_trim::trimmed(own).as_ref().into())
+                .collect();
+        found_for.sort();
+        found_for.dedup();
+        // rustc's similar name stands in for the impls' note.
+        let similar = self.similar_std_method(ty, definition, member);
+        if similar.is_some() {
+            found_for.clear();
+        }
         Error::NoItem {
             owner: owner.clone(),
             member: member.clone(),
@@ -275,8 +296,9 @@ impl<'a> Parser<'a> {
                 declared,
                 found: Some(found),
                 definition: None,
+                found_for: found_for.into(),
             }),
-            similar: None,
+            similar,
             unsatisfied: None,
         }
     }
@@ -967,15 +989,12 @@ impl<'a> Parser<'a> {
                         .contains_key(&(owner, member.clone()))
                 })
             {
-                return Err(Error::BorrowConflict {
-                    code: "E0596",
-                    message: format!(
-                        "cannot borrow `{name}` as mutable, as it is not declared as mutable"
-                    )
-                    .into(),
-                    access: value.span,
-                    borrow: Span::NONE,
-                });
+                return Err(Error::immutable_borrow(
+                    name,
+                    name,
+                    value.span,
+                    binding.declaration,
+                ));
             }
             // std's method of a `String`, `Vec` or map that takes `self`
             // moves it out of its place (`s.into_bytes()`).
@@ -1277,6 +1296,7 @@ impl<'a> Parser<'a> {
                             declared: name.clone(),
                             found: Some(name),
                             definition: None,
+                            found_for: Box::default(),
                         }),
                         similar: None,
                         unsatisfied: None,

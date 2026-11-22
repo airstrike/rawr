@@ -114,7 +114,7 @@ impl Kind {
 }
 
 /// The functions and methods rawr runs, by the code `invoke` takes.
-const METHODS: [&str; 24] = [
+const METHODS: [&str; 26] = [
     "spawn",
     "join",
     "is_finished",
@@ -139,6 +139,8 @@ const METHODS: [&str; 24] = [
     "vacant",
     "put",
     "thread_end",
+    "ended",
+    "access_error",
 ];
 
 pub(super) fn code(name: &str) -> origin::Fragment {
@@ -296,7 +298,9 @@ pub(super) fn invoke(context: Option<&NativeCallContext<'_>>, args: &mut FnCallA
                 context.ok_or_else(|| invariant("a thread-local key is read outside a call"))?;
             local(args[0])?.value(context)
         }
-        "vacant" => Ok(Dynamic::from(local(args[0])?.vacant())),
+        "vacant" => Ok(Dynamic::from(local(args[0])?.vacant()?)),
+        "ended" => Ok(Dynamic::from(local(args[0])?.ended())),
+        "access_error" => crate::std_facade::thread::access_error(),
         "put" => {
             local(args[0])?.put(args[2].take());
             Ok(Dynamic::UNIT)
@@ -313,25 +317,30 @@ pub(super) fn invoke(context: Option<&NativeCallContext<'_>>, args: &mut FnCallA
     }
 }
 
-/// `thread(initializer, local_key, [key, glue])`: the `LocalKey` of the
-/// key `key`, whose value on a thread `initializer` makes, and `glue`
-/// drops as the thread ends, `()` for a type with no drop glue.
+/// `thread(initializer, local_key, [key, glue, destroyed])`: the
+/// `LocalKey` of the key `key`, whose value on a thread `initializer`
+/// makes, and `glue` drops as the thread ends, `()` for a type with no
+/// drop glue the program sees; `destroyed` says whether the thread's end
+/// destroys the value, as std's does one of a type with drop glue in Rust.
 fn local_key(initializer: Dynamic, operand: Dynamic) -> RawrResult {
-    let malformed = || invariant("a thread-local key is no `[key, glue]`");
+    use crate::eval::thread_local::{End, LocalKey};
+    let malformed = || invariant("a thread-local key is no `[key, glue, destroyed]`");
     let initializer = initializer
         .try_cast::<crate::FnPtr>()
         .ok_or_else(|| invariant("a thread-local key's initializer is no function"))?;
     let mut operand = operand.try_cast::<crate::Array>().ok_or_else(malformed)?;
-    let (Some(glue), Some(key)) = (operand.pop(), operand.pop()) else {
+    let (Some(destroyed), Some(glue), Some(key)) = (operand.pop(), operand.pop(), operand.pop())
+    else {
         return Err(malformed());
     };
     let key = key.try_cast::<ImmutableString>().ok_or_else(malformed)?;
     let glue = glue.try_cast::<crate::FnPtr>();
-    Ok(Dynamic::from(crate::eval::thread_local::LocalKey::new(
-        key,
-        initializer,
-        glue,
-    )))
+    let end = match destroyed.as_bool() {
+        Ok(true) => End::Destroyed,
+        Ok(false) => End::Kept,
+        Err(_) => return Err(malformed()),
+    };
+    Ok(Dynamic::from(LocalKey::new(key, initializer, glue, end)))
 }
 
 /// The `LocalKey` `value` is at runtime.

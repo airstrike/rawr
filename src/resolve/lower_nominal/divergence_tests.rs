@@ -12361,3 +12361,319 @@ main();
     );
     assert!(report.contains(":10:12"), "{report}");
 }
+
+#[test]
+fn a_trait_path_call_of_a_mut_self_method_changes_the_place_it_borrows() {
+    // `Iterator::next(&mut c)`, `<C as Iterator>::next(&mut c)` and
+    // `fmt::Write::write_str(&mut a, ..)` are the method calls on the
+    // places they borrow, as `c.next()` is. The output is rustc's.
+    let output = printed(
+        r#"
+use std::fmt;
+struct C { n: u32 }
+impl Iterator for C {
+    type Item = u32;
+    fn next(&mut self) -> Option<u32> {
+        if self.n < 3 { self.n += 1; Some(self.n) } else { None }
+    }
+}
+struct A { s: String }
+impl fmt::Write for A {
+    fn write_str(&mut self, s: &str) -> fmt::Result { self.s.push_str(s); Ok(()) }
+}
+struct P { c: C }
+fn bump(c: &mut C) -> Option<u32> { Iterator::next(c) }
+fn main() {
+    let mut c = C { n: 0 };
+    let first: Option<u32> = Iterator::next(&mut c);
+    println!("{:?} {:?}", first, <C as Iterator>::next(&mut c));
+    while let Some(x) = Iterator::next(&mut c) { println!("loop {x}"); }
+    let mut p = P { c: C { n: 0 } };
+    println!("{:?} {:?} {}", Iterator::next(&mut p.c), bump(&mut p.c), (p.c).n);
+    let mut a = A { s: String::new() };
+    fmt::Write::write_str(&mut a, "hi").unwrap();
+    std::fmt::Write::write_char(&mut a, '!').unwrap();
+    <A as fmt::Write>::write_str(&mut a, ".").unwrap();
+    println!("{} {}", a.s, c.n);
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "Some(1) Some(2)\nloop 3\nSome(1) Some(2) 2\nhi!. 3\n"
+    );
+    // A local not declared `mut` is rustc's E0596 at the borrow.
+    let report = rendered(
+        "struct C;\nimpl Iterator for C {\n    type Item = u32;\n    fn next(&mut self) -> \
+         Option<u32> { None }\n}\nfn main() {\n    let c = C;\n    let _ = <C as \
+         Iterator>::next(&mut c);\n}\n",
+    );
+    assert_eq!(
+        report,
+        r#"error[E0596]: cannot borrow `c` as mutable, as it is not declared as mutable
+ --> main.rs:8:35
+  |
+8 |     let _ = <C as Iterator>::next(&mut c);
+  |                                   ^^^^^^ cannot borrow as mutable
+  |
+help: consider changing this to be mutable
+  |
+7 |     let mut c = C;
+  |         +++
+"#
+    );
+    let report = rendered(
+        "struct C;\nimpl Iterator for C {\n    type Item = u32;\n    fn next(&mut self) -> \
+         Option<u32> { None }\n}\nstruct P { c: C }\nfn main() {\n    let p = P { c: C \
+         };\n    let _ = Iterator::next(&mut p.c);\n}\n",
+    );
+    assert!(
+        report.starts_with(
+            r#"error[E0596]: cannot borrow `p.c` as mutable, as `p` is not declared as mutable
+ --> main.rs:9:28
+  |
+9 |     let _ = Iterator::next(&mut p.c);
+  |                            ^^^^^^^^ cannot borrow as mutable
+"#
+        ),
+        "{report}"
+    );
+}
+
+#[test]
+fn an_unmet_bound_a_path_writes_is_marked_whole_with_its_similarly_named_trait() {
+    // `W: io::Write` of a type that implements `fmt::Write` alone: the
+    // bound marked whole, the help at the type's definition, and rustc's
+    // note on the similarly named trait. The report is rustc's.
+    let report = rendered(
+        "use std::fmt;\nuse std::io;\nstruct A;\nimpl fmt::Write for A {\n    fn write_str(&mut \
+         self, _: &str) -> fmt::Result { Ok(()) }\n}\nfn f<W: io::Write>(_: W) {}\nfn main() \
+         {\n    f(A);\n}\n",
+    );
+    assert_eq!(
+        report,
+        r#"error[E0277]: the trait bound `A: std::io::Write` is not satisfied
+ --> main.rs:9:7
+  |
+9 |     f(A);
+  |     - ^ unsatisfied trait bound
+  |     |
+  |     required by a bound introduced by this call
+  |
+help: the trait `std::io::Write` is not implemented for `A`
+ --> main.rs:3:1
+  |
+3 | struct A;
+  | ^^^^^^^^
+  = note: `A` implements similarly named trait `std::fmt::Write`, but not `std::io::Write`
+note: required by a bound in `f`
+ --> main.rs:7:9
+  |
+7 | fn f<W: io::Write>(_: W) {}
+  |         ^^^^^^^^^ required by this bound in `f`
+"#
+    );
+    // A std type's note is the report's own.
+    let report =
+        rendered("fn f<W: std::io::Write>(_: W) {}\nfn main() {\n    f(String::new());\n}\n");
+    assert!(
+        report.contains(
+            r#"  |     - ^^^^^^^^^^^^^ the trait `std::io::Write` is not implemented for `String`
+  |     |
+  |     required by a bound introduced by this call
+  |
+  = note: `String` implements similarly named trait `std::fmt::Write`, but not `std::io::Write`
+note: required by a bound in `f`
+"#
+        ),
+        "{report}"
+    );
+    // rustc writes a std trait by its path where its name isn't the one
+    // type std's crates have of it: `std::error::Error`, `std::io::Read`.
+    for (bound, written) in [
+        ("std::error::Error", "std::error::Error"),
+        ("std::io::Read", "std::io::Read"),
+        ("AsRef<str>", "AsRef<str>"),
+    ] {
+        let report = rendered(&format!(
+            "struct A;\nfn f<W: {bound}>(_: W) {{}}\nfn main() {{\n    f(A);\n}}\n"
+        ));
+        assert!(
+            report.starts_with(&format!(
+                "error[E0277]: the trait bound `A: {written}` is not satisfied\n"
+            )),
+            "{report}"
+        );
+        assert!(
+            report.contains(&format!(
+                "  |     - ^ unsatisfied trait bound\n  |     |\n  |     required by a bound \
+                 introduced by this call\n  |\nhelp: the trait `{written}` is not implemented \
+                 for `A`\n"
+            )),
+            "{report}"
+        );
+        let marks = "^".repeat(bound.len());
+        assert!(
+            report.contains(&format!(
+                "  |         {marks} required by this bound in `f`"
+            )),
+            "{report}"
+        );
+    }
+}
+
+#[test]
+fn a_local_keys_try_with_is_ok_until_its_value_is_destroyed() {
+    // `try_with` is `with` in `Ok`, and std's `AccessError` once the
+    // thread's end destroyed the key's value, the last made first: during
+    // its own drop and after. A `Cell<u32>` has no drop glue, so its value
+    // lasts (#2645). The output is rustc's.
+    let output = printed(
+        r#"
+use std::cell::{Cell, RefCell};
+use std::thread::AccessError;
+struct D(&'static str);
+impl Drop for D {
+    fn drop(&mut self) {
+        let seen = LOG.try_with(|log| log.borrow().len());
+        let own = OWN.try_with(|own| own.0);
+        let count = COUNT.try_with(|count| count.get());
+        println!("drop {} {:?} {:?} {:?}", self.0, seen, own, count);
+        if let Err(error) = own {
+            println!("{} | {:?} | {}", error, error, error == error.clone());
+        }
+    }
+}
+thread_local! {
+    static OWN: D = D("own");
+    static LOG: RefCell<Vec<String>> = RefCell::new(Vec::new());
+    static COUNT: Cell<u32> = Cell::new(7);
+}
+fn check(r: Result<u32, AccessError>) -> u32 {
+    r.unwrap_or(0)
+}
+fn main() {
+    COUNT.set(3);
+    let r = COUNT.try_with(|c| c.get() + 1);
+    println!("{:?} {}", r, check(COUNT.try_with(|c| c.get())));
+    std::thread::spawn(|| {
+        LOG.with_borrow_mut(|log| log.push("x".to_string()));
+        OWN.with(|own| println!("t {}", own.0));
+        COUNT.set(9);
+        println!("t {}", LOG.try_with(|log| log.borrow().len()).unwrap());
+    })
+    .join()
+    .unwrap();
+    std::thread::spawn(|| {
+        OWN.with(|own| println!("u {}", own.0));
+        LOG.with_borrow_mut(|log| log.push("y".to_string()));
+    })
+    .join()
+    .unwrap();
+    println!("end of main");
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "Ok(4) 3\nt own\nt 1\ndrop own Ok(1) Err(AccessError) Ok(9)\nalready destroyed | \
+         AccessError | true\nu own\ndrop own Err(AccessError) Err(AccessError) Ok(7)\nalready \
+         destroyed | AccessError | true\nend of main\n"
+    );
+}
+
+#[test]
+fn a_local_key_method_of_another_impl_is_rustcs_e0599_with_its_notes() {
+    // rustc notes the impls that have the method, suggests a std method
+    // of a similar name in its place, a blanket impl's too, and marks a
+    // `where` bound the method's impl asks of the cell's type at the
+    // method (#2644). Each report is rustc's but for a place in std's
+    // source, which rawr's report notes without its source.
+    let program = |inner: &str, call: &str| {
+        format!(
+            "use std::cell::{{Cell, RefCell}};\nstruct S;\nthread_local! {{\n    static N: \
+             {inner};\n}}\nfn main() {{\n    let _ = N.{call};\n}}\n"
+        )
+    };
+    let report = rendered(&program("i32 = 1", "get()"));
+    assert!(
+        report.ends_with(
+            "  |               ^^^ method not found in `LocalKey<i32>`\n  |\n  = note: the method \
+             was found for `LocalKey<Cell<T>>`\n"
+        ),
+        "{report}"
+    );
+    let report = rendered(&program("i32 = 1", "set(2)"));
+    assert!(
+        report.ends_with(
+            "  = note: the method was found for\n          - `LocalKey<Cell<T>>`\n          - \
+             `LocalKey<RefCell<T>>`\n"
+        ),
+        "{report}"
+    );
+    let report = rendered(&program("Cell<i32> = Cell::new(1)", "with_borrow(|_| ())"));
+    assert!(
+        report.starts_with(
+            "error[E0599]: no method named `with_borrow` found for struct `LocalKey<Cell<i32>>` \
+             in the current scope\n"
+        ),
+        "{report}"
+    );
+    assert!(
+        report.ends_with(
+            "  |               ^^^^^^^^^^^\n  |\n  = help: there is a method `borrow` with a \
+             similar name, but with different arguments\n"
+        ),
+        "{report}"
+    );
+    let report = rendered(&program("i32 = 1", "borow()"));
+    assert!(
+        report.starts_with(
+            "error[E0599]: no method named `borow` found for struct `LocalKey<T>` in the current \
+             scope\n"
+        ),
+        "{report}"
+    );
+    assert!(
+        report.ends_with(
+            "help: there is a method `borrow` with a similar name\n  |\n7 |     let _ = \
+             N.borrow();\n  |                  +\n"
+        ),
+        "{report}"
+    );
+    for (inner, call, trait_name, item) in [
+        (
+            "Cell<S> = Cell::new(S)",
+            "take()",
+            "Default",
+            "LocalKey::<Cell<T>>::take",
+        ),
+        (
+            "RefCell<S> = RefCell::new(S)",
+            "take()",
+            "Default",
+            "LocalKey::<RefCell<T>>::take",
+        ),
+        (
+            "Cell<String> = Cell::new(String::new())",
+            "get()",
+            "Copy",
+            "LocalKey::<Cell<T>>::get",
+        ),
+    ] {
+        let report = rendered(&program(inner, call));
+        let owner = if trait_name == "Copy" { "String" } else { "S" };
+        let marks = "^".repeat(call.len() - 2);
+        assert!(
+            report.starts_with(&format!(
+                "error[E0277]: the trait bound `{owner}: {trait_name}` is not satisfied\n --> \
+                 main.rs:7:15\n  |\n7 |     let _ = N.{call};\n  |               {marks} the \
+                 trait `{trait_name}` is not implemented for `{owner}`\n  |\n  = note: required \
+                 by a bound in `{item}`\n"
+            )),
+            "{report}"
+        );
+    }
+}

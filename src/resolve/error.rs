@@ -661,6 +661,10 @@ pub struct Bound {
     pub callee: Option<Span>,
     /// The argument whose type the parameter is.
     pub argument: Span,
+    /// A trait the argument's type implements whose name is the bound's
+    /// own, as rustc notes it: `std::fmt::Write` of an unmet
+    /// `std::io::Write`.
+    pub similar: Option<ImmutableString>,
 }
 
 /// A call's arguments and its callee's parameters where rustc's E0061
@@ -2486,6 +2490,10 @@ pub struct Receiver {
     /// The struct's or enum's name where the program declares it, in the
     /// error's file: rustc marks its definition.
     pub definition: Option<Span>,
+    /// The self types of std's impls that declare the method for other
+    /// instances of the type, as rustc notes them: "the method was found
+    /// for `LocalKey<Cell<T>>`".
+    pub found_for: Box<[ImmutableString]>,
 }
 
 /// An item of the type an E0599 is about whose name is like the missing

@@ -507,6 +507,89 @@ impl Parser<'_> {
         self.needs_drop_in(ty, at, &mut Vec::new())
     }
 
+    /// Whether a value of `ty` has drop glue in Rust, as std's
+    /// `needs_drop` says, whether or not a drop of it does what the program
+    /// sees: a `Vec` or a `String` has, a `Cell<i32>` or a `&T` hasn't. A
+    /// type rawr can't see through (a generic, a trait object, a library
+    /// type, an iterator) is taken to have it.
+    pub(super) fn std_drop_glue(&self, ty: &Ty) -> bool {
+        self.std_drop_glue_in(ty, &mut Vec::new())
+    }
+
+    fn std_drop_glue_in(&self, ty: &Ty, visiting: &mut Vec<(type_def::Id, Box<[Ty]>)>) -> bool {
+        let resolved = self.inference.resolve(ty);
+        match &resolved {
+            Ty::Script(id, arguments) => {
+                if self.models.has_drop(*id) {
+                    return true;
+                }
+                let key = (*id, arguments.clone());
+                if visiting.contains(&key) {
+                    return false;
+                }
+                visiting.push(key);
+                let substitution = self.nominal_substitution(*id, arguments);
+                let fields: Vec<Ty> = match self.models.definition(*id) {
+                    Nominal::Struct { item, .. } => item
+                        .fields
+                        .iter()
+                        .map(|field| instantiate(&Ty::from_resolved(&field.ty), &substitution))
+                        .collect(),
+                    Nominal::Enum { item, .. } => item
+                        .variants
+                        .iter()
+                        .flat_map(|variant| variant.payload.iter())
+                        .map(|ty| instantiate(&Ty::from_resolved(ty), &substitution))
+                        .collect(),
+                };
+                let glue = fields
+                    .iter()
+                    .any(|field| self.std_drop_glue_in(field, visiting));
+                visiting.pop();
+                glue
+            }
+            // A fixed array holds its elements in place; a `Vec`, a
+            // `VecDeque` and a boxed slice own their buffer.
+            Ty::Array {
+                element,
+                kind: sequence::Kind::Array(_),
+            } => self.std_drop_glue_in(element, visiting),
+            Ty::Option(inner)
+            | Ty::Range(inner)
+            | Ty::OpenRange(_, inner)
+            | Ty::InclusiveOf(inner)
+            | Ty::Reverse(inner) => self.std_drop_glue_in(inner, visiting),
+            Ty::Cell(CellKind::Cell | CellKind::RefCell, inner) => {
+                self.std_drop_glue_in(inner, visiting)
+            }
+            Ty::Result(ok, err) => {
+                self.std_drop_glue_in(ok, visiting) || self.std_drop_glue_in(err, visiting)
+            }
+            Ty::Tuple(members) => members
+                .iter()
+                .any(|member| self.std_drop_glue_in(member, visiting)),
+            Ty::Never
+            | Ty::Unit
+            | Ty::Bool
+            | Ty::Char
+            | Ty::Int(_)
+            | Ty::Float(_)
+            | Ty::Str
+            | Ty::InclusiveRange(_)
+            | Ty::FloatRange
+            | Ty::Ordering
+            | Ty::Time(_)
+            | Ty::ParseError(_)
+            | Ty::Arguments
+            | Ty::Reference { .. }
+            | Ty::Fn { .. }
+            | Ty::FnItem { .. }
+            | Ty::FnChoice { .. }
+            | Ty::Const(_) => false,
+            _ => true,
+        }
+    }
+
     /// How the glue walks a value of `ty` ([`Shape`]), as its second
     /// argument.
     pub(super) fn drop_shape(&self, ty: &Ty) -> String {

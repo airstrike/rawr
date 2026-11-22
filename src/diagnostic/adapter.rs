@@ -360,13 +360,32 @@ fn sourced_builder(error: &resolve::Error, source: &Source, primary: Span) -> Bu
         );
     }
     if let Some(missing) = Missing::of(error, source, primary) {
-        return Report::error(
+        let builder = Report::error(
             code::RESOLVE_NO_METHOD,
             format!(
                 "no {} named `{}` found for {} `{}` in the current scope",
                 missing.item, missing.member, missing.receiver.kind, missing.receiver.declared
             ),
         );
+        // The impls that have it, for other instances of the type, or a
+        // std method of a similar name, whose place in std's source the
+        // report doesn't show.
+        return match error {
+            resolve::Error::NoItem {
+                receiver,
+                similar: None,
+                ..
+            } if !receiver.found_for.is_empty() => {
+                builder.note(found_for(missing.item, &receiver.found_for))
+            }
+            resolve::Error::NoItem {
+                similar: Some(similar),
+                ..
+            } if similar.shown != resolve::Shown::Replaced && similar.declared == Span::NONE => {
+                builder.help(similar_help(similar))
+            }
+            _ => builder,
+        };
     }
     let resolve::Error::UnknownMember { owner, member, .. } = error else {
         return resolution_builder(error);
@@ -515,6 +534,35 @@ fn bound_place(error: &resolve::Error) -> Option<&resolve::Bound> {
         } => Some(place),
         _ => None,
     }
+}
+
+/// rustc's note naming the self types `found_for` of the impls that have
+/// an E0599's missing `item` (`method`): "the method was found for
+/// `LocalKey<Cell<T>>`", or a list of them, four at most (five where
+/// there are five) and a count of the rest.
+fn found_for(item: &str, found_for: &[crate::ImmutableString]) -> String {
+    if let [one] = found_for {
+        return format!("the {item} was found for `{one}`");
+    }
+    let limit = if found_for.len() == 5 { 5 } else { 4 };
+    let mut note = format!("the {item} was found for");
+    for ty in found_for.iter().take(limit) {
+        note.push_str(&format!("\n- `{ty}`"));
+    }
+    if found_for.len() > limit {
+        note.push_str(&format!("\nand {} more types", found_for.len() - limit));
+    }
+    note
+}
+
+/// rustc's note on an E0277 whose type `owner` implements a trait named as
+/// the unmet `capability` is: "`A` implements similarly named trait
+/// `std::fmt::Write`, but not `std::io::Write`".
+fn similar_trait(error: &resolve::Error, owner: &str, capability: &str) -> Option<String> {
+    let similar = bound_place(error)?.similar.as_ref()?;
+    Some(format!(
+        "`{owner}` implements similarly named trait `{similar}`, but not `{capability}`"
+    ))
 }
 
 /// Whether `error`, rustc's E0277, is a `value.into()` whose target has no
@@ -1329,18 +1377,12 @@ fn sections(error: &resolve::Error, source: &Source) -> Vec<Section> {
         resolve::Error::NoItem {
             similar: Some(similar),
             ..
-        } if similar.shown != resolve::Shown::Replaced => {
-            let suffix = match similar.shown {
-                resolve::Shown::DifferentArguments => ", but with different arguments",
-                _ => "",
-            };
-            vec![
-                Section::help(format!("{}{suffix}", similar_message(similar))).primary(
-                    source.clone(),
-                    super::definition::span(source, similar.declared),
-                    None,
-                ),
-            ]
+        } if similar.shown != resolve::Shown::Replaced && similar.declared != Span::NONE => {
+            vec![Section::help(similar_help(similar)).primary(
+                source.clone(),
+                super::definition::span(source, similar.declared),
+                None,
+            )]
         }
         // The enum's name, and each variant no arm covers.
         resolve::Error::NonExhaustive {
@@ -1426,32 +1468,37 @@ fn sections(error: &resolve::Error, source: &Source) -> Vec<Section> {
             chain,
             ..
         } => {
-            let help = declared
-                .filter(|_| capability == "Display" || into_bound(error))
-                .map(|declared| {
-                    let written = if capability == "Display" {
-                        "std::fmt::Display"
-                    } else {
-                        capability.as_str()
-                    };
-                    let help = Section::help(format!(
-                        "the trait `{written}` is not implemented for `{owner}`"
-                    ))
-                    .primary(
-                        source.clone(),
-                        super::definition::span(source, declared),
-                        None,
-                    );
-                    match formatting(error) {
-                        Some(_) => help.followed(DEBUG_INSTEAD),
-                        None if into_bound(error) => {
-                            super::requirement::lines(chain.requirements())
-                                .into_iter()
-                                .fold(help, Section::followed)
-                        }
-                        None => help,
-                    }
-                });
+            // rustc's help at the definition for each trait no derive
+            // gives, at a bound a call's argument doesn't meet.
+            let at_definition = capability == "Display"
+                || into_bound(error)
+                || (bound_place(error).is_some() && !resolve::derivable(capability));
+            let help = declared.filter(|_| at_definition).map(|declared| {
+                let written = if capability == "Display" {
+                    "std::fmt::Display"
+                } else {
+                    capability.as_str()
+                };
+                let help = Section::help(format!(
+                    "the trait `{written}` is not implemented for `{owner}`"
+                ))
+                .primary(
+                    source.clone(),
+                    super::definition::span(source, declared),
+                    None,
+                );
+                let help = match similar_trait(error, owner, capability) {
+                    Some(note) => help.followed(note),
+                    None => help,
+                };
+                match formatting(error) {
+                    Some(_) => help.followed(DEBUG_INSTEAD),
+                    None if into_bound(error) => super::requirement::lines(chain.requirements())
+                        .into_iter()
+                        .fold(help, Section::followed),
+                    None => help,
+                }
+            });
             let bound = match required_by {
                 Some(resolve::Required {
                     item,
@@ -1615,6 +1662,17 @@ fn imported(imports: &resolve::Imports, source: &Source) -> Result<Option<Sugges
 }
 
 /// The code rustc suggests for `error`, in `source`.
+/// rustc's help naming `similar`, which the call can't take in place:
+/// "there is a method `go` with a similar name, but with different
+/// arguments".
+fn similar_help(similar: &resolve::Similar) -> String {
+    let suffix = match similar.shown {
+        resolve::Shown::DifferentArguments => ", but with different arguments",
+        _ => "",
+    };
+    format!("{}{suffix}", similar_message(similar))
+}
+
 /// rustc's help naming `similar`: "there is a method `go` with a similar
 /// name".
 fn similar_message(similar: &resolve::Similar) -> String {
@@ -2164,12 +2222,19 @@ fn primary_label(
             .into(),
         ),
         // At an argument a bound needs, as the trait's own wording has it.
+        // rustc's help at the definition says what a derive doesn't give.
         resolve::Error::MissingCapability {
-            owner, capability, ..
+            owner,
+            capability,
+            declared,
+            ..
         } if bound_place(error).is_some() => Some(
             match capability.as_str() {
                 "Display" => "unsatisfied trait bound".to_owned(),
                 "PartialEq" => format!("no implementation for `{owner} == {owner}`"),
+                _ if declared.is_some() && !resolve::derivable(capability) => {
+                    "unsatisfied trait bound".to_owned()
+                }
                 _ => format!("the trait `{capability}` is not implemented for `{owner}`"),
             }
             .into(),
@@ -2189,6 +2254,16 @@ fn primary_label(
             }
             .into(),
         ),
+        // At a std method whose `where` clause the type misses, as
+        // `LocalKey<Cell<T>>::take`'s `T: Default`.
+        resolve::Error::MissingCapability {
+            owner,
+            capability,
+            required_by: Some(resolve::Required { place: None, .. }),
+            ..
+        } if resolve::derivable(capability) => {
+            Some(format!("the trait `{capability}` is not implemented for `{owner}`").into())
+        }
         resolve::Error::ImmutableBinding { .. } => {
             Some("cannot assign twice to immutable variable".into())
         }
@@ -2555,6 +2630,7 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Error::UnscopedMethod { .. } => {
             builder.help("items from traits can only be used if the trait is in scope")
         }
+
         resolve::Error::UnknownMacro {
             scope: resolve::MacroScope::Elsewhere,
             ..
@@ -2651,6 +2727,12 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
                         "the trait `{capability}` is not implemented for `{owner}`"
                     )),
                 },
+                _ => builder,
+            };
+            // The similarly named trait, after the help at the definition
+            // when there is one (`sections`).
+            let builder = match similar_trait(error, owner, capability) {
+                Some(note) if declared.is_none() => builder.note(note),
                 _ => builder,
             };
             // `Debug`'s own note for a type the program declares.

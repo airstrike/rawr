@@ -59,6 +59,34 @@ pub(super) fn std_type_name(path: &str, models: &Models) -> Option<String> {
     })
 }
 
+/// How a message names the trait a bound names `name` by, as rustc's
+/// trimmed paths do: a std trait the program knows by its last segment
+/// (`Error`, `Read`) by that name where it is `unique`, else by its std
+/// path, `std::error::Error` beside `fmt::Error` and `std::io::Read`
+/// beside `Shutdown::Read`. The program's own trait, a std trait known by
+/// its path already, and `Display`, which each message spells
+/// `std::fmt::Display` itself, keep `name`.
+pub(super) fn trait_name(name: ImmutableString, models: &Models) -> ImmutableString {
+    let program = models
+        .traits
+        .get(&name)
+        .is_some_and(|(_, declared)| declared.std.is_none());
+    // `unique` of a std trait, which the program's traits hold too.
+    let unique = std_table::sole_type(&name).is_some()
+        && !models
+            .by_definition
+            .values()
+            .any(|nominal| nominal.name() == name)
+        && !models.glob_names.contains(&name);
+    if name.contains("::") || name == "Display" || program || unique {
+        return name;
+    }
+    match crate::resolve::std_trait::anywhere(&name).and_then(public_path) {
+        Some(path) => path.into(),
+        None => name,
+    }
+}
+
 /// The std type defined at `definition` as rustc's E0599 names it where no
 /// method of the name is found on any of the type's instances: with its
 /// definition's parameters, defaults and all, `std::ops::Range<Idx>`,

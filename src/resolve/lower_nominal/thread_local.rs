@@ -6,7 +6,9 @@
 //! thread, and the glue that drops a value of a type with drop glue as its
 //! thread ends.
 //!
-//! Each method is std's, as std defines it over `with`: `with_borrow` and
+//! Each method is std's, as std defines it over `with`: `try_with` is
+//! `with` in `Ok`, or std's `AccessError` once the thread's end destroyed
+//! the value, `with_borrow` and
 //! `with_borrow_mut` borrow the `RefCell` and call the closure, `get`,
 //! `take`, `replace` and `update` run on the cell, and `set` makes the
 //! key's cell itself where the thread has no value yet, without running
@@ -17,8 +19,10 @@ use super::*;
 
 impl Parser<'_> {
     /// The runtime value of the key `key`, whose initializer `initializer`
-    /// renders a `T` of: `thread(|| initializer, local_key, [key, glue])`,
-    /// `glue` the drop of a value of a type with drop glue.
+    /// renders a `T` of: `thread(|| initializer, local_key, [key, glue,
+    /// destroyed])`, `glue` the drop of a value of a type with drop glue,
+    /// and `destroyed` whether the thread's end destroys the value, as
+    /// std's does one of a type with drop glue in Rust.
     pub(super) fn local_key(
         &mut self,
         key: &str,
@@ -32,7 +36,8 @@ impl Parser<'_> {
         } else {
             "()".into()
         };
-        let operand = origin::Fragment::plain(format!("[{key:?}, {glue}]"));
+        let destroyed = self.std_drop_glue(ty);
+        let operand = origin::Fragment::plain(format!("[{key:?}, {glue}, {destroyed}]"));
         Ok(self.prelude_op(
             PreludeOp::Thread,
             [
@@ -89,6 +94,9 @@ impl Parser<'_> {
                 reference: member_span,
             });
         }
+        if let (Some(found), Some((_, inside))) = (&found, &cell) {
+            self.local_key_bounds(found, inside, &member, member_span)?;
+        }
         let local = self.prelude_op(
             PreludeOp::Thread,
             [value.rendered_source(), thread::code("local"), "()".into()],
@@ -107,6 +115,7 @@ impl Parser<'_> {
         };
         match (member.as_str(), cell) {
             ("with", _) => self.parse_local_key_with(value, local, inner, &member),
+            ("try_with", _) => self.parse_local_key_try_with(value, inner, &member),
             ("with_borrow" | "with_borrow_mut", Some((CellKind::RefCell, inside))) => {
                 self.parse_local_key_borrow(value, local, inside, &member)
             }
@@ -132,6 +141,50 @@ impl Parser<'_> {
                 },
             }),
         }
+    }
+
+    /// rustc's E0277 for the `LocalKey` method `found`, written at
+    /// `member_span`, whose `where` clause asks of the cell's `inside` type
+    /// a trait it lacks: `T: Default` of `LocalKey<Cell<T>>::take`, required
+    /// by a bound in `LocalKey::<Cell<T>>::take`.
+    fn local_key_bounds(
+        &self,
+        found: &std_method::Inherent,
+        inside: &Ty,
+        member: &str,
+        member_span: Span,
+    ) -> Result<(), Error> {
+        let Some(declared) = crate::std_table::Declared::parse(found.item.declaration()) else {
+            return Ok(());
+        };
+        let unmet = crate::std_table::split_list(declared.wheres)
+            .into_iter()
+            .filter_map(|clause| clause.trim().strip_prefix("T:"))
+            .flat_map(|bounds| bounds.split('+'))
+            .filter_map(|bound| capability::Kind::from_name(bound.trim()))
+            .find(|kind| !self.type_provides(inside, *kind));
+        let Some(kind) = unmet else {
+            return Ok(());
+        };
+        // rustc names the impl's function by its self type's path:
+        // `LocalKey::<Cell<T>>::take`.
+        let owner = found.item.impl_self().map_or_else(
+            || "LocalKey".to_owned(),
+            |own| crate::resolve::forced_trim::trimmed(own).replacen('<', "::<", 1),
+        );
+        Err(Error::MissingCapability {
+            owner: inside.name(&self.models),
+            capability: kind.name().into(),
+            operation: span(member_span.start(), text_end(member_span.start(), member)),
+            derive: matches!(inside, Ty::Script(..)),
+            declared: self.declared_name(inside),
+            required_by: Some(crate::resolve::Required {
+                item: format!("{owner}::{member}").into(),
+                place: None,
+            }),
+            formatted: None,
+            chain: crate::resolve::Chain::default(),
+        })
     }
 
     /// The one argument of the `LocalKey` method `member`, read with std's
@@ -175,6 +228,52 @@ impl Parser<'_> {
         self.move_local(&mut function)?;
         let output = self.inference.resolve(&output);
         Ok(self.operator_expr(source, output, call))
+    }
+
+    /// `key.try_with(f)`: `Ok` of `key.with(f)`, or `Err` of std's
+    /// `AccessError` once the thread's end destroyed the key's value, as
+    /// std's `try_with` gives.
+    fn parse_local_key_try_with(
+        &mut self,
+        value: ParsedExpr,
+        inner: Ty,
+        member: &str,
+    ) -> Result<ParsedExpr, Error> {
+        let Some(error) = self.std_held("thread::AccessError") else {
+            return Err(Error::NotYet {
+                path: "std::thread::LocalKey::try_with".into(),
+                reference: value.span,
+            });
+        };
+        let key = self.temporary("key");
+        let local = self.prelude_op(
+            PreludeOp::Thread,
+            [key.as_str().into(), thread::code("local"), "()".into()],
+        );
+        // `with` of the key the block binds, which reads it once.
+        let bound = self.operator_expr(key.as_str().into(), value.ty.clone(), value.span);
+        let called = self.parse_local_key_with(bound, local, inner, member)?;
+        let ended = self.prelude_op(
+            PreludeOp::Thread,
+            [key.as_str().into(), thread::code("ended"), "()".into()],
+        );
+        let made = self.prelude_op(
+            PreludeOp::Thread,
+            ["()".into(), thread::code("access_error"), "()".into()],
+        );
+        let refused = self.prelude_op(PreludeOp::Err, [made]);
+        let ok = self.prelude_op(PreludeOp::Ok, [called.rendered_source()]);
+        let mut source = origin::Fragment::plain(format!("{{ let {key} = "));
+        source.push(value.rendered_source());
+        source.push_text("; if ");
+        source.push(ended);
+        source.push_text(" { ");
+        source.push(refused);
+        source.push_text(" } else { ");
+        source.push(ok);
+        source.push_text(" } }");
+        let ty = Ty::Result(Box::new(called.ty), Box::new(error));
+        Ok(self.operator_expr(source, ty, called.span))
     }
 
     /// `key.with_borrow(f)` and `key.with_borrow_mut(f)` of a

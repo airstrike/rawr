@@ -570,6 +570,19 @@ pub(super) static STEPS: &[Step] = &[
         ],
     },
     Step::Held {
+        std: "std::thread::AccessError",
+        capabilities: &[
+            capability::Kind::Debug,
+            capability::Kind::Clone,
+            capability::Kind::Copy,
+            capability::Kind::PartialEq,
+            capability::Kind::Eq,
+            capability::Kind::Send,
+            capability::Kind::Static,
+            capability::Kind::Error,
+        ],
+    },
+    Step::Held {
         std: "std::time::SystemTime",
         capabilities: &[
             capability::Kind::Debug,
@@ -7599,6 +7612,12 @@ pub(super) static STEPS: &[Step] = &[
         output: Ty::Registered("thread::Builder"),
     },
     Step::Item {
+        path: "thread::AccessError::to_string",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Builtin(Builtin::String),
+    },
+    Step::Item {
         path: "thread::Builder::stack_size",
         kind: Kind::Method(Mode::Owned),
         inputs: &[Ty::Builtin(Builtin::Usize)],
@@ -8623,10 +8642,6 @@ pub(super) static STEPS: &[Step] = &[
     Step::StdAlias {
         path: "sync::mpsc::sync_channel",
         std: "std::sync::mpsc::sync_channel",
-    },
-    Step::StdAlias {
-        path: "thread::AccessError",
-        std: "std::thread::AccessError",
     },
     Step::StdAlias {
         path: "thread::JoinHandle",
