@@ -1648,6 +1648,11 @@ impl<'a> Parser<'a> {
                         Err(back) => value = back,
                     }
                 }
+                // `stdout().flush()`, as the program writes it, needs
+                // `io::Write` in scope (#1427); an operator never does.
+                if let Some(error) = self.unscoped_written_method(&value.ty, &member, member_span) {
+                    return Err(error);
+                }
                 value = self.parse_host_method(value, member, member_span)?;
                 continue;
             }
