@@ -8,6 +8,14 @@
   },
   "releases": [
     {
+      "version": "0.5.12",
+      "date": "2026-11-22",
+      "entries": [
+        {"text":"A generic bounded by `fmt::Write` or `io::Write` runs std's impls for `String` and `Vec<u8>`, and `write!` into any writer is its `write_fmt`, as rustc expands it; `fmt::Arguments` is a type a program can write.","issues":[2483,2484]},
+        {"text":"A program's `Hasher` gets `write_u8` through `write_isize`, integers have `to_ne_bytes`, `to_le_bytes` and `to_be_bytes`, `Iterator::by_ref` on a program iterator goes on from where it stopped, and std's integer-to-float `From` conversions run.","issues":[2481,2482,2475]}
+      ]
+    },
+    {
       "version": "0.5.11",
       "date": "2026-11-22",
       "entries": [

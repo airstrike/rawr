@@ -6,6 +6,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors.
 
+## 0.5.12 (2026-11-22)
+
+- A generic bounded by `fmt::Write` or `io::Write` runs std's impls for `String` and `Vec<u8>`, and `write!` into any writer is its `write_fmt`, as rustc expands it; `fmt::Arguments` is a type a program can write. (#2483, #2484)
+- A program's `Hasher` gets `write_u8` through `write_isize`, integers have `to_ne_bytes`, `to_le_bytes` and `to_be_bytes`, `Iterator::by_ref` on a program iterator goes on from where it stopped, and std's integer-to-float `From` conversions run. (#2481, #2482, #2475)
+
 ## 0.5.11 (2026-11-22)
 
 - A path through another module's import of a std item resolves to that item, as rustc's does: `super::fmt::Display`, `crate::fmt::Formatter` and `super::super::HashMap::new()` after the parent's `use std::fmt;` or `use std::collections::*;`, in signatures, bodies and patterns. (#2468)

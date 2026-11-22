@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-22",
-  "version": "0.5.11",
+  "version": "0.5.12",
   "examples": {
     "running": 55,
     "total": 56,
@@ -11,6 +11,14 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors."],"entries":[]},
     "releases": [
+      {
+        "version": "0.5.12",
+        "date": "2026-11-22",
+        "entries": [
+          {"text":"A generic bounded by `fmt::Write` or `io::Write` runs std's impls for `String` and `Vec<u8>`, and `write!` into any writer is its `write_fmt`, as rustc expands it; `fmt::Arguments` is a type a program can write.","issues":[2483,2484]},
+          {"text":"A program's `Hasher` gets `write_u8` through `write_isize`, integers have `to_ne_bytes`, `to_le_bytes` and `to_be_bytes`, `Iterator::by_ref` on a program iterator goes on from where it stopped, and std's integer-to-float `From` conversions run.","issues":[2481,2482,2475]}
+        ]
+      },
       {
         "version": "0.5.11",
         "date": "2026-11-22",
@@ -6144,16 +6152,16 @@
     {"issue":2472,"title":"E0277 for a std container names the container, where rustc names the element and adds \"required for\"","state":"open","category":"Divergences from rustc"},
     {"issue":2473,"title":"A generic value's `{:?}` of a tuple prints it as an array","state":"closed","category":"Divergences from rustc","release":"0.5.7"},
     {"issue":2474,"title":"`r.clone()` of an `&T` for an unbounded `T` is refused as `T: Clone` unmet","state":"closed","category":"Divergences from rustc","release":"0.5.7"},
-    {"issue":2475,"title":"A generic `T: From<u8>` called at `f64` fails at runtime","state":"open","category":"Divergences from rustc"},
+    {"issue":2475,"title":"A generic `T: From<u8>` called at `f64` fails at runtime","state":"closed","category":"Divergences from rustc","release":"0.5.12"},
     {"issue":2476,"title":"The own-signature check misses `&mut` reborrow chains and `&mut self` bodies","state":"open","category":"Divergences from rustc"},
     {"issue":2477,"title":"The own-signature check misses a `&str` range slice returned as a longer lifetime","state":"open","category":"Divergences from rustc"},
     {"issue":2478,"title":"A borrow stored into a `&mut` parameter isn't checked against the signature's lifetimes","state":"open","category":"Divergences from rustc"},
     {"issue":2479,"title":"Variance: `fn(T)` fields are contravariant, and struct-inferred outlives bounds are implied","state":"open","category":"Divergences from rustc"},
     {"issue":2480,"title":"`impl Trait` is a per-function opaque type, not a trait object","state":"open","category":"Divergences from rustc"},
-    {"issue":2481,"title":"A program's impl Hasher lacks the provided write_u8..write_usize methods","state":"open","category":"Divergences from rustc"},
-    {"issue":2482,"title":"Iterator::by_ref on a program iterator isn't run","state":"open","category":"Divergences from rustc"},
-    {"issue":2483,"title":"A generic bounded by io::Write, io::Read or fmt::Write fails at runtime for std's own values","state":"open","category":"Divergences from rustc"},
-    {"issue":2484,"title":"std::fmt::Arguments as a written type is unsupported, so write_fmt can't be called or overridden directly","state":"open","category":"Divergences from rustc"},
+    {"issue":2481,"title":"A program's impl Hasher lacks the provided write_u8..write_usize methods","state":"closed","category":"Divergences from rustc","release":"0.5.12"},
+    {"issue":2482,"title":"Iterator::by_ref on a program iterator isn't run","state":"closed","category":"Divergences from rustc","release":"0.5.12"},
+    {"issue":2483,"title":"A generic bounded by io::Write, io::Read or fmt::Write fails at runtime for std's own values","state":"closed","category":"Divergences from rustc","release":"0.5.12"},
+    {"issue":2484,"title":"std::fmt::Arguments as a written type is unsupported, so write_fmt can't be called or overridden directly","state":"closed","category":"Divergences from rustc","release":"0.5.12"},
     {"issue":2485,"title":"A `Box<dyn Trait>` isn't checked for `Send` where a thread needs it","state":"open","category":"Divergences from rustc"},
     {"issue":2486,"title":"A function body that breaks its own signature's lifetimes is reported with rustc's labels: where…","state":"closed","category":"Divergences from rustc","release":"0.5.8"},
     {"issue":2487,"title":"Report every region error rustc reports for one returned value","state":"open","category":"Divergences from rustc"},
@@ -6167,7 +6175,10 @@
     {"issue":2495,"title":"E0277 for a non-Send capture names the capture's type, not the type that isn't Send","state":"open","category":"Divergences from rustc"},
     {"issue":2496,"title":"Auto-trait leakage beyond thread closures: a generic call's `T: Send` and spawn's output","state":"open","category":"Divergences from rustc"},
     {"issue":2497,"title":"A `use` that collides with a same-named declaration reports `duplicate item` where rustc reports E0255","state":"open","category":"Divergences from rustc"},
-    {"issue":2498,"title":"A generic call's argument that fails its expected input is E0308 at the argument, as rustc reports it","state":"open","category":"Divergences from rustc"}
+    {"issue":2498,"title":"A generic call's argument that fails its expected input is E0308 at the argument, as rustc reports it","state":"open","category":"Divergences from rustc"},
+    {"issue":2499,"title":"Hash::hash into a program's Hasher is refused: derive(Hash) and impl Hash bodies don't run","state":"open","category":"Divergences from rustc"},
+    {"issue":2500,"title":"by_ref and &mut of std's own iterators, and `for x in &mut it`, aren't run","state":"open","category":"Divergences from rustc"},
+    {"issue":2501,"title":"write! into a program's fmt::Write calls write_str once with the whole text","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -8790,12 +8801,12 @@
             {"number":2472,"title":"E0277 for a std container names the container, where rustc names the element and adds \"required for\"","state":"open"},
             {"number":2473,"title":"A generic value's `{:?}` of a tuple prints it as an array","state":"closed"},
             {"number":2474,"title":"`r.clone()` of an `&T` for an unbounded `T` is refused as `T: Clone` unmet","state":"closed"},
-            {"number":2475,"title":"A generic `T: From<u8>` called at `f64` fails at runtime","state":"open"},
+            {"number":2475,"title":"A generic `T: From<u8>` called at `f64` fails at runtime","state":"closed"},
             {"number":2480,"title":"`impl Trait` is a per-function opaque type, not a trait object","state":"open"},
-            {"number":2481,"title":"A program's impl Hasher lacks the provided write_u8..write_usize methods","state":"open"},
-            {"number":2482,"title":"Iterator::by_ref on a program iterator isn't run","state":"open"},
-            {"number":2483,"title":"A generic bounded by io::Write, io::Read or fmt::Write fails at runtime for std's own values","state":"open"},
-            {"number":2484,"title":"std::fmt::Arguments as a written type is unsupported, so write_fmt can't be called or overridden directly","state":"open"},
+            {"number":2481,"title":"A program's impl Hasher lacks the provided write_u8..write_usize methods","state":"closed"},
+            {"number":2482,"title":"Iterator::by_ref on a program iterator isn't run","state":"closed"},
+            {"number":2483,"title":"A generic bounded by io::Write, io::Read or fmt::Write fails at runtime for std's own values","state":"closed"},
+            {"number":2484,"title":"std::fmt::Arguments as a written type is unsupported, so write_fmt can't be called or overridden directly","state":"closed"},
             {"number":2485,"title":"A `Box<dyn Trait>` isn't checked for `Send` where a thread needs it","state":"open"},
             {"number":2490,"title":"A function written `-> impl Trait` returns its own opaque type, known by every written bound as…","state":"closed"},
             {"number":2491,"title":"A static trait function through a generic parameter filled by an opaque output runs","state":"closed"},
@@ -8929,7 +8940,10 @@
             {"number":2088,"title":"std::process::ExitCode does not run, so fn main() -> ExitCode fails","state":"open"},
             {"number":2089,"title":"writeln! into std::io::stdout().lock() is refused","state":"open"},
             {"number":2090,"title":"str::matches, match_indices and replacen do not run","state":"open"},
-            {"number":2091,"title":"std::io::Error does not implement Display or std::error::Error, so ? into Box<dyn Error> fails E0277","state":"open"}
+            {"number":2091,"title":"std::io::Error does not implement Display or std::error::Error, so ? into Box<dyn Error> fails E0277","state":"open"},
+            {"number":2499,"title":"Hash::hash into a program's Hasher is refused: derive(Hash) and impl Hash bodies don't run","state":"open"},
+            {"number":2500,"title":"by_ref and &mut of std's own iterators, and `for x in &mut it`, aren't run","state":"open"},
+            {"number":2501,"title":"write! into a program's fmt::Write calls write_str once with the whole text","state":"open"}
           ]
         },
         {
