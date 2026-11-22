@@ -9,7 +9,12 @@
   },
   "changelog": {
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
-    "unreleased": {"notes":["The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors."],"entries":[]},
+    "unreleased": {
+      "notes": ["The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors."],
+      "entries": [
+        {"text":"An edition 2021 (or older) crate's block tail temporaries now live past the block's locals, as rustc's do: a `Drop` temporary that borrows a local is E0597, with rustc's labels, note and help.","issues":[2517]}
+      ]
+    },
     "releases": [
       {
         "version": "0.5.19",
@@ -6333,7 +6338,7 @@
     {"issue":2514,"title":"`Trait::m(\"hi\")` on a program trait implemented for `str` and `i32` is E0308","state":"closed","category":"Divergences from rustc","release":"0.5.16"},
     {"issue":2515,"title":"An unmarked module file doesn't see the macro_rules! its parent defines before `mod`","state":"closed","category":"Divergences from rustc","release":"0.5.17"},
     {"issue":2516,"title":"A crate derive's helper attributes are not checked against what it declares","state":"open","category":"Divergences from rustc"},
-    {"issue":2517,"title":"An edition 2021 crate's tail temporaries drop as edition 2024's do","state":"open","category":"Divergences from rustc"},
+    {"issue":2517,"title":"An edition 2021 crate's tail temporaries drop as edition 2024's do","state":"closed","category":"Divergences from rustc"},
     {"issue":2518,"title":"Move url from 2.5.8 to 2.5.9 for RUSTSEC-2026-0592 and re-verify the manifest reference","state":"closed","category":"Health","release":"0.5.15"},
     {"issue":2519,"title":"A program static is evaluated again at each read, so a Mutex or atomic static loses its state","state":"closed","category":"Divergences from rustc","release":"0.5.16"},
     {"issue":2520,"title":"A program macro called inside a std macro's arguments no longer makes `rawr run` rebuild…","state":"closed","category":"Health","release":"0.5.15"},
@@ -6435,7 +6440,9 @@
     {"issue":2616,"title":"The expected type doesn't reach a std method's type parameter before its arguments","state":"open","category":"Divergences from rustc"},
     {"issue":2617,"title":"An E0599 or E0277 on an iterator chain names it impl Iterator, not its std struct","state":"open","category":"Divergences from rustc"},
     {"issue":2618,"title":"partition and unzip refuse Vec<T> of &T items, and sum refuses Option and Result items","state":"open","category":"Divergences from rustc"},
-    {"issue":2619,"title":"Option::map_or_else is the not-yet error","state":"open","category":"Divergences from rustc"}
+    {"issue":2619,"title":"Option::map_or_else is the not-yet error","state":"open","category":"Divergences from rustc"},
+    {"issue":2620,"title":"RefCell's borrow() and borrow_mut() give `&T`, not the `Ref` and `RefMut` guards","state":"open","category":"Divergences from rustc"},
+    {"issue":2621,"title":"Before edition 2024, a block's tail temporaries drop after its locals at runtime too","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -9818,7 +9825,7 @@
             {"number":2511,"title":"A macro fragment that starts but doesn't parse reports no-rules, not rustc's parser error","state":"closed"},
             {"number":2515,"title":"An unmarked module file doesn't see the macro_rules! its parent defines before `mod`","state":"closed"},
             {"number":2516,"title":"A crate derive's helper attributes are not checked against what it declares","state":"open"},
-            {"number":2517,"title":"An edition 2021 crate's tail temporaries drop as edition 2024's do","state":"open"},
+            {"number":2517,"title":"An edition 2021 crate's tail temporaries drop as edition 2024's do","state":"closed"},
             {"number":2520,"title":"A program macro called inside a std macro's arguments no longer makes `rawr run` rebuild…","state":"closed"}
           ],
           "milestone": "0.5"

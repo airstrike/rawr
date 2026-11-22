@@ -5,6 +5,7 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors.
+- An edition 2021 (or older) crate's block tail temporaries now live past the block's locals, as rustc's do: a `Drop` temporary that borrows a local is E0597, with rustc's labels, note and help. (#2517)
 
 ## 0.5.19 (2026-11-22)
 
