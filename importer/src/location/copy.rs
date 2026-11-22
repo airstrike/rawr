@@ -152,11 +152,17 @@ impl std::fmt::Display for Said {
     }
 }
 
+/// The note a failed runner build's error gets where its place in an
+/// adapter rawr generated is mapped to the program's call that needed the
+/// adapter, before the adapter's own place.
+pub(crate) const CALL_SITE: &str = "in the code rawr generated for this call, at ";
+
 /// Each error in `stderr` as the program's, with the file under it and
 /// the causes Cargo gave: once each, as a stand-in's error is its marked
 /// type's, and without Cargo's summary. A line of the copy is no line of
 /// the program's, so no line is named, but for an error in code rawr
-/// generated for a marked item, which names the item's declaration.
+/// generated for a marked item, which names the item's declaration, and
+/// for one in an adapter, which names the program's call.
 fn errors(stderr: &str) -> Vec<Said> {
     let mut errors: Vec<Said> = Vec::new();
     let mut lines = stderr.lines().peekable();
@@ -167,6 +173,7 @@ fn errors(stderr: &str) -> Vec<Said> {
         let headline = program(line);
         let mut location = None;
         let mut generated = None;
+        let mut called = None;
         let mut causes: Vec<String> = Vec::new();
         while let Some(next) = lines.next_if(|next| !next.starts_with("error")) {
             if next == "Caused by:" {
@@ -182,6 +189,16 @@ fn errors(stderr: &str) -> Vec<Said> {
                 }
                 continue;
             }
+            if let Some(adapter) = next
+                .trim_start()
+                .strip_prefix("= note: ")
+                .and_then(|note| note.strip_prefix(CALL_SITE))
+            {
+                if generated.is_none() {
+                    generated = called.and_then(|place| Generated::called_at(place, adapter));
+                }
+                continue;
+            }
             let Some(place) = place(next) else {
                 continue;
             };
@@ -189,7 +206,15 @@ fn errors(stderr: &str) -> Vec<Said> {
                 let file = place.trim_end_matches(|character: char| {
                     character.is_ascii_digit() || character == ':'
                 });
-                location = Some(format!("  --> {}", program(file)));
+                // A place in the copy names no line of the program's; any
+                // other place is where rustc says.
+                let shown = if program_path(file).is_some() {
+                    program(file)
+                } else {
+                    place.to_owned()
+                };
+                location = Some(format!("  --> {shown}"));
+                called = Some(place);
             }
             if generated.is_none() {
                 generated = Generated::at(place);
@@ -277,6 +302,9 @@ enum Purpose {
     /// An impl of the island's trait (`Put`, `Take`, `Parts` or `Mirror`)
     /// for the marked type, as the copy writes it.
     Crossing { traits: Box<str>, ty: Box<str> },
+    /// An adapter of a runner, which the program's call at the place
+    /// needed.
+    Adapter,
 }
 
 /// The traits of the island's support whose impls for a marked type carry
@@ -367,7 +395,33 @@ impl Generated {
                  and the interpreter, at {}",
                 self.generated
             ),
+            Purpose::Adapter => format!("{CALL_SITE}{}", self.generated),
         }
+    }
+
+    /// The program's call at `place`, `file:line:column` as rustc writes
+    /// it, that needed the adapter at `adapter`, read from the program's
+    /// file on disk.
+    fn called_at(place: &str, adapter: &str) -> Option<Self> {
+        let mut parts = place.rsplitn(3, ':');
+        let column = parts.next()?.parse::<usize>().ok()?;
+        let line = parts.next()?.parse::<usize>().ok()?;
+        let file = parts.next()?;
+        let text = std::fs::read_to_string(file).ok()?;
+        let written = text.lines().nth(line.checked_sub(1)?)?;
+        let at = written.char_indices().nth(column.checked_sub(1)?)?.0;
+        let width = words(written)
+            .find(|(start, word)| (*start..start + word.len()).contains(&at))
+            .map_or(1, |(_, word)| word.chars().count());
+        Some(Self {
+            purpose: Purpose::Adapter,
+            file: std::path::Path::new(file).into(),
+            text: text.into(),
+            line,
+            column,
+            width,
+            generated: adapter.into(),
+        })
     }
 }
 
@@ -874,6 +928,51 @@ Caused by:\n  [6] Couldn't resolve host name (Could not resolve host: index.crat
                 "in the `Take` impl rawr generated to carry `Ball<T>` between native code and \
                  the interpreter, at {}:11",
                 copied.display()
+            )
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A runner's error mapped from an adapter to the program's call
+    /// names the call, and the adapter in its note.
+    #[test]
+    fn an_error_mapped_from_an_adapter_names_the_program_s_call() {
+        let root =
+            std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../target/tests"))
+                .join(format!("rawr-adapter-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let program = root.join("home.rs");
+        std::fs::write(
+            &program,
+            "// rawr\nfn view() {\n    row().spacing(\"zero\");\n}\n",
+        )
+        .unwrap();
+        let adapter = "src/__rawr_program/rawr_adapters_iced_8.rs:4:50";
+        let stderr = format!(
+            "error[E0277]: the trait bound `Pixels: From<&str>` is not satisfied\n   \
+             --> {}:3:11\n    = note: {}{adapter}\n    |\n\n\
+             error: could not compile `rawr-generated-runner` (bin) due to 1 previous error\n",
+            program.display(),
+            super::CALL_SITE
+        );
+        let error = crate::Error::Process {
+            program: "cargo",
+            status: "exit status: 101".into(),
+            stderr: stderr.into(),
+        };
+        let failure = super::Failure::of(error).unwrap();
+        let generated = failure.generated().unwrap();
+        assert_eq!(generated.place(), (3, 11));
+        assert_eq!(generated.width(), "spacing".len());
+        assert_eq!(generated.file(), program);
+        assert_eq!(
+            failure.to_string(),
+            format!(
+                "rawr could not build the program; unless `cargo check` fails too, this is a bug in rawr\n\
+                 error[E0277]: the trait bound `Pixels: From<&str>` is not satisfied\n  \
+                 --> {}:3:11\n   \
+                 = note: in the code rawr generated for this call, at {adapter}",
+                program.display()
             )
         );
         let _ = std::fs::remove_dir_all(&root);

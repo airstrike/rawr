@@ -556,7 +556,9 @@ fn compile<B>(
         }
     };
     drop((shared, runtime));
-    result?;
+    result.map_err(|error| {
+        super::call_site::mapped(error, manifest.generated.source_map(), &manifest.files)
+    })?;
     copied.transpose()?;
     let executable = crate::store::bundle::path(
         &target,
