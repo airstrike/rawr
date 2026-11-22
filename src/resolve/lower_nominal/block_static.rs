@@ -115,8 +115,17 @@ impl Parser<'_> {
             }
             let (name, name_span) = self.expect_name("static name")?;
             self.expect(Token::Colon, "':' after a static's name")?;
+            let start = self.position();
+            let ahead = self.input.clone();
             let ty = self.parse_local_type()?;
-            self.expect(Token::Equals, "'=' after a static's type")?;
+            let equals = self.expect(Token::Equals, "'=' after a static's type")?;
+            // Every thread shares a static, so its type is `Sync`.
+            if let Some((last, at)) = ahead.take_while(|(_, at)| *at < equals).last()
+                && let Some(error) =
+                    self.unshared_static(&ty, span(start, text_end(at, &last.to_string())))
+            {
+                return Err(error);
+            }
             let value = self.static_value()?;
             let kind = if matches!(ty, Ty::Host { .. }) {
                 let file = self.source_identity();
@@ -315,6 +324,8 @@ impl Parser<'_> {
         };
         if let Ok(read) = &read {
             self.static_reads.insert(read.span);
+            self.unmovable
+                .insert(read.span, Unplaced::static_item(name));
             if self.may_hold_borrow(&ty) {
                 self.flow().set_origins(read.span, Vec::new());
             }

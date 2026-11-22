@@ -532,6 +532,14 @@ fn formatting(error: &resolve::Error) -> Option<&resolve::Placeholder> {
 const DEBUG_INSTEAD: &str =
     "in format strings you may be able to use `{:?}` (or {:#?} for pretty-print) instead";
 
+/// rustc's last note on a static whose type isn't `Sync`.
+const SHARED_STATIC: &str = "shared static variables must have a type that implements `Sync`";
+
+/// rustc's note on a type that holds one that doesn't implement a trait.
+fn appears_within(holder: &str) -> String {
+    format!("required because it appears within the type `{holder}`")
+}
+
 /// An unknown member's span, which covers its name as rustc underlines it;
 /// an unmet bound's argument and a wrong argument count's callee.
 fn member_span(error: &resolve::Error) -> Span {
@@ -1231,6 +1239,29 @@ fn sections(error: &resolve::Error, source: &Source) -> Vec<Section> {
                         )
                     });
             vec![section.secondary(source.clone(), unsatisfied.owner, None)]
+        }
+        // Each type the program declares that holds what isn't `Sync`, at
+        // its name, followed by the lines after it.
+        resolve::Error::UnsharedStatic { appears, .. } => {
+            let mut sections = Vec::<Section>::new();
+            for (holder, site) in appears {
+                match site {
+                    Some(site) => sections.push(Section::note(appears_within(holder)).primary(
+                        source.clone(),
+                        *site,
+                        None,
+                    )),
+                    None => {
+                        if let Some(section) = sections.pop() {
+                            sections.push(section.followed(appears_within(holder)));
+                        }
+                    }
+                }
+            }
+            if let Some(section) = sections.pop() {
+                sections.push(section.followed(SHARED_STATIC));
+            }
+            sections
         }
         // A similar item the call can't take in place, at its definition.
         resolve::Error::NoItem {
@@ -1985,6 +2016,9 @@ fn primary_label(
         }
         resolve::Error::WrongKind { expected, .. } => Some(format!("not a {expected}").into()),
         resolve::Error::Unimplemented { label, .. } => Some(label.clone()),
+        resolve::Error::UnsharedStatic { ty, .. } => {
+            Some(resolve::Unsatisfied(ty, "Sync").to_string().into())
+        }
         // At an argument a bound needs, as the trait's own wording has it.
         resolve::Error::MissingCapability {
             owner, capability, ..
@@ -2335,6 +2369,33 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Error::Unimplemented {
             help: Some(help), ..
         } => builder.help(help.clone()),
+        // The notes on types that hold it with a site are sections.
+        resolve::Error::UnsharedStatic {
+            ty,
+            within,
+            note,
+            appears,
+            ..
+        } => {
+            let builder = builder.help(match within {
+                Some(within) => {
+                    format!("within `{within}`, the trait `Sync` is not implemented for `{ty}`")
+                }
+                None => format!("the trait `Sync` is not implemented for `{ty}`"),
+            });
+            let builder = note
+                .iter()
+                .fold(builder, |builder, note| builder.note(note.clone()));
+            let builder = appears
+                .iter()
+                .map_while(|(holder, site)| site.is_none().then(|| appears_within(holder)))
+                .fold(builder, Builder::note);
+            if appears.iter().any(|(_, site)| site.is_some()) {
+                builder
+            } else {
+                builder.note(SHARED_STATIC)
+            }
+        }
         resolve::Error::MovedValue {
             cause: Some(cause), ..
         } => match &cause.moved {
@@ -2611,6 +2672,7 @@ fn resolution_message(error: &resolve::Error) -> String {
             ..
         } => format!("expected {expected}, found {found} `{name}`"),
         resolve::Error::Unimplemented { message, .. } => message.to_string(),
+        resolve::Error::UnsharedStatic { ty, .. } => resolve::Unsatisfied(ty, "Sync").to_string(),
         resolve::Error::MovedValue {
             name,
             borrowed,

@@ -579,6 +579,7 @@ impl<'a> Parser<'a> {
                     Unplaced {
                         moved: ("E0507", format!("cannot move out of {behind}")),
                         assigned,
+                        of_static: None,
                     },
                 );
             }
@@ -1005,6 +1006,8 @@ impl<'a> Parser<'a> {
             }
         }
         let block = block?;
+        // The block's value is its tail's, with the borrows it holds.
+        self.flow().same_origins(block.syntax, block.value.span);
         if matches!(self.inference.resolve(&block.value.ty), Ty::FnItem { .. }) {
             self.closure_blocks
                 .insert(block.syntax, block.value.prelude.clone());
@@ -1618,6 +1621,15 @@ impl<'a> Parser<'a> {
             if self.needs_drop(&ty, call)? {
                 self.move_local(&mut argument)?;
             }
+            // The `Box` holds what its value does.
+            self.compose(
+                call,
+                &ty,
+                &[(
+                    &argument,
+                    borrows::Slot::At(borrowck::Path::of(&[borrowck::Step::Arg(0)])),
+                )],
+            );
             let source = argument.rendered_source();
             return Ok(self.operator_expr(source, ty, call));
         }

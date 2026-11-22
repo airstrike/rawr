@@ -51,10 +51,25 @@ pub(super) enum Clears {
     BeforeBindings,
 }
 
+/// Where the temporaries a `let` condition's subject makes drop.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Subject {
+    /// With the condition's scope: at the end of the consequent or of the
+    /// iteration, and without a match before the alternative, as in Rust
+    /// 2024's `if let` and in `while let`. The caller declares them.
+    Scoped,
+    /// With the enclosing statement's (a let chain's link).
+    Statement,
+}
+
 /// A `let` condition's drops beyond its scope's.
 pub(super) struct Condition {
-    /// Without a match: the drop of the value made for the condition.
+    /// Without a match: the drop of the value made for the condition, and
+    /// of the temporaries its subject made.
     pub(super) otherwise: String,
+    /// The temporaries the subject made, which the caller declares before
+    /// the subject: its condition's scope drops them.
+    pub(super) temporaries: Vec<String>,
     /// Copies of the outer locals the pattern's bindings shadow, made
     /// before it binds them (`shadow_copies`).
     pub(super) copies: String,
@@ -382,6 +397,14 @@ fn collect_names(syntax: &pattern::Syntax, names: &mut Vec<(ImmutableString, Spa
         }
         _ => {}
     }
+}
+
+/// The statements that declare `temporaries` before what assigns them.
+pub(super) fn declarations(temporaries: &[String]) -> String {
+    temporaries
+        .iter()
+        .map(|temporary| format!("let {temporary} = (); "))
+        .collect()
 }
 
 /// A drop of the value `place` reads, whose type's [`Shape`] is `shape`
@@ -1517,6 +1540,69 @@ impl Parser<'_> {
         })
     }
 
+    /// The temporaries `made` by a `let` condition's subject, as locals of
+    /// the condition's scope, just opened: they drop with it, and at a jump
+    /// out of it. Where the scope keeps no locals, they stay the enclosing
+    /// statement's, and none is the scope's.
+    pub(super) fn scope_temporaries(&mut self, made: Vec<String>) -> Result<Vec<String>, Error> {
+        if !self.drop_scoped() || self.drop_scopes.len() <= self.drop_base {
+            if let Some(scope) = self.temporary_scopes.last_mut() {
+                scope.extend(made);
+            }
+            return Ok(Vec::new());
+        }
+        for temporary in &made {
+            let binding = &self.bindings[temporary.as_str()];
+            let (declaration, ty) = (binding.declaration, binding.ty.clone());
+            self.note_drop_here(&temporary.as_str().into(), declaration, &ty)?;
+        }
+        Ok(made)
+    }
+
+    /// The temporary scope of a `let` closed: the temporaries the `let`
+    /// extends, as the borrow facts have it, and the others, which drop
+    /// when its value is made.
+    pub(super) fn extended_temporaries(&mut self) -> (Vec<String>, Vec<String>) {
+        let temporaries = self.close_temporaries();
+        if temporaries.is_empty() {
+            return (Vec::new(), Vec::new());
+        }
+        let extends = self.flow().extended();
+        temporaries.into_iter().partition(|temporary| {
+            self.bindings
+                .get(temporary.as_str())
+                .is_some_and(|binding| extends.contains(&binding.declaration))
+        })
+    }
+
+    /// `extended`, temporaries a `let` of the value at `value` keeps to the
+    /// end of its block, as locals of the block's scope: their
+    /// declarations, which go before the `let`.
+    pub(super) fn extend_temporaries(
+        &mut self,
+        extended: &[String],
+        value: Span,
+    ) -> Result<String, Error> {
+        if extended.is_empty() {
+            return Ok(String::new());
+        }
+        if !self.drop_scoped() || self.drop_scopes.len() <= self.drop_base {
+            return Err(Error::UnsupportedNominalSyntax {
+                construct: "a `let` that borrows a temporary value whose type implements `Drop` \
+                            outside a block: keeping it to the block's end is not supported in \
+                            Rawr yet"
+                    .into(),
+                source: value,
+            });
+        }
+        for temporary in extended {
+            let binding = &self.bindings[temporary.as_str()];
+            let (declaration, ty) = (binding.declaration, binding.ty.clone());
+            self.note_drop_here(&temporary.as_str().into(), declaration, &ty)?;
+        }
+        Ok(declarations(extended))
+    }
+
     /// Open a temporary scope (a statement, a match arm, a condition): the
     /// values made in it that nothing moves drop at its end.
     pub(super) fn open_temporaries(&mut self) {
@@ -1610,9 +1696,10 @@ impl Parser<'_> {
         if shape != WALK {
             self.temporary_shapes.insert(temporary.clone(), shape);
         }
-        let mut source = origin::Fragment::plain(format!("{{ {temporary} = "));
+        // In parentheses, so a statement may start with it (`make().ok();`).
+        let mut source = origin::Fragment::plain(format!("({{ {temporary} = "));
         source.push(value.rendered_source());
-        source.push_text(format!("; {temporary} }}"));
+        source.push_text(format!("; {temporary} }})"));
         value.source = source;
         value.prelude = origin::Fragment::default();
         // A field moved out of it leaves `()` there.

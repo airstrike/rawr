@@ -574,6 +574,13 @@ impl<'a> Parser<'a> {
 
     pub(super) fn function_body(&mut self, definition: &item::Function) -> Result<Lowered, Error> {
         self.check_function_signature(definition)?;
+        // Every thread shares a static, so its type is `Sync`.
+        if definition.body.static_item
+            && let Some(output) = &definition.output
+            && let Some(error) = self.unshared_static(&Ty::from_resolved(output), output.span())
+        {
+            return Err(error);
+        }
         if definition.body.constant {
             // The initializer of `const NAME: T = value;` is a tail, whose
             // temporaries are promoted to `'static`.

@@ -640,6 +640,7 @@ impl Parser<'_> {
                             format!("cannot move out of an `{}`", counter.name()),
                         ),
                         assigned: Some(Unassignable::Counted(counter)),
+                        of_static: None,
                     },
                 );
 
@@ -736,6 +737,86 @@ impl Parser<'_> {
         }
     }
 
+    /// rustc's E0277 for a static of type `ty`, written at `at`, when
+    /// rustc knows `ty` isn't `Sync` because it is, or holds through the
+    /// program's types and tuples, a `Cell`, a `RefCell` or an `Rc`. What
+    /// isn't `Sync` for another reason is left to rustc.
+    pub(super) fn unshared_static(&self, ty: &Ty, at: Span) -> Option<Error> {
+        if self.shared_between_threads(ty) {
+            return None;
+        }
+        let mut appears = Vec::new();
+        let culprit = self.unshared_part(ty, &mut appears, &mut Vec::new())?;
+        let name = culprit.name(&self.models);
+        let whole = self.inference.resolve(ty).name(&self.models);
+        let note = match &culprit {
+            Ty::Cell(CellKind::RefCell, _) => Some(
+                "if you want to do aliasing and mutation between multiple threads, use \
+                 `std::sync::RwLock` instead"
+                    .into(),
+            ),
+            Ty::Cell(CellKind::Cell, inner) => Some(
+                match atomic(&self.inference.resolve(inner)) {
+                    Some(atomic) => format!(
+                        "if you want to do aliasing and mutation between multiple threads, use \
+                         `std::sync::RwLock` or `std::sync::atomic::{atomic}` instead"
+                    ),
+                    None => "if you want to do aliasing and mutation between multiple threads, \
+                             use `std::sync::RwLock`"
+                        .to_string(),
+                }
+                .into(),
+            ),
+            _ => None,
+        };
+        Some(Error::UnsharedStatic {
+            within: (whole != name).then_some(whole),
+            ty: name,
+            note,
+            appears: appears.into(),
+            at,
+        })
+    }
+
+    /// The `Cell`, `RefCell` or `Rc` in `ty` that makes it not `Sync`,
+    /// with the types between, innermost first, into `appears`; none when
+    /// something else does, or a type rustc places outside the program
+    /// (`Option`) holds it.
+    fn unshared_part(
+        &self,
+        ty: &Ty,
+        appears: &mut Vec<(ImmutableString, Option<Span>)>,
+        visiting: &mut Vec<(type_def::Id, Box<[Ty]>)>,
+    ) -> Option<Ty> {
+        let ty = self.inference.resolve(ty);
+        let held = match &ty {
+            Ty::Cell(CellKind::Cell | CellKind::RefCell, _)
+            | Ty::Counted(Counter::Rc, _)
+            | Ty::Weak(Counter::Rc, _) => return Some(ty),
+            Ty::Tuple(members) => (members.to_vec(), None),
+            Ty::Script(id, arguments) => {
+                let key = (*id, arguments.clone());
+                if visiting.contains(&key) {
+                    return None;
+                }
+                visiting.push(key);
+                let site = match self.models.definition(*id) {
+                    Nominal::Struct { item, .. } => item.name.span,
+                    Nominal::Enum { item, .. } => item.name.span,
+                };
+                (self.field_types(*id, arguments), Some(site))
+            }
+            _ => return None,
+        };
+        let (members, site) = held;
+        let member = members
+            .iter()
+            .find(|member| !self.shared_between_threads(member))?;
+        let culprit = self.unshared_part(member, appears, visiting)?;
+        appears.push((ty.name(&self.models), site));
+        Some(culprit)
+    }
+
     fn sync_in(&self, ty: &Ty, visiting: &mut Vec<(type_def::Id, Box<[Ty]>)>) -> bool {
         match self.inference.resolve(ty) {
             // A `Mutex<T>` is `Sync` where `T` is `Send`, as a `Sender`
@@ -821,4 +902,22 @@ impl Parser<'_> {
             _ => false,
         }
     }
+}
+
+/// The atomic std suggests for a `Cell` of `ty`, as its `Sync` note does.
+fn atomic(ty: &Ty) -> Option<&'static str> {
+    Some(match ty {
+        Ty::Bool => "AtomicBool",
+        Ty::Int(Int::I8) => "AtomicI8",
+        Ty::Int(Int::I16) => "AtomicI16",
+        Ty::Int(Int::I32) => "AtomicI32",
+        Ty::Int(Int::I64) => "AtomicI64",
+        Ty::Int(Int::Isize) => "AtomicIsize",
+        Ty::Int(Int::U8) => "AtomicU8",
+        Ty::Int(Int::U16) => "AtomicU16",
+        Ty::Int(Int::U32) => "AtomicU32",
+        Ty::Int(Int::U64) => "AtomicU64",
+        Ty::Int(Int::Usize) => "AtomicUsize",
+        _ => return None,
+    })
 }

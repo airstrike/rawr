@@ -1059,6 +1059,21 @@ pub enum Error {
         /// The operator.
         at: Span,
     },
+    /// A static whose type isn't `Sync`, which rustc refuses (E0277): every
+    /// thread shares a static.
+    UnsharedStatic {
+        /// The type in it that isn't `Sync`, as rustc names it.
+        ty: ImmutableString,
+        /// The static's type, when it holds `ty` rather than being it.
+        within: Option<ImmutableString>,
+        /// std's note on the type that isn't `Sync`, when it has one.
+        note: Option<ImmutableString>,
+        /// The types that hold `ty`, innermost first, each with the name
+        /// the program declares it at (none for a tuple).
+        appears: Box<[(ImmutableString, Option<Span>)]>,
+        /// The static's type as written.
+        at: Span,
+    },
     /// A name used as another kind of item than the one it names, which
     /// rustc refuses (E0423): a macro called as a function, a struct used
     /// as a value.
@@ -1986,7 +2001,7 @@ impl Error {
                 Category::UnknownMacro
             }
             Self::WrongKind { .. } => Category::WrongKind,
-            Self::Unimplemented { .. } => Category::Unimplemented,
+            Self::Unimplemented { .. } | Self::UnsharedStatic { .. } => Category::Unimplemented,
             Self::MovedValue { .. } => Category::MovedValue,
             Self::BorrowConflict { .. } | Self::ImmutableBorrow { .. } | Self::Outlives(_) => {
                 Category::BorrowConflict
@@ -2103,6 +2118,7 @@ impl Error {
             Self::SelfOutsideImpl { .. } => "self",
             Self::UnsupportedNominalSyntax { construct, .. } => construct.as_str(),
             Self::Syntax { message, .. } | Self::Unimplemented { message, .. } => message.as_str(),
+            Self::UnsharedStatic { ty, .. } => ty.as_str(),
             Self::UnlabeledJumpInWhileCondition { keyword, .. } => keyword.as_str(),
             Self::AsyncMain { .. } => "main",
             Self::UnscopedWrite { owner, .. } => owner.as_str(),
@@ -2203,6 +2219,7 @@ impl Error {
             Self::ArgumentCount { call, .. } => *call,
             Self::Syntax { at, .. }
             | Self::Unimplemented { at, .. }
+            | Self::UnsharedStatic { at, .. }
             | Self::UnlabeledJumpInWhileCondition { at, .. }
             | Self::CannotCompare { at, .. }
             | Self::BinaryOperation { at, .. }
@@ -2283,6 +2300,7 @@ impl Error {
             | Self::MacroExpansionRequired { .. }
             | Self::WrongKind { .. }
             | Self::Unimplemented { .. }
+            | Self::UnsharedStatic { .. }
             | Self::InvalidConstruction { .. }
             | Self::TypeMismatch { .. }
             | Self::OpaqueMismatch { .. }
@@ -3388,6 +3406,11 @@ impl fmt::Display for Written<'_> {
                 "the call of `{path}!` at {reference} has not been expanded"
             ),
             Error::Unimplemented { message, at, .. } => write!(formatter, "{message} at {at} (E0277)"),
+            Error::UnsharedStatic { ty, at, .. } => write!(
+                formatter,
+                "{} at {at} (E0277)",
+                Unsatisfied(ty, "Sync")
+            ),
             Error::WrongKind {
                 expected,
                 found,

@@ -1296,6 +1296,7 @@ fn diagnostic_path(error: &crate::resolve::Error) -> Option<(String, ImportedNam
         | R::UnknownMacro { .. }
         | R::WrongKind { .. }
         | R::Unimplemented { .. }
+        | R::UnsharedStatic { .. }
         | R::IfWithoutElse { .. }
         | R::ReturnWithoutValue { .. }
         | R::MovedValue { .. }

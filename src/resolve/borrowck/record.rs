@@ -72,6 +72,11 @@ struct Temporary {
     ends: Option<Point>,
 }
 
+/// The temporaries of a scope taken out of the scopes being read, which
+/// end where [`Recorder::end_temporaries`] is told, on each path that
+/// leaves it (an `if let`'s consequent and alternative).
+pub(crate) struct Taken(Vec<Temporary>);
+
 /// How a temporary scope ends ([`Recorder::close_temporaries`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ScopeEnd {
@@ -1749,6 +1754,18 @@ impl Recorder {
         self.temporary_scopes.push(Vec::new());
     }
 
+    /// Where the temporaries of the scope opened last are made that a `let`
+    /// closing it extends to its block's end.
+    pub(crate) fn extended(&self) -> Vec<Span> {
+        self.temporary_scopes
+            .last()
+            .into_iter()
+            .flatten()
+            .filter(|temporary| temporary.extendable && !self.pinned.contains(&temporary.local))
+            .map(|temporary| temporary.span)
+            .collect()
+    }
+
     /// The temporary scope opened last ends here, as `end` says. A loan of
     /// one of its temporaries still live is rustc's E0716.
     pub(crate) fn close_temporaries(&mut self, end: ScopeEnd) {
@@ -1779,6 +1796,23 @@ impl Recorder {
                 }
                 _ => self.temporary_dead(temporary),
             }
+        }
+    }
+
+    /// The temporary scope opened last, taken out to end on each path that
+    /// leaves it.
+    pub(crate) fn take_temporaries(&mut self) -> Taken {
+        Taken(self.temporary_scopes.pop().unwrap_or_default())
+    }
+
+    /// The temporaries `taken` drop and end here, on one path that leaves
+    /// their scope.
+    pub(crate) fn end_temporaries(&mut self, taken: &Taken) {
+        for &temporary in taken.0.iter().rev() {
+            self.temporary_dead(Temporary {
+                ends: None,
+                ..temporary
+            });
         }
     }
 

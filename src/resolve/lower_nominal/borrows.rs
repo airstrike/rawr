@@ -1437,7 +1437,9 @@ impl Parser<'_> {
                 .iter()
                 .any(|closure| closure.key == **key && !closure.captures.is_empty());
         }
-        if self.flow().part_of_made(span) {
+        // No constant whose value needs a drop is promoted (`&D("a")` of a
+        // `D` with `impl Drop`).
+        if self.flow().part_of_made(span) || self.needs_drop(ty, span).unwrap_or(false) {
             return true;
         }
         matches!(

@@ -50,7 +50,7 @@ impl<'a> Parser<'a> {
                 // in each iteration (D558 tier 1).
                 self.open_frames();
                 self.enter_while(label.clone());
-                let parsed = self.parse_let_condition(&scrutinee);
+                let parsed = self.parse_let_condition(&scrutinee, drops::Subject::Scoped);
                 self.leave_while_condition();
                 let frames = self.close_frames();
                 let (subject, arm, binds, operand, condition) = parsed?;
@@ -78,6 +78,7 @@ impl<'a> Parser<'a> {
                     head.push(frame.outer);
                     head.push(frame.inner);
                 }
+                head.push_text(drops::declarations(&condition.temporaries));
                 head.push_text(format!("let {scrutinee} = "));
                 head.push(subject);
                 head.push_text(format!(
@@ -111,9 +112,11 @@ impl<'a> Parser<'a> {
                 self.open_frames();
                 self.enter_while(label.clone());
                 let condition = self.parse_head(Self::parse_expr);
+                // The condition's temporaries end before it leaves the loop
+                // or enters the body.
+                self.flow().close_temporaries(ScopeEnd::Statement);
                 let jumped = self.leave_while_condition();
                 let frames = self.close_frames();
-                self.flow().close_temporaries(ScopeEnd::Statement);
                 let temporaries = self.close_temporaries();
                 let mut condition = condition?;
                 if !temporaries.is_empty() {

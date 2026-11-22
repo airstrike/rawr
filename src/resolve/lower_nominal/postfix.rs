@@ -1346,9 +1346,9 @@ impl<'a> Parser<'a> {
                 );
                 // A member of what can't be moved out of or assigned to, as
                 // an `Arc`'s value, can't be either.
-                if let Some(unmovable) = self.unmovable.get(&value.span).cloned() {
-                    self.unmovable
-                        .insert(span(value.span.start(), end), unmovable);
+                if let Some(unmovable) = self.unmovable.get(&value.span) {
+                    let part = unmovable.member(&member);
+                    self.unmovable.insert(span(value.span.start(), end), part);
                 }
                 value = self.operator_expr(
                     source,
@@ -1825,8 +1825,9 @@ impl<'a> Parser<'a> {
             let expression_span = span(value.span.start(), member_span.end());
             // A field of what can't be moved out of, as an `Rc`'s value,
             // can't be either (rustc's E0507).
-            if let Some(unmovable) = self.unmovable.get(&value.span).cloned() {
-                self.unmovable.insert(expression_span, unmovable);
+            if let Some(unmovable) = self.unmovable.get(&value.span) {
+                let part = unmovable.member(&member);
+                self.unmovable.insert(expression_span, part);
             }
             self.part_of(
                 (value.span, &value.ty),
@@ -2618,6 +2619,7 @@ impl<'a> Parser<'a> {
                 Unplaced {
                     moved: (code, message),
                     assigned: None,
+                    of_static: None,
                 },
             );
         }
