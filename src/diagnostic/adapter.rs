@@ -824,6 +824,13 @@ fn resolution_report_with_sources(
             Some(format!("expected `{output}` because of this return type").into()),
         )?;
     }
+    // rustc explains where the temporary that keeps the borrow is made
+    // and dropped.
+    if let resolve::Error::TailTemporary(explanation) = error {
+        for (span, label) in explanation.labels() {
+            builder = builder.secondary(source.clone(), span, Some(label.into()))?;
+        }
+    }
     // rustc marks the lifetimes it names.
     if let resolve::Error::Outlives(reports) = error {
         for (span, label) in reports.first().lifetimes() {
@@ -1599,6 +1606,14 @@ fn suggestion(error: &resolve::Error, source: &Source) -> Result<Option<Suggesti
     let before = |span: Span| Span::new(span.start(), span.start());
     let after = |span: Span| Span::new(span.end(), span.end());
     match error {
+        resolve::Error::TailTemporary(explanation) => {
+            let (message, places) = explanation.help();
+            let mut edits = Vec::with_capacity(places.len());
+            for (span, text) in places {
+                edits.push(Edit::new(source.clone(), span, &text)?);
+            }
+            Ok(Suggestion::of(&message, Style::Verbose, edits))
+        }
         resolve::Error::Outlives(reports) => match reports.first().suggestion() {
             Some(suggested) => {
                 let lifetime = suggested.lifetime;
@@ -1974,6 +1989,7 @@ fn primary_label(
         }
         resolve::Error::ImmutableBorrow { .. } => Some("cannot borrow as mutable".into()),
         resolve::Error::Outlives(reports) => Some(reports.first().label().into()),
+        resolve::Error::TailTemporary(_) => Some(resolve::tail::Explanation::label().into()),
         resolve::Error::NonExhaustive { witnesses, .. } => resolve::NonExhaustive(witnesses)
             .scrutinee_label()
             .map(Into::into),
@@ -2266,6 +2282,7 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Category::BorrowConflict => match error {
             resolve::Error::BorrowConflict { code, .. } => code::borrow(code),
             resolve::Error::Outlives(reports) => code::borrow(reports.first().code()),
+            resolve::Error::TailTemporary(_) => code::borrow("E0597"),
             resolve::Error::ImmutableBorrow { .. } => code::BORROW_NOT_MUTABLE,
             _ => unreachable!("a borrow conflict's category"),
         },
@@ -2365,6 +2382,7 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
                 None => builder,
             }
         }
+        resolve::Error::TailTemporary(_) => builder.note(resolve::tail::Explanation::note()),
         resolve::Error::Outlives(reports) => {
             let builder = match reports.first().help() {
                 Some(help) => builder.help(help),
@@ -2814,6 +2832,7 @@ fn resolution_message(error: &resolve::Error) -> String {
         resolve::Error::BorrowConflict { message, .. }
         | resolve::Error::ImmutableBorrow { message, .. } => message.to_string(),
         resolve::Error::Outlives(reports) => reports.first().message(),
+        resolve::Error::TailTemporary(explanation) => explanation.message().to_owned(),
         resolve::Error::InvalidConstruction { owner, reason, .. } => {
             format!("invalid construction of `{owner}`: {reason}")
         }

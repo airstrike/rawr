@@ -53,6 +53,9 @@ pub(super) struct Tables {
     /// The features Cargo enables for the package: `cfg(feature = "..")`
     /// holds for each.
     pub(super) features: crate::project::cargo::features::Enabled,
+    /// The edition each source's package is written in, by the source's
+    /// index: empty for a source compiled alone.
+    editions: Box<[crate::edition::Edition]>,
     /// The entry package's workspace, as Cargo described it when the
     /// program loaded: what `env!("CARGO_CRATE_NAME")` and
     /// `module_path!()` name the entry target by.
@@ -1001,6 +1004,7 @@ impl Models {
             host,
             access: engine.access().clone(),
             features: program.features().clone(),
+            editions: program.editions().into(),
             workspace: program.workspace().cloned(),
             imports,
             lexical: program.lexical.clone(),
@@ -1820,6 +1824,15 @@ impl Models {
                 .macros
                 .sites(self.context, at)
                 .any(|at| crate::resolve::block::contains(block, at))
+    }
+
+    /// The edition the source being lowered is written in.
+    pub(super) fn edition(&self) -> crate::edition::Edition {
+        self.tables
+            .editions
+            .get(self.context.index())
+            .copied()
+            .unwrap_or_default()
     }
 
     pub(super) fn for_source(&self, source: crate::program::source::Id) -> Self {

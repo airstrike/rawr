@@ -418,6 +418,14 @@ impl Package {
             .map(|cargo| (cargo.path.as_path(), cargo.text.as_str()))
     }
 
+    /// The edition the package's source is written in: its Cargo
+    /// manifest's, else rawr's own for a package no manifest declares.
+    pub(crate) fn edition(&self) -> crate::edition::Edition {
+        self.cargo.as_ref().map_or_else(Default::default, |cargo| {
+            crate::edition::Edition::from_cargo(cargo.edition.as_deref())
+        })
+    }
+
     #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
     pub(crate) const fn cargo(&self) -> Option<&manifest::cargo::Cargo> {
         self.cargo.as_ref()

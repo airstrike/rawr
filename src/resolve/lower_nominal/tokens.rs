@@ -293,6 +293,12 @@ impl<'a> Parser<'a> {
             .clone()
     }
 
+    /// Where the last token read is, as a point: where a statement that
+    /// ends with it drops its temporaries.
+    pub(super) fn last_read(&self) -> Span {
+        point_span(self.models.at)
+    }
+
     pub(super) fn position(&mut self) -> Position {
         if let Some(position) = self.split_angle {
             return position;

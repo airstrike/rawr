@@ -399,7 +399,8 @@ impl<'a> Parser<'a> {
                     self.open_temporaries();
                     self.flow().open_temporaries();
                     let guard = self.parse_expr();
-                    self.flow().close_temporaries(ScopeEnd::Statement);
+                    let end = ScopeEnd::Statement(self.last_read());
+                    self.flow().close_temporaries(end);
                     let temporaries = self.close_temporaries();
                     self.normalize_private_calls = normalize_private_calls;
                     let mut guard = guard?;
@@ -504,7 +505,8 @@ impl<'a> Parser<'a> {
                     self.open_temporaries();
                     self.flow().open_temporaries();
                     let guard = self.parse_expr();
-                    self.flow().close_temporaries(ScopeEnd::Statement);
+                    let end = ScopeEnd::Statement(self.last_read());
+                    self.flow().close_temporaries(end);
                     let temporaries = self.close_temporaries();
                     self.normalize_private_calls = normalize_private_calls;
                     let mut guard = guard?;
@@ -2079,7 +2081,8 @@ impl<'a> Parser<'a> {
             self.open_temporaries();
             self.flow().open_temporaries();
             let condition = self.parse_head(Self::parse_expr);
-            self.flow().close_temporaries(ScopeEnd::Statement);
+            let end = ScopeEnd::Statement(self.last_read());
+            self.flow().close_temporaries(end);
             let temporaries = self.close_temporaries();
             let mut condition = condition?;
             if !temporaries.is_empty() {

@@ -23,6 +23,7 @@ pub(crate) mod record;
 pub(crate) mod similar;
 pub(crate) mod std_path;
 pub(crate) mod std_trait;
+pub mod tail;
 pub(crate) mod type_ref;
 
 use crate::{host, method, parse, program, type_def, ImmutableString, Span};
@@ -139,6 +140,9 @@ pub struct Program {
     /// The features Cargo enables for the package: its bodies'
     /// `cfg(feature = "..")`s hold. None for a source compiled alone.
     features: crate::project::cargo::features::Enabled,
+    /// The edition each source's package is written in, by the source's
+    /// index. Empty for a source compiled alone, which is rawr's own.
+    editions: Box<[crate::edition::Edition]>,
     /// The entry package's workspace, as Cargo described it when the
     /// graph loaded. None for a source compiled alone.
     workspace: Option<std::sync::Arc<crate::project::cargo::Workspace>>,
@@ -434,6 +438,12 @@ impl Program {
     /// The features Cargo enables for the package.
     pub(crate) const fn features(&self) -> &crate::project::cargo::features::Enabled {
         &self.features
+    }
+
+    /// The edition each source's package is written in, by the source's
+    /// index.
+    pub(crate) fn editions(&self) -> &[crate::edition::Edition] {
+        &self.editions
     }
 
     /// The entry package's workspace, as Cargo described it.
@@ -808,6 +818,7 @@ fn resolve_with_evidence_and_namespace(
         own: Box::new([]),
         crates: None,
         features: crate::project::cargo::features::Enabled::default(),
+        editions: Box::default(),
         workspace: None,
         aliases,
         scripts: vec![Script {

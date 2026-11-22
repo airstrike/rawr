@@ -750,7 +750,8 @@ impl<'a> Parser<'a> {
             self.open_frames();
             let body = self.parse_expr();
             let frames = self.close_frames();
-            self.flow().close_temporaries(ScopeEnd::Statement);
+            let end = ScopeEnd::Statement(self.last_read());
+            self.flow().close_temporaries(end);
             let temporaries = self.close_temporaries();
             body.and_then(|mut value| {
                 if !temporaries.is_empty() {

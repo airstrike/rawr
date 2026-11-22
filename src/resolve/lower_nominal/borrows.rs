@@ -1514,7 +1514,7 @@ impl Parser<'_> {
         };
         let reference = self
             .flow()
-            .borrow_temporary(value.span, true, &held, false, false);
+            .borrow_temporary(value.span, true, &held, false, None);
         self.flow().set_origins(whole, reference);
     }
 
@@ -1538,7 +1538,7 @@ impl Parser<'_> {
         let place = self.flow().in_place(value.span);
         match held {
             Some(held) if !place && self.made_here(value.span, &ty) => {
-                let drops = self.temporary_drop_use(&ty, value.span);
+                let drops = self.temporary_destructor(&ty, value.span);
                 let reference = self
                     .flow()
                     .borrow_temporary(value.span, false, &held, true, drops);
@@ -1553,6 +1553,30 @@ impl Parser<'_> {
             _ if holds => {}
             _ => self.flow().set_origins(whole, Vec::new()),
         }
+    }
+
+    /// What the drop of the temporary of type `ty` spanning `span` runs,
+    /// as rustc names it, when it uses what the temporary holds: its type's
+    /// own `Drop` code, else its drop glue.
+    fn temporary_destructor(
+        &self,
+        ty: &Ty,
+        span: Span,
+    ) -> Option<crate::resolve::tail::Destructor> {
+        use crate::resolve::tail::Destructor;
+        if !self.temporary_drop_use(ty, span) {
+            return None;
+        }
+        let ty = self.inference.resolve(ty);
+        let name = ty.name(&self.models);
+        Some(match ty {
+            // rustc names a type with a `Drop` of its own by its path.
+            Ty::Script(id, _) if self.models.has_drop(id) => {
+                let path = name.split('<').next().unwrap_or(&name);
+                Destructor::Drop(path.into())
+            }
+            _ => Destructor::Glue(name),
+        })
     }
 
     /// Whether the drop of a temporary of type `ty` spanning `span` uses
@@ -2003,7 +2027,7 @@ impl Parser<'_> {
                 && self.made_here(receiver.span, &receiver.ty)
             {
                 let held = region::sub(&value, path(&[Step::Arg(0)]));
-                let drops = self.temporary_drop_use(&receiver.ty, receiver.span);
+                let drops = self.temporary_destructor(&receiver.ty, receiver.span);
                 return Some(self.flow().borrow_temporary(
                     receiver.span,
                     mutable,
@@ -2387,6 +2411,12 @@ impl Parser<'_> {
                     report.returned_at(|returned| self.expression_span(returned)),
                 )))
             }
+            Some(borrowck::Conflict {
+                tail: Some(explanation),
+                ..
+            }) => Err(Error::TailTemporary(Box::new(
+                explanation.written(|span| self.expression_span(span)),
+            ))),
             Some(conflict) => Err(Error::BorrowConflict {
                 code: conflict.code,
                 message: conflict.message.into(),
