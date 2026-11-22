@@ -30,6 +30,21 @@ pub(crate) struct Argument {
     pub(crate) returns: bool,
 }
 
+/// How an assignment changes its place ([`Recorder::assigned`]).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Assignment {
+    /// `place = value`: the place is only written.
+    Plain,
+    /// `place += value` of a builtin operator: the place is read and
+    /// written after the value.
+    Compound,
+    /// `place += value` through the place type's `AddAssign` impl (and
+    /// kin), which is `AddAssign::add_assign(&mut place, value)`: a
+    /// two-phase borrow reserved where the place is read and activated
+    /// after the value.
+    Overloaded,
+}
+
 /// What a value expression began with, so the `let` that takes it can tell
 /// what it made: [`Recorder::value_start`].
 #[derive(Clone, Copy)]
@@ -1158,6 +1173,7 @@ impl Recorder {
             loan: None,
         });
         self.activations.insert(point, activation);
+        self.body.activations.insert(activation);
         if place.projection.first() == Some(&Projection::Deref) {
             self.push(Fact::Use(place.local));
         }
@@ -1165,13 +1181,18 @@ impl Recorder {
         self.flush();
     }
 
-    /// The use starting at `start` is assigned (`v = x`, `v.a += 1`): it
-    /// is read and written here, after the value, or only written when the
-    /// assignment is not compound.
-    pub(crate) fn assigned(&mut self, start: Position, span: Span, compound: bool) {
+    /// The use starting at `start` is assigned (`v = x`, `v.a += 1`), as
+    /// `assignment` says: read and written here, after the value, only
+    /// written, or borrowed `&mut` for the operator's call.
+    pub(crate) fn assigned(&mut self, start: Position, span: Span, assignment: Assignment) {
         let Some((point, place)) = self.mention_place(start) else {
             return;
         };
+        if assignment == Assignment::Overloaded && !self.overloaded.contains(&point) {
+            self.mutable_call(start, span);
+            return;
+        }
+        let compound = assignment != Assignment::Plain;
         self.set_access(point, Access::None);
         if place.projection.first() == Some(&Projection::Deref) {
             self.push(Fact::Use(place.local));
@@ -1186,6 +1207,13 @@ impl Recorder {
         if self.overloaded.contains(&point) {
             if let Some(loan) = self.index_loans.get(&point).copied() {
                 self.body.loans[loan.0 as usize].mutable = true;
+                // Through `AddAssign`, `IndexMut::index_mut` is called
+                // before the value is made: its borrow is the operator's
+                // place, which the call takes here.
+                if assignment == Assignment::Overloaded {
+                    let temporary = self.body.loans[loan.0 as usize].temporary;
+                    self.push(Fact::Use(temporary));
+                }
             }
             self.push(Fact::Access {
                 place,

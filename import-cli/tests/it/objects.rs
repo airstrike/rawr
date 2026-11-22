@@ -139,3 +139,28 @@ fn a_borrowed_local_for_a_static_object_field_does_not_live_long_enough() {
         "{stderr}"
     );
 }
+
+/// So is a borrow of a local crate value, as `Held(&square)` with `square:
+/// shapes::Square`: rawr's borrow facts hold the loan of a crate value as
+/// they hold one of a program value (#1619).
+#[test]
+fn a_borrowed_local_crate_value_for_a_static_object_field_does_not_live_long_enough() {
+    let root = crate::support::fresh("trait-objects-crate-field");
+    copy(&Path::new(FIXTURES).join("trait-objects"), &root);
+    fs::write(
+        root.join("src/main.rs"),
+        "// rawr\n\nfn main() {\n    let square = shapes::Square { side: 3 };\n    \
+         let held = shapes::Held(&square);\n    println!(\"held {}\", held.area());\n}\n",
+    )
+    .unwrap();
+    let run = rawr_import("run", &root);
+    let stderr = text(&run.stderr);
+    assert!(!run.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("error[E0597]: `square` does not live long enough")
+            && stderr.contains("main.rs:5:29")
+            && !stderr.contains("building runner")
+            && !stderr.contains("Runtime error"),
+        "{stderr}"
+    );
+}

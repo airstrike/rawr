@@ -1109,8 +1109,11 @@ impl Parser<'_> {
         // does a method's whose frame holds what it takes, as jiff's
         // `strftime(&self, format: &'f F)` and quick-xml's
         // `read_event_into(&mut self, buf)` give: it borrows its receiver
-        // for the call alone. One whose frame holds its receiver borrowed
-        // is left to rustc.
+        // for the call alone. One whose frame holds its receiver borrowed,
+        // as quick-xml's `BytesStart::name(&self) -> QName<'_>` does, keeps
+        // that borrow, and the inputs it takes at the receiver's lifetime,
+        // as `view<'a>(&'a self, theme: &'a Theme)` takes its theme, for as
+        // long as the value lives.
         match item.frame() {
             Some(crate::host::item::Frame::Inputs) => {
                 return Summary::taps(
@@ -1121,7 +1124,24 @@ impl Parser<'_> {
                     Vec::new(),
                 );
             }
-            Some(crate::host::item::Frame::Receiver) => return Summary::unknown(),
+            Some(crate::host::item::Frame::Receiver) => {
+                return match mode {
+                    Some(mode @ (signature::Receiver::Shared | signature::Receiver::Mutable)) => {
+                        Summary::taps(
+                            Some(mode),
+                            std::iter::once(all(Input::Receiver))
+                                .chain(
+                                    (0..arguments)
+                                        .filter(|index| item.lends(*index))
+                                        .map(|index| all(Input::Argument(index))),
+                                )
+                                .collect(),
+                            Vec::new(),
+                        )
+                    }
+                    _ => Summary::unknown(),
+                };
+            }
             None => {}
         }
         // `draw<'a>(&'a self, pass: &mut RenderPass<'a>)` keeps its
@@ -2114,6 +2134,29 @@ impl Parser<'_> {
         }
     }
 
+    /// `value`, a shared reference the call spanning `call` makes of a
+    /// place and takes as its first input, as a slice member takes
+    /// `&items[..]` (#2097): the place's loan, made where it is read and
+    /// kept over the arguments, is that input, which the call's value may
+    /// keep. A value that is no place is the input as it is.
+    #[cfg(feature = "rust-import")]
+    pub(super) fn lend_first_input(&self, value: &ParsedExpr, call: Span) {
+        if is_place(value) {
+            let below = match self.inference.resolve(&value.ty) {
+                Ty::Reference { target, .. } => self.may_hold_borrow(&target),
+                ty => self.may_hold_borrow(&ty),
+            };
+            let loan = self.flow().autoref(value.span.start(), call, false, below);
+            match loan {
+                Some(loan) => self.flow().set_origins(value.span, vec![(Path::OWN, loan)]),
+                None => self.flow().shared(value.span.start()),
+            }
+        }
+        let mut arguments = self.flow().arguments(call.end()).unwrap_or_default();
+        arguments.insert(0, self.argument_fact(value));
+        self.flow().call_operands(&arguments, call.end());
+    }
+
     /// A method call on the place `value`: a shared borrow of it, unless
     /// the method's mutability check makes it a `&mut` one.
     pub(super) fn call_on_place(&self, value: &ParsedExpr) {
@@ -2224,8 +2267,9 @@ impl Parser<'_> {
         lvalue: &Lvalue,
         replacement: &ParsedExpr,
         start: ValueStart,
-        compound: bool,
+        assignment: record::Assignment,
     ) {
+        let compound = assignment != record::Assignment::Plain;
         let holds = self.may_hold_borrow(&replacement.ty);
         // A local that holds borrows given a whole new value (`r = &w`,
         // `view = View { value: &b }`) holds only the new value's.
@@ -2260,7 +2304,7 @@ impl Parser<'_> {
                 if matches!(nested.steps.first(), Some(PlaceStep::Cell { release: true, .. }))
         );
         if !through_guard {
-            self.flow().assigned(target.start(), whole, compound);
+            self.flow().assigned(target.start(), whole, assignment);
         }
         // `pair.right = &b`: the local takes the borrows besides its own.
         let origins = self

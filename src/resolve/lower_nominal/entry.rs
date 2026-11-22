@@ -1299,12 +1299,22 @@ pub(super) fn lower_with_context(
             function.name = name.clone();
         }
     });
-    // Each async body becomes a state machine, once its names are final.
+    // Each async body becomes a state machine, once its names are final,
+    // with its frames as its closure's are kept.
+    let copied = closures
+        .iter()
+        .filter(|closure| matches!(closure.frames, crate::eval::machine::Frames::Copied))
+        .map(|closure| closure.dispatch.clone())
+        .collect::<BTreeSet<_>>();
     let mut unsupported = None;
     ast.for_each_fn_def_mut(|function| {
         if unsupported.is_none() {
-            unsupported =
-                crate::eval::machine::lower(function, crate::eval::machine::Frames::Resumed).err();
+            let frames = if copied.contains(&function.name) {
+                crate::eval::machine::Frames::Copied
+            } else {
+                crate::eval::machine::Frames::Resumed
+            };
+            unsupported = crate::eval::machine::lower(function, frames).err();
         }
     });
     if let Some(crate::eval::machine::Unsupported(what, position)) = unsupported {

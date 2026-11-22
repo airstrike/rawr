@@ -1996,6 +1996,7 @@ impl<'a> Parser<'a> {
             };
             let owner = definition.id();
             let expression_span = span(value.span.start(), member_span.end());
+            self.note_fn_value(&field.ty, expression_span);
             // A field of what can't be moved out of, as an `Rc`'s value,
             // can't be either (rustc's E0507).
             if let Some(unmovable) = self.unmovable.get(&value.span) {
@@ -2203,6 +2204,7 @@ impl<'a> Parser<'a> {
         if let Some(definition) = found {
             let summary = self.method_summary(&definition);
             self.note_call(end, summary);
+            self.note_fn_value(definition.output(), span(value.span.start(), end));
             let Some(mode) = definition.receiver() else {
                 return Err(Error::InvalidMethodCall {
                     owner: owner_name.clone(),

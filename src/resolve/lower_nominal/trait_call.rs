@@ -1766,7 +1766,6 @@ impl<'a> Parser<'a> {
         let owner = self.models.item_owner(path).cloned();
         let start = receiver.span.start();
         let (arguments, end) = self.parse_call_arguments("trait method arguments")?;
-        self.call_on_place(&receiver);
         receiver.ty = Ty::Reference {
             mutable: false,
             target: Box::new(Ty::Array {
@@ -1774,6 +1773,10 @@ impl<'a> Parser<'a> {
                 kind: sequence::Kind::Slice,
             }),
         };
+        // The slice is the function's first input, `<[_] as Trait>::
+        // member(&items[..])`: borrowed where it is read, for as long as
+        // the value keeps it, as rayon's `Iter<'data, T>` does (#2097).
+        self.lend_first_input(&receiver, span(start, end));
         let mut inputs = Vec::with_capacity(arguments.len() + 1);
         inputs.push(receiver);
         for mut argument in arguments {
