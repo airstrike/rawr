@@ -8,6 +8,13 @@
   },
   "releases": [
     {
+      "version": "0.5.9",
+      "date": "2026-11-21",
+      "entries": [
+        {"text":"A function written `-> impl Trait` returns its own opaque type, known by every written bound as rustc knows it: `impl A + B`, `impl Clone`, `impl Copy`, `impl PartialEq`, `impl Default`, `impl Into<String>`, and traits with `-> Self`, generic, static or by-value methods all run. Two different hidden types in one body, an inherent call on the hidden type, naming the hidden type, and mixing two functions' opaque types are rustc's E0308 and E0599.","issues":[2490],"refs":[2480]}
+      ]
+    },
+    {
       "version": "0.5.8",
       "date": "2026-11-21",
       "entries": [

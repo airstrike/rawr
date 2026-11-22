@@ -6,6 +6,10 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors.
 
+## 0.5.9 (2026-11-21)
+
+- A function written `-> impl Trait` returns its own opaque type, known by every written bound as rustc knows it: `impl A + B`, `impl Clone`, `impl Copy`, `impl PartialEq`, `impl Default`, `impl Into<String>`, and traits with `-> Self`, generic, static or by-value methods all run. Two different hidden types in one body, an inherent call on the hidden type, naming the hidden type, and mixing two functions' opaque types are rustc's E0308 and E0599. (#2490; part of #2480)
+
 ## 0.5.8 (2026-11-21)
 
 - A function body that breaks its own signature's lifetimes is reported with rustc's labels: where each lifetime is declared (or `'1` for an elided one), "returning this value requires that `'a` must outlive `'static`" or "function was supposed to return data with lifetime `'b`…", the bound to add, the variance notes for a `&mut`, a cell or an invariant struct, and E0621's explicit-lifetime suggestion. (#2486)

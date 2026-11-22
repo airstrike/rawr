@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-21",
-  "version": "0.5.8",
+  "version": "0.5.9",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,13 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors."],"entries":[]},
     "releases": [
+      {
+        "version": "0.5.9",
+        "date": "2026-11-21",
+        "entries": [
+          {"text":"A function written `-> impl Trait` returns its own opaque type, known by every written bound as rustc knows it: `impl A + B`, `impl Clone`, `impl Copy`, `impl PartialEq`, `impl Default`, `impl Into<String>`, and traits with `-> Self`, generic, static or by-value methods all run. Two different hidden types in one body, an inherent call on the hidden type, naming the hidden type, and mixing two functions' opaque types are rustc's E0308 and E0599.","issues":[2490],"refs":[2480]}
+        ]
+      },
       {
         "version": "0.5.8",
         "date": "2026-11-21",
@@ -6134,7 +6141,10 @@
     {"issue":2486,"title":"A function body that breaks its own signature's lifetimes is reported with rustc's labels: where…","state":"closed","category":"Divergences from rustc","release":"0.5.8"},
     {"issue":2487,"title":"Report every region error rustc reports for one returned value","state":"open","category":"Divergences from rustc"},
     {"issue":2488,"title":"Mark the branch a returned if or match takes its borrow from","state":"open","category":"Divergences from rustc"},
-    {"issue":2489,"title":"Suggest a named lifetime for two elided ones, as rustc does","state":"open","category":"Divergences from rustc"}
+    {"issue":2489,"title":"Suggest a named lifetime for two elided ones, as rustc does","state":"open","category":"Divergences from rustc"},
+    {"issue":2490,"title":"A function written `-> impl Trait` returns its own opaque type, known by every written bound as…","state":"closed","category":"Divergences from rustc","release":"0.5.9"},
+    {"issue":2491,"title":"A static trait function through a generic parameter filled by an opaque output runs","state":"open","category":"Divergences from rustc"},
+    {"issue":2492,"title":"An opaque output's identity includes its function's generic arguments, and its bounds may name them","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -8762,7 +8772,10 @@
             {"number":2482,"title":"Iterator::by_ref on a program iterator isn't run","state":"open"},
             {"number":2483,"title":"A generic bounded by io::Write, io::Read or fmt::Write fails at runtime for std's own values","state":"open"},
             {"number":2484,"title":"std::fmt::Arguments as a written type is unsupported, so write_fmt can't be called or overridden directly","state":"open"},
-            {"number":2485,"title":"A `Box<dyn Trait>` isn't checked for `Send` where a thread needs it","state":"open"}
+            {"number":2485,"title":"A `Box<dyn Trait>` isn't checked for `Send` where a thread needs it","state":"open"},
+            {"number":2490,"title":"A function written `-> impl Trait` returns its own opaque type, known by every written bound as…","state":"closed"},
+            {"number":2491,"title":"A static trait function through a generic parameter filled by an opaque output runs","state":"open"},
+            {"number":2492,"title":"An opaque output's identity includes its function's generic arguments, and its bounds may name them","state":"open"}
           ]
         },
         {
