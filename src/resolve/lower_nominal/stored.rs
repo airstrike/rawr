@@ -12,6 +12,14 @@
 //! holds it in a hidden local of the statement, and reaches the place
 //! through that local, as a `&mut` local given new borrows reaches its
 //! place (`__rawr_through_h`).
+//!
+//! A view of a collection's elements kept past its statement is such a
+//! reference too (`view_of`): `let s = &mut v[1..]`, `split_at_mut`'s
+//! halves and `chunks_mut`'s chunks end with a range of elements, and a
+//! kept `iter_mut()` is an iterator over each element's reference
+//! (`eval::view`). An iterator's `&mut` items are bound as such
+//! references wherever they go: a `for`'s binding or pattern, a closure's
+//! parameter, a `let` pattern, `unwrap()`.
 
 use super::*;
 use crate::engine::{KEYWORD_REF, KEYWORD_THROUGH};
@@ -116,6 +124,12 @@ impl Parser<'_> {
                 value.span,
             ));
         }
+        // `W { s: &mut v[1..] }`: the view of the range (`view_of`).
+        if matches!(value.lvalue, Some(Lvalue::Slice(_))) {
+            value.source = self.view_of(value)?;
+            value.lvalue = None;
+            return Ok(());
+        }
         let Some((path, _)) = self.reborrow_source(value) else {
             return Err(refused(
                 "a `&mut` of this place kept in a value",
@@ -126,6 +140,51 @@ impl Parser<'_> {
         value.source.cover(value.span);
         value.lvalue = None;
         Ok(())
+    }
+
+    /// The reference to the place `value` names, which a view of its
+    /// elements kept past its statement starts at (`let s = &mut v[1..]`,
+    /// `split_at_mut`'s halves, `chunks_mut`'s chunks, a kept `iter_mut()`):
+    /// `__rawr_ref` of its path, a range of elements last (`view.rs`). A
+    /// `&mut` parameter's copy is such a place too: rustc keeps a view of
+    /// it from outliving the call, which then stores the copy back.
+    pub(super) fn view_of(&mut self, value: &ParsedExpr) -> Result<origin::Fragment, Error> {
+        let refused = || Error::UnsupportedNominalSyntax {
+            construct: "a view of the elements of this place kept past its statement: not \
+                        supported in Rawr yet"
+                .into(),
+            source: value.span,
+        };
+        let Some(lvalue) = value.lvalue.as_ref() else {
+            return Err(refused());
+        };
+        if self.in_async_body() || !value.prelude.is_empty() {
+            return Err(refused());
+        }
+        self.require_mutable_binding(lvalue.binding(), value.span)?;
+        let lvalue = lvalue.clone();
+        let located = self.place_located(&lvalue).ok_or_else(refused)?;
+        let mut reference = origin::Fragment::call(KEYWORD_REF, [located]);
+        // A range out of bounds panics at its `[`, as rustc's does.
+        if let Lvalue::Slice(slice) = &lvalue {
+            reference.cover(point_span(slice.open));
+        }
+        Ok(reference)
+    }
+
+    /// `code` (`eval::view`'s) of the view of `value`'s elements
+    /// (`view_of`), given `argument`.
+    pub(super) fn view_call(
+        &mut self,
+        value: &ParsedExpr,
+        code: crate::INT,
+        argument: origin::Fragment,
+    ) -> Result<origin::Fragment, Error> {
+        let reference = self.view_of(value)?;
+        Ok(self.prelude_op(
+            PreludeOp::View,
+            [reference, code.to_string().into(), argument],
+        ))
     }
 
     /// `value`, an `Option<&mut T>` stored in a value: `Some` of the
@@ -373,14 +432,41 @@ impl Parser<'_> {
 
     /// Whether `value` is a temporary whose type has a `&mut` below it, as
     /// a call's `Vec<&mut T>`: each `&mut` it holds is a stored reference,
-    /// made where it entered the value.
+    /// made where it entered the value. One that lends a place (`o.as_mut()`,
+    /// `lend_place`) holds that place instead.
     pub(super) fn stored_temporary(&self, value: &ParsedExpr) -> bool {
         let ty = self.inference.resolve(&value.ty);
         value.lvalue.is_none()
+            && !self.lent_places.contains_key(&value.span)
             && !matches!(ty, Ty::Reference { .. })
             && super::ty::contains(&ty, &|part| {
                 matches!(part, Ty::Reference { mutable: true, .. })
             })
+    }
+
+    /// Whether `ty` has a `&mut` in it: an iterator's item of that type, a
+    /// kept `iter_mut()`'s or a `Vec<&mut T>`'s, holds stored `&mut`s.
+    pub(super) fn holds_mutable_reference(&self, ty: &Ty) -> bool {
+        super::ty::contains(&self.inference.resolve(ty), &|part| {
+            matches!(part, Ty::Reference { mutable: true, .. })
+        })
+    }
+
+    /// The bindings `pattern` just made of a stored `&mut` item, an
+    /// iterator's (`for (i, x) in it.enumerate()`, a closure's `|(x, y)|`),
+    /// as `bind_stored` makes them.
+    pub(super) fn bind_stored_pattern(&mut self, pattern: &pattern::Syntax) {
+        let bound: Vec<_> = self
+            .pattern_bindings(pattern)
+            .into_iter()
+            .map(|(name, span, ty)| PatternBinding {
+                name,
+                span,
+                ty,
+                mutable: false,
+            })
+            .collect();
+        self.bind_stored(true, &bound);
     }
 
     /// The bindings of a pattern matched on a value that holds stored

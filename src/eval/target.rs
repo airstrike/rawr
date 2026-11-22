@@ -107,6 +107,10 @@ pub enum Target<'a> {
         /// The parts below the shared value, each by its index.
         steps: crate::StaticVec<usize>,
     },
+    /// The target is a range of an array's elements a stored `&mut [T]`
+    /// reaches below its shared handle (D1113): the elements, moved out
+    /// while the target lives and put back when it drops.
+    Window(Box<Window>),
     /// The target is a temporary [`Dynamic`] value (i.e. its mutation can cause no side effects).
     TempValue(Dynamic),
     /// The target is a bit inside an [`INT`][crate::INT].
@@ -182,7 +186,10 @@ impl<'a> Target<'a> {
             | Self::BlobByte { source, .. }
             | Self::StringChar { source, .. }
             | Self::StringSlice { source, .. } => Some(std::ptr::from_ref::<Dynamic>(source)),
-            Self::SharedValue { .. } | Self::SharedPart { .. } | Self::TempValue(..) => None,
+            Self::SharedValue { .. }
+            | Self::SharedPart { .. }
+            | Self::Window(..)
+            | Self::TempValue(..) => None,
         }
     }
     /// Is the [`Target`] a reference pointing to other data?
@@ -192,7 +199,7 @@ impl<'a> Target<'a> {
     pub const fn is_ref(&self) -> bool {
         match self {
             Self::RefMut(..) => true,
-            Self::SharedValue { .. } | Self::SharedPart { .. } => true,
+            Self::SharedValue { .. } | Self::SharedPart { .. } | Self::Window(..) => true,
             Self::TempValue(..) => false,
             Self::Bit { .. }
             | Self::BitField { .. }
@@ -207,7 +214,7 @@ impl<'a> Target<'a> {
     pub const fn is_temp_value(&self) -> bool {
         match self {
             Self::RefMut(..) => false,
-            Self::SharedValue { .. } | Self::SharedPart { .. } => false,
+            Self::SharedValue { .. } | Self::SharedPart { .. } | Self::Window(..) => false,
             Self::TempValue(..) => true,
             Self::Bit { .. }
             | Self::BitField { .. }
@@ -224,7 +231,7 @@ impl<'a> Target<'a> {
             Self::RefMut(r) => r.is_shared(),
             Self::SharedValue { .. } => true,
             // The part is reached below the shared value; it is not shared.
-            Self::SharedPart { .. } => false,
+            Self::SharedPart { .. } | Self::Window(..) => false,
             Self::TempValue(value) => value.is_shared(),
             Self::Bit { .. }
             | Self::BitField { .. }
@@ -239,8 +246,9 @@ impl<'a> Target<'a> {
         match self {
             Self::RefMut(r) => r.clone(), // Referenced value is cloned
             Self::SharedValue { shared_value, .. } => shared_value, // Original shared value is simply taken
-            part @ Self::SharedPart { .. } => part.as_ref().clone(), // Referenced part is cloned
-            Self::TempValue(value) => value,                        // Owned value is simply taken
+            // A referenced part is cloned.
+            part @ (Self::SharedPart { .. } | Self::Window(..)) => part.as_ref().clone(),
+            Self::TempValue(value) => value, // Owned value is simply taken
             Self::Bit { value, .. }
             | Self::BitField { value, .. }
             | Self::BlobByte { value, .. }
@@ -264,7 +272,7 @@ impl<'a> Target<'a> {
         match self {
             Self::RefMut(r) => r,
             Self::SharedValue { guard, .. } => guard,
-            Self::SharedPart { .. } => self.as_ref(),
+            Self::SharedPart { .. } | Self::Window(..) => self.as_ref(),
             Self::TempValue(value) => value,
             Self::Bit { source, .. }
             | Self::BitField { source, .. }
@@ -279,7 +287,7 @@ impl<'a> Target<'a> {
     pub fn propagate_changed_value(&mut self, _pos: Position) -> RawrResultOf<()> {
         match self {
             Self::RefMut(..) | Self::TempValue(..) => (),
-            Self::SharedValue { .. } | Self::SharedPart { .. } => (),
+            Self::SharedValue { .. } | Self::SharedPart { .. } | Self::Window(..) => (),
             Self::Bit { source, value, bit } => {
                 // Replace the bit at the specified index position
                 let new_bit = value.as_bool().map_err(|err| {
@@ -393,6 +401,79 @@ impl<'a> Target<'a> {
     }
 }
 
+/// The elements `low..` of the array a stored `&mut [T]` reaches (D1113),
+/// at `steps` below its shared handle `handle`. They are moved out of the
+/// array under the handle's lock, which is then released, so another view
+/// of the same array (`split_at_mut`'s other half) is reached while this
+/// one is used. They are moved back when the window drops. Nothing is
+/// copied.
+#[derive(Debug)]
+pub struct Window {
+    handle: Dynamic,
+    steps: crate::StaticVec<usize>,
+    low: usize,
+    elements: Dynamic,
+}
+
+impl Window {
+    /// The elements `low..high` of the array at `steps` below `handle`,
+    /// moved out. `None` when no array that long is there, or its lock is
+    /// held.
+    pub(crate) fn take(
+        mut handle: Dynamic,
+        steps: crate::StaticVec<usize>,
+        low: usize,
+        high: usize,
+    ) -> Option<Self> {
+        let elements = {
+            let mut guard = handle.write_lock::<Dynamic>()?;
+            let mut place = &mut *guard;
+            for &step in &steps {
+                place = place.part_mut(step)?;
+            }
+            let mut array = place.as_array_mut().ok()?;
+            let taken = array.get_mut(low..high)?;
+            taken
+                .iter_mut()
+                .map(Dynamic::take)
+                .collect::<crate::Array>()
+        };
+        Some(Self {
+            handle,
+            steps,
+            low,
+            elements: Dynamic::from_array(elements),
+        })
+    }
+}
+
+impl Drop for Window {
+    fn drop(&mut self) {
+        let Ok(elements) = self.elements.take().into_array() else {
+            return;
+        };
+        // Rustc's borrows keep every other use of the array off it while
+        // this view lives, so the lock is free, or another thread's view
+        // holds it for a moment.
+        let Some(mut guard) = self.handle.waited_write_lock() else {
+            return;
+        };
+        let mut place = &mut *guard;
+        for &step in &self.steps {
+            let Some(part) = place.part_mut(step) else {
+                return;
+            };
+            place = part;
+        }
+        let Ok(mut array) = place.as_array_mut() else {
+            return;
+        };
+        for (slot, element) in array.iter_mut().skip(self.low).zip(elements) {
+            *slot = element;
+        }
+    }
+}
+
 impl<'a> TryFrom<&'a mut Dynamic> for Target<'a> {
     type Error = RawrError;
 
@@ -427,6 +508,7 @@ impl AsRef<Dynamic> for Target<'_> {
                     .part(step)
                     .expect("a shared part checked when it was reached")
             }),
+            Self::Window(window) => &window.elements,
             Self::TempValue(value) => value,
             Self::StringSlice { value, .. } => value,
             Self::Bit { value, .. }
@@ -455,6 +537,7 @@ impl AsMut<Dynamic> for Target<'_> {
                     .part_mut(step)
                     .expect("a shared part checked when it was reached")
             }),
+            Self::Window(window) => &mut window.elements,
             Self::TempValue(value) => value,
             Self::StringSlice { value, .. } => value,
             Self::Bit { value, .. }

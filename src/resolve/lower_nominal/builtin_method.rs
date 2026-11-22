@@ -1212,7 +1212,7 @@ impl<'a> Parser<'a> {
         // the place is reached.
         // `o.unwrap()` of an `Option` that holds a stored `&mut` is the
         // reference, moved out (`stored.rs`).
-        let stored = keeps_place && self.holds_stored(&value);
+        let stored = keeps_place && (self.holds_stored(&value) || self.stored_temporary(&value));
         let place = match &value.lvalue {
             Some(lvalue) if keeps_place && !stored && !matches!(lvalue, Lvalue::Slice(_)) => {
                 let mut nested = places::as_nested(lvalue);

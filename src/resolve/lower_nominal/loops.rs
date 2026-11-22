@@ -723,6 +723,12 @@ impl<'a> Parser<'a> {
                             source: lhs.span,
                         });
                     }
+                    // A chain's `&mut` items are stored `&mut`s (`stored.rs`):
+                    // `v.chunks_mut(2)`, a kept `v.iter_mut()` and its
+                    // adaptors.
+                    if self.holds_mutable_reference(&item) {
+                        self.stored_items = Some(declaration);
+                    }
                     let (setup, header, entry, exit) = Self::for_parts(pipeline, &name);
                     let mut looped = self.parse_for_body(
                         name,
@@ -773,12 +779,8 @@ impl<'a> Parser<'a> {
                 };
                 // `for r in v` of a `Vec<&mut T>`, or of one a call gives:
                 // each `r` is a stored `&mut` (`stored.rs`).
-                if pattern.is_none()
-                    && (self.holds_stored(&lhs) || self.stored_temporary(&lhs))
-                    && matches!(
-                        self.inference.resolve(&ty),
-                        Ty::Reference { mutable: true, .. }
-                    )
+                if (self.holds_stored(&lhs) || self.stored_temporary(&lhs))
+                    && self.holds_mutable_reference(&ty)
                 {
                     self.stored_items = Some(declaration);
                 }
@@ -908,7 +910,13 @@ impl<'a> Parser<'a> {
             },
         );
         self.note_drop_here(&name, declaration, &ty)?;
-        if self.stored_items.take() == Some(declaration) {
+        let stored = self.stored_items.take() == Some(declaration);
+        if stored
+            && matches!(
+                self.inference.resolve(&ty),
+                Ty::Reference { mutable: true, .. }
+            )
+        {
             self.select_local(name.clone(), declaration, ty.clone(), mutable);
         }
         let wrap = match pattern {
@@ -971,6 +979,11 @@ impl<'a> Parser<'a> {
             },
             None => None,
         };
+        // A pattern's `&mut` bindings of stored items (`for (i, x) in
+        // it.enumerate()`) are the references, each reaching its place.
+        if stored && let Some(pattern) = pattern {
+            self.bind_stored_pattern(pattern);
+        }
         // A fused chain's stages run before the pattern, its exits after
         // the body.
         let wrap = match (fused, wrap) {

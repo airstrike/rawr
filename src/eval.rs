@@ -10,6 +10,7 @@ pub(crate) mod stack;
 mod stmt;
 mod target;
 pub(crate) mod threads;
+pub(crate) mod view;
 
 #[allow(unused_imports)]
 pub use cache::FnResolutionCache;
@@ -28,4 +29,4 @@ pub use eval_context::{EvalContext, EvalContextFrameGuard};
 
 pub use global_state::GlobalRuntimeState;
 pub use target::calc_offset_len;
-pub use target::{calc_index, Target};
+pub use target::{calc_index, Target, Window};

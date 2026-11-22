@@ -502,6 +502,10 @@ impl<'a> Parser<'a> {
     ) -> Result<ParsedExpr, Error> {
         let async_step = self.async_step.take();
         let async_closure = std::mem::take(&mut self.async_closure);
+        // An iterator's stored `&mut` items given to the closure
+        // (`stored.rs`): each `&mut` parameter reaches its place through
+        // the reference it is given, and nothing is copied back.
+        let stored = std::mem::take(&mut self.stored_inputs);
         let mut hint = self.closure_hint.take();
         // A tuple the host hands over spreads over a closure of as many
         // parameters: `event::listen_with(|event, status, window| ..)`.
@@ -627,10 +631,11 @@ impl<'a> Parser<'a> {
         let copied = parameters
             .iter()
             .filter(|(_, ty, _)| {
-                matches!(
-                    self.inference.resolve(ty),
-                    Ty::Reference { mutable: true, .. }
-                )
+                !stored
+                    && matches!(
+                        self.inference.resolve(ty),
+                        Ty::Reference { mutable: true, .. }
+                    )
             })
             .map(|(name, _, _)| name.clone())
             .collect::<Vec<_>>();
@@ -655,6 +660,23 @@ impl<'a> Parser<'a> {
             );
             if self.drop_scoped() && name.as_str() != ASYNC_RESUME {
                 self.note_drop_here(name, *declaration, ty)?;
+            }
+        }
+        if stored {
+            for (name, ty, declaration) in &parameters {
+                // `|x| *x += 1` of `&mut T`, and `filter(|x| **x > 0)`'s
+                // `&&mut T`, whose reference is the stored one.
+                let reached = match self.inference.resolve(ty) {
+                    Ty::Reference { mutable: true, .. } => true,
+                    Ty::Reference { target, .. } => matches!(
+                        self.inference.resolve(&target),
+                        Ty::Reference { mutable: true, .. }
+                    ),
+                    _ => false,
+                };
+                if reached {
+                    self.select_local(name.clone(), *declaration, ty.clone(), false);
+                }
             }
         }
         let mut destructured = String::new();
@@ -687,6 +709,9 @@ impl<'a> Parser<'a> {
                     )?;
                     Ok(statements + clears.as_str())
                 });
+            if stored && destructure.is_ok() {
+                self.bind_stored_pattern(pattern);
+            }
             match destructure {
                 Ok(statements) => destructured.push_str(&statements),
                 Err(error) => {
@@ -889,6 +914,7 @@ impl<'a> Parser<'a> {
                 self.inference.resolve(ty),
                 Ty::Reference { mutable: true, .. }
             ) && !copied.contains(name)
+                && !stored
         }) {
             return Err(Error::UnsupportedNominalSyntax {
                 construct: format!(

@@ -578,6 +578,13 @@ struct Parser<'a> {
     /// items are stored `&mut`s, each a `&mut` local reaching its place
     /// through the reference (`stored.rs`).
     stored_items: Option<Span>,
+    /// The `v.as_mut_slice()` just read, whose value is the place `v`: a
+    /// `let` keeps it as a `&mut` of that place, as `let s = &mut v;`.
+    viewed_whole: Option<Span>,
+    /// Whether the closure about to be read is given stored `&mut`s, an
+    /// iterator's items (`stored.rs`): each `&mut` parameter is a `&mut`
+    /// local reaching its place through the reference, not a copy.
+    stored_inputs: bool,
     /// Where the operand of the `&` being read starts: a crate struct's
     /// field read there, as all of the operand, is lent, not taken
     /// (`read_imported_field`).
@@ -1083,6 +1090,8 @@ impl<'a> Parser<'a> {
             mutable_borrow: None,
             chosen: None,
             stored_items: None,
+            viewed_whole: None,
+            stored_inputs: false,
             lent_field: None,
             lent_mut_field: None,
             bound_iterators: BTreeMap::new(),

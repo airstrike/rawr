@@ -453,7 +453,7 @@ impl<'a> Parser<'a> {
                 if let Some(arm_place) = &arm_place {
                     self.bind_parts(arm_place);
                 }
-                let stored = self.holds_stored(&place);
+                let stored = self.holds_stored(&place) || self.stored_temporary(&place);
                 self.bind_stored(stored, &resolved.bindings);
                 let bound = resolved
                     .bindings
@@ -799,7 +799,7 @@ impl<'a> Parser<'a> {
             .map_err(|error| error.matched(|| self.subject_origin(&subject)))?;
         let trace = std::mem::take(&mut resolved.trace);
         self.pattern_facts(trace, &matched, subject.span, &resolved.bindings)?;
-        let stored = self.holds_stored(&subject);
+        let stored = self.holds_stored(&subject) || self.stored_temporary(&subject);
         let place = self.pattern_place(&subject, &mut resolved.proof, &resolved.bindings)?;
         // The condition's scope: the value made for it, then its bindings,
         // which the caller closes after the consequent or body.

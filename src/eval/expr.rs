@@ -210,6 +210,12 @@ impl Engine {
         }
         let holder = name.strip_prefix(KEYWORD_THROUGH).unwrap_or(name);
         let index = scope.search(holder).ok_or_else(|| missing(holder))?;
+        // A stored `&mut [T]` reaches a range of an array's elements.
+        if let Some((handle, steps, low, high)) =
+            Self::reference_window(scope.get_mut_by_index(index))
+        {
+            return Self::reach_window(handle, steps, (low, high), name, expr);
+        }
         let (root, steps) =
             Self::held_path(scope.get_mut_by_index(index)).ok_or_else(|| missing(name))?;
         if root.is_shared() {
@@ -222,6 +228,16 @@ impl Engine {
     /// copy of its place's value, as a derive's `Debug` or `PartialEq`
     /// reads through `&mut T`. `None` for any other value.
     pub(crate) fn stored_referent(value: &Dynamic) -> Option<Dynamic> {
+        if let Some((handle, steps, low, high)) = Self::reference_window(value) {
+            let guard = handle.read_lock::<Dynamic>()?;
+            let mut place = &*guard;
+            for &step in &steps {
+                place = place.part(step)?;
+            }
+            let array = place.as_array_ref().ok()?;
+            let elements = array.get(low..high)?.iter().map(Dynamic::flatten_clone);
+            return Some(Dynamic::from_array(elements.collect()));
+        }
         let path = value.as_array_ref().ok()?;
         let (handle, steps) = path.split_first()?;
         if !handle.is_shared() {
@@ -270,9 +286,14 @@ impl Engine {
         at.push_str(holder);
         at.push_str(HELD_STEPS);
         let path = scope.search(&at).ok_or_else(|| missing(&at))?;
-        let (_, steps) =
-            Self::held_path(scope.get_mut_by_index(path)).ok_or_else(|| missing(name))?;
+        let (_, steps, window) =
+            Self::windowed_path(scope.get_mut_by_index(path)).ok_or_else(|| missing(name))?;
         let index = scope.search(holder).ok_or_else(|| missing(holder))?;
+        // A stored `&mut [T]` the closure captured reaches its window.
+        if let Some(window) = window {
+            let handle = scope.get_mut_by_index(index).clone();
+            return Self::reach_window(handle, steps, window, name, expr);
+        }
         Self::reach(scope.get_mut_by_index(index), &steps, name, expr)
     }
 
@@ -294,15 +315,19 @@ impl Engine {
         at.push_str(holder);
         at.push_str(HELD_STEPS);
         let index = scope.search(&at).ok_or_else(|| missing(&at))?;
-        let (_, steps) =
-            Self::held_path(scope.get_mut_by_index(index)).ok_or_else(|| missing(name))?;
-        let mut path = crate::Array::with_capacity(steps.len() + 1);
+        let (_, steps, window) =
+            Self::windowed_path(scope.get_mut_by_index(index)).ok_or_else(|| missing(name))?;
+        let mut path = crate::Array::with_capacity(steps.len() + 2);
         path.push(Dynamic::from(crate::ImmutableString::from(holder)));
         path.extend(
             steps
                 .iter()
                 .map(|&step| Dynamic::from_int(step as crate::INT)),
         );
+        if let Some((low, high)) = window {
+            let range: crate::ExclusiveRange = (low as crate::INT)..(high as crate::INT);
+            path.push(Dynamic::from(range));
+        }
         Ok(Dynamic::from_array(path).into())
     }
 
