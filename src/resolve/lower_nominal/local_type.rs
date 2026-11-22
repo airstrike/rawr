@@ -340,6 +340,17 @@ impl<'a> Parser<'a> {
         {
             return Ok(self_ty.clone());
         }
+        // `Text` after `use std::string::String as Text;` is `String`
+        // (#810).
+        if !self.generics.contains_key(name.as_str())
+            && let Some(spelling) = self.prelude_alias(&name)
+        {
+            self.splice_tokens(vec![(
+                Token::Identifier(Box::new(spelling.into())),
+                name_span.start(),
+            )]);
+            return self.parse_local_type();
+        }
         // A type alias: its target, resolved once with the item headers.
         if !matches!(self.peek(), Token::DoubleColon)
             && !self.generics.contains_key(name.as_str())

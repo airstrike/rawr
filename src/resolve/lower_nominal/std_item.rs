@@ -204,7 +204,8 @@ impl<'a> Parser<'a> {
     /// here: called, one whose body rawr has (`Body`); named as a
     /// value, any one the facade doesn't bind, which is the closure that
     /// calls it, as a fn item coerces to one. `None` for a name the program
-    /// binds, a turbofish, or any other path.
+    /// binds, a turbofish of a function that makes no iterator, or any
+    /// other path.
     #[inline(never)]
     pub(super) fn std_function(&self, name: &str, name_span: Span) -> Option<StdFunction> {
         if self.bindings.contains_key(name)
@@ -215,8 +216,14 @@ impl<'a> Parser<'a> {
             return None;
         }
         let (written, reference, next) = self.peek_path(name, name_span);
-        let called = matches!(next, Some(Token::LeftParen | Token::Unit));
-        if matches!(next, Some(Token::DoubleColon)) {
+        let skip = 2 * (written.split("::").count() - 1);
+        // `iter::empty::<u8>()`: a turbofish, then its call.
+        let turbofish = matches!(next, Some(Token::DoubleColon));
+        let called = match turbofish {
+            true => self.called_after_turbofish(skip),
+            false => matches!(next, Some(Token::LeftParen | Token::Unit)),
+        };
+        if turbofish && !called {
             return None;
         }
         let binding = self.models.import(name);
@@ -239,7 +246,11 @@ impl<'a> Parser<'a> {
             return None;
         }
         let use_ = if called {
-            Use::Call(Body::of(path.definition)?)
+            let body = Body::of(path.definition)?;
+            if turbofish && !matches!(body, Body::Iterator(_)) {
+                return None;
+            }
+            Use::Call(body)
         } else {
             let facade = crate::resolve::std_reexport(&qualified, &self.models.host);
             self.models
@@ -255,12 +266,35 @@ impl<'a> Parser<'a> {
                 .filter(|input| !input.trim().is_empty())
                 .count();
         Some(StdFunction {
-            skip: 2 * (written.split("::").count() - 1),
+            skip,
+            turbofish,
             written,
             reference,
             use_,
             inputs,
         })
+    }
+
+    /// Whether the turbofish after the path's `skip` tokens ahead closes
+    /// before a call's `(`.
+    fn called_after_turbofish(&self, skip: usize) -> bool {
+        let mut ahead = self.input.clone().skip(skip);
+        if !matches!(ahead.next(), Some((Token::DoubleColon, _)))
+            || !matches!(ahead.next(), Some((Token::LessThan, _)))
+        {
+            return false;
+        }
+        let mut depth = 1_usize;
+        while depth > 0 {
+            depth = match ahead.next() {
+                Some((Token::LessThan, _)) => depth + 1,
+                Some((Token::GreaterThan, _)) => depth - 1,
+                Some((Token::RightShift, _)) => depth.saturating_sub(2),
+                Some((Token::EOF, _)) | None => return false,
+                Some(_) => depth,
+            };
+        }
+        matches!(ahead.next(), Some((Token::LeftParen | Token::Unit, _)))
     }
 
     /// The std function `function` names from its first segment, which is
@@ -272,6 +306,11 @@ impl<'a> Parser<'a> {
         for _ in 0..function.skip {
             self.next();
         }
+        if function.turbofish {
+            self.next();
+            self.next();
+            self.pending_turbofish = Some(self.parse_turbofish_types()?);
+        }
         let Use::Call(body) = function.use_ else {
             return self.function_value_closure(
                 &function.written,
@@ -280,26 +319,32 @@ impl<'a> Parser<'a> {
                 function.reference,
             );
         };
+        match body {
+            Body::Iterator(constructor) => {
+                self.parse_iterator_source(constructor, &function.written, function.reference)
+            }
+            Body::Identity => self.parse_identity(&function),
+        }
+    }
+
+    /// The call of `core::convert::identity`, its path read: `fn
+    /// identity<T>(x: T) -> T { x }`, as core writes it.
+    fn parse_identity(&mut self, function: &StdFunction) -> Result<ParsedExpr, Error> {
         let (arguments, end) =
             self.parse_call_arguments(&format!("`{}` arguments", function.written))?;
         let call = span(function.reference.start(), end);
-        match body {
-            // `fn identity<T>(x: T) -> T { x }`, as core writes it.
-            Body::Identity => {
-                let [mut value] = <[ParsedExpr; 1]>::try_from(arguments).map_err(|arguments| {
-                    Error::argument_count(
-                        crate::resolve::Callee::Function,
-                        function.written.clone(),
-                        1,
-                        arguments.len(),
-                        call,
-                    )
-                })?;
-                self.move_local(&mut value)?;
-                let ty = self.inference.resolve(&value.ty);
-                Ok(self.operator_expr(value.rendered_source(), ty, call))
-            }
-        }
+        let [mut value] = <[ParsedExpr; 1]>::try_from(arguments).map_err(|arguments| {
+            Error::argument_count(
+                crate::resolve::Callee::Function,
+                function.written.clone(),
+                1,
+                arguments.len(),
+                call,
+            )
+        })?;
+        self.move_local(&mut value)?;
+        let ty = self.inference.resolve(&value.ty);
+        Ok(self.operator_expr(value.rendered_source(), ty, call))
     }
 
     /// A call of `std::mem`'s `swap`, `replace` or `take` at `name`, by
@@ -614,6 +659,12 @@ impl<'a> Parser<'a> {
             return;
         }
         let first = ImmutableString::from(first.as_str());
+        // `Maybe::Some(x)` after `use std::option::Option as Maybe;`.
+        if let Some(spelling) = self.prelude_alias(&first) {
+            self.next();
+            self.splice_tokens(vec![(Token::Identifier(Box::new(spelling.into())), start)]);
+            return;
+        }
         let mut ahead = self.input.clone();
         ahead.next();
         let mut path = first.to_string();
@@ -776,6 +827,35 @@ impl<'a> Parser<'a> {
         Some(tokens)
     }
 
+    /// The prelude's name of the std type that `name`, a `use` binding of
+    /// another name, imports: `String` for `Text` after `use
+    /// std::string::String as Text;`, so a body reads `Text::from(..)` as
+    /// `String::from(..)` (#810). `None` for a name a local, a generic or
+    /// an item of the program declares, for any other import, and where
+    /// the program shadows the prelude's name.
+    pub(super) fn prelude_alias(&self, name: &str) -> Option<&'static str> {
+        if self.bindings.contains_key(name) || self.models.import(name).is_none() {
+            return None;
+        }
+        let path = self.std_scoped(name)?;
+        let spelling = crate::resolve::std_path::check(
+            &path,
+            crate::std_table::Namespace::Type,
+            "type",
+            Span::NONE,
+        )
+        .ok()
+        .flatten()
+        .and_then(crate::resolve::std_path::spelling)?;
+        let shadowed =
+            self.models.get(spelling).is_some() || self.models.import(spelling).is_some();
+        (spelling != name
+            && !shadowed
+            && crate::std_table::prelude(crate::resolve::std_path::EDITION)
+                .any(|prelude| prelude.path.rsplit("::").next() == Some(spelling)))
+        .then_some(spelling)
+    }
+
     /// The std path `name`, whose first segment is `first`, names through a
     /// crate's re-export of it, when it is one.
     pub(super) fn std_alias(&self, first: &ImmutableString, name: &str) -> Option<ImmutableString> {
@@ -831,6 +911,8 @@ pub(super) struct StdFunction {
     written: String,
     /// The tokens after its first segment up to its last.
     skip: usize,
+    /// Whether a turbofish follows its last segment.
+    turbofish: bool,
     reference: Span,
     use_: Use,
     /// How many inputs std declares it with.
@@ -851,6 +933,8 @@ enum Use {
 enum Body {
     /// `core::convert::identity`.
     Identity,
+    /// `std::iter::repeat` and std::iter's other iterator sources.
+    Iterator(iterator::Constructor),
 }
 
 impl Body {
@@ -858,7 +942,7 @@ impl Body {
     fn of(definition: &str) -> Option<Self> {
         match definition {
             "core::convert::identity" => Some(Self::Identity),
-            _ => None,
+            _ => iterator::Constructor::of(definition).map(Self::Iterator),
         }
     }
 }

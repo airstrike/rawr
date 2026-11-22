@@ -221,6 +221,21 @@ pub(super) fn bind(binds: &mut impl super::Bind) {
                 .unwrap_or_else(|failure| Err(std::io::Error::other(failure.to_string())))
         })
     });
+    // `BufRead::lines`, which takes the cursor: each line it has left.
+    bind("io::Cursor::lines", |args| {
+        let lines = reading(args[0], |bytes| {
+            bytes
+                .lines()
+                .map(|line| match line {
+                    Ok(line) => {
+                        crate::result::ok(Dynamic::from(crate::ImmutableString::from(line)))
+                    }
+                    Err(failure) => crate::result::err(super::io::made(failure)),
+                })
+                .collect::<crate::Array>()
+        })?;
+        Ok(Dynamic::from(lines))
+    });
     bind("io::Cursor::seek", |args| {
         let from = seek_from(args[1])?;
         Ok(io_result(reading(args[0], |bytes| bytes.seek(from))?, int))

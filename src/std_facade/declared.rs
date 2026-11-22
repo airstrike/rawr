@@ -1743,6 +1743,15 @@ pub(super) static STEPS: &[Step] = &[
         output: Ty::Result(&Ty::Builtin(Builtin::Usize), &Ty::Registered("io::Error")),
     },
     Step::Item {
+        path: "io::Cursor::lines",
+        kind: Kind::Method(Mode::Owned),
+        inputs: &[],
+        output: Ty::Iter(&Ty::Result(
+            &Ty::Builtin(Builtin::String),
+            &Ty::Registered("io::Error"),
+        )),
+    },
+    Step::Item {
         path: "io::Cursor::seek",
         kind: Kind::Method(Mode::Mutable),
         inputs: &[Ty::Registered("io::SeekFrom")],

@@ -55,6 +55,76 @@ impl Parser<'_> {
             })
     }
 
+    /// rustc's E0599 for the method `member` at `at` of `receiver`, a value
+    /// of the std type the facade holds at `facade` (`rawr_std::io::Cursor`),
+    /// when std gives the type the method only through traits none of
+    /// which is in scope: `stdout().flush()` with no `use std::io::Write;`.
+    /// The facade binds such a method as the type's own, so its call is
+    /// checked here. `None` for an inherent method, or one a trait in
+    /// scope gives.
+    pub(super) fn unscoped_facade_method(
+        &self,
+        facade: &str,
+        receiver: &Ty,
+        member: &ImmutableString,
+        at: Position,
+    ) -> Option<Error> {
+        let path = facade.strip_prefix(crate::std_facade::ROOT)?;
+        let owner = std_table::path(&format!("std{path}"), std_table::Namespace::Type)?;
+        if std_table::item(&format!("{}::{member}", owner.definition)).is_some() {
+            return None;
+        }
+        let traits = std_table::trait_functions(member)
+            .iter()
+            .filter(|function| takes_self(function.declaration()))
+            .filter_map(|function| {
+                function
+                    .definition
+                    .strip_suffix(member.as_str())?
+                    .strip_suffix("::")
+            })
+            .filter(|definition| {
+                std_table::impls(definition, owner.definition)
+                    .next()
+                    .is_some()
+            })
+            .collect::<Vec<_>>();
+        if traits
+            .iter()
+            .any(|definition| self.std_trait_in_scope(definition, at))
+        {
+            return None;
+        }
+        let path = std_table::public_path(traits.first()?)?;
+        // rustc names a generic type that has no inherent method of the
+        // name and no `Deref` by its declaration: `std::io::Cursor<T>`.
+        let mut name = without_references(receiver).name(&self.models);
+        if let Some((head, _)) = name.split_once('<')
+            && std_table::impls("core::ops::deref::Deref", owner.definition)
+                .next()
+                .is_none()
+            && let Some(item) = std_table::item(owner.definition)
+        {
+            let parameters = item
+                .generics()
+                .filter(|parameter| parameter.stability == std_table::Stability::Stable)
+                .map(|parameter| parameter.name)
+                .collect::<Vec<_>>();
+            name = format!("{head}<{}>", parameters.join(", ")).into();
+        }
+        Some(Error::UnscopedMethod {
+            kind: match owner.kind {
+                "enum" => "enum",
+                _ => "struct",
+            },
+            owner: name,
+            member: member.clone(),
+            path: path.into(),
+            at: Span::new(at, text_end(at, member)),
+            placement: self.models.use_placement(),
+        })
+    }
+
     /// rustc's E0599 for `error`, an unknown method of a receiver whose std
     /// type implements a std trait that has the method, where that trait is
     /// out of scope at the call and no trait in scope gives the method:

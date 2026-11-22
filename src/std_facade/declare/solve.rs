@@ -24,8 +24,15 @@ pub(super) enum Slot {
 
 /// The types the unknown slot of `self_ty: trait_<arguments>` stands for,
 /// one for each way an impl proves it. With no unknown slot, a unit for
-/// each impl that proves it.
-pub(super) fn solve(trait_: &str, self_ty: &Slot, arguments: &[Slot], depth: u8) -> Vec<Written> {
+/// each impl that proves it. A clause on one of the `held` parameters holds
+/// ([`instances`]).
+pub(super) fn solve(
+    trait_: &str,
+    self_ty: &Slot,
+    arguments: &[Slot],
+    held: &[&'static str],
+    depth: u8,
+) -> Vec<Written> {
     let mut found = Vec::new();
     let Some(depth) = depth.checked_sub(1) else {
         return found;
@@ -65,7 +72,7 @@ pub(super) fn solve(trait_: &str, self_ty: &Slot, arguments: &[Slot], depth: u8)
         if !fits {
             continue;
         }
-        for binding in where_clauses(&implementation, &variables, binding, &[], depth) {
+        for binding in where_clauses(&implementation, &variables, binding, held, depth) {
             found.push(match &unknown {
                 Some(pattern) => substitute(pattern, &binding),
                 None => Written::Tuple(Vec::new()),
@@ -116,7 +123,14 @@ pub(super) fn holds(trait_: &str, self_ty: &Written, arguments: &[Written]) -> b
         .iter()
         .map(|argument| Slot::Known(argument.clone()))
         .collect::<Vec<_>>();
-    !solve(trait_, &Slot::Known(self_ty.clone()), &arguments, DEPTH).is_empty()
+    !solve(
+        trait_,
+        &Slot::Known(self_ty.clone()),
+        &arguments,
+        &[],
+        DEPTH,
+    )
+    .is_empty()
 }
 
 /// Each way `implementation` applies to `self_ty`: what its parameters
@@ -142,12 +156,19 @@ pub(super) fn instances(
 }
 
 /// The associated type `name` of the first impl of `trait_` that applies
-/// to `self_ty`: `String` of `<str as ToOwned>::Owned`.
-pub(super) fn associated(trait_: &str, self_ty: &Written, name: &str) -> Option<Written> {
+/// to `self_ty`, whose `held` names are a held type's parameters: `String`
+/// of `<str as ToOwned>::Owned`, `Result<String, io::Error>` of `<io::Lines<
+/// Cursor<T>> as Iterator>::Item`.
+pub(super) fn associated(
+    trait_: &str,
+    self_ty: &Written,
+    name: &str,
+    held: &[&'static str],
+) -> Option<Written> {
     impls(trait_, Some(self_ty))
         .into_iter()
         .find_map(|implementation| {
-            let binding = instances(&implementation, self_ty, &[])
+            let binding = instances(&implementation, self_ty, held)
                 .into_iter()
                 .next()?;
             Some(substitute(
@@ -378,7 +399,9 @@ fn where_clauses(
                         .iter()
                         .map(|argument| substitute(argument, &binding))
                         .collect::<Vec<_>>();
-                    clause(trait_, &subject, &arguments, variables, binding, depth)
+                    clause(
+                        trait_, &subject, &arguments, variables, binding, held, depth,
+                    )
                 })
                 .collect();
         }
@@ -395,6 +418,7 @@ fn clause(
     arguments: &[Written],
     variables: &[&'static str],
     binding: Binding,
+    held: &[&'static str],
     depth: u8,
 ) -> Vec<Binding> {
     let free = |written: &Written| match written {
@@ -416,7 +440,7 @@ fn clause(
         }
     }
     let self_slot = slots.remove(0);
-    let found = solve(trait_, &self_slot, &slots, depth);
+    let found = solve(trait_, &self_slot, &slots, held, depth);
     match solved {
         Some(name) => found
             .into_iter()
