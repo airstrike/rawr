@@ -916,6 +916,96 @@ impl Parser<'_> {
         self.optional_element(&held.place, &held.element, &slot, locate, expression)
     }
 
+    /// `v.iter_mut()` kept past its statement or given to an adaptor (D1113
+    /// stage 3): an iterator over the reference to each element of `value`
+    /// (`view.rs`), so a write through any item, wherever it goes, reaches
+    /// the element. `end` is where the call ends.
+    pub(super) fn kept_iter_mut(
+        &mut self,
+        value: &ParsedExpr,
+        element: Ty,
+        end: Position,
+    ) -> Result<ParsedExpr, Error> {
+        let expression = span(value.span.start(), end);
+        let elements = self.view_call(value, crate::eval::view::ELEMENTS, "()".into())?;
+        let item = Ty::Reference {
+            mutable: true,
+            target: Box::new(element),
+        };
+        let elements = self.operator_expr(
+            elements,
+            Ty::Array {
+                element: Box::new(item.clone()),
+                kind: sequence::Kind::Vec,
+            },
+            expression,
+        );
+        Ok(self.array_iterator(&elements, item, end))
+    }
+
+    /// `let it = v.iter_mut();` bound to `name`, which `held` holds: the
+    /// index its `next()` steps (`step_iter_mut`) while each use of `name`
+    /// before its block ends is `name.next()`, else the iterator over each
+    /// element's reference (`kept_iter_mut`), which `value` becomes.
+    pub(super) fn bind_iter_mut(
+        &mut self,
+        name: &ImmutableString,
+        mut held: HeldIterMut,
+        declaration: Span,
+        value: &mut ParsedExpr,
+    ) -> Result<(), Error> {
+        if self.stepped_only(name) {
+            held.declaration = declaration;
+            self.held_iter_mut.insert(name.clone(), held);
+            return Ok(());
+        }
+        self.held_iter_mut.remove(name);
+        *value = self.kept_iter_mut(&held.place, held.element, value.span.end())?;
+        Ok(())
+    }
+
+    /// Whether each use of the local `name` ahead, before its block ends,
+    /// is `name.next()`, none of them a `let` statement's value: two items
+    /// `let`s keep are two places of one collection, which only references
+    /// hold apart.
+    fn stepped_only(&self, name: &str) -> bool {
+        let mut ahead = self.input.clone();
+        let mut depth = 0usize;
+        let mut previous = Token::EOF;
+        // Whether a `let` statement (not `if let` or `while let`) is read.
+        let mut statement = false;
+        while let Some((token, _)) = ahead.next() {
+            match &token {
+                Token::EOF => return true,
+                Token::LeftBrace | Token::MapStart => depth += 1,
+                Token::RightBrace => match depth.checked_sub(1) {
+                    Some(outer) => depth = outer,
+                    None => return true,
+                },
+                Token::Let => {
+                    statement = !matches!(previous, Token::If | Token::While | Token::And);
+                }
+                Token::SemiColon => statement = false,
+                Token::Identifier(identifier)
+                    if identifier.as_str() == name
+                        && !matches!(previous, Token::Period | Token::DoubleColon) =>
+                {
+                    let mut step = ahead.clone();
+                    let stepped = matches!(step.next(), Some((Token::Period, _)))
+                        && matches!(step.next(), Some((Token::Identifier(member), _))
+                            if member.as_str() == "next")
+                        && matches!(step.next(), Some((Token::Unit, _)));
+                    if !stepped || statement && previous == Token::Equals {
+                        return false;
+                    }
+                }
+                _ => {}
+            }
+            previous = token;
+        }
+        true
+    }
+
     /// `v.iter_mut().find(f)`: `Some` of the first element's place `f`
     /// holds for, or `None` (`optional_element`).
     fn parse_iter_mut_find(
@@ -1091,18 +1181,19 @@ impl Parser<'_> {
             });
             return Ok(self.operator_expr("0".into(), ty, expression));
         }
-        if !(tokens[0] == Token::Unit
-            && tokens[1] == Token::Period
+        if tokens[0] != Token::Unit {
+            return Err(Error::UnsupportedNominalSyntax {
+                construct: "`iter_mut` with arguments".into(),
+                source: member_span,
+            });
+        }
+        if !(tokens[1] == Token::Period
             && matches!(&tokens[2], Token::Identifier(name) if name.as_str() == "for_each")
             && tokens[3] == Token::LeftParen
             && tokens[4] == Token::Pipe)
         {
-            return Err(Error::UnsupportedNominalSyntax {
-                construct: "`iter_mut()` other than `for x in v.iter_mut()` or \
-                            `v.iter_mut().for_each(|x| ..)`"
-                    .into(),
-                source: member_span,
-            });
+            let (_, end) = self.next();
+            return self.kept_iter_mut(value, element, end);
         }
         self.require_mutable_binding(&owner, value.span)?;
         for _ in 0..5 {

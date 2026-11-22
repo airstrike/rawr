@@ -843,7 +843,7 @@ impl<'a> Parser<'a> {
             self.require_irrefutable(syntax, &resolved.coverage, &written_ty, site)?;
         }
         let (scrutinee, values) = (self.temporary("match"), self.temporary("bound"));
-        let stored = self.holds_stored(&subject);
+        let stored = self.holds_stored(&subject) || self.stored_temporary(&subject);
         let place = self.pattern_place(&subject, &mut resolved.proof, &resolved.bindings)?;
         // A value made for the statement drops at its end, or before
         // `else`; a local's moved parts are left `()` in it.
@@ -1028,7 +1028,13 @@ impl<'a> Parser<'a> {
         // `let Wrapper(x) = w;` of a one-variant enum, `let Some(x) = o;`
         // or `let [a, ..] = slice;`: matched as `let .. else` is, after the
         // coverage check finds it irrefutable, or refused as rustc's E0005.
-        if syntax.may_refute() || self.matches_unsized_slice(&syntax, &value.ty) {
+        // So is a value holding stored `&mut`s (`let (a, b) =
+        // v.split_at_mut(1);`), whose `&mut` bindings reach their places.
+        if syntax.may_refute()
+            || self.matches_unsized_slice(&syntax, &value.ty)
+            || self.holds_stored(&value)
+            || self.stored_temporary(&value)
+        {
             let end = self.position();
             self.terminate(start, Continuation::Let)?;
             let origin = self.let_origin(annotated, &value);

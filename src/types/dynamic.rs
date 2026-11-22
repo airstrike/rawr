@@ -1651,6 +1651,17 @@ impl Dynamic {
             .map(DynamicWriteLockInner::Reference)
             .map(DynamicWriteLock)
     }
+    /// The value a _shared_ [`Dynamic`] holds, locked for write once its
+    /// holder releases it, as a [`Dynamic`]: for what must be put back
+    /// where it was, as a view's elements are (`eval::Window`). [`None`]
+    /// for a value that is not shared.
+    pub(crate) fn waited_write_lock(&self) -> Option<DynamicWriteLock<'_, Self>> {
+        let Union::Shared(ref cell, ..) = self.0 else {
+            return None;
+        };
+        let guard = crate::func::waited_write(cell);
+        Some(DynamicWriteLock(DynamicWriteLockInner::Guard(guard)))
+    }
     /// Get a reference of a specific type to the [`Dynamic`].
     ///
     /// Casting to [`Dynamic`] just returns a reference to it.

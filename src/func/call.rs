@@ -1288,6 +1288,15 @@ impl Engine {
                         }
                     }
                 }
+                // A path below a stored `&mut [T]`'s handle reaches its
+                // window's own elements (`eval::view`).
+                if path.first().is_some_and(Dynamic::is_shared)
+                    && path.iter().any(|step| step.is::<crate::ExclusiveRange>())
+                {
+                    let (handle, steps) = path.split_first().expect("a path's handle");
+                    return Self::reference(handle.clone(), steps)
+                        .map_err(|message| ERR::ErrorRuntime(message.into(), pos).into());
+                }
                 return Ok(Dynamic::from_array(path));
             }
 
@@ -1301,7 +1310,7 @@ impl Engine {
                 let missing = || -> crate::RawrError {
                     ERR::ErrorVariableNotFound(crate::engine::KEYWORD_SHARE.into(), pos).into()
                 };
-                let (root, _) = Self::held_path(&path).ok_or_else(missing)?;
+                let (root, ..) = Self::windowed_path(&path).ok_or_else(missing)?;
                 return shared_root(scope, this_ptr, root).ok_or_else(missing);
             }
 
@@ -1316,16 +1325,24 @@ impl Engine {
                 let missing = || -> crate::RawrError {
                     ERR::ErrorVariableNotFound(crate::engine::KEYWORD_REF.into(), pos).into()
                 };
-                let (root, steps) = Self::held_path(&path).ok_or_else(missing)?;
-                let handle = shared_root(scope, this_ptr, root).ok_or_else(missing)?;
-                let mut reference = crate::Array::with_capacity(steps.len() + 1);
-                reference.push(handle);
-                reference.extend(
-                    steps
-                        .iter()
-                        .map(|&step| Dynamic::from_int(step as crate::INT)),
-                );
-                return Ok(Dynamic::from_array(reference));
+                // A path a closure captured is shared: its steps are read out.
+                let path = if path.is_shared() {
+                    path.flatten_clone()
+                } else {
+                    path
+                };
+                // A whole local's path is its slot alone.
+                let path = if path.is_array() {
+                    path.into_array().map_err(|_| missing())?
+                } else {
+                    vec![path]
+                };
+                let (root, steps) = path.split_first().ok_or_else(missing)?;
+                let handle = shared_root(scope, this_ptr, root.clone()).ok_or_else(missing)?;
+                // A range of elements last (`&mut v[1..3]`) is checked here,
+                // where Rust's borrow of it is.
+                return Self::reference(handle, steps)
+                    .map_err(|message| ERR::ErrorRuntime(message.into(), pos).into());
             }
 
             _ => (),
@@ -2199,7 +2216,7 @@ fn unshare_part(place: &mut Dynamic, slots: &[usize]) {
 /// itself, not a copy.
 fn held_place(first: &Expr, target: &crate::eval::Target) -> bool {
     match target {
-        crate::eval::Target::SharedPart { .. } => true,
+        crate::eval::Target::SharedPart { .. } | crate::eval::Target::Window(..) => true,
         crate::eval::Target::SharedValue { .. } => matches!(first, Expr::Variable(v, ..)
             if v.1.starts_with(crate::engine::KEYWORD_HELD)
                 || v.1.starts_with(crate::engine::KEYWORD_THROUGH)),

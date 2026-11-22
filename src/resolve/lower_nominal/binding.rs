@@ -320,6 +320,8 @@ impl<'a> Parser<'a> {
         self.closure_hint = None;
         self.mutable_borrow = outer;
         let mut value = value?;
+        // `let s = v.as_mut_slice();` is `let s = &mut v;` of the slice.
+        let viewed = self.viewed_whole.take() == Some(value.span);
         self.frame_value(&mut value);
         // `let r = if c { &mut a } else { &mut b };`: `r` holds where the
         // place the run chose is (`chosen.rs`).
@@ -364,9 +366,8 @@ impl<'a> Parser<'a> {
         // `let mut it = v.iter_mut();`: each `it.next()` lends the next
         // element of `v`.
         match self.pending_iter_mut.take() {
-            Some(mut held) if held.declaration == value.span => {
-                held.declaration = name_span;
-                self.held_iter_mut.insert(name.clone(), held);
+            Some(held) if held.declaration == value.span => {
+                self.bind_iter_mut(&name, held, name_span, &mut value)?;
             }
             _ => {
                 self.held_iter_mut.remove(&name);
@@ -502,7 +503,7 @@ impl<'a> Parser<'a> {
             mutable: true,
             target,
         } = self.inference.resolve(&value.ty)
-            && (borrowing || moved_borrow)
+            && (borrowing || moved_borrow || viewed)
         {
             // `let mut r = &mut a;` given a new borrow later (`r = &mut b`),
             // or `let s = r;` of such a local: a runtime local holding
@@ -561,6 +562,26 @@ impl<'a> Parser<'a> {
                 self.entry_aliases.remove(&name);
                 self.bound_value(&name, name_span, &value, value_start);
                 self.borrow_lvalue(name, name_span, value.ty, lvalue);
+                self.last_type = Ty::Unit;
+                self.last_expression = None;
+                return self
+                    .consume_binding_terminator(start, let_keyword)
+                    .map(|_| ());
+            }
+            // `let s = &mut v[1..3];`: `s` holds the reference to the range
+            // of elements (`view.rs`), and each use reaches them there.
+            if matches!(value.lvalue, Some(Lvalue::Slice(_))) {
+                let mut rendered = origin::Fragment::plain(format!("let {name} = "));
+                rendered.push(self.view_of(&value)?);
+                rendered.push_text(";");
+                if let Some(annotation) = &annotation {
+                    self.coerce_expr(annotation, &mut value)?;
+                }
+                let rendered = self.with_field_entries(pending, rendered);
+                self.write_output(rendered, span(start, value.span.end()));
+                self.entry_aliases.remove(&name);
+                self.bound_value(&name, name_span, &value, value_start);
+                self.select_local(name, name_span, value.ty.clone(), mutable);
                 self.last_type = Ty::Unit;
                 self.last_expression = None;
                 return self

@@ -80,7 +80,7 @@ Modules are named by their symbols; line numbers drift.
 | `construct` | values built by name | `parse_struct_fields`, `parse_array`, `parse_prelude_constructor`, `parse_imported_struct` |
 | `constant` | literals, constants, compile-time macros | `literal`, `literal_kind`, `constant_use`, `compile_time_text` |
 | `local_type` | types written in bodies | `parse_local_type`, `dyn_type`, `resolve_type`, `parse_alias_type` |
-| `stored` | a `&mut` stored in a value (D1113) | `parse_stored`, `store_borrow`, `store_argument`, `stored_holder`, `through_stored`, `holds_stored`, `stored_temporary`, `bind_stored`, `bind_kept`, `lend_kept` |
+| `stored` | a `&mut` stored in a value, and views of a collection's elements (D1113) | `parse_stored`, `store_borrow`, `store_argument`, `view_of`, `view_call`, `stored_holder`, `through_stored`, `holds_stored`, `stored_temporary`, `bind_stored`, `bind_stored_pattern`, `bind_kept`, `lend_kept` |
 | `format` | format strings and specs | `format::Spec`, `format::RawSpec`, `DebugSpec`, `parse_format`, `parse_print`, `parse_panic_macro`, `parse_dbg` |
 | `builtin_method` | builtin values' methods | `parse_string_method`, `parse_option_method`, `parse_result_method`, `vec_method`, `str_method`, `int_method` |
 | `time` | `Duration` and `Instant` | `parse_time_method`, `time_binary`, `time_method` |

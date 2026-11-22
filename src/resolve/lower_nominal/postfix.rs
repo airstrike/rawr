@@ -2368,7 +2368,7 @@ impl<'a> Parser<'a> {
         if let Some(place) = self.indexed_place(&value)? {
             return Ok(place);
         }
-        self.next();
+        let (_, open) = self.next();
         let outer = std::mem::replace(&mut self.no_struct, false);
         let index = self.parse_range_or_expr();
         self.no_struct = outer;
@@ -2377,7 +2377,7 @@ impl<'a> Parser<'a> {
         let index = match index {
             Ok(index) => index,
             Err((low, high, inclusive)) => {
-                return self.parse_slice(value, low, high, inclusive, end);
+                return self.parse_slice(value, [low, high], inclusive, [open, end]);
             }
         };
         self.index_into(value, index, end)
@@ -2697,10 +2697,9 @@ impl<'a> Parser<'a> {
     pub(super) fn parse_slice(
         &mut self,
         value: ParsedExpr,
-        low: Option<ParsedExpr>,
-        high: Option<ParsedExpr>,
+        [low, high]: [Option<ParsedExpr>; 2],
         inclusive: bool,
-        end: Position,
+        [open, end]: [Position; 2],
     ) -> Result<ParsedExpr, Error> {
         let mut peeled = self.inference.resolve(&value.ty);
         while let Ty::Reference { target, .. } = peeled {
@@ -2765,6 +2764,7 @@ impl<'a> Parser<'a> {
                 low: low.clone(),
                 high: high.clone(),
                 inclusive,
+                open,
             }))
         });
         let source = self.prelude_op(
@@ -3557,6 +3557,37 @@ impl<'a> Parser<'a> {
                 };
                 (source, Ty::Tuple(Box::new([half.clone(), half])))
             }
+            // `split_at_mut(mid)`: the views of the two halves, each the
+            // reference to its elements (`view.rs`), with std's panic.
+            ("split_at_mut", [mid]) => {
+                self.coerce_expr(&Ty::Int(Int::Usize), mid)?;
+                let source =
+                    self.view_call(&value, crate::eval::view::SPLIT, mid.rendered_source())?;
+                let half = Ty::Reference {
+                    mutable: true,
+                    target: Box::new(Ty::sequence(sequence::Kind::Slice, element)),
+                };
+                (source, Ty::Tuple(Box::new([half.clone(), half])))
+            }
+            // `chunks_mut(size)`: an iterator over the views of each chunk.
+            ("chunks_mut", [size]) => {
+                self.coerce_expr(&Ty::Int(Int::Usize), size)?;
+                let chunks =
+                    self.view_call(&value, crate::eval::view::CHUNKS, size.rendered_source())?;
+                let item = Ty::Reference {
+                    mutable: true,
+                    target: Box::new(Ty::sequence(sequence::Kind::Slice, element)),
+                };
+                let chunks = self.operator_expr(
+                    chunks,
+                    Ty::Array {
+                        element: Box::new(item.clone()),
+                        kind: sequence::Kind::Vec,
+                    },
+                    expression,
+                );
+                return Ok(self.array_iterator(&chunks, item, end));
+            }
             ("contains", [argument]) => {
                 let expected = Ty::Reference {
                     mutable: false,
@@ -3643,6 +3674,7 @@ impl<'a> Parser<'a> {
         let mut parsed = self.operator_expr(source, ty, expression);
         if whole.is_some() {
             parsed.lvalue = whole;
+            self.viewed_whole = Some(expression);
         }
         Ok(parsed)
     }

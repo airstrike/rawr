@@ -7730,3 +7730,274 @@ fn a_mod_s_path_attribute_names_its_file() {
     );
     assert_eq!(output, "1 2 3 4\n");
 }
+
+#[test]
+fn a_kept_view_of_a_range_of_elements_reaches_them() {
+    // A `&mut [T]` kept from `as_mut_slice()`, `make_contiguous()` or
+    // `&mut v[a..]`, in a local or a struct's field, changes the
+    // collection, its `first_mut` and `last_mut` included, as rustc's build
+    // runs it (#800, D1113).
+    let output = printed(
+        r#"
+use std::collections::VecDeque;
+struct W<'a> {
+    s: &'a mut [i32],
+}
+fn main() {
+    let mut v = vec![3, 1, 2];
+    let s = v.as_mut_slice();
+    s.sort();
+    s[0] = 10;
+    println!("{:?}", v);
+    let mut d: VecDeque<i32> = VecDeque::new();
+    d.push_back(3);
+    d.push_front(5);
+    d.push_back(1);
+    let c = d.make_contiguous();
+    c.sort();
+    println!("{:?}", d);
+    let mut w = vec![3, 1, 2, 5];
+    let s = &mut w[1..];
+    s.reverse();
+    s[0] += 100;
+    s.sort();
+    println!("{:?} {}", s, s.len());
+    let t = &mut s[1..];
+    t[0] = 9;
+    if let Some(x) = s.first_mut() {
+        *x = 7;
+    }
+    if let Some(x) = s.last_mut() {
+        *x += 1;
+    }
+    w.push(4);
+    println!("{:?}", w);
+    let mut x = vec![1, 2, 3];
+    let held = W { s: &mut x[1..] };
+    held.s[0] = 7;
+    println!("{:?}", x);
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "[10, 2, 3]\n[1, 3, 5]\n[1, 2, 105] 3\n[3, 7, 9, 106, 4]\n[1, 7, 3]\n"
+    );
+}
+
+#[test]
+fn split_at_mut_and_chunks_mut_views_reach_their_collection() {
+    // Each half `split_at_mut` gives and each chunk of `chunks_mut` is a
+    // view of the collection's own elements: two halves are used side by
+    // side, from closures and from scoped threads, with no data race, as
+    // rustc's build runs them (D1113).
+    let output = printed(
+        r#"
+fn halves(s: &mut [i32]) {
+    let (a, b) = s.split_at_mut(1);
+    a[0] = b[0] + b[1];
+    for c in b.chunks_mut(1) {
+        c[0] *= 2;
+    }
+}
+fn main() {
+    let mut v = vec![1, 2, 3, 4, 5];
+    let (a, b) = v.split_at_mut(2);
+    a[0] = 10;
+    b[0] += a[1];
+    std::mem::swap(&mut a[1], &mut b[2]);
+    println!("{:?} {:?}", a, b);
+    println!("{:?}", v);
+    for c in v.chunks_mut(2) {
+        c[0] *= 10;
+        c.reverse();
+    }
+    println!("{:?}", v);
+    let mut u = vec![1, 2, 3];
+    halves(&mut u);
+    println!("{:?}", u);
+    let mut w = vec![3, 1, 2, 5, 4];
+    let (a, b) = w.split_at_mut(2);
+    a.sort_by_key(|x| b[0] - *x);
+    b.sort_by(|x, y| a[0].cmp(x).then(x.cmp(y)));
+    println!("{:?}", w);
+    let mut t = vec![1, 2, 3, 4, 5];
+    let (a, b) = t.split_at_mut(2);
+    std::thread::scope(|scope| {
+        scope.spawn(|| a.reverse());
+        scope.spawn(|| b.sort_by(|x, y| y.cmp(x)));
+    });
+    println!("{:?}", t);
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "[10, 5] [5, 4, 2]\n[10, 5, 5, 4, 2]\n[5, 100, 4, 50, 20]\n[5, 4, 6]\n[3, 1, 4, 5, \
+         2]\n[2, 1, 5, 4, 3]\n"
+    );
+}
+
+#[test]
+fn a_kept_iter_mut_reaches_each_element() {
+    // A kept `iter_mut()` used other than by `next()`: a local walked by a
+    // `for`, `zip`, `rev`, `enumerate`, `filter`, `for_each`, collected into
+    // a `Vec<&mut T>`, passed to a function, and two of its items held at
+    // once, as rustc's build runs them (#806, D1113).
+    let output = printed(
+        r#"
+fn bump<'a>(it: impl Iterator<Item = &'a mut i32>) {
+    for x in it {
+        *x += 1;
+    }
+}
+struct S {
+    v: Vec<i32>,
+}
+fn main() {
+    let mut v = vec![1, 2, 3];
+    let it = v.iter_mut();
+    for x in it {
+        *x *= 2;
+    }
+    let mut w = vec![1, 2, 3];
+    let a = vec![10, 20, 30];
+    for (x, y) in w.iter_mut().zip(a.iter()) {
+        *x += y;
+    }
+    let mut u = vec![1, 2, 3];
+    let refs: Vec<&mut i32> = u.iter_mut().collect();
+    for r in refs {
+        *r += 1;
+    }
+    let mut q = vec![1, 2, 3];
+    q.iter_mut().rev().for_each(|x| *x -= 1);
+    println!("{:?} {:?} {:?} {:?}", v, w, u, q);
+    let mut e = vec![1, 2, 3];
+    let mut it = e.iter_mut().enumerate();
+    let (i, x) = it.next().unwrap();
+    *x = 100 + i as i32;
+    for (i, x) in it {
+        *x += i as i32 * 10;
+    }
+    println!("{:?}", e);
+    let mut p = vec![1, 2, 3];
+    bump(p.iter_mut());
+    let mut it = p.iter_mut();
+    it.next();
+    let rest: Vec<&mut i32> = it.collect();
+    for r in rest {
+        *r *= 10;
+    }
+    println!("{:?}", p);
+    let mut n = vec![1, 2, 3];
+    let mut it = n.iter_mut();
+    let a = it.next().unwrap();
+    let b = it.next().unwrap();
+    *a += 10;
+    *b += 20;
+    std::mem::swap(a, b);
+    *it.next().unwrap() += 5;
+    println!("{:?}", n);
+    let mut f = vec![1, 2, 3, 4];
+    let evens: Vec<&mut i32> = f.iter_mut().filter(|x| **x % 2 == 0).collect();
+    for e in evens {
+        *e = 0;
+    }
+    let mut s = S { v: vec![1, 2, 3] };
+    let refs: Vec<&mut i32> = s.v.iter_mut().rev().collect();
+    *refs.into_iter().next().unwrap() = 9;
+    println!("{:?} {:?}", f, s.v);
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "[2, 4, 6] [11, 22, 33] [2, 3, 4] [0, 1, 2]\n[100, 12, 23]\n[2, 30, 40]\n[22, 11, \
+         8]\n[1, 0, 3, 0] [1, 2, 9]\n"
+    );
+}
+
+#[test]
+fn a_kept_view_holds_its_collection_borrowed() {
+    // While a kept `iter_mut()`, a `split_at_mut` half, a chunk, a range's
+    // view or the references collected from them live, the collection is
+    // borrowed mutably: rustc's E0499 and E0502 (#805).
+    let refused_with = |body: &str, report: &str| {
+        let refusal = refused(&format!(
+            "fn main() {{\n    let mut v = vec![1, 2, 3];\n{body}}}\nmain();\n"
+        ));
+        assert!(refusal.starts_with(report), "{body}: {refusal}");
+    };
+    let twice = "error[E0499]: cannot borrow `v` as mutable more than once at a time";
+    let shared =
+        "error[E0502]: cannot borrow `v` as immutable because it is also borrowed as mutable";
+    refused_with(
+        "    let mut it = v.iter_mut();\n    v.len();\n    it.next();\n",
+        shared,
+    );
+    refused_with(
+        "    let (a, _b) = v.split_at_mut(1);\n    let c = &mut v;\n    a[0] = 1;\n    \
+         c.push(1);\n",
+        twice,
+    );
+    refused_with(
+        "    let s = v.as_mut_slice();\n    v.push(4);\n    s[0] = 1;\n",
+        twice,
+    );
+    refused_with(
+        "    let mut refs: Vec<&mut i32> = v.iter_mut().collect();\n    println!(\"{}\", \
+         v.len());\n    *refs[0] = 1;\n",
+        shared,
+    );
+    refused_with(
+        "    let mut a = v.iter_mut();\n    let mut b = v.iter_mut();\n    a.next();\n    \
+         b.next();\n",
+        twice,
+    );
+    refused_with(
+        "    for c in v.chunks_mut(2) {\n        v.push(c[0]);\n    }\n",
+        twice,
+    );
+    refused_with(
+        "    let s = &mut v[1..];\n    println!(\"{}\", v[0]);\n    s[0] = 1;\n",
+        shared,
+    );
+}
+
+#[test]
+fn a_view_out_of_its_range_panics_as_rustc() {
+    // std's panics for a view's bounds, where rustc's build places them.
+    for (body, at, message) in [
+        (
+            "    let (a, b) = v.split_at_mut(5);\n    a[0] = b[0];\n",
+            "3:20",
+            "mid > len",
+        ),
+        (
+            "    let s = &mut v[1..9];\n    s[0] = 1;\n",
+            "3:19",
+            "range end index 9 out of range for slice of length 3",
+        ),
+        (
+            "    let s = &mut v[1..];\n    s[5] = 1;\n",
+            "4:5",
+            "index out of bounds: the len is 2 but the index is 5",
+        ),
+        (
+            "    for c in v.chunks_mut(0) {\n        c[0] = 1;\n    }\n",
+            "3:16",
+            "chunk size must be non-zero",
+        ),
+    ] {
+        let source = format!("fn main() {{\n    let mut v = vec![1, 2, 3];\n{body}}}\n");
+        assert_eq!(
+            panicked(&source),
+            format!("thread 'main' panicked at main.rs:{at}:\n{message}"),
+            "{body}"
+        );
+    }
+}

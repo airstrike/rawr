@@ -6,7 +6,7 @@ use super::ty::Ty;
 use super::{origin, BindingKind, ParsedExpr, Parser};
 use crate::resolve::Error;
 use crate::tokenizer::Token;
-use crate::{type_def, ImmutableString, Span};
+use crate::{type_def, ImmutableString, Position, Span};
 
 #[derive(Clone)]
 pub(super) struct Field {
@@ -145,6 +145,8 @@ pub(super) struct Slice {
     pub(super) low: origin::Fragment,
     pub(super) high: origin::Fragment,
     pub(super) inclusive: bool,
+    /// Where its `[` is, which a range out of bounds panics at.
+    pub(super) open: Position,
 }
 
 impl Lvalue {

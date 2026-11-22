@@ -363,6 +363,10 @@ pub(super) enum PreludeOp {
     SliceGet,
     /// `v.split_at(mid)` of an array or a string: the pair of its halves.
     SplitAt,
+    /// What a stored `&mut` of an array or of a range of its elements
+    /// gives (D1113): `view(reference, code, argument)`, by
+    /// `eval::view`'s codes, with Rust's panics.
+    View,
     /// A `char` method of `CHAR_METHODS`: `char(c, code, argument)`.
     CharMethod,
     /// `char::from_digit(n, radix)`, or `char::from_u32(n)` with radix `-1`.
@@ -571,6 +575,7 @@ impl PreludeOp {
             Self::SliceGetRange => "slice.get-range",
             Self::SliceGet => "slice.get",
             Self::SplitAt => "slice.split-at",
+            Self::View => "slice.view",
             Self::CharMethod => "char.method",
             Self::CharFrom => "char.from",
             Self::IntErrorKind => "error.int-kind",
@@ -833,6 +838,11 @@ impl PreludeOp {
             Self::SliceGet | Self::SplitAt => {
                 vec![TypeId::of::<Dynamic>(), TypeId::of::<crate::INT>()]
             }
+            Self::View => vec![
+                TypeId::of::<Dynamic>(),
+                TypeId::of::<crate::INT>(),
+                TypeId::of::<Dynamic>(),
+            ],
             Self::CharFrom => vec![TypeId::of::<crate::INT>(), TypeId::of::<crate::INT>()],
             Self::IntErrorKind => vec![TypeId::of::<ImmutableString>()],
             Self::CaseMapping => vec![TypeId::of::<char>(), TypeId::of::<bool>()],
@@ -1252,6 +1262,10 @@ impl PreludeOp {
             }
             Self::Slice | Self::SliceGetRange | Self::SplitAt => {
                 return slice_value(self, args);
+            }
+            Self::View => {
+                let code = args[1].as_int().unwrap_or(-1);
+                return crate::Engine::view(args[0], code, args[2]).or_else(panic);
             }
             Self::VecMethod => return vec_method(context, args),
             Self::PathGet | Self::PathSet => return places::path_invoke(self, args),

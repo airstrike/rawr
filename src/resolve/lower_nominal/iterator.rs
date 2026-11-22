@@ -1112,8 +1112,17 @@ impl Parser<'_> {
                 // A crate function named as an argument is the closure that
                 // calls it, as for `Option::map` (T327): `.map(text)`.
                 self.script_callables = true;
+                // A closure given the chain's stored `&mut` items
+                // (`for_each(|x| *x += 1)` of a kept `iter_mut()`) reaches
+                // each item's place through it.
+                self.stored_inputs = matches!(self.peek(), Token::LeftParen)
+                    && matches!(self.peek_second(), Token::Pipe)
+                    && self.holds_mutable_reference(&item);
                 let iterator = Ty::iter(item.clone());
-                self.parse_std_arguments(&iterator, &member, "iterator method arguments")?
+                let arguments =
+                    self.parse_std_arguments(&iterator, &member, "iterator method arguments");
+                self.stored_inputs = false;
+                arguments?
             };
         let expression = span(value.span.start(), end);
         let arity = |expected: usize, arguments: &[ParsedExpr]| {
