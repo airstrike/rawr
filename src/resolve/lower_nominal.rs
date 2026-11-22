@@ -521,6 +521,11 @@ struct Parser<'a> {
     /// argument: a closure's body is converted into it, as Rust's `Into`.
     closure_outputs: Vec<Option<closure::Output>>,
     closure_output: Option<closure::Output>,
+    /// The return type std's `Fn` bound gives the closure each call
+    /// argument fills (`U` of `map_or`'s `F: FnOnce(T) -> U`), which its
+    /// body is coerced to, as rustc's expected closure signature is.
+    closure_returns: Vec<Option<Ty>>,
+    closure_return: Option<Ty>,
     /// The closure about to be parsed is an async body's step function
     /// (`parse_async_block`), with its output type when it is known.
     async_step: Option<Option<Ty>>,
@@ -1082,6 +1087,8 @@ impl<'a> Parser<'a> {
             static_reads: HashSet::new(),
             closure_outputs: Vec::new(),
             closure_output: None,
+            closure_returns: Vec::new(),
+            closure_return: None,
             async_step: None,
             async_closure: false,
             array_hint: None,

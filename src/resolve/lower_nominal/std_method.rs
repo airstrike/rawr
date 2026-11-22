@@ -416,6 +416,11 @@ pub(super) struct Arguments {
     /// for an argument that takes no closure, or one whose inputs name a
     /// type rawr has none of.
     pub closures: Vec<Option<Box<[Ty]>>>,
+    /// The return type of each closure argument, as its `Fn` bound writes
+    /// it: `U` of `map_or`'s `F: FnOnce(T) -> U`, one of the method's own
+    /// type parameters. `None` where `closures` has none, or the bound
+    /// writes no type rawr has.
+    pub returns: Vec<Option<Ty>>,
     /// The type of each argument up to the last that names one of the
     /// method's own type parameters (`init: B` of `fold`), whose value
     /// fixes it for the closures after it. Earlier ones are left to be
@@ -498,18 +503,25 @@ pub(super) fn arguments(receiver: &Ty, member: &str, fresh: &mut impl FnMut() ->
         let closure = written_bounds
             .into_iter()
             .flat_map(std_table::split_bounds)
-            .find_map(closure_inputs);
+            .find_map(|bound| Some((closure_inputs(bound)?, closure_output(bound))));
         match closure {
-            Some(inputs) => {
+            Some((inputs, output)) => {
                 let inputs = std_table::split_list(inputs)
                     .into_iter()
                     .map(|input| known.ty(input))
                     .collect::<Option<Box<[Ty]>>>();
+                arguments.returns.push(
+                    inputs
+                        .is_some()
+                        .then(|| known.ty(output.unwrap_or("()")))
+                        .flatten(),
+                );
                 arguments.closures.push(inputs);
                 arguments.generics.push(fresh());
             }
             None => {
                 arguments.closures.push(None);
+                arguments.returns.push(None);
                 let generic = bounds.iter().any(|(name, _)| *name == written);
                 match known.ty(written) {
                     Some(ty) if generic => {
@@ -532,6 +544,14 @@ fn closure_inputs(bound: &'static str) -> Option<&'static str> {
         .find_map(|closure| bound.starts_with(closure).then_some(closure.len() - 1))?;
     let close = open + std_table::closing(&bound[open..], '(', ')')?;
     Some(&bound[open + 1..close])
+}
+
+/// The output a closure bound writes: `bool` of `FnMut(&T, &T) -> bool`,
+/// `None` for one that writes none, which returns `()`.
+fn closure_output(bound: &'static str) -> Option<&'static str> {
+    let open = bound.find('(')?;
+    let close = open + std_table::closing(&bound[open..], '(', ')')?;
+    Some(bound[close + 1..].trim().strip_prefix("->")?.trim())
 }
 
 /// The types a method's declaration names, as rawr's: its impl's and its

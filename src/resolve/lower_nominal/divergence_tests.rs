@@ -9153,3 +9153,59 @@ main();
         "Err(TryFromIntError(PosOverflow)) Ok(5) [1, 2, 3] [2, 4, 6] ab 6 6\n30 5 -3 false P(3)\n"
     );
 }
+
+#[test]
+fn a_closure_passed_to_a_cell_method_takes_std_parameter_types() {
+    // `Cell::update`'s `impl FnOnce(T) -> T` gives `x` the cell's type,
+    // and `RefCell::replace_with`'s `F: FnOnce(&mut T) -> T` gives `v`
+    // its: the closure reads before the method's own error (#803).
+    let output = printed(
+        r#"
+use std::cell::Cell;
+fn main() {
+    let c = Cell::new(2u8);
+    c.update(|x| x.pow(2) + 1);
+    let held = &c;
+    held.update(|x| x * 2);
+    println!("{}", c.get());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "10\n");
+    let report = refused(
+        r#"
+fn main() {
+    let r = std::cell::RefCell::new(vec![1]);
+    r.replace_with(|v| { let mut n = v.clone(); n.push(2); n });
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error: rawr doesn't run `RefCell::replace_with` yet"),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_closure_passed_to_a_std_method_returns_its_fn_bounds_output() {
+    // `map_or`'s `F: FnOnce(T) -> U` takes `U` from the default, `&str`,
+    // so the closure's `&String` coerces to it, as rustc's expected
+    // closure signature makes it (#804).
+    let output = printed(
+        r#"
+fn main() {
+    let name = String::from("n");
+    let a: &str = Some(&name).map_or("", |s| s);
+    let held = vec![1, 2];
+    let b = Some(&held).map_or(&[0][..], |v| v);
+    let words = vec![String::from("w")];
+    let c: Vec<usize> = words.iter().map(|w| w.len()).collect();
+    println!("{a} {b:?} {c:?} {}", None.map_or("none", |s: &String| s));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "n [1, 2] [1] none\n");
+}

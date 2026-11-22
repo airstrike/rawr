@@ -1731,9 +1731,11 @@ impl<'a> Parser<'a> {
         let receiver = self.inference.resolve(receiver);
         let declared = std_method::arguments(&receiver, member, &mut || self.inference.fresh());
         self.closure_hints = declared.closures;
+        self.closure_returns = declared.returns;
         self.generic_argument_hints = declared.generics;
         let arguments = self.parse_call_arguments(context);
         self.closure_hints = Vec::new();
+        self.closure_returns = Vec::new();
         self.generic_argument_hints = Vec::new();
         arguments
     }
@@ -1768,6 +1770,7 @@ impl<'a> Parser<'a> {
         let mut arguments = Vec::new();
         let mut hints = std::mem::take(&mut self.closure_hints).into_iter();
         let mut outputs = std::mem::take(&mut self.closure_outputs).into_iter();
+        let mut returns = std::mem::take(&mut self.closure_returns).into_iter();
         while !matches!(self.peek(), Token::RightParen) {
             if self.element_left_out()? {
                 continue;
@@ -1781,6 +1784,7 @@ impl<'a> Parser<'a> {
                     self.overload_closure_hint(items, receiver.as_ref(), &arguments);
             }
             self.closure_output = outputs.next().flatten();
+            self.closure_return = returns.next().flatten();
             let expected = expected.next().flatten();
             let generic = generic.next();
             // A closure where a crate function takes `impl Fn(f32) -> C`
@@ -1810,6 +1814,7 @@ impl<'a> Parser<'a> {
             self.script_callable = false;
             self.closure_hint = None;
             self.closure_output = None;
+            self.closure_return = None;
             self.no_struct = outer;
             arguments.push(argument?);
             if matches!(self.peek(), Token::Comma) {

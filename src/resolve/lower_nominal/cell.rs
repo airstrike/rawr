@@ -536,7 +536,8 @@ impl Parser<'_> {
         member: ImmutableString,
         member_span: Span,
     ) -> Result<ParsedExpr, Error> {
-        let (mut arguments, end) = self.parse_call_arguments("`RefCell` method arguments")?;
+        let (mut arguments, end) =
+            self.parse_std_arguments(&value.ty, &member, "`RefCell` method arguments")?;
         let call = span(value.span.start(), end);
         let cell = value.rendered_source();
         match (member.as_str(), arguments.as_mut_slice()) {
@@ -626,11 +627,28 @@ impl Parser<'_> {
                 let source = self.prelude_op(PreludeOp::CellClone, [cell]);
                 Ok(self.operator_expr(source, Ty::Cell(CellKind::RefCell, Box::new(inner)), call))
             }
-            _ => Err(Error::UnknownMember {
-                owner: format!("RefCell<{}>", inner.name(&self.models)).into(),
+            _ => Err(self.cell_not_yet(
+                Ty::Cell(CellKind::RefCell, Box::new(inner)),
+                member,
+                member_span,
+            )),
+        }
+    }
+
+    /// The error of a method `cell` doesn't run: the not-yet error of one
+    /// std declares (D712.1), as `RefCell::replace_with`, else rustc's
+    /// unknown member.
+    fn cell_not_yet(&self, cell: Ty, member: ImmutableString, member_span: Span) -> Error {
+        match std_method::inherent(&cell, &member) {
+            Some(found) => Error::NotYet {
+                path: std_method::path(&found).into(),
+                reference: member_span,
+            },
+            None => Error::UnknownMember {
+                owner: cell.name(&self.models),
                 member,
                 reference: member_span,
-            }),
+            },
         }
     }
 
@@ -665,7 +683,8 @@ impl Parser<'_> {
         member: ImmutableString,
         member_span: Span,
     ) -> Result<ParsedExpr, Error> {
-        let (mut arguments, end) = self.parse_call_arguments("`Cell` method arguments")?;
+        let (mut arguments, end) =
+            self.parse_std_arguments(&value.ty, &member, "`Cell` method arguments")?;
         let call = span(value.span.start(), end);
         let cell = value.rendered_source();
         let needs = |this: &Self, capability: capability::Kind, name: &str| {
@@ -731,11 +750,26 @@ impl Parser<'_> {
                 let source = self.prelude_op(PreludeOp::CellClone, [cell]);
                 Ok(self.operator_expr(source, Ty::Cell(CellKind::Cell, Box::new(inner)), call))
             }
-            _ => Err(Error::UnknownMember {
-                owner: format!("Cell<{}>", inner.name(&self.models)).into(),
+            // `c.update(f)`, std's `let old = self.get(); self.set(f(old))`.
+            ("update", [function]) => {
+                needs(self, capability::Kind::Copy, "Copy")?;
+                let held = self.temporary("cell");
+                let old = self.prelude_op(PreludeOp::CellGet, [held.as_str().into()]);
+                let new =
+                    self.callable_call(function, std::slice::from_ref(&inner), &inner, vec![old])?;
+                let set = self.prelude_op(PreludeOp::CellSet, [held.as_str().into(), new]);
+                let mut source = origin::Fragment::plain(format!("{{ let {held} = "));
+                source.push(cell);
+                source.push_text("; ");
+                source.push(set);
+                source.push_text(" }");
+                Ok(self.operator_expr(source, Ty::Unit, call))
+            }
+            _ => Err(self.cell_not_yet(
+                Ty::Cell(CellKind::Cell, Box::new(inner)),
                 member,
-                reference: member_span,
-            }),
+                member_span,
+            )),
         }
     }
 
