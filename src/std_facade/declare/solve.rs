@@ -288,6 +288,30 @@ pub(super) fn definition(path: &'static str) -> &'static str {
     std_table::definition_of(path).unwrap_or(path)
 }
 
+/// The type the public path `path` names: its own, or the one std's type
+/// alias of no parameters names, as `std::sync::atomic::AtomicUsize` names
+/// `std::sync::atomic::Atomic<usize>`.
+pub(super) fn named(path: &'static str) -> Written {
+    read(std_table::aliased(path).unwrap_or(path))
+}
+
+/// The definition of the type the public path `path` names
+/// ([`named`]): `core::sync::atomic::Atomic` of
+/// `std::sync::atomic::AtomicUsize`.
+pub(super) fn named_definition(path: &'static str) -> &'static str {
+    match named(path) {
+        Written::Path { path, .. } => definition(path),
+        _ => definition(path),
+    }
+}
+
+/// Whether `concrete` is an instance of `pattern`, whose `variables` may
+/// stand for any type: an impl's self type `Cursor<Vec<u8>>` is one of a
+/// held `Cursor<T>`, and `Atomic<bool>` is none of `Atomic<usize>`.
+pub(super) fn instance(pattern: &Written, concrete: &Written, variables: &[&'static str]) -> bool {
+    matches(pattern, concrete, variables, &mut Binding::new())
+}
+
 /// The impl's type parameters, which its header's types bind.
 fn variables(implementation: &Impl) -> Vec<&'static str> {
     implementation

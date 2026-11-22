@@ -12,8 +12,10 @@
 //!   stable Rust can name, with its header (`Table::impl_line`);
 //! - `items.tsv`: each definition, with its own stability and generics,
 //!   and its members (a trait's items, a type's inherent items, an enum's
-//!   variants) under its path. An enum's variant has its position in the
-//!   enum's declaration and its declaration (`Start(u64)`), and a
+//!   variants, a struct's public fields) under its path. An enum's variant
+//!   has its position in the enum's declaration and its declaration
+//!   (`Start(u64)`), and a struct's field its position and its declaration
+//!   (`status: std::process::ExitStatus`), and a
 //!   `#[non_exhaustive]` enum's line ends with `non_exhaustive`. A trait's
 //!   line ends with its supertraits,
 //!   and each of its members' with its declaration as a program writes it
@@ -22,7 +24,9 @@
 //!   a type alias's with the type it names (step 6), and a free or
 //!   inherent constant's with its declaration. A type's inherent items
 //!   include those a later crate of std declares for it, as `std`'s `impl
-//!   io::Error` for core's `io::Error`.
+//!   io::Error` for core's `io::Error`. Each impl that declares a name
+//!   gives it a line of its own, with the impl's self type: `fetch_add` of
+//!   `Atomic<i8>`, of `Atomic<usize>`, ..
 //!
 //! What differs by target (`arch`, `simd`, `os`) is left out, so the table
 //! is the same on every host. `scripts/std-table.sh` regenerates it for
@@ -214,10 +218,14 @@ struct Table<'tcx> {
     traits: Vec<(DefId, String)>,
     /// `impls.tsv`'s lines (D711 step 3).
     impls: BTreeSet<String>,
-    /// Each inherent function's line, with its definition and its impl,
-    /// whose declarations are written once every public path is known
-    /// (D711 step 4).
-    inherent: BTreeMap<String, (DefId, DefId)>,
+    /// Each inherent member, under its key, from every impl that declares
+    /// it, whose lines are written once every public path is known (D711
+    /// step 4).
+    inherent: BTreeMap<String, Vec<Member>>,
+    /// Each public field's line, with its struct and its position, which
+    /// ends with the field's declaration once every public path is known:
+    /// `status: std::process::ExitStatus` of `std::process::Output::status`.
+    fields: BTreeMap<String, (DefId, usize)>,
     /// Each free function's line, whose declaration is written as an
     /// inherent function's is (D711 step 6).
     functions: BTreeMap<String, DefId>,
@@ -234,6 +242,18 @@ struct Table<'tcx> {
     /// Whether `ty` writes lifetimes: an inherent function's declaration
     /// does, for its borrow summary.
     lifetimes: std::cell::Cell<bool>,
+    /// The types a stable type alias of no parameters names, which stable
+    /// Rust names through it though their own definition is unstable:
+    /// `Atomic<usize>` of `AtomicUsize`.
+    aliased: HashSet<ty::Ty<'tcx>>,
+}
+
+/// One impl's inherent member of a type.
+struct Member {
+    def_id: DefId,
+    implementation: DefId,
+    kind: &'static str,
+    stability: String,
 }
 
 fn table(tcx: TyCtxt<'_>, out: &Path) -> Result<(), String> {
@@ -259,11 +279,13 @@ fn table(tcx: TyCtxt<'_>, out: &Path) -> Result<(), String> {
         traits: Vec::new(),
         impls: BTreeSet::new(),
         inherent: BTreeMap::new(),
+        fields: BTreeMap::new(),
         functions: BTreeMap::new(),
         aliases: BTreeMap::new(),
         constants: BTreeMap::new(),
         variants: BTreeMap::new(),
         lifetimes: std::cell::Cell::new(false),
+        aliased: HashSet::new(),
     };
     for (krate, name) in &roots {
         let root = krate.as_def_id();
@@ -343,25 +365,35 @@ fn table(tcx: TyCtxt<'_>, out: &Path) -> Result<(), String> {
     for (def_id, canonical) in &traits {
         table.trait_signatures(*def_id, canonical);
     }
-    // Each stable trait's impls in std's crates (D711 step 3).
+    // Each stable trait's impls in std's crates (D711 step 3), of the
+    // types stable Rust names, through a stable alias too.
+    let aliased = table
+        .aliases
+        .values()
+        .filter(|alias| {
+            tcx.generics_of(**alias).own_params.is_empty()
+                && table.public.get(*alias).is_some_and(|(stable, _)| *stable)
+        })
+        .map(|alias| tcx.type_of(*alias).instantiate_identity().skip_norm_wip())
+        .collect();
+    table.aliased = aliased;
     let crates = roots.iter().map(|(krate, _)| *krate).collect::<Vec<_>>();
     for (def_id, canonical) in &traits {
         table.trait_impls(*def_id, canonical, &crates);
     }
     // Every primitive's inherent items, under its name: `i64::pow`.
     for (name, simplified) in primitives() {
-        let mut members = BTreeSet::new();
         for implementation in tcx.incoherent_impls(simplified) {
-            table.inherent_members(*implementation, name, &mut members);
+            table.inherent_members(*implementation, name);
         }
         table
             .items
             .insert(name.to_owned(), "primitive\ts\t".to_owned());
     }
     // Each inherent function's declaration (D711 step 4).
-    table.inherent_signatures();
-    write_sorted(out.join("paths.tsv"), &table.paths)?;
-    write_sorted(out.join("items.tsv"), &table.items)?;
+    let members = table.inherent_signatures();
+    write_sorted(out.join("paths.tsv"), &table.paths, Vec::new())?;
+    write_sorted(out.join("items.tsv"), &table.items, members)?;
     let mut text = String::new();
     for line in &table.impls {
         text.push_str(line);
@@ -373,10 +405,23 @@ fn table(tcx: TyCtxt<'_>, out: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn write_sorted(path: PathBuf, lines: &BTreeMap<String, String>) -> Result<(), String> {
+/// Write `lines` and `more`, which may share a key with each other, in
+/// their sorted order.
+fn write_sorted(
+    path: PathBuf,
+    lines: &BTreeMap<String, String>,
+    more: Vec<String>,
+) -> Result<(), String> {
+    let mut sorted = lines
+        .iter()
+        .map(|(key, value)| format!("{key}\t{value}"))
+        .chain(more)
+        .collect::<Vec<_>>();
+    sorted.sort_unstable();
+    sorted.dedup();
     let mut text = String::new();
-    for (key, value) in lines {
-        let _ = writeln!(text, "{key}\t{value}");
+    for line in sorted {
+        let _ = writeln!(text, "{line}");
     }
     fs::write(&path, text).map_err(|error| format!("failed to write {}: {error}", path.display()))
 }
@@ -512,7 +557,10 @@ impl<'tcx> Table<'tcx> {
                 }
                 self.inherent(def_id, canonical);
             }
-            DefKind::Struct | DefKind::Union => self.inherent(def_id, canonical),
+            DefKind::Struct | DefKind::Union => {
+                self.fields(def_id, canonical, &own);
+                self.inherent(def_id, canonical);
+            }
             DefKind::Fn => {
                 self.functions.insert(canonical.to_owned(), def_id);
             }
@@ -531,21 +579,15 @@ impl<'tcx> Table<'tcx> {
     /// `io::Error`.
     fn inherent(&mut self, def_id: DefId, canonical: &str) {
         let tcx = self.tcx;
-        let mut members = BTreeSet::new();
         let incoherent = tcx.incoherent_impls(SimplifiedType::Adt(def_id));
         for implementation in tcx.inherent_impls(def_id).iter().chain(incoherent) {
-            self.inherent_members(*implementation, canonical, &mut members);
+            self.inherent_members(*implementation, canonical);
         }
     }
 
-    /// An inherent impl's public items under `owner`; the first impl to
-    /// declare a name gives its line.
-    fn inherent_members(
-        &mut self,
-        implementation: DefId,
-        owner: &str,
-        seen: &mut BTreeSet<String>,
-    ) {
+    /// An inherent impl's public items under `owner`, beside those other
+    /// impls of the type declare under the same names.
+    fn inherent_members(&mut self, implementation: DefId, owner: &str) {
         let tcx = self.tcx;
         let inherited = stability(tcx, implementation);
         for member in tcx.associated_item_def_ids(implementation) {
@@ -555,29 +597,33 @@ impl<'tcx> Table<'tcx> {
             let Some(name) = tcx.associated_item(*member).opt_name() else {
                 continue;
             };
-            let key = format!("{owner}::{name}");
-            seen.insert(key.clone());
-            let stability = member_stability(tcx, *member, inherited.clone());
-            let kind = kind_text(tcx.def_kind(*member));
-            // A stable method beside an unstable one of its name keeps the
-            // stable line.
-            match self.items.get(&key) {
-                Some(line) if line.split('\t').nth(1) == Some("s") => {}
-                _ => {
-                    self.inherent.remove(&key);
-                    self.constants.remove(&key);
-                    match kind {
-                        "assoc-fn" => {
-                            self.inherent.insert(key.clone(), (*member, implementation));
-                        }
-                        "assoc-const" => {
-                            self.constants.insert(key.clone(), *member);
-                        }
-                        _ => {}
-                    }
-                    self.items.insert(key, format!("{kind}\t{stability}\t"));
-                }
+            self.inherent
+                .entry(format!("{owner}::{name}"))
+                .or_default()
+                .push(Member {
+                    def_id: *member,
+                    implementation,
+                    kind: kind_text(tcx.def_kind(*member)),
+                    stability: member_stability(tcx, *member, inherited.clone()),
+                });
+        }
+    }
+
+    /// A struct's or union's public fields under its path `canonical`, each
+    /// with its position, of the stability `own` when it has none of its
+    /// own.
+    fn fields(&mut self, def_id: DefId, canonical: &str, own: &str) {
+        let tcx = self.tcx;
+        let fields = &tcx.adt_def(def_id).non_enum_variant().fields;
+        for (index, field) in fields.iter().enumerate() {
+            if !field.vis.is_public() {
+                continue;
             }
+            let key = format!("{canonical}::{}", field.name);
+            let stability = member_stability(tcx, field.did, Some(own.to_owned()));
+            self.items
+                .insert(key.clone(), format!("field\t{stability}\t{index}"));
+            self.fields.insert(key, (def_id, index));
         }
     }
 }
@@ -1132,18 +1178,25 @@ impl<'tcx> Table<'tcx> {
         text
     }
 
-    /// Each inherent function's line: the impl's self type when it isn't
-    /// the owner's own (`Option<&T>` of `copied`, `[u8]` of `is_ascii`),
-    /// then its declaration with its lifetimes (D711 step 4); then each free
-    /// function's declaration and each type alias's type (step 6), and each
-    /// constant's declaration.
-    fn inherent_signatures(&mut self) {
+    /// Each inherent member's lines, one per impl that declares it: the
+    /// impl's self type when it isn't the owner's own (`Option<&T>` of
+    /// `copied`, `[u8]` of `is_ascii`), then a function's declaration with
+    /// its lifetimes (D711 step 4) or a constant's. Then each free
+    /// function's declaration and each type alias's type (step 6), each
+    /// free constant's declaration, and each variant's and field's.
+    fn inherent_signatures(&mut self) -> Vec<String> {
         let tcx = self.tcx;
-        self.lifetimes.set(true);
+        let mut lines = Vec::new();
         let inherent = std::mem::take(&mut self.inherent);
-        for (key, (member, implementation)) in &inherent {
+        for (key, member) in inherent
+            .iter()
+            .flat_map(|(key, members)| members.iter().map(move |member| (key, member)))
+        {
+            // A function's declaration writes its lifetimes, for its borrow
+            // summary.
+            self.lifetimes.set(member.kind == "assoc-fn");
             let owner = tcx
-                .type_of(*implementation)
+                .type_of(member.implementation)
                 .instantiate_identity()
                 .skip_norm_wip();
             let identity = match owner.kind() {
@@ -1160,19 +1213,33 @@ impl<'tcx> Table<'tcx> {
                 _ => true,
             };
             let name = key.rsplit("::").next().unwrap_or_default();
-            let declaration = self.declare(*member, name, Some(owner));
             let shown = if identity {
                 String::new()
             } else {
                 self.ty(owner)
             };
-            if let Some(line) = self.items.get_mut(key) {
-                let mut fields = line.split('\t');
-                let kind = fields.next().unwrap_or_default().to_owned();
-                let stability = fields.next().unwrap_or("s").to_owned();
-                *line = format!("{kind}\t{stability}\t{shown}\t{}", clean(&declaration));
-            }
+            let declaration = match member.kind {
+                "assoc-fn" => self.declare(member.def_id, name, Some(owner)),
+                "assoc-const" => {
+                    let ty = tcx
+                        .type_of(member.def_id)
+                        .instantiate_identity()
+                        .skip_norm_wip();
+                    format!("const {name}: {}", self.ty(ty))
+                }
+                _ => {
+                    lines.push(format!("{key}\t{}\t{}\t", member.kind, member.stability));
+                    continue;
+                }
+            };
+            lines.push(format!(
+                "{key}\t{}\t{}\t{shown}\t{}",
+                member.kind,
+                member.stability,
+                clean(&declaration)
+            ));
         }
+        self.lifetimes.set(true);
         // A free function's line ends with its declaration (D711 step 6).
         let functions = std::mem::take(&mut self.functions);
         for (key, function) in &functions {
@@ -1192,7 +1259,7 @@ impl<'tcx> Table<'tcx> {
                 line.push_str(&clean(&target));
             }
         }
-        // A constant's line ends with its declaration, as a free
+        // A free constant's line ends with its declaration, as a free
         // function's does (#925).
         let constants = std::mem::take(&mut self.constants);
         for (key, constant) in &constants {
@@ -1248,6 +1315,29 @@ impl<'tcx> Table<'tcx> {
                 line.push_str(&clean(&declaration));
             }
         }
+        // A field's line ends with its declaration: `status:
+        // std::process::ExitStatus`.
+        let fields = std::mem::take(&mut self.fields);
+        for (key, (structure, index)) in &fields {
+            let Some(field) = tcx
+                .adt_def(*structure)
+                .non_enum_variant()
+                .fields
+                .iter()
+                .nth(*index)
+            else {
+                continue;
+            };
+            let ty = self.ty(tcx
+                .type_of(field.did)
+                .instantiate_identity()
+                .skip_norm_wip());
+            if let Some(line) = self.items.get_mut(key) {
+                line.push('\t');
+                line.push_str(&clean(&format!("{}: {ty}", field.name)));
+            }
+        }
+        lines
     }
 }
 
@@ -1513,6 +1603,7 @@ impl<'tcx> Table<'tcx> {
                             .public
                             .get(&definition.did())
                             .is_some_and(|(stable, _)| *stable)
+                        || self.aliased.contains(&ty)
                 }
                 ty::Foreign(def_id) => self.public.get(def_id).is_some_and(|(stable, _)| *stable),
                 ty::Closure(..)

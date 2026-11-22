@@ -114,14 +114,23 @@ impl<'a> Parser<'a> {
         };
         // A stable function std declares on a type the held one stands
         // for, as `Path::strip_prefix` of a `PathBuf`, which the facade
-        // doesn't bind yet.
+        // doesn't bind yet. A type std's alias names (`AtomicUsize`) has
+        // the functions of the impls of that type (`Atomic<usize>`).
         for form in &forms {
-            let declared = crate::std_table::path(form, crate::std_table::Namespace::Type)
-                .and_then(|path| crate::std_table::item(&format!("{}::{member}", path.definition)));
-            if let Some(item) = declared
-                && item.kind == "assoc-fn"
-                && item.stability == crate::std_table::Stability::Stable
-            {
+            let aliased = crate::std_table::aliased(form);
+            let owner = aliased.map_or(*form, |target| target.split('<').next().unwrap_or(target));
+            let Some(path) = crate::std_table::path(owner, crate::std_table::Namespace::Type)
+            else {
+                continue;
+            };
+            let declared =
+                crate::std_table::items(&format!("{}::{member}", path.definition)).any(|item| {
+                    item.kind == "assoc-fn"
+                        && item.stability == crate::std_table::Stability::Stable
+                        && aliased
+                            .is_none_or(|target| item.impl_self().is_none_or(|own| own == target))
+                });
+            if declared {
                 let name = form.rsplit("::").next().unwrap_or(form);
                 return Error::NotYet {
                     path: format!("{name}::{member}").into(),
@@ -129,7 +138,28 @@ impl<'a> Parser<'a> {
                 };
             }
         }
-        let kind = match crate::std_table::path(form, crate::std_table::Namespace::Type) {
+        // rustc names the type's definition with its parameters where it
+        // declares the member missing: `Atomic<T>` of an `AtomicUsize`.
+        let (definition, declared) = match crate::std_table::aliased(form) {
+            Some(target) => {
+                let head = target.split('<').next().unwrap_or(target);
+                let parameters = crate::std_table::path(head, crate::std_table::Namespace::Type)
+                    .and_then(|path| crate::std_table::item(path.definition))
+                    .map(|item| {
+                        item.generics()
+                            .filter(|parameter| {
+                                parameter.kind == crate::std_table::ParameterKind::Type
+                            })
+                            .map(|parameter| parameter.name)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                let name = head.rsplit("::").next().unwrap_or(head);
+                (head, Some(format!("{name}<{}>", parameters.join(", "))))
+            }
+            None => (form, None),
+        };
+        let kind = match crate::std_table::path(definition, crate::std_table::Namespace::Type) {
             Some(path) if path.kind == "enum" => "enum",
             Some(path) if path.kind == "struct" => "struct",
             _ => return error,
@@ -143,7 +173,7 @@ impl<'a> Parser<'a> {
             reference: *reference,
             receiver: Box::new(crate::resolve::Receiver {
                 kind,
-                declared: name.as_str().into(),
+                declared: declared.unwrap_or_else(|| name.clone()).as_str().into(),
                 found: name.into(),
                 definition: None,
             }),

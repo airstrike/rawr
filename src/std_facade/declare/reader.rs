@@ -166,12 +166,26 @@ impl<'a> Reader<'a> {
             }
             _ => {}
         }
+        let written = Written::Path {
+            path,
+            arguments: arguments.to_vec(),
+            bindings: Vec::new(),
+        };
         for held in self.held {
             match held {
+                // A held type is its definition at any arguments, or the
+                // one type its std alias names: `Atomic<usize>` is
+                // `AtomicUsize`.
                 Held::Value(value)
-                    if value
-                        .forms()
-                        .any(|form| solve::definition(form) == definition) =>
+                    if value.forms().any(|form| {
+                        let named = solve::named(form);
+                        match &named {
+                            Written::Path { path, .. } if *path == form => {
+                                solve::definition(form) == definition
+                            }
+                            _ => solve::same(&named, &written),
+                        }
+                    }) =>
                 {
                     let facade = super::held::Value::facade(value.std);
                     if value.parameters.is_empty() {

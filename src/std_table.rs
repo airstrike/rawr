@@ -34,7 +34,11 @@
 //!   Result<Vec<u8>, std::io::Error>`, and a type alias the type it names,
 //!   `Result<T, std::io::Error>` (D711 step 6). A free or inherent
 //!   constant has its declaration, `const UNIX_EPOCH:
-//!   std::time::SystemTime`.
+//!   std::time::SystemTime`. Each impl that declares an inherent name
+//!   gives it a line of its own, with its self type, so a member has as
+//!   many lines as impls declare it: `fetch_add` of `Atomic<i8>`, of
+//!   `Atomic<usize>`, ... A struct's public field has its position, then
+//!   its declaration, `status: std::process::ExitStatus`.
 //!
 //! - `impls.tsv` (D711 step 3): `trait  key  self  arguments  generics
 //!   where  associated`, one line per impl of a stable trait that stable
@@ -207,20 +211,24 @@ impl Lines {
         Self(text.lines().collect())
     }
 
-    /// The line whose leading fields are `key`: a path's `path\tnamespace`,
-    /// an item's definition. A tab sorts before any character of a key, so
-    /// a line that starts with `key` and goes on with a tab is the one.
+    /// The first line whose leading fields are `key`: a path's
+    /// `path\tnamespace`, an item's definition.
     fn find(&self, key: &str) -> Option<&'static str> {
-        self.0
-            .binary_search_by(|line| match line.strip_prefix(key) {
-                Some(rest) if rest.is_empty() || rest.starts_with('\t') => {
-                    std::cmp::Ordering::Equal
-                }
-                Some(_) => std::cmp::Ordering::Greater,
-                None => (*line).cmp(key),
-            })
-            .ok()
-            .map(|index| self.0[index])
+        self.all(key).first().copied()
+    }
+
+    /// Every line whose leading fields are `key`, in their sorted order. A
+    /// tab sorts before any character of a key, so the lines that start
+    /// with `key` and go on with a tab are together.
+    fn all(&self, key: &str) -> &[&'static str] {
+        let order = |line: &&'static str| match line.strip_prefix(key) {
+            Some(rest) if rest.is_empty() || rest.starts_with('\t') => std::cmp::Ordering::Equal,
+            Some(_) => std::cmp::Ordering::Greater,
+            None => (*line).cmp(key),
+        };
+        let start = self.0.partition_point(|line| order(line).is_lt());
+        let length = self.0[start..].partition_point(|line| order(line).is_eq());
+        &self.0[start..start + length]
     }
 
     /// The lines from the first at or after `prefix`.
@@ -509,10 +517,11 @@ impl Item {
         }
     }
 
-    /// An inherent function's impl's self type, where it isn't its owner's
-    /// own: `Option<&T>` of `Option::copied`, `[u8]` of `slice::is_ascii`.
+    /// An inherent function's or constant's impl's self type, where it
+    /// isn't its owner's own: `Option<&T>` of `Option::copied`, `[u8]` of
+    /// `slice::is_ascii`, `Atomic<usize>` of one `Atomic::fetch_add`.
     pub(crate) fn impl_self(&self) -> Option<&'static str> {
-        (self.kind == "assoc-fn"
+        (matches!(self.kind, "assoc-fn" | "assoc-const")
             && !self.extra.is_empty()
             && !matches!(self.extra, "provided" | "required"))
         .then_some(self.extra)
@@ -657,15 +666,42 @@ pub(crate) fn named(name: &str, namespace: Namespace) -> Vec<Path> {
     named
 }
 
+/// The type std's type alias of no parameters at the public path `path`
+/// names, as its declaration writes it: `std::sync::atomic::Atomic<usize>`
+/// of `std::sync::atomic::AtomicUsize`. `None` for any other path.
+pub(crate) fn aliased(path: &str) -> Option<&'static str> {
+    let found = self::path(path, Namespace::Type)?;
+    if found.kind != "type" {
+        return None;
+    }
+    let alias = item(found.definition)?;
+    (alias.generics().next().is_none() && !alias.declaration().is_empty())
+        .then(|| alias.declaration())
+}
+
 /// Whether `path` is a module.
 pub(crate) fn is_module(path: &str) -> bool {
     self::path(path, Namespace::Type).is_some_and(|found| found.kind == "mod")
 }
 
 /// The definition `definition`, or a member of one: `alloc::vec::Vec`,
-/// `alloc::vec::Vec::push`, `i64::pow`.
+/// `alloc::vec::Vec::push`, `i64::pow`. Of a member several impls
+/// declare, the first line: a stable one before an unstable one, and the
+/// one of the type's own impl first.
 pub(crate) fn item(definition: &str) -> Option<Item> {
     Table::get().items.find(definition).map(item_line)
+}
+
+/// Every line of the definition or member `definition`: one for each impl
+/// that declares an inherent member, each with its self type
+/// ([`Item::impl_self`]), as `core::sync::atomic::Atomic::fetch_add` of
+/// `Atomic<i8>`, `Atomic<usize>`, ..
+pub(crate) fn items(definition: &str) -> impl Iterator<Item = Item> + use<> {
+    Table::get()
+        .items
+        .all(definition)
+        .iter()
+        .map(|line| item_line(line))
 }
 
 fn item_line(line: &'static str) -> Item {
@@ -685,7 +721,8 @@ fn item_line(line: &'static str) -> Item {
 }
 
 /// The members the table lists under `definition`: a trait's items, a
-/// type's inherent items, an enum's variants.
+/// type's inherent items (one for each impl that declares one), an enum's
+/// variants, a struct's public fields.
 pub(crate) fn members(definition: &str) -> impl Iterator<Item = Item> {
     let prefix = format!("{definition}::");
     let length = prefix.len();

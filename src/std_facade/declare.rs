@@ -185,7 +185,7 @@ pub(super) fn declare(
     }
     let mut declared = BTreeSet::new();
     for module in &modules {
-        declared.extend(aliases(sink, &reader, module)?);
+        declared.extend(aliases(sink, &reader, module, &forms)?);
     }
     for path in bound {
         let (owner, name) = path.rsplit_once("::").unwrap_or(("", path));
@@ -234,7 +234,7 @@ fn reexports(
 /// and `'static` are rawr's facts about its own value.
 fn capabilities(value: &held::Value) -> Vec<capability::Kind> {
     use capability::Kind;
-    let own = solve::read(value.std);
+    let own = solve::named(value.std);
     value
         .runs
         .iter()
@@ -275,7 +275,7 @@ type Variant = (&'static str, Vec<Type>);
 /// read from std's value: a named one, one of several, or one of a type
 /// rawr doesn't represent.
 fn variants(reader: &reader::Reader<'_>, value: &held::Value) -> Option<(Vec<Variant>, bool)> {
-    let definition = solve::definition(value.std);
+    let definition = solve::named_definition(value.std);
     let enumeration = std_table::item(definition).filter(|item| item.kind == "enum")?;
     let mut variants = std_table::members(definition)
         .filter(|member| member.kind == "variant")
@@ -334,15 +334,20 @@ fn tuple_fields(variant: &std_table::Item) -> Option<Vec<&'static str>> {
 }
 
 /// std's stable type aliases in `module` whose types rawr represents, as
-/// `io::Result<T>`.
+/// `io::Result<T>`, but for those a held type is, at the facade paths
+/// `held`: `sync::atomic::AtomicUsize`.
 fn aliases(
     sink: &mut impl Sink,
     reader: &reader::Reader<'_>,
     module: &str,
+    held: &BTreeSet<&str>,
 ) -> Result<Vec<String>, host::Error> {
     let mut declared = Vec::new();
     for path in std_table::children(&format!("std::{module}")) {
-        if path.kind != "type" || path.stability != std_table::Stability::Stable {
+        if path.kind != "type"
+            || path.stability != std_table::Stability::Stable
+            || held.contains(held::Value::facade(path.path))
+        {
             continue;
         }
         let Some(item) = std_table::item(path.definition) else {
@@ -395,7 +400,7 @@ fn member(
     name: &str,
 ) -> Result<(), host::Error> {
     let own = Type::registered(held::Value::facade(value.std))?;
-    let item = std_table::item(&format!("{}::{name}", solve::definition(value.std)));
+    let item = std_table::item(&format!("{}::{name}", solve::named_definition(value.std)));
     match item {
         // A unit variant is a value of its enum. A tuple variant is its
         // constructor, beside the shared reader of the same name that gives
@@ -450,7 +455,8 @@ fn member(
 
 /// Each declaration of `name` the types `value` stands for have, with the
 /// reader of its scope, in the order rustc's method probe finds them: a
-/// type's inherent function, then each trait impl's.
+/// type's inherent function, of each impl whose self type the type is,
+/// then each trait impl's.
 fn declarations<'a>(
     reader: &reader::Reader<'a>,
     value: &held::Value,
@@ -461,13 +467,20 @@ fn declarations<'a>(
     let mut found = Vec::new();
     for form in value.forms() {
         let own = own(form, value);
-        if let Some(item) = std_table::item(&format!("{}::{name}", solve::definition(form)))
-            && item.kind == "assoc-fn"
-        {
-            let this = item.impl_self().map_or_else(|| own.clone(), solve::read);
+        let inherent = std_table::items(&format!("{}::{name}", solve::named_definition(form)))
+            .filter(|item| item.kind == "assoc-fn")
+            .map(|item| (item, item.impl_self().map(solve::read)))
+            .filter(|(_, this)| {
+                this.as_ref()
+                    .is_none_or(|this| solve::instance(&own, this, value.parameters))
+            });
+        for (item, this) in inherent {
             found.push((
                 item.declaration(),
-                reader.scoped(vec![("Self", this)], Vec::new()),
+                reader.scoped(
+                    vec![("Self", this.unwrap_or_else(|| own.clone()))],
+                    Vec::new(),
+                ),
             ));
         }
         for function in functions {
@@ -504,9 +517,10 @@ fn declarations<'a>(
 }
 
 /// The type `form` of `value` is, at the held type's own parameters:
-/// `std::io::Cursor<T>`.
+/// `std::io::Cursor<T>`, or `std::sync::atomic::Atomic<usize>` of
+/// `AtomicUsize`.
 fn own(form: &'static str, value: &held::Value) -> Written {
-    match solve::read(form) {
+    match solve::named(form) {
         Written::Path { path, bindings, .. } if !value.parameters.is_empty() => Written::Path {
             path,
             arguments: value

@@ -8642,6 +8642,74 @@ main();
 }
 
 #[test]
+fn std_atomics_run_as_stds() {
+    // Each atomic has its own impl's members (`Atomic<usize>`'s), its
+    // value is shared by a static, a borrow and an `Arc` on threads, and
+    // rustc names it by the type its alias names (#1549).
+    let output = printed(
+        r#"
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, AtomicU64, AtomicUsize, Ordering};
+use std::sync::Arc;
+static NEXT: AtomicUsize = AtomicUsize::new(1);
+struct Counter {
+    hits: AtomicI32,
+}
+fn main() {
+    let a = AtomicUsize::new(5);
+    let old = a.fetch_add(2, Ordering::SeqCst);
+    println!("{old} {} {:?}", a.load(Ordering::Relaxed), a);
+    println!("{:?} {:?}", a.compare_exchange(7, 9, Ordering::SeqCst, Ordering::SeqCst),
+        a.compare_exchange_weak(7, 1, Ordering::SeqCst, Ordering::Relaxed));
+    let b = AtomicBool::default();
+    println!("{} {} {}", b.fetch_not(Ordering::SeqCst), b.swap(false, Ordering::AcqRel), b.into_inner());
+    let small = AtomicU8::from(250);
+    small.fetch_add(10, Ordering::SeqCst);
+    let wide = AtomicU64::new(u64::MAX);
+    println!("{:?} {}", small, wide.fetch_sub(1, Ordering::SeqCst));
+    let counter = Counter { hits: AtomicI32::new(-4) };
+    let borrowed = &counter;
+    borrowed.hits.fetch_max(3, Ordering::SeqCst);
+    println!("{:?}", counter.hits);
+    let shared = Arc::new(AtomicUsize::new(0));
+    let handles = (0..4).map(|_| {
+        let shared = Arc::clone(&shared);
+        std::thread::spawn(move || {
+            for _ in 0..100 {
+                shared.fetch_add(1, Ordering::SeqCst);
+            }
+        })
+    }).collect::<Vec<_>>();
+    for handle in handles {
+        handle.join().unwrap();
+    }
+    NEXT.fetch_add(1, Ordering::Relaxed);
+    println!("{} {} {:?}", shared.load(Ordering::SeqCst), NEXT.load(Ordering::Relaxed), Ordering::SeqCst);
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "5 7 7\nOk(7) Err(9)\nfalse true false\n4 18446744073709551615\n3\n400 2 SeqCst\n"
+    );
+    let report = refused(
+        "use std::sync::atomic::*;\nfn main() {\n    let x: () = AtomicUsize::new(0);\n}\nmain();\n",
+    );
+    assert!(
+        report.contains("expected `()`, found `Atomic<usize>`"),
+        "{report}"
+    );
+    let report = refused(
+        "use std::sync::atomic::*;\nfn main() {\n    AtomicUsize::new(0).nope();\n}\nmain();\n",
+    );
+    assert!(
+        report.contains("no method named `nope` found for struct `Atomic<T>`")
+            && report.contains("method not found in `Atomic<usize>`"),
+        "{report}"
+    );
+}
+
+#[test]
 fn std_items_by_their_paths_and_impls() {
     // `std::rc::Rc::new` by its full path (#1253), `SystemTime`'s `Ord`
     // (#1471) and `SeekFrom`'s tuple variants built by their paths (#1978).
