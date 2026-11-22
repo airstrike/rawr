@@ -485,7 +485,7 @@ impl Parser<'_> {
                 declared: None,
                 required_by: Some(crate::resolve::Required::by(spawner.path())),
                 formatted: None,
-                chain: Box::default(),
+                chain: crate::resolve::Chain::default(),
             });
         }
         // A captured opaque output is `Send` as its hidden type is (D1109).

@@ -32,8 +32,8 @@ pub(crate) use error::{
 };
 pub use error::{
     Annotation, Arguments, Arms, Assignment, Beyond, BinaryOperation, BindingSite, Bound, Boxing,
-    Callee, Category, Cloning, Detail, Error, Expansion, Fields, Import, Imported, Instead, Lint,
-    MacroScope, Missing, MissingImpl, MoveCause, MovedPlace, MutBinding, Opaqueness,
+    Callee, Category, Chain, Cloning, Detail, Error, Expansion, Fields, Import, Imported, Instead,
+    Lint, MacroScope, Missing, MissingImpl, MoveCause, MovedPlace, MutBinding, Opaqueness,
     OwningParameter, PatternOrigin, PatternTypes, Placeholder, Private, Receiver, Referent,
     Required, Requirement, Shown, Similar, Site, Uncovered, Unexpected, Unresolved,
 };

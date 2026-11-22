@@ -1167,7 +1167,8 @@ fn sections(error: &resolve::Error, source: &Source) -> Vec<Section> {
                 ),
                 _ => None,
             };
-            let chain = super::requirement::sections(chain, owner, capability, source);
+            let chain =
+                super::requirement::sections(chain.requirements(), owner, capability, source);
             help.into_iter().chain(chain).chain(bound).collect()
         }
         // The program's own type an operator's trait has no impl for.
@@ -2093,7 +2094,7 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
                 )),
                 _ => builder,
             };
-            let builder = super::requirement::lines(chain)
+            let builder = super::requirement::lines(chain.requirements())
                 .into_iter()
                 .fold(builder, Builder::note);
             let builder = match required_by {
@@ -2611,7 +2612,7 @@ mod tests {
             declared: None,
             required_by: None,
             formatted: None,
-            chain: Box::default(),
+            chain: crate::resolve::Chain::default(),
         };
 
         let report = Report::from_resolution(source.clone(), None, &missing("FromStr", true))

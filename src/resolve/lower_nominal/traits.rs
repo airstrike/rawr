@@ -1604,7 +1604,7 @@ impl<'a> Parser<'a> {
                     declared: self.declared_name(&owner),
                     required_by: None,
                     formatted: None,
-                    chain: Box::default(),
+                    chain: crate::resolve::Chain::default(),
                 });
             }
             // `impl Both<i64> for C` needs `C: Convert<i64>` for `trait
@@ -1636,7 +1636,7 @@ impl<'a> Parser<'a> {
                         declared: self.declared_name(&owner),
                         required_by: None,
                         formatted: None,
-                        chain: Box::default(),
+                        chain: crate::resolve::Chain::default(),
                     });
                 }
             }
@@ -1690,7 +1690,7 @@ impl<'a> Parser<'a> {
                         trait_name.text, name.text
                     ))),
                     formatted: None,
-                    chain: Box::default(),
+                    chain: crate::resolve::Chain::default(),
                 });
             }
             self.check_associated_equalities(&trait_name.text, name, &ty, &owner)?;

@@ -223,7 +223,7 @@ impl Parser<'_> {
             declared: self.declared_name(&unmet.ty),
             required_by: site,
             formatted: None,
-            chain: unmet.chain,
+            chain: crate::resolve::Chain::new(unmet.chain),
         }
     }
 

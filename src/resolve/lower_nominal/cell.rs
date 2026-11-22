@@ -615,7 +615,7 @@ impl Parser<'_> {
                         declared: self.declared_name(&inner),
                         required_by: None,
                         formatted: None,
-                        chain: Box::default(),
+                        chain: crate::resolve::Chain::default(),
                     });
                 }
                 let default = self.default_source(&inner, member_span)?;
@@ -680,7 +680,7 @@ impl Parser<'_> {
                     declared: self.declared_name(&inner),
                     required_by: None,
                     formatted: None,
-                    chain: Box::default(),
+                    chain: crate::resolve::Chain::default(),
                 })
             }
         };

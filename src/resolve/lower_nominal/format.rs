@@ -1712,7 +1712,7 @@ impl<'a> Parser<'a> {
                     declared: None,
                     required_by: None,
                     formatted: None,
-                    chain: Box::default(),
+                    chain: crate::resolve::Chain::default(),
                 });
             }
             let name = origin::Fragment::plain(names[index].as_str());
@@ -2166,7 +2166,7 @@ impl<'a> Parser<'a> {
             declared: self.declared_name(ty),
             required_by: None,
             formatted: None,
-            chain: Box::default(),
+            chain: crate::resolve::Chain::default(),
         }
     }
 
@@ -2748,7 +2748,7 @@ impl<'a> Parser<'a> {
                 if unmet.ty.name(&self.models) == *owner
                     && unmet.obligation.name() == capability.as_str()
                 {
-                    *chain = unmet.chain;
+                    *chain = crate::resolve::Chain::new(unmet.chain);
                 }
             }
             error
@@ -2794,7 +2794,8 @@ impl<'a> Parser<'a> {
                 span,
                 None,
             );
-            if matches!(&error, Error::MissingCapability { chain, .. } if !chain.is_empty()) {
+            if matches!(&error, Error::MissingCapability { chain, .. } if !chain.requirements().is_empty())
+            {
                 return Err(error);
             }
         }
@@ -2868,7 +2869,7 @@ impl<'a> Parser<'a> {
                         declared: self.declared_name(&ty),
                         required_by: None,
                         formatted: None,
-                        chain: Box::default(),
+                        chain: crate::resolve::Chain::default(),
                     });
                 }
                 if self.models.std_traits.contains("Debug") {
@@ -3087,7 +3088,7 @@ impl<'a> Parser<'a> {
                     declared: self.declared_name(&ty),
                     required_by: None,
                     formatted: None,
-                    chain: Box::default(),
+                    chain: crate::resolve::Chain::default(),
                 })
             }
         })

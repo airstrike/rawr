@@ -170,7 +170,7 @@ impl<'a> Parser<'a> {
                                     crate::host::path::public(&item.path()).as_ref(),
                                 )),
                                 formatted: None,
-                                chain: Box::default(),
+                                chain: crate::resolve::Chain::default(),
                             });
                         }
                     }

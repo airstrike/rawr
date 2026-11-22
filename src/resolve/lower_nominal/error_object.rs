@@ -131,7 +131,7 @@ impl Parser<'_> {
                         declared: self.declared_name(&from),
                         required_by: None,
                         formatted: None,
-                        chain: Box::default(),
+                        chain: crate::resolve::Chain::default(),
                     });
                 };
                 (display, self.debug_source(&from, local, span)?)

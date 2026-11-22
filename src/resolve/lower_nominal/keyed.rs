@@ -254,7 +254,7 @@ impl Parser<'_> {
                 declared: self.declared_name(&key),
                 required_by: None,
                 formatted: None,
-                chain: Box::default(),
+                chain: crate::resolve::Chain::default(),
             })
         }
     }
@@ -592,7 +592,7 @@ impl Parser<'_> {
                         declared: None,
                         required_by: None,
                         formatted: None,
-                        chain: Box::default(),
+                        chain: crate::resolve::Chain::default(),
                     });
                 }
                 (receiver, ty)

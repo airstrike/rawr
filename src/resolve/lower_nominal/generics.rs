@@ -464,7 +464,7 @@ impl<'a> Parser<'a> {
                         declared: None,
                         required_by: None,
                         formatted: None,
-                        chain: Box::default(),
+                        chain: crate::resolve::Chain::default(),
                     });
                 }
                 // The innermost obligation the program's impls needed:
@@ -519,7 +519,7 @@ impl<'a> Parser<'a> {
                     declared: self.declared_name(&ty),
                     required_by: site,
                     formatted: None,
-                    chain: Box::default(),
+                    chain: crate::resolve::Chain::default(),
                 });
             }
         }
@@ -812,7 +812,7 @@ impl<'a> Parser<'a> {
                             declared: None,
                             required_by: None,
                             formatted: None,
-                            chain: Box::default(),
+                            chain: crate::resolve::Chain::default(),
                         });
                     }
                     format!("{DEFAULT_DISPATCHER}({})", witness_variable(name))

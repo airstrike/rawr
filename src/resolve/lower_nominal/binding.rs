@@ -346,7 +346,7 @@ impl<'a> Parser<'a> {
                 declared: None,
                 required_by: None,
                 formatted: None,
-                chain: Box::default(),
+                chain: crate::resolve::Chain::default(),
             });
         }
         // `let mut f = make();` of `fn make() -> impl Fn(i32)`: a call of `f`

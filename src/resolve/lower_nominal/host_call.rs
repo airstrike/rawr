@@ -772,7 +772,7 @@ impl<'a> Parser<'a> {
                 declared: self.declared_name(&value.ty),
                 required_by: None,
                 formatted: None,
-                chain: Box::default(),
+                chain: crate::resolve::Chain::default(),
             });
         }
         Ok(value)

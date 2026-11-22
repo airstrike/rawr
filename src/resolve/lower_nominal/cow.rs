@@ -272,7 +272,7 @@ impl Parser<'_> {
                 declared: None,
                 required_by: None,
                 formatted: None,
-                chain: Box::default(),
+                chain: crate::resolve::Chain::default(),
             });
         };
         self.inference.commit(checkpoint);
@@ -353,7 +353,7 @@ impl Parser<'_> {
                     declared: None,
                     required_by: Some(crate::resolve::Required::by("std::borrow::Cow")),
                     formatted: None,
-                    chain: Box::default(),
+                    chain: crate::resolve::Chain::default(),
                 })?
         } else {
             reference_to(borrowed.clone())
@@ -401,7 +401,7 @@ impl Parser<'_> {
                             declared: None,
                             required_by: None,
                             formatted: None,
-                            chain: Box::default(),
+                            chain: crate::resolve::Chain::default(),
                         });
                     }
                     return Ok(Some(self.operator_expr(

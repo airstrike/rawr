@@ -522,6 +522,24 @@ pub struct Requirement {
     pub site: Option<Box<Site>>,
 }
 
+/// The impls an unmet bound needed, innermost first, behind one thin
+/// pointer: most errors have none, and the error stays small.
+#[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
+pub struct Chain(Option<Box<Box<[Requirement]>>>);
+
+impl Chain {
+    /// The chain of `requirements`, innermost first.
+    pub(crate) fn new(requirements: Box<[Requirement]>) -> Self {
+        Self((!requirements.is_empty()).then(|| Box::new(requirements)))
+    }
+
+    /// Each impl, innermost first.
+    #[must_use]
+    pub fn requirements(&self) -> &[Requirement] {
+        self.0.as_deref().map_or(&[], |requirements| requirements)
+    }
+}
+
 /// Where the program writes an impl a [`Requirement`] names.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum Site {
@@ -599,6 +617,7 @@ impl Error {
                 // The trait the value is formatted with is the outermost
                 // the chain needed.
                 let formatting = chain
+                    .requirements()
                     .last()
                     .map_or(capability.as_str(), |outermost| &outermost.trait_name);
                 argument == operation && *name == formatting
@@ -1324,7 +1343,7 @@ pub enum Error {
         /// The impls that needed the trait of the type, innermost first,
         /// when the bound is on a type that holds it: `Vec<Opaque>` of
         /// `Opaque` in `Vec<Opaque>: Debug`.
-        chain: Box<[Requirement]>,
+        chain: Chain,
     },
     /// A statically-known nominal enum match has an invalid pattern set.
     InvalidMatch {
