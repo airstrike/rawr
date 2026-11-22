@@ -71,7 +71,7 @@ Modules are named by their symbols; line numbers drift.
 | `path` | qualified paths | `parse_qualified_path`, `parse_owner_function`, `parse_imported_variant`, `parse_builtin_path` |
 | `trait_call` | trait method calls | `parse_std_trait_call`, `parse_typed_std_trait_call`, `parse_*trait*_call` |
 | `traits` | trait resolution | `select_impl`, `receiver_method`, `type_implements`, `check_associated_bounds` |
-| `std_scope` | std traits in scope at a method call | `std_trait_in_scope`, `unscoped_std_method` |
+| `std_scope` | std traits in scope at a method call | `std_trait_in_scope`, `unscoped_std_method`, `unscoped_facade_method` |
 | `generics` | generic instances and witnesses | `fresh_generics`, `finish_witnesses`, `bind_instance`, `instantiate` |
 | `operator` | operators and casts | `parse_binary`, `apply_binary`, `cast`, `operator_impl`, `index_impl` |
 | `compare` | comparisons | `equality`, `partial_ord_operator`, `parse_ord_method`, `compare_value`, `equal_value` |
@@ -87,7 +87,7 @@ Modules are named by their symbols; line numbers drift.
 | `from_str` | `FromStr` and std's parse errors | `parse_str_parse`, `ParseError`, `parse_text` |
 | `error_object` | std's `dyn Error` | `ErrorObject`, `error_object`, `parse_error_member` |
 | `any_object` | std's `dyn Any` and the downcasts of it and of `dyn Error` | `any_object::Key`, `AnyObject`, `any_object`, `parse_downcast`, `downcast_key` |
-| `std_item` | std paths in bodies | `check_std_path`, `parse_mem_call`, `parse_size_of`, `std_alias` |
+| `std_item` | std paths in bodies | `check_std_path`, `parse_mem_call`, `parse_size_of`, `std_alias`, `prelude_alias` |
 | `names` | names in scope and their errors | `lexical_scope`, `unknown_variable`, `unknown_function` |
 | `emit` | emitting operations | `op_call`, `materialize`, `private_call`, `write_over` |
 | `proof` | proofs of executable operations | `prove_executable_op`, `type_provides`, `proven_type` |
