@@ -750,6 +750,13 @@ impl Parser<'_> {
             declared: signature.lifetimes.declared.to_vec(),
             elided,
             variances,
+            naming: borrowck::Naming {
+                elisions: own.elided,
+                input_elided: own.input_elided,
+                first: signature.lifetimes.first.clone(),
+                introduced: signature.lifetimes.introduced,
+                implemented: signature.lifetimes.owner.is_some(),
+            },
         };
         self.flow().own_signature(parameters, own.output, names);
         Ok(())
@@ -1990,8 +1997,9 @@ impl Parser<'_> {
                 ..
             }) => {
                 // The facts give where the value's first and last tokens start.
-                let returned = self.expression_span(report.returned());
-                Err(Error::Outlives(Box::new((*report).returned_at(returned))))
+                Err(Error::Outlives(Box::new(
+                    report.returned_at(|returned| self.expression_span(returned)),
+                )))
             }
             Some(conflict) => Err(Error::BorrowConflict {
                 code: conflict.code,

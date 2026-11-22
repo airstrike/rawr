@@ -31,11 +31,11 @@ pub(crate) use error::{
     Unsatisfied, Unsupported, ASYNC_MAIN, IF_WITHOUT_ELSE, INVALID_ASSIGNEE, RETURN_WITHOUT_VALUE,
 };
 pub use error::{
-    Annotation, Arguments, Arms, Assignment, Beyond, BinaryOperation, BindingSite, Bound, Boxing,
-    Callee, Category, Cloning, Detail, Error, Expansion, Fields, Import, Imported, Instead, Lint,
-    MacroScope, Missing, MissingImpl, MoveCause, MovedPlace, MutBinding, Opaqueness,
-    OwningParameter, PatternOrigin, PatternTypes, Placeholder, Private, Receiver, Referent,
-    Required, Shown, Similar, Uncovered, Unexpected, Unresolved,
+    Annotation, ArgumentMismatch, Arguments, Arms, Assignment, Beyond, BinaryOperation,
+    BindingSite, Bound, Boxing, Callee, Category, Cloning, Detail, Error, Expansion, Fields,
+    Import, Imported, Instead, Lint, MacroScope, Missing, MissingImpl, MoveCause, MovedPlace,
+    MutBinding, Opaqueness, OwningParameter, PatternOrigin, PatternTypes, Placeholder, Private,
+    Receiver, Referent, Required, Shown, Similar, Uncovered, Unexpected, Unresolved,
 };
 pub use imports::{Candidate, Imports};
 use std::collections::BTreeMap;
@@ -1850,10 +1850,10 @@ fn resolve_imports(
             if let Some((side, previous)) = previous {
                 return Err(Error::duplicate(
                     binding.name.text.clone(),
-                    binding.name.span,
                     side.noun(),
                     import(side),
                     previous,
+                    true,
                 ));
             }
             if let item::Import::Type { definition, owner } = &binding.target {

@@ -428,8 +428,14 @@ impl<'a> Parser<'a> {
         }
         self.refuse_rebound_alias(value.span, &value.ty)?;
         let value_start = self.flow().value_start();
-        let mut replacement = self.parse_expr()?;
         let compound = compound_operator(&assignment).is_some();
+        // rustc checks a plain assignment's value against the place's type.
+        let mut replacement = if compound {
+            self.parse_expr()?
+        } else {
+            let place = value.ty.clone();
+            self.parse_expr_expecting(Some(&place))?
+        };
         self.assigned_place(
             value.span,
             &value.ty,

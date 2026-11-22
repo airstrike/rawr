@@ -645,15 +645,30 @@ impl<'a> Resolver<'a> {
                 }
                 for (name, path) in use_paths(use_item) {
                     let address = context.address(&name.text);
+                    // rustc's E0255, in the declaration's namespace; the
+                    // import binds there what the declaration is.
                     if let Some(previous) = self.tables.declaration(&address) {
+                        let (namespace, kind) = match previous.target {
+                            Target::Module => ("type", "module"),
+                            Target::Trait(_) => ("type", "trait"),
+                            Target::Item(_) => ("value", "value"),
+                            _ => ("type", "type"),
+                        };
+                        let import = super::Import {
+                            written: use_item.written(&name),
+                            rename: use_item.rename(&name),
+                            kind,
+                        };
                         return Err(Failure {
                             primary: context.source,
                             secondary: Some(previous.source),
-                            error: Error::DuplicateItem {
-                                name: name.text,
-                                declaration: name.span,
-                                previous_declaration: previous.span,
-                            },
+                            error: Error::duplicate(
+                                name.text,
+                                namespace,
+                                import,
+                                (previous.span, None),
+                                previous.source == context.source,
+                            ),
                         });
                     }
                     if let Some(previous) = self.tables.export_at(
@@ -2418,10 +2433,10 @@ impl<'a> Resolver<'a> {
                         secondary: Some(previous_source),
                         error: Error::duplicate(
                             name.text.clone(),
-                            name.span,
                             side.noun(),
                             written(side),
                             (previous_span, imported),
+                            previous_source == context.source,
                         ),
                     });
                 }

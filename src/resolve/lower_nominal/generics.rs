@@ -245,20 +245,30 @@ impl<'a> Parser<'a> {
     /// `argument` coerced to `input`, the type the call's expectation gives
     /// its parameter of type `formal`, which then takes that type, as rustc
     /// checks an argument against its expected input. An argument that
-    /// doesn't coerce to it is left to the parameter's own coercion.
+    /// doesn't coerce to it is left to the parameter's own coercion, and
+    /// the mismatch is given back where its type is not `input`'s.
     pub(super) fn coerce_expected_input(
         &mut self,
         input: &Ty,
         formal: &Ty,
         argument: &mut ParsedExpr,
-    ) {
+    ) -> Option<Error> {
         let checkpoint = self.inference.checkpoint();
         let mut coerced = argument.clone();
-        if self.coerce_expr(input, &mut coerced).is_ok() && self.unify_type(formal, input) {
-            self.inference.commit(checkpoint);
-            *argument = coerced;
-        } else {
-            self.inference.rollback(checkpoint);
+        match self.coerce_expr(input, &mut coerced) {
+            Ok(_) if self.unify_type(formal, input) => {
+                self.inference.commit(checkpoint);
+                *argument = coerced;
+                None
+            }
+            Ok(_) => {
+                self.inference.rollback(checkpoint);
+                None
+            }
+            Err(error) => {
+                self.inference.rollback(checkpoint);
+                Some(error)
+            }
         }
     }
 

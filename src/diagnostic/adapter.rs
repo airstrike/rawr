@@ -666,6 +666,7 @@ fn resolution_report_with_sources(
             ..
         } => origin.label().into(),
         resolve::Error::ArgumentCount { callee, .. } => callee.defined_here().into(),
+        resolve::Error::ArgumentMismatch(_) => "arguments to this function are incorrect".into(),
         resolve::Error::ImmutableBinding { binding, .. } => {
             format!("first assignment to `{binding}`").into()
         }
@@ -686,12 +687,37 @@ fn resolution_report_with_sources(
         resolve::Error::UnknownMacro { .. } => {
             "a macro with the same name exists, but it appears later".into()
         }
+        resolve::Error::Redefined {
+            name,
+            import,
+            imported_first: true,
+            ..
+        } => format!("previous import of the {} `{name}` here", import.kind).into(),
+        resolve::Error::Redefined {
+            name, definition, ..
+        } => {
+            let source = secondary_source.as_ref().unwrap_or(&source);
+            format!(
+                "previous definition of the {} `{name}` here",
+                super::definition::kind(source, *definition)
+            )
+            .into()
+        }
         _ => crate::ImmutableString::from("first declaration or related definition is here"),
     });
     let mut builder = builder.source(source.clone());
     if !error.primary_span().is_none() {
         let label = primary_label(error, &source, error.primary_span());
-        builder = builder.primary(source.clone(), member_span(error), label)?;
+        // E0255 marks a definition after the import by its header.
+        let at = match error {
+            resolve::Error::Redefined {
+                imported_first: true,
+                definition,
+                ..
+            } => super::definition::span(&source, *definition),
+            _ => member_span(error),
+        };
+        builder = builder.primary(source.clone(), at, label)?;
     }
     if let resolve::Error::MovedValue {
         name,
@@ -726,8 +752,8 @@ fn resolution_report_with_sources(
         )?;
     }
     // rustc marks the lifetimes it names.
-    if let resolve::Error::Outlives(report) = error {
-        for (span, label) in report.lifetimes() {
+    if let resolve::Error::Outlives(reports) = error {
+        for (span, label) in reports.first().lifetimes() {
             if !span.is_none() {
                 builder = builder.secondary(source.clone(), span, Some(label.into()))?;
             }
@@ -873,11 +899,16 @@ fn resolution_report_with_sources(
                 }
             }
             None => {
-                // E0624 labels the private function whole.
+                // E0624 labels the private function whole, and E0255 the
+                // definition's header.
                 let secondary = match error {
                     resolve::Error::PrivateItem { item, .. } if item.code() == "E0624" => {
                         super::definition::span(&secondary_source, secondary)
                     }
+                    resolve::Error::Redefined {
+                        imported_first: false,
+                        ..
+                    } => super::definition::span(&secondary_source, secondary),
                     _ => secondary,
                 };
                 builder.secondary(secondary_source.clone(), secondary, secondary_message)?
@@ -899,6 +930,23 @@ fn resolution_report_with_sources(
         .flatten()
     {
         builder = builder.suggestion(suggestion);
+    }
+    // rustc's further lifetime errors of the function, each its own, and
+    // its help after them.
+    if let resolve::Error::Outlives(reports) = error {
+        for report in reports.rest() {
+            let one = resolve::outlives::Reports::alone(report.clone());
+            let follower = resolution_report_with_sources(
+                source.clone(),
+                Some(secondary_source.clone()),
+                &resolve::Error::Outlives(Box::new(one)),
+            )?;
+            builder = builder.follower(follower);
+        }
+        if let Some((message, helps)) = reports.afterword() {
+            let helps = helps.into_iter().map(Into::into).collect();
+            builder = builder.afterword(super::Afterword::new(message, helps));
+        }
     }
     Ok(builder.finish())
 }
@@ -1040,6 +1088,34 @@ fn referent_section(referent: &resolve::Referent, source: &Source) -> Section {
 /// The notes rustc gives `error` with places of their own, in `source`.
 fn sections(error: &resolve::Error, source: &Source) -> Vec<Section> {
     match error {
+        // What the argument makes the call's type, and the function's
+        // definition with the parameter marked.
+        resolve::Error::ArgumentMismatch(mismatch) => {
+            let mut sections = Vec::new();
+            if mismatch.generic {
+                let help = format!(
+                    "the return type of this call is `{}` due to the type of the argument passed",
+                    mismatch.actual
+                );
+                let influences = format!(
+                    "this argument influences the return type of `{}`",
+                    mismatch.function
+                );
+                sections.push(
+                    Section::help(help)
+                        .primary(source.clone(), mismatch.call, None)
+                        .secondary(source.clone(), mismatch.argument, Some(influences.into())),
+                );
+            }
+            if let Some((name, parameter)) = mismatch.definition {
+                sections.push(
+                    Section::note(resolve::Callee::Function.defined_here())
+                        .primary(source.clone(), name, None)
+                        .secondary(source.clone(), parameter, None),
+                );
+            }
+            sections
+        }
         // A similar item the call can't take in place, at its definition.
         resolve::Error::NoItem {
             similar: Some(similar),
@@ -1314,23 +1390,40 @@ fn suggestion(error: &resolve::Error, source: &Source) -> Result<Option<Suggesti
     let before = |span: Span| Span::new(span.start(), span.start());
     let after = |span: Span| Span::new(span.end(), span.end());
     match error {
-        // The lifetime written after the reference's `&`, and a blank
-        // before what follows it unless one is there.
-        resolve::Error::Outlives(report) => match report.suggestion() {
-            Some(lifetime) => {
-                let at = lifetime.reference.ampersand.end();
-                let mut next = at;
-                next.advance();
-                let spaced = Span::new(at, next)
-                    .text(source.text())
-                    .starts_with(char::is_whitespace);
-                let blank = if spaced { "" } else { " " };
-                suggestion(
-                    &lifetime.message,
-                    Style::Verbose,
-                    after(lifetime.reference.ampersand),
-                    &format!("'{}{blank}", lifetime.lifetime),
-                )
+        resolve::Error::Outlives(reports) => match reports.first().suggestion() {
+            Some(suggested) => {
+                let lifetime = suggested.lifetime;
+                let mut edits = Vec::with_capacity(suggested.places.len());
+                for place in &suggested.places {
+                    let (span, text) = match *place {
+                        // A blank before what follows unless one is there.
+                        resolve::outlives::Place::Spaced(ampersand) => {
+                            let at = ampersand.end();
+                            let mut next = at;
+                            next.advance();
+                            let spaced = Span::new(at, next)
+                                .text(source.text())
+                                .starts_with(char::is_whitespace);
+                            let blank = if spaced { "" } else { " " };
+                            (after(ampersand), format!("'{lifetime}{blank}"))
+                        }
+                        resolve::outlives::Place::After(ampersand) => {
+                            (after(ampersand), format!("'{lifetime} "))
+                        }
+                        resolve::outlives::Place::Over(placeholder) => {
+                            (placeholder, format!("'{lifetime}"))
+                        }
+                        resolve::outlives::Place::Parameter { at, listed: true } => {
+                            (at, format!("'{lifetime}, "))
+                        }
+                        resolve::outlives::Place::Parameter { at, listed: false } => {
+                            (at, format!("<'{lifetime}>"))
+                        }
+                    };
+                    edits.push(Edit::new(source.clone(), span, text)?);
+                }
+                edits.sort_by_key(|edit| edit.span().start());
+                Ok(Suggestion::of(&suggested.message, Style::Verbose, edits))
             }
             None => Ok(None),
         },
@@ -1409,8 +1502,11 @@ fn suggestion(error: &resolve::Error, source: &Source) -> Result<Option<Suggesti
         // rustc names the second import `Other` and its name, or
         // `other_` and a lowercase one.
         resolve::Error::DuplicateImport {
-            name, declaration, ..
-        } => {
+            name,
+            declaration: import,
+            ..
+        }
+        | resolve::Error::Redefined { name, import, .. } => {
             let other = if name.starts_with(char::is_uppercase) {
                 format!("Other{name}")
             } else {
@@ -1419,7 +1515,7 @@ fn suggestion(error: &resolve::Error, source: &Source) -> Result<Option<Suggesti
             suggestion(
                 "you can use `as` to change the binding name of the import",
                 Style::Verbose,
-                declaration.rename,
+                import.rename,
                 &format!(" as {other}"),
             )
         }
@@ -1596,16 +1692,20 @@ fn primary_label(
             Some(format!("unlabeled `{keyword}` in the condition of a `while` loop").into())
         }
         resolve::Error::AsyncMain { .. } => Some(resolve::ASYNC_MAIN.into()),
-        resolve::Error::DuplicateImport { name, .. } => {
-            Some(format!("`{name}` reimported here").into())
-        }
+        resolve::Error::DuplicateImport { name, .. }
+        | resolve::Error::Redefined {
+            name,
+            imported_first: false,
+            ..
+        } => Some(format!("`{name}` reimported here").into()),
+        resolve::Error::Redefined { name, .. } => Some(format!("`{name}` redefined here").into()),
         resolve::Error::StdPath { label, .. } => label.clone(),
         resolve::Error::UnknownTrait { .. } => Some("not found in this scope".into()),
         resolve::Error::UnscopedMethod { owner, .. } => {
             Some(format!("method not found in `{owner}`").into())
         }
         resolve::Error::ImmutableBorrow { .. } => Some("cannot borrow as mutable".into()),
-        resolve::Error::Outlives(report) => Some(report.label().into()),
+        resolve::Error::Outlives(reports) => Some(reports.first().label().into()),
         resolve::Error::NonExhaustive { witnesses, .. } => {
             Some(resolve::NonExhaustive(witnesses).label().into())
         }
@@ -1691,6 +1791,14 @@ fn primary_label(
             opaque,
             ..
         } => Some(opaque.label(expected, actual).into()),
+        resolve::Error::ArgumentMismatch(mismatch) => Some(
+            format!(
+                "expected {}, found {}",
+                resolve::Described(&mismatch.expected),
+                resolve::Described(&mismatch.actual)
+            )
+            .into(),
+        ),
         resolve::Error::TypeMismatch {
             expected, actual, ..
         }
@@ -1812,6 +1920,7 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
     let stable_code = match error.category() {
         resolve::Category::DuplicateItem => code::RESOLVE_DUPLICATE_ITEM,
         resolve::Category::DuplicateImport => code::RESOLVE_DUPLICATE_IMPORT,
+        resolve::Category::Redefined => code::RESOLVE_REDEFINED,
         resolve::Category::UnknownType => match error {
             resolve::Error::UnknownType { path: true, .. } => code::RESOLVE_FAILED_PATH,
             _ => code::RESOLVE_UNKNOWN_TYPE,
@@ -1837,7 +1946,7 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Category::MovedValue => code::RESOLVE_MOVED_VALUE,
         resolve::Category::BorrowConflict => match error {
             resolve::Error::BorrowConflict { code, .. } => code::borrow(code),
-            resolve::Error::Outlives(report) => code::borrow(report.code()),
+            resolve::Error::Outlives(reports) => code::borrow(reports.first().code()),
             resolve::Error::ImmutableBorrow { .. } => code::BORROW_NOT_MUTABLE,
             _ => unreachable!("a borrow conflict's category"),
         },
@@ -1927,12 +2036,12 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Error::Syntax {
             help: Some(help), ..
         } => builder.help(help.clone()),
-        resolve::Error::Outlives(report) => {
-            let builder = match report.help() {
+        resolve::Error::Outlives(reports) => {
+            let builder = match reports.first().help() {
                 Some(help) => builder.help(help),
                 None => builder,
             };
-            match report.variance() {
+            match reports.first().variance() {
                 Some(variance) => variance
                     .notes()
                     .into_iter()
@@ -1947,6 +2056,9 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
             builder.help("rename or remove one of the duplicate declarations")
         }
         resolve::Error::DuplicateImport {
+            name, namespace, ..
+        }
+        | resolve::Error::Redefined {
             name, namespace, ..
         } => builder.note(format!(
             "`{name}` must be defined only once in the {namespace} namespace of this module"
@@ -2232,7 +2344,7 @@ fn unlinked_crate_help(name: &str) -> String {
 fn resolution_message(error: &resolve::Error) -> String {
     match error {
         resolve::Error::DuplicateItem { name, .. } => format!("duplicate item `{name}`"),
-        resolve::Error::DuplicateImport { name, .. } => {
+        resolve::Error::DuplicateImport { name, .. } | resolve::Error::Redefined { name, .. } => {
             format!("the name `{name}` is defined multiple times")
         }
         resolve::Error::UnknownType { name, path, .. } => {
@@ -2308,11 +2420,12 @@ fn resolution_message(error: &resolve::Error) -> String {
         ),
         resolve::Error::BorrowConflict { message, .. }
         | resolve::Error::ImmutableBorrow { message, .. } => message.to_string(),
-        resolve::Error::Outlives(report) => report.message(),
+        resolve::Error::Outlives(reports) => reports.first().message(),
         resolve::Error::InvalidConstruction { owner, reason, .. } => {
             format!("invalid construction of `{owner}`: {reason}")
         }
         resolve::Error::TypeMismatch { .. }
+        | resolve::Error::ArgumentMismatch(_)
         | resolve::Error::OpaqueMismatch { .. }
         | resolve::Error::Unboxed { .. } => "mismatched types".into(),
         resolve::Error::IfWithoutElse { .. } => resolve::IF_WITHOUT_ELSE.into(),

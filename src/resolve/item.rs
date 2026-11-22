@@ -554,6 +554,23 @@ pub(crate) struct Lifetimes {
     /// Each lifetime parameter the function and its impl declare, by name,
     /// and where: rustc's lifetime errors mark it.
     pub declared: Box<[(crate::ImmutableString, Span)]>,
+    /// The function's own first lifetime parameter, which rustc's
+    /// suggestion of a named lifetime reuses.
+    pub first: Option<crate::ImmutableString>,
+    /// Where that suggestion declares a new one otherwise.
+    pub introduced: Option<Introduced>,
+}
+
+/// Where rustc's suggestion of a named lifetime declares it on a function
+/// that has none.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
+pub(crate) struct Introduced {
+    /// Before the function's first generic parameter, or after its name.
+    pub at: Span,
+    /// It has generic parameters: `'a, ` goes before the first, and
+    /// `<'a>` after its name otherwise.
+    pub listed: bool,
 }
 
 impl Lifetimes {
@@ -574,6 +591,12 @@ impl Lifetimes {
         }
         lifetimes.bound(&function.lifetimes);
         lifetimes.declare(&function.lifetimes);
+        lifetimes.first = function
+            .lifetimes
+            .params
+            .first()
+            .map(|param| param.text.clone());
+        lifetimes.introduced = Some(Introduced::of(function));
         lifetimes
     }
 
@@ -643,6 +666,38 @@ impl Lifetimes {
                             self.names.insert(lifetime.span, lifetime.name.text.clone());
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+impl Introduced {
+    /// `function`'s.
+    fn of(function: &crate::item::Function) -> Self {
+        // A lifetime parameter's span is after its apostrophe.
+        let lifetimes = function.lifetimes.params.iter().map(|param| {
+            let mut start = param.span.start();
+            start.rewind();
+            start
+        });
+        let first = function
+            .generics
+            .iter()
+            .filter(|generic| !generic.lifted)
+            .map(|generic| generic.name.span.start())
+            .chain(lifetimes)
+            .min();
+        match first {
+            Some(at) => Self {
+                at: Span::new(at, at),
+                listed: true,
+            },
+            None => {
+                let end = function.name.span.end();
+                Self {
+                    at: Span::new(end, end),
+                    listed: false,
                 }
             }
         }

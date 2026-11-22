@@ -142,6 +142,15 @@ struct Reader<'a> {
 pub(crate) struct Elision {
     pub(crate) at: Span,
     pub(crate) mutable: bool,
+    /// The `'_` written for it, or `None` where nothing is.
+    pub(crate) placeholder: Option<Span>,
+    /// It is a reference's: a `&` that rustc's suggestion of a named
+    /// lifetime writes the lifetime after. A type whose lifetimes are left
+    /// out is not.
+    pub(crate) reference: bool,
+    /// How many elided lifetimes its reference's type holds below it, each
+    /// numbered after it.
+    pub(crate) below: usize,
 }
 
 /// What makes a position of a type invariant, which rustc's notes on
@@ -182,14 +191,38 @@ impl Reader<'_> {
         match span.and_then(|span| self.lifetimes.names.get(&span)) {
             Some(name) if name == "static" => Region::Static,
             Some(name) if name != "_" => Region::Named(name.clone()),
-            _ => self.fresh(at),
+            Some(_) => {
+                let fresh = self.fresh(at);
+                if let Some(elision) = self.elided.last_mut() {
+                    elision.placeholder = span;
+                }
+                fresh
+            }
+            None => self.fresh(at),
         }
     }
 
     /// An elided lifetime of the type at `at`.
     fn fresh(&mut self, at: Span) -> Region {
-        self.elided.push(Elision { at, mutable: false });
+        self.elided.push(Elision {
+            at,
+            mutable: false,
+            placeholder: None,
+            reference: false,
+            below: 0,
+        });
         Region::Elided(self.elided.len())
+    }
+
+    /// The reference's lifetime `region`, read before what its type holds,
+    /// as elided: its `&`'s, and the lifetimes elided below it since.
+    fn referenced(&mut self, region: &Region) {
+        if let Region::Elided(number) = region {
+            let below = self.elided.len() - number;
+            let elision = &mut self.elided[number - 1];
+            elision.reference = true;
+            elision.below = below;
+        }
     }
 
     /// The regions of `ty`, at `at` and below. `output` when it is the
@@ -213,7 +246,7 @@ impl Reader<'_> {
                 if let Region::Elided(number) = region {
                     self.elided[number - 1].mutable = *mutable;
                 }
-                out.push((own, region));
+                out.push((own, region.clone()));
                 if *mutable {
                     self.invariant.push((
                         at.push(Step::Arg(0)),
@@ -221,6 +254,7 @@ impl Reader<'_> {
                     ));
                 }
                 self.positions(target, at.push(Step::Arg(0)), output, out);
+                self.referenced(&region);
             }
             // `&str`, which a resolved type reads as `String` with the
             // reference's lifetime.
@@ -230,6 +264,7 @@ impl Reader<'_> {
                     _ => None,
                 };
                 let region = self.lifetime(span, path.span);
+                self.referenced(&region);
                 out.push((own, region));
             }
             // `Cow<'a, B>` holds a borrow of its lifetime, of a `B` below
@@ -457,6 +492,8 @@ struct Read {
     unknown: bool,
     /// Each elided lifetime, by its number less one.
     elided: Vec<Elision>,
+    /// How many of them the inputs elide: the output's follow.
+    input_elided: usize,
     /// The output's positions below which it is invariant.
     invariant: Vec<(Path, Invariance)>,
 }
@@ -494,6 +531,7 @@ fn read(
                             let fresh = reader.fresh(Span::NONE);
                             if let Some(elision) = reader.elided.last_mut() {
                                 elision.mutable = mode == Receiver::Mutable;
+                                elision.reference = signature.lifetimes.receiver.is_none();
                             }
                             fresh
                         }
@@ -517,6 +555,7 @@ fn read(
     }
     let mut output = Positions::new();
     let written = signature.lifetimes.written_output.as_deref();
+    let input_elided = reader.elided.len();
     reader.invariant.clear();
     reader.positions(
         written.unwrap_or(signature.output),
@@ -550,6 +589,7 @@ fn read(
         elided_to,
         unknown,
         elided: reader.elided,
+        input_elided,
         invariant: reader.invariant,
     }
 }
@@ -669,9 +709,11 @@ pub(crate) struct Own {
     pub(crate) receiver: Regions,
     pub(crate) parameters: Vec<Regions>,
     pub(crate) output: Output,
-    /// Each elided input lifetime, by its number less one: the receiver's
-    /// is at no place.
+    /// Each elided lifetime, by its number less one: the receiver's is at
+    /// no place.
     pub(crate) elided: Vec<Elision>,
+    /// How many of them the inputs elide: the output's follow.
+    pub(crate) input_elided: usize,
 }
 
 /// A function's output, as what its body returns is checked against it.
@@ -736,6 +778,7 @@ pub(crate) fn own(
             bounds,
         },
         elided: read.elided,
+        input_elided: read.input_elided,
     }
 }
 
@@ -785,18 +828,30 @@ impl Output {
     /// invariant position. Where it is neither, rustc reports the output's
     /// first.
     pub(crate) fn relate(&self, lifetime: &Lifetime, at: Path) -> Relation<'_> {
+        match self.broken(lifetime, at) {
+            None => Relation::Unsaid,
+            Some(broken) => broken
+                .first()
+                .copied()
+                .map_or(Relation::Holds, Relation::Broken),
+        }
+    }
+
+    /// Each requirement of [`Output::relate`] the body breaks, in the
+    /// order rustc reports them, or `None` where these facts can't tell.
+    pub(crate) fn broken(&self, lifetime: &Lifetime, at: Path) -> Option<Vec<Required<'_>>> {
         let at = self.within(at);
         let mut below: Vec<(Path, &Lifetime)> = Vec::new();
         for (path, output) in &self.regions {
             match output {
                 _ if !path.starts_with(at) => {}
                 Some(output) => below.push((*path, output)),
-                None => return Relation::Unsaid,
+                None => return None,
             }
         }
         let exact = matches!(below[..], [(path, _)] if path == at);
         if !exact && below.iter().any(|(_, output)| *output != below[0].1) {
-            return Relation::Unsaid;
+            return None;
         }
         let invariance = |path: Path| {
             self.invariant
@@ -804,24 +859,22 @@ impl Output {
                 .find(|(root, _)| exact && path.starts_with(*root))
                 .map(|(_, invariance)| invariance)
         };
-        below
-            .into_iter()
-            .find_map(|(path, output)| {
-                let invariance = invariance(path);
-                let direction = if invariance.is_some() && !self.bounds.outlives(output, lifetime) {
-                    Direction::Output
-                } else if !self.bounds.outlives(lifetime, output) {
-                    Direction::Input
-                } else {
-                    return None;
-                };
-                Some(Required {
-                    output,
-                    direction,
-                    invariance,
-                })
-            })
-            .map_or(Relation::Holds, Relation::Broken)
+        let mut broken = Vec::new();
+        for (path, output) in below {
+            let invariance = invariance(path);
+            let required = |direction| Required {
+                output,
+                direction,
+                invariance,
+            };
+            if invariance.is_some() && !self.bounds.outlives(output, lifetime) {
+                broken.push(required(Direction::Output));
+            }
+            if !self.bounds.outlives(lifetime, output) {
+                broken.push(required(Direction::Input));
+            }
+        }
+        Some(broken)
     }
 
     /// `at`, or the own region above it that holds it where the output's

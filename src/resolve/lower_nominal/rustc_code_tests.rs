@@ -1813,7 +1813,7 @@ fn a_mismatched_argument_is_underlined_whole() {
     );
     let report = rendered("fn take(s: String) {}\nfn main() {\n    take(1 + 23);\n}\n");
     assert!(
-        report.contains("  |          ^^^^^^ expected `String`, found integer"),
+        report.contains("  |     ---- ^^^^^^ expected `String`, found integer"),
         "{report}"
     );
 }

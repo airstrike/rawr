@@ -96,6 +96,9 @@ pub(crate) struct Recorder {
     /// The loans and the holders' loans each expression's value is, by its
     /// span, at the positions of its type: `&v`, `r`, `if c { &a } else { &b }`.
     origins: BTreeMap<Span, Held>,
+    /// The branches each `if`'s or `match`'s value is one of, by its span,
+    /// each by its value's span.
+    eithers: BTreeMap<Span, Vec<Span>>,
     /// The holders used, the places a call borrowed, and the closures that
     /// captured, so far: the borrows a value may have been made from, for
     /// [`ValueStart`].
@@ -223,6 +226,7 @@ impl Default for Recorder {
             locals: BTreeMap::new(),
             mentions: BTreeMap::new(),
             origins: BTreeMap::new(),
+            eithers: BTreeMap::new(),
             borrowed: 0,
             loops: Vec::new(),
             outer_loops: Vec::new(),
@@ -524,6 +528,16 @@ impl Recorder {
     /// through any position, more than the check finds.
     pub(crate) fn give_back(&mut self, held: &[(Path, Origin)], span: Span) {
         if self.constant {
+            return;
+        }
+        // An `if`'s or a `match`'s value is the branch's it is, as rustc
+        // marks it.
+        if let Some(parts) = self.eithers.get(&span).cloned() {
+            for part in parts {
+                if let Some(held) = self.origins.get(&part).cloned() {
+                    self.give_back(&held, part);
+                }
+            }
             return;
         }
         let local = self.hidden("<return>", span);
@@ -1157,6 +1171,7 @@ impl Recorder {
         if !followed.is_empty() {
             let origins = followed.into_iter().flatten().copied().collect();
             self.origins.insert(whole, origins);
+            self.eithers.insert(whole, parts.to_vec());
         }
     }
 

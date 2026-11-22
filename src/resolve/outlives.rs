@@ -21,6 +21,9 @@ pub enum Report {
         /// Why the position the value is returned at is invariant, where
         /// that is why.
         variance: Option<Variance>,
+        /// rustc's suggestion of a named lifetime for the two, where it
+        /// makes one.
+        named: Option<Box<Named>>,
     },
     /// E0621: the parameter's elided lifetime must be the output's.
     Explicit {
@@ -35,6 +38,144 @@ pub enum Report {
     },
 }
 
+/// rustc's reports of the values a function returns that break its
+/// signature, in the order it gives them: one or more.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct Reports {
+    first: Report,
+    rest: Vec<Report>,
+}
+
+impl Reports {
+    /// `reports`, or `None` where there are none. Each elided lifetime is
+    /// numbered where a report first names it, the lifetime that must
+    /// outlive the other first, as rustc names them.
+    pub(crate) fn of(mut reports: Vec<Report>) -> Option<Self> {
+        let mut numbered: Vec<Span> = Vec::new();
+        for report in &mut reports {
+            let Report::NotLongEnough {
+                longer, shorter, ..
+            } = report
+            else {
+                continue;
+            };
+            for region in [longer, shorter] {
+                if let Region::Anonymous(reference, number) = region {
+                    let at = match numbered.iter().position(|at| *at == reference.ampersand) {
+                        Some(at) => at,
+                        None => {
+                            numbered.push(reference.ampersand);
+                            numbered.len() - 1
+                        }
+                    };
+                    *number = at + 1;
+                }
+            }
+        }
+        let mut reports = reports.into_iter();
+        Some(Self {
+            first: reports.next()?,
+            rest: reports.collect(),
+        })
+    }
+
+    /// `report` alone, its lifetimes numbered as they are.
+    pub(crate) fn alone(report: Report) -> Self {
+        Self {
+            first: report,
+            rest: Vec::new(),
+        }
+    }
+
+    /// The first, which a report of one error gives.
+    pub(crate) const fn first(&self) -> &Report {
+        &self.first
+    }
+
+    /// The ones after the first, each its own error.
+    pub(crate) fn rest(&self) -> &[Report] {
+        &self.rest
+    }
+
+    /// Each, the first first.
+    fn all(&self) -> impl Iterator<Item = &Report> {
+        std::iter::once(&self.first).chain(&self.rest)
+    }
+
+    /// The reports with each value returned where `at` places it.
+    pub(crate) fn returned_at(&self, at: impl Fn(Span) -> Span) -> Self {
+        let moved = |report: &Report| report.clone().returned_at(at(report.returned()));
+        Self {
+            first: moved(&self.first),
+            rest: self.rest.iter().map(moved).collect(),
+        }
+    }
+
+    /// rustc's help after its errors, which relates the named lifetimes
+    /// their bounds would (its `OutlivesSuggestionBuilder`): the one
+    /// change, or the changes under its own message. `None` where the
+    /// errors suggest one bound or none.
+    pub(crate) fn afterword(&self) -> Option<(String, Vec<String>)> {
+        // Each lifetime that must outlive others, in the order the errors
+        // name it, and those it must outlive.
+        let mut bounds: Vec<(String, Vec<String>)> = Vec::new();
+        for report in self.all() {
+            let Report::NotLongEnough {
+                longer: longer @ Region::Named { .. },
+                shorter: shorter @ Region::Named { .. },
+                ..
+            } = report
+            else {
+                continue;
+            };
+            let [(_, longer), (_, shorter)] = names(longer, shorter);
+            match bounds.iter_mut().find(|(name, _)| *name == longer) {
+                Some((_, shorters)) => shorters.push(shorter),
+                None => bounds.push((longer, vec![shorter])),
+            }
+        }
+        if bounds
+            .iter()
+            .map(|(_, shorters)| shorters.len())
+            .sum::<usize>()
+            < 2
+        {
+            return None;
+        }
+        // Two lifetimes that must outlive each other are one.
+        let mut suggested = Vec::new();
+        let mut unified: Vec<&str> = Vec::new();
+        for (longer, shorters) in &bounds {
+            let (same, other): (Vec<&String>, Vec<&String>) =
+                shorters.iter().partition(|shorter| {
+                    bounds
+                        .iter()
+                        .any(|(name, outlived)| name == *shorter && outlived.contains(longer))
+                });
+            for shorter in same {
+                if !unified.contains(&longer.as_str()) {
+                    suggested.push(format!(
+                        "`{longer}` and `{shorter}` must be the same: replace one with the other"
+                    ));
+                    unified.push(shorter);
+                }
+            }
+            if !other.is_empty() {
+                let other: Vec<&str> = other.iter().map(|name| name.as_str()).collect();
+                suggested.push(format!("add bound `{longer}: {}`", other.join(" + ")));
+            }
+        }
+        match suggested.len() {
+            0 => None,
+            1 => Some((suggested.remove(0), Vec::new())),
+            _ => Some((
+                "the following changes may resolve your lifetime errors".to_string(),
+                suggested,
+            )),
+        }
+    }
+}
+
 /// A lifetime a report names.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum Region {
@@ -46,8 +187,9 @@ pub enum Region {
         declared: Span,
     },
     /// The elided lifetime of a reference, which rustc calls `'1`, `'2`
-    /// and on in the order it names them.
-    Anonymous(Reference),
+    /// and on in the order its reports of one function name them: the
+    /// number [`Reports::of`] gives it.
+    Anonymous(Reference, usize),
     /// `'static`.
     Static,
 }
@@ -61,6 +203,58 @@ pub struct Reference {
     pub mutable: bool,
     /// It is the receiver's: `&self`.
     pub receiver: bool,
+}
+
+/// rustc's suggestion of one named lifetime for the two lifetimes a report
+/// names: the function's first lifetime parameter, or a new one.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct Named {
+    /// The lifetime, without its apostrophe.
+    pub lifetime: ImmutableString,
+    /// It is a new parameter, declared at the first of `places`.
+    pub introduced: bool,
+    /// The function is in an impl, whose trait may need the change too.
+    pub implemented: bool,
+    /// Where it is written.
+    pub places: Vec<Place>,
+}
+
+impl Named {
+    /// rustc's message over it.
+    fn message(&self) -> String {
+        let verb = if self.introduced {
+            "introducing"
+        } else {
+            "reusing"
+        };
+        let trait_ = if self.implemented {
+            " and update trait if needed"
+        } else {
+            ""
+        };
+        format!("consider {verb} a named lifetime parameter{trait_}")
+    }
+}
+
+/// Where rustc's suggestion writes a lifetime.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum Place {
+    /// After this reference's `&`, with a blank before what follows unless
+    /// one is there: E0621's.
+    Spaced(Span),
+    /// After this reference's `&`, and a blank.
+    After(Span),
+    /// Over the `'_` written here.
+    Over(Span),
+    /// A new lifetime parameter, before the first generic parameter at
+    /// `at` where the function is `listed` with some, and after its name
+    /// otherwise.
+    Parameter {
+        /// Where it goes.
+        at: Span,
+        /// The function has generic parameters.
+        listed: bool,
+    },
 }
 
 /// What rustc calls the function whose body breaks its signature.
@@ -143,12 +337,12 @@ impl Variance {
 const MUTABLE_HELP: &str = "see <https://doc.rust-lang.org/nomicon/borrow-splitting.html> for \
                             more information about lifetime errors related to mutable references";
 
-/// What rustc suggests writing: `lifetime` after the reference's `&`,
-/// under `message`.
+/// What rustc suggests writing: `lifetime` at each of `places`, under
+/// `message`.
 pub(crate) struct Suggestion<'a> {
     pub(crate) message: String,
-    pub(crate) reference: &'a Reference,
     pub(crate) lifetime: &'a str,
+    pub(crate) places: Vec<Place>,
 }
 
 impl Report {
@@ -238,7 +432,7 @@ impl Report {
                 Region::Named { declared, .. } => {
                     Some((*declared, format!("lifetime `{name}` defined here")))
                 }
-                Region::Anonymous(reference) => Some((
+                Region::Anonymous(reference, _) => Some((
                     reference.ampersand,
                     format!("let's call the lifetime of this reference `{name}`"),
                 )),
@@ -266,8 +460,9 @@ impl Report {
         }
     }
 
-    /// The lifetime rustc suggests writing on a reference: the output's on
-    /// the parameter's, or a named one on `&self`.
+    /// The lifetime rustc suggests writing: the output's on the
+    /// parameter's reference, or one named lifetime for the two the report
+    /// names.
     pub(crate) fn suggestion(&self) -> Option<Suggestion<'_>> {
         match self {
             Self::Explicit {
@@ -279,18 +474,15 @@ impl Report {
                 message: format!(
                     "add explicit lifetime `'{lifetime}` to the type of `{parameter}`"
                 ),
-                reference,
                 lifetime,
+                places: vec![Place::Spaced(reference.ampersand)],
             }),
             Self::NotLongEnough {
-                longer: Region::Anonymous(reference),
-                shorter: Region::Named { name, .. },
-                ..
-            } if reference.receiver => Some(Suggestion {
-                message: "consider reusing a named lifetime parameter and update trait if needed"
-                    .to_string(),
-                reference,
-                lifetime: name,
+                named: Some(named), ..
+            } => Some(Suggestion {
+                message: named.message(),
+                lifetime: &named.lifetime,
+                places: named.places.clone(),
             }),
             Self::NotLongEnough { .. } | Self::Explicit { .. } => None,
         }
@@ -307,16 +499,12 @@ impl Report {
 }
 
 /// `longer` and `shorter`, each with the name rustc gives it: an elided
-/// one is `'1`, then `'2`.
+/// one is `'1`, `'2` and on.
 fn names<'a>(longer: &'a Region, shorter: &'a Region) -> [(&'a Region, String); 2] {
-    let mut anonymous = 0;
     [longer, shorter].map(|region| {
         let name = match region {
             Region::Named { name, .. } => format!("'{name}"),
-            Region::Anonymous(_) => {
-                anonymous += 1;
-                format!("'{anonymous}")
-            }
+            Region::Anonymous(_, number) => format!("'{number}"),
             Region::Static => "'static".to_string(),
         };
         (region, name)

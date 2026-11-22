@@ -38,6 +38,40 @@ pub(super) fn span(source: &Source, name: Span) -> Span {
     }
 }
 
+/// What rustc calls the item `name` names in `source`, by the keyword
+/// before it: `module` of `mod inner`.
+pub(super) fn kind(source: &Source, name: Span) -> &'static str {
+    let text = source.text();
+    let before: Option<String> =
+        name.start()
+            .line()
+            .zip(name.start().position())
+            .and_then(|(line, column)| {
+                let written = text.split('\n').nth(line.saturating_sub(1))?;
+                Some(written.chars().take(column.saturating_sub(1)).collect())
+            });
+    let kinds = [
+        ("fn", "function"),
+        ("struct", "struct"),
+        ("enum", "enum"),
+        ("union", "union"),
+        ("mod", "module"),
+        ("trait", "trait"),
+        ("type", "type alias"),
+        ("const", "constant"),
+        ("static", "static"),
+        ("macro_rules!", "macro"),
+    ];
+    before
+        .and_then(|before| {
+            kinds
+                .iter()
+                .find(|(keyword, _)| word_before(&before, keyword).is_some())
+                .map(|(_, kind)| *kind)
+        })
+        .unwrap_or("item")
+}
+
 /// The type `name` names in `source` from its visibility or keyword
 /// through its name and generics, as rustc marks a type that "must
 /// implement" a trait: `pub struct Value<T>`, without its fields.

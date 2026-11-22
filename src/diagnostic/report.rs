@@ -116,6 +116,51 @@ pub struct Report {
     closing_help: Option<ImmutableString>,
     sections: Vec<Section>,
     suggestions: Vec<Suggestion>,
+    /// What rustc gives after the report, boxed: most reports have none.
+    after: Option<Box<After>>,
+}
+
+/// The reports rustc gives after one for the same check, and the help
+/// after them all.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct After {
+    followers: Vec<Report>,
+    afterword: Option<Afterword>,
+}
+
+/// Where a label or an edit at a span of a source is shown instead, if it
+/// moves.
+type Moved<'a> = dyn FnMut(&Source, Span) -> Option<(Source, Span)> + 'a;
+
+/// A help rustc gives after the errors of one check, apart from each: its
+/// message, and the `= help:` lines under it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Afterword {
+    message: ImmutableString,
+    helps: Vec<ImmutableString>,
+}
+
+impl Afterword {
+    /// A help saying `message`, with `helps` under it.
+    #[must_use]
+    pub fn new(message: impl Into<ImmutableString>, helps: Vec<ImmutableString>) -> Self {
+        Self {
+            message: message.into(),
+            helps,
+        }
+    }
+
+    /// Return its message.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    /// Return the `= help:` lines under it.
+    #[must_use]
+    pub fn helps(&self) -> &[ImmutableString] {
+        &self.helps
+    }
 }
 
 /// A report under validated construction.
@@ -239,6 +284,21 @@ impl Report {
         &self.sections
     }
 
+    /// Return the reports rustc gives after this one for the same check,
+    /// each its own error.
+    #[must_use]
+    pub fn followers(&self) -> &[Report] {
+        self.after
+            .as_deref()
+            .map_or(&[], |after| after.followers.as_slice())
+    }
+
+    /// Return the help rustc gives after this report and its followers.
+    #[must_use]
+    pub fn afterword(&self) -> Option<&Afterword> {
+        self.after.as_deref()?.afterword.as_ref()
+    }
+
     /// Return the code the report suggests, in the order it was suggested.
     #[must_use]
     pub fn suggestions(&self) -> &[Suggestion] {
@@ -253,7 +313,17 @@ impl Report {
         &self,
         mut moved: impl FnMut(&Source, Span) -> Option<(Source, Span)>,
     ) -> Self {
+        self.relabeled_by(&mut moved)
+    }
+
+    /// [`Report::relabeled`], its followers too.
+    fn relabeled_by(&self, moved: &mut Moved<'_>) -> Self {
         let mut report = self.clone();
+        if let Some(after) = &mut report.after {
+            for follower in &mut after.followers {
+                *follower = follower.relabeled_by(moved);
+            }
+        }
         let mut left = Vec::new();
         let labels = report
             .labels
@@ -323,6 +393,7 @@ impl Builder {
                 closing_help: None,
                 sections: Vec::new(),
                 suggestions: Vec::new(),
+                after: None,
             },
             has_primary: false,
         }
@@ -554,6 +625,24 @@ impl Builder {
             self = self.source(edit.source().clone());
         }
         self.report.suggestions.push(suggestion.written(written));
+        self
+    }
+
+    /// Attach a report rustc gives after this one for the same check.
+    #[must_use]
+    pub fn follower(mut self, report: Report) -> Self {
+        self.report
+            .after
+            .get_or_insert_default()
+            .followers
+            .push(report);
+        self
+    }
+
+    /// Attach the help rustc gives after this report and its followers.
+    #[must_use]
+    pub fn afterword(mut self, afterword: Afterword) -> Self {
+        self.report.after.get_or_insert_default().afterword = Some(afterword);
         self
     }
 

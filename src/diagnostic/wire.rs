@@ -53,6 +53,11 @@ impl Report {
     /// sources with its text.
     #[must_use]
     pub fn encode(&self) -> String {
+        self.value().to_string()
+    }
+
+    /// This report as the value [`Report::encode`] writes.
+    fn value(&self) -> Value {
         let sources = self.sources();
         let label = |label: &Label| {
             json!({
@@ -123,8 +128,12 @@ impl Report {
             "closing_help": self.closing_help(),
             "sections": sections.collect::<Vec<_>>(),
             "suggestions": suggestions.collect::<Vec<_>>(),
+            "followers": self.followers().iter().map(Self::value).collect::<Vec<_>>(),
+            "afterword": self.afterword().map(|afterword| json!({
+                "message": afterword.message(),
+                "helps": afterword.helps().iter().map(crate::ImmutableString::as_str).collect::<Vec<_>>(),
+            })),
         })
-        .to_string()
     }
 
     /// The report `text` holds, as [`Report::encode`] wrote it.
@@ -134,6 +143,11 @@ impl Report {
     /// Returns an error for a text no report wrote.
     pub fn decode(text: &str) -> Result<Self, Error> {
         let value: Value = serde_json::from_str(text).map_err(|_| Error::Malformed("text"))?;
+        Self::from_value(&value)
+    }
+
+    /// The report `value` holds, as [`Report::value`] wrote it.
+    fn from_value(value: &Value) -> Result<Self, Error> {
         let field = |name: &'static str| value.get(name).ok_or(Error::Malformed(name));
         let list = |name: &'static str| field(name)?.as_array().ok_or(Error::Malformed(name));
         let printed = string(field("code")?, "code")?;
@@ -199,6 +213,23 @@ impl Report {
         }
         for suggestion in list("suggestions")? {
             builder = builder.suggestion(self::suggestion(suggestion, &sources)?);
+        }
+        for follower in list("followers")? {
+            builder = builder.follower(Self::from_value(follower)?);
+        }
+        if let Some(afterword) = value.get("afterword").filter(|value| !value.is_null()) {
+            let message = afterword
+                .get("message")
+                .ok_or(Error::Malformed("afterword"))?;
+            let helps = afterword
+                .get("helps")
+                .and_then(Value::as_array)
+                .ok_or(Error::Malformed("afterword"))?
+                .iter()
+                .map(|help| string(help, "afterword").map(Into::into))
+                .collect::<Result<Vec<_>, _>>()?;
+            builder =
+                builder.afterword(super::Afterword::new(string(message, "afterword")?, helps));
         }
         Ok(builder.finish())
     }
