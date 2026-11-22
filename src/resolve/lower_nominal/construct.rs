@@ -392,6 +392,7 @@ impl<'a> Parser<'a> {
             .iter()
             .map(|element| self.inference.resolve(&element.ty))
             .collect::<Vec<_>>();
+        let hint_given = hint.clone();
         let (element, skip) = match (hint, elements.first()) {
             (Some(hint), _) => (hint, 0),
             (None, Some(_)) if let Some(pointer) = self.fn_choice(&types) => (pointer, 0),
@@ -410,6 +411,7 @@ impl<'a> Parser<'a> {
         }
         for value in &mut elements {
             self.move_local(value)?;
+            self.move_unless_reborrowed(value, hint_given.as_ref());
         }
         let parts: Vec<_> = elements
             .iter()

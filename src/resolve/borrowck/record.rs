@@ -1234,17 +1234,54 @@ impl Recorder {
     }
 
     /// The value spanning `whole` is one of the values spanning `parts`, as
-    /// an `if`'s or a `match`'s is one of its branches'.
-    pub(crate) fn either(&mut self, whole: Span, parts: &[Span]) {
+    /// an `if`'s or a `match`'s is one of its branches', each made where
+    /// its branch ends (at its block). As rustc's MIR assigns the result
+    /// in each branch, a hidden local takes each branch's borrows there:
+    /// a loan of one branch is then not live through another, nor through
+    /// a loop's back edge into it.
+    pub(crate) fn either(&mut self, whole: Span, parts: &[(Span, Block)]) {
         // A branch that diverges, or holds nothing that borrows, adds none.
-        let followed: Vec<&Held> = parts
+        let followed: Vec<(Held, Block)> = parts
             .iter()
-            .filter_map(|part| self.origins.get(part))
+            .filter_map(|(part, end)| Some((self.origins.get(part)?.clone(), *end)))
             .collect();
-        if !followed.is_empty() {
-            let origins = followed.into_iter().flatten().copied().collect();
-            self.origins.insert(whole, origins);
+        if followed.is_empty() {
+            return;
         }
+        let chosen = self.hidden("branch value", whole);
+        let mut paths: Vec<Path> = Vec::new();
+        for (held, end) in followed {
+            self.push_in(end, Fact::Def(chosen));
+            for (path, origin) in held {
+                let from = self.source(origin);
+                let at = self.push_in(end, Fact::Use(self.origin_local(origin)));
+                self.body.flows.push(Flow {
+                    from,
+                    into: chosen,
+                    path,
+                    at,
+                });
+                if !paths.contains(&path) {
+                    paths.push(path);
+                }
+            }
+        }
+        let origins = paths
+            .into_iter()
+            .map(|path| (path, Origin::Local(chosen, path)))
+            .collect();
+        self.origins.insert(whole, origins);
+    }
+
+    /// `fact` at the end of `block`, one control has left: a branch's end.
+    fn push_in(&mut self, block: Block, fact: Fact) -> Point {
+        let facts = &mut self.body.blocks[block.0 as usize].facts;
+        let point = Point {
+            block,
+            index: facts.len() as u32,
+        };
+        facts.push(fact);
+        point
     }
 
     // Control flow.

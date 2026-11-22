@@ -1986,7 +1986,10 @@ impl Parser<'_> {
         mut value: ParsedExpr,
         block_like: bool,
     ) -> Result<ParsedExpr, Error> {
-        if !self.place_output || !self.closures.is_empty() {
+        if !self.place_output {
+            return Ok(self.chosen_place(value, block_like));
+        }
+        if !self.closures.is_empty() {
             return Ok(value);
         }
         let Some(output) = self.place_output(&value.ty) else {
@@ -2271,6 +2274,9 @@ impl Parser<'_> {
             None => None,
         };
         let Some(lvalue) = lvalue else {
+            if let Some(held) = self.held_receiver(value) {
+                return Ok(held);
+            }
             return Err(Error::UnsupportedNominalSyntax {
                 construct: "a call returning `&mut` on a value that is not a local, a field \
                             or an element"
@@ -2280,6 +2286,47 @@ impl Parser<'_> {
         };
         self.require_mutable_binding(lvalue.binding(), value.span)?;
         Ok(lvalue)
+    }
+
+    /// The place of `value`, a temporary of its own (`Config::new()` in
+    /// `Config::new().time().build()`) that a call returning `&mut` is
+    /// made on: a hidden local of the statement holds it, given the value
+    /// where the place is first reached, as rustc keeps the temporary to
+    /// the statement's end (T2074). `None` for a reference, whose referent
+    /// is elsewhere, or a value in an async body.
+    fn held_receiver(&mut self, value: &ParsedExpr) -> Option<Lvalue> {
+        if self.in_async_body()
+            || matches!(
+                self.inference.resolve(&value.ty),
+                Ty::Reference { .. } | Ty::Unknown
+            )
+        {
+            return None;
+        }
+        let held: ImmutableString = self.temporary("receiver").into();
+        self.field_entries.push((
+            origin::Fragment::plain(format!("let {held} = (); ")),
+            origin::Fragment::default(),
+        ));
+        self.bindings.insert(
+            held.clone(),
+            Binding {
+                ty: value.ty.clone(),
+                mutable: true,
+                available: true,
+                declaration: value.span,
+                kind: BindingKind::Local,
+            },
+        );
+        let mut setup = origin::Fragment::plain(format!("{held} = "));
+        setup.push(value.rendered_source());
+        setup.push_text(";");
+        Some(Lvalue::Nested(Box::new(lvalue::Nested {
+            binding: held.clone(),
+            base: origin::Fragment::plain(held.as_str()),
+            steps: vec![PlaceStep::Setup(setup)],
+            ty: value.ty.clone(),
+        })))
     }
 
     /// The value of `call`, a call on the place `receiver` (written as

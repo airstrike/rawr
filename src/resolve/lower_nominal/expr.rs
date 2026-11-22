@@ -351,7 +351,12 @@ impl<'a> Parser<'a> {
                 // place where it is inlined (`indexed_place`).
                 let index_mut = self.place_output
                     || matches!(&self.return_ty, Some(Ty::Reference { mutable: true, .. }));
-                if !index_mut && self.mutable_borrow != Some(self.expression_stack.len()) {
+                // A tail of a value that chooses a `&mut` gives where its
+                // place is (`chosen.rs`).
+                if !index_mut
+                    && self.mutable_borrow != Some(self.expression_stack.len())
+                    && !self.borrow_chosen(start)
+                {
                     return self.drained_iterator(start);
                 }
                 self.next();

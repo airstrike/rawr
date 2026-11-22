@@ -30,7 +30,13 @@ impl Parser<'_> {
             .is_some_and(|(aliased, _)| *aliased == binding.declaration)
             || self.entry_aliases.contains_key(name)
             || self.cell_guards.contains_key(name);
-        !aliased && binding.mutable && matches!(binding.kind, BindingKind::Local)
+        !aliased
+            && binding.mutable
+            && match binding.kind {
+                BindingKind::Local => true,
+                BindingKind::Receiver { .. } => name == KEYWORD_THIS,
+                BindingKind::Invocation => false,
+            }
     }
 
     /// The `&mut` local given new borrows that `place` reaches, by name.
@@ -47,24 +53,42 @@ impl Parser<'_> {
     }
 
     /// What a `&mut` local given new borrows holds for `value`, a `&mut`
-    /// to a whole local (`&mut b`, or `r` of a `let r = &mut b;`) or
+    /// to a whole local (`&mut b`, or `r` of a `let r = &mut b;`), to a
+    /// field or an element below one (`&mut s.right`, `&mut v[1]`), or
     /// another such local (`prev = r`): the runtime text of where its
-    /// referent is, and whether it is another such local's. `None` where a
-    /// new borrow can't be held yet.
-    pub(super) fn reborrow_source(&self, value: &ParsedExpr) -> Option<(String, bool)> {
+    /// referent is (a local's slot, or a part's path), and whether it is
+    /// another such local's. `None` where a new borrow can't be held yet.
+    pub(super) fn reborrow_source(&mut self, value: &ParsedExpr) -> Option<(String, bool)> {
         if self.in_async_body() {
             return None;
         }
-        let root = match value.lvalue.as_ref()? {
+        let lvalue = value.lvalue.as_ref()?;
+        let root = match lvalue {
             Lvalue::Binding { binding, .. } => binding,
             Lvalue::Place { binding, place, .. } if self.selector_of(binding, place) => {
                 return Some((binding.to_string(), true));
             }
             Lvalue::Place { binding, place, .. } if place.as_str() == binding.as_str() => binding,
-            _ => return None,
+            Lvalue::Place { binding, .. } | Lvalue::Field(lvalue::Field { binding, .. }) => {
+                return self.part_source(binding, lvalue);
+            }
+            Lvalue::Nested(nested) => return self.part_source(&nested.binding, lvalue),
+            Lvalue::Slice(_) => return None,
         };
         self.reborrow_root(root)
             .then(|| (format!("{KEYWORD_SLOT_OF}{root}"), false))
+    }
+
+    /// What a `&mut` local given new borrows holds for the field or
+    /// element `lvalue` below the local `root`: the part's path, its
+    /// indexes read once, here. `None` for a part of anything but a whole
+    /// local of the body, or one through a borrow guard.
+    fn part_source(&mut self, root: &str, lvalue: &Lvalue) -> Option<(String, bool)> {
+        if !self.reborrow_root(root) {
+            return None;
+        }
+        let located = self.place_located(lvalue)?;
+        Some((located.as_str().to_string(), false))
     }
 
     /// Whether the local `name`, just declared, is given a new value
@@ -263,11 +287,36 @@ impl Parser<'_> {
             self.mutable_borrow = Some(self.expression_stack.len() + 1);
         }
         let value_start = self.flow().value_start();
+        // `r = if c { &mut a } else { &mut b };` (`chosen.rs`).
+        let chosen = if self.peek_block_like() {
+            self.choose_ahead()
+        } else {
+            None
+        };
+        let outer_chosen = std::mem::replace(&mut self.chosen, chosen);
         let replacement = self.parse_expr();
+        let chosen = std::mem::replace(&mut self.chosen, outer_chosen);
         self.mutable_borrow = outer;
         let replacement = replacement?;
         self.require_type(target_ty, &replacement.ty, replacement.span)?;
-        let Some((source, _)) = self.reborrow_source(&replacement) else {
+        let chose = match chosen.map(|chosen| chosen.chose()) {
+            Some(Err(refused)) => {
+                return Err(Error::UnsupportedNominalSyntax {
+                    construct: "a `&mut` chosen by a branch, of a place that is not a local of \
+                                the body or a part of one: not supported in Rawr yet"
+                        .into(),
+                    source: refused,
+                });
+            }
+            Some(Ok(chose)) => chose,
+            None => false,
+        };
+        let source = if chose {
+            Some((replacement.rendered_source().as_str().to_string(), false))
+        } else {
+            self.reborrow_source(&replacement)
+        };
+        let Some((source, _)) = source else {
             return Err(Error::UnsupportedNominalSyntax {
                 construct: format!(
                     "giving the `&mut` local `{selector}` a borrow of a field or an element: \

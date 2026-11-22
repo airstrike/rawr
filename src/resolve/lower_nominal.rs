@@ -14,6 +14,7 @@ mod call;
 mod callable_object;
 mod cargo_env;
 pub(crate) mod cell;
+mod chosen;
 mod closure;
 mod coerce;
 mod collect;
@@ -570,6 +571,9 @@ struct Parser<'a> {
     /// The expression depth at which `&mut place` is read: a direct
     /// argument for a function's `&mut` parameter (`this_parameter`).
     mutable_borrow: Option<usize>,
+    /// The tails of the block-like value being read that may choose a
+    /// `&mut` (`chosen.rs`).
+    chosen: Option<chosen::Chosen>,
     /// Where the operand of the `&` being read starts: a crate struct's
     /// field read there, as all of the operand, is lent, not taken
     /// (`read_imported_field`).
@@ -1070,6 +1074,7 @@ impl<'a> Parser<'a> {
             self_changed: std::cell::Cell::new(false),
             lend_self: false,
             mutable_borrow: None,
+            chosen: None,
             lent_field: None,
             lent_mut_field: None,
             bound_iterators: BTreeMap::new(),

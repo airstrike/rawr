@@ -288,23 +288,45 @@ impl<'a> Parser<'a> {
             path.target,
             type_ref::Target::Parameter | type_ref::Target::Opaque(_)
         ) && path.name != "Self";
+        if generic
+            && self.move_whole_reference(argument)
+            && let Some(site) = self.move_sites.get_mut(&argument.span.start())
+        {
+            site.reborrow = true;
+        }
+    }
+
+    /// `value`, an element of an array or `vec!` literal (`vec![r]`) whose
+    /// expectation gives its elements the type `expected`: a `&mut` local
+    /// moves, unless `expected` is a reference, where rustc reborrows it
+    /// (T2502). `None` is an element no type is expected of.
+    pub(super) fn move_unless_reborrowed(&mut self, value: &ParsedExpr, expected: Option<&Ty>) {
+        let reborrowed = expected.is_some_and(|expected| {
+            matches!(self.inference.resolve(expected), Ty::Reference { .. })
+        });
+        if !reborrowed {
+            self.move_whole_reference(value);
+        }
+    }
+
+    /// `value`, a `&mut` local given whole, moves: whether it was one.
+    fn move_whole_reference(&mut self, value: &ParsedExpr) -> bool {
         let mutable = matches!(
-            self.inference.resolve(&argument.ty),
+            self.inference.resolve(&value.ty),
             Ty::Reference { mutable: true, .. }
         );
         // A lone local, whose use is the reference itself.
-        let lone = argument.span.start() == argument.span.end()
+        let lone = value.span.start() == value.span.end()
             && self
                 .flow()
-                .value_place(argument.span.start())
+                .value_place(value.span.start())
                 .is_some_and(|place| place.projection.is_empty());
-        if generic && mutable && lone && self.closures.is_empty() {
-            self.note_move(argument);
-            if let Some(site) = self.move_sites.get_mut(&argument.span.start()) {
-                site.reborrow = true;
-            }
-            self.flow().moved(argument.span.start());
+        if !mutable || !lone || !self.closures.is_empty() {
+            return false;
         }
+        self.note_move(value);
+        self.flow().moved(value.span.start());
+        true
     }
 
     /// `argument`, passed to `parameter`, a parameter of the crate's own
