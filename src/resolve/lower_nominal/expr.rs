@@ -1024,6 +1024,9 @@ impl<'a> Parser<'a> {
             left_out = true;
         }
         let deref = matches!(self.peek(), Token::Multiply);
+        // The tuple's expected type, which says whether a `&mut` member is
+        // reborrowed or moved (`move_unless_reborrowed`).
+        let expectation = self.block_expectation();
         // `(&mut a, &mut b)`: a tuple stores each `&mut` (`stored.rs`).
         let mut value = self.parse_borrowable(Self::parse_expr)?;
         // `(x += 1)`: an assignment is an expression of type `()`, and
@@ -1076,8 +1079,13 @@ impl<'a> Parser<'a> {
             members.push(self.parse_stored(Self::parse_expr)?);
         }
         let end = self.expect(Token::RightParen, "')' after a tuple")?;
-        for member in &mut members {
+        let expected = match expectation.map(|ty| self.inference.resolve(&ty)) {
+            Some(Ty::Tuple(expected)) if expected.len() == members.len() => expected,
+            _ => Box::default(),
+        };
+        for (index, member) in members.iter_mut().enumerate() {
             self.move_local(member)?;
+            self.move_unless_reborrowed(member, expected.get(index));
         }
         Ok(self.tuple_of(open, end, members))
     }

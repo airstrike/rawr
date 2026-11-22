@@ -1236,9 +1236,20 @@ impl<'a> Parser<'a> {
         }
         let changed = self.self_changed.replace(outer_changed);
         if changed && self.closures.is_empty() {
-            // The closure changes `self`: the statement binds its `self`
-            // and writes it back after it.
-            self.lend_self = true;
+            // The closure changes `self`: its `self` is the receiver's
+            // shared handle (`__rawr_share`), the caller's place made
+            // shared where it is, so its changes reach that place from
+            // wherever the closure is kept, as Rust's capture of `self`'s
+            // fields borrows them (D1113).
+            let mut bound = origin::Fragment::plain(format!(
+                "{{ let {SELF_CAPTURE} = {share}({slot}{this}); ",
+                share = crate::engine::KEYWORD_SHARE,
+                slot = crate::engine::KEYWORD_SLOT_OF,
+                this = crate::engine::KEYWORD_THIS,
+            ));
+            bound.push(source);
+            bound.push_text(" }");
+            source = bound;
         } else if changed {
             self.self_changed.set(true);
         }

@@ -1389,14 +1389,12 @@ impl<'a> Parser<'a> {
         let receiver = function
             .as_ref()
             .and_then(|function| this_parameter(&function.definition));
-        let copied = function.as_ref().map_or_else(Vec::new, |function| {
-            copied_parameters(
-                &function.definition.parameters,
-                receiver,
-                function.definition.formatter.as_ref(),
-                function.definition.body.asynchronous,
-            )
-        });
+        let copied = function
+            .as_ref()
+            .map_or_else(Vec::new, |function| function_copied(&function.definition));
+        let keeps = function
+            .as_ref()
+            .map_or_else(Vec::new, |function| function_kept(&function.definition));
         let lent = function.as_ref().map_or_else(Vec::new, |function| {
             lent_parameters(
                 &function.definition.parameters,
@@ -1407,7 +1405,7 @@ impl<'a> Parser<'a> {
         });
         let borrow = std::mem::replace(
             &mut self.mutable_borrow,
-            (receiver.is_some() || !copied.is_empty() || !lent.is_empty())
+            (receiver.is_some() || !copied.is_empty() || !lent.is_empty() || !keeps.is_empty())
                 .then(|| self.expression_stack.len() + 1),
         );
         // A generic function's parameter types, its parameters fresh, for
@@ -1504,6 +1502,7 @@ impl<'a> Parser<'a> {
                 }
                 self.coerce_argument(&parameter.ty, &expected, argument)?;
                 self.convert_into_host(&function.definition.generics, &parameter.ty, argument)?;
+                self.store_argument(&parameter.ty, argument)?;
                 self.move_local(argument)?;
                 self.move_generic_reference(argument, &parameter.ty);
                 if function.source == self.models.context {
@@ -1562,9 +1561,10 @@ impl<'a> Parser<'a> {
             let places =
                 self.mutable_arguments(&arguments, receiver.into_iter().chain(copied.clone()))?;
             // The lent places are the caller's own: nothing is copied back.
-            self.mutable_arguments(&arguments, lent.iter().copied())?;
+            self.mutable_arguments(&arguments, lent.iter().chain(&keeps).copied())?;
             self.move_copied_in(&mut arguments, &copied);
             self.lend_mutable(&mut arguments, &lent)?;
+            self.lend_kept(&mut arguments, &keeps)?;
             // `f(a, &mut v)` is `v.f(a)`: the place is the receiver.
             if let Some(index) = receiver
                 && index < arguments.len()
@@ -1839,6 +1839,7 @@ impl<'a> Parser<'a> {
         for (argument, parameter) in arguments.iter_mut().zip(definition.parameters()) {
             let expected = instantiate(&Ty::from_resolved(&parameter.ty), substitution);
             self.coerce_argument(&parameter.ty, &expected, argument)?;
+            self.store_argument(&parameter.ty, argument)?;
             self.move_local(argument)?;
             self.move_generic_reference(argument, &parameter.ty);
             if definition.source() == self.models.context {

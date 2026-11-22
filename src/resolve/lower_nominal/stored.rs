@@ -69,6 +69,29 @@ impl Parser<'_> {
         }
     }
 
+    /// `argument`, given to a parameter of the program's own function
+    /// written `declared`: an `Option<&mut T>` that names its payload's
+    /// place (`f(v.get_mut(i))`) is given as `Some` of the reference, so
+    /// the callee's writes reach the place (`store_optional`), and a
+    /// `&mut` given to a type parameter (`push(&mut v, &mut x)` of
+    /// `t: T`) is the reference to its place, which the callee may keep
+    /// as a value (`store_reference`).
+    pub(super) fn store_argument(
+        &mut self,
+        declared: &type_ref::Type,
+        argument: &mut ParsedExpr,
+    ) -> Result<(), Error> {
+        let generic = matches!(declared, type_ref::Type::Path(path)
+            if matches!(path.target, type_ref::Target::Parameter) && path.name != "Self");
+        match self.inference.resolve(&argument.ty) {
+            Ty::Option(_) if !matches!(declared, type_ref::Type::Reference { .. }) => {
+                self.store_borrow(argument)
+            }
+            Ty::Reference { mutable: true, .. } if generic => self.store_borrow(argument),
+            _ => Ok(()),
+        }
+    }
+
     /// `value`, a `&mut` stored in a value: the reference to its place.
     fn store_reference(&mut self, value: &mut ParsedExpr) -> Result<(), Error> {
         if value.lvalue.is_none() {
@@ -145,15 +168,17 @@ impl Parser<'_> {
     }
 
     /// Whether `binding` is a function's `&mut` parameter, a copy the call
-    /// stores back when it ends, which no reference may outlive.
+    /// stores back when it ends, which no reference may outlive. One the
+    /// function keeps (`bind_kept`) is the caller's place.
     fn copied_parameter(&self, binding: &str) -> bool {
-        self.bindings.get(binding).is_some_and(|local| {
-            self.parameter_declarations.contains(&local.declaration)
-                && matches!(
-                    self.inference.resolve(&local.ty),
-                    Ty::Reference { mutable: true, .. }
-                )
-        })
+        !self.kept_parameter(binding)
+            && self.bindings.get(binding).is_some_and(|local| {
+                self.parameter_declarations.contains(&local.declaration)
+                    && matches!(
+                        self.inference.resolve(&local.ty),
+                        Ty::Reference { mutable: true, .. }
+                    )
+            })
     }
 
     /// Whether `value`, dereferenced (`*s.a = 1`), reads a `&mut` a value
@@ -181,15 +206,35 @@ impl Parser<'_> {
                 })
             })
         };
+        // A `&mut` local of a `&mut` (`m` of `if let Some(m) = &mut o`,
+        // `o: Option<&mut T>`) reaches a place that holds the stored
+        // reference, through its holder: `*m` is that place.
+        let reaches_stored = |binding: &str| {
+            self.bindings.get(binding).is_some_and(|local| {
+                let Ty::Reference { target, .. } = self.inference.resolve(&local.ty) else {
+                    return false;
+                };
+                matches!(
+                    self.inference.resolve(&target),
+                    Ty::Reference { mutable: true, .. }
+                ) && self.inference.resolve(&target) == ty
+            })
+        };
         match &value.lvalue {
             Some(Lvalue::Field(field)) => self.inference.resolve(&field.ty) == ty,
             Some(Lvalue::Place {
                 binding,
                 place,
                 ty: held,
+            }) if place.as_str().starts_with(KEYWORD_THROUGH) => {
+                self.inference.resolve(held) == ty && reaches_stored(binding)
+            }
+            Some(Lvalue::Place {
+                binding,
+                place,
+                ty: held,
             }) => {
-                !place.as_str().starts_with(KEYWORD_THROUGH)
-                    && place.as_str().ends_with(']')
+                place.as_str().ends_with(']')
                     && self.inference.resolve(held) == ty
                     && holds(binding)
             }
@@ -253,6 +298,44 @@ impl Parser<'_> {
 }
 
 impl Parser<'_> {
+    /// The `&mut` parameters at `kept`, which the function's signature
+    /// lets it keep past the call (`function_kept`): the caller lends each
+    /// as the reference to its place (`KEYWORD_REF`), so each is a `&mut`
+    /// local reaching that place through it, which the body may keep in a
+    /// value, not a copy given back when the call ends.
+    pub(super) fn bind_kept(&mut self, parameters: &[item::Parameter], kept: &[usize]) {
+        for &index in kept {
+            let parameter = &parameters[index];
+            let ty = Ty::from_resolved(&parameter.ty);
+            self.select_local(parameter.name.text.clone(), parameter.name.span, ty, false);
+        }
+    }
+
+    /// Whether `binding` is a `&mut` parameter the function keeps
+    /// (`bind_kept`), a local reaching the caller's place.
+    pub(super) fn kept_parameter(&self, binding: &str) -> bool {
+        self.reborrow_selectors.contains_key(binding)
+            && self
+                .bindings
+                .get(binding)
+                .is_some_and(|local| self.parameter_declarations.contains(&local.declaration))
+    }
+
+    /// The arguments at `kept`, given to parameters the callee keeps
+    /// (`bind_kept`): each is the reference to its place (`__rawr_ref`).
+    pub(super) fn lend_kept(
+        &mut self,
+        arguments: &mut [ParsedExpr],
+        kept: &[usize],
+    ) -> Result<(), Error> {
+        for &index in kept {
+            if let Some(argument) = arguments.get_mut(index) {
+                self.store_reference(argument)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Whether `place` is reached through a stored `&mut` a hidden local
     /// holds (`through_stored`), whose path starts at its handle.
     pub(super) fn stored_place(place: &Lvalue) -> bool {
@@ -283,6 +366,18 @@ impl Parser<'_> {
             return false;
         };
         self.inference.resolve(lvalue.ty()) == ty
+            && super::ty::contains(&ty, &|part| {
+                matches!(part, Ty::Reference { mutable: true, .. })
+            })
+    }
+
+    /// Whether `value` is a temporary whose type has a `&mut` below it, as
+    /// a call's `Vec<&mut T>`: each `&mut` it holds is a stored reference,
+    /// made where it entered the value.
+    pub(super) fn stored_temporary(&self, value: &ParsedExpr) -> bool {
+        let ty = self.inference.resolve(&value.ty);
+        value.lvalue.is_none()
+            && !matches!(ty, Ty::Reference { .. })
             && super::ty::contains(&ty, &|part| {
                 matches!(part, Ty::Reference { mutable: true, .. })
             })

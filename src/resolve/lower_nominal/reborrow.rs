@@ -91,6 +91,24 @@ impl Parser<'_> {
         Some((located.as_str().to_string(), false))
     }
 
+    /// Whether the value ahead is a `&mut` borrow: `&mut place`, or a
+    /// `&mut` local named whole (`r;`).
+    pub(super) fn borrow_ahead(&mut self) -> bool {
+        let first = self.peek().clone();
+        match (first, self.peek_second().clone()) {
+            (Token::Ampersand, Token::Mut) => true,
+            (Token::Identifier(name), Token::SemiColon) => {
+                self.bindings.get(name.as_str()).is_some_and(|binding| {
+                    matches!(
+                        self.inference.resolve(&binding.ty),
+                        Ty::Reference { mutable: true, .. }
+                    )
+                })
+            }
+            _ => false,
+        }
+    }
+
     /// Whether the local `name`, just declared, is given a new value
     /// before its block ends: `name = ..` as a statement ahead.
     pub(super) fn rebound_later(&self, name: &str) -> bool {
@@ -259,13 +277,16 @@ impl Parser<'_> {
 
     /// `r = value;` of the `&mut` local given new borrows `selector`
     /// (`target` is the use of `r`, of the type `target_ty`): the statement
-    /// giving it where what `value` borrows is, and the value's span.
+    /// giving it where what `value` borrows is, and the value's span. A
+    /// `&mut` local `value` names whole is `moved` where no reference is
+    /// expected (a `let s;` of no known type).
     pub(super) fn rebind_selector(
         &mut self,
         target: Span,
         target_ty: &Ty,
         selector: ImmutableString,
         mutable: bool,
+        moved: bool,
     ) -> Result<(origin::Fragment, Span), Error> {
         let declaration = self
             .bindings
@@ -298,6 +319,9 @@ impl Parser<'_> {
         let chosen = std::mem::replace(&mut self.chosen, outer_chosen);
         self.mutable_borrow = outer;
         let replacement = replacement?;
+        if moved {
+            self.move_unless_reborrowed(&replacement, None);
+        }
         self.require_type(target_ty, &replacement.ty, replacement.span)?;
         let chose = match chosen.map(|chosen| chosen.chose()) {
             Some(Err(refused)) => {

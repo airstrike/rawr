@@ -107,7 +107,6 @@ impl<'a> Parser<'a> {
 
     pub(super) fn parse_binding(&mut self, let_keyword: bool) -> Result<(), Error> {
         let pending = self.field_entries.len();
-        let outer_lend = std::mem::take(&mut self.lend_self);
         let start = self.output.len();
         let opened = self.calls_noted;
         let depth = self.temporary_scopes.len();
@@ -132,7 +131,6 @@ impl<'a> Parser<'a> {
         }
         bound?;
         self.statement_frames(start, opened, frames, true)?;
-        self.end_lend_self(outer_lend, start);
         self.settle_parses()
     }
 
@@ -465,16 +463,6 @@ impl<'a> Parser<'a> {
             return self
                 .consume_binding_terminator(start, let_keyword)
                 .map(|_| ());
-        }
-        // A closure that changes `self` writes it back after its statement,
-        // so it cannot outlive that statement in a local.
-        if self.lend_self
-            && matches!(
-                self.inference.resolve(&value.ty),
-                Ty::Fn { .. } | Ty::FnItem { .. } | Ty::Boxed(..)
-            )
-        {
-            return Err(self.unsupported("a closure that changes `self` kept in a local"));
         }
         // `let r = &s;`, `let r = &s.a.b;` of a value Rust moves: `r` is the
         // place, read where it is at each use, as Rust's shared borrow

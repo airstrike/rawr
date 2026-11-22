@@ -5460,3 +5460,214 @@ main();
         );
     }
 }
+
+#[test]
+fn a_closure_that_changes_self_reaches_self_where_it_is_kept() {
+    // A closure kept in a local, called later or nested, changes the
+    // receiver's fields where they are, as rustc's capture of them
+    // borrows them (#189, D1113).
+    let output = printed(
+        r#"
+struct S { a: i32, b: Vec<i32>, items: Vec<i32> }
+impl S {
+    fn total(&mut self) {
+        self.items.iter().for_each(|x| self.a += x);
+    }
+    fn run(&mut self) -> usize {
+        let mut add = |x: i32| { self.b.push(x); self.b.len() };
+        add(4);
+        let n = add(5);
+        self.a += 1;
+        n
+    }
+    fn nested(&mut self) {
+        let mut f = |k: i32| { let mut g = |j: i32| self.b.push(j * k); g(1); g(2); };
+        f(10);
+    }
+}
+fn fill(v: &mut Vec<i32>) {
+    let mut add = |x: i32| v.push(x);
+    add(7);
+    add(8);
+}
+fn main() {
+    let mut s = S { a: 0, b: vec![], items: vec![1, 2, 3] };
+    s.total();
+    let n = s.run();
+    s.nested();
+    let mut v = vec![];
+    fill(&mut v);
+    let mut list = vec![S { a: 0, b: vec![], items: vec![5] }];
+    list[0].total();
+    list[0].run();
+    println!("{} {} {:?} {:?} {} {:?}", s.a, n, s.b, v, list[0].a, list[0].b);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "7 2 [4, 5, 10, 20] [7, 8] 6 [4, 5]\n");
+}
+
+#[test]
+fn a_mut_local_moves_where_no_reference_is_expected() {
+    // rustc moves a `&mut` local given whole where the expected type is
+    // no reference: `Some(r)`, a tuple, a generic field, a `let s;` of no
+    // type (#2502).
+    for (shape, holder) in [
+        ("", "let o = Some(r);"),
+        ("", "let o = (r, 2);"),
+        ("struct G<T>(T);", "let o = G(r);"),
+        ("struct N<T> { t: T }", "let o = N { t: r };"),
+        ("", "let o; o = r;"),
+    ] {
+        let report = refused(&format!(
+            "{shape}\nfn main() {{ let mut x = 1; let r = &mut x; {holder} *r += 1; drop(o); }}\nmain();\n"
+        ));
+        assert!(
+            report.starts_with("error[E0382]: use of moved value: `r`"),
+            "{holder}: {report}"
+        );
+    }
+    // Where a reference is expected, `r` is reborrowed, and a `let s;`
+    // given a `&mut` reaches its place.
+    let output = printed(
+        r#"
+struct G<T>(T);
+fn take(o: Option<&mut i32>) { if let Some(m) = o { *m += 1; } }
+fn main() {
+    let mut x = 1;
+    let r = &mut x;
+    take(Some(r));
+    let t: (&mut i32, i32) = (r, 2);
+    *t.0 += 1;
+    let o = Some::<&mut i32>(r);
+    drop(o);
+    let s: &mut i32;
+    s = r;
+    *s += 1;
+    *r += 1;
+    let mut y = 1;
+    let g = G(&mut y);
+    *g.0 += 1;
+    let mut z = 1;
+    let u;
+    u = &mut z;
+    *u += 5;
+    println!("{} {} {}", x, y, z);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "5 2 6\n");
+}
+
+#[test]
+fn a_mut_parameter_a_function_keeps_is_the_callers_place() {
+    // A `&mut` parameter whose lifetime the output, another parameter or
+    // the impl names is lent as the reference to the caller's place, so
+    // the value keeping it reaches that place; two of one local's parts
+    // stay apart (D1113).
+    let output = printed(
+        r#"
+struct S<'a> { a: &'a mut i32 }
+impl<'a> S<'a> {
+    fn new(a: &'a mut i32) -> S<'a> { S { a } }
+    fn inc(&mut self) { *self.a += 1; }
+}
+fn pair<'a>(n: &mut i32, a: &'a mut i32) -> S<'a> { *n += 1; S { a } }
+struct T<'a> { x: &'a mut i32, y: &'a mut i32 }
+impl<'a> T<'a> {
+    fn new(x: &'a mut i32, y: &'a mut i32) -> T<'a> { T { x, y } }
+    fn bump(&mut self) { *self.x += 1; *self.y += 2; }
+}
+struct P { l: i32, r: i32 }
+struct Bag<T> { items: Vec<T> }
+impl<T> Bag<T> {
+    fn add(&mut self, t: T) { self.items.push(t); }
+}
+fn keep<T>(t: T) -> Vec<T> { vec![t] }
+fn main() {
+    let mut x = 1;
+    let mut s = S::new(&mut x);
+    s.inc();
+    s.inc();
+    println!("{}", x);
+    let mut p = (1, 2);
+    let t = pair(&mut p.0, &mut p.1);
+    *t.a += 10;
+    println!("{:?}", p);
+    let mut q = P { l: 1, r: 2 };
+    let mut u = T::new(&mut q.l, &mut q.r);
+    u.bump();
+    std::mem::swap(u.x, u.y);
+    u.bump();
+    println!("{} {}", q.l, q.r);
+    let mut a = 1;
+    let mut b = 2;
+    let mut bag = Bag { items: Vec::new() };
+    bag.add(&mut a);
+    bag.add(&mut b);
+    for e in bag.items { *e += 10; }
+    let mut c = 1;
+    let r = &mut c;
+    for e in keep(r) { *e += 4; }
+    println!("{} {} {}", a, b, c);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "3\n(2, 12)\n5 4\n11 12 5\n");
+}
+
+#[test]
+fn an_option_of_a_mut_given_or_matched_reaches_its_place() {
+    // `f(v.get_mut(i))` gives the callee `Some` of the element's place,
+    // and `if let Some(m) = &mut o` of an `Option<&mut T>` reaches it
+    // through `**m`.
+    let output = printed(
+        r#"
+fn bump(o: Option<&mut i32>) { if let Some(r) = o { *r += 100; } }
+fn main() {
+    let mut v = vec![1, 2, 3];
+    bump(v.get_mut(1));
+    bump(v.last_mut());
+    bump(v.get_mut(9));
+    println!("{:?}", v);
+    let mut x = 1;
+    let mut o: Option<&mut i32> = Some(&mut x);
+    if let Some(m) = &mut o { **m += 1; }
+    if let Some(m) = o.as_mut() { **m += 1; }
+    match &mut o { Some(m) => **m += 10, None => {} }
+    println!("{}", x);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "[1, 102, 103]\n13\n");
+}
+
+#[test]
+fn a_derived_hash_of_a_mut_field_hashes_what_it_refers_to() {
+    // rustc derives `Hash` for a `&mut T` field from `T`.
+    let output = printed(
+        r#"
+use std::collections::HashSet;
+#[derive(Hash, PartialEq, Eq, Debug)]
+struct W<'a> { a: &'a mut i32, n: u8 }
+fn main() {
+    let mut p = (3, 3, 4);
+    let mut set = HashSet::new();
+    set.insert(W { a: &mut p.0, n: 1 });
+    set.insert(W { a: &mut p.1, n: 1 });
+    set.insert(W { a: &mut p.2, n: 1 });
+    let mut x = 5;
+    let mut y = 5;
+    let mut t = HashSet::new();
+    t.insert(W { a: &mut x, n: 2 });
+    println!("{} {}", set.len(), t.contains(&W { a: &mut y, n: 2 }));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "2 true\n");
+}

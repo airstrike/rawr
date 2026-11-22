@@ -895,15 +895,10 @@ pub(super) fn write_function(
         output.declaration(source, declaration, &witness_variable(&generic.name.text));
     }
     output.declaration(source, declaration, ") {\n");
-    let copied = copied_parameters(
-        &definition.parameters,
-        receiver,
-        definition.formatter.as_ref(),
-        definition.body.asynchronous,
-    )
-    .into_iter()
-    .map(|index| definition.parameters[index].name.text.as_str())
-    .collect::<Vec<_>>();
+    let copied = function_copied(definition)
+        .into_iter()
+        .map(|index| definition.parameters[index].name.text.as_str())
+        .collect::<Vec<_>>();
     let body_offset = write_copied_body(
         output,
         source,
@@ -1118,6 +1113,167 @@ pub(super) fn lent_parameters(
     further_mutable(parameters, receiver, formatter)
 }
 
+/// `copied_parameters` of a function: not the ones it keeps
+/// (`function_kept`), which its call lends.
+pub(super) fn function_copied(definition: &item::Function) -> Vec<usize> {
+    let kept = function_kept(definition);
+    copied_parameters(
+        &definition.parameters,
+        this_parameter(definition),
+        definition.formatter.as_ref(),
+        definition.body.asynchronous,
+    )
+    .into_iter()
+    .filter(|index| !kept.contains(index))
+    .collect()
+}
+
+/// The `&mut` parameters a function's signature lets it keep past its
+/// call (`kept_parameters`), which the call lends as references to the
+/// caller's places (D1113).
+pub(super) fn function_kept(definition: &item::Function) -> Vec<usize> {
+    if definition.body.asynchronous {
+        return Vec::new();
+    }
+    let receiver = this_parameter(definition);
+    let mutable = further_mutable(
+        &definition.parameters,
+        receiver,
+        definition.formatter.as_ref(),
+    );
+    kept_parameters(
+        &definition.parameters,
+        &definition.lifetimes,
+        definition.output.as_ref(),
+        &mutable,
+    )
+}
+
+/// `function_kept` of a method: an inherent method's or associated
+/// function's. A trait's methods copy every `&mut` parameter, as each of
+/// their impls does (`method_copied`).
+pub(super) fn method_kept(definition: &method::Definition) -> Vec<usize> {
+    if definition.asynchronous() || definition.trait_name().is_some() {
+        return Vec::new();
+    }
+    let mutable = further_mutable(definition.parameters(), None, definition.formatter());
+    kept_parameters(
+        definition.parameters(),
+        definition.lifetimes(),
+        Some(definition.output()),
+        &mutable,
+    )
+}
+
+/// The `&mut` parameters among `mutable` whose borrow the signature lets
+/// outlive the call: the lifetime of each is named again below a
+/// reference, by the output (`fn new(a: &'a mut i32) -> S<'a>`), another
+/// parameter (`v: &mut Vec<&'a mut i32>`) or the impl's owner (`S<'a>` of
+/// `self.a = a`), so the body may keep it in a value, as rustc's borrow
+/// may live as long. An elided one is kept where it is the signature's
+/// only reference and the output names an elided lifetime below its own
+/// reference (`-> Option<&mut i32>`), as rustc's elision gives the output
+/// its lifetime. A `&mut` output's own lifetime keeps none: the output is
+/// a place below the call's receiver (`places::returned_place`).
+fn kept_parameters(
+    parameters: &[item::Parameter],
+    lifetimes: &item::Lifetimes,
+    output: Option<&type_ref::Type>,
+    mutable: &[usize],
+) -> Vec<usize> {
+    let name = |span: &Span| lifetimes.names.get(span).map(ImmutableString::as_str);
+    mutable
+        .iter()
+        .copied()
+        .filter(|&index| {
+            let type_ref::Type::Reference { lifetime, .. } = &parameters[index].ty else {
+                return false;
+            };
+            let mut below = Vec::new();
+            if let Some(output) = output {
+                below_lifetimes(output, &mut below);
+            }
+            match lifetime.as_ref().and_then(name) {
+                Some("static") => false,
+                Some(own) => {
+                    for (other, parameter) in parameters.iter().enumerate() {
+                        if other != index {
+                            below_lifetimes(&parameter.ty, &mut below);
+                        }
+                    }
+                    if let Some(owner) = &lifetimes.owner {
+                        lifetime_spans(owner, &mut below);
+                    }
+                    below.iter().any(|span| name(span) == Some(own))
+                }
+                None => {
+                    let references = parameters
+                        .iter()
+                        .filter(|parameter| {
+                            let mut spans = Vec::new();
+                            lifetime_spans(&parameter.ty, &mut spans);
+                            matches!(parameter.ty, type_ref::Type::Reference { .. })
+                                || !spans.is_empty()
+                        })
+                        .count();
+                    references == 1
+                        && lifetimes.owner.is_none()
+                        && below
+                            .iter()
+                            .any(|span| matches!(name(span), None | Some("_")))
+                }
+            }
+        })
+        .collect()
+}
+
+/// The lifetimes `ty` names below its own reference, if it is one (a
+/// `&str` too, a `String` that keeps its lifetime): each lifetime of a
+/// reference or a path's argument inside it.
+fn below_lifetimes(ty: &type_ref::Type, spans: &mut Vec<Span>) {
+    match ty {
+        type_ref::Type::Reference { target, .. } => lifetime_spans(target, spans),
+        type_ref::Type::Path(path) if ty.is_str() => {
+            for argument in &path.arguments {
+                if let type_ref::Argument::Type(ty) = argument {
+                    lifetime_spans(ty, spans);
+                }
+            }
+        }
+        ty => lifetime_spans(ty, spans),
+    }
+}
+
+/// Each lifetime `ty` names, by where it is written: a reference's (`None`
+/// written is its own span, which no name has) and a path's arguments'.
+fn lifetime_spans(ty: &type_ref::Type, spans: &mut Vec<Span>) {
+    match ty {
+        type_ref::Type::Unit(_) => {}
+        type_ref::Type::Tuple { members, .. } => {
+            members
+                .iter()
+                .for_each(|member| lifetime_spans(member, spans));
+        }
+        type_ref::Type::Reference {
+            lifetime,
+            target,
+            span,
+            ..
+        } => {
+            spans.push(lifetime.unwrap_or(*span));
+            lifetime_spans(target, spans);
+        }
+        type_ref::Type::Path(path) => {
+            for argument in &path.arguments {
+                match argument {
+                    type_ref::Argument::Type(ty) => lifetime_spans(ty, spans),
+                    type_ref::Argument::Lifetime(span) => spans.push(*span),
+                }
+            }
+        }
+    }
+}
+
 /// The `&mut` parameters other than the receiver and the formatter.
 fn further_mutable(
     parameters: &[item::Parameter],
@@ -1151,12 +1307,16 @@ pub(super) fn method_copied(definition: &method::Definition, _models: &Models) -
     {
         return Vec::new();
     }
+    let kept = method_kept(definition);
     copied_parameters(
         definition.parameters(),
         None,
         definition.formatter(),
         definition.asynchronous(),
     )
+    .into_iter()
+    .filter(|index| !kept.contains(index))
+    .collect()
 }
 
 /// `lent_parameters` of a method: an async method's `&mut` parameters.

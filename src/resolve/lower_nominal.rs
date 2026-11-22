@@ -181,6 +181,7 @@ pub(crate) use disk::Disk;
 pub(crate) use dispatch::this_parameter;
 use dispatch::{builtin_conversions_from, builtin_operator, BUILTIN_CONVERSIONS};
 use dispatch::{copied_parameters, inherit_block_names, inherit_names, method_copied};
+use dispatch::{function_copied, function_kept, method_kept};
 use dispatch::{lent_parameters, method_lent};
 /// The generated function that runs a value's `Drop` and its parts'.
 #[cfg(feature = "rust-import")]
@@ -567,9 +568,6 @@ struct Parser<'a> {
     chain_link: Option<usize>,
     /// A closure being read changes `self`.
     self_changed: std::cell::Cell<bool>,
-    /// The statement being read makes a closure that changes `self`: it
-    /// binds the closure's `self` before it and writes it back after it.
-    lend_self: bool,
     /// The expression depth at which `&mut place` is read: a direct
     /// argument for a function's `&mut` parameter (`this_parameter`).
     mutable_borrow: Option<usize>,
@@ -1078,7 +1076,6 @@ impl<'a> Parser<'a> {
             closure_blocks: BTreeMap::new(),
             chain_link: None,
             self_changed: std::cell::Cell::new(false),
-            lend_self: false,
             mutable_borrow: None,
             chosen: None,
             stored_items: None,
@@ -1298,6 +1295,7 @@ impl<'a> Parser<'a> {
                 },
             );
         }
+        parser.bind_kept(definition.parameters(), &method_kept(definition));
 
         if let Some(name) = formatter {
             parser.bind_formatter(name);
@@ -1406,15 +1404,10 @@ impl<'a> Parser<'a> {
         }
 
         let receiver = this_parameter(definition);
-        parser.copy_out = copied_parameters(
-            &definition.parameters,
-            receiver,
-            definition.formatter.as_ref(),
-            definition.body.asynchronous,
-        )
-        .into_iter()
-        .map(|index| definition.parameters[index].name.text.clone())
-        .collect();
+        parser.copy_out = function_copied(definition)
+            .into_iter()
+            .map(|index| definition.parameters[index].name.text.clone())
+            .collect();
         for (index, parameter) in definition.parameters.iter().enumerate() {
             let ty = Ty::from_resolved(&parameter.ty);
             // The `&mut` parameter is `this`, the caller's place.
@@ -1455,6 +1448,7 @@ impl<'a> Parser<'a> {
                 },
             );
         }
+        parser.bind_kept(&definition.parameters, &function_kept(definition));
         if let Some(name) = definition.formatter.clone() {
             parser.bind_formatter(name);
         }

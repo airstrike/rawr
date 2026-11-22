@@ -6434,16 +6434,17 @@ fn language_closures_capturing_self() {
         run()
     "#);
     assert_eq!(value, ((4 + 6) * 1000 + 40 * 100 + 9 + 18) * 10 + 10);
-    rejected(
-        r#"
+    // A closure kept in a local changes `self` where it is, as rustc's
+    // capture of `self.n` does (#189).
+    let value = run(r#"
         struct Counter { n: i64 }
         impl Counter {
             fn bump(&mut self) { let mut add = || self.n += 1; add(); }
         }
         pub fn run() -> i64 { let mut c = Counter { n: 0 }; c.bump(); c.n }
         run()
-    "#,
-    );
+    "#);
+    assert_eq!(value, 1);
 }
 
 #[test]
