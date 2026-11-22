@@ -439,6 +439,30 @@ impl Executable {
         &self.ast
     }
 
+    /// The keys of the statics this program keeps a value of, as its reads
+    /// name them (#2519): a generation that names a key goes on with the
+    /// value an earlier one kept.
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn kept_statics(&self) -> std::collections::BTreeSet<ImmutableString> {
+        use crate::ast::{ASTNode, Expr};
+        let mut keys = std::collections::BTreeSet::new();
+        let mut note = |path: &[ASTNode]| {
+            if let Some(ASTNode::Expr(Expr::StringConstant(text, _))) = path.last()
+                && text.starts_with(crate::place::statics::KEPT)
+            {
+                keys.insert(text.clone());
+            }
+            true
+        };
+        self.ast._walk(&mut note);
+        for (.., function) in self.ast.shared_support().iter_script_fn() {
+            for statement in function.body.iter() {
+                statement.walk(&mut Vec::new(), &mut note);
+            }
+        }
+        keys
+    }
+
     /// This program's [`AST`], which keeps the facade items it calls so
     /// its first evaluation binds them (D494 item 15).
     pub(crate) fn into_hosted_ast(self) -> AST {

@@ -155,6 +155,12 @@ impl Candidate {
         self.catalog.in_async_fn(step)
     }
 
+    /// The keys of the statics this candidate keeps a value of (#2519).
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn kept_statics(&self) -> std::collections::BTreeSet<crate::ImmutableString> {
+        self.catalog.kept_statics()
+    }
+
     /// Return this candidate's immutable metadata proof.
     #[must_use]
     pub const fn generation(&self) -> &Arc<Generation> {

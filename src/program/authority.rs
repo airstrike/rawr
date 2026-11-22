@@ -65,6 +65,12 @@ impl Authority {
 
     /// Whether an `async fn` or method of this generation writes the
     /// closure `step` names.
+    /// The keys of the statics this generation keeps a value of (#2519).
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn kept_statics(&self) -> std::collections::BTreeSet<crate::ImmutableString> {
+        self.executable.kept_statics()
+    }
+
     #[cfg(feature = "rust-import")]
     pub(crate) fn in_async_fn(&self, step: &item::Key) -> bool {
         self.executable.in_async_fn(step)

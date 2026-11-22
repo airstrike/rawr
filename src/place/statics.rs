@@ -205,6 +205,86 @@ pub fn slot(key: &str) -> Slot {
         .clone()
 }
 
+/// How every key of a static the interpreter keeps starts, which tells it
+/// apart in a generation's code from any other text (#2519).
+pub const KEPT: &str = "\u{1}kept:";
+
+/// What becomes of the kept statics a swap leaves out once `decide` in
+/// [`apart`] has decided.
+pub enum After {
+    /// The swap happens: their values drop.
+    Release,
+    /// The swap doesn't: they keep their values.
+    Restore,
+}
+
+/// `decide`'s answer, given while the statics the interpreter keeps that
+/// the next generation doesn't declare (the keys `declared` doesn't give)
+/// hold no value: a static whose initializer or type changed, or that was
+/// removed, is a new static, so no check of the values that live counts
+/// the old one's (D862, #2519). `declared` runs only when a static is
+/// kept. Each such static's reads wait while `decide` runs.
+pub fn apart<R>(
+    declared: impl FnOnce() -> std::collections::BTreeSet<crate::ImmutableString>,
+    decide: impl FnOnce() -> (R, After),
+) -> R {
+    let kept: Vec<(Box<str>, Slot)> = statics()
+        .slots
+        .iter()
+        .filter(|(key, _)| key.starts_with(KEPT))
+        .map(|(key, slot)| (key.clone(), slot.clone()))
+        .collect();
+    if kept.is_empty() {
+        return decide().0;
+    }
+    let declared = declared();
+    let left: Vec<(Box<str>, Slot)> = kept
+        .into_iter()
+        .filter(|(key, _)| !declared.contains(&**key))
+        .collect();
+    let mut states: Vec<_> = left.iter().map(|(_, slot)| slot.state()).collect();
+    let taken: Vec<State> = states
+        .iter_mut()
+        .map(|state| std::mem::replace(&mut **state, State::Reserved { memory: None }))
+        .collect();
+    let (answer, after) = decide();
+    match after {
+        After::Restore => {
+            for (state, value) in states.iter_mut().zip(taken) {
+                **state = value;
+            }
+        }
+        After::Release => {
+            let mut statics = statics();
+            for (key, slot) in &left {
+                if statics
+                    .slots
+                    .get(key)
+                    .is_some_and(|kept| Shared::ptr_eq(&kept.0, &slot.0))
+                {
+                    statics.slots.remove(key);
+                }
+            }
+            drop(statics);
+            drop(states);
+            drop(taken);
+        }
+    }
+    answer
+}
+
+/// The key of every static the interpreter keeps, for a test to leave the
+/// statics of the tests running beside it out of [`apart`].
+#[cfg(all(test, feature = "rust-import"))]
+pub(crate) fn kept() -> std::collections::BTreeSet<crate::ImmutableString> {
+    statics()
+        .slots
+        .keys()
+        .filter(|key| key.starts_with(KEPT))
+        .map(|key| (**key).into())
+        .collect()
+}
+
 /// The statics being built that refer to each other, for `change`.
 fn building<R>(change: impl FnOnce(&mut Building) -> R) -> R {
     change(&mut statics().building)
