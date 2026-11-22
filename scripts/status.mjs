@@ -4,8 +4,10 @@
 //
 //   node scripts/status.mjs
 //
-// The gating rows are the chart rows D739 names for 0.3: every iced example
-// (the "no-glue" group) and all rustlings code (the "rustlings" row).
+// The gating rows are the next milestone's: the chart group whose subtitle
+// begins with its version ("0.6: ..."). With none, they are the rows D739
+// names for 0.3: every iced example (the "no-glue" group) and all rustlings
+// code (the "rustlings" row).
 
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -41,18 +43,28 @@ const minor = repoVersion?.split(".").slice(0, 2).join(".");
 console.log(`Items: ${open} open of ${items.length} (${percent}% open${retired ? `, ${retired} retired` : ""})`);
 console.log("");
 
-// What gates the minor series (D739).
+// What gates the next minor series: its group, or D739's rows.
+const [major, current] = (minor ?? "0.0").split(".").map(Number);
+const next = `${major}.${current + 1}`;
+const milestone = gantt.groups.find((group) => group.subtitle?.startsWith(`${next}:`));
+const gates = milestone
+  ? (group) => group === milestone
+  : (group, row) => group.id === "no-glue" || row.id === "rustlings";
 const gating = [];
 for (const group of gantt.groups) {
   for (const row of group.rows) {
     if (row.state === "done") continue;
-    if (group.id !== "no-glue" && row.id !== "rustlings") continue;
+    if (!gates(group, row)) continue;
     const left = row.issues.filter((n) => byIssue.get(n)?.state === "open");
     if (left.length) gating.push({ group, row, left });
   }
 }
 const { running, total } = gantt.examples;
-console.log(`Gating ${minor}.0 (D739: every iced example runs, all rustlings code works)`);
+console.log(
+  milestone
+    ? `Gating ${next}.0 (${milestone.title}: ${milestone.subtitle.slice(next.length + 1).trim()})`
+    : `Gating ${minor}.0 (D739: every iced example runs, all rustlings code works)`,
+);
 console.log(`  iced examples running: ${running} of ${total} (chart, as of: ${gantt.examples.note})`);
 for (const { row, left } of gating) {
   console.log(`  ${row.name}: ${left.length} open (${row.state})`);
@@ -82,26 +94,21 @@ const health = await fetchText("https://rawr.airstrike.fyi/bot/health");
 const image = health ? JSON.parse(health).deployed : null;
 const bot = image ? `${releaseOf(image)} (image ${image}${JSON.parse(health).running ? ", running" : ", not running"})` : "unreachable";
 
-// rawr-web reaches the playground only through a release run's site stage,
-// whose deploy step deploys first and checks after: a run whose step took
-// this run's rawr-web and started deploying deployed it, even when the
-// checks after it failed or timed out.
+// The playground's modules are the set the newest successful module build
+// published to R2 (playground.yml), run by hand, nightly from bot.yml, or
+// as release.yml's stage 2; the page loads that set by its pointer.
 let playground = "unknown";
-const runs = run("gh", ["run", "list", "--workflow", "release.yml", "-L", "20", "--json", "databaseId,headSha"]);
-for (const entry of runs ? JSON.parse(runs) : []) {
-  const steps = run("gh", ["run", "view", String(entry.databaseId), "--json", "jobs", "-q", '.jobs[]|select(.name=="site / site")|.steps[]|.name+"="+.conclusion']);
-  const step = (name) => steps?.split("\n").find((line) => line.startsWith(`${name}=`))?.split("=")[1];
-  const took = step("Use this run's rawr-web") === "success";
-  const deploy = step("Test, deploy and check the site");
-  if (took && deploy && deploy !== "skipped") {
-    playground = `${releaseOf(entry.headSha)}${deploy === "success" ? "" : ` (deployed; its checks ended ${deploy})`}`;
-    break;
-  }
+const built = [];
+for (const workflow of ["playground.yml", "bot.yml", "release.yml"]) {
+  const runs = run("gh", ["run", "list", "--workflow", workflow, "--status", "success", "-L", "1", "--json", "headSha,createdAt"]);
+  for (const entry of runs ? JSON.parse(runs) : []) built.push({ ...entry, workflow });
 }
+built.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+if (built[0]) playground = `${releaseOf(built[0].headSha)} (${built[0].workflow}, ${built[0].createdAt.slice(0, 16).replace("T", " ")} UTC)`;
 
 console.log("Versions");
 console.log(`  repo (main):  ${repoVersion}`);
 console.log(`  local tools:  ${tool("rawr")}, ${tool("rawr-import")}, driver protocol ${driverProtocol}${driverProtocol === mainProtocol ? "" : ` (main is ${mainProtocol}: reinstall the driver)`}`);
 console.log(`  work plan:    ${workplan ?? "unreachable"}`);
-console.log(`  playground:   ${playground} (last release run whose site stage deployed rawr-web)`);
+console.log(`  playground:   ${playground}`);
 console.log(`  bot:          ${bot}`);
