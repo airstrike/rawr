@@ -104,6 +104,35 @@ fn nightly_built(root: &Path) -> bool {
     walk(&root.join("target/rawr"))
 }
 
+/// `&req.comparators[0]` borrows the crate struct's field where it is, as
+/// `Index::index` takes it by reference: a later `req.matches(..)` runs, as
+/// cargo's build does (#2225).
+#[test]
+fn an_indexed_crate_field_is_borrowed_and_its_struct_stays_whole() {
+    crate::support::driver();
+    let root = crate::support::fresh("plain-indexed-field");
+    copy(Path::new(FIXTURE), &root);
+    let program = "// rawr
+use semver::{Version, VersionReq};
+
+fn main() {
+    let req = VersionReq::parse(\">=1.2.3, <2\").unwrap();
+    let first = &req.comparators[0];
+    println!(\"{} {}\", first.major, req.comparators[1].major);
+    println!(\"{}\", req.matches(&Version::parse(\"1.5.0\").unwrap()));
+}
+";
+    fs::write(root.join("src/main.rs"), program).unwrap();
+    let run = rawr_import(&root, &["run"]);
+    assert!(
+        run.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        text(&run.stdout),
+        text(&run.stderr)
+    );
+    assert_eq!(text(&run.stdout), "1 2\ntrue\n");
+}
+
 #[test]
 fn a_plain_program_with_a_dependency_runs_in_a_runner_without_iced() {
     crate::support::driver();
