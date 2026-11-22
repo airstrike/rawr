@@ -516,6 +516,22 @@ fn bound_place(error: &resolve::Error) -> Option<&resolve::Bound> {
     }
 }
 
+/// Whether `error`, rustc's E0277, is a `value.into()` whose target has no
+/// `From` impl for the value: its one requirement is the `Into` std's
+/// blanket impl would give the value.
+fn into_bound(error: &resolve::Error) -> bool {
+    match error {
+        resolve::Error::MissingCapability {
+            capability, chain, ..
+        } => {
+            capability.starts_with("From<")
+                && matches!(chain.requirements(), [requirement]
+                    if requirement.site.is_none() && requirement.trait_name.starts_with("Into<"))
+        }
+        _ => false,
+    }
+}
+
 /// The placeholder that formats the value `error`, rustc's E0277, says
 /// lacks a trait.
 fn formatting(error: &resolve::Error) -> Option<&resolve::Placeholder> {
@@ -1368,10 +1384,15 @@ fn sections(error: &resolve::Error, source: &Source) -> Vec<Section> {
             ..
         } => {
             let help = declared
-                .filter(|_| capability == "Display")
+                .filter(|_| capability == "Display" || into_bound(error))
                 .map(|declared| {
+                    let written = if capability == "Display" {
+                        "std::fmt::Display"
+                    } else {
+                        capability.as_str()
+                    };
                     let help = Section::help(format!(
-                        "the trait `std::fmt::Display` is not implemented for `{owner}`"
+                        "the trait `{written}` is not implemented for `{owner}`"
                     ))
                     .primary(
                         source.clone(),
@@ -1380,6 +1401,11 @@ fn sections(error: &resolve::Error, source: &Source) -> Vec<Section> {
                     );
                     match formatting(error) {
                         Some(_) => help.followed(DEBUG_INSTEAD),
+                        None if into_bound(error) => {
+                            super::requirement::lines(chain.requirements())
+                                .into_iter()
+                                .fold(help, Section::followed)
+                        }
                         None => help,
                     }
                 });
@@ -1653,6 +1679,25 @@ fn suggestion(error: &resolve::Error, source: &Source) -> Result<Option<Suggesti
             Style::Verbose,
             after(member_span(error)),
             "()",
+        ),
+        resolve::Error::UnknownField {
+            reference,
+            hint: resolve::FieldHint::Similar(similar),
+            ..
+        } => suggestion(
+            "a field with a similar name exists",
+            Style::Verbose,
+            *reference,
+            similar,
+        ),
+        resolve::Error::WrongKind {
+            annotation: Some(between),
+            ..
+        } => suggestion(
+            "you might have meant to use `:` for type annotation",
+            Style::Verbose,
+            *between,
+            ": ",
         ),
         resolve::Error::WrongKind {
             expected: "function",
@@ -2039,11 +2084,35 @@ fn primary_label(
         resolve::Error::SelfOutsideImpl { parameter, .. } => {
             Some(resolve::SelfOutside(*parameter).label().into())
         }
+        resolve::Error::UnknownField {
+            owner,
+            pattern,
+            hint,
+            ..
+        } => Some(owner.label(*pattern, hint).into()),
+        // rustc's `:` help stands in for the label.
+        resolve::Error::WrongKind {
+            annotation: Some(_),
+            ..
+        } => None,
         resolve::Error::WrongKind { expected, .. } => Some(format!("not a {expected}").into()),
         resolve::Error::Unimplemented { label, .. } => Some(label.clone()),
         resolve::Error::UnsharedStatic { ty, .. } => {
             Some(resolve::Unsatisfied(ty, "Sync").to_string().into())
         }
+        // At `into`, the program's own type's help at its definition.
+        resolve::Error::MissingCapability {
+            owner,
+            capability,
+            declared,
+            ..
+        } if into_bound(error) => Some(
+            match declared {
+                Some(_) => "unsatisfied trait bound".to_owned(),
+                None => format!("the trait `{capability}` is not implemented for `{owner}`"),
+            }
+            .into(),
+        ),
         // At an argument a bound needs, as the trait's own wording has it.
         resolve::Error::MissingCapability {
             owner, capability, ..
@@ -2171,7 +2240,15 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
             }
             _ => code::RESOLVE_DUPLICATE_MEMBER,
         },
-        resolve::Category::UnknownMember => code::RESOLVE_UNKNOWN_MEMBER,
+        resolve::Category::UnknownMember => match error {
+            resolve::Error::UnknownField {
+                owner,
+                field,
+                pattern,
+                ..
+            } => code::std_path(owner.missing(field, *pattern).0),
+            _ => code::RESOLVE_UNKNOWN_MEMBER,
+        },
         resolve::Category::NotInModule => code::RESOLVE_NOT_IN_MODULE,
         resolve::Category::UnknownFunction => code::RESOLVE_UNKNOWN_FUNCTION,
         resolve::Category::UnknownVariable => code::RESOLVE_UNKNOWN_VARIABLE,
@@ -2318,6 +2395,9 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
             note: Some(note),
             ..
         } if *code != "E0364" => builder.note(note.clone()),
+        resolve::Error::UnknownField { hint, .. } if let Some(note) = hint.note() => {
+            builder.note(note)
+        }
         // After the enum's note, when it has one (`sections`).
         // Each `#[non_exhaustive]` enum the first witness's `_` stands for
         // follows the type, as rustc notes it.
@@ -2473,9 +2553,15 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
             } else {
                 builder
             };
-            let builder = super::requirement::lines(chain.requirements())
-                .into_iter()
-                .fold(builder, Builder::note);
+            // An `into`'s requirement follows the help at the definition
+            // (`sections`) when there is one.
+            let builder = if into_bound(error) && declared.is_some() {
+                builder
+            } else {
+                super::requirement::lines(chain.requirements())
+                    .into_iter()
+                    .fold(builder, Builder::note)
+            };
             let builder = match required_by {
                 Some(resolve::Required { item, place: None }) => {
                     builder.note(format!("required by a bound in `{item}`"))
@@ -2785,6 +2871,12 @@ fn resolution_message(error: &resolve::Error) -> String {
         } => resolve::unscoped_method(kind, owner, member),
         resolve::Error::InvalidAssignee { .. } => resolve::INVALID_ASSIGNEE.to_string(),
         resolve::Error::StdPath { message, .. } => message.to_string(),
+        resolve::Error::UnknownField {
+            owner,
+            field,
+            pattern,
+            ..
+        } => owner.missing(field, *pattern).1,
         resolve::Error::UnknownTrait { name, .. } => {
             format!("cannot find trait `{name}` in this scope")
         }

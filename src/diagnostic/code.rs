@@ -99,6 +99,9 @@ codes!(Resolve in RESOLVE;
     (RESOLVE_UNKNOWN_MEMBER, "RAWR-RESOLVE-UNKNOWN-MEMBER", "Unknown nominal member."),
     (RESOLVE_NO_METHOD, "E0599", "No method or associated item of that name, as rustc reports it."),
     (RESOLVE_NO_FIELD, "E0609", "No field of that name, as rustc reports it."),
+    (RESOLVE_LITERAL_FIELD, "E0560", "A struct literal that names a field its struct does not declare, as rustc reports it."),
+    (RESOLVE_VARIANT_FIELD, "E0559", "A variant literal that names a field its variant does not declare, as rustc reports it."),
+    (RESOLVE_PATTERN_FIELD, "E0026", "A struct or variant pattern that names a field its type does not declare, as rustc reports it."),
     (RESOLVE_NOT_IN_MODULE, "E0425", "A path names no item of a module, as rustc reports it."),
     (RESOLVE_METHOD_VALUE, "E0615", "A method read like a field, as rustc reports it."),
     (RESOLVE_UNKNOWN_FUNCTION, "E0425", "A call of a name no function in scope has, as rustc reports it."),
@@ -315,6 +318,9 @@ pub(crate) fn std_path(rustc: &str) -> Code {
         "E0451" => RESOLVE_PRIVATE_FIELD_NAMED,
         "E0364" => RESOLVE_PRIVATE_REEXPORT,
         "E0742" => RESOLVE_VISIBILITY_ANCESTOR,
+        "E0560" => RESOLVE_LITERAL_FIELD,
+        "E0559" => RESOLVE_VARIANT_FIELD,
+        "E0026" => RESOLVE_PATTERN_FIELD,
         _ => RESOLVE_UNSTABLE,
     }
 }

@@ -1405,18 +1405,25 @@ impl Parser<'_> {
                         let declared = declared.as_deref().unwrap_or_default();
                         let rest = *rest || variant.payload.is_empty();
                         let names = declared.iter().map(|field| field.text.as_str());
-                        field_order(definition.name(), names, written, rest, at)?
-                            .into_iter()
-                            .map(|index| index.map_or(&discard, |index| &pattern.payload[index]))
-                            .chain(std::iter::repeat_n(
-                                &discard,
-                                if declared.is_empty() {
-                                    variant.payload.len()
-                                } else {
-                                    0
-                                },
-                            ))
-                            .collect()
+                        field_order(
+                            definition.name(),
+                            Some(&pattern.variant),
+                            names,
+                            written,
+                            rest,
+                            at,
+                        )?
+                        .into_iter()
+                        .map(|index| index.map_or(&discard, |index| &pattern.payload[index]))
+                        .chain(std::iter::repeat_n(
+                            &discard,
+                            if declared.is_empty() {
+                                variant.payload.len()
+                            } else {
+                                0
+                            },
+                        ))
+                        .collect()
                     }
                     (None, _) => tuple_members(&pattern.payload, variant.payload.len(), &discard)?,
                 };

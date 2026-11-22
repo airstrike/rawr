@@ -351,10 +351,33 @@ pub(crate) fn check(
                 message: format!("cannot find `{}` in `{parent}`", missing.segment).into(),
                 label: Some(format!("could not find `{}` in `{parent}`", missing.segment).into()),
                 note: None,
-                reference,
+                reference: segment_span(path, reference, missing.found.len()).unwrap_or(reference),
             })
         }
     }
+}
+
+/// The span of `path`'s segment at `index`, where `reference` is `path`
+/// written on one line with no blanks, as rustc marks the segment a path
+/// stops resolving at: `None` where it is written another way.
+fn segment_span(path: &str, reference: Span, index: usize) -> Option<Span> {
+    let advance = |mut position: crate::Position, count: usize| {
+        for _ in 0..count {
+            position.advance();
+        }
+        position
+    };
+    if advance(reference.start(), path.chars().count()) != reference.end() {
+        return None;
+    }
+    let segment = path.split("::").nth(index)?;
+    let before = path
+        .split("::")
+        .take(index)
+        .map(|segment| segment.chars().count() + 2)
+        .sum();
+    let start = advance(reference.start(), before);
+    Some(Span::new(start, advance(start, segment.chars().count())))
 }
 
 /// The names `use module::*;` binds when `module` is a std module: every

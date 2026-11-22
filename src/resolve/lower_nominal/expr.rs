@@ -961,11 +961,29 @@ impl<'a> Parser<'a> {
             }
             // `try { .. } catch ..`: rustc reads a `try` block, which no
             // `catch` may follow.
-            Token::Try if let Some(at) = self.catch_after_block() => Err(Error::Syntax {
-                message: "keyword `catch` cannot follow a `try` block".into(),
-                label: "".into(),
-                help: Some("try using `match` on the result of the `try` block instead".into()),
-                at: Span::new(at, text_end(at, "catch")),
+            Token::Try
+                if let Some(TryBlock {
+                    catch: Some(at), ..
+                }) = self.try_block() =>
+            {
+                Err(Error::Syntax {
+                    message: "keyword `catch` cannot follow a `try` block".into(),
+                    label: "".into(),
+                    help: Some("try using `match` on the result of the `try` block instead".into()),
+                    at: Span::new(at, text_end(at, "catch")),
+                })
+            }
+            // A `try` block alone: rustc's E0658, as stable Rust has none.
+            Token::Try if let Some(block) = self.try_block() => Err(Error::StdPath {
+                code: "E0658",
+                message: "`try` expression is experimental".into(),
+                label: None,
+                note: Some(
+                    "see issue #154391 <https://github.com/rust-lang/rust/issues/154391> for more \
+                     information"
+                        .into(),
+                ),
+                reference: Span::new(token_span.start(), block.end),
             }),
             // `_` that no destructuring assignment took: rustc's syntax
             // error.
@@ -2398,26 +2416,40 @@ impl<'a> Parser<'a> {
         .retain_origin())
     }
 
-    /// Where a `catch` follows the block that starts at the next token.
-    pub(super) fn catch_after_block(&self) -> Option<Position> {
+    /// The `try` block whose `{` is the next token: where it ends, and
+    /// where a `catch` follows it.
+    pub(super) fn try_block(&self) -> Option<TryBlock> {
         let mut ahead = self.input.clone();
         if !matches!(ahead.next(), Some((Token::LeftBrace, _))) {
             return None;
         }
         let mut depth = 1_usize;
+        let mut end = None;
         while depth > 0 {
             match ahead.next()? {
                 (Token::LeftBrace | Token::MapStart, _) => depth += 1,
-                (Token::RightBrace, _) => depth -= 1,
+                (Token::RightBrace, at) => {
+                    depth -= 1;
+                    end = Some(text_end(at, "}"));
+                }
                 (Token::EOF, _) => return None,
                 _ => {}
             }
         }
-        match ahead.next()? {
-            (Token::Identifier(word), at) if word.as_str() == "catch" => Some(at),
+        let catch = match ahead.next() {
+            Some((Token::Identifier(word), at)) if word.as_str() == "catch" => Some(at),
             _ => None,
-        }
+        };
+        Some(TryBlock { end: end?, catch })
     }
+}
+
+/// A `try { .. }` block, which stable Rust doesn't have.
+pub(super) struct TryBlock {
+    /// Just past its closing `}`.
+    end: Position,
+    /// The `catch` after it, which no `try` block may have.
+    catch: Option<Position>,
 }
 
 #[derive(Clone)]

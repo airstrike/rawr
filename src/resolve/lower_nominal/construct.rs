@@ -1014,15 +1014,22 @@ impl<'a> Parser<'a> {
             }
         }
         let end = self.expect(Token::RightBrace, "'}' after struct fields")?;
-        if let Some((field, (_, field_span))) = values
+        if let Some(field) = order
             .iter()
-            .find(|(field, _)| !item.fields.iter().any(|known| known.name.text == **field))
+            .find(|field| !item.fields.iter().any(|known| known.name.text == **field))
         {
-            return Err(Error::UnknownMember {
-                owner: definition.name().into(),
-                member: field.clone(),
-                reference: *field_span,
-            });
+            let owner = crate::resolve::FieldOwner {
+                variant: false,
+                name: definition.name().into(),
+            };
+            let declared = item.fields.iter().map(|known| known.name.text.as_str());
+            return Err(unknown_literal_field(
+                owner,
+                field,
+                values[field].1,
+                declared,
+                &order,
+            ));
         }
         for field in &order {
             let declared = item
@@ -1201,9 +1208,11 @@ impl<'a> Parser<'a> {
 
     /// `{ x, y: value }` after a struct variant: each value with its
     /// field's slot, in written order, and the position of the `}`.
+    /// `owner` is the variant.
     pub(super) fn parse_named_values(
         &mut self,
         definition: &type_def::Definition,
+        owner: crate::resolve::FieldOwner,
         fields: &[(ImmutableString, Ty)],
     ) -> Result<(Vec<(usize, ParsedExpr)>, Position), Error> {
         self.expect(Token::LeftBrace, "'{' after a struct variant")?;
@@ -1211,11 +1220,14 @@ impl<'a> Parser<'a> {
         while !matches!(self.peek(), Token::RightBrace) {
             let (field, field_span) = self.expect_name("variant field initializer")?;
             let Some(slot) = fields.iter().position(|(known, _)| *known == field) else {
-                return Err(Error::UnknownMember {
-                    owner: definition.name().into(),
-                    member: field,
-                    reference: field_span,
-                });
+                let given = written
+                    .iter()
+                    .map(|(slot, _)| fields[*slot].0.clone())
+                    .collect::<Vec<_>>();
+                let declared = fields.iter().map(|(known, _)| known.as_str());
+                return Err(unknown_literal_field(
+                    owner, &field, field_span, declared, &given,
+                ));
             };
             if written.iter().any(|(known, _)| *known == slot) {
                 return Err(Error::InvalidConstruction {
@@ -1961,4 +1973,28 @@ fn lasting(ty: &crate::host::type_ref::Type) -> bool {
             ..
         }
     )
+}
+
+/// rustc's E0560 (E0559 for a variant) for `field`, which `owner` doesn't
+/// declare, at `reference` in a literal that gives `given` of its
+/// `declared` fields: rustc weighs the fields not yet given, in declared
+/// order.
+fn unknown_literal_field<'a>(
+    owner: crate::resolve::FieldOwner,
+    field: &str,
+    reference: Span,
+    declared: impl Iterator<Item = &'a str>,
+    given: &[ImmutableString],
+) -> Error {
+    let available = declared
+        .filter(|known| !given.iter().any(|given| given.as_str() == *known))
+        .map(ImmutableString::from)
+        .collect();
+    Error::UnknownField {
+        owner,
+        field: field.into(),
+        reference: Span::new(reference.start(), text_end(reference.start(), field)),
+        pattern: false,
+        hint: crate::resolve::FieldHint::new(field, available, false),
+    }
 }

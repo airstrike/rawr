@@ -35,11 +35,11 @@ pub(crate) use error::{
 };
 pub use error::{
     Annotation, ArgumentMismatch, Arguments, Arms, Assignment, Beyond, BinaryOperation,
-    BindingSite, Bound, Boxing, Callee, Category, Chain, Cloning, Detail, Error, Expansion, Fields,
-    Import, Imported, Instead, Lint, MacroScope, Missing, MissingImpl, MoveCause, MovedPlace,
-    MutBinding, Opaqueness, OwningParameter, PatternOrigin, PatternTypes, Placeholder, Private,
-    Receiver, Referent, Required, Requirement, Shown, Similar, Site, Uncovered, Unexpected,
-    UnmetBound, UnmetBounds, Unresolved,
+    BindingSite, Bound, Boxing, Callee, Category, Chain, Cloning, Detail, Error, Expansion,
+    FieldHint, FieldOwner, Fields, Import, Imported, Instead, Lint, MacroScope, Missing,
+    MissingImpl, MoveCause, MovedPlace, MutBinding, Opaqueness, OwningParameter, PatternOrigin,
+    PatternTypes, Placeholder, Private, Receiver, Referent, Required, Requirement, Shown, Similar,
+    Site, Uncovered, Unexpected, UnmetBound, UnmetBounds, Unresolved,
 };
 pub use imports::{Candidate, Direct, Imports};
 use std::collections::BTreeMap;

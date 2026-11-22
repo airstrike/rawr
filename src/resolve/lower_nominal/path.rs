@@ -45,12 +45,15 @@ impl<'a> Parser<'a> {
                 | Error::UnknownMember { .. }
                 | Error::NotInModule { .. }),
             ) if error.primary_span().start() <= reference.end() => {
-                let expected = match next {
-                    Some(Token::LeftParen) => "function",
-                    _ => "value",
+                let (expected, called) = match next {
+                    Some(Token::LeftParen) => {
+                        ("function", "function, tuple struct or tuple variant")
+                    }
+                    _ => ("value", "value"),
                 };
                 Err(self
-                    .std_not_yet(&path, reference)
+                    .trait_as_value(&path, called, reference)
+                    .or_else(|| self.std_not_yet(&path, reference))
                     .or_else(|| self.macro_without_bang(&path, expected, reference))
                     .unwrap_or_else(|| self.std_no_item(error)))
             }
@@ -1205,10 +1208,12 @@ impl<'a> Parser<'a> {
                 path.push((member.clone(), member_span));
                 self.unresolved_root_error(&path)
             } else {
+                // A path's first segment is a type or a module, as rustc
+                // offers to import it: `Rc::new`, `mem::swap` (#809).
                 let imports = if owner.contains("::") {
                     Box::default()
                 } else {
-                    self.imports(&owner, Wanted::Type)
+                    self.imports(&owner, Wanted::Path)
                 };
                 Error::UnknownType {
                     name: owner,
@@ -1512,12 +1517,16 @@ impl<'a> Parser<'a> {
                 })
                 .collect::<Vec<_>>();
             let variant_name = declaration.name.text.clone();
+            let owner = crate::resolve::FieldOwner {
+                variant: true,
+                name: format!("{}::{}", definition.name(), declaration.name.text).into(),
+            };
             let helper = self.push_op(Op::Enum {
                 definition: definition.clone(),
                 item: Box::new(item),
                 variant,
             });
-            let (written, end) = self.parse_named_values(&definition, &fields)?;
+            let (written, end) = self.parse_named_values(&definition, owner, &fields)?;
             let whole = span(owner_span.start(), end);
             let parts: Vec<_> = written
                 .iter()

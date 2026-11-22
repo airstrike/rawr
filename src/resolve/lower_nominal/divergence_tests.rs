@@ -7637,7 +7637,13 @@ fn a_std_item_or_module_with_no_use_is_rustc_s_error() {
         "fn main() {\n    let (mut a, mut b) = (1, 2);\n    mem::swap(&mut a, &mut b);\n}\n",
     );
     assert!(
-        report.starts_with("error[E0433]: cannot find module or crate `mem` in this scope"),
+        report.starts_with("error[E0433]: cannot find module or crate `mem` in this scope")
+            && report.contains("help: consider importing this module\n  |\n1 + use std::mem;\n  |"),
+        "{report}"
+    );
+    let report = refused("fn main() {\n    let t = io::stdin();\n}\n");
+    assert!(
+        report.contains("help: consider importing this module\n  |\n1 + use std::io;\n  |"),
         "{report}"
     );
     // With the `use`, each runs.

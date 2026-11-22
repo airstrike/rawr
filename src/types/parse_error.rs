@@ -372,6 +372,12 @@ impl fmt::Display for ParseErrorType {
                 | crate::resolve::Error::NoItem { owner, member, .. } => {
                     write!(f, "Unknown member '{owner}::{member}'")
                 }
+                crate::resolve::Error::UnknownField {
+                    owner,
+                    field,
+                    pattern,
+                    ..
+                } => f.write_str(&owner.missing(field, *pattern).1),
                 crate::resolve::Error::NotInModule { module, item, .. } => {
                     write!(f, "Cannot find '{item}' in module '{module}'")
                 }

@@ -494,6 +494,10 @@ struct Parser<'a> {
     /// call passes its `Formatter` on.
     forward_spec: bool,
     closure_hint: Option<Box<[Ty]>>,
+    /// In the value of a `let` that writes no type, what lies between its
+    /// pattern and the value, as rustc's E0423 for a trait's name there
+    /// offers to make it a `:` (`WrongKind::annotation`).
+    unannotated_let: Option<Span>,
     /// The lifetimes the `for<'a>` binders around the body type being
     /// read bind, which are elided ones (`for<'a> fn(&'a T)`).
     bound_lifetimes: Vec<ImmutableString>,
@@ -1067,6 +1071,7 @@ impl<'a> Parser<'a> {
             debug_spec: None,
             forward_spec: false,
             closure_hint: None,
+            unannotated_let: None,
             bound_lifetimes: Vec::new(),
             expansions: 0,
             expansion_ends: Vec::new(),

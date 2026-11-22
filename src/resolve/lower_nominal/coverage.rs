@@ -6,7 +6,7 @@ use super::op::ordering_discriminant;
 use super::pattern;
 use super::pattern::Prelude;
 use super::ty::{Int, Ty};
-use super::{cow, instantiate, origin, without_references, Parser};
+use super::{cow, instantiate, origin, text_end, without_references, Parser};
 use crate::resolve::{BindingSite, Error};
 use crate::types::nominal;
 use crate::{ast, type_def, ImmutableString, Span};
@@ -178,9 +178,11 @@ pub(super) enum Pattern {
 
 /// For each declared field, the index of the written field pattern that
 /// names it, `None` where `..` skips it; Rust's errors for an unknown field
+/// (E0026, of `variant` where the pattern is one of `owner`'s variants)
 /// and, without `..`, a missing one.
 pub(super) fn field_order<'a>(
     owner: &str,
+    variant: Option<&str>,
     declared: impl Iterator<Item = &'a str>,
     written: &[(ImmutableString, Span)],
     rest: bool,
@@ -191,10 +193,30 @@ pub(super) fn field_order<'a>(
         .iter()
         .find(|(name, _)| !declared.contains(&name.as_str()))
     {
-        return Err(Error::UnknownMember {
-            owner: owner.into(),
-            member: unknown.clone(),
-            reference: *reference,
+        // rustc offers a similar name only for the one field the pattern
+        // leaves unmentioned.
+        let unmentioned = declared
+            .iter()
+            .filter(|field| !written.iter().any(|(name, _)| name.as_str() == **field))
+            .map(|field| ImmutableString::from(*field))
+            .collect::<Vec<_>>();
+        let candidates = if unmentioned.len() == 1 {
+            unmentioned
+        } else {
+            Vec::new()
+        };
+        return Err(Error::UnknownField {
+            owner: crate::resolve::FieldOwner {
+                variant: variant.is_some(),
+                name: match variant {
+                    Some(variant) => format!("{owner}::{variant}").into(),
+                    None => owner.into(),
+                },
+            },
+            field: unknown.clone(),
+            reference: Span::new(reference.start(), text_end(reference.start(), unknown)),
+            pattern: true,
+            hint: crate::resolve::FieldHint::new(unknown, candidates, true),
         });
     }
     declared

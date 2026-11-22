@@ -1076,16 +1076,20 @@ pub enum Error {
     },
     /// A name used as another kind of item than the one it names, which
     /// rustc refuses (E0423): a macro called as a function, a struct used
-    /// as a value.
+    /// as a value, a trait called as a function.
     WrongKind {
         /// What the use expects: `function`, `value`.
         expected: &'static str,
-        /// What the name is: `macro`, `struct`.
+        /// What the name is: `macro`, `struct`, `trait`.
         found: &'static str,
         /// The name.
         name: ImmutableString,
         /// The name's use.
         reference: Span,
+        /// A trait's name that starts a `let`'s value where the `let` writes
+        /// no type: what lies between the pattern and the value, which
+        /// rustc offers to make a `:` (`let f = Fn(1)` for `let f: Fn(1)`).
+        annotation: Option<Span>,
     },
     /// A local is used after its value was moved out, as rustc's E0382.
     MovedValue {
@@ -1147,6 +1151,21 @@ pub enum Error {
         member: ImmutableString,
         /// Exact source reference.
         reference: Span,
+    },
+    /// A struct literal or a struct pattern that names a field its struct
+    /// or variant doesn't declare, as rustc refuses it: E0560 for a
+    /// struct's literal, E0559 for a variant's, E0026 for a pattern.
+    UnknownField {
+        /// The struct or the variant.
+        owner: FieldOwner,
+        /// The field as written.
+        field: ImmutableString,
+        /// The field's name in the literal or the pattern.
+        reference: Span,
+        /// Written in a pattern, not a literal.
+        pattern: bool,
+        /// What rustc says of the fields the owner does declare.
+        hint: FieldHint,
     },
     /// `value.member(..)` or `Type::member` where the program's own
     /// struct or enum, or a reference to one, has no item of that name,
@@ -1994,9 +2013,10 @@ impl Error {
             Self::LoweringUnavailable { .. } => Category::LoweringUnavailable,
             Self::InvalidDerive { .. } | Self::ExpansionRequired { .. } => Category::InvalidDerive,
             Self::DuplicateMember { .. } => Category::DuplicateMember,
-            Self::UnknownMember { .. } | Self::NoItem { .. } | Self::MemberKind { .. } => {
-                Category::UnknownMember
-            }
+            Self::UnknownMember { .. }
+            | Self::UnknownField { .. }
+            | Self::NoItem { .. }
+            | Self::MemberKind { .. } => Category::UnknownMember,
             Self::NotInModule { .. } => Category::NotInModule,
             Self::UnknownFunction { .. } => Category::UnknownFunction,
             Self::UnknownVariable { .. } => Category::UnknownVariable,
@@ -2091,6 +2111,7 @@ impl Error {
             Self::Uninitialized { name, .. }
             | Self::LocalTypeNeeded { name, .. }
             | Self::UnboundAlternative { name, .. } => name.as_str(),
+            Self::UnknownField { owner, .. } => owner.name.as_str(),
             Self::UnknownMember { owner, .. }
             | Self::NoItem { owner, .. }
             | Self::MemberKind { owner, .. }
@@ -2167,6 +2188,7 @@ impl Error {
             }
             Self::DuplicateMember { declaration, .. } => *declaration,
             Self::UnknownMember { reference, .. }
+            | Self::UnknownField { reference, .. }
             | Self::NoItem { reference, .. }
             | Self::MemberKind { reference, .. }
             | Self::NotInModule { reference, .. }
@@ -2294,6 +2316,7 @@ impl Error {
             | Self::InvalidTypeArguments { .. }
             | Self::LoweringUnavailable { .. } => None,
             Self::UnknownMember { .. }
+            | Self::UnknownField { .. }
             | Self::NoItem { .. }
             | Self::MemberKind { .. }
             | Self::NotInModule { .. }
@@ -2572,6 +2595,111 @@ impl Unresolved {
                 "expected type, found {noun} `{last}` in `{module}`"
             )),
         }
+    }
+}
+
+/// The struct or the variant a field is looked for in, as rustc names it in
+/// E0560, E0559 and E0026.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct FieldOwner {
+    /// A variant, not a struct.
+    pub variant: bool,
+    /// `P`, or `E::V` for a variant.
+    pub name: ImmutableString,
+}
+
+impl FieldOwner {
+    /// rustc's word for the owner: `struct` or `variant`.
+    pub(crate) fn kind(&self) -> &'static str {
+        if self.variant {
+            "variant"
+        } else {
+            "struct"
+        }
+    }
+
+    /// rustc's code and message for `field`, which the owner doesn't
+    /// declare, written in a pattern or a literal.
+    pub(crate) fn missing(&self, field: &str, pattern: bool) -> (&'static str, String) {
+        let (kind, name) = (self.kind(), &self.name);
+        match (pattern, self.variant) {
+            (true, _) => (
+                "E0026",
+                format!("{kind} `{name}` does not have a field named `{field}`"),
+            ),
+            (false, true) => (
+                "E0559",
+                format!("{kind} `{name}` has no field named `{field}`"),
+            ),
+            (false, false) => (
+                "E0560",
+                format!("{kind} `{name}` has no field named `{field}`"),
+            ),
+        }
+    }
+
+    /// rustc's label at the field.
+    pub(crate) fn label(&self, pattern: bool, hint: &FieldHint) -> String {
+        match (pattern, hint) {
+            (true, _) => format!("{} `{}` does not have this field", self.kind(), self.name),
+            (false, FieldHint::Similar(_)) => "unknown field".into(),
+            (false, _) => format!("`{}` does not have this field", self.name),
+        }
+    }
+}
+
+/// What rustc says of the fields an owner declares, beside a field it
+/// doesn't.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub enum FieldHint {
+    /// The field whose name is like the one written, which rustc offers in
+    /// its place: of the fields not yet given in a literal, or of the one
+    /// field a pattern leaves unmentioned.
+    Similar(ImmutableString),
+    /// A literal's fields not yet given, none of them like the one written,
+    /// in declared order: rustc's "available fields are" note, or "all
+    /// struct fields are already assigned" when there are none.
+    Available(Box<[ImmutableString]>),
+    /// Nothing more.
+    Nothing,
+}
+
+impl FieldHint {
+    /// rustc's hint for `field` where `candidates` are the fields it may
+    /// offer, in declared order: a similar name, else for a literal the
+    /// candidates themselves.
+    pub(crate) fn new(field: &str, candidates: Vec<ImmutableString>, pattern: bool) -> Self {
+        let names = candidates
+            .iter()
+            .map(ImmutableString::as_str)
+            .collect::<Vec<_>>();
+        match super::similar::best(&names, field) {
+            Some(index) => Self::Similar(candidates[index].clone()),
+            None if pattern => Self::Nothing,
+            None => Self::Available(candidates.into_boxed_slice()),
+        }
+    }
+
+    /// rustc's note for a literal's field, when it has one.
+    pub(crate) fn note(&self) -> Option<String> {
+        let Self::Available(names) = self else {
+            return None;
+        };
+        if names.is_empty() {
+            return Some("all struct fields are already assigned".into());
+        }
+        // rustc's name series: five names and a count of the rest, or six.
+        let limit = if names.len() == 6 { 6 } else { 5 };
+        let mut series = names
+            .iter()
+            .take(limit)
+            .map(|name| format!("`{name}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        if names.len() > limit {
+            series = format!("{series} ... and {} others", names.len() - limit);
+        }
+        Some(format!("available fields are: {series}"))
     }
 }
 
@@ -3351,6 +3479,16 @@ impl fmt::Display for Written<'_> {
                 member,
                 reference,
             } => write!(formatter, "unknown member `{owner}::{member}` at {reference}"),
+            Error::UnknownField {
+                owner,
+                field,
+                reference,
+                pattern,
+                ..
+            } => {
+                let (code, message) = owner.missing(field, *pattern);
+                write!(formatter, "{message} at {reference} ({code})")
+            }
             Error::NoItem {
                 member,
                 reference,
@@ -3419,6 +3557,7 @@ impl fmt::Display for Written<'_> {
                 found,
                 name,
                 reference,
+                ..
             } => write!(
                 formatter,
                 "expected {expected}, found {found} `{name}` at {reference} (E0423)"

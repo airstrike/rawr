@@ -11,7 +11,7 @@ ui/borrowck/borrowck-borrow-from-owned-ptr.rs	E0499:20 E0502:27 E0502:34 E0499:6
 ui/borrowck/borrowck-borrow-from-stack-variable.rs	E0499:20 E0502:27 E0502:34 E0499:63 E0502:72 E0502:73 E0499:80 E0499:87 E0502:94 E0502:101 E0596:122
 ui/borrowck/borrowck-borrow-from-temporary.rs	E0515:12
 ui/borrowck/borrowck-borrow-of-mut-base-ptr-safe.rs	ok	0	""
-ui/borrowck/borrowck-borrowed-uniq-rvalue-2.rs	E0716:58
+ui/borrowck/borrowck-borrowed-uniq-rvalue-2.rs	E0716:18
 ui/borrowck/borrowck-closures-two-imm.rs	ok	0	""
 ui/borrowck/borrowck-closures-use-after-free.rs	E0502:20
 ui/borrowck/borrowck-escaping-closure-error-2.rs	E0373:11
