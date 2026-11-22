@@ -10823,3 +10823,256 @@ main();
     );
     assert_eq!(output, "vec 3 slice 3 slice 2 vec 1\n");
 }
+
+#[test]
+fn a_tail_temporary_drops_after_its_blocks_locals_before_edition_2024() {
+    // Before edition 2024 a block's tail temporaries drop at the end of the
+    // temporary scope around the block, after the block's locals, and a
+    // body's between its locals and its parameters. A loop's, a branch's,
+    // an arm's and a closure's body is a temporary scope of its own.
+    // Edition 2024 drops them with the tail, before the locals. Each is
+    // what rustc's build prints.
+    assert_eq!(
+        edition_printed("order", "2021", TAIL_ORDER),
+        "drop local\ndrop temp\nafter let 1\ndrop if local\n\
+         drop if temp\nafter if 1\ndrop arm local\ndrop arm temp\n\
+         after match 1\ndrop body local\ndrop body temp\ndrop param\n\
+         1\ndrop closure local\ndrop closure temp\ndrop closure param\n\
+         1\ndrop inner local\ndrop outer local\ndrop inner temp\n\
+         after nested 1\ndrop vec local\ndrop vec temp\nafter vec 2\n\
+         drop stmt local\ndrop rhs local\ndrop rhs temp\ndrop stmt temp\n\
+         after sum 2\ndrop loop local\ndrop loop temp\niteration 0\n\
+         drop loop local\ndrop loop temp\niteration 1\ndrop loop body local\n\
+         drop loop body temp\nend\n"
+    );
+    assert_eq!(
+        edition_printed("order", "2024", TAIL_ORDER),
+        "drop temp\ndrop local\nafter let 1\ndrop if temp\n\
+         drop if local\nafter if 1\ndrop arm temp\ndrop arm local\n\
+         after match 1\ndrop body temp\ndrop body local\ndrop param\n\
+         1\ndrop closure temp\ndrop closure local\ndrop closure param\n\
+         1\ndrop inner temp\ndrop inner local\ndrop outer local\n\
+         after nested 1\ndrop vec temp\ndrop vec local\nafter vec 2\n\
+         drop stmt temp\ndrop stmt local\ndrop rhs temp\ndrop rhs local\n\
+         after sum 2\ndrop loop temp\ndrop loop local\niteration 0\n\
+         drop loop temp\ndrop loop local\niteration 1\ndrop loop body temp\n\
+         drop loop body local\nend\n"
+    );
+}
+
+/// An `if let` subject, a `match` scrutinee, a `vec!` element and a
+/// `while` condition, each a block whose tail makes a value that prints
+/// its drop.
+const TAIL_SCOPES: &str = r#"struct D(&'static str);
+impl Drop for D {
+    fn drop(&mut self) {
+        println!("drop {}", self.0);
+    }
+}
+impl D {
+    fn get(&self) -> i32 {
+        1
+    }
+    fn some(&self) -> Option<i32> {
+        Some(2)
+    }
+}
+fn main() {
+    if let Some(x) = { let _a = D("subject local"); D("subject temp").some() } {
+        println!("matched {x}");
+    }
+    println!("after if let");
+    match { let _a = D("scrutinee local"); D("scrutinee temp").get() } {
+        1 => println!("one"),
+        _ => println!("other"),
+    }
+    println!("after match");
+    let v = vec![{ let _a = D("vec local"); D("vec temp").get() }, 2];
+    println!("after vec {}", v.len());
+    let mut i = 0;
+    while { let _a = D("cond local"); D("cond temp").get() } > i {
+        println!("loop {i}");
+        i += 1;
+    }
+    println!("end");
+}
+"#;
+
+#[test]
+fn a_tail_temporary_in_a_condition_or_subject_drops_with_it_before_edition_2024() {
+    // A block expression's tail temporaries that go on past its locals
+    // drop with the temporary scope around the block: an `if let`'s and a
+    // `match`'s after the body, a condition's before it. Each is what
+    // rustc's build prints.
+    assert_eq!(
+        edition_printed("scopes", "2021", TAIL_SCOPES),
+        "drop subject local\nmatched 2\ndrop subject temp\nafter if let\n\
+         drop scrutinee local\none\ndrop scrutinee temp\nafter match\n\
+         drop vec local\ndrop vec temp\nafter vec 2\ndrop cond local\n\
+         drop cond temp\nloop 0\ndrop cond local\ndrop cond temp\n\
+         end\n"
+    );
+    assert_eq!(
+        edition_printed("scopes", "2024", TAIL_SCOPES),
+        "drop subject temp\ndrop subject local\nmatched 2\nafter if let\n\
+         drop scrutinee temp\ndrop scrutinee local\none\nafter match\n\
+         drop vec temp\ndrop vec local\nafter vec 2\ndrop cond temp\n\
+         drop cond local\nloop 0\ndrop cond temp\ndrop cond local\n\
+         end\n"
+    );
+}
+
+/// A block whose tail reads through a `RefCell`'s borrow of a local.
+const GUARD_BLOCK: &str = r#"use std::cell::RefCell;
+
+fn main() {
+    let n = {
+        let x = RefCell::new(1);
+        *x.borrow()
+    };
+    println!("{n}");
+}
+"#;
+
+/// A body whose tail calls a method through a `RefCell`'s mutable borrow
+/// of a local.
+const GUARD_BODY: &str = r#"use std::cell::RefCell;
+
+fn total() -> usize {
+    let v = RefCell::new(vec![1, 2]);
+    v.borrow_mut().len()
+}
+
+fn main() {
+    println!("{}", total());
+}
+"#;
+
+#[test]
+fn a_refcell_guard_in_a_tail_outlives_its_cell_before_edition_2024() {
+    // `borrow()` gives std's `Ref<'_, T>` and `borrow_mut()` its
+    // `RefMut<'_, T>`, whose drop uses the borrow of the cell. Before
+    // edition 2024 one made in a block's tail drops after the block's
+    // locals: a borrow of a local cell is rustc's E0597, which names the
+    // guard's destructor (#2620). Edition 2024 drops it first.
+    assert_eq!(
+        edition_rendered("guard-block", "2021", GUARD_BLOCK),
+        "error[E0597]: `x` does not live long enough\n  |\n6 |         let x = RefCell::new(1);\n  |             - binding `x` declared here\n7 |         *x.borrow()\n  |          ^---------\n  |          |\n  |          borrowed value does not live long enough\n  |          a temporary with access to the borrow is created here ...\n8 |     };\n  |     -- ... and the borrow might be used here, when that temporary is dropped and runs the destructor for type `Ref<'_, i32>`\n  |     |\n  |     `x` dropped here while still borrowed\n  |\n  = note: the temporary is part of an expression at the end of a block;\n          consider forcing this temporary to be dropped sooner, before the block's local variables are dropped\nhelp: for example, you could save the expression's value in a new local variable `x` and then make `x` be the expression at the end of the block\n  |\n7 |         let x = *x.borrow(); x\n  |         +++++++            +++\n"
+    );
+    assert_eq!(edition_printed("guard-block", "2024", GUARD_BLOCK), "1\n");
+    assert_eq!(
+        edition_rendered("guard-body", "2021", GUARD_BODY),
+        "error[E0597]: `v` does not live long enough\n  |\n5 |     let v = RefCell::new(vec![1, 2]);\n  |         - binding `v` declared here\n6 |     v.borrow_mut().len()\n  |     ^-------------\n  |     |\n  |     borrowed value does not live long enough\n  |     a temporary with access to the borrow is created here ...\n7 | }\n  | -\n  | |\n  | `v` dropped here while still borrowed\n  | ... and the borrow might be used here, when that temporary is dropped and runs the destructor for type `RefMut<'_, Vec<i32>>`\n  |\n  = note: the temporary is part of an expression at the end of a block;\n          consider forcing this temporary to be dropped sooner, before the block's local variables are dropped\nhelp: for example, you could save the expression's value in a new local variable `x` and then make `x` be the expression at the end of the block\n  |\n6 |     let x = v.borrow_mut().len(); x\n  |     +++++++                     +++\n"
+    );
+    assert_eq!(edition_printed("guard-body", "2024", GUARD_BODY), "2\n");
+}
+
+/// Guards read, changed, printed and held through a `RefCell`, an `Rc` of
+/// one and a `Mutex`, in blocks' tails whose cells outlive them.
+const GUARD_USES: &str = r#"use std::cell::RefCell;
+use std::rc::Rc;
+
+fn first(v: &RefCell<Vec<i32>>) -> i32 {
+    v.borrow()[0]
+}
+
+fn main() {
+    let c = RefCell::new(vec![1, 2]);
+    c.borrow_mut().push(3);
+    *c.borrow_mut() = vec![4, 5, 6];
+    let n = c.borrow().len();
+    println!("{n} {:?} {}", c.borrow(), first(&c));
+    let s = RefCell::new(String::from("hi"));
+    println!("{} {}", s.borrow(), s.borrow().len());
+    let shared = Rc::new(RefCell::new(7));
+    *shared.borrow_mut() += 1;
+    let total = { *shared.borrow() + 1 };
+    let g = c.borrow();
+    println!("{total} {} {}", g[1], g.iter().sum::<i32>());
+    drop(g);
+    drop(c);
+    let m = std::sync::Mutex::new(2);
+    let doubled = { *m.lock().unwrap() * 2 };
+    println!("{doubled}");
+}
+"#;
+
+#[test]
+fn a_refcell_guard_derefs_to_its_value_in_every_edition() {
+    // A guard derefs to the cell's value, and `Display` and `Debug` go
+    // through it. A tail's guard of a cell that outlives the block is
+    // accepted before edition 2024 too. Each is what rustc's build prints.
+    let printed = "3 [4, 5, 6] 4\nhi 2\n9 5 15\n4\n";
+    assert_eq!(edition_printed("guard-uses", "2021", GUARD_USES), printed);
+    assert_eq!(edition_printed("guard-uses", "2024", GUARD_USES), printed);
+}
+
+#[test]
+fn a_refcell_guard_assigned_to_a_local_drops_where_the_local_ends() {
+    // `r = c.borrow();` moves the guard into `r`, whose drop at the end of
+    // `main` uses the borrow of `c`, which ended with its block: rustc's
+    // E0597 though `r` is never read.
+    let report = refused(
+        "use std::cell::RefCell;
+fn main() {
+    let r;
+    {
+        let c = RefCell::new(1);
+        r = c.borrow();
+    }
+}
+main();
+",
+    );
+    assert!(
+        report.starts_with("error[E0597]: `c` does not live long enough"),
+        "{report}"
+    );
+}
+
+/// A type whose drop prints its name, and a block, a branch, an arm, a
+/// body, a closure, a nested block, a sum of blocks and loops whose tails
+/// make one.
+const TAIL_ORDER: &str = r#"struct D(&'static str);
+impl Drop for D {
+    fn drop(&mut self) {
+        println!("drop {}", self.0);
+    }
+}
+impl D {
+    fn get(&self) -> i32 {
+        1
+    }
+    fn touch(&self) {}
+}
+fn body(_p: D) -> i32 {
+    let _a = D("body local");
+    D("body temp").get()
+}
+fn main() {
+    let n = { let _a = D("local"); D("temp").get() };
+    println!("after let {n}");
+    let m = if n == 1 { let _a = D("if local"); D("if temp").get() } else { 0 };
+    println!("after if {m}");
+    let k = match n { 1 => { let _a = D("arm local"); D("arm temp").get() } _ => 0 };
+    println!("after match {k}");
+    println!("{}", body(D("param")));
+    let c = |_p: D| { let _a = D("closure local"); D("closure temp").get() };
+    println!("{}", c(D("closure param")));
+    let nested = { let _o = D("outer local"); { let _i = D("inner local"); D("inner temp").get() } };
+    println!("after nested {nested}");
+    let v = vec![{ let _a = D("vec local"); D("vec temp").get() }, 2];
+    println!("after vec {}", v.len());
+    let s = { let _a = D("stmt local"); D("stmt temp").get() } + { let _b = D("rhs local"); D("rhs temp").get() };
+    println!("after sum {s}");
+    for i in 0..2 {
+        let _l = { let _a = D("loop local"); D("loop temp").get() + i };
+        println!("iteration {i}");
+    }
+    for _ in 0..1 {
+        let _a = D("loop body local");
+        D("loop body temp").touch()
+    }
+    println!("end");
+}
+"#;

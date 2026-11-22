@@ -93,6 +93,23 @@ pub(super) struct Scope {
     uses_recorded: bool,
 }
 
+/// Where a block's tail temporaries drop before edition 2024: after the
+/// block's locals, at the end of the temporary scope around the block, or,
+/// in a body's own tail, between its locals and its parameters. Edition
+/// 2024 drops them with the tail, before the locals.
+#[derive(Default)]
+pub(super) struct Tails {
+    /// The block or body being read keeps its tail's temporaries past its
+    /// locals.
+    kept: bool,
+    /// The temporaries its tail handed it, in the order made.
+    handed: Vec<String>,
+    /// The block ahead is a block expression, whose tail's temporaries go
+    /// on to the temporary scope around it. A body's block, a loop's, a
+    /// closure's or a branch's is a temporary scope of its own.
+    escapes: bool,
+}
+
 /// Which of the borrows a value holds its drop uses, as rustc's drop check
 /// has it: a type's own `Drop` may use all of them, and a reference or
 /// `std`'s containers (whose `Drop` is `#[may_dangle]`) use none of their
@@ -891,11 +908,17 @@ impl Parser<'_> {
 
     /// Close the innermost scope: the drops of its locals, as statements.
     pub(super) fn close_drops(&mut self) -> Result<String, Error> {
+        self.close_drops_after(&[])
+    }
+
+    /// Close the innermost scope: the drops of its locals, then of `tail`,
+    /// its tail's temporaries that outlive them, then of its parameters.
+    fn close_drops_after(&mut self, tail: &[String]) -> Result<String, Error> {
         if !self.drop_scoped() {
-            return Ok(String::new());
+            return Ok(self.temporary_drops(tail));
         }
         let Some(scope) = self.drop_scopes.pop() else {
-            return Ok(String::new());
+            return Ok(self.temporary_drops(tail));
         };
         // The outer locals this scope shadowed have their names again.
         for (outer, position) in scope.shadowed.iter().rev() {
@@ -912,7 +935,13 @@ impl Parser<'_> {
                 self.note_drop_use(local);
             }
         }
-        self.local_drops(&scope.locals)
+        // A body's tail temporaries drop after its locals, before its
+        // parameters.
+        let (parameters, locals) = scope.locals.split_at(scope.parameters);
+        let mut drops = self.local_drops(locals)?;
+        drops.push_str(&self.temporary_drops(tail));
+        drops.push_str(&self.local_drops(parameters)?);
+        Ok(drops)
     }
 
     /// The drops of every scope above `depth`, innermost first: what a jump
@@ -941,18 +970,21 @@ impl Parser<'_> {
     }
 
     /// A block's statements and tail with the drops of its scope, closed
-    /// here, after the tail's value.
+    /// here, after the tail's value, then the drops of `temporaries`, the
+    /// tail's that outlive the block's locals.
     pub(super) fn close_block_drops(
         &mut self,
         prelude: &mut origin::Fragment,
         source: &mut origin::Fragment,
         tail: bool,
+        temporaries: &[String],
     ) -> Result<(), Error> {
-        let drops = self.close_drops()?;
+        let drops = self.close_drops_after(temporaries)?;
         if drops.is_empty() {
             return Ok(());
         }
         if tail {
+            prelude.push_text(declarations(temporaries));
             let kept = self.temporary("dropped");
             prelude.push_text(format!("let {kept} = "));
             prelude.push(std::mem::replace(
@@ -1003,6 +1035,8 @@ impl Parser<'_> {
         &mut self,
         parameters: impl IntoIterator<Item = (ImmutableString, Span)>,
     ) -> Result<(), Error> {
+        // The body's own tail, closed by `close_body_drops`.
+        let _ = self.open_tails();
         if !self.drop_scoped() {
             return Ok(());
         }
@@ -1083,15 +1117,20 @@ impl Parser<'_> {
             let end = self.last_read();
             self.flow().body_end(&[], &[], &guards, end);
         }
-        let drops = self.close_drops()?;
+        let temporaries = std::mem::take(&mut self.tails.handed);
+        let drops = self.close_drops_after(&temporaries)?;
         if drops.is_empty() {
             return Ok(());
         }
         match self.last_expression {
             Some((start, endpoint)) => {
-                let mut tail = self.output.split_off(start);
-                tail.trim_end();
-                let tail = self.then_drops(tail, &drops);
+                let mut value = self.output.split_off(start);
+                value.trim_end();
+                let mut tail = self.then_drops(value, &drops);
+                if !temporaries.is_empty() {
+                    // Declared before the tail, which gives them their values.
+                    tail = tail.surrounded(&format!("{{ {}", declarations(&temporaries)), " }");
+                }
                 let start = self.write_output(tail, endpoint);
                 self.last_expression = Some((start, endpoint));
             }
@@ -1636,6 +1675,62 @@ impl Parser<'_> {
             self.note_drop_here(&temporary.as_str().into(), declaration, &ty)?;
         }
         Ok(declarations(extended))
+    }
+
+    /// Open the tail of a block or body: before edition 2024 it keeps its
+    /// tail's temporaries past its locals. Gives what the enclosing one's
+    /// was, to close it with, and whether this block's escape to the
+    /// temporary scope around it.
+    pub(super) fn open_tails(&mut self) -> (Tails, bool) {
+        let kept = self.drops() && !self.models.edition().drops_tail_temporaries_first();
+        let mut outer = std::mem::replace(
+            &mut self.tails,
+            Tails {
+                kept,
+                ..Tails::default()
+            },
+        );
+        let escapes = std::mem::take(&mut outer.escapes);
+        (outer, escapes)
+    }
+
+    /// Close the tail opened with `outer` given: the temporaries its tail
+    /// handed it.
+    pub(super) fn close_tails(&mut self, outer: Tails) -> Vec<String> {
+        std::mem::replace(&mut self.tails, outer).handed
+    }
+
+    /// The block ahead is a block expression: its tail's temporaries go on
+    /// to the temporary scope around it before edition 2024.
+    pub(super) fn escape_tails(&mut self) {
+        self.tails.escapes = true;
+    }
+
+    /// `temporaries`, the block's tail's that outlive its locals: those of
+    /// a block expression go on to the temporary scope around it, as
+    /// Rust's do; the others drop at the block's end, after its locals.
+    /// Gives the ones that drop there.
+    pub(super) fn escaped_tails(&mut self, temporaries: Vec<String>, escapes: bool) -> Vec<String> {
+        match self.temporary_scopes.last_mut() {
+            Some(scope) if escapes => {
+                scope.extend(temporaries);
+                Vec::new()
+            }
+            _ => temporaries,
+        }
+    }
+
+    /// The temporaries of the statement written from `start`, closed: a
+    /// tail of a block or body that keeps them hands them to it, and none
+    /// drop with the statement.
+    pub(super) fn hand_tail(&mut self, start: usize, temporaries: Vec<String>) -> Vec<String> {
+        match self.last_expression {
+            Some((tail, _)) if tail >= start && self.tails.kept => {
+                self.tails.handed.extend(temporaries);
+                Vec::new()
+            }
+            _ => temporaries,
+        }
     }
 
     /// Open a temporary scope (a statement, a match arm, a condition): the

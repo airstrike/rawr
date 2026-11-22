@@ -124,6 +124,16 @@ impl Explanation {
         self.borrow
     }
 
+    /// The explanation with the destructor of a temporary that is std's
+    /// guard of a cell's borrow named by `named`, from the temporary's
+    /// span, once the body's types are settled (`Ref<'_, i32>`).
+    pub(crate) fn guard_named(mut self, named: impl Fn(Span) -> Option<ImmutableString>) -> Self {
+        if let Some(guard) = named(self.temporary) {
+            self.destructor = Destructor::Glue(guard);
+        }
+        self
+    }
+
     /// The explanation with each expression's span from where its first
     /// and last tokens start, as the facts give them, to where it is
     /// `written` in the source.

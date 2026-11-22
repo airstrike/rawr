@@ -544,6 +544,8 @@ impl Parser<'_> {
             ("borrow" | "borrow_mut" | "get_mut", []) => {
                 let mutable = member.as_str() != "borrow";
                 if member.as_str() != "get_mut" {
+                    let guard = self.cell_guard_kind(&value.ty, mutable);
+                    self.cell_guard_types.insert(call, (guard, inner.clone()));
                     self.cell_borrowed(&value, call);
                 }
                 let flag: origin::Fragment = if mutable { "true" } else { "false" }.into();
@@ -636,6 +638,28 @@ impl Parser<'_> {
                 member_span,
             )),
         }
+    }
+
+    /// Which of std's guards a borrow of the cell of type `cell` gives,
+    /// mutable when `mutable`: `Ref`, `RefMut` or `MutexGuard`.
+    fn cell_guard_kind(&self, cell: &Ty, mutable: bool) -> &'static str {
+        let mut cell = self.inference.resolve(cell);
+        // Through the references and pointers its method autoderefs.
+        while let Ty::Reference { target, .. } | Ty::Counted(_, target) | Ty::Boxed(target) = cell {
+            cell = self.inference.resolve(&target);
+        }
+        match cell {
+            Ty::Cell(CellKind::Mutex, _) => "MutexGuard",
+            _ if mutable => "RefMut",
+            _ => "Ref",
+        }
+    }
+
+    /// The type of the guard of the borrow spanning `call`, as rustc
+    /// writes it once the body is checked: `Ref<'_, i32>`.
+    pub(super) fn cell_guard_type(&self, call: Span) -> Option<ImmutableString> {
+        let (guard, inner) = self.cell_guard_types.get(&call)?;
+        Some(format!("{guard}<'_, {}>", self.settled_name(inner)).into())
     }
 
     /// The error of a method `cell` doesn't run: the not-yet error of one
@@ -821,6 +845,7 @@ impl Parser<'_> {
         self.cell_guards
             .values()
             .map(|(declaration, ..)| *declaration)
+            .chain(self.assigned_guards.iter().copied())
             .filter(|declaration| declared.contains(declaration))
             .collect()
     }

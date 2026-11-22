@@ -966,6 +966,16 @@ struct Parser<'a> {
     /// The `drops::Shape` of each temporary there whose type needs more
     /// than the walk of every part.
     temporary_shapes: BTreeMap<String, String>,
+    /// What the tail of the block or body being read does with its
+    /// temporaries before edition 2024 (`drops::Tails`).
+    tails: drops::Tails,
+    /// The guard type of each `RefCell` borrow and `Mutex` lock, by the
+    /// call's span: std's guard (`Ref`, `RefMut` or `MutexGuard`) and the
+    /// type of the value it lends (`cell::cell_guard_type`).
+    cell_guard_types: BTreeMap<Span, (&'static str, Ty)>,
+    /// The locals, by declaration, an assignment gave a `RefCell`'s guard
+    /// (`r = c.borrow();`): each drops it where it ends.
+    assigned_guards: BTreeSet<Span>,
     /// Expressions that read a place through a reference, which no
     /// temporary holds (`materialize`).
     borrowed: BTreeSet<Span>,
@@ -1235,6 +1245,9 @@ impl<'a> Parser<'a> {
             subject_deref: false,
             temporary_scopes: Vec::new(),
             temporary_shapes: BTreeMap::new(),
+            tails: drops::Tails::default(),
+            cell_guard_types: BTreeMap::new(),
+            assigned_guards: BTreeSet::new(),
             borrowed: BTreeSet::new(),
             borrowed_fields: BTreeMap::new(),
             deferred_clears: Vec::new(),

@@ -2130,9 +2130,18 @@ impl Recorder {
 
     /// The value spanning `value`, which holds `held`, is kept in a
     /// temporary to its scope's end, whose drop uses what it holds there,
-    /// as a part read of a value with `Drop` is (`G(&x).0`).
-    pub(crate) fn hold_temporary(&mut self, value: Span, held: &[(Path, Origin)]) {
+    /// as a part read of a value with `Drop` is (`G(&x).0`). `destructor`
+    /// names what the drop runs, when rustc's explanation names it.
+    pub(crate) fn hold_temporary(
+        &mut self,
+        value: Span,
+        held: &[(Path, Origin)],
+        destructor: Option<crate::resolve::tail::Destructor>,
+    ) {
         let local = self.hidden(super::TEMPORARY, value);
+        if let Some(destructor) = destructor {
+            self.destructors.insert(local, destructor);
+        }
         self.push(Fact::Def(local));
         self.flow_into(local, held);
         if let Some(scope) = self.temporary_scopes.last_mut() {
