@@ -142,10 +142,11 @@ impl Parser<'_> {
         ))
     }
 
-    /// `write!(w, ..)` into the local `w` of a type of the program's that
-    /// implements `std::fmt::Write` or `std::io::Write`: std's `write_fmt`,
-    /// which hands the formatted text to the impl's `write_str`, as
-    /// `w.write_str(&text)`, or its bytes to `write_all`.
+    /// `write!(w, ..)` into the local `w` of any type but a `String`, as
+    /// rustc expands it: `w.write_fmt(format_args!(..))`, the `write_fmt`
+    /// of the `Write` trait in scope that `w`'s type implements: a
+    /// program's impl, std's (`Vec<u8>`), or a generic's bound (#2483).
+    /// `writeln!` adds the newline to the format string, as std's does.
     /// After the macro's `(`; `None`, consuming nothing, for another target.
     fn write_into_program_writer(
         &mut self,
@@ -166,36 +167,24 @@ impl Parser<'_> {
         while let Ty::Reference { target, .. } = ty {
             ty = self.inference.resolve(&target);
         }
-        let Ty::Script(id, _) = &ty else {
+        // A writer by an impl, its own or std's, or by a generic's bound.
+        // A crate's or a std facade's writer (`Stdout`) has no `write_fmt`
+        // rawr runs yet, and another type is refused where it was.
+        let writes = !matches!(ty, Ty::String | Ty::Str | Ty::Host { .. })
+            && (self.type_implements(&ty, "Write")
+                || super::op::owner_id(&ty).is_some_and(|owner| {
+                    self.models
+                        .trait_methods
+                        .contains_key(&(owner, "write_fmt".into()))
+                }));
+        if !writes {
             return Ok(None);
-        };
-        let id = *id;
-        let writes = |method: &str| {
-            self.models
-                .trait_methods
-                .get(&(id, method.into()))
-                .is_some_and(|definitions| {
-                    definitions.iter().any(|definition| {
-                        definition
-                            .trait_name()
-                            .is_some_and(|name| name.as_str() == "Write")
-                    })
-                })
-        };
-        // `std::fmt::Write`'s `write_str`, or `std::io::Write`'s
-        // `write_all` of the text's bytes (#2461).
-        let bytes = if writes("write_str") {
-            false
-        } else if writes("write_all") {
-            true
-        } else {
-            return Ok(None);
-        };
+        }
         let (local_token, at) = self.next();
         if let Some(error) = self.unscoped_write(&ty, span(target_start, at)) {
             return Err(error);
         }
-        let (arguments, close) = if matches!(self.peek(), Token::Comma) {
+        let (mut arguments, close) = if matches!(self.peek(), Token::Comma) {
             self.next();
             self.splice_tokens(vec![(Token::LeftParen, at)]);
             self.take_argument_tokens()?
@@ -203,46 +192,34 @@ impl Parser<'_> {
             let close = self.expect(Token::RightParen, "')' after `writeln!`")?;
             (Vec::new(), close)
         };
+        if name == "writeln" {
+            match arguments.first_mut() {
+                Some((Token::StringConstant(format), _)) => {
+                    **format = format!("{format}\n").into();
+                }
+                None => arguments.push((Token::StringConstant(Box::new("\n".into())), close)),
+                Some((_, at)) => {
+                    return Err(Error::UnsupportedNominalSyntax {
+                        construct: "`writeln!` whose format is not a string literal".into(),
+                        source: point_span(*at),
+                    });
+                }
+            }
+        } else if arguments.is_empty() {
+            arguments.push((Token::StringConstant(Box::new("".into())), close));
+        }
         let identifier = |text: &str| Token::Identifier(Box::new(text.into()));
-        // `w.write_str(&(format!(..) + "\n"))`, or `w.write_all((format!(..)
-        // + "\n").as_bytes())`.
-        let method = if bytes { "write_all" } else { "write_str" };
         let mut tokens = vec![
             (local_token, at),
             (Token::Period, at),
-            (identifier(method), at),
+            (identifier("write_fmt"), at),
+            (Token::LeftParen, at),
+            (identifier("format_args"), at),
+            (Token::Bang, at),
             (Token::LeftParen, at),
         ];
-        if !bytes {
-            tokens.push((Token::Ampersand, at));
-        }
-        tokens.push((Token::LeftParen, at));
-        if arguments.is_empty() {
-            tokens.push((Token::StringConstant(Box::new("".into())), at));
-        } else {
-            tokens.extend([
-                (identifier("format"), at),
-                (Token::Bang, at),
-                (Token::LeftParen, at),
-            ]);
-            tokens.extend(arguments);
-            tokens.push((Token::RightParen, close));
-        }
-        if name == "writeln" {
-            tokens.extend([
-                (Token::Plus, close),
-                (Token::StringConstant(Box::new("\n".into())), close),
-            ]);
-        }
-        tokens.push((Token::RightParen, close));
-        if bytes {
-            tokens.extend([
-                (Token::Period, close),
-                (identifier("as_bytes"), close),
-                (Token::Unit, close),
-            ]);
-        }
-        tokens.push((Token::RightParen, close));
+        tokens.extend(arguments);
+        tokens.extend([(Token::RightParen, close), (Token::RightParen, close)]);
         let _ = name_span;
         self.splice_tokens(tokens);
         self.parse_primary().map(Some)

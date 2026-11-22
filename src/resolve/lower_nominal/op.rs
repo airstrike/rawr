@@ -192,10 +192,11 @@ pub(super) enum PreludeOp {
     /// `value as i32` of a fieldless script enum: its variant's
     /// discriminant, explicit or one past the previous variant's.
     Discriminant,
-    /// `i64::from(bool)`, `f64::from(bool)`, `String::from(char)`: the
-    /// prelude's conversions among builtin types.
+    /// `i64::from(bool)`, `f64::from(bool)`, `f64::from(u8)`,
+    /// `String::from(char)`: the prelude's conversions among builtin types.
     IntFromBool,
     FloatFromBool,
+    FloatFromInt,
     StringFromChar,
     /// `<str as AsRef<[u8]>>::as_ref`: a text's bytes, which rawr holds
     /// as an array of integers.
@@ -470,6 +471,7 @@ impl PreludeOp {
             Self::Discriminant => "enum.discriminant",
             Self::IntFromBool => "from.i64-bool",
             Self::FloatFromBool => "from.f64-bool",
+            Self::FloatFromInt => "from.f64-int",
             Self::StringFromChar => "from.string-char",
             Self::StrBytes => "str.bytes",
             Self::FormatFloat => "format.float",
@@ -687,6 +689,7 @@ impl PreludeOp {
             Self::ReverseInner => vec![TypeId::of::<std::cmp::Reverse<Dynamic>>()],
             Self::CowValue => vec![TypeId::of::<cow::Value>()],
             Self::IntFromBool | Self::FloatFromBool => vec![TypeId::of::<bool>()],
+            Self::FloatFromInt => vec![TypeId::of::<crate::INT>()],
             Self::StringFromChar => vec![TypeId::of::<char>()],
             Self::StrBytes => vec![TypeId::of::<ImmutableString>()],
             Self::FormatFloat => vec![
@@ -993,6 +996,14 @@ impl PreludeOp {
                     0.0
                 };
                 return Ok(Dynamic::from_float(value));
+            }
+            // std's `From`s into a float are from the integers it holds
+            // exactly.
+            #[allow(clippy::cast_precision_loss)]
+            Self::FloatFromInt => {
+                return Ok(Dynamic::from_float(
+                    args[0].as_int().unwrap_or_default() as crate::FLOAT
+                ))
             }
             Self::StringFromChar => {
                 let value = args[0].as_char().unwrap_or_default();

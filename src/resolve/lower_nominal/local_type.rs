@@ -513,6 +513,13 @@ impl<'a> Parser<'a> {
                     _ => Time::Instant,
                 }));
             }
+            if crate::resolve::std_arguments(&path)
+                || std_path
+                    .as_deref()
+                    .is_some_and(crate::resolve::std_arguments)
+            {
+                return self.parse_arguments_type();
+            }
             // `std::num::ParseIntError` and kin, the errors of `str::parse`.
             if let Some(error) = crate::resolve::std_parse_error(&path).or(std_error) {
                 return Ok(Ty::ParseError(
@@ -738,6 +745,15 @@ impl<'a> Parser<'a> {
 
     /// The generic arguments `<A, B>` after a type's name, its lifetimes
     /// left out.
+    /// `fmt::Arguments`, after its name, with its lifetime if written:
+    /// the text `format_args!` formats.
+    fn parse_arguments_type(&mut self) -> Result<Ty, Error> {
+        if matches!(self.peek(), Token::LessThan) && !self.parse_local_arguments()?.is_empty() {
+            return Err(self.unsupported("a type argument of `fmt::Arguments`"));
+        }
+        Ok(Ty::Arguments)
+    }
+
     fn parse_local_arguments(&mut self) -> Result<Vec<Ty>, Error> {
         self.expect(Token::LessThan, "'<' before generic arguments")?;
         let mut arguments = Vec::new();
@@ -1356,6 +1372,9 @@ impl<'a> Parser<'a> {
                 let scoped = self.std_scoped(name);
                 if scoped.as_deref().is_some_and(crate::resolve::std_ordering) {
                     return Ok(Ty::Ordering);
+                }
+                if scoped.as_deref().is_some_and(crate::resolve::std_arguments) {
+                    return self.parse_arguments_type();
                 }
                 if let Some(error) = scoped.as_deref().and_then(crate::resolve::std_parse_error) {
                     return Ok(Ty::ParseError(

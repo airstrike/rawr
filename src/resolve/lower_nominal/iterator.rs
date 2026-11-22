@@ -140,6 +140,13 @@ impl Parser<'_> {
                 })
                 .is_some()
             }
+            // std's `impl Iterator for &mut I` of a crate type's.
+            Ty::Reference {
+                mutable: true,
+                target,
+            } if matches!(self.inference.resolve(&target), Ty::Script(..)) => {
+                self.iterator_receiver(&target, member)
+            }
             // A crate type's `impl Iterator`: the adaptors its own methods
             // do not name.
             ty @ Ty::Script(id, _) => {
@@ -197,6 +204,12 @@ impl Parser<'_> {
         {
             return Err(error);
         }
+        // A `&mut` of a place is std's `impl Iterator for &mut I`: each
+        // `next` advances the place itself, which goes on from where the
+        // chain stopped (`by_ref`).
+        let in_place = matches!(ty, Ty::Reference { mutable: true, .. })
+            && value.prelude.is_empty()
+            && value.lvalue.is_some();
         let iterator = self.temporary("iterator");
         self.bindings.insert(
             iterator.as_str().into(),
@@ -208,17 +221,21 @@ impl Parser<'_> {
                 kind: BindingKind::Local,
             },
         );
-        let receiver = ParsedExpr {
-            prelude: origin::Fragment::default(),
-            source: origin::Fragment::plain(iterator.clone()),
-            ty: ty.clone(),
-            span: value.span,
-            lvalue: Some(Lvalue::Binding {
-                binding: iterator.as_str().into(),
+        let receiver = if in_place {
+            value.clone()
+        } else {
+            ParsedExpr {
+                prelude: origin::Fragment::default(),
+                source: origin::Fragment::plain(iterator.clone()),
                 ty: ty.clone(),
-            }),
-            outcome: crate::host::usage::Outcome::Conservative,
-            evaluation: crate::host::usage::Evaluation::Required,
+                span: value.span,
+                lvalue: Some(Lvalue::Binding {
+                    binding: iterator.as_str().into(),
+                    ty: ty.clone(),
+                }),
+                outcome: crate::host::usage::Outcome::Conservative,
+                evaluation: crate::host::usage::Evaluation::Required,
+            }
         };
         let called = match id {
             Some(id) => {
@@ -247,11 +264,22 @@ impl Parser<'_> {
             return Err(self.unsupported("an `Iterator` whose `next` is not an `Option`"));
         };
         let (item_name, option) = (self.temporary("item"), self.temporary("option"));
-        // The iterator as made, and its copy each run advances.
+        // The iterator as made, and its copy each run advances, unless
+        // the chain advances the place.
         let initial = self.temporary("initial");
-        let mut setup = origin::Fragment::plain(format!("let {initial} = "));
-        setup.push(value.rendered_source());
-        setup.push_text("; ");
+        let (setup, names, state) = if in_place {
+            (
+                origin::Fragment::default(),
+                Vec::new(),
+                origin::Fragment::default(),
+            )
+        } else {
+            let mut setup = origin::Fragment::plain(format!("let {initial} = "));
+            setup.push(value.rendered_source());
+            setup.push_text("; ");
+            let state = origin::Fragment::plain(format!("let {iterator} = {initial}; "));
+            (setup, vec![initial], state)
+        };
         let mut entry = origin::Fragment::plain(format!("let {option} = "));
         entry.push(called.rendered_source());
         entry.push_text("; if !");
@@ -263,9 +291,9 @@ impl Parser<'_> {
         entry.push_text("; ");
         let pipeline = Pipeline {
             setup,
-            names: vec![initial.clone()],
+            names,
             outer: Vec::new(),
-            state: origin::Fragment::plain(format!("let {iterator} = {initial}; ")),
+            state,
             segments: vec![Segment {
                 guards: Vec::new(),
                 header: vec![Part::Text("loop".into())],
@@ -654,10 +682,10 @@ impl Parser<'_> {
     /// something Rust's `IntoIterator` walks (an array, `&Vec`, a range).
     fn pipeline_of(&mut self, value: &ParsedExpr) -> Option<(Pipeline, Ty)> {
         let ty = self.inference.resolve(&value.ty);
-        if let Ty::Script(id, _) = ty
-            && self.type_implements(&ty, "Iterator")
+        if let Ty::Script(id, _) = without_mutable_reference(&ty)
+            && self.type_implements(without_mutable_reference(&ty), "Iterator")
         {
-            return self.user_pipeline(value, Some(id)).ok();
+            return self.user_pipeline(value, Some(*id)).ok();
         }
         if matches!(ty, Ty::Host { .. }) && self.type_implements(&ty, "Iterator") {
             return self.user_pipeline(value, None).ok();
@@ -2264,6 +2292,17 @@ impl<'a> Parser<'a> {
             ty @ Ty::Script(..) => self.type_implements(&ty, "Iterator"),
             _ => false,
         }
+    }
+}
+
+/// The type a `&mut` of `ty` points to, else `ty`.
+pub(super) fn without_mutable_reference(ty: &Ty) -> &Ty {
+    match ty {
+        Ty::Reference {
+            mutable: true,
+            target,
+        } => target,
+        ty => ty,
     }
 }
 
