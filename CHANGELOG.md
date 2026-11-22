@@ -9,6 +9,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 - A generic function picks a trait's impl by its type argument among f32 and f64, the integer kinds, and &str and String, as rustc does, including T::f() and T: Into<X> conversions. (#1177)
 - A generic body prints an f32 it is given as an f32, and prints floats with Rust's text and precision. (#1177)
 - Using an iterator local again after collect, count, a for loop or passing it on is E0382, as in rustc. (#2523)
+- The borrow checker now reports what rustc reports for struct-variant constructors, closure parameters that shadow a borrowed local, `Cow::into_owned` through a reference (E0507), binding arms of a match through a reference, a returned `&r` of a reference local (E0515), a local's borrow stored through a parameter (E0597), a struct's declared lifetime bounds, and a slice pattern's `rest @ ..` binding. (#133, #139, #819, #118, #157, #171, #172, #116)
+- `Cow::to_mut` makes the `Cow` owned at the call, as std's does, even when nothing is written through it. (#818)
+- `write!` and `writeln!` into `std::io::stdout()`, `stderr()` and their locks run, by std's `io::Write`, and write where `print!` and `eprint!` do. Without `io::Write` in scope the error is rustc's E0599, which suggests `use std::io::Write;`. (#2089)
+- std's `fs::File` and `OpenOptions` read, write, append and seek files, and `fs::metadata`, `read_dir` and `canonicalize` run with `Metadata`, `FileType` and `DirEntry`, as far as the program's file access reaches. (#646)
+- std's `process::Command` builds a command (`arg`, `env`, `current_dir`) and runs it with `status`, giving its `ExitStatus`, for a program granted the process. (#2579; part of #2082)
 
 ## 0.5.16 (2026-11-22)
 
