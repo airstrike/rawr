@@ -679,11 +679,10 @@ impl Parser<'_> {
         visiting: &mut Vec<(type_def::Id, Box<[Ty]>)>,
     ) -> Result<bool, Error> {
         let unsupported = |holder: &str| Error::UnsupportedNominalSyntax {
-            construct: format!(
+            construct: crate::resolve::Unsupported::said(format!(
                 "a value whose type implements `Drop` inside {holder}: dropping it where Rust \
                  does is not supported in Rawr yet"
-            )
-            .into(),
+            )),
             source: at,
         };
         let resolved = self.inference.resolve(ty);
@@ -869,11 +868,10 @@ impl Parser<'_> {
         match self.note_drop(name, declaration, ty)? {
             None => Ok(()),
             Some(_) => Err(Error::UnsupportedNominalSyntax {
-                construct: format!(
+                construct: crate::resolve::Unsupported::said(format!(
                     "a pattern binding `{name}` that shadows a value whose type implements \
                      `Drop`: keeping the shadowed value is not supported in Rawr yet"
-                )
-                .into(),
+                )),
                 source: declaration,
             }),
         }
@@ -1042,9 +1040,10 @@ impl Parser<'_> {
         for (ty, declaration) in parameters {
             if self.needs_drop(&ty, declaration)? {
                 return Err(Error::UnsupportedNominalSyntax {
-                    construct: "an `async` function's parameter whose type implements `Drop`: \
-                                dropping it with the future is not supported in Rawr yet"
-                        .into(),
+                    construct: crate::resolve::Unsupported::said(
+                        "an `async` function's parameter whose type implements `Drop`: \
+                                dropping it with the future is not supported in Rawr yet",
+                    ),
                     source: declaration,
                 });
             }
@@ -1234,11 +1233,10 @@ impl Parser<'_> {
                 .map(|local| local.place.to_string());
             let Some(copy) = copy else {
                 return Err(Error::UnsupportedNominalSyntax {
-                    construct: format!(
+                    construct: crate::resolve::Unsupported::said(format!(
                         "a pattern binding that shadows `{place}`, the local it moves a value \
                          whose type implements `Drop` out of: not supported in Rawr yet"
-                    )
-                    .into(),
+                    )),
                     source: at,
                 });
             };
@@ -1255,9 +1253,10 @@ impl Parser<'_> {
             Holder::Local(place, prefix) => (place, prefix),
             Holder::Place => {
                 return Err(Error::UnsupportedNominalSyntax {
-                    construct: "a pattern that moves a value whose type implements `Drop` out of \
-                                a place other than a local or its field: not supported in Rawr yet"
-                        .into(),
+                    construct: crate::resolve::Unsupported::said(
+                        "a pattern that moves a value whose type implements `Drop` out of \
+                                a place other than a local or its field: not supported in Rawr yet",
+                    ),
                     source: at,
                 })
             }
@@ -1309,9 +1308,10 @@ impl Parser<'_> {
             .any(|(_, _, ty)| matches!(self.inference.resolve(ty), Ty::Reference { .. }))
         {
             return Err(Error::UnsupportedNominalSyntax {
-                construct: "a `let` pattern that borrows from a value whose type implements \
-                            `Drop` made for it: keeping that value is not supported in Rawr yet"
-                    .into(),
+                construct: crate::resolve::Unsupported::said(
+                    "a `let` pattern that borrows from a value whose type implements \
+                            `Drop` made for it: keeping that value is not supported in Rawr yet",
+                ),
                 source: syntax.span(),
             });
         }
@@ -1502,9 +1502,10 @@ impl Parser<'_> {
                     && self.needs_drop(&owned, at)?
                 {
                     return Err(Error::UnsupportedNominalSyntax {
-                        construct: "a `Cow::Owned` pattern that moves a value whose type \
-                                    implements `Drop`: not supported in Rawr yet"
-                            .into(),
+                        construct: crate::resolve::Unsupported::said(
+                            "a `Cow::Owned` pattern that moves a value whose type \
+                                    implements `Drop`: not supported in Rawr yet",
+                        ),
                         source: at,
                     });
                 }
@@ -1517,9 +1518,10 @@ impl Parser<'_> {
                     leftover |= self.pattern_moves(alternative, &resolved, path, &mut inside)?;
                     if !inside.is_empty() {
                         return Err(Error::UnsupportedNominalSyntax {
-                            construct: "an `|` pattern that moves a value whose type implements \
-                                        `Drop`: not supported in Rawr yet"
-                                .into(),
+                            construct: crate::resolve::Unsupported::said(
+                                "an `|` pattern that moves a value whose type implements \
+                                        `Drop`: not supported in Rawr yet",
+                            ),
                             source: at,
                         });
                     }
@@ -1529,9 +1531,10 @@ impl Parser<'_> {
             pattern::Syntax::Slice { .. } => {
                 if binds_by_value(syntax) && self.needs_drop(&resolved, at)? {
                     return Err(Error::UnsupportedNominalSyntax {
-                        construct: "a slice pattern that moves a value whose type implements \
-                                    `Drop`: not supported in Rawr yet"
-                            .into(),
+                        construct: crate::resolve::Unsupported::said(
+                            "a slice pattern that moves a value whose type implements \
+                                    `Drop`: not supported in Rawr yet",
+                        ),
                         source: at,
                     });
                 }
@@ -1542,9 +1545,10 @@ impl Parser<'_> {
 
     fn partial_drop_move(&self, at: Span) -> Error {
         Error::UnsupportedNominalSyntax {
-            construct: "a pattern that moves a part of an `Option` or `Result` whose type \
-                        implements `Drop` and leaves another such part: not supported in Rawr yet"
-                .into(),
+            construct: crate::resolve::Unsupported::said(
+                "a pattern that moves a part of an `Option` or `Result` whose type \
+                        implements `Drop` and leaves another such part: not supported in Rawr yet",
+            ),
             source: at,
         }
     }
@@ -1618,10 +1622,11 @@ impl Parser<'_> {
         }
         if !self.drop_scoped() || self.drop_scopes.len() <= self.drop_base {
             return Err(Error::UnsupportedNominalSyntax {
-                construct: "a `let` that borrows a temporary value whose type implements `Drop` \
+                construct: crate::resolve::Unsupported::said(
+                    "a `let` that borrows a temporary value whose type implements `Drop` \
                             outside a block: keeping it to the block's end is not supported in \
-                            Rawr yet"
-                    .into(),
+                            Rawr yet",
+                ),
                 source: value,
             });
         }
@@ -1715,9 +1720,10 @@ impl Parser<'_> {
         let temporary = self.temporary("temporary");
         let Some(scope) = self.temporary_scopes.last_mut() else {
             return Err(Error::UnsupportedNominalSyntax {
-                construct: "a temporary value whose type implements `Drop` outside a statement: \
-                            dropping it where Rust does is not supported in Rawr yet"
-                    .into(),
+                construct: crate::resolve::Unsupported::said(
+                    "a temporary value whose type implements `Drop` outside a statement: \
+                            dropping it where Rust does is not supported in Rawr yet",
+                ),
                 source: value.span,
             });
         };
@@ -1814,11 +1820,10 @@ impl Parser<'_> {
         };
         if discarded == Some(true) {
             return Err(Error::UnsupportedNominalSyntax {
-                construct: format!(
+                construct: crate::resolve::Unsupported::said(format!(
                     "`{member}`, which drops a value whose type implements `Drop` that it does \
                      not return: dropping it where Rust does is not supported in Rawr yet"
-                )
-                .into(),
+                )),
                 source: at,
             });
         }

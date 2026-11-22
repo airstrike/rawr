@@ -54,7 +54,7 @@ fn test_mismatched_op_custom_type() {
     // Two untyped values can't be compared either.
     assert!(matches!(
         *engine.eval::<bool>("let x = new_ts(); let y = new_ts(); x == y").unwrap_err(),
-        EvalAltResult::ErrorParsing(ParseErrorType::Resolution(Error::UnsupportedNominalSyntax { construct, .. }), ..) if construct == "equality of dynamic values"
+        EvalAltResult::ErrorParsing(ParseErrorType::Resolution(Error::UnsupportedNominalSyntax { construct, .. }), ..) if construct.message() == "equality of dynamic values is not supported"
     ));
 
     assert!(matches!(

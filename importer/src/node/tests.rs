@@ -5967,3 +5967,24 @@ fn a_failed_release_reports_the_failure_it_follows() {
         )
     );
 }
+
+/// A fresh build's failure that only a rawr bug causes panics with a
+/// `Bug`, which rawr-import prints as rustc's internal compiler error, and
+/// names what rawr misread without the `internal error:` its message
+/// carries elsewhere (#1929).
+#[test]
+fn a_fresh_builds_broken_invariant_panics_with_a_bug() {
+    let misread = Error::from(crate::Error::Extraction {
+        code: "span",
+        reason: "line 0".into(),
+    });
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| misread.fresh()))
+        .expect_err("a misread is a rawr bug");
+    let bug = panicked
+        .downcast_ref::<crate::Bug>()
+        .expect("the payload is the invariant");
+    assert_eq!(
+        bug.message(),
+        "rawr misread rustc's output (`span`): line 0"
+    );
+}

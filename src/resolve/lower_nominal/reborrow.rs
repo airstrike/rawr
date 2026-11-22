@@ -357,9 +357,10 @@ impl Parser<'_> {
         let chose = match chosen.map(|chosen| chosen.chose()) {
             Some(Err(refused)) => {
                 return Err(Error::UnsupportedNominalSyntax {
-                    construct: "a `&mut` chosen by a branch, of a place that is not a local of \
-                                the body or a part of one: not supported in Rawr yet"
-                        .into(),
+                    construct: crate::resolve::Unsupported::said(
+                        "a `&mut` chosen by a branch, of a place that is not a local of \
+                                the body or a part of one: not supported in Rawr yet",
+                    ),
                     source: refused,
                 });
             }
@@ -373,11 +374,10 @@ impl Parser<'_> {
         };
         let Some((source, _)) = source else {
             return Err(Error::UnsupportedNominalSyntax {
-                construct: format!(
+                construct: crate::resolve::Unsupported::said(format!(
                     "giving the `&mut` local `{selector}` a borrow of a field or an element: \
                      not supported in Rawr yet"
-                )
-                .into(),
+                )),
                 source: replacement.span,
             });
         };
@@ -449,9 +449,10 @@ impl Parser<'_> {
                 }
                 _ => {
                     return Err(Error::UnsupportedNominalSyntax {
-                        construct: "a `&mut` borrow of this place, held by an async function's \
-                                    future: not supported in Rawr yet"
-                            .into(),
+                        construct: crate::resolve::Unsupported::said(
+                            "a `&mut` borrow of this place, held by an async function's \
+                                    future: not supported in Rawr yet",
+                        ),
                         source: argument.span,
                     });
                 }

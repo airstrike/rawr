@@ -665,11 +665,10 @@ impl Parser<'_> {
         };
         if self.models.holds_cell(&ty, &mut Vec::new()) {
             return Err(Error::UnsupportedNominalSyntax {
-                construct: format!(
+                construct: crate::resolve::Unsupported::said(format!(
                     "cloning a `{}`, which holds a `Cell` or `RefCell`, is not supported yet",
                     ty.name(&self.models)
-                )
-                .into(),
+                )),
                 source: at,
             });
         }

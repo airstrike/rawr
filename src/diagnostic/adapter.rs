@@ -2509,6 +2509,10 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Error::Unimplemented {
             help: Some(help), ..
         } => builder.help(help.clone()),
+        resolve::Error::UnsupportedNominalSyntax { construct, .. } => match construct.help() {
+            Some(help) => builder.help(help),
+            None => builder,
+        },
         // The notes on types that hold it with a site are sections.
         resolve::Error::UnsharedStatic {
             ty,
@@ -2891,7 +2895,7 @@ fn resolution_message(error: &resolve::Error) -> String {
             format!("invalid match for `{owner}`: {reason}")
         }
         resolve::Error::UnsupportedNominalSyntax { construct, .. } => {
-            resolve::Unsupported(construct).to_string()
+            construct.message().to_owned()
         }
         resolve::Error::Syntax { message, .. } | resolve::Error::Macro { message, .. } => {
             message.to_string()
@@ -3084,6 +3088,59 @@ mod tests {
                 Some("not found in `extension::registry`")
             );
         }
+    }
+
+    /// A construct rawr doesn't run says so on rustc's `error:` line, and
+    /// how to write it so it runs on a `help:` line of its own; a token the
+    /// lowering doesn't read where it stands says what it reads (#1112).
+    #[test]
+    fn an_unsupported_constructs_hint_is_its_help_line() {
+        let source = Source::new(
+            "src/main.rs",
+            "fn main() {\n    static mut N: i32 = 0;\n}\n",
+        )
+        .expect("test source has a stable identity");
+        let at = Span::new(Position::new(2, 12), Position::new(2, 15));
+        let report = |construct: resolve::Unsupported| {
+            let error = ParseError(
+                Box::new(ParseErrorType::Resolution(
+                    resolve::Error::UnsupportedNominalSyntax {
+                        construct,
+                        source: at,
+                    },
+                )),
+                at.start(),
+                Default::default(),
+            );
+            crate::diagnostic::render(
+                &Report::from_parse(source.clone(), &error)
+                    .expect("the error's span belongs to the source"),
+            )
+        };
+        let hinted = report(
+            resolve::Unsupported::construct("a `static mut`")
+                .with_help("keep the value in your state"),
+        );
+        assert!(
+            hinted.starts_with("error: a `static mut` is not supported\n"),
+            "{hinted}"
+        );
+        assert!(
+            hinted.ends_with("  = help: keep the value in your state\n"),
+            "{hinted}"
+        );
+        let token = report(resolve::Unsupported::token(
+            "':' after a static's name",
+            "mut",
+        ));
+        assert!(
+            token.starts_with("error: `mut` is not supported here\n"),
+            "{token}"
+        );
+        assert!(
+            token.ends_with("  = help: rawr expects ':' after a static's name here\n"),
+            "{token}"
+        );
     }
 
     #[test]

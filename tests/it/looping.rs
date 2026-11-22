@@ -48,7 +48,7 @@ fn test_loop() {
 
     let outside_loop = |script: &str| {
         let err = engine.compile(script).expect_err(script);
-        matches!(err.err_type(), ParseErrorType::Resolution(Error::UnsupportedNominalSyntax { construct, .. }) if construct == "`break` or `continue` outside a loop")
+        matches!(err.err_type(), ParseErrorType::Resolution(Error::UnsupportedNominalSyntax { construct, .. }) if construct.message() == "`break` or `continue` outside a loop is not supported")
     };
 
     assert!(outside_loop("let x = 0; break;"));

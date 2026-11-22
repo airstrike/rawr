@@ -2354,13 +2354,12 @@ pub(super) fn native_impl(
                     crate::resolve::ImportedFailure::Lowering(LoweringFailure::original(
                         shell.source,
                         Error::UnsupportedNominalSyntax {
-                            construct: format!(
+                            construct: crate::resolve::Unsupported::said(format!(
                                 "`{}` in an impl of `{path}` whose functions native code calls \
-                             is not supported in Rawr yet; the type has no Rust type for the impl \
-                             to name",
+                                 is not supported in Rawr yet: the type has no Rust type for the \
+                                 impl to name",
                                 crate::resolve::full_type_name(ty)
-                            )
-                            .into(),
+                            )),
                             source: crate::resolve::type_span(ty),
                         }
                         .into(),

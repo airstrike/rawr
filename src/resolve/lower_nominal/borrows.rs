@@ -2178,11 +2178,10 @@ impl Parser<'_> {
             );
         if alias && matches!(self.inference.resolve(ty), Ty::Reference { .. }) && !same {
             return Err(Error::UnsupportedNominalSyntax {
-                construct: format!(
+                construct: crate::resolve::Unsupported::said(format!(
                     "giving the `&mut` local `{name}` a new borrow when it borrows a place no \
                      runtime local can hold, or in an async body: not supported in Rawr yet"
-                )
-                .into(),
+                )),
                 source: target,
             });
         }

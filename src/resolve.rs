@@ -31,7 +31,7 @@ pub(crate) use error::{
     derivable, unscoped_method, ArgumentCount, ArgumentSignature, ArrayLength, AssignTwice,
     CannotCompare, Described, NonExhaustive, NotFound, PatternFields, Qualified, Refutable,
     RepeatedRest, SelfOutside, SlicePattern, TypeNeeded, UnboundAlternative, Uninitialized,
-    Unsatisfied, Unsupported, ASYNC_MAIN, IF_WITHOUT_ELSE, INHABITED_REFERENCES, INVALID_ASSIGNEE,
+    Unsatisfied, ASYNC_MAIN, IF_WITHOUT_ELSE, INHABITED_REFERENCES, INVALID_ASSIGNEE,
     RETURN_WITHOUT_VALUE,
 };
 pub use error::{
@@ -40,7 +40,7 @@ pub use error::{
     FieldHint, FieldOwner, Fields, Import, Imported, Instead, Lint, MacroScope, Missing,
     MissingImpl, MoveCause, MovedPlace, MutBinding, Opaqueness, OwningParameter, PatternOrigin,
     PatternTypes, Placeholder, Private, Receiver, Referent, Required, Requirement, Shown, Similar,
-    Site, Uncovered, Unexpected, UnmetBound, UnmetBounds, Unresolved,
+    Site, Uncovered, Unexpected, UnmetBound, UnmetBounds, Unresolved, Unsupported,
 };
 pub use imports::{Candidate, Direct, Imports};
 use std::collections::BTreeMap;
@@ -2556,9 +2556,10 @@ fn resolve_item(
     let kind = match parsed {
         crate::item::Parsed::TypeAlias(alias) => {
             return Err(Error::UnsupportedNominalSyntax {
-                construct: "a type alias read as an item; its target is resolved with the \
-                            module's types"
-                    .into(),
+                construct: crate::resolve::Unsupported::said(
+                    "a type alias read as an item is not supported: its target is resolved \
+                     with the module's types",
+                ),
                 source: alias.span,
             });
         }

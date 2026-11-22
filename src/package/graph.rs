@@ -709,6 +709,16 @@ impl Graph {
         self.island_shadow_for(called.as_ref())
     }
 
+    /// The marked functions native code can see and can't call through
+    /// rawr yet, as rustc reports the errors of one check: what stops a
+    /// shadow crate's build before anything is built.
+    #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
+    #[must_use]
+    pub fn island_refusal(&self) -> Option<super::Error> {
+        let shadow = self.island_shadow()?;
+        super::island::refusal(shadow.refused).map(super::Error::import_diagnostic)
+    }
+
     /// The shadow files with the bodies of the functions in `called`, or of
     /// all of them. A type the last check found native code holding but
     /// never opening is the handle of the program value (D961), in the

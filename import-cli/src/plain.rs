@@ -270,7 +270,7 @@ fn acquire(
         let environment = Environment::capture().map_err(Error::other)?;
         graph
             .rust_inventory_plain(environment, closure, limits, copies)
-            .map_err(Error::other)?
+            .map_err(|error| Error::rust(graph, error))?
             .ok_or_else(|| Error::other("the crate has no Rust dependency"))
     };
     let probe = request(&[])?;
@@ -567,7 +567,7 @@ fn expansion_basis(
             limits,
             &mut rawr::package::Copies::default(),
         )
-        .map_err(Error::other)?
+        .map_err(|error| Error::rust(graph, error))?
         .ok_or_else(|| Error::other("cannot expand a macro in a crate with no Rust dependency"))?;
     let native = request.pinned_native(limits).map_err(Error::other)?;
     let names_roots = |basis: &expand::Basis| roots.iter().all(|root| basis.names(root));
@@ -791,7 +791,7 @@ fn prepare_resolving(
                 rawr_import::crate_demand::store_in(&rawr, &crate_demand);
                 continue;
             }
-            Err(error) => return Err(Error::other(error)),
+            Err(error) => return Err(Error::rust(&graph, error)),
         };
         remembered = false;
         // The instances the last check recorded, read once for the round.

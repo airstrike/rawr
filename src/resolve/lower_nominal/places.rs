@@ -121,11 +121,10 @@ impl Parser<'_> {
             });
         match alias.filter(|(root, at)| moved(root, *at)) {
             Some((root, _)) => Err(Error::UnsupportedNominalSyntax {
-                construct: format!(
+                construct: crate::resolve::Unsupported::said(format!(
                     "a borrow of `{root}` used after a new local named `{root}` shadows it: \
                      not supported in Rawr yet"
-                )
-                .into(),
+                )),
                 source: span,
             }),
             None => Ok(()),
@@ -1577,9 +1576,10 @@ impl Parser<'_> {
                 Ty::Option(inner) if matches!(*inner, Ty::Reference { mutable: true, .. })
             );
         let unreached = |source: Span| Error::UnsupportedNominalSyntax {
-            construct: "a `&mut` pattern binding of a place not reached from a local, or \
-                        through a `RefCell` borrowed below its start: not supported in Rawr yet"
-                .into(),
+            construct: crate::resolve::Unsupported::said(
+                "a `&mut` pattern binding of a place not reached from a local, or through a \
+                 `RefCell` borrowed below its start: not supported in Rawr yet",
+            ),
             source,
         };
         // A range of elements is matched by a slice pattern, not bound whole.
@@ -1587,9 +1587,9 @@ impl Parser<'_> {
             && !matches!(proof, NominalPattern::Slice { .. } | NominalPattern::Or(_))
         {
             return Err(Error::UnsupportedNominalSyntax {
-                construct: "a `&mut` binding of a whole range of elements: not supported in \
-                            Rawr yet"
-                    .into(),
+                construct: crate::resolve::Unsupported::said(
+                    "a `&mut` binding of a whole range of elements: not supported in Rawr yet",
+                ),
                 source: subject.span,
             });
         }
@@ -1635,7 +1635,9 @@ impl Parser<'_> {
         };
         if let Err(construct) = mark_parts(proof, &parts, false) {
             return Err(Error::UnsupportedNominalSyntax {
-                construct: format!("{construct}: not supported in Rawr yet").into(),
+                construct: crate::resolve::Unsupported::said(format!(
+                    "{construct}: not supported in Rawr yet"
+                )),
                 source: subject.span,
             });
         }
@@ -1801,8 +1803,9 @@ impl Parser<'_> {
             return Ok(holder);
         }
         let unreached = |construct: &str| Error::UnsupportedNominalSyntax {
-            construct: format!("a closure using `{name}`, {construct}: not supported in Rawr yet")
-                .into(),
+            construct: crate::resolve::Unsupported::said(format!(
+                "a closure using `{name}`, {construct}: not supported in Rawr yet"
+            )),
             source: span,
         };
         if matches!(lvalue, Lvalue::Slice(_)) {
