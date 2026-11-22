@@ -1180,6 +1180,13 @@ impl Recorder {
         if self.overloaded.contains(&point) {
             if let Some(loan) = self.index_loans.get(&point).copied() {
                 self.body.loans[loan.0 as usize].mutable = true;
+                // Through `AddAssign`, `IndexMut::index_mut` is called
+                // before the value is made: its borrow is the operator's
+                // place, which the call takes here.
+                if assignment == Assignment::Overloaded {
+                    let temporary = self.body.loans[loan.0 as usize].temporary;
+                    self.push(Fact::Use(temporary));
+                }
             }
             self.push(Fact::Access {
                 place,

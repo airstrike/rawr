@@ -10531,6 +10531,22 @@ main();
         operand.contains("error[E0382]: borrow of moved value: `v`\n --> <script>:6:78"),
         "{operand}"
     );
+    // An element's `IndexMut::index_mut` borrow is made before the value.
+    let indexed = refused(
+        r#"
+use std::ops::AddAssign;
+struct V(i32);
+impl AddAssign<i32> for V { fn add_assign(&mut self, o: i32) { self.0 += o; } }
+fn main() { let mut vs = vec![V(1)]; vs[0] += { vs = vec![]; 0 }; }
+main();
+"#,
+    );
+    assert!(
+        indexed.contains(
+            "error[E0506]: cannot assign to `vs` because it is borrowed\n --> <script>:5:49"
+        ),
+        "{indexed}"
+    );
 }
 
 #[test]
