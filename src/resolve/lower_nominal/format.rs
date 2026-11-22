@@ -993,7 +993,9 @@ impl DebugLeaf {
                 bits: 64,
                 signed: true,
             },
-            Union::Float(..) => Self::Float { single: false },
+            Union::Float(_, tag, _) => Self::Float {
+                single: *tag == crate::types::dynamic::SINGLE_TAG,
+            },
             Union::Bool(..) => Self::Bool,
             Union::Unit(..) => Self::Unit,
             _ => Self::Other,
@@ -1117,6 +1119,12 @@ impl DebugSpec {
     /// this spec: a number as `Formatter::pad_integral` pads it, anything
     /// else (its text) as `Formatter::pad` does.
     pub(super) fn display(&self, value: &Dynamic, leaf: DebugLeaf) -> String {
+        // A float of a type the caller doesn't know writes as Rust's
+        // `f64`, or as the `f32` its tag says it is (`SINGLE_TAG`).
+        let leaf = match (leaf, &value.0) {
+            (DebugLeaf::Other, Union::Float(..)) => DebugLeaf::of_value(value),
+            _ => leaf,
+        };
         match (leaf, &value.0) {
             (DebugLeaf::Int { signed: true, .. }, Union::Int(value, ..)) => {
                 self.pad_number(*value < 0, "", &value.unsigned_abs().to_string())
@@ -1140,9 +1148,9 @@ impl DebugSpec {
                     None => self.pad_number(false, "", &text),
                 }
             }
-            // A number of a type the caller doesn't know writes its own
+            // An integer of a type the caller doesn't know writes its own
             // text, padded as a number.
-            (DebugLeaf::Other, Union::Int(..) | Union::Float(..)) => {
+            (DebugLeaf::Other, Union::Int(..)) => {
                 let text = value.to_string();
                 match text.strip_prefix('-') {
                     Some(digits) => self.pad_number(true, "", digits),

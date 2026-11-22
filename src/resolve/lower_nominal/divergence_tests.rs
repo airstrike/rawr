@@ -8001,3 +8001,137 @@ fn a_view_out_of_its_range_panics_as_rustc() {
         );
     }
 }
+
+#[test]
+fn a_generic_call_runs_the_impl_of_its_type_argument_among_kinds() {
+    // A trait with impls for f32 and f64, two integer kinds, or &str and
+    // String runs the impl rustc's monomorphisation picks by `T`, through
+    // a method, a trait function, a nested generic, a closure and an
+    // inherent impl's parameter (#1177).
+    let output = printed(
+        r#"
+trait Half { fn half(&self) -> String; }
+impl Half for f32 { fn half(&self) -> String { format!("f32 {}", self / 2.0) } }
+impl Half for f64 { fn half(&self) -> String { format!("f64 {}", self / 2.0) } }
+impl Half for u8 { fn half(&self) -> String { format!("u8 {}", self / 2) } }
+impl Half for i64 { fn half(&self) -> String { format!("i64 {}", self / 2) } }
+trait Kind { fn kind(&self) -> &'static str; fn name() -> &'static str; }
+impl Kind for &str { fn kind(&self) -> &'static str { "str" } fn name() -> &'static str { "&str" } }
+impl Kind for String { fn kind(&self) -> &'static str { "String" } fn name() -> &'static str { "String" } }
+struct W<T>(T);
+impl<T: Half> W<T> { fn go(&self) -> String { self.0.half() } }
+fn twice<T: Half>(x: &T) -> String { format!("{} {}", x.half(), inner(x)) }
+fn inner<U: Half>(x: &U) -> String { x.half() }
+fn later<T: Half + Copy>(x: T) -> String { let f = move || x.half(); f() }
+fn kind<T: Kind>(x: T) -> String { format!("{} {}", x.kind(), T::name()) }
+fn main() {
+    println!("{} | {}", twice(&3.0f32), twice(&3.0f64));
+    println!("{} | {} | {}", twice(&9u8), later(9i64), W(1.0f64).go());
+    println!("{} | {}", kind("a"), kind(String::from("b")));
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "f32 1.5 f32 1.5 | f64 1.5 f64 1.5\nu8 4 u8 4 | i64 4 | f64 0.5\nstr &str | String String\n"
+    );
+    // `x.into()` of a `T: Into<Bar>` runs the `From` impl for `T`.
+    let output = printed(
+        r#"
+struct Bar(String);
+impl From<&str> for Bar { fn from(s: &str) -> Bar { Bar(format!("str:{s}")) } }
+impl From<String> for Bar { fn from(s: String) -> Bar { Bar(format!("string:{s}")) } }
+impl From<u8> for Bar { fn from(n: u8) -> Bar { Bar(format!("u8:{n}")) } }
+impl From<i64> for Bar { fn from(n: i64) -> Bar { Bar(format!("i64:{n}")) } }
+fn into<T: Into<Bar>>(x: T) -> String { x.into().0 }
+fn main() {
+    println!("{} {} {} {}", into("a"), into(String::from("b")), into(3u8), into(4i64));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "str:a string:b u8:3 i64:4\n");
+}
+
+#[test]
+fn an_f32_passed_to_a_generic_writes_as_an_f32() {
+    // A generic body's `{}` and `{:?}` of an `f32` write the `f32`, and of
+    // an `f64` Rust's `f64` text, with its precision (#1177).
+    let output = printed(
+        r#"
+use std::fmt::{Debug, Display};
+fn show<T: Display>(x: T) -> String { format!("{} {:.2}", x, x) }
+fn debug<T: Debug>(x: T) -> String { format!("{:?}", x) }
+fn main() {
+    println!("{} | {} | {}", show(0.1f32), show(2.0f64), show(1.0f32 / 3.0));
+    println!("{} | {} | {}", debug(0.1f32), debug(vec![0.1f32, 2.0]), debug((0.1f32, 0.2f64)));
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "0.1 0.10 | 2 2.00 | 0.33333334 0.33\n0.1 | [0.1, 2.0] | (0.1, 0.2)\n"
+    );
+}
+
+#[test]
+fn a_consuming_iterator_method_moves_the_iterator_local() {
+    // `it.collect()`, `it.count()`, `for x in it` and passing `it` take it
+    // by value, as for a range (#2523). A clone or `next()` keeps it.
+    let output = printed(
+        r#"
+fn main() {
+    let words = "a b c".split(' ');
+    let n = words.clone().count();
+    let all: Vec<&str> = words.collect();
+    let mut chars = "xyz".chars();
+    let first = chars.next();
+    let rest: String = chars.collect();
+    println!("{} {:?} {:?} {}", n, all, first, rest);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "3 [\"a\", \"b\", \"c\"] Some('x') yz\n");
+    for program in [
+        "fn main() { let it = vec![1, 2].into_iter(); let a: Vec<i32> = it.collect(); \
+         let b: Vec<i32> = it.collect(); println!(\"{:?} {:?}\", a, b); }",
+        "fn main() { let it = \"a b\".split(' '); let n = it.count(); println!(\"{} {}\", n, it.count()); }",
+        "fn main() { let it = vec![1, 2].into_iter(); for x in it { print!(\"{x}\"); } \
+         println!(\"{}\", it.count()); }",
+        "fn take<I: Iterator<Item = i32>>(i: I) -> i32 { i.sum() }\n\
+         fn main() { let it = vec![1, 2].into_iter(); println!(\"{} {}\", take(it), take(it)); }",
+    ] {
+        let report = refused(program);
+        assert!(
+            report.starts_with("error[E0382]: use of moved value: `it`"),
+            "{report}"
+        );
+    }
+}
+
+#[test]
+fn an_iterator_parameter_without_its_item_has_iterator_methods() {
+    // `I: Iterator` with no `Item = X`: its item is `<I as Iterator>::Item`,
+    // which the call fills (#2507).
+    let output = printed(
+        r#"
+struct Count { n: u32 }
+impl Iterator for Count {
+    type Item = u32;
+    fn next(&mut self) -> Option<u32> { if self.n < 3 { self.n += 1; Some(self.n) } else { None } }
+}
+fn count<I: Iterator>(i: I) -> usize { i.count() }
+fn first<I: Iterator>(mut i: I) -> Option<I::Item> { i.next() }
+fn all<I>(i: I) -> Vec<I::Item> where I: Iterator { i.collect() }
+fn main() {
+    println!("{} {}", count(vec![1, 2, 3].into_iter()), count("a b".split(' ')));
+    println!("{:?} {:?} {:?}", first(vec!['x'].into_iter()), first(Count { n: 0 }), all(Count { n: 1 }));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "3 2\nSome('x') Some(1) [2, 3]\n");
+}

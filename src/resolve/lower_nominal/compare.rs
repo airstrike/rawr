@@ -16,6 +16,9 @@ pub(super) enum Shape {
     Plain,
     /// A `u64` or a `usize`.
     Unsigned,
+    /// An `f32`, which a generic body writes as one (`SINGLE_TAG`); only
+    /// `with_tuples` reads it, as it compares as the float it holds.
+    Single,
     /// Each element of a vector, array, slice or set.
     Each(Box<Shape>),
     /// A tuple's members; a map's `[key, value]` entry.
@@ -47,6 +50,7 @@ impl Shape {
         let shape = match resolve(ty) {
             Ty::Tuple(members) if tuples => return Self::Tuple(members.iter().map(of).collect()),
             Ty::Int(Int::U64 | Int::Usize) => Self::Unsigned,
+            Ty::Float(Float::F32) if tuples => Self::Single,
             Ty::Reference { target, .. } | Ty::Boxed(target) | Ty::Counted(_, target) => {
                 of(&target)
             }
@@ -68,7 +72,7 @@ impl Shape {
     /// `Plain` where nothing inside is unsigned.
     fn simplified(self) -> Self {
         let plain = match &self {
-            Self::Plain | Self::Unsigned => return self,
+            Self::Plain | Self::Unsigned | Self::Single => return self,
             Self::Each(inner) | Self::Option(inner) => inner.is_plain(),
             Self::Tuple(members) => members.iter().all(Self::is_plain),
             Self::Result(ok, err) => ok.is_plain() && err.is_plain(),
@@ -86,6 +90,7 @@ impl std::fmt::Display for Shape {
         match self {
             Self::Plain => formatter.write_str("p"),
             Self::Unsigned => formatter.write_str("u"),
+            Self::Single => formatter.write_str("f"),
             Self::Each(inner) => write!(formatter, "e({inner})"),
             Self::Option(inner) => write!(formatter, "o({inner})"),
             Self::Result(ok, err) => write!(formatter, "r({ok},{err})"),
@@ -482,14 +487,19 @@ pub(super) fn comparison_method(member: &str) -> Option<Token> {
 }
 
 /// `value` with each integer its shape says is unsigned tagged as one
-/// (`UNSIGNED_TAG`), and each tuple as one (`TUPLE_TAG`), for a generic
-/// body that reads it without its type.
+/// (`UNSIGNED_TAG`), each `f32` as one (`SINGLE_TAG`) and each tuple as
+/// one (`TUPLE_TAG`), for a generic body that reads it without its type.
 pub(super) fn tag_unsigned(mut value: Dynamic, shape: &Shape) -> Dynamic {
     match shape {
         Shape::Plain => {}
         Shape::Unsigned => {
             if value.is_int() {
                 value.set_tag(crate::types::dynamic::UNSIGNED_TAG);
+            }
+        }
+        Shape::Single => {
+            if value.is_float() {
+                value.set_tag(crate::types::dynamic::SINGLE_TAG);
             }
         }
         Shape::Option(inner) => {

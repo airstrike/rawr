@@ -253,6 +253,15 @@ pub(super) fn trait_dispatcher_name(trait_name: &str, method: &str) -> String {
     format!("{DISPATCH_SENTINEL}{}__{method}", identifier(trait_name))
 }
 
+/// The generated function that runs `trait_name::method` for a value by
+/// its generic parameter's witness (`write_kind_dispatchers`).
+pub(super) fn kind_dispatcher_name(trait_name: &str, method: &str) -> String {
+    format!(
+        "{DISPATCH_SENTINEL}kind_{}__{method}",
+        identifier(trait_name)
+    )
+}
+
 /// A placeholder before the text of a pending `text.into()`, long enough
 /// for the helper that marks the text lent at `'static`, which it becomes
 /// where the impl the use selects borrows the text, and blank elsewhere.

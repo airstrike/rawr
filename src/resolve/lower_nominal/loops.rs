@@ -693,8 +693,14 @@ impl<'a> Parser<'a> {
                 let iterated = self.inference.resolve(&lhs.ty);
                 // A `&mut` of a program's iterator walks it in place.
                 let walked = super::iterator::without_mutable_reference(&iterated);
-                // A `for` takes a range by value, out of its place.
-                if self.stepped_item(&iterated).is_some() {
+                // A `for` takes a range or an iterator by value, out of
+                // its place; a `&mut` one is walked in place.
+                if self.stepped_item(&iterated).is_some()
+                    || matches!(iterated, Ty::Iter(..))
+                    || !matches!(iterated, Ty::Reference { .. })
+                        && (walked.script().is_some() || matches!(iterated, Ty::Host { .. }))
+                        && self.type_implements(walked, "Iterator")
+                {
                     self.move_local(&mut lhs.clone())?;
                 }
                 let pipelined = if matches!(iterated, Ty::Iter(..))

@@ -184,7 +184,7 @@ pub(crate) use dispatch::this_parameter;
 use dispatch::{builtin_conversions_from, builtin_operator, BUILTIN_CONVERSIONS};
 use dispatch::{copied_parameters, inherit_block_names, inherit_names, method_copied};
 use dispatch::{function_copied, function_kept, method_kept};
-use dispatch::{lent_parameters, method_lent};
+use dispatch::{kind_into_dispatcher_name, lent_parameters, method_lent};
 /// The generated function that runs a value's `Drop` and its parts'.
 #[cfg(feature = "rust-import")]
 pub(crate) use drops::GLUE;
@@ -202,8 +202,8 @@ use from_str::{parse_text, ParseError};
 use generics::{
     assumed_generics, bound_kinds, bounded_value, const_generics, dyn_arguments,
     generic_conversion_call, host_witnesses, instantiate, is_iterator_trait, item_generics,
-    mentions_parameter, opaque_outputs, opaque_substitution, supertraits, witness_generics,
-    PendingInstance,
+    kind_into_bound, mentions_parameter, opaque_outputs, opaque_substitution, supertraits,
+    witness_generics, PendingInstance, UNKNOWN_WITNESS,
 };
 #[cfg(feature = "rust-import")]
 use generics::{ImplBounds, ImplProjection, Selection};
@@ -249,11 +249,11 @@ pub(crate) use naming::DEBUG_DISPATCHER;
 pub(crate) use naming::DEBUG_GENERIC;
 use naming::{
     call_placeholder, conversion_placeholder, function_name, instance_dispatcher_name,
-    instance_placeholder, instance_text, lent_text_placeholder, method_name, pattern_name,
-    static_dispatcher_name, static_instance_dispatcher_name, static_instance_placeholder,
-    text_into_placeholder, trait_dispatcher_name, witness_placeholder, witness_variable,
-    CLOSURE_SENTINEL, DEFAULT_DISPATCHER, FALLBACK_INSTANCE, HIDDEN_DISPATCHER, METHOD_SENTINEL,
-    PRIVATE_PREFIX, SENTINEL,
+    instance_placeholder, instance_text, kind_dispatcher_name, lent_text_placeholder, method_name,
+    pattern_name, static_dispatcher_name, static_instance_dispatcher_name,
+    static_instance_placeholder, text_into_placeholder, trait_dispatcher_name, witness_placeholder,
+    witness_variable, CLOSURE_SENTINEL, DEFAULT_DISPATCHER, FALLBACK_INSTANCE, HIDDEN_DISPATCHER,
+    METHOD_SENTINEL, PRIVATE_PREFIX, SENTINEL,
 };
 pub(crate) use naming::{function_display_name, private_function_name, PRIVATE_METHOD};
 use obligation::Obligation;
@@ -865,10 +865,10 @@ struct Parser<'a> {
     pending_projections: Vec<(Ty, Ty, Span)>,
     /// Type witnesses passed for `Default`-bounded generic parameters,
     /// written over their placeholders once the types are inferred.
-    /// Each also says whether a reference's witness is its referent's.
+    /// Each also says what its witness must name (`generics::Need`).
     /// Each witness placeholder with the type its parameter, named as
     /// declared, takes at the call.
-    pending_witnesses: Vec<(String, ImmutableString, Ty, Span, bool)>,
+    pending_witnesses: Vec<(String, ImmutableString, Ty, Span, generics::Need)>,
     /// Each opaque output a generic call here takes as a type argument,
     /// whose witness is its hidden type's (D1109), and where.
     witnessed_opaques: Vec<Witnessed>,
