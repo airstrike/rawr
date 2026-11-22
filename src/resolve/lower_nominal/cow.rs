@@ -452,7 +452,9 @@ impl Parser<'_> {
 
     /// `cow.to_mut()` of a place: a `&mut` place whose read is the payload
     /// and whose store makes the `Cow` owned of the value stored, as std's
-    /// `to_mut` clones a borrowed value into an owned one.
+    /// `to_mut` clones a borrowed value into an owned one. The call stores
+    /// the payload once itself, so the `Cow` is owned from the call on,
+    /// whether or not anything is written through the place (#818).
     fn cow_to_mut(
         &mut self,
         receiver: ParsedExpr,
@@ -494,10 +496,14 @@ impl Parser<'_> {
             }
             lvalue => nested_step(lvalue, step, owned.clone()),
         };
-        let mut source = origin::Fragment::plain(format!("{{ let {place} = "));
-        source.push(receiver.rendered_source());
-        source.push_text("; ");
+        let Lvalue::Nested(nested) = &lvalue else {
+            unreachable!("a `Cow`'s payload is a nested place");
+        };
+        let (read, payload, store) = self.nested_parts(nested);
+        let mut source = origin::Fragment::plain("{ ");
         source.push(read);
+        source.push(store);
+        source.push(payload);
         source.push_text(" }");
         let mut value = self.operator_expr(
             source,
