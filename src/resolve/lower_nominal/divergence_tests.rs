@@ -4097,6 +4097,124 @@ main();
     assert_eq!(output, "w(1)\nw(\"r\")\nw(7)\n2\ni2w([Some(3)])\nw(4)\n");
 }
 
+fn crate_facade() -> crate::host::facade::Definition {
+    use crate::host::{facade, type_def, type_ref};
+    use rawr_import::surface::identity::{Form, Selector};
+    let mut builder = facade::Builder::new("crt", facade::Abi::new(1).unwrap()).unwrap();
+    let mut allocation = crate::host::TestImportAllocation::default();
+    let field = |name: &str, ty: type_ref::Type| {
+        type_def::Field::new(name.into(), ty, Selector::Unavailable)
+    };
+    let variant = |index: u32, name: &str, fields: Vec<type_def::Field>| {
+        let form = if fields.is_empty() {
+            Form::Unit
+        } else {
+            Form::Tuple { arity: 1 }
+        };
+        type_def::Variant::new(
+            name.into(),
+            fields.into_boxed_slice(),
+            true,
+            Selector::EnumVariant {
+                index,
+                name: name.into(),
+                form,
+            },
+        )
+    };
+    let variants = vec![
+        variant(
+            0,
+            "On",
+            vec![field("0", type_ref::Type::builtin(type_ref::Builtin::Bool))],
+        ),
+        variant(
+            1,
+            "Level",
+            vec![field("0", type_ref::Type::builtin(type_ref::Builtin::I64))],
+        ),
+        variant(2, "Off", Vec::new()),
+    ];
+    builder
+        .imported_type(
+            "Flag",
+            type_def::import::Identity::new([0x61; 32]),
+            &[crate::capability::Kind::Clone],
+            Box::default(),
+            Box::default(),
+            type_def::Shape::Enum {
+                variants: variants.into_boxed_slice(),
+                non_exhaustive: false,
+            }
+            .into(),
+            &mut allocation,
+        )
+        .unwrap();
+    builder
+        .imported_type(
+            "Slot",
+            type_def::import::Identity::new([0x62; 32]),
+            &[crate::capability::Kind::Clone],
+            Box::default(),
+            Box::default(),
+            type_def::Shape::Struct {
+                form: type_def::Form::Record,
+                constructor: Some(Selector::Unavailable),
+                fields: Box::from([
+                    field(
+                        "a",
+                        type_ref::Type::option(type_ref::Type::builtin(type_ref::Builtin::I64)),
+                    ),
+                    field("b", type_ref::Type::builtin(type_ref::Builtin::Bool)),
+                ]),
+                constructible: true,
+                unsupported: None,
+                layout: None,
+            }
+            .into(),
+            &mut allocation,
+        )
+        .unwrap();
+    builder.finish().unwrap()
+}
+
+fn crate_lowered(source: &str) -> String {
+    use crate::diagnostic::{render, Report, Source};
+    let mut engine = Engine::new();
+    engine.register_host_facade(crate_facade()).unwrap();
+    let program = crate::resolve::resolve(
+        engine.parse_unit(source).expect("the program parses"),
+        &engine.host_registry,
+    )
+    .expect("the program's headers resolve");
+    let mut allocation = crate::host::TestImportAllocation::default();
+    match super::imported(
+        &engine,
+        &program,
+        &engine.host_registry.share(),
+        &mut allocation,
+        None,
+    ) {
+        Ok(_) => String::new(),
+        Err(failure) => {
+            let error = failure.into_error();
+            let evidence = Source::new("main.rs", source).expect("a test source has an identity");
+            render(&Report::from_parse(evidence, &error).expect("the error is in the source"))
+        }
+    }
+}
+
+/// The report `rawr` renders for `source`, which it refuses, as rustc's.
+fn rendered(source: &str) -> String {
+    use crate::diagnostic::{render, Report, Source};
+    let error = Engine::new()
+        .compile(source)
+        .map(|_| ())
+        .expect_err("rawr refuses this program");
+    let evidence = Source::new("main.rs", source).expect("a test source has an identity");
+    render(&Report::from_parse(evidence, &error).expect("the error is in the source"))
+}
+
 #[test]
 fn a_match_whose_arm_rebinds_a_mut_options_name_runs() {
     // An arm's `Some(first)` below a `first: &mut Option<_>` binds the
