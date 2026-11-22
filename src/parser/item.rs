@@ -975,20 +975,7 @@ fn parse_inner_attribute(input: &mut TokenStream, hash: Position) -> ParseResult
     expect(input, Token::LeftBracket, "after '#!' in an attribute")?;
     let path = parse_path(input)?;
     let close = if attribute_name(&path) == "cfg_attr" {
-        expect(input, Token::LeftParen, "after `cfg_attr`")?;
-        let enabled = parse_cfg_predicate(input)?;
-        expect(input, Token::Comma, "after a `cfg_attr` predicate")?;
-        while !matches!(input.peek(), Some((Token::RightParen, _))) {
-            let (_, position) = *input.peek().expect("token streams always end with EOF");
-            let applied = parse_meta_item(input)?;
-            if enabled {
-                check_inner_attribute(&applied, position)?;
-            }
-            if matches!(input.peek(), Some((Token::Comma, _))) {
-                input.next();
-            }
-        }
-        expect(input, Token::RightParen, "to close `cfg_attr`")?;
+        parse_inner_cfg_attr(input, true)?;
         expect(input, Token::RightBracket, "to close an attribute")?
     } else {
         check_inner_attribute(&path, hash)?;
@@ -1006,12 +993,30 @@ fn parse_inner_attribute(input: &mut TokenStream, hash: Position) -> ParseResult
     Ok(span)
 }
 
-/// One attribute inside `cfg_attr(..)`: a path, then `(..)` or `= value`,
-/// as `doc = include_str!("README.md")`, up to the next `,` or the `)`.
-fn parse_meta_item(input: &mut TokenStream) -> ParseResult<type_ref::Path> {
-    let path = parse_path(input)?;
-    parse_meta_arguments(input)?;
-    Ok(path)
+/// The `(predicate, attribute, ..)` of an inner `cfg_attr`, each attribute
+/// checked when `enabled` and its predicate hold, a `cfg_attr` among them
+/// under its own predicate too.
+fn parse_inner_cfg_attr(input: &mut TokenStream, enabled: bool) -> ParseResult<()> {
+    expect(input, Token::LeftParen, "after `cfg_attr`")?;
+    let enabled = parse_cfg_predicate(input)? && enabled;
+    expect(input, Token::Comma, "after a `cfg_attr` predicate")?;
+    while !matches!(input.peek(), Some((Token::RightParen, _))) {
+        let (_, position) = *input.peek().expect("token streams always end with EOF");
+        let path = parse_path(input)?;
+        if attribute_name(&path) == "cfg_attr" {
+            parse_inner_cfg_attr(input, enabled)?;
+        } else {
+            parse_meta_arguments(input)?;
+            if enabled {
+                check_inner_attribute(&path, position)?;
+            }
+        }
+        if matches!(input.peek(), Some((Token::Comma, _))) {
+            input.next();
+        }
+    }
+    expect(input, Token::RightParen, "to close `cfg_attr`")?;
+    Ok(())
 }
 
 /// Pass over the `(..)` or `= value` of an attribute inside `cfg_attr(..)`,
@@ -1843,6 +1848,11 @@ fn cfg_disabled(attributes: &[crate::item::Attribute]) -> bool {
 fn parse_cfg_predicate(input: &mut TokenStream) -> ParseResult<bool> {
     let name = parse_name(input, "in a `cfg` predicate")?;
     if let Some(operator) = Operator::named(&name.text) {
+        // `all()` and `any()`, whose `()` the lexer reads as one token.
+        if matches!(input.peek(), Some((Token::Unit, _))) {
+            input.next();
+            return Ok(operator.holds(&[]));
+        }
         expect(input, Token::LeftParen, "after a `cfg` operator")?;
         let mut values = Vec::new();
         while !matches!(input.peek(), Some((Token::RightParen, _))) {
@@ -1900,9 +1910,11 @@ fn skip_item(input: &mut TokenStream) -> ParseResult<Position> {
 }
 
 /// The attributes on a field or an enum variant. Only `#[cfg(..)]` and a
-/// variant's `#[default]` mean anything to Rawr. Every attribute, such as a
+/// variant's `#[default]` mean anything to Rawr, written alone or applied
+/// by a `#[cfg_attr(..)]` whose predicate holds. Every attribute, such as a
 /// derive helper like `#[serde(default = "..")]`, is kept as written for the
-/// Rust a later pass writes; Rawr leaves a helper inert, as rustc does.
+/// Rust a later pass writes; a helper is inert where a derive on its item
+/// declares it (`resolve::attribute`).
 #[derive(Default)]
 struct MemberAttributes {
     default: Option<Span>,
@@ -1920,24 +1932,39 @@ fn parse_member_attributes(input: &mut TokenStream) -> ParseResult<MemberAttribu
         expect(input, Token::LeftBracket, "after '#' in an attribute")?;
         let path = parse_path(input)?;
         let name = (path.segments.len() == 1).then(|| path.segments[0].name.text.as_str());
-        let close = if name == Some("cfg") {
-            expect(input, Token::LeftParen, "after `cfg`")?;
-            attributes.disabled |= !parse_cfg_predicate(input)?;
-            expect(input, Token::RightParen, "to close `cfg`")?;
-            expect(input, Token::RightBracket, "to close an attribute")?
-        } else {
-            skip_to_attribute_end(input)?
+        let mut applied = Vec::new();
+        let close = match name {
+            Some("cfg") => {
+                expect(input, Token::LeftParen, "after `cfg`")?;
+                attributes.disabled |= !parse_cfg_predicate(input)?;
+                expect(input, Token::RightParen, "to close `cfg`")?;
+                expect(input, Token::RightBracket, "to close an attribute")?
+            }
+            Some("cfg_attr") => {
+                parse_cfg_attr_list(input, true, &mut applied)?;
+                expect(input, Token::RightBracket, "to close an attribute")?
+            }
+            _ => skip_to_attribute_end(input)?,
         };
         let span = Span::new(hash, after(close, 1));
-        if name == Some("default") {
-            attributes.default = Some(span);
+        let paths = if applied.is_empty() {
+            vec![path]
+        } else {
+            applied.into_iter().map(|(path, _)| path).collect()
+        };
+        for path in paths {
+            match (path.segments.len() == 1).then(|| path.segments[0].name.text.as_str()) {
+                Some("default") => attributes.default = Some(span),
+                Some(CFG_DISABLED) => attributes.disabled = true,
+                _ => {}
+            }
+            attributes.attributes.push(crate::item::Attribute {
+                path,
+                arguments: Box::default(),
+                span,
+                text: ImmutableString::new(),
+            });
         }
-        attributes.attributes.push(crate::item::Attribute {
-            path,
-            arguments: Box::default(),
-            span,
-            text: ImmutableString::new(),
-        });
     }
     Ok(attributes)
 }
@@ -2052,20 +2079,52 @@ fn parse_attribute_after_marker(
 
 /// `#[cfg_attr(predicate, attribute, ..)]` after its path: each attribute
 /// it applies when the predicate holds, under the same rules as the one
-/// written alone. When it does not hold, it is kept as written, inert.
+/// written alone, and those a `cfg_attr` among them applies. When none
+/// applies, it is kept as written, inert.
 fn parse_cfg_attr(
     input: &mut TokenStream,
     path: type_ref::Path,
     hash: Position,
 ) -> ParseResult<Vec<crate::item::Attribute>> {
-    expect(input, Token::LeftParen, "after `cfg_attr`")?;
-    let enabled = parse_cfg_predicate(input)?;
-    expect(input, Token::Comma, "after a `cfg_attr` predicate")?;
     let mut applied = Vec::new();
+    parse_cfg_attr_list(input, true, &mut applied)?;
+    let close = expect(input, Token::RightBracket, "to close an attribute")?;
+    let span = Span::new(hash, after(close, 1));
+    let attribute =
+        |(path, arguments): (type_ref::Path, Vec<type_ref::Path>)| crate::item::Attribute {
+            path,
+            arguments: arguments.into_boxed_slice(),
+            span,
+            text: ImmutableString::new(),
+        };
+    if applied.is_empty() {
+        return Ok(vec![attribute((path, Vec::new()))]);
+    }
+    Ok(applied.into_iter().map(attribute).collect())
+}
+
+/// The `(predicate, attribute, ..)` of a `cfg_attr`: each attribute, with
+/// its `derive` arguments, pushed to `applied` when `enabled` and the
+/// predicate hold.
+fn parse_cfg_attr_list(
+    input: &mut TokenStream,
+    enabled: bool,
+    applied: &mut Vec<(type_ref::Path, Vec<type_ref::Path>)>,
+) -> ParseResult<()> {
+    expect(input, Token::LeftParen, "after `cfg_attr`")?;
+    let enabled = parse_cfg_predicate(input)? && enabled;
+    expect(input, Token::Comma, "after a `cfg_attr` predicate")?;
     while !matches!(input.peek(), Some((Token::RightParen, _))) {
         let mut path = parse_path(input)?;
         let mut arguments = Vec::new();
         let named = |name: &str| path.segments.len() == 1 && path.segments[0].name.text == name;
+        if named("cfg_attr") {
+            parse_cfg_attr_list(input, enabled, applied)?;
+            if matches!(input.peek(), Some((Token::Comma, _))) {
+                input.next();
+            }
+            continue;
+        }
         if named("derive") && matches!(input.peek(), Some((Token::LeftParen, _))) {
             input.next();
             while !matches!(input.peek(), Some((Token::RightParen, _))) {
@@ -2084,25 +2143,15 @@ fn parse_cfg_attr(
         } else {
             parse_meta_arguments(input)?;
         }
-        applied.push((path, arguments));
+        if enabled {
+            applied.push((path, arguments));
+        }
         if matches!(input.peek(), Some((Token::Comma, _))) {
             input.next();
         }
     }
     expect(input, Token::RightParen, "to close `cfg_attr`")?;
-    let close = expect(input, Token::RightBracket, "to close an attribute")?;
-    let span = Span::new(hash, after(close, 1));
-    let attribute =
-        |(path, arguments): (type_ref::Path, Vec<type_ref::Path>)| crate::item::Attribute {
-            path,
-            arguments: arguments.into_boxed_slice(),
-            span,
-            text: ImmutableString::new(),
-        };
-    if !enabled {
-        return Ok(vec![attribute((path, Vec::new()))]);
-    }
-    Ok(applied.into_iter().map(attribute).collect())
+    Ok(())
 }
 
 /// An outer attribute after its path, through its `]`.
@@ -2450,16 +2499,18 @@ fn parse_struct(
                     ),
                 };
                 let span = ty.span();
-                fields.push(crate::item::Field {
-                    name: crate::item::Name {
-                        text: fields.len().to_string().into(),
+                if !field_attributes.disabled {
+                    fields.push(crate::item::Field {
+                        name: crate::item::Name {
+                            text: fields.len().to_string().into(),
+                            span,
+                        },
+                        ty,
                         span,
-                    },
-                    ty,
-                    span,
-                    attributes: field_attributes.attributes.into_boxed_slice(),
-                    visibility,
-                });
+                        attributes: field_attributes.attributes.into_boxed_slice(),
+                        visibility,
+                    });
+                }
                 consume_comma_or_end(input, Token::RightParen, "between tuple struct fields")?;
             }
             expect(input, Token::RightParen, "to close a tuple struct")?;
@@ -2588,8 +2639,9 @@ fn parse_enum(
     let mut variants = Vec::new();
 
     while !matches!(input.peek(), Some((Token::RightBrace, _))) {
-        // `#[default]` marks the variant a derived `Default` builds; other
-        // variant attributes have no effect.
+        // `#[default]` marks the variant a derived `Default` builds, and a
+        // `#[cfg(..)]` that does not hold leaves it out; other variant
+        // attributes have no effect.
         let variant_attributes = parse_member_attributes(input)?;
         let default = variant_attributes.default;
         let variant_name = parse_name(input, "as an enum variant")?;
@@ -2602,13 +2654,12 @@ fn parse_enum(
             input.next();
 
             while !matches!(input.peek(), Some((Token::RightParen, _))) {
-                field_attributes.push(
-                    parse_member_attributes(input)?
-                        .attributes
-                        .into_boxed_slice(),
-                );
+                let attributes = parse_member_attributes(input)?;
                 let ty = parse_type(input)?;
-                payload.push(ty);
+                if !attributes.disabled {
+                    field_attributes.push(attributes.attributes.into_boxed_slice());
+                    payload.push(ty);
+                }
                 consume_comma_or_end(input, Token::RightParen, "between variant payload types")?;
             }
 
@@ -2620,11 +2671,7 @@ fn parse_enum(
             let mut names = Vec::new();
 
             while !matches!(input.peek(), Some((Token::RightBrace, _))) {
-                field_attributes.push(
-                    parse_member_attributes(input)?
-                        .attributes
-                        .into_boxed_slice(),
-                );
+                let attributes = parse_member_attributes(input)?;
                 let field = parse_name(input, "as a variant field")?;
                 if names
                     .iter()
@@ -2634,8 +2681,12 @@ fn parse_enum(
                         .into_err(field.span.start()));
                 }
                 expect(input, Token::Colon, "after a variant field name")?;
-                payload.push(parse_type(input)?);
-                names.push(field);
+                let ty = parse_type(input)?;
+                if !attributes.disabled {
+                    field_attributes.push(attributes.attributes.into_boxed_slice());
+                    payload.push(ty);
+                    names.push(field);
+                }
                 consume_comma_or_end(input, Token::RightBrace, "between variant fields")?;
             }
 
@@ -2668,6 +2719,10 @@ fn parse_enum(
             }
         }
 
+        if variant_attributes.disabled {
+            consume_comma_or_end(input, Token::RightBrace, "between enum variants")?;
+            continue;
+        }
         variants.push(crate::item::Variant {
             span: Span::new(variant_name.span.start(), end),
             name: variant_name,
@@ -5827,8 +5882,10 @@ fn parse_body_syntax(
     )];
     // A `macro_rules!` definition, or a call of the program's own macro,
     // that starts a statement: its tokens as they are read, and the depth
-    // inside its delimiters once they open.
-    let mut capture: Option<Capture> = None;
+    // inside its delimiters once they open. A call of the program's macro
+    // among the arguments of a std macro that reads expressions is read
+    // inside that one's.
+    let mut captures: Vec<Capture> = Vec::new();
     let mut tokens = Vec::new();
     // The tokens of the calls' expansions laid out from the body, after
     // its own: the resolver reads the paths among them as the body's.
@@ -6064,12 +6121,12 @@ fn parse_body_syntax(
             ));
         }
         // A call may start where a path does not go on.
-        if capture.is_none()
-            && macros.is_empty()
-            && !after_path
-            && let Some((Token::Identifier(_), _)) = input.peek()
+        if !after_path
+            && let Some((Token::Identifier(name), _)) = input.peek()
+            && (captures.is_empty() && macros.is_empty() || nested_call(&captures, name))
         {
-            capture = Some((Vec::new(), None, boundary));
+            let statement = captures.is_empty() && boundary;
+            captures.push((Vec::new(), None, statement));
         }
         const_start = match input.peek() {
             Some((Token::Const, position)) if boundary => Some(*position),
@@ -6211,8 +6268,10 @@ fn parse_body_syntax(
         }
         // After its block's end, so a definition names its macro to the
         // end of the block around it.
-        if let Some((tokens, open, statement)) = &mut capture {
+        for (tokens, ..) in &mut captures {
             tokens.push((token.clone(), position));
+        }
+        if let Some((tokens, open, _)) = captures.last_mut() {
             let opens = matches!(
                 token,
                 Token::LeftBrace | Token::LeftParen | Token::LeftBracket | Token::MapStart
@@ -6228,21 +6287,25 @@ fn parse_body_syntax(
                 && matches!(tokens.iter().rev().nth(1), Some((Token::Bang, _)))
                 && !matches!(&tokens[0].0, Token::Identifier(word) if word.as_str() == "macro_rules");
             if empty {
-                let statement = *statement;
-                let (tokens, ..) = capture.take().expect("a body's macro is read");
+                let (tokens, _, statement) = captures.pop().expect("a body's macro is read");
                 if let Some(syntax) = body_macro(&tokens, statement) {
                     expanded.extend(syntax.tokens().iter().cloned());
                 }
             } else if open.is_none() && !macro_head(tokens) {
                 // The name that ends a head may start a call of its own.
-                let restart = matches!(token, Token::Identifier(_))
-                    && !matches!(tokens.iter().rev().nth(1), Some((Token::DoubleColon, _)));
-                capture = restart.then(|| (vec![(token.clone(), position)], None, false));
+                let after_segment =
+                    matches!(tokens.iter().rev().nth(1), Some((Token::DoubleColon, _)));
+                captures.pop();
+                if let Token::Identifier(name) = &token
+                    && !after_segment
+                    && (captures.is_empty() || nested_call(&captures, name))
+                {
+                    captures.push((vec![(token.clone(), position)], None, false));
+                }
             } else if opens && open.is_none() {
                 *open = Some(scan.delimiter_depth);
             } else if closes && *open == Some(scan.delimiter_depth + 1) {
-                let statement = *statement;
-                let (tokens, ..) = capture.take().expect("a body's macro is read");
+                let (tokens, _, statement) = captures.pop().expect("a body's macro is read");
                 if let Some(syntax) = body_macro(&tokens, statement) {
                     expanded.extend(syntax.tokens().iter().cloned());
                 }
@@ -6362,6 +6425,40 @@ fn body_macro(tokens: &[(Token, Position)], statement: bool) -> Option<crate::it
             None
         }
     })
+}
+
+/// Whether a call of `name` starts among the arguments of the innermost
+/// of `captures`: `name` is the program's own macro, and the call around
+/// it is of a std macro whose arguments are expressions, which rustc
+/// expands the calls among.
+fn nested_call(captures: &[Capture], name: &str) -> bool {
+    const READS_EXPRESSIONS: &[&str] = &[
+        "format",
+        "print",
+        "println",
+        "eprint",
+        "eprintln",
+        "write",
+        "writeln",
+        "panic",
+        "assert",
+        "assert_eq",
+        "assert_ne",
+        "debug_assert",
+        "debug_assert_eq",
+        "debug_assert_ne",
+        "vec",
+        "format_args",
+        "dbg",
+        "todo",
+        "unimplemented",
+        "unreachable",
+    ];
+    captures.last().is_some_and(|(tokens, open, _)| {
+        open.is_some()
+            && matches!(tokens.as_slice(), [(Token::Identifier(outer), _), (Token::Bang, _), ..]
+                if READS_EXPRESSIONS.contains(&outer.as_str()))
+    }) && super::item_macro::lookup(name).is_some()
 }
 
 /// Whether `syntax` holds a path through a module or a type, `a::b`.

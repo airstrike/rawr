@@ -300,11 +300,17 @@ impl Report {
 
 /// A report's text as the program could write it: an item a macro's
 /// `$crate` reached through a crate's hidden segment reads from that
-/// crate's root (`host::path::public`), so no message names it (#563).
+/// crate's root (`host::path::public`), so no message names it (#563),
+/// and a macro's local is named as the macro writes it, not as hygiene
+/// renamed it apart (`resolve::macro_rules::written`).
 fn written(text: ImmutableString) -> ImmutableString {
-    match crate::host::path::public(&text) {
+    let text = match crate::host::path::public(&text) {
         std::borrow::Cow::Borrowed(_) => text,
         std::borrow::Cow::Owned(public) => public.into(),
+    };
+    match crate::resolve::macro_rules::written(&text) {
+        std::borrow::Cow::Borrowed(_) => text,
+        std::borrow::Cow::Owned(local) => local.into(),
     }
 }
 
@@ -441,6 +447,7 @@ impl Builder {
             kind,
             message,
         } = label;
+        let message = message.map(written);
         if span.is_none() {
             return Err(Error::MissingSpan);
         }
