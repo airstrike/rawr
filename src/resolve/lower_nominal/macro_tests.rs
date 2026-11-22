@@ -425,6 +425,29 @@ fn main() {
     assert_eq!(printed(source), "unix\n");
 }
 
+/// In a body, `crate::name!` calls the program's `#[macro_export]` macro
+/// where an expression or a statement goes, and a call's `#[cfg(..)]`
+/// that doesn't hold leaves it and the items it expands to out, written
+/// or in an expansion. The output is rustc's.
+#[test]
+fn a_body_calls_an_exported_macro_by_its_crate_path_and_under_cfg() {
+    let source = "#[macro_export]\nmacro_rules! one { () => { 1 }; }\n\
+                  #[macro_export]\nmacro_rules! item { () => { fn f() -> i32 { 3 } }; }\n\
+                  fn main() { println!(\"{}\", crate::one!()); crate::item! {} println!(\"{}\", f()); }";
+    assert_eq!(printed(source), "1\n3\n");
+    let source = "#[macro_export]\nmacro_rules! item { () => { fn f() -> i32 { 3 } }; }\n\
+                  fn main() { #[cfg(windows)] crate::item! {} #[cfg(unix)] item! {} println!(\"{}\", f()); }";
+    assert_eq!(printed(source), "3\n");
+    let source = "macro_rules! wrap { ($($t:tt)*) => { #[cfg(unix)] inner! { $($t)* } }; }\n\
+                  macro_rules! inner { ($($t:tt)*) => { $($t)* }; }\n\
+                  fn main() { wrap! { fn f() -> i32 { 3 } } println!(\"{}\", f()); }";
+    assert_eq!(printed(source), "3\n");
+    let source = "macro_rules! wrap { ($($t:tt)*) => { #[cfg(windows)] inner! { $($t)* } inner! { $($t)* } }; }\n\
+                  macro_rules! inner { ($($t:tt)*) => { $($t)* }; }\n\
+                  fn main() { wrap! { fn f() -> i32 { 3 } } println!(\"{}\", f()); }";
+    assert_eq!(printed(source), "3\n");
+}
+
 #[test]
 fn a_call_no_rule_matches_is_rustcs_error() {
     let one = "macro_rules! one { ($x:ident) => { $x }; }\n";

@@ -172,13 +172,44 @@ impl Parser<'_> {
         if self.crate_statement_ahead().is_some() {
             return true;
         }
+        self.program_call_ahead().is_some()
+    }
+
+    /// The program's own macro whose call is next, by its name in textual
+    /// scope or by its crate's path (`crate::name!`), and how many tokens
+    /// its path is.
+    fn program_call_ahead(&mut self) -> Option<(Result<Shared<macro_rules::Rules>, Error>, usize)> {
         let Token::Identifier(name) = self.peek() else {
-            return false;
+            return None;
         };
-        matches!(self.peek_second(), Token::Bang) && {
-            let at = self.position();
-            self.program_macro(&name, at).is_some()
+        if name.as_str() == "crate" {
+            return self.exported_call(1).map(|(_, rules)| (rules, 3));
         }
+        if !matches!(self.peek_second(), Token::Bang) {
+            return None;
+        }
+        let at = self.position();
+        self.program_macro(&name, at).map(|rules| (rules, 1))
+    }
+
+    /// The program's `#[macro_export]` macro whose call by its crate's path
+    /// follows `skip` tokens from here: `::`, its name and `!`, after
+    /// `crate`.
+    pub(super) fn exported_call(
+        &mut self,
+        skip: usize,
+    ) -> Option<(ImmutableString, Result<Shared<macro_rules::Rules>, Error>)> {
+        if self.split_angle.is_some() {
+            return None;
+        }
+        let mut ahead = self.input.clone().skip(skip).map(|(token, _)| token);
+        let (Some(Token::DoubleColon), Some(Token::Identifier(name)), Some(Token::Bang)) =
+            (ahead.next(), ahead.next(), ahead.next())
+        else {
+            return None;
+        };
+        let rules = self.exported_macro(&name)?;
+        Some((name.as_str().into(), rules))
     }
 
     /// The crate macro ([`Self::crate_macro`]) whose call is next: its path
@@ -294,19 +325,15 @@ impl Parser<'_> {
             }
             return Ok(());
         }
-        let (token, position) = self.next();
-        let Token::Identifier(name) = token else {
-            unreachable!("`macro_statement_ahead` saw a name");
-        };
-        let name_span = span(position, text_end(position, &name));
-        let rules = self
-            .program_macro(&name, position)
-            .expect("`macro_statement_ahead` found the macro")?;
+        let (rules, tokens) = self
+            .program_call_ahead()
+            .expect("`macro_statement_ahead` found the macro");
+        let rules = rules?;
+        let name_span = self.take_path(tokens);
         self.splice_expansion(&rules, "crate", name_span, Place::Statement)
     }
 
     /// The span of the `taken` tokens of a call's path, which are read.
-    #[cfg(feature = "rust-import")]
     fn take_path(&mut self, taken: usize) -> Span {
         let start = self.position();
         let mut end = start;
@@ -356,19 +383,11 @@ impl Parser<'_> {
                 return Ok(true);
             }
         }
-        let Token::Identifier(name) = self.peek() else {
-            return Ok(false);
-        };
-        if !matches!(self.peek_second(), Token::Bang) {
-            return Ok(false);
-        }
-        let position = self.position();
-        let Some(rules) = self.program_macro(&name, position) else {
+        let Some((rules, tokens)) = self.program_call_ahead() else {
             return Ok(false);
         };
         let rules = rules?;
-        self.next();
-        let name_span = span(position, text_end(position, &name));
+        let name_span = self.take_path(tokens);
         self.splice_expansion(&rules, "crate", name_span, place)?;
         Ok(true)
     }

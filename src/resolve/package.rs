@@ -4349,7 +4349,14 @@ fn qualified_calls(body: &crate::item::BodySyntax) -> Vec<QualifiedCall> {
                 end += 2;
             }
 
-            if segments.len() >= 2 {
+            // `crate::name!` calls the program's `#[macro_export]` macro,
+            // which the lowering expands where it is called.
+            let exported_call = segments.len() == 2
+                && segments[0].0.as_str() == "crate"
+                && tokens
+                    .get(end + 1)
+                    .is_some_and(|token| matches!(token.kind(), crate::item::BodyTokenKind::Bang));
+            if segments.len() >= 2 && !exported_call {
                 let owner_end = segments[segments.len() - 2].1.end();
                 let path_end = segments[segments.len() - 1].1.end();
                 output.push(QualifiedCall {

@@ -246,6 +246,18 @@ impl Table {
         }
     }
 
+    /// The `#[macro_export]` macro `name` of the crate `source` is in, which
+    /// its crate's path names from anywhere in it (`crate::name!`), as an
+    /// item of its root: the later definition when there are several.
+    pub(crate) fn exported(&self, name: &str, source: source::Id) -> Option<&Definition> {
+        let root = self.root_of(source);
+        self.definitions.iter().rfind(|definition| {
+            definition.exported
+                && definition.name == name
+                && self.root_of(definition.source) == root
+        })
+    }
+
     /// Whether `definition` is in scope at `at` in `source`: how many
     /// modules up from `source` the frame it is in scope through is, and
     /// where in that frame's source it is.

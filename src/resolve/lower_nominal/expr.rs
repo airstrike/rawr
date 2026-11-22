@@ -1246,6 +1246,16 @@ impl<'a> Parser<'a> {
             return Ok(value);
         }
 
+        // The program's `#[macro_export]` macro by its crate's path.
+        if name.as_str() == "crate"
+            && let Some((macro_name, rules)) = self.exported_call(0)
+        {
+            let rules = rules?;
+            self.next();
+            let (_, at) = self.next();
+            let path_span = span(name_span.start(), text_end(at, &macro_name));
+            return self.expand_program_macro(&rules, path_span);
+        }
         // The program's own macro: textual scope shadows the prelude's.
         if !std_macro
             && matches!(self.peek(), Token::Bang)

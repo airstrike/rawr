@@ -24,17 +24,34 @@ impl<'a> Parser<'a> {
         else {
             return None;
         };
+        Some(self.definition_rules(definition))
+    }
+
+    /// The program's `#[macro_export]` macro `name`, which `crate::name!`
+    /// calls from anywhere in its crate.
+    pub(super) fn exported_macro(
+        &self,
+        name: &str,
+    ) -> Option<Result<Shared<crate::resolve::macro_rules::Rules>, Error>> {
+        let definition = self.models.macros.exported(name, self.models.context)?;
+        Some(self.definition_rules(definition))
+    }
+
+    fn definition_rules(
+        &self,
+        definition: &crate::resolve::macros::Definition,
+    ) -> Result<Shared<crate::resolve::macro_rules::Rules>, Error> {
         let rules = self
             .models
             .macro_rules
             .get(&(definition.source(), definition.span()))
             .expect("every definition's rules are read with the tables");
-        Some(rules.clone().map_err(|malformed| Error::Syntax {
+        rules.clone().map_err(|malformed| Error::Syntax {
             message: malformed.message().into(),
             label: malformed.label().into(),
             help: malformed.help().map(Into::into),
             at: point_span(malformed.at()),
-        }))
+        })
     }
 
     /// Whether a `macro_rules!` definition is next.
@@ -285,11 +302,34 @@ impl<'a> Parser<'a> {
 
     /// One statement a false `#[cfg(..)]` leaves out: through its `;`, or
     /// through the `}` that ends a block, `if`, `match` or loop.
+    /// Whether a macro call in braces is next, `path! { .. }`, which ends a
+    /// statement at its `}` as a block does.
+    fn braced_call_ahead(&self) -> bool {
+        if self.split_angle.is_some() {
+            return false;
+        }
+        let mut ahead = self.input.clone().map(|(token, _)| token);
+        let mut segment = true;
+        loop {
+            match (ahead.next(), segment) {
+                (Some(Token::Identifier(_)), true) | (Some(Token::DoubleColon), false) => {
+                    segment = !segment;
+                }
+                (Some(Token::DoubleColon), true) => {}
+                (Some(Token::Bang), false) => {
+                    return matches!(ahead.next(), Some(Token::LeftBrace | Token::MapStart));
+                }
+                _ => return false,
+            }
+        }
+    }
+
     pub(super) fn skip_statement(&mut self) -> Result<(), Error> {
         let start = self.position();
         let braced = match self.peek() {
             Token::LeftBrace | Token::If | Token::For | Token::While | Token::Loop => true,
             Token::Reserved(keyword) => matches!(keyword.as_str(), "match" | "unsafe"),
+            Token::Identifier(_) | Token::DoubleColon => self.braced_call_ahead(),
             _ => false,
         };
         let mut depth = 0usize;

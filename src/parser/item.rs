@@ -6095,8 +6095,14 @@ fn parse_body_syntax(
                 }
                 continue;
             }
-            // A statement's attribute, as `#[allow(..)]`, has no effect.
+            // A statement's attribute, as `#[allow(..)]`, has no effect
+            // here, but a `cfg` that doesn't hold leaves the statement out,
+            // a macro call's items with it, as rustc does.
             if !attributes.is_empty() {
+                if cfg_disabled(&attributes) {
+                    skip_item(input)?;
+                    after_name = false;
+                }
                 continue;
             }
         }
@@ -6456,8 +6462,15 @@ fn body_macro(tokens: &[(Token, Position)], statement: bool) -> Option<crate::it
     let (last, close) = tokens.last().expect("a call has its delimiters");
     let at = tokens[0].1;
     let span = Span::new(at, after(*close, last.to_string().chars().count()));
+    // The program's own macro, by its name or the crate's, as among a
+    // module's items (`item_call`).
     let rules = match &tokens[..bang] {
         [_] => super::item_macro::lookup(name.as_str()),
+        [(Token::Identifier(first), _), _, (Token::Identifier(name), _)]
+            if first.as_str() == "crate" =>
+        {
+            super::item_macro::lookup(name.as_str())
+        }
         _ => None,
     };
     let Some(rules) = rules else {
