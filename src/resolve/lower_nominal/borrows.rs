@@ -2092,6 +2092,7 @@ impl Parser<'_> {
             Ty::Array { element, .. }
             | Ty::Option(element)
             | Ty::Range(element)
+            | Ty::OpenRange(_, element)
             | Ty::InclusiveOf(element) => self.may_hold_borrow(&element),
             Ty::Tuple(members) => members.iter().any(|member| self.may_hold_borrow(member)),
             Ty::Result(ok, error) => self.may_hold_borrow(&ok) || self.may_hold_borrow(&error),

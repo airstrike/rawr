@@ -6,6 +6,7 @@ use super::lvalue::Lvalue;
 use super::models::{Models, Nominal};
 use super::obligation::Obligation;
 use super::op::{Op, PreludeOp};
+use super::range;
 use super::ty::{contains_inference, CellKind, Float, Int, Ty};
 use super::{
     cargo_env, cell, counted, cow, origin, point_span, span, split_arguments, stringify_tokens,
@@ -479,6 +480,17 @@ pub(super) fn debug_text(value: &Dynamic, models: &Models, spec: Option<&DebugSp
     }
     if let Some(reverse) = value.read_lock::<std::cmp::Reverse<Dynamic>>() {
         return format!("Reverse({})", debug_value_spec(&reverse.0, models, spec));
+    }
+    // std's ranges write their bounds around `..` or `..=`, as std's
+    // `Debug` of each does.
+    if let Some(bounds) = range::read(value) {
+        let bound = |bound: &Option<Dynamic>| {
+            bound
+                .as_ref()
+                .map_or_else(String::new, |bound| debug_value_spec(bound, models, spec))
+        };
+        let dots = if bounds.inclusive() { "..=" } else { ".." };
+        return format!("{}{dots}{}", bound(&bounds.start), bound(&bounds.end));
     }
     // A `Cow` writes what it derefs to.
     if let Some(inner) = cow::payload(value) {
@@ -3048,13 +3060,24 @@ impl<'a> Parser<'a> {
                 source.push_text(format!("; }} {text} + \"}}\" }}"));
                 source
             }
-            // `Range<usize>` a crate gives (#707): its `Range<i64>` value,
-            // which shows as Rust's `0..5` does, and an integer `a..=b` of
-            // any kind, its `RangeInclusive<i64>`.
-            Ty::Range(element) if matches!(**element, Ty::Int(_)) => {
+            // std's ranges show as Rust's `0..5`, `'a'..='e'`, `0.5..` and
+            // `..` do: their runtime values are std's, of their bounds'
+            // values.
+            range if let Some((_, element)) = range::parts(range) => {
+                if !self.type_provides(&element, capability::Kind::Debug) {
+                    return Err(Error::MissingCapability {
+                        owner: ty.name(&self.models),
+                        capability: "Debug".into(),
+                        operation: span,
+                        derive: false,
+                        declared: self.declared_name(&ty),
+                        required_by: None,
+                        formatted: None,
+                        chain: crate::resolve::Chain::default(),
+                    });
+                }
                 self.prelude_op(PreludeOp::GenericDebug, [value])
             }
-            Ty::InclusiveRange(_) => self.prelude_op(PreludeOp::GenericDebug, [value]),
             // A facade type providing `Debug`: Rust's text, as its facade
             // registered it (`host::debug`).
             Ty::Host { proof, .. }

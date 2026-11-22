@@ -4,8 +4,8 @@
 #[cfg(feature = "rust-import")]
 use super::ImportedFunctionProof;
 use super::{
-    cell, counted, cow, dyn_arguments, error_object, range_type_id, sequence, thread, Models,
-    Nominal, ParseError, PreludeOp,
+    cell, counted, cow, dyn_arguments, error_object, range, range_type_id, sequence, thread,
+    Models, Nominal, ParseError, PreludeOp,
 };
 use crate::resolve::type_ref;
 use crate::types::nominal;
@@ -709,6 +709,10 @@ pub(super) enum Ty {
     /// generic item takes as rand's `random_range` does. A `Range<f64>` at
     /// runtime.
     Range(Box<Ty>),
+    /// `a..`, `..b`, `..=b` or `..` of `T` (`Unit` for `..`): std.s
+    /// `RangeFrom<T>`, `RangeTo<T>`, `RangeToInclusive<T>` or `RangeFull`,
+    /// a `RangeFrom<Dynamic>` and kin at runtime (`range::Open`).
+    OpenRange(range::Open, Box<Ty>),
     /// Rust's `RangeInclusive<T>` of a crate's type, as iced's
     /// `Radians::RANGE` is: a `RangeInclusive<Dynamic>` of its two bounds
     /// at runtime.
@@ -893,6 +897,7 @@ impl Ty {
             | Self::Keyed(..)
             | Self::Reverse(_)
             | Self::Range(_)
+            | Self::OpenRange(..)
             | Self::InclusiveRange(_)
             | Self::FloatRange
             | Self::InclusiveOf(_)
@@ -993,6 +998,7 @@ impl Ty {
             | Self::Reverse(target)
             | Self::Cow(target)
             | Self::Range(target)
+            | Self::OpenRange(_, target)
             | Self::InclusiveOf(target)
             | Self::Cell(_, target)
             | Self::Thread(_, target)
@@ -1168,13 +1174,27 @@ impl Ty {
                         Some(type_ref::Argument::Type(element)) => {
                             match Self::from_resolved(element) {
                                 Self::Float(_) => Self::FloatRange,
-                                element @ Self::Host { .. } => Self::InclusiveOf(Box::new(element)),
+                                element @ (Self::Host { .. }
+                                | Self::Char
+                                | Self::Param(..)
+                                | Self::Script(..)) => Self::InclusiveOf(Box::new(element)),
                                 Self::Int(kind) => Self::InclusiveRange(kind),
                                 _ => Self::InclusiveRange(Int::I64),
                             }
                         }
                         _ => Self::InclusiveRange(Int::I64),
                     },
+                    "RangeFull" => Self::OpenRange(range::Open::Full, Box::new(Self::Unit)),
+                    name @ ("Range" | "RangeFrom" | "RangeTo" | "RangeToInclusive") => {
+                        let element = match path.arguments.first() {
+                            Some(type_ref::Argument::Type(element)) => Self::from_resolved(element),
+                            _ => Self::Unknown,
+                        };
+                        match range::Open::named(name) {
+                            Some(open) => Self::OpenRange(open, Box::new(element)),
+                            None => Self::Range(Box::new(element)),
+                        }
+                    }
                     name => ParseError::named(name)
                         .map(Self::ParseError)
                         .or_else(|| numeric_type(name))
@@ -1275,6 +1295,10 @@ impl Ty {
             Self::InclusiveRange(kind) => format!("RangeInclusive<{}>", kind.name()).into(),
             Self::FloatRange => "RangeInclusive<f64>".into(),
             Self::Range(element) => format!("Range<{}>", element.name(models)).into(),
+            Self::OpenRange(range::Open::Full, _) => "RangeFull".into(),
+            Self::OpenRange(open, element) => {
+                format!("{}<{}>", open.name(), element.name(models)).into()
+            }
             Self::InclusiveOf(element) => {
                 format!("RangeInclusive<{}>", element.name(models)).into()
             }
@@ -1455,6 +1479,7 @@ impl Ty {
             Self::FloatRange => Some(TypeId::of::<std::ops::RangeInclusive<crate::FLOAT>>()),
             Self::Range(element) => Some(range_type_id(element)),
             Self::InclusiveOf(_) => Some(TypeId::of::<std::ops::RangeInclusive<Dynamic>>()),
+            Self::OpenRange(open, _) => Some(range::type_id(*open)),
             Self::Ordering => Some(TypeId::of::<INT>()),
             Self::Time(Time::Duration) => Some(TypeId::of::<std::time::Duration>()),
             Self::Time(Time::Instant) => Some(TypeId::of::<crate::Instant>()),
@@ -1631,6 +1656,7 @@ impl Ty {
             | Self::InclusiveRange(_)
             | Self::FloatRange
             | Self::Range(_)
+            | Self::OpenRange(..)
             | Self::InclusiveOf(_)
             | Self::Ordering
             | Self::Time(_)
@@ -1995,6 +2021,9 @@ pub(super) fn same_inferred(left: &Ty, right: &Ty) -> bool {
             (Ty::InclusiveRange(left), Ty::InclusiveRange(right)) => {
                 compare(&Ty::Int(*left), &Ty::Int(*right), forward, reverse)
             }
+            (Ty::OpenRange(left_open, left), Ty::OpenRange(right_open, right)) => {
+                left_open == right_open && compare(left, right, forward, reverse)
+            }
             (Ty::Cell(left_kind, left), Ty::Cell(right_kind, right)) => {
                 left_kind == right_kind && compare(left, right, forward, reverse)
             }
@@ -2073,6 +2102,7 @@ pub(super) fn reaches_param(ty: &Ty) -> bool {
         Ty::Reference { target, .. }
         | Ty::Boxed(target)
         | Ty::Range(target)
+        | Ty::OpenRange(_, target)
         | Ty::InclusiveOf(target) => reaches_param(target),
         Ty::Array { element, .. } | Ty::Option(element) => reaches_param(element),
         Ty::Result(ok, err) => reaches_param(ok) || reaches_param(err),
@@ -2142,6 +2172,7 @@ pub(super) fn contains(ty: &Ty, leaf: &dyn Fn(&Ty) -> bool) -> bool {
             | Ty::Reverse(target)
             | Ty::Cow(target)
             | Ty::Range(target)
+            | Ty::OpenRange(_, target)
             | Ty::InclusiveOf(target)
             | Ty::Cell(_, target) => inside(target),
             Ty::Array {

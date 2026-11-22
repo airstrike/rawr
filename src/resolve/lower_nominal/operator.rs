@@ -60,8 +60,12 @@ impl<'a> Parser<'a> {
         self.operator_expr(source, ty, span(lhs.span.start(), rhs.span.end()))
     }
 
-    /// `a..=b`, Rawr's range value; `a..b` and `a..`, iterators.
+    /// A range expression, std's range value of its form: `a..b`, `a..=b`,
+    /// `a..`, `..b`, `..=b` or `..`.
     pub(super) fn parse_range(&mut self) -> Result<ParsedExpr, Error> {
+        if matches!(self.peek(), Token::ExclusiveRange | Token::InclusiveRange) {
+            return self.parse_open_range();
+        }
         let lhs = self.parse_binary(0)?;
         let inclusive = match self.peek() {
             Token::InclusiveRange => true,
@@ -70,15 +74,7 @@ impl<'a> Parser<'a> {
         };
 
         self.next();
-        let rhs = if !inclusive
-            && matches!(
-                self.peek(),
-                Token::RightParen
-                    | Token::Comma
-                    | Token::SemiColon
-                    | Token::RightBrace
-                    | Token::RightBracket
-            ) {
+        let rhs = if !inclusive && self.range_ends() {
             None
         } else {
             Some(self.parse_binary(0)?)
@@ -101,7 +97,12 @@ impl<'a> Parser<'a> {
             let element = Box::new(lhs.ty.clone());
             return Ok(self.binary(lhs, "..", rhs.clone(), Ty::Range(element)));
         }
-        // `'a'..='e'`: an iterator over the chars between.
+        // `0.5..`: a `RangeFrom<f64>`, a value std doesn't iterate.
+        if rhs.is_none() && matches!(self.inference.resolve(&lhs.ty), Ty::Float(_)) {
+            let element = lhs.ty.clone();
+            return Ok(self.open_range(range::Open::From, element, Some(&lhs), None, lhs.span));
+        }
+        // `'a'..='e'`: the chars between.
         if matches!(self.inference.resolve(&lhs.ty), Ty::Char) {
             if let Some(rhs) = &rhs {
                 self.require_type(&lhs.ty, &rhs.ty, rhs.span)?;
@@ -115,6 +116,57 @@ impl<'a> Parser<'a> {
         self.record_range_value(&lhs, rhs.as_ref(), item, inclusive, &range);
         self.last_range = Some((lhs, rhs, inclusive, range.span));
         Ok(range)
+    }
+
+    /// Whether the token after a `..` ends the range, as in `a..` or `..`.
+    fn range_ends(&mut self) -> bool {
+        matches!(
+            self.peek(),
+            Token::RightParen
+                | Token::Comma
+                | Token::SemiColon
+                | Token::RightBrace
+                | Token::RightBracket
+                | Token::EOF
+        )
+    }
+
+    /// `..b`, `..=b` or `..`: std's `RangeTo<T>`, `RangeToInclusive<T>` or
+    /// `RangeFull`.
+    fn parse_open_range(&mut self) -> Result<ParsedExpr, Error> {
+        let (token, start) = self.next();
+        if matches!(token, Token::ExclusiveRange) && self.range_ends() {
+            let all = span(start, text_end(start, ".."));
+            return Ok(self.open_range(range::Open::Full, Ty::Unit, None, None, all));
+        }
+        let high = self.parse_binary(0)?;
+        let open = if matches!(token, Token::InclusiveRange) {
+            range::Open::ToInclusive
+        } else {
+            range::Open::To
+        };
+        let whole = span(start, high.span.end());
+        let element = high.ty.clone();
+        Ok(self.open_range(open, element, None, Some(&high), whole))
+    }
+
+    /// The value of an `open` range of `element` from its bounds.
+    fn open_range(
+        &mut self,
+        open: range::Open,
+        element: Ty,
+        low: Option<&ParsedExpr>,
+        high: Option<&ParsedExpr>,
+        whole: Span,
+    ) -> ParsedExpr {
+        let bound = |bound: Option<&ParsedExpr>| {
+            bound.map_or_else(|| "()".into(), ParsedExpr::rendered_source)
+        };
+        let value = self.prelude_op(
+            PreludeOp::RangeNew,
+            [open.code().to_string().into(), bound(low), bound(high)],
+        );
+        self.operator_expr(value, Ty::OpenRange(open, Box::new(element)), whole)
     }
 
     /// Keep `low..high` of integers or chars as the value Rust's

@@ -2157,15 +2157,19 @@ pub(crate) fn core_futures(host: &host::Registry) -> bool {
 /// bodies), and a bare or partial path nothing binds names no std item, as
 /// in rustc.
 ///
-/// `std::ops::RangeInclusive` and `std::ops::Range`. A `Range` is an
-/// iterator in Rawr; a `RangeInclusive` of numbers is its own type.
+/// `std::ops::Range` and its kin (`RangeInclusive`, `RangeFrom`, `RangeTo`,
+/// `RangeToInclusive`, `RangeFull`), each its own type, as in Rust.
 pub(crate) fn std_range(path: &str) -> Option<&'static str> {
     let name = path
         .strip_prefix("std::ops::")
         .or_else(|| path.strip_prefix("core::ops::"))?;
     match name {
         "RangeInclusive" => Some("RangeInclusive"),
-        "Range" => Some(crate::item::type_ref::ITER_TYPE),
+        "Range" => Some("Range"),
+        "RangeFrom" => Some("RangeFrom"),
+        "RangeTo" => Some("RangeTo"),
+        "RangeToInclusive" => Some("RangeToInclusive"),
+        "RangeFull" => Some("RangeFull"),
         _ => None,
     }
 }
@@ -2294,6 +2298,10 @@ pub(crate) fn std_canonical(spelling: &str) -> Option<&'static str> {
         "Arc" => "std::sync::Arc",
         "RangeInclusive" => "std::ops::RangeInclusive",
         "Range" => "std::ops::Range",
+        "RangeFrom" => "std::ops::RangeFrom",
+        "RangeTo" => "std::ops::RangeTo",
+        "RangeToInclusive" => "std::ops::RangeToInclusive",
+        "RangeFull" => "std::ops::RangeFull",
         "PhantomData" => "std::marker::PhantomData",
         "Duration" => "std::time::Duration",
         "Instant" => "std::time::Instant",
