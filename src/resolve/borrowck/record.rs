@@ -80,15 +80,21 @@ pub(crate) struct Taken(Vec<Temporary>);
 /// How a temporary scope ends ([`Recorder::close_temporaries`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ScopeEnd {
-    /// A `let`: a temporary its value borrows in an extending place lives
-    /// to the end of the `let`'s block.
-    Let,
-    /// A statement ending in `;`, or a condition: its temporaries end.
-    Statement,
-    /// A scope whose value goes on into the expression around it (a
-    /// block's tail, a match arm): a temporary that value may borrow in an
-    /// extending place goes on with it.
+    /// A `let` ending at this point: a temporary its value borrows in an
+    /// extending place lives to the end of the `let`'s block.
+    Let(Span),
+    /// A statement ending in `;`, or a condition, ending at this point: its
+    /// temporaries end.
+    Statement(Span),
+    /// A scope whose value goes on into the expression around it (a match
+    /// arm): a temporary that value may borrow in an extending place goes
+    /// on with it.
     Value,
+    /// A block's tail spanning this, whose value goes on as
+    /// [`ScopeEnd::Value`]'s does. Before edition 2024 every one of its
+    /// temporaries goes on with it, to the end of the statement around the
+    /// block, after the block's locals.
+    Tail(Span),
 }
 
 /// The facts of a body being read.
@@ -149,6 +155,15 @@ pub(crate) struct Recorder {
     pinned: BTreeSet<Local>,
     /// A constant's initializer, whose value's temporaries are `'static`.
     constant: bool,
+    /// The edition the body is written in, which decides where a block's
+    /// tail temporaries end.
+    edition: crate::edition::Edition,
+    /// For the body and each closure being read, innermost last: how many
+    /// temporary scopes were open where it starts, and the temporaries of
+    /// its tail that end after its locals, as they do before edition 2024.
+    tails: Vec<(usize, Vec<Temporary>)>,
+    /// What dropping each temporary whose drop uses what it holds runs.
+    destructors: BTreeMap<Local, crate::resolve::tail::Destructor>,
     /// Where each call without arguments ends.
     calls: BTreeSet<Position>,
     /// Where each tuple struct's or variant's constructor ends (`Some(1)`),
@@ -255,6 +270,9 @@ impl Default for Recorder {
             blocks: Vec::new(),
             pinned: BTreeSet::new(),
             constant: false,
+            edition: crate::edition::Edition::default(),
+            tails: vec![(0, Vec::new())],
+            destructors: BTreeMap::new(),
             calls: BTreeSet::new(),
             constructors: BTreeSet::new(),
             projections: BTreeMap::new(),
@@ -266,8 +284,17 @@ impl Default for Recorder {
 }
 
 impl Recorder {
+    /// The recorder of a body written in `edition`.
+    pub(crate) fn new(edition: crate::edition::Edition) -> Self {
+        Self {
+            edition,
+            ..Self::default()
+        }
+    }
+
     /// The facts recorded, once the body is read.
     pub(crate) fn finish(mut self) -> Body {
+        self.end_tail();
         self.flush();
         self.body
     }
@@ -1448,6 +1475,7 @@ impl Recorder {
         self.closure_returns.push(Vec::new());
         let outer = std::mem::take(&mut self.loops);
         self.outer_loops.push(outer);
+        self.tails.push((self.temporary_scopes.len(), Vec::new()));
         split
     }
 
@@ -1461,6 +1489,8 @@ impl Recorder {
 
     /// The closure's body ends here.
     pub(crate) fn closure_exit(&mut self, split: Block) -> ClosureBody {
+        self.end_tail();
+        self.tails.pop();
         self.flush();
         self.loops = self.outer_loops.pop().unwrap_or_default();
         let mut ends = self.returns.pop().unwrap_or_default();
@@ -1845,17 +1875,50 @@ impl Recorder {
         let Some(temporaries) = self.temporary_scopes.pop() else {
             return;
         };
+        let at = match end {
+            ScopeEnd::Let(at) | ScopeEnd::Statement(at) => Some(at),
+            ScopeEnd::Value | ScopeEnd::Tail(_) => None,
+        };
+        let outlives_block = match end {
+            ScopeEnd::Tail(tail) if !self.edition.drops_tail_temporaries_first() => Some(tail),
+            _ => None,
+        };
         for mut temporary in temporaries.into_iter().rev() {
             let goes_on = temporary.extendable && !self.pinned.contains(&temporary.local);
+            if let Some(tail) = outlives_block {
+                temporary.ends = None;
+                if let Some(destructor) = self.destructors.get(&temporary.local) {
+                    self.body
+                        .outliving
+                        .push(crate::resolve::tail::Outliving::new(
+                            temporary.local,
+                            tail,
+                            destructor.clone(),
+                        ));
+                }
+                let depth = self.temporary_scopes.len();
+                match self.tails.last_mut() {
+                    // The body's or the closure's own tail: it ends after
+                    // the body's locals.
+                    Some((opened, tail)) if *opened == depth => tail.push(temporary),
+                    _ => match self.temporary_scopes.last_mut() {
+                        Some(outer) => outer.push(temporary),
+                        None => self.temporary_dead(temporary),
+                    },
+                }
+                continue;
+            }
             match end {
-                ScopeEnd::Let if goes_on => {
+                ScopeEnd::Let(_) if goes_on => {
                     // At a body's own level it lives to the body's end.
                     if let Some(block) = self.blocks.last_mut() {
                         temporary.ends = None;
                         block.push(temporary);
                     }
                 }
-                ScopeEnd::Value if goes_on && !self.temporary_scopes.is_empty() => {
+                ScopeEnd::Value | ScopeEnd::Tail(_)
+                    if goes_on && !self.temporary_scopes.is_empty() =>
+                {
                     if temporary.ends.is_none() {
                         // The drop's use goes before the end.
                         if temporary.drops {
@@ -1867,7 +1930,20 @@ impl Recorder {
                         outer.push(temporary);
                     }
                 }
-                _ => self.temporary_dead(temporary),
+                _ => {
+                    // A tail temporary that outlived its block's locals
+                    // drops where this scope ends.
+                    if let Some(at) = at
+                        && let Some(outliving) = self
+                            .body
+                            .outliving
+                            .iter_mut()
+                            .find(|outliving| outliving.local() == temporary.local)
+                    {
+                        outliving.drop_at(at);
+                    }
+                    self.temporary_dead(temporary);
+                }
             }
         }
     }
@@ -1997,16 +2073,24 @@ impl Recorder {
     /// here and held in a temporary: the reference, its loan at its own
     /// region and the temporary's value below it. The value holds `held`.
     /// `extendable` when a `let` may extend it (`&value`), not when it is a
-    /// call's receiver. `drops` when the value's drop uses what it holds.
+    /// call's receiver. `drops` says what the value's drop runs when it
+    /// uses what the value holds.
     pub(crate) fn borrow_temporary(
         &mut self,
         value: Span,
         mutable: bool,
         held: &[(Path, Origin)],
         extendable: bool,
-        drops: bool,
+        drops: Option<crate::resolve::tail::Destructor>,
     ) -> Held {
         let local = self.hidden(super::TEMPORARY, value);
+        let drops = match drops {
+            Some(destructor) => {
+                self.destructors.insert(local, destructor);
+                true
+            }
+            None => false,
+        };
         self.push(Fact::Def(local));
         self.flow_into(local, held);
         let point = self.push(Fact::Access {
@@ -2088,11 +2172,37 @@ impl Recorder {
         self.locals_end(declared, drops, end);
     }
 
-    /// The function body's locals and parameters, declared at `declared`,
-    /// end here, the locals declared at `drops` dropping first, as at a
-    /// block's end ([`Recorder::storage_dead`]).
-    pub(crate) fn body_end(&mut self, declared: &[Span], drops: &[Span], end: Span) {
-        self.locals_end(declared, drops, end);
+    /// The function body's locals, declared at `declared`, end here, then
+    /// its tail's temporaries that outlive them, then its parameters,
+    /// declared at `parameters`. The locals and parameters declared at
+    /// `drops` drop first, as at a block's end ([`Recorder::storage_dead`]).
+    pub(crate) fn body_end(
+        &mut self,
+        declared: &[Span],
+        parameters: &[Span],
+        drops: &[Span],
+        end: Span,
+    ) {
+        let (parameter_drops, local_drops): (Vec<Span>, Vec<Span>) = drops
+            .iter()
+            .partition(|declaration| parameters.contains(declaration));
+        self.locals_end(declared, &local_drops, end);
+        self.end_tail();
+        self.locals_end(parameters, &parameter_drops, end);
+    }
+
+    /// The temporaries of the innermost body's tail that outlive its
+    /// locals drop and end here, the last made first, as `close_temporaries`
+    /// gave them.
+    fn end_tail(&mut self) {
+        let tail = self
+            .tails
+            .last_mut()
+            .map(|(_, tail)| std::mem::take(tail))
+            .unwrap_or_default();
+        for temporary in tail {
+            self.temporary_dead(temporary);
+        }
     }
 
     fn locals_end(&mut self, declared: &[Span], drops: &[Span], end: Span) {

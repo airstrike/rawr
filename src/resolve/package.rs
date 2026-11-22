@@ -159,6 +159,9 @@ struct Resolver<'a> {
     host: &'a host::Registry,
     package: ImmutableString,
     evidence: Box<[crate::diagnostic::Source]>,
+    /// The edition each source's package is written in, by the source's
+    /// index.
+    editions: Box<[crate::edition::Edition]>,
     units: Vec<Unit>,
     entry_source: source::Id,
     /// A host's one in-memory file, which has no extern prelude to bound
@@ -369,6 +372,10 @@ impl<'a> Resolver<'a> {
         for package in &packages {
             package_by_name.insert(package.name().to_owned(), package.id());
         }
+        let editions = sources
+            .iter()
+            .map(|source| packages[package_by_name[source.package()].index()].edition())
+            .collect();
 
         #[cfg_attr(not(feature = "rust-import"), allow(unused_mut))]
         let mut units: Vec<Unit> = parsed
@@ -443,6 +450,7 @@ impl<'a> Resolver<'a> {
             host,
             package,
             evidence,
+            editions,
             units,
             entry_source,
             hosted,
@@ -1270,6 +1278,7 @@ impl<'a> Resolver<'a> {
             own: self.own,
             crates: prelude,
             features,
+            editions: self.editions,
             workspace,
             aliases,
             scripts,

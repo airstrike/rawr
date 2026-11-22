@@ -436,6 +436,9 @@ impl fmt::Display for ParseErrorType {
                 crate::resolve::Error::Outlives(reports) => {
                     write!(f, "{} ({})", reports.first().message(), reports.first().code())
                 }
+                crate::resolve::Error::TailTemporary(explanation) => {
+                    write!(f, "{} (E0597)", explanation.message())
+                }
                 crate::resolve::Error::ImmutableBorrow { message, .. } => {
                     write!(f, "{message} (E0596)")
                 }

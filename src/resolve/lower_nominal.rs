@@ -1006,6 +1006,7 @@ impl<'a> Parser<'a> {
         }
         let associated = Shared::clone(&models.associated);
         let opaque_outputs = Shared::clone(&models.opaque_outputs);
+        let edition = models.edition();
 
         let mut parser = Self {
             marker: std::marker::PhantomData,
@@ -1125,7 +1126,7 @@ impl<'a> Parser<'a> {
             alias_roots: BTreeMap::new(),
             undeclared_mut: BTreeSet::new(),
             reborrow_selectors: BTreeMap::new(),
-            flow: std::cell::RefCell::default(),
+            flow: std::cell::RefCell::new(super::borrowck::record::Recorder::new(edition)),
             parameter_declarations: BTreeSet::new(),
             loop_entered: false,
             loop_iterator: None,
