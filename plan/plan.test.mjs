@@ -5,7 +5,7 @@ import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { changelogMarkdown, doneCommits, drift, format, issueRefs, issueState, parseTodo, publicText, sentences, shortTitle, siteData, validate } from "./plan.mjs";
+import { changelogMarkdown, doneCommits, drift, format, issueRefs, issueState, milestoneSlices, parseTodo, publicText, sentences, shortTitle, siteData, validate } from "./plan.mjs";
 
 const schema = (name) => JSON.parse(readFileSync(new URL(`schema/${name}.schema.json`, import.meta.url)));
 
@@ -234,4 +234,20 @@ test("an issue a release closed locally waits for sync as a note, not drift", ()
   assert.ok(warnings.some((w) => w === "1 released issues wait for GitHub (#1); run sync"), warnings.join("\n"));
   assert.ok(!problems.some((p) => p.startsWith("#1 ")), problems.join("\n"));
   assert.ok(problems.includes("#2 (T002) is open on GitHub, recorded closed"), problems.join("\n"));
+});
+
+test("a row shows under each milestone its issues shipped in, and its open issues under the one under way", () => {
+  const items = new Map([
+    [1, { issue: 1, state: "closed", release: "0.3.4" }],
+    [2, { issue: 2, state: "closed", release: "0.4.1" }],
+    [3, { issue: 3, state: "closed", release: "0.5.2" }],
+    [4, { issue: 4, state: "open" }],
+  ]);
+  const row = { id: "r", milestone: "0.3", state: "now", size: 4, issues: [1, 2, 3, 4] };
+  assert.deepEqual(milestoneSlices(row, items, "0.5"), [
+    { id: "r-0-3", milestone: "0.3", issues: [1], state: "done", size: 1 },
+    { id: "r-0-4", milestone: "0.4", issues: [2], state: "done", size: 1 },
+    { milestone: "0.5", issues: [3, 4], state: "now", size: 2 },
+  ]);
+  assert.deepEqual(milestoneSlices({ id: "h", milestone: "0.0", state: "done", size: 5, issues: [] }, items, "0.5"), [{ milestone: "0.0", issues: [] }]);
 });

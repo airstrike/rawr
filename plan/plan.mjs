@@ -591,16 +591,56 @@ export function siteData(plan) {
     })),
     groups: groups.map((g) => ({
       ...g,
-      rows: g.rows.map((r) => ({
-        ...r,
-        note: text(r.note),
-        issues: r.issues.map((n) => {
-          const i = items.get(n);
-          return { number: n, title: i ? title(i) : `#${n}`, state: i?.state ?? "open" };
-        }),
-      })),
+      rows: g.rows.flatMap((r) =>
+        milestoneSlices(r, items, milestoneOf(version)).map((slice) => ({
+          ...r,
+          ...slice,
+          note: text(r.note),
+          issues: slice.issues.map((n) => {
+            const i = items.get(n);
+            return { number: n, title: i ? title(i) : `#${n}`, state: i?.state ?? "open" };
+          }),
+        })),
+      ),
     })),
   };
+}
+
+const versionOrder = (a, b) => {
+  const x = a.split(".").map(Number), y = b.split(".").map(Number);
+  return x[0] - y[0] || x[1] - y[1];
+};
+
+// A row as the milestones its issues belong to. An issue that shipped
+// belongs to its release's milestone, and every other issue to the
+// milestone under way (`current`), so a shipped milestone holds only what
+// shipped in it and never gains work. A closed issue with no release
+// predates releases and belongs to the row's own milestone. A row with no
+// issues is history and keeps its milestone. A slice in a shipped milestone
+// is done, its bar is its share of the row, and its id names the milestone
+// so the page's anchors stay unique.
+export function milestoneSlices(row, items, current) {
+  if (!row.issues.length) return [{ milestone: row.milestone ?? current, issues: [] }];
+  const own = row.milestone && versionOrder(row.milestone, current) < 0 ? row.milestone : current;
+  const by = new Map();
+  for (const n of row.issues) {
+    const item = items.get(n);
+    const milestone = item?.release ? milestoneOf(item.release) : item && item.state !== "open" ? own : current;
+    by.set(milestone, [...(by.get(milestone) ?? []), n]);
+  }
+  const order = [...by.keys()].sort(versionOrder);
+  return order.map((milestone) => {
+    const issues = by.get(milestone);
+    const shipped = versionOrder(milestone, current) < 0;
+    const open = issues.some((n) => (items.get(n)?.state ?? "open") === "open");
+    return {
+      ...(order.length > 1 && milestone !== current ? { id: `${row.id}-${milestone.replace(".", "-")}` } : {}),
+      milestone,
+      issues,
+      state: shipped || !open ? "done" : row.state === "done" ? "now" : row.state,
+      size: order.length > 1 ? Math.max(0.5, Math.round((row.size * issues.length * 10) / row.issues.length) / 10) : row.size,
+    };
+  });
 }
 
 // `before` is the CHANGELOG.md an apply started from. If the file changed on

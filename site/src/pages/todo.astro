@@ -5,8 +5,10 @@
 // The data comes from plan/ through src/lib/todo.ts; issues are named #N.
 //
 // Gantt: bar length is complexity, not time. Milestones are the top level,
-// in version order, then the rows with none. Under each milestone come the
-// groups with rows in it, so a group can appear under several. Milestones
+// in version order. A row shows under each milestone its issues shipped in,
+// and its open issues show under the milestone under way (siteData in
+// plan/plan.mjs slices it). Under each milestone come the groups with rows
+// in it, so a group can appear under several. Milestones
 // whose rows are all done, before the first with work left, start folded.
 // Milestones and groups fold, and the chart rescales to the rows that show.
 // Each row links its GitHub issues; a row with many folds them behind a count.
