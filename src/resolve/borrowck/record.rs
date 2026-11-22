@@ -1586,6 +1586,7 @@ impl Recorder {
         &mut self,
         parameters: Vec<(ImmutableString, Span, super::signature::Regions, bool)>,
         output: super::signature::Output,
+        names: super::Names,
     ) {
         let parameters = parameters
             .into_iter()
@@ -1593,7 +1594,11 @@ impl Recorder {
                 (self.local(&name, declaration), regions, receiver)
             })
             .collect();
-        self.body.own = Some(super::OwnSignature { parameters, output });
+        self.body.own = Some(super::OwnSignature {
+            parameters,
+            output,
+            names,
+        });
     }
 
     /// A temporary scope starts here: a statement, a match arm, a

@@ -113,6 +113,7 @@ pub struct Report {
     external_labels: Vec<ExternalLabel>,
     help: Option<ImmutableString>,
     notes: Vec<ImmutableString>,
+    closing_help: Option<ImmutableString>,
     sections: Vec<Section>,
     suggestions: Vec<Suggestion>,
 }
@@ -225,6 +226,12 @@ impl Report {
         self.notes.iter().map(AsRef::as_ref)
     }
 
+    /// Return the help after the notes, when there is one.
+    #[must_use]
+    pub fn closing_help(&self) -> Option<&str> {
+        self.closing_help.as_deref()
+    }
+
     /// Return the notes and helps with places of their own, in the order
     /// they were given.
     #[must_use]
@@ -313,6 +320,7 @@ impl Builder {
                 external_labels: Vec::new(),
                 help: None,
                 notes: Vec::new(),
+                closing_help: None,
                 sections: Vec::new(),
                 suggestions: Vec::new(),
             },
@@ -508,6 +516,14 @@ impl Builder {
     #[must_use]
     pub fn note(mut self, note: impl Into<ImmutableString>) -> Self {
         self.report.notes.push(written(note.into()));
+        self
+    }
+
+    /// Attach a help that follows the notes, as rustc's pointer to more
+    /// reading does.
+    #[must_use]
+    pub fn closing_help(mut self, help: impl Into<ImmutableString>) -> Self {
+        self.report.closing_help = Some(written(help.into()));
         self
     }
 

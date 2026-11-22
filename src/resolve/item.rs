@@ -532,6 +532,9 @@ pub(crate) struct Lifetimes {
     /// type argument written without its lifetimes, as `Content<M>` for
     /// `impl IntoView<'a, M> + 'a`, does not.
     pub written_parameters: Option<Box<[type_ref::Type]>>,
+    /// Each lifetime parameter the function and its impl declare, by name,
+    /// and where: rustc's lifetime errors mark it.
+    pub declared: Box<[(crate::ImmutableString, Span)]>,
 }
 
 impl Lifetimes {
@@ -551,6 +554,7 @@ impl Lifetimes {
             lifetimes.name(output);
         }
         lifetimes.bound(&function.lifetimes);
+        lifetimes.declare(&function.lifetimes);
         lifetimes
     }
 
@@ -570,7 +574,21 @@ impl Lifetimes {
     ) {
         self.name(written);
         self.bound(lifetimes);
+        self.declare(lifetimes);
         self.owner = Some(Box::new(owner.clone()));
+    }
+
+    fn declare(&mut self, lifetimes: &crate::item::Lifetimes) {
+        let mut declared = self.declared.to_vec();
+        // A parameter's name is after its apostrophe.
+        declared.extend(lifetimes.params.iter().map(|param| {
+            let mut start = param.span.start();
+            if start.position().is_some_and(|column| column > 1) {
+                start.rewind();
+            }
+            (param.text.clone(), Span::new(start, param.span.end()))
+        }));
+        self.declared = declared.into_boxed_slice();
     }
 
     fn bound(&mut self, lifetimes: &crate::item::Lifetimes) {

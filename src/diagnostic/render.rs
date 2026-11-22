@@ -120,6 +120,9 @@ pub fn render_with(report: &Report, color: Color) -> String {
     for note in report.notes().chain(unread) {
         group = group.element(Level::NOTE.message(note));
     }
+    if let Some(help) = report.closing_help() {
+        group = group.element(Level::HELP.message(help));
+    }
     let mut groups = vec![group];
     groups.extend(report.sections().iter().map(sectioned_group));
     if inline.is_none() {

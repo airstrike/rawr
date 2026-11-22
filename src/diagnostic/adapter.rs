@@ -725,6 +725,14 @@ fn resolution_report_with_sources(
             Some(format!("expected `{output}` because of this return type").into()),
         )?;
     }
+    // rustc marks the lifetimes it names.
+    if let resolve::Error::Outlives(report) = error {
+        for (span, label) in report.lifetimes() {
+            if !span.is_none() {
+                builder = builder.secondary(source.clone(), span, Some(label.into()))?;
+            }
+        }
+    }
     // rustc labels the last of a tuple pattern's declared fields.
     if let resolve::Error::PatternFields {
         variant,
@@ -1306,6 +1314,26 @@ fn suggestion(error: &resolve::Error, source: &Source) -> Result<Option<Suggesti
     let before = |span: Span| Span::new(span.start(), span.start());
     let after = |span: Span| Span::new(span.end(), span.end());
     match error {
+        // The lifetime written after the reference's `&`, and a blank
+        // before what follows it unless one is there.
+        resolve::Error::Outlives(report) => match report.suggestion() {
+            Some(lifetime) => {
+                let at = lifetime.reference.ampersand.end();
+                let mut next = at;
+                next.advance();
+                let spaced = Span::new(at, next)
+                    .text(source.text())
+                    .starts_with(char::is_whitespace);
+                let blank = if spaced { "" } else { " " };
+                suggestion(
+                    &lifetime.message,
+                    Style::Verbose,
+                    after(lifetime.reference.ampersand),
+                    &format!("'{}{blank}", lifetime.lifetime),
+                )
+            }
+            None => Ok(None),
+        },
         resolve::Error::NoItem {
             similar: Some(similar),
             ..
@@ -1577,6 +1605,7 @@ fn primary_label(
             Some(format!("method not found in `{owner}`").into())
         }
         resolve::Error::ImmutableBorrow { .. } => Some("cannot borrow as mutable".into()),
+        resolve::Error::Outlives(report) => Some(report.label().into()),
         resolve::Error::NonExhaustive { witnesses, .. } => {
             Some(resolve::NonExhaustive(witnesses).label().into())
         }
@@ -1802,6 +1831,7 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Category::MovedValue => code::RESOLVE_MOVED_VALUE,
         resolve::Category::BorrowConflict => match error {
             resolve::Error::BorrowConflict { code, .. } => code::borrow(code),
+            resolve::Error::Outlives(report) => code::borrow(report.code()),
             resolve::Error::ImmutableBorrow { .. } => code::BORROW_NOT_MUTABLE,
             _ => unreachable!("a borrow conflict's category"),
         },
@@ -1891,6 +1921,20 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Error::Syntax {
             help: Some(help), ..
         } => builder.help(help.clone()),
+        resolve::Error::Outlives(report) => {
+            let builder = match report.help() {
+                Some(help) => builder.help(help),
+                None => builder,
+            };
+            match report.variance() {
+                Some(variance) => variance
+                    .notes()
+                    .into_iter()
+                    .fold(builder, |builder, note| builder.note(note))
+                    .closing_help(resolve::outlives::Variance::HELP),
+                None => builder,
+            }
+        }
         resolve::Error::DuplicateItem { .. }
         | resolve::Error::DuplicateMember { .. }
         | resolve::Error::DuplicateMethod { .. } => {
@@ -2258,6 +2302,7 @@ fn resolution_message(error: &resolve::Error) -> String {
         ),
         resolve::Error::BorrowConflict { message, .. }
         | resolve::Error::ImmutableBorrow { message, .. } => message.to_string(),
+        resolve::Error::Outlives(report) => report.message(),
         resolve::Error::InvalidConstruction { owner, reason, .. } => {
             format!("invalid construction of `{owner}`: {reason}")
         }

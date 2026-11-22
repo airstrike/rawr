@@ -1650,6 +1650,40 @@ impl Type {
         }
     }
 
+    /// The type as rustc writes it with its lifetimes erased: `&i32` of
+    /// `&'a i32`, `S<'_>` of `S<'a>`.
+    pub(crate) fn erased(&self) -> String {
+        match self {
+            Self::Unit(_) => "()".to_string(),
+            Self::Tuple { members, .. } => {
+                let members: Vec<String> = members.iter().map(Self::erased).collect();
+                match &members[..] {
+                    [only] => format!("({only},)"),
+                    _ => format!("({})", members.join(", ")),
+                }
+            }
+            Self::Reference {
+                mutable, target, ..
+            } => format!("&{}{}", if *mutable { "mut " } else { "" }, target.erased()),
+            Self::Path(_) if self.is_str() => "&str".to_string(),
+            Self::Path(path) => {
+                let arguments: Vec<String> = path
+                    .arguments
+                    .iter()
+                    .map(|argument| match argument {
+                        Argument::Type(ty) => ty.erased(),
+                        Argument::Lifetime(_) => "'_".to_string(),
+                    })
+                    .collect();
+                if arguments.is_empty() {
+                    path.name.to_string()
+                } else {
+                    format!("{}<{}>", path.name, arguments.join(", "))
+                }
+            }
+        }
+    }
+
     /// Whether this is a written `&str`: Rawr's `String` path with the
     /// reference's lifetime (`resolve`).
     pub(crate) fn is_str(&self) -> bool {

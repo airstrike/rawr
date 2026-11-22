@@ -19,6 +19,7 @@ pub struct ReportView<'a> {
     external_labels: Vec<ExternalLabelView<'a>>,
     help: Option<&'a str>,
     notes: Vec<&'a str>,
+    closing_help: Option<&'a str>,
     sections: Vec<SectionView<'a>>,
     suggestions: Vec<SuggestionView<'a>>,
 }
@@ -119,6 +120,7 @@ impl Report {
                 .collect(),
             help: self.help(),
             notes: self.notes().collect(),
+            closing_help: self.closing_help(),
             sections: self.sections().iter().map(Section::view).collect(),
             suggestions: self.suggestions().iter().map(Suggestion::view).collect(),
         }
@@ -270,6 +272,12 @@ impl<'a> ReportView<'a> {
     #[must_use]
     pub fn notes(&self) -> &[&'a str] {
         &self.notes
+    }
+
+    /// Return the help after the notes.
+    #[must_use]
+    pub const fn closing_help(&self) -> Option<&'a str> {
+        self.closing_help
     }
 
     /// Return the notes and helps with places of their own.

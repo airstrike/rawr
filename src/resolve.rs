@@ -14,6 +14,7 @@ pub(crate) mod macro_rules;
 pub(crate) mod macros;
 #[cfg(feature = "rust-import")]
 pub(crate) mod native;
+pub mod outlives;
 pub(crate) mod package;
 #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
 pub(crate) mod record;

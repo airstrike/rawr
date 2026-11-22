@@ -246,6 +246,21 @@ pub(crate) struct OwnSignature {
     /// whether it is `self`.
     pub(crate) parameters: Vec<(Local, signature::Regions, bool)>,
     pub(crate) output: signature::Output,
+    pub(crate) names: Names,
+}
+
+/// What rustc's reports of a body that breaks its own signature name of
+/// the signature.
+#[derive(Clone, Debug)]
+pub(crate) struct Names {
+    pub(crate) item: super::outlives::Item,
+    /// Each lifetime parameter, and where it is declared.
+    pub(crate) declared: Vec<(ImmutableString, Span)>,
+    /// Each elided input lifetime's reference, by its number less one.
+    pub(crate) elided: Vec<super::outlives::Reference>,
+    /// Why each of the output's invariant positions is so, as rustc's
+    /// notes say.
+    pub(crate) variances: Vec<(signature::Invariance, super::outlives::Variance)>,
 }
 
 impl Body {
@@ -337,6 +352,9 @@ pub(crate) struct Conflict {
     pub(crate) access: Span,
     /// The loan it conflicts with.
     pub(crate) borrow: Span,
+    /// rustc's report of a returned value that breaks the function's own
+    /// signature, which says more than the conflict.
+    pub(crate) report: Option<Box<super::outlives::Report>>,
 }
 
 /// The first borrow error in `body` under `rule`, in the order the body
@@ -390,6 +408,7 @@ pub(crate) fn check(body: &Body, rule: &impl Rule) -> Option<Conflict> {
                     message: "temporary value dropped while borrowed".to_string(),
                     access: loan.span,
                     borrow: loan.span,
+                    report: None,
                 });
             }
             let name = describe(body, &loan.place);
@@ -410,6 +429,7 @@ pub(crate) fn check(body: &Body, rule: &impl Rule) -> Option<Conflict> {
                 message,
                 access: loan.span,
                 borrow: loan.span,
+                report: None,
             });
         }
         let made = loan.map(|loan| body.loans[loan.0 as usize].capture);
@@ -469,6 +489,7 @@ fn returned_local(body: &Body, reach: &[Vec<bool>]) -> Option<Conflict> {
             message,
             access: value,
             borrow: loan.span,
+            report: None,
         });
     }
     None
@@ -656,6 +677,7 @@ fn conflict(
             message,
             access: span,
             borrow: loan.span,
+            report: None,
         });
     }
     let (code, message) = match access {
@@ -698,6 +720,7 @@ fn conflict(
                 message: "temporary value dropped while borrowed".to_string(),
                 access: loan.span,
                 borrow: span,
+                report: None,
             });
         }
         Access::StorageDead => {
@@ -706,6 +729,7 @@ fn conflict(
                 message: format!("`{name}` does not live long enough"),
                 access: loan.span,
                 borrow: span,
+                report: None,
             });
         }
         Access::Read | Access::Length | Access::Shared | Access::Reserve => {
@@ -717,6 +741,7 @@ fn conflict(
         message,
         access: span,
         borrow: loan.span,
+        report: None,
     })
 }
 
