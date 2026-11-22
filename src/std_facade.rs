@@ -14,6 +14,7 @@
 //! its final form ([`declared`]), which a new engine installs as it is
 //! ([`step`]): a start reads nothing of the table (#1526).
 
+mod buffered;
 mod case;
 mod command;
 mod cursor;
@@ -202,6 +203,7 @@ fn build() -> Result<facade::Definition, host::Error> {
     file::register_debug();
     metadata::register_debug();
     cursor::register_debug();
+    buffered::register_debug();
     num::register_debug();
     fmt::register_debug();
     panic::register_debug();
@@ -225,6 +227,7 @@ fn held() -> Vec<held::Held> {
         file::HELD.as_slice(),
         metadata::HELD.as_slice(),
         cursor::HELD.as_slice(),
+        buffered::HELD.as_slice(),
         case::HELD.as_slice(),
         num::HELD.as_slice(),
         fmt::HELD.as_slice(),
@@ -241,6 +244,7 @@ fn bind(binds: &mut impl Bind) {
     path::bind(binds);
     io::bind(binds);
     cursor::bind(binds);
+    buffered::bind(binds);
     env::bind(binds);
     fs::bind(binds);
     file::bind(binds);

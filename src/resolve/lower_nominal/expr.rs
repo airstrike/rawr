@@ -1264,6 +1264,15 @@ impl<'a> Parser<'a> {
             self.splice_tokens(tokens);
             return self.parse_primary();
         }
+        // `Text::from(..)` after `use std::string::String as Text;` is
+        // `String::from(..)` (#810).
+        if let Some(spelling) = self.prelude_alias(&name) {
+            self.splice_tokens(vec![(
+                Token::Identifier(Box::new(spelling.into())),
+                name_span.start(),
+            )]);
+            return self.parse_primary();
+        }
         if crate::std_table::is_root(&name) && matches!(self.peek(), Token::DoubleColon) {
             self.check_std_path(&name, name_span)?;
         }

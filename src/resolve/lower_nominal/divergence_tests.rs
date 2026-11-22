@@ -9587,3 +9587,252 @@ fn language_blanket_impls_are_probed_by_the_bounds_that_hold() {
         "{report}"
     );
 }
+
+#[test]
+fn a_prelude_type_imported_under_another_name_works_in_bodies() {
+    // `use std::string::String as Text;` names `String` in a body's paths,
+    // types and patterns, as in a signature (#810).
+    let output = printed(
+        r#"
+use std::option::Option as Maybe;
+use std::string::String as Text;
+use std::vec::Vec as List;
+fn twice(t: Text) -> Text {
+    t.repeat(2)
+}
+fn main() {
+    let t: Text = Text::from("ab");
+    let mut l: List<Text> = List::new();
+    l.push(twice(t));
+    let m: Maybe<usize> = Maybe::Some(l.len());
+    match m {
+        Maybe::Some(n) => println!("{n} {:?} {}", l, Text::with_capacity(4).len()),
+        Maybe::None => println!("none"),
+    }
+}
+main();
+"#,
+    );
+    assert_eq!(output, "1 [\"abab\"] 0\n");
+}
+
+#[test]
+fn a_public_glob_re_exports_its_module_s_names() {
+    // `pub use inner::*;` binds inner's names in `outer` for every module
+    // `outer`'s items reach, a std module's too (#1349).
+    let output = printed(
+        r#"
+mod outer {
+    mod inner {
+        pub fn f() -> i32 {
+            1
+        }
+        pub struct S(pub i32);
+        pub trait T {
+            fn t(&self) -> i32 {
+                9
+            }
+        }
+        impl T for S {}
+    }
+    pub use inner::*;
+}
+mod formatting {
+    pub use std::fmt::*;
+}
+use outer::T;
+struct X;
+impl formatting::Display for X {
+    fn fmt(&self, f: &mut formatting::Formatter) -> formatting::Result {
+        write!(f, "x")
+    }
+}
+fn main() {
+    let s = outer::S(outer::f());
+    println!("{} {} {X}", s.0, s.t());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "1 9 x\n");
+    // Each name goes no further than its item: a `pub(super)` function
+    // is the parent's, rustc's E0603 where another module names it.
+    let report = refused(
+        r#"
+mod outer {
+    mod inner {
+        pub(super) fn g() -> i32 {
+            2
+        }
+    }
+    pub use inner::*;
+    pub fn h() -> i32 {
+        g()
+    }
+}
+fn main() {
+    println!("{} {}", outer::h(), outer::g());
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0603]: function import `g` is private"),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_facade_type_s_trait_method_needs_its_trait_in_scope() {
+    // `Stdout`'s `flush`, `Stdin`'s `read_to_string` and a `Cursor`'s
+    // `read_to_end` are `Write`'s and `Read`'s: rustc's E0599 with no
+    // `use` of them (#1427).
+    for (program, headline, import) in [
+        (
+            "fn main() {\n    std::io::stdout().flush().unwrap();\n}\n",
+            "error[E0599]: no method named `flush` found for struct `Stdout` in the current scope",
+            "1 + use std::io::Write;",
+        ),
+        (
+            "fn main() {\n    let mut s = String::new();\n    \
+             std::io::stdin().read_to_string(&mut s).unwrap();\n}\n",
+            "error[E0599]: no method named `read_to_string` found for struct `Stdin` in the \
+             current scope",
+            "1 + use std::io::Read;",
+        ),
+        (
+            "use std::io::Cursor;\nfn main() {\n    let mut c = Cursor::new(vec![1u8]);\n    \
+             let mut v = Vec::new();\n    c.read_to_end(&mut v).unwrap();\n}\n",
+            "error[E0599]: no method named `read_to_end` found for struct `std::io::Cursor<T>` \
+             in the current scope",
+            "1 + use std::io::Read;",
+        ),
+    ] {
+        let report = refused(&format!("{program}main();\n"));
+        assert!(report.starts_with(headline), "{report}");
+        assert!(report.contains(import), "{report}");
+    }
+    // With `BufRead` in scope, a `Cursor`'s `lines` are its own.
+    let output = printed(
+        r#"
+use std::io::{BufRead, Cursor};
+fn main() {
+    for line in Cursor::new("a\nb\n").lines() {
+        println!("{}", line.unwrap());
+    }
+}
+main();
+"#,
+    );
+    assert_eq!(output, "a\nb\n");
+}
+
+#[test]
+fn std_iter_s_sources_run_as_far_as_the_chain_pulls() {
+    // `repeat`, `once`, `empty`, `from_fn`, `successors`, `repeat_with`,
+    // `repeat_n` and `once_with`, each a chain's source; a closure runs
+    // once per item pulled.
+    let output = printed(
+        r#"
+use std::iter::{self, from_fn, successors};
+fn counter() -> impl Iterator<Item = u32> {
+    let mut c = 0;
+    from_fn(move || {
+        c += 1;
+        if c <= 3 { Some(c) } else { None }
+    })
+}
+fn main() {
+    let a: Vec<i32> = iter::repeat(7).take(3).collect();
+    let b: Vec<i32> = iter::once(1).chain(iter::once(2)).collect();
+    let mut k = 1;
+    let c: Vec<i32> = iter::repeat_with(|| { k *= 2; k }).take(4).collect();
+    let d: Vec<u32> = successors(Some(1u32), |x| if *x < 100 { Some(x * 3) } else { None }).collect();
+    println!("{:?} {:?} {:?} {:?} {}", a, b, c, d, iter::empty::<u8>().count());
+    let mut it = counter();
+    println!("{:?} {:?}", it.next(), it.collect::<Vec<_>>());
+    let mut pulls = 0;
+    let e: Vec<i32> = std::iter::from_fn(|| { pulls += 1; Some(pulls) }).take(2).collect();
+    let s: i32 = iter::repeat_n(4, 3).sum();
+    let w: Vec<String> = iter::once_with(|| "w".to_string()).collect();
+    println!("{:?} {pulls} {s} {:?} {}", e, w, iter::once(1).len());
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "[7, 7, 7] [1, 2] [2, 4, 8, 16] [1, 3, 9, 27, 81, 243] 0\nSome(1) [2, 3]\n\
+         [1, 2] 2 12 [\"w\"] 1\n"
+    );
+    // `repeat` clones its value, which must be `Clone`.
+    let report = refused(
+        "struct S;\nfn main() {\n    let n = std::iter::repeat(S).take(2).count();\n}\nmain();\n",
+    );
+    assert!(
+        report.starts_with("error[E0277]: the trait bound `S: Clone` is not satisfied"),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_buffered_reader_and_writer_over_a_file_run_as_stds() {
+    // std's `BufWriter` over a `File` writes what it buffers when it is
+    // flushed or dropped, and a `BufReader` reads a file's lines, as
+    // std's do (#2580). `read_line` is `BufRead`'s, so it needs its `use`.
+    let directory = std::env::temp_dir().join(format!("rawr-buffered-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    let source = format!(
+        r#"
+use std::fs::{{self, File}};
+use std::io::{{BufRead, BufReader, BufWriter, Cursor, Read, Write}};
+use std::path::PathBuf;
+fn main() {{
+    let dir = PathBuf::from({directory:?});
+    fs::create_dir_all(&dir).unwrap();
+    let p = dir.join("lines.txt");
+    {{
+        let mut out = BufWriter::new(File::create(&p).unwrap());
+        writeln!(out, "one").unwrap();
+        out.write_all(b"two\n").unwrap();
+        println!("{{}} {{}}", out.capacity(), fs::read_to_string(&p).unwrap().len());
+    }}
+    let mut out = BufWriter::with_capacity(4, fs::OpenOptions::new().append(true).open(&p).unwrap());
+    out.write_all(b"three\n").unwrap();
+    out.flush().unwrap();
+    drop(out);
+    for line in BufReader::new(File::open(&p).unwrap()).lines() {{
+        println!("{{}}", line.unwrap());
+    }}
+    let mut reader = BufReader::new(File::open(&p).unwrap());
+    let mut first = String::new();
+    let n = reader.read_line(&mut first).unwrap();
+    let mut rest = String::new();
+    reader.read_to_string(&mut rest).unwrap();
+    println!("{{n}} {{first:?}} {{rest:?}}");
+    let words: Vec<String> = BufReader::new(Cursor::new("x y\nz")).lines().map(|l| l.unwrap()).collect();
+    println!("{{:?}}", words);
+    fs::remove_dir_all(&dir).unwrap();
+}}
+main();
+"#
+    );
+    let output = printed_with(&source, crate::Access::all());
+    assert_eq!(
+        output,
+        "8192 0\none\ntwo\nthree\n4 \"one\\n\" \"two\\nthree\\n\"\n[\"x y\", \"z\"]\n"
+    );
+    let report = refused(
+        "use std::io::{BufReader, Cursor};\nfn main() {\n    let mut r = \
+         BufReader::new(Cursor::new(\"a\"));\n    let mut s = String::new();\n    \
+         r.read_line(&mut s).unwrap();\n}\nmain();\n",
+    );
+    assert!(
+        report.starts_with(
+            "error[E0599]: no method named `read_line` found for struct `BufReader<R>` in the \
+             current scope"
+        ),
+        "{report}"
+    );
+    assert!(report.contains("1 + use std::io::BufRead;"), "{report}");
+}
