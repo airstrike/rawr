@@ -35,6 +35,19 @@ pub(crate) fn is(value: &Dynamic) -> bool {
     value.is::<Items>()
 }
 
+/// The next item of the runtime iterator `value`, stepped where it is, as
+/// native code pulls from one the program gave it (`island`).
+#[cfg(feature = "rust-import")]
+pub(crate) fn next(
+    context: &NativeCallContext<'_>,
+    value: &mut Dynamic,
+) -> crate::RawrResultOf<Option<Dynamic>> {
+    let mut code = Dynamic::from_int(NEXT);
+    let mut argument = Dynamic::UNIT;
+    let output = invoke(Some(context), &mut [value, &mut code, &mut argument])?;
+    crate::option::read(&output).ok_or_else(|| invariant("an iterator's `next` gave no `Option`"))
+}
+
 /// A copy goes on by itself from the same item, as Rust's clone of an
 /// iterator part way through does: its step's locals are copied.
 impl Clone for Items {
@@ -55,6 +68,27 @@ impl Items {
             frame: None,
             ahead: std::collections::VecDeque::new(),
         }
+    }
+
+    /// Visit each value it holds: its step's captures, what its suspended
+    /// step holds and the items made ahead, as `Dynamic::deep_scan` finds
+    /// the native values native code keeps through it (`island`).
+    pub(crate) fn for_each_held(&mut self, visit: &mut dyn FnMut(&mut Dynamic)) {
+        // A capture is shared with where the closure was made.
+        let mut held = |value: &mut Dynamic| {
+            if !value.is_shared() {
+                visit(value);
+            } else if let Some(mut inner) = value.write_lock::<Dynamic>() {
+                visit(&mut inner);
+            }
+        };
+        if let Some(step) = &mut self.step {
+            step.iter_curry_mut().for_each(&mut held);
+        }
+        if let Some(frame) = &self.frame {
+            frame.for_each_local(&mut held);
+        }
+        self.ahead.iter_mut().for_each(held);
     }
 
     /// The next item the step makes, `None` past its last.
