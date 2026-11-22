@@ -5,7 +5,34 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 ## Unreleased
 
 - The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors.
+
+## 0.5.20 (2026-11-22)
+
 - An edition 2021 (or older) crate's block tail temporaries now live past the block's locals, as rustc's do: a `Drop` temporary that borrows a local is E0597, with rustc's labels, note and help. (#2517)
+- A generic function or method whose body uses its parameters' types runs as rustc's instance at its callers' types: overflow panics at u8, f32 arithmetic, parse and to_string print f32 digits, `T: Sum<T>` sums, and impls for f32 and f64 or Foo<i32> and Foo<i64> are each chosen through T. (#2569, #801)
+- An impl for an array type, `impl Trait for [i32; 3]` or for every length `[T; N]`, is its own beside the slice's impl. (#2214)
+- An unsupported construct's hint is its own `help:` line, and a token rawr can't read says what rawr expects there. (#1112)
+- A broken invariant in rawr-import prints as rustc's internal compiler error, with rustc's notes on where to report it. (#1929)
+- The runtime's bare `Stale` error is gone: a crate value used on a thread the program spawned says rawr doesn't run it there yet, and the rest panic as rawr bugs. (#734)
+- A marked function native code can't call through rawr yet is reported as rustc reports an error at its signature, in rustc's colours. (#1930)
+- Before edition 2024, a block's tail temporaries drop after the block's locals at run time, and a body's before its parameters, as rustc's do. (#2621)
+- A RefCell's borrow guard keeps and uses the cell's borrow until it drops, so a tail guard of a local cell before edition 2024, or a guard kept past its cell, is rustc's E0597 naming `Ref<'_, T>` or `RefMut<'_, T>`. (#2620)
+- Diagnostics name std types as rustc does. A type is written by its name alone only when no other visible type has it: `std::ops::Range<{integer}>` and `std::cmp::Ordering`, but `RangeTo` and `Option`. E0308 labels name each type by its name alone. E0599 on a std value names its kind and its definition's parameters (`found for struct std::ops::Range<Idx>`, `enum Option<T>`) with rustc's 'method not found in' label. (#2524)
+- A compound assignment through a program type's operator impl borrows its place `&mut` and moves its operand, as rustc lowers `AddAssign::add_assign(&mut place, value)`: E0502, E0505, E0506 and E0382 are now rawr's own, and `a + b` moves non-Copy operands. (#130)
+- A local set from a method's `impl Fn`, a `fn` field, or an `if`, `match` or block of them is called through a shared borrow, and a `Box<dyn FnMut>` local through a `&mut` one, as rustc borrows them. (#188)
+- A crate method's value that borrows its receiver, such as quick-xml's `name(&self) -> QName<'_>`, and a slice member's value, such as rayon's `par_iter`, keep their borrows in rawr's own check, so a change meanwhile is E0502 before anything runs. (#131, #2097)
+- A local crate value lent where a crate keeps a `&'static dyn` field is E0597 from rawr's own check. (#1619)
+- A program's iterator that a crate clones part way through goes on from the same item, as Rust's clone of an iterator does, where it used to panic. (#1056)
+- An E0599 on an iterator names the std struct of its source or outermost adapter with the struct's parameters, as rustc does (`std::slice::Iter<'a, T>`, `Map<I, F>`, `TakeWhile<I, P>`), and `(0..).rev()`'s E0277 names `std::ops::RangeFrom<{integer}>`. (#2617)
+- A field access on a std type without that field, as `o.x` of an `Option` or an `Ordering`, is rustc's E0609 with its "unknown field" label, and a range's lists its public fields in rustc's note. (#2632)
+- A method a boxed value lacks is rustc's E0599 naming the box, as in "found for struct `Box<P>`". (#2633)
+- A `let`'s value of another type than its written one has rustc's "expected due to this" label under the written type, and its expected/found note where the types aren't simple. (#2634)
+- A local's trait object of a second trait that is not an auto trait, as `&(dyn Shape + Named)`, is rustc's E0225. (#2638)
+- A closure's local that shadows a capture (`let c = c.borrow(); c.get()`) is the closure's own borrow instead of panicking. (#2229)
+- E0277 for a value that isn't `Send` names the type that isn't, as rustc does, with its notes on each type it appears within and the closure that uses it. (#2495)
+- A trait object the program writes without `+ Send` isn't `Send`, so moving a `Box<dyn Shape>` into a thread is rustc's E0277, and only what is `Send` becomes `dyn Shape + Send`. (#2485)
+- An `impl Trait` output is `Send` as its hidden type is at any `Send` bound: a generic call's `T: Send` and what a thread gives. (#2496)
+- A method of an `impl Trait` value whose hidden type is the program's own, and `Trait::method(&value)`, call the program's impl of the crate trait over an inherent method of the same name. (#2099)
 
 ## 0.5.19 (2026-11-22)
 
