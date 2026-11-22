@@ -3,6 +3,7 @@
 //! expands to literals.
 
 use super::*;
+use std::hash::{Hash, Hasher};
 
 /// How deep one constant's initializer may name others: a cycle, which
 /// rustc reports, ends there.
@@ -52,6 +53,57 @@ impl<'a> Parser<'a> {
         }
         let source = origin::Fragment::call(function.generated.as_str(), []);
         self.operator_expr(source, ty, span)
+    }
+
+    /// The key the program's `static` `definition` keeps its value by, when
+    /// the interpreter holds it (#2519): its path and a fingerprint of its
+    /// type and its initializer, the tokens left to parse. An edit of
+    /// either starts a new value, and any other edit keeps the one a
+    /// generation before made. `None` for a `const`, and for a static of
+    /// literals alone, whose every read makes the same value at no cost.
+    pub(super) fn kept_static_key(&self, definition: &item::Function) -> Option<ImmutableString> {
+        if !definition.body.static_item {
+            return None;
+        }
+        let tokens: Vec<Token> = self.input.clone().map(|(token, _)| token).collect();
+        if plain_initializer(tokens.iter()) {
+            return None;
+        }
+        let mut hasher = std::hash::DefaultHasher::new();
+        if let Some(output) = &definition.output {
+            Ty::from_resolved(output)
+                .name(&self.models)
+                .as_str()
+                .hash(&mut hasher);
+        }
+        for token in &tokens {
+            token.to_string().hash(&mut hasher);
+        }
+        let path = self
+            .callable
+            .as_ref()
+            .map_or_else(|| definition.name.text.to_string(), ToString::to_string);
+        let file = self.source_identity();
+        Some(format!("{file}#{path}@{:016x}", hasher.finish()).into())
+    }
+
+    /// A read of the static the interpreter keeps as `key`, whose
+    /// initializer `value` renders: the initializer runs at the static's
+    /// first read, and every read, on every thread and in every generation
+    /// that declares it alike, shares the value it made (#2519).
+    pub(super) fn kept_static(&mut self, key: &str, value: origin::Fragment) -> origin::Fragment {
+        let key = origin::Fragment::plain(format!("{key:?}"));
+        let reserved = self.prelude_op(PreludeOp::StaticReserved, [key.clone()]);
+        let keep = self.prelude_op(PreludeOp::StaticKeep, [key.clone(), value]);
+        let kept = self.prelude_op(PreludeOp::StaticValue, [key]);
+        let mut read = origin::Fragment::plain("if ");
+        read.push(reserved);
+        read.push_text(" { ");
+        read.push(keep);
+        read.push_text(" } else { ");
+        read.push(kept);
+        read.push_text(" }");
+        read
     }
 
     /// `Type::member(..)` for a builtin type: `String::new()`, the
@@ -566,4 +618,44 @@ pub(super) fn included(
     target: &std::path::Path,
 ) -> std::io::Result<Vec<u8>> {
     access.read(target).and_then(|()| std::fs::read(target))
+}
+
+/// Whether a static's initializer is literals, operators and the arrays and
+/// tuples of them alone: no name, call or block, so each read makes the
+/// same value and nothing in it changes.
+pub(super) fn plain_initializer<'t>(mut tokens: impl Iterator<Item = &'t Token>) -> bool {
+    tokens.all(|token| {
+        matches!(
+            token,
+            Token::IntegerConstant(_)
+                | Token::FloatConstant(_)
+                | Token::CharConstant(_)
+                | Token::StringConstant(_)
+                | Token::ByteStringConstant(_)
+                | Token::ByteConstant(_)
+                | Token::True
+                | Token::False
+                | Token::Unit
+                | Token::LeftParen
+                | Token::RightParen
+                | Token::LeftBracket
+                | Token::RightBracket
+                | Token::Comma
+                | Token::SemiColon
+                | Token::Plus
+                | Token::UnaryPlus
+                | Token::Minus
+                | Token::UnaryMinus
+                | Token::Multiply
+                | Token::Divide
+                | Token::Modulo
+                | Token::LeftShift
+                | Token::RightShift
+                | Token::Ampersand
+                | Token::Pipe
+                | Token::XOr
+                | Token::Bang
+                | Token::EOF
+        )
+    })
 }

@@ -441,7 +441,8 @@ pub(super) enum PreludeOp {
     #[cfg(feature = "rust-import")]
     NativeCoerce,
     /// A static declared in a body, of a native type (D862): its place,
-    /// or before its block writes it, its slot: `value(key)`.
+    /// or before its block writes it, its slot. A static the interpreter
+    /// holds: the value its first read kept. `value(key)`.
     StaticValue,
     /// Whether the static `key` has no value yet: `reserved(key)`.
     StaticReserved,
@@ -449,6 +450,10 @@ pub(super) enum PreludeOp {
     /// type's layout, `[size, pointer offsets..]` or `()` when the import
     /// driver gave none (D865): `settle(key, value, layout)`.
     StaticSettle,
+    /// Keep the static `key`'s value, one the interpreter holds, made at
+    /// its first read, and give the value every read shares (#2519):
+    /// `keep(key, value)`.
+    StaticKeep,
 }
 
 impl PreludeOp {
@@ -588,6 +593,7 @@ impl PreludeOp {
             Self::StaticValue => "static.value",
             Self::StaticReserved => "static.reserved",
             Self::StaticSettle => "static.settle",
+            Self::StaticKeep => "static.keep",
         }
     }
 
@@ -873,6 +879,7 @@ impl PreludeOp {
                 vec![TypeId::of::<Dynamic>(), TypeId::of::<ImmutableString>()]
             }
             Self::StaticValue | Self::StaticReserved => vec![TypeId::of::<ImmutableString>()],
+            Self::StaticKeep => vec![TypeId::of::<ImmutableString>(), TypeId::of::<Dynamic>()],
             Self::StaticSettle => vec![
                 TypeId::of::<ImmutableString>(),
                 TypeId::of::<Dynamic>(),
@@ -975,6 +982,10 @@ impl PreludeOp {
                 let layout = static_layout(args[2]);
                 crate::place::statics::slot(&key).settle(args[1].take(), layout)?;
                 return Ok(Dynamic::UNIT);
+            }
+            Self::StaticKeep => {
+                let key = args[0].clone_cast::<ImmutableString>();
+                return crate::place::statics::slot(&key).keep(args[1].take());
             }
             // An `Rc` or `Arc` coerced to a trait object's gives its value,
             // which native code puts behind its own pointer (#1304).

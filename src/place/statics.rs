@@ -3,6 +3,10 @@
 //! its site runs and keeps for the program's life, at a stable `'static`
 //! address, as a registry that keeps a callsite by its address assumes.
 //!
+//! A static the interpreter holds, of a body or of the program, is kept the
+//! same way: its initializer runs at its first read, and every read, on
+//! every thread, shares the one value it made (#2519).
+//!
 //! A static is found by its key: its site and the fingerprint of its
 //! block's declarations. A new generation that declares it alike reuses
 //! the place and never runs its initializer again. A changed declaration
@@ -31,6 +35,9 @@ enum State {
     Reserved { memory: Option<Memory> },
     /// Written: its place, which marked code reads.
     Settled(Place),
+    /// Written: a value the interpreter holds, whose copies share what a
+    /// `Mutex` or a `RefCell` in it holds.
+    Kept(Dynamic),
 }
 
 /// A written static: its value, reached where it is and never moved.
@@ -219,7 +226,25 @@ impl Slot {
     pub fn value(&self) -> Dynamic {
         match &*self.state() {
             State::Settled(place) => Dynamic::from(place.clone()),
+            State::Kept(value) => value.clone(),
             State::Reserved { .. } => Dynamic::from(self.clone()),
+        }
+    }
+
+    /// Keep `value`, the interpreter's, as the static's, and give the value
+    /// every read shares: `value`, or the one another thread's read of the
+    /// static kept first.
+    pub fn keep(&self, value: Dynamic) -> RawrResult {
+        let mut state = self.state();
+        match &*state {
+            State::Reserved { memory: None } => {
+                *state = State::Kept(value.clone());
+                Ok(value)
+            }
+            State::Kept(kept) => Ok(kept.clone()),
+            State::Reserved { memory: Some(_) } | State::Settled(_) => {
+                Err(failure("a static is written once"))
+            }
         }
     }
 
@@ -290,6 +315,7 @@ impl Slot {
                 drop(state);
                 lasting_place(&place)
             }
+            State::Kept(_) => None,
             State::Reserved { memory } => {
                 if memory.is_none() {
                     *memory = Some(Memory::of::<T>());

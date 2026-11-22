@@ -1744,8 +1744,8 @@ fn main_text(text: &str) -> Option<String> {
 ///
 /// - A script type that was removed while a live value of it is held:
 ///   the running program's state, a value native code holds as a handle,
-///   a pending task or a captured closure (#1746). A static of a script
-///   type holds none: each read is its initializer (D862). One whose
+///   a pending task or a captured closure (#1746), or a static the value
+///   its first read made (#2519). One whose
 ///   fields or variants changed is left to [`admit`], which rewrites its
 ///   live values in place or says why it can't (#2026), and checks again
 ///   with the callables native code holds. Its derives aren't its
