@@ -418,6 +418,14 @@ impl Package {
             .map(|cargo| (cargo.path.as_path(), cargo.text.as_str()))
     }
 
+    /// The edition the package's source is written in: its Cargo
+    /// manifest's, else rawr's own for a package no manifest declares.
+    pub(crate) fn edition(&self) -> crate::edition::Edition {
+        self.cargo.as_ref().map_or_else(Default::default, |cargo| {
+            crate::edition::Edition::from_cargo(cargo.edition.as_deref())
+        })
+    }
+
     #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
     pub(crate) const fn cargo(&self) -> Option<&manifest::cargo::Cargo> {
         self.cargo.as_ref()
@@ -699,6 +707,16 @@ impl Graph {
     pub(crate) fn island_shadow(&self) -> Option<super::island::Shadow> {
         let called = super::called::kept_in(&self.rawr_directory());
         self.island_shadow_for(called.as_ref())
+    }
+
+    /// The marked functions native code can see and can't call through
+    /// rawr yet, as rustc reports the errors of one check: what stops a
+    /// shadow crate's build before anything is built.
+    #[cfg(all(feature = "rust-import", not(target_arch = "wasm32")))]
+    #[must_use]
+    pub fn island_refusal(&self) -> Option<super::Error> {
+        let shadow = self.island_shadow()?;
+        super::island::refusal(shadow.refused).map(super::Error::import_diagnostic)
     }
 
     /// The shadow files with the bodies of the functions in `called`, or of

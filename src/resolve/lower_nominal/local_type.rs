@@ -348,10 +348,13 @@ impl<'a> Parser<'a> {
                     "Send" | "Sync" | "Unpin" | "UnwindSafe" | "RefUnwindSafe"
                 ) {
                     return Err(Error::UnsupportedNominalSyntax {
-                        construct: "a second non-auto trait in a trait object is not supported; \
-                                    only auto traits (`Send`, `Sync`, `Unpin`) can be added, as \
-                                    in Rust (E0225)"
-                            .into(),
+                        construct: crate::resolve::Unsupported::said(
+                            "a second non-auto trait in a trait object is not supported",
+                        )
+                        .with_help(
+                            "only auto traits (`Send`, `Sync`, `Unpin`) can be added, as in Rust \
+                             (E0225)",
+                        ),
                         source: extra_span,
                     });
                 }

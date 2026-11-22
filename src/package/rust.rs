@@ -412,9 +412,11 @@ fn app_crate(
                 handles: Vec::new(),
                 generic: std::collections::BTreeMap::new(),
             });
-        if !shadow.refused.is_empty() {
+        // The program reads the reports from the graph
+        // ([`super::graph::Graph::island_refusal`]); its text is the reason.
+        if let Some(refusal) = super::island::refusal(std::mem::take(&mut shadow.refused)) {
             return Err(rawr_import::Error::Request {
-                reason: shadow.refused.join("\n").into_boxed_str(),
+                reason: crate::diagnostic::render(&refusal).trim_end().into(),
             });
         }
         let root_path = entry

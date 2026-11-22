@@ -1378,34 +1378,10 @@ impl<'a> Parser<'a> {
                     .is_some_and(|(_, name)| name == member)
             });
         }
-        // A kind trait's method, or `into` of a type whose `From` impls
-        // name kinds, on a generic parameter's value runs the impl its
-        // witness names (`write_kind_dispatcher`).
         let trait_arguments = trait_arguments
             .iter()
             .map(|argument| self.inference.resolve(argument))
             .collect::<Vec<_>>();
-        let kind = match self.inference.resolve(&self_ty) {
-            Ty::Param(name, Parameter::Declared) if self.has_witness(&name) => {
-                if trait_arguments.is_empty() && self.models.kind_traits.contains(trait_name) {
-                    Some((
-                        witness_variable(&name),
-                        kind_dispatcher_name(trait_name, &function.name.text),
-                    ))
-                } else if kind_into_bound(&self.models, trait_name, &trait_arguments)
-                    && let Some(index) = self.models.kind_into(&trait_arguments[0])
-                {
-                    Some((witness_variable(&name), kind_into_dispatcher_name(index)))
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        };
-        if kind.is_some() {
-            self.capture_witnesses();
-        }
-        let (kind_witness, kind_dispatcher) = kind.unzip();
         // `Describe::describe(&b)` of a `Foo<i64>`, whose impl is one of
         // `Foo<i32>`'s and `Foo<i64>`'s: the one rustc selects by the full
         // Self type, which the runtime type can't tell.
@@ -1418,9 +1394,7 @@ impl<'a> Parser<'a> {
                         .next()
                         .is_none()
             });
-        let dispatcher = if let Some(dispatcher) = kind_dispatcher {
-            dispatcher
-        } else if let Some(definition) = selected {
+        let dispatcher = if let Some(definition) = selected {
             method_name(&definition)
         } else if trait_arguments.is_empty() {
             trait_dispatcher_name(trait_name, &function.name.text)
@@ -1442,13 +1416,8 @@ impl<'a> Parser<'a> {
             ));
             placeholder
         };
-        let arguments = origin::Fragment::join(
-            kind_witness
-                .map(origin::Fragment::plain)
-                .into_iter()
-                .chain(arguments.iter().map(ParsedExpr::rendered_source)),
-            ", ",
-        );
+        let arguments =
+            origin::Fragment::join(arguments.iter().map(ParsedExpr::rendered_source), ", ");
         if let (Some(borrowed), Some(receiver)) = (borrowed, borrowed_receiver) {
             let mut source =
                 origin::Fragment::plain(format!("{}.{dispatcher}(", places::RECEIVER_PLACE));

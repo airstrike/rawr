@@ -22,8 +22,11 @@ impl<'a> Parser<'a> {
         if inline {
             if frames.iter().any(|frame| !frame.after.is_empty()) {
                 return Err(self.unsupported(
-                    "a `let` that binds a value borrowing a `&mut` buffer its call fills is \
-                     not supported in Rawr yet; match on the call in a statement of its own",
+                    crate::resolve::Unsupported::said(
+                        "a `let` that binds a value borrowing a `&mut` buffer its call fills is \
+                         not supported in Rawr yet",
+                    )
+                    .with_help("match on the call in a statement of its own"),
                 ));
             }
             for frame in frames {
@@ -124,16 +127,17 @@ impl<'a> Parser<'a> {
         let parsed = self.parse_expression_statement(pending);
         // A tail's value goes on into the block's: a temporary it borrows in
         // an extending place goes on with it.
-        let end = if self.last_expression.is_some() {
-            ScopeEnd::Value
+        let end = if let Some((_, tail)) = self.last_expression {
+            ScopeEnd::Tail(tail)
         } else {
-            ScopeEnd::Statement
+            ScopeEnd::Statement(self.last_read())
         };
         self.flow().close_temporaries(end);
         let frames = self.close_frames();
         let temporaries = self.close_temporaries();
         self.field_entries.truncate(pending);
         parsed?;
+        let temporaries = self.hand_tail(start, temporaries);
         self.statement_temporaries(start, &temporaries);
         self.statement_frames(start, opened, frames, false)?;
         self.settle_parses()
@@ -331,6 +335,7 @@ impl<'a> Parser<'a> {
         let Some(binding) = self.mutation_binding(&binding_name) else {
             return Err(self.unsupported("assignment through an unknown binding"));
         };
+        let declaration = binding.declaration;
         // rustc checks an assignment's types before its mutability: an
         // immutable local is reported once the value's type is.
         // A `let x;` not declared `mut` takes one assignment, where it has
@@ -427,6 +432,14 @@ impl<'a> Parser<'a> {
             let place = value.ty.clone();
             self.parse_expr_expecting(Some(&place))?
         };
+        // `r = c.borrow();`: `r` holds the guard, whose drop uses the
+        // cell's borrow where `r` ends.
+        if !compound
+            && matches!(lvalue, Lvalue::Binding { .. })
+            && self.cell_guard_types.contains_key(&replacement.span)
+        {
+            self.assigned_guards.insert(declaration);
+        }
         let kind = match compound_operator(&assignment) {
             Some(_) => self.compound_kind(&value.ty, &replacement.ty),
             None => record::Assignment::Plain,

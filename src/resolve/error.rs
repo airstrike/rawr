@@ -1131,6 +1131,10 @@ pub enum Error {
     /// signature's as the signature's types require, as rustc's borrow
     /// checker reports it (T170).
     Outlives(Box<super::outlives::Reports>),
+    /// A local's borrow that a block's tail temporary keeps past the
+    /// local's end, as it does before edition 2024: rustc's E0597, with
+    /// its explanation of the temporary.
+    TailTemporary(Box<super::tail::Explanation>),
     /// A `&mut` borrow of a place that a local not declared `mut` owns,
     /// which rustc refuses (E0596 "cannot borrow `c` as mutable, as it is
     /// not declared as mutable"), suggesting `mut` where the local is
@@ -1562,8 +1566,8 @@ pub enum Error {
     },
     /// A nominal script reaches syntax deliberately deferred to a later step.
     UnsupportedNominalSyntax {
-        /// Stable description of the unsupported construct.
-        construct: ImmutableString,
+        /// What rawr doesn't run, and how to write it so it runs.
+        construct: Unsupported,
         /// Exact source position that selected it.
         source: Span,
     },
@@ -2044,9 +2048,10 @@ impl Error {
             Self::WrongKind { .. } => Category::WrongKind,
             Self::Unimplemented { .. } | Self::UnsharedStatic { .. } => Category::Unimplemented,
             Self::MovedValue { .. } => Category::MovedValue,
-            Self::BorrowConflict { .. } | Self::ImmutableBorrow { .. } | Self::Outlives(_) => {
-                Category::BorrowConflict
-            }
+            Self::BorrowConflict { .. }
+            | Self::ImmutableBorrow { .. }
+            | Self::Outlives(_)
+            | Self::TailTemporary(_) => Category::BorrowConflict,
             Self::InvalidConstruction { .. } => Category::InvalidConstruction,
             Self::TypeMismatch { .. }
             | Self::ArgumentMismatch(_)
@@ -2115,6 +2120,7 @@ impl Error {
                 message.as_str()
             }
             Self::Outlives(reports) => reports.first().name(),
+            Self::TailTemporary(explanation) => explanation.message(),
             Self::UnknownImport { path, .. } | Self::InvalidImport { path, .. } => path.as_str(),
             Self::UnknownImports { imports } => imports[0].name(),
             Self::InvalidTypeArguments { ty, .. } => ty.as_str(),
@@ -2158,7 +2164,7 @@ impl Error {
             | Self::ImportedApplicationRequired { item, .. } => item.as_str(),
             Self::UnusedValue { value, .. } => value.as_str(),
             Self::SelfOutsideImpl { .. } => "self",
-            Self::UnsupportedNominalSyntax { construct, .. } => construct.as_str(),
+            Self::UnsupportedNominalSyntax { construct, .. } => construct.message(),
             Self::Syntax { message, .. }
             | Self::Macro { message, .. }
             | Self::Unimplemented { message, .. } => message.as_str(),
@@ -2225,6 +2231,7 @@ impl Error {
             Self::MovedValue { reference, .. } => *reference,
             Self::BorrowConflict { access, .. } | Self::ImmutableBorrow { access, .. } => *access,
             Self::Outlives(reports) => reports.first().returned(),
+            Self::TailTemporary(explanation) => explanation.borrow(),
             Self::InvalidConstruction { construction, .. } => *construction,
             Self::TypeMismatch { expression, .. }
             | Self::OpaqueMismatch { expression, .. }
@@ -2315,7 +2322,7 @@ impl Error {
             } => None,
             Self::MovedValue { moved, .. } => Some(*moved),
             Self::BorrowConflict { borrow, .. } => Some(*borrow),
-            Self::Outlives(_) => None,
+            Self::Outlives(_) | Self::TailTemporary(_) => None,
             Self::DuplicateMethod {
                 previous_declaration,
                 ..
@@ -3620,6 +3627,12 @@ impl fmt::Display for Written<'_> {
             Error::ImmutableBorrow {
                 message, access, ..
             } => write!(formatter, "{message} at {access} (E0596)"),
+            Error::TailTemporary(explanation) => write!(
+                formatter,
+                "{} at {} (E0597)",
+                explanation.message(),
+                explanation.borrow()
+            ),
             Error::Outlives(reports) => write!(
                 formatter,
                 "{} at {} ({})",
@@ -3827,7 +3840,7 @@ impl fmt::Display for Written<'_> {
                 write!(formatter, "{} at {rest}", RepeatedRest(*slice))
             }
             Error::UnsupportedNominalSyntax { construct, source } => {
-                write!(formatter, "{} at {source}", Unsupported(construct))
+                write!(formatter, "{construct} at {source}")
             }
             Error::Syntax { message, .. } | Error::Macro { message, .. } => {
                 formatter.write_str(message)
@@ -3957,17 +3970,78 @@ impl fmt::Display for CannotCompare<'_> {
     }
 }
 
-/// A construct rawr doesn't handle yet, named in Rust's terms. A reason
-/// that already says it isn't supported reads as written.
-pub(crate) struct Unsupported<'a>(pub(crate) &'a str);
+/// What rawr doesn't run yet, named in Rust's terms: the message of
+/// rustc's `error:` line, and how to write it so rawr runs it, rustc's
+/// `help:` line.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct Unsupported {
+    message: ImmutableString,
+    help: Option<ImmutableString>,
+}
 
-impl fmt::Display for Unsupported<'_> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.0.contains("not supported") {
-            formatter.write_str(self.0)
-        } else {
-            write!(formatter, "{} is not supported", self.0)
+impl Unsupported {
+    /// `construct is not supported`.
+    pub(crate) fn construct(construct: impl fmt::Display) -> Self {
+        Self {
+            message: format!("{construct} is not supported").into(),
+            help: None,
         }
+    }
+
+    /// A sentence that says, as written, what rawr doesn't run.
+    pub(crate) fn said(message: impl Into<ImmutableString>) -> Self {
+        Self {
+            message: message.into(),
+            help: None,
+        }
+    }
+
+    /// The token `found` where the lowering reads only `expected`, as
+    /// `')' after a tuple`.
+    pub(crate) fn token(expected: &str, found: impl fmt::Display) -> Self {
+        Self {
+            message: format!("`{found}` is not supported here").into(),
+            help: Some(format!("rawr expects {expected} here").into()),
+        }
+    }
+
+    /// The same, with `help` saying how to write it so rawr runs it.
+    #[must_use]
+    pub(crate) fn with_help(self, help: impl Into<ImmutableString>) -> Self {
+        Self {
+            help: Some(help.into()),
+            ..self
+        }
+    }
+
+    /// The message of the error's `error:` line.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    /// How to write it so rawr runs it, the error's `help:` line.
+    #[must_use]
+    pub fn help(&self) -> Option<&str> {
+        self.help.as_deref()
+    }
+}
+
+impl From<&str> for Unsupported {
+    fn from(construct: &str) -> Self {
+        Self::construct(construct)
+    }
+}
+
+impl From<String> for Unsupported {
+    fn from(construct: String) -> Self {
+        Self::construct(construct)
+    }
+}
+
+impl fmt::Display for Unsupported {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
     }
 }
 

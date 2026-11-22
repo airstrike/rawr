@@ -85,6 +85,7 @@ pub(super) fn parameter(body: &Body) -> Option<Conflict> {
         message: reports.first().message(),
         access: reports.first().returned(),
         borrow,
+        tail: None,
         report: Some(Box::new(reports)),
     })
 }
@@ -168,6 +169,7 @@ pub(super) fn stored(body: &Body) -> Option<Conflict> {
                 message: reports.first().message(),
                 access: store.span,
                 borrow: body.locals[local.0 as usize].declaration,
+                tail: None,
                 report: Some(Box::new(reports)),
             });
         }

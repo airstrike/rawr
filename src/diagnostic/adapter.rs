@@ -824,6 +824,13 @@ fn resolution_report_with_sources(
             Some(format!("expected `{output}` because of this return type").into()),
         )?;
     }
+    // rustc explains where the temporary that keeps the borrow is made
+    // and dropped.
+    if let resolve::Error::TailTemporary(explanation) = error {
+        for (span, label) in explanation.labels() {
+            builder = builder.secondary(source.clone(), span, Some(label.into()))?;
+        }
+    }
     // rustc marks the lifetimes it names.
     if let resolve::Error::Outlives(reports) = error {
         for (span, label) in reports.first().lifetimes() {
@@ -1599,6 +1606,14 @@ fn suggestion(error: &resolve::Error, source: &Source) -> Result<Option<Suggesti
     let before = |span: Span| Span::new(span.start(), span.start());
     let after = |span: Span| Span::new(span.end(), span.end());
     match error {
+        resolve::Error::TailTemporary(explanation) => {
+            let (message, places) = explanation.help();
+            let mut edits = Vec::with_capacity(places.len());
+            for (span, text) in places {
+                edits.push(Edit::new(source.clone(), span, &text)?);
+            }
+            Ok(Suggestion::of(&message, Style::Verbose, edits))
+        }
         resolve::Error::Outlives(reports) => match reports.first().suggestion() {
             Some(suggested) => {
                 let lifetime = suggested.lifetime;
@@ -1974,6 +1989,7 @@ fn primary_label(
         }
         resolve::Error::ImmutableBorrow { .. } => Some("cannot borrow as mutable".into()),
         resolve::Error::Outlives(reports) => Some(reports.first().label().into()),
+        resolve::Error::TailTemporary(_) => Some(resolve::tail::Explanation::label().into()),
         resolve::Error::NonExhaustive { witnesses, .. } => resolve::NonExhaustive(witnesses)
             .scrutinee_label()
             .map(Into::into),
@@ -2266,6 +2282,7 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Category::BorrowConflict => match error {
             resolve::Error::BorrowConflict { code, .. } => code::borrow(code),
             resolve::Error::Outlives(reports) => code::borrow(reports.first().code()),
+            resolve::Error::TailTemporary(_) => code::borrow("E0597"),
             resolve::Error::ImmutableBorrow { .. } => code::BORROW_NOT_MUTABLE,
             _ => unreachable!("a borrow conflict's category"),
         },
@@ -2365,6 +2382,7 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
                 None => builder,
             }
         }
+        resolve::Error::TailTemporary(_) => builder.note(resolve::tail::Explanation::note()),
         resolve::Error::Outlives(reports) => {
             let builder = match reports.first().help() {
                 Some(help) => builder.help(help),
@@ -2491,6 +2509,10 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
         resolve::Error::Unimplemented {
             help: Some(help), ..
         } => builder.help(help.clone()),
+        resolve::Error::UnsupportedNominalSyntax { construct, .. } => match construct.help() {
+            Some(help) => builder.help(help),
+            None => builder,
+        },
         // The notes on types that hold it with a site are sections.
         resolve::Error::UnsharedStatic {
             ty,
@@ -2814,6 +2836,7 @@ fn resolution_message(error: &resolve::Error) -> String {
         resolve::Error::BorrowConflict { message, .. }
         | resolve::Error::ImmutableBorrow { message, .. } => message.to_string(),
         resolve::Error::Outlives(reports) => reports.first().message(),
+        resolve::Error::TailTemporary(explanation) => explanation.message().to_owned(),
         resolve::Error::InvalidConstruction { owner, reason, .. } => {
             format!("invalid construction of `{owner}`: {reason}")
         }
@@ -2872,7 +2895,7 @@ fn resolution_message(error: &resolve::Error) -> String {
             format!("invalid match for `{owner}`: {reason}")
         }
         resolve::Error::UnsupportedNominalSyntax { construct, .. } => {
-            resolve::Unsupported(construct).to_string()
+            construct.message().to_owned()
         }
         resolve::Error::Syntax { message, .. } | resolve::Error::Macro { message, .. } => {
             message.to_string()
@@ -3065,6 +3088,59 @@ mod tests {
                 Some("not found in `extension::registry`")
             );
         }
+    }
+
+    /// A construct rawr doesn't run says so on rustc's `error:` line, and
+    /// how to write it so it runs on a `help:` line of its own; a token the
+    /// lowering doesn't read where it stands says what it reads (#1112).
+    #[test]
+    fn an_unsupported_constructs_hint_is_its_help_line() {
+        let source = Source::new(
+            "src/main.rs",
+            "fn main() {\n    static mut N: i32 = 0;\n}\n",
+        )
+        .expect("test source has a stable identity");
+        let at = Span::new(Position::new(2, 12), Position::new(2, 15));
+        let report = |construct: resolve::Unsupported| {
+            let error = ParseError(
+                Box::new(ParseErrorType::Resolution(
+                    resolve::Error::UnsupportedNominalSyntax {
+                        construct,
+                        source: at,
+                    },
+                )),
+                at.start(),
+                Default::default(),
+            );
+            crate::diagnostic::render(
+                &Report::from_parse(source.clone(), &error)
+                    .expect("the error's span belongs to the source"),
+            )
+        };
+        let hinted = report(
+            resolve::Unsupported::construct("a `static mut`")
+                .with_help("keep the value in your state"),
+        );
+        assert!(
+            hinted.starts_with("error: a `static mut` is not supported\n"),
+            "{hinted}"
+        );
+        assert!(
+            hinted.ends_with("  = help: keep the value in your state\n"),
+            "{hinted}"
+        );
+        let token = report(resolve::Unsupported::token(
+            "':' after a static's name",
+            "mut",
+        ));
+        assert!(
+            token.starts_with("error: `mut` is not supported here\n"),
+            "{token}"
+        );
+        assert!(
+            token.ends_with("  = help: rawr expects ':' after a static's name here\n"),
+            "{token}"
+        );
     }
 
     #[test]

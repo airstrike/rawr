@@ -114,7 +114,8 @@ impl<'a> Parser<'a> {
         self.flow().open_temporaries();
         self.open_frames();
         let bound = self.parse_binding_statement(let_keyword);
-        self.flow().close_temporaries(ScopeEnd::Let);
+        let end = ScopeEnd::Let(self.last_read());
+        self.flow().close_temporaries(end);
         let frames = self.close_frames();
         self.field_entries.truncate(pending);
         // A form of `let` that does not drop its temporaries with its value.
@@ -122,9 +123,10 @@ impl<'a> Parser<'a> {
             let temporaries = self.close_temporaries();
             if bound.is_ok() && !temporaries.is_empty() {
                 return Err(Error::UnsupportedNominalSyntax {
-                    construct: "a temporary value whose type implements `Drop` in this form of \
-                                `let`: dropping it where Rust does is not supported in Rawr yet"
-                        .into(),
+                    construct: crate::resolve::Unsupported::said(
+                        "a temporary value whose type implements `Drop` in this form of \
+                                `let`: dropping it where Rust does is not supported in Rawr yet",
+                    ),
                     source: point_span(self.position()),
                 });
             }
@@ -354,10 +356,10 @@ impl<'a> Parser<'a> {
             let chose = chosen
                 .chose()
                 .map_err(|refused| Error::UnsupportedNominalSyntax {
-                    construct:
+                    construct: crate::resolve::Unsupported::said(
                         "a `&mut` chosen by a branch, of a place that is not a local of the \
-                            body or a part of one: not supported in Rawr yet"
-                            .into(),
+                            body or a part of one: not supported in Rawr yet",
+                    ),
                     source: refused,
                 })?;
             if chose {
@@ -1435,8 +1437,10 @@ impl<'a> Parser<'a> {
                 hosted?;
                 if !out.tests.is_empty() {
                     return Err(Error::UnsupportedNominalSyntax {
-                        construct: "a refutable pattern in a binding; use `if let` or `match`"
-                            .into(),
+                        construct: crate::resolve::Unsupported::construct(
+                            "a refutable pattern in a binding",
+                        )
+                        .with_help("use `if let` or `match`"),
                         source: pattern.owner_span,
                     });
                 }
@@ -1452,7 +1456,10 @@ impl<'a> Parser<'a> {
                 Ok(())
             }
             other => Err(Error::UnsupportedNominalSyntax {
-                construct: "a refutable pattern in a binding; use `if let` or `match`".into(),
+                construct: crate::resolve::Unsupported::construct(
+                    "a refutable pattern in a binding",
+                )
+                .with_help("use `if let` or `match`"),
                 source: other.span(),
             }),
         }
@@ -1471,21 +1478,22 @@ impl<'a> Parser<'a> {
         ty: &Ty,
         statements: &mut String,
     ) -> Result<(), Error> {
-        let (element, length) = match ty {
-            Ty::Array {
-                element,
-                kind: sequence::Kind::Array(sequence::Length::Fixed(length)),
-            } => (element, *length),
-            Ty::Array { .. } => {
-                return Err(Error::UnsupportedNominalSyntax {
-                    construct: "a refutable pattern in a binding: a slice pattern on a slice \
-                                of unknown length; use `if let` or `match`"
-                        .into(),
+        let (element, length) =
+            match ty {
+                Ty::Array {
+                    element,
+                    kind: sequence::Kind::Array(sequence::Length::Fixed(length)),
+                } => (element, *length),
+                Ty::Array { .. } => return Err(Error::UnsupportedNominalSyntax {
+                    construct: crate::resolve::Unsupported::said(
+                        "a refutable pattern in a binding is not supported: a slice pattern on a \
+                         slice of unknown length",
+                    )
+                    .with_help("use `if let` or `match`"),
                     source: pattern,
-                })
-            }
-            other => return Err(self.slice_pattern(other, pattern)),
-        };
+                }),
+                other => return Err(self.slice_pattern(other, pattern)),
+            };
         let fixed = before.len() + after.len();
         if rest.is_none() && fixed != length || fixed > length {
             return Err(Error::ArrayPatternLength {

@@ -1456,10 +1456,11 @@ impl Error {
     /// A fresh build's failure as it leaves its transform. The cache check
     /// reads the same errors as an entry to rebuild ([`Check`]), but a fresh
     /// build has no entry: one that only a rawr bug can cause panics here,
-    /// naming its invariant (#522, D664).
+    /// naming its invariant as a [`crate::Bug`] (#522, D664).
+    #[track_caller]
     pub(crate) fn fresh(self) -> Self {
         if let Some(invariant) = self.invariant() {
-            panic!("{invariant}");
+            crate::Bug::raise(invariant);
         }
         self
     }

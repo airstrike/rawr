@@ -436,6 +436,9 @@ impl fmt::Display for ParseErrorType {
                 crate::resolve::Error::Outlives(reports) => {
                     write!(f, "{} ({})", reports.first().message(), reports.first().code())
                 }
+                crate::resolve::Error::TailTemporary(explanation) => {
+                    write!(f, "{} (E0597)", explanation.message())
+                }
                 crate::resolve::Error::ImmutableBorrow { message, .. } => {
                     write!(f, "{message} (E0596)")
                 }
@@ -525,7 +528,7 @@ impl fmt::Display for ParseErrorType {
                     write!(f, "Invalid match for '{owner}': {reason}")
                 }
                 crate::resolve::Error::UnsupportedNominalSyntax { construct, .. } => {
-                    write!(f, "{}", crate::resolve::Unsupported(construct))
+                    write!(f, "{construct}")
                 }
                 crate::resolve::Error::Syntax { message, .. }
                 | crate::resolve::Error::Macro { message, .. } => f.write_str(message),

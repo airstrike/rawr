@@ -282,7 +282,8 @@ impl<'a> Parser<'a> {
             let rhs = self.parse_binary(precedence + 1);
             let (temporaries, frames) = if lazy {
                 let frames = self.close_frames();
-                self.flow().close_temporaries(ScopeEnd::Statement);
+                let end = ScopeEnd::Statement(self.last_read());
+                self.flow().close_temporaries(end);
                 (self.close_temporaries(), frames)
             } else {
                 (Vec::new(), Vec::new())

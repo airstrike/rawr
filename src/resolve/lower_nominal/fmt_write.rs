@@ -70,12 +70,11 @@ impl Parser<'_> {
         if !matches!(owner, Ty::String) {
             if !self.std_writer(&owner) {
                 return Err(Error::UnsupportedNominalSyntax {
-                    construct: format!(
-                        "`{name}!` into a `{}` is not supported in Rawr yet; write into a \
-                         `String` or a `fmt` formatter",
+                    construct: crate::resolve::Unsupported::said(format!(
+                        "`{name}!` into a `{}` is not supported in Rawr yet",
                         target.ty.name(&self.models)
-                    )
-                    .into(),
+                    ))
+                    .with_help("write into a `String` or a `fmt` formatter"),
                     source: target.span,
                 });
             }

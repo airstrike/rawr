@@ -849,7 +849,6 @@ impl<'a> Parser<'a> {
         trait_name: &str,
         arguments: &[Ty],
         span: Span,
-        through: Through,
     ) -> Option<Error> {
         let mut ty = self.inference.resolve(ty);
         while let Ty::Reference { target, .. } = ty {
@@ -872,7 +871,7 @@ impl<'a> Parser<'a> {
             })
             .cloned()
             .collect::<Vec<_>>();
-        let mut selves = BTreeMap::new();
+        let mut selves = BTreeSet::new();
         for definition in &definitions {
             let written = definition.trait_arguments();
             let instance = written.len() == arguments.len()
@@ -881,31 +880,13 @@ impl<'a> Parser<'a> {
                         || self.unifies(&Ty::from_resolved(written), argument)
                 });
             if instance {
-                let witness = definition
-                    .builtin_owner()
-                    .and_then(|owner| witness_code(&Ty::from_resolved(owner)));
-                selves.insert(
-                    impl_self_ty(definition, &BTreeMap::new()).name(&self.models),
-                    witness,
-                );
+                selves.insert(impl_self_ty(definition, &BTreeMap::new()).name(&self.models));
             }
         }
-        // A kind trait's impls each have their own witness.
-        let witnessed = through == Through::Parameter
-            && arguments.is_empty()
-            && self.models.kind_traits.contains(trait_name)
-            && selves
-                .values()
-                .copied()
-                .collect::<Option<BTreeSet<_>>>()
-                .is_some_and(|codes| codes.len() == selves.len());
-        let mut selves = selves.into_keys();
+        let mut selves = selves.into_iter();
         let (Some(first), Some(second)) = (selves.next(), selves.next()) else {
             return None;
         };
-        if witnessed {
-            return None;
-        }
         Some(Error::UnsupportedNominalSyntax {
             construct: format!(
                 "telling `{first}`'s impl of `{trait_name}` from `{second}`'s through a generic \
@@ -1941,13 +1922,12 @@ impl<'a> Parser<'a> {
                 };
                 let Some(item) = item else {
                     return Err(Error::UnsupportedNominalSyntax {
-                        construct: format!(
+                        construct: crate::resolve::Unsupported::said(format!(
                             "`{}` as an associated type bounded by `{bound}<Item = ..>` is not \
-                             supported in Rawr yet; only Rust's own iterators (a `Range`, an \
+                             supported in Rawr yet: only Rust's own iterators (a `Range`, an \
                              iterator chain) are",
                             ty.name(&self.models)
-                        )
-                        .into(),
+                        )),
                         source: name.span,
                     });
                 };
@@ -2217,16 +2197,6 @@ fn implementor_tag(ty: &crate::host::type_ref::Type) -> Option<String> {
         _ => return None,
     };
     rawr_import::classify::representability::object::tag(&converted)
-}
-
-/// What a value reaches its trait's impls through by its runtime type
-/// (`Parser::untold_impls`).
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum Through {
-    /// A generic parameter, which may hold a type witness.
-    Parameter,
-    /// A trait object, which holds none.
-    Object,
 }
 
 /// An impl's associated type: its name, its type, and where the impl

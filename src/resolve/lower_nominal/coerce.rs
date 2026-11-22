@@ -653,12 +653,11 @@ impl<'a> Parser<'a> {
             // a counted pointer of the program's type, is not done yet.
             if type_ref::is_native_trait(&trait_name) {
                 return Err(Error::UnsupportedNominalSyntax {
-                    construct: format!(
+                    construct: crate::resolve::Unsupported::said(format!(
                         "coercing `{}` to the native trait object `{}` is not supported yet",
                         concrete.name(&self.models),
                         Ty::Dyn(trait_name.clone(), bindings.clone()).name(&self.models)
-                    )
-                    .into(),
+                    )),
                     source: value.span,
                 });
             }
@@ -721,13 +720,8 @@ impl<'a> Parser<'a> {
                     chain: crate::resolve::Chain::default(),
                 });
             }
-            if let Some(error) = self.untold_impls(
-                &concrete,
-                &trait_name,
-                &positional,
-                value.span,
-                super::traits::Through::Object,
-            ) {
+            if let Some(error) = self.untold_impls(&concrete, &trait_name, &positional, value.span)
+            {
                 return Err(error);
             }
             // `dyn Shape<Output = i64>`: the type's `Output` is `i64`.

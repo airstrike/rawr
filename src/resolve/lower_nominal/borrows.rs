@@ -1534,7 +1534,7 @@ impl Parser<'_> {
         };
         let reference = self
             .flow()
-            .borrow_temporary(value.span, true, &held, false, false);
+            .borrow_temporary(value.span, true, &held, false, None);
         self.flow().set_origins(whole, reference);
     }
 
@@ -1558,7 +1558,7 @@ impl Parser<'_> {
         let place = self.flow().in_place(value.span);
         match held {
             Some(held) if !place && self.made_here(value.span, &ty) => {
-                let drops = self.temporary_drop_use(&ty, value.span);
+                let drops = self.temporary_destructor(&ty, value.span);
                 let reference = self
                     .flow()
                     .borrow_temporary(value.span, false, &held, true, drops);
@@ -1573,6 +1573,30 @@ impl Parser<'_> {
             _ if holds => {}
             _ => self.flow().set_origins(whole, Vec::new()),
         }
+    }
+
+    /// What the drop of the temporary of type `ty` spanning `span` runs,
+    /// as rustc names it, when it uses what the temporary holds: its type's
+    /// own `Drop` code, else its drop glue.
+    fn temporary_destructor(
+        &self,
+        ty: &Ty,
+        span: Span,
+    ) -> Option<crate::resolve::tail::Destructor> {
+        use crate::resolve::tail::Destructor;
+        if !self.temporary_drop_use(ty, span) {
+            return None;
+        }
+        let ty = self.inference.resolve(ty);
+        let name = ty.name(&self.models);
+        Some(match ty {
+            // rustc names a type with a `Drop` of its own by its path.
+            Ty::Script(id, _) if self.models.has_drop(id) => {
+                let path = name.split('<').next().unwrap_or(&name);
+                Destructor::Drop(path.into())
+            }
+            _ => Destructor::Glue(name),
+        })
     }
 
     /// Whether the drop of a temporary of type `ty` spanning `span` uses
@@ -2023,7 +2047,7 @@ impl Parser<'_> {
                 && self.made_here(receiver.span, &receiver.ty)
             {
                 let held = region::sub(&value, path(&[Step::Arg(0)]));
-                let drops = self.temporary_drop_use(&receiver.ty, receiver.span);
+                let drops = self.temporary_destructor(&receiver.ty, receiver.span);
                 return Some(self.flow().borrow_temporary(
                     receiver.span,
                     mutable,
@@ -2083,21 +2107,30 @@ impl Parser<'_> {
         }
         let held = self.flow().origins(value.span).map(<[_]>::to_vec);
         if let Some(held) = held {
-            self.flow().hold_temporary(value.span, &held);
+            self.flow().hold_temporary(value.span, &held, None);
         }
     }
 
     /// `cell.borrow()` or `cell.borrow_mut()` spanning `call`: its guard
     /// holds the `&self` borrow of the cell for as long as it lives, as
-    /// `Ref` and `RefMut` do.
+    /// `Ref` and `RefMut` do, and the guard's drop uses it. A guard the
+    /// expression makes is a temporary of its scope, whose drop runs the
+    /// destructor of std's guard type (`cell_guard_type`).
     pub(super) fn cell_borrowed(&self, cell: &ParsedExpr, call: Span) {
         if !is_place(cell) {
             return;
         }
         let below = self.may_hold_borrow(&cell.ty);
-        let loan = self.flow().autoref(cell.span.start(), call, false, below);
+        // At the receiver, as rustc reports a method's autoref.
+        let loan = self
+            .flow()
+            .autoref(cell.span.start(), cell.span, false, below);
         if let Some(loan) = loan {
-            self.flow().set_origins(call, vec![(Path::OWN, loan)]);
+            let held = vec![(Path::OWN, loan)];
+            let guard = self.cell_guard_type(call).unwrap_or_default();
+            let destructor = crate::resolve::tail::Destructor::Glue(guard);
+            self.flow().hold_temporary(call, &held, Some(destructor));
+            self.flow().set_origins(call, held);
         }
     }
 
@@ -2197,11 +2230,10 @@ impl Parser<'_> {
             );
         if alias && matches!(self.inference.resolve(ty), Ty::Reference { .. }) && !same {
             return Err(Error::UnsupportedNominalSyntax {
-                construct: format!(
+                construct: crate::resolve::Unsupported::said(format!(
                     "giving the `&mut` local `{name}` a new borrow when it borrows a place no \
                      runtime local can hold, or in an async body: not supported in Rawr yet"
-                )
-                .into(),
+                )),
                 source: target,
             });
         }
@@ -2264,7 +2296,16 @@ impl Parser<'_> {
             return;
         }
         let whole = assignee::assignment_span(target, replacement);
-        self.flow().assigned(target.start(), whole, assignment);
+        // `*c.borrow_mut() = v` stores through the guard the expression
+        // made: a change inside the cell, which its `&self` borrow allows.
+        let through_guard = matches!(
+            lvalue,
+            Lvalue::Nested(nested)
+                if matches!(nested.steps.first(), Some(PlaceStep::Cell { release: true, .. }))
+        );
+        if !through_guard {
+            self.flow().assigned(target.start(), whole, assignment);
+        }
         // `pair.right = &b`: the local takes the borrows besides its own.
         let origins = self
             .flow()
@@ -2431,6 +2472,14 @@ impl Parser<'_> {
                     report.returned_at(|returned| self.expression_span(returned)),
                 )))
             }
+            Some(borrowck::Conflict {
+                tail: Some(explanation),
+                ..
+            }) => Err(Error::TailTemporary(Box::new(
+                explanation
+                    .guard_named(|temporary| self.cell_guard_type(temporary))
+                    .written(|span| self.expression_span(span)),
+            ))),
             Some(conflict) => Err(Error::BorrowConflict {
                 code: conflict.code,
                 message: conflict.message.into(),

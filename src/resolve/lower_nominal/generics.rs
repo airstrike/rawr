@@ -440,6 +440,11 @@ impl<'a> Parser<'a> {
 
     /// Check each pending generic bound against its now-known type.
     pub(super) fn finish_bounds(&mut self) -> Result<(), Error> {
+        // A template's instance is chosen by its types, which the impls its
+        // bounds select fix before a literal falls back (D1115).
+        if !self.pending_template_calls.is_empty() {
+            self.fix_by_impls();
+        }
         // An opaque output's hidden literal is its fallback kind before its
         // bounds are proved: `impl Display` of `42` is an `i32`.
         for hidden in self.hidden_outputs.values().cloned().collect::<Vec<_>>() {
@@ -558,13 +563,10 @@ impl<'a> Parser<'a> {
             }
         }
         for (ty, trait_name, arguments, span) in std::mem::take(&mut self.pending_dispatches) {
-            if let Some(error) = self.untold_impls(
-                &ty,
-                &trait_name,
-                &arguments,
-                span,
-                super::traits::Through::Parameter,
-            ) {
+            if self.binds_instance(span) {
+                continue;
+            }
+            if let Some(error) = self.untold_impls(&ty, &trait_name, &arguments, span) {
                 return Err(error);
             }
         }
@@ -589,7 +591,7 @@ impl<'a> Parser<'a> {
     ) -> Vec<origin::Fragment> {
         let mut arguments = Vec::new();
         let names = witness_generics(generics, &self.models)
-            .map(|generic| (generic.name.text.clone(), Need::of(generic, &self.models)))
+            .map(|generic| (generic.name.text.clone(), Need::of(generic)))
             .collect::<Vec<_>>();
         // A call inside a closure may pass this body's own witnesses, which
         // the closure then captures.
@@ -616,19 +618,10 @@ impl<'a> Parser<'a> {
                 .generics
                 .get(name)
                 .is_some_and(|bounds| bounds.contains(capability::Kind::Default))
-            || self.generic_traits.get(name).is_some_and(|traits| {
-                traits.iter().any(|name| {
-                    static_trait(&self.models, name) || self.models.kind_traits.contains(name)
-                })
-            })
             || self
-                .generic_trait_arguments
-                .get(&(name.into(), "Into".into()))
-                .is_some_and(|lists| {
-                    lists
-                        .iter()
-                        .any(|arguments| kind_into_bound(&self.models, "Into", arguments))
-                })
+                .generic_traits
+                .get(name)
+                .is_some_and(|traits| traits.iter().any(|name| static_trait(&self.models, name)))
     }
 
     /// Each enclosing closure captures this body's type witnesses, which a
@@ -731,6 +724,7 @@ impl<'a> Parser<'a> {
                 self.inference.bind(id, default);
             }
         }
+        self.finish_template_calls();
         for (id, value, at) in std::mem::take(&mut self.literal_values) {
             let value = Wide::Signed(value.into());
             if let Ty::Int(kind) = self.inference.resolve(&Ty::Int(Int::Var(id)))
@@ -831,10 +825,7 @@ impl<'a> Parser<'a> {
             {
                 ty = self.inference.resolve(target);
             }
-            let witness = match self.witness(&ty, &parameter, span) {
-                Err(_) if need == Need::Kind => UNKNOWN_WITNESS.to_string(),
-                witness => witness?,
-            };
+            let witness = self.witness(&ty, &parameter, span)?;
             if let Ty::Param(_, Parameter::Opaque(captured)) = &ty {
                 let arguments = self
                     .opaque_argument_witnesses(&captured.arguments, &parameter, span)
@@ -898,12 +889,11 @@ impl<'a> Parser<'a> {
             };
             if source.len() > placeholder.len() {
                 return Err(Error::UnsupportedNominalSyntax {
-                    construct: format!(
-                        "`Default::default()` for `{}` is not supported in Rawr yet; write \
-                         `<{0}>::default()`",
+                    construct: crate::resolve::Unsupported::said(format!(
+                        "`Default::default()` for `{}` is not supported in Rawr yet",
                         ty.name(&self.models)
-                    )
-                    .into(),
+                    ))
+                    .with_help(format!("write `<{}>::default()`", ty.name(&self.models))),
                     source: span,
                 });
             }
@@ -1088,8 +1078,7 @@ impl<'a> Parser<'a> {
     /// `From<u32>`. A bound's argument takes the type the impl for a known
     /// type gives: `M` of `impl IntoView<'a, M>` given a `Content<Message>`
     /// is `Message` by `impl<M> IntoView<'_, M> for Content<M>`.
-    #[cfg(feature = "rust-import")]
-    fn fix_by_impls(&mut self) {
+    pub(super) fn fix_by_impls(&mut self) {
         let open = self
             .pending_traits
             .iter()
@@ -1097,15 +1086,36 @@ impl<'a> Parser<'a> {
                 let ty = self.inference.resolve(ty);
                 contains_open_literal(&ty)
                     || !is_unsettled(&ty)
-                        && arguments
-                            .iter()
-                            .any(|argument| contains_inference(&self.inference.resolve(argument)))
+                        && arguments.iter().any(|argument| {
+                            let argument = self.inference.resolve(argument);
+                            contains_inference(&argument) || contains_open_literal(&argument)
+                        })
             })
             .cloned()
             .collect::<Vec<_>>();
         for (ty, trait_name, arguments, ..) in open {
             let resolved = self.inference.resolve(&ty);
-            if contains_open_literal(&resolved) {
+            // A literal argument of a program type takes what its impl's
+            // arguments give it: `Holder<{integer}>: Convert<i64>` by
+            // `impl<T> Convert<T> for Holder<T>` holds an `i64`.
+            // `7` for `T: Into<Wrapper>`, or `S` of `T: From<S>` at
+            // `Wrapper`, is the `i64` of Wrapper's one `From` impl a literal
+            // fits, as rustc selects it.
+            if let [argument] = &arguments[..] {
+                let (target, source) = match trait_name.as_str() {
+                    "Into" => (argument.clone(), resolved.clone()),
+                    "From" => (resolved.clone(), argument.clone()),
+                    _ => (Ty::Unknown, Ty::Unknown),
+                };
+                let source = self.inference.resolve(&source);
+                if contains_open_literal(&source)
+                    && let Some(target) = owner_id(&self.inference.resolve(&target))
+                    && self.fix_conversion_source(target, &source)
+                {
+                    continue;
+                }
+            }
+            if contains_open_literal(&resolved) && !matches!(resolved, Ty::Script(..)) {
                 self.type_implements_with(&ty, &trait_name, &arguments);
                 continue;
             }
@@ -1130,6 +1140,26 @@ impl<'a> Parser<'a> {
                 }
             }
         }
+    }
+
+    /// Give `source`, an open literal's type, the source type of the one
+    /// `From` impl of `target` it fits, if one alone does.
+    fn fix_conversion_source(&mut self, target: type_def::Id, source: &Ty) -> bool {
+        let sources = self
+            .models
+            .conversions
+            .get(&target)
+            .into_iter()
+            .flatten()
+            .filter_map(|method| method.conversion().map(Ty::from_resolved))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .filter(|from| self.unifies(from, source))
+            .collect::<Vec<_>>();
+        let [from] = &sources[..] else {
+            return false;
+        };
+        self.unify_type(from, source)
     }
 
     /// The names of the types a call of a template gives its parameters:
@@ -1499,8 +1529,6 @@ pub(super) fn assumed_generics(generics: &[item::Generic]) -> Box<[(Ty, Immutabl
 /// function without `self`: each takes a hidden type witness, so
 /// `T::default()` and `T::new()` reach a type erased at runtime. A const
 /// parameter takes its value as its witness, which `N` in the body reads.
-/// One bounded by a kind trait (`Models::kind_traits`) takes one too, so
-/// `x.half()` of a `T` that is `f32` runs `f32`'s impl.
 pub(super) fn witness_generics<'a>(
     generics: &'a [item::Generic],
     models: &'a Models,
@@ -1513,35 +1541,7 @@ pub(super) fn witness_generics<'a>(
                 .traits
                 .iter()
                 .any(|name| static_trait(models, &name.text))
-            || kind_bounded(generic, models)
     })
-}
-
-/// Whether `generic` is bounded by a kind trait (`Models::kind_traits`) or
-/// by `Into` of a type whose `From` impls name kinds (`Models::kind_into`).
-fn kind_bounded(generic: &item::Generic, models: &Models) -> bool {
-    generic
-        .traits
-        .iter()
-        .any(|name| models.kind_traits.contains(&name.text))
-        || generic.trait_arguments.iter().any(|(name, arguments)| {
-            kind_into_bound(
-                models,
-                name,
-                &arguments.iter().map(Ty::from_resolved).collect::<Vec<_>>(),
-            )
-        })
-}
-
-/// Whether `name<arguments>` is the prelude's `Into` of a type whose `From`
-/// impls name kinds (`Models::kind_into`).
-pub(super) fn kind_into_bound(models: &Models, name: &str, arguments: &[Ty]) -> bool {
-    name == "Into"
-        && models
-            .traits
-            .get(name)
-            .is_some_and(|(_, declared)| declared.name.span == Span::NONE)
-        && matches!(arguments, [target] if models.kind_into(target).is_some())
 }
 
 /// What a call's witness for a generic parameter must name.
@@ -1554,33 +1554,22 @@ pub(super) enum Need {
     /// alone may take a reference, which implements them only by
     /// forwarding to its referent's impls (`resolve::forward`).
     Referent,
-    /// As `Referent`, for a parameter witnessed for its kind traits alone:
-    /// a type without a witness passes `UNKNOWN_WITNESS`, and the call
-    /// runs the impl of the value's runtime type.
-    Kind,
 }
 
 impl Need {
     /// What a call's witness for `generic`, one of `witness_generics`,
     /// must name.
-    pub(super) fn of(generic: &item::Generic, models: &Models) -> Self {
+    pub(super) fn of(generic: &item::Generic) -> Self {
         if generic.host || generic.bounds.contains(capability::Kind::Default) {
             Self::Type
-        } else if generic.constant.is_some()
-            || generic
-                .traits
-                .iter()
-                .any(|name| static_trait(models, &name.text))
-        {
-            Self::Referent
         } else {
-            Self::Kind
+            Self::Referent
         }
     }
 }
 
-/// The witness of a type no witness code names, which a kind trait's
-/// dispatcher (`write_kind_dispatchers`) reads as the value's runtime type.
+/// The witness a dispatcher by runtime type passes an impl method for its
+/// generics' witnesses, which no runtime value names.
 pub(super) const UNKNOWN_WITNESS: crate::INT = -1;
 
 /// Whether an impl whose header writes its owner's arguments `written`

@@ -88,6 +88,40 @@ pub fn failure(
     }
 }
 
+/// Where rawr's bugs are reported, as rustc's ICE names its tracker.
+const BUG_REPORT: &str = "https://github.com/airstrike/rawr/issues/new";
+
+/// A broken invariant, `bug`, as rustc reports an internal compiler error:
+/// `error: internal compiler error: <place>: <message>`, the place being
+/// where rawr panicked, as rustc's `bug!` names its own.
+#[must_use]
+pub fn internal(bug: &str, at: Option<&std::panic::Location<'_>>) -> diagnostic::Report {
+    let message = match at {
+        Some(at) => format!(
+            "internal compiler error: {}:{}:{}: {bug}",
+            at.file(),
+            at.line(),
+            at.column()
+        ),
+        None => format!("internal compiler error: {bug}"),
+    };
+    diagnostic::Report::error(diagnostic::code::FRAMEWORK_NATIVE, message).finish()
+}
+
+/// The notes rustc prints after an internal compiler error's panic, each a
+/// line of its own after a blank line: where to report the bug, and the
+/// version that has it.
+#[must_use]
+pub fn bug_notes(note: &str) -> String {
+    format!(
+        "\n{note}: we would appreciate a bug report: {BUG_REPORT}\n\n\
+         {note}: rawr-import {} running on {}-{}\n",
+        env!("CARGO_PKG_VERSION"),
+        std::env::consts::ARCH,
+        std::env::consts::OS,
+    )
+}
+
 /// `file` as the user names it: from the current directory when it is
 /// under it, as rustc and cargo show a path.
 fn shown(file: &str) -> String {
@@ -131,6 +165,33 @@ mod tests {
         assert_eq!(
             Task::Start.headline(Some("/project/src/main.rs")),
             "rawr could not start `/project/src/main.rs`"
+        );
+    }
+
+    /// A broken invariant reads as rustc's internal compiler error: the
+    /// place rawr panicked at and what it misread on the `error:` line,
+    /// then rustc's notes on where to report it (#1929).
+    #[test]
+    fn a_broken_invariant_reads_as_rustc_s_internal_compiler_error() {
+        let at = std::panic::Location::caller();
+        let report = super::internal("rawr misread rustc's output (`span`): line 0", Some(at));
+        assert_eq!(
+            diagnostic::render(&report),
+            format!(
+                "error: internal compiler error: {}:{}:{}: rawr misread rustc's output \
+                 (`span`): line 0\n",
+                at.file(),
+                at.line(),
+                at.column()
+            )
+        );
+        let notes = super::bug_notes("note");
+        assert!(
+            notes.starts_with(
+                "\nnote: we would appreciate a bug report: \
+                 https://github.com/airstrike/rawr/issues/new\n\nnote: rawr-import "
+            ),
+            "{notes}"
         );
     }
 }

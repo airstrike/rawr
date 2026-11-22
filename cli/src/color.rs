@@ -164,6 +164,8 @@ pub enum Style {
     Status,
     /// A headline's message, after `error: `: bold.
     Emphasis,
+    /// `note`, as rustc's: bold bright green.
+    Note,
 }
 
 impl Style {
@@ -173,6 +175,7 @@ impl Style {
             Self::Warning => "\u{1b}[1m\u{1b}[33m",
             Self::Status => "\u{1b}[1m\u{1b}[92m",
             Self::Emphasis => "\u{1b}[1m",
+            Self::Note => "\u{1b}[1m\u{1b}[92m",
         }
     }
 }
@@ -184,6 +187,9 @@ pub enum Level {
     Error,
     /// `warning`.
     Warning,
+    /// `note`, a line of its own after an error, as rustc's after an
+    /// internal compiler error.
+    Note,
 }
 
 /// The word `level` starts a line on stderr with, before its `: `, in
@@ -194,6 +200,7 @@ pub fn label(level: Level) -> String {
     match level {
         Level::Error => paint("error", Style::Error, stderr()),
         Level::Warning => paint("warning", Style::Warning, stderr()),
+        Level::Note => paint("note", Style::Note, stderr()),
     }
 }
 

@@ -2304,7 +2304,11 @@ pub(super) fn contains(ty: &Ty, leaf: &dyn Fn(&Ty) -> bool) -> bool {
             | Ty::Range(target)
             | Ty::OpenRange(_, target)
             | Ty::InclusiveOf(target)
-            | Ty::Cell(_, target) => inside(target),
+            | Ty::Cell(_, target)
+            | Ty::Counted(_, target)
+            | Ty::Weak(_, target)
+            | Ty::Thread(_, target) => inside(target),
+            Ty::Script(_, arguments) => arguments.iter().any(inside),
             Ty::Array {
                 element,
                 kind: sequence::Kind::Array(length),

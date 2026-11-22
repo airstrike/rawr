@@ -3,7 +3,6 @@
 
 use super::inference::AssociatedTypes;
 use super::obligation;
-use super::op::{builtin_code, witness_code};
 use super::ty::Ty;
 use super::{
     function_name, inherit_block_names, inherit_names, instance_text, is_iterator_trait,
@@ -53,6 +52,9 @@ pub(super) struct Tables {
     /// The features Cargo enables for the package: `cfg(feature = "..")`
     /// holds for each.
     pub(super) features: crate::project::cargo::features::Enabled,
+    /// The edition each source's package is written in, by the source's
+    /// index: empty for a source compiled alone.
+    editions: Box<[crate::edition::Edition]>,
     /// The entry package's workspace, as Cargo described it when the
     /// program loaded: what `env!("CARGO_CRATE_NAME")` and
     /// `module_path!()` name the entry target by.
@@ -155,11 +157,6 @@ pub(super) struct Tables {
     /// The distinct argument lists without parameters of each generic
     /// trait's impls: one dispatcher per instance.
     pub(super) trait_instances: BTreeMap<ImmutableString, Vec<Box<[type_ref::Type]>>>,
-    /// The program's traits with impls for two kinds of one runtime type
-    /// (`f32` and `f64`, or two integer kinds). A call through a generic
-    /// parameter bounded by one picks its impl by the parameter's witness,
-    /// as rustc picks it by the parameter's type.
-    pub(super) kind_traits: BTreeSet<ImmutableString>,
     /// `type Name = T;` of each `impl Trait for Owner`.
     pub(super) associated: Shared<AssociatedTypes>,
     /// The std traits among `traits` (`Clone`, `Display`, ..).
@@ -174,6 +171,10 @@ pub(super) struct Tables {
     pub(super) entry: crate::program::source::Id,
     /// The generic functions compiled per instantiation (D629).
     pub(super) instances: crate::resolve::Instances,
+    /// The program's generic functions and inherent methods whose bodies
+    /// use their parameters' types, each with those parameters: each is
+    /// lowered per instance its calls bind (D1115).
+    pub(super) templates: BTreeMap<crate::item::Key, Box<[ImmutableString]>>,
     /// The script's impls of crate traits for its own types, which a
     /// crate's bound selects as rustc selects an impl (D627, D629).
     #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
@@ -324,7 +325,6 @@ impl Models {
                     .push(method.clone());
             }
         }
-        let kind_traits = kind_traits(&trait_methods);
         let traits = program
             .items
             .iter()
@@ -1001,6 +1001,7 @@ impl Models {
             host,
             access: engine.access().clone(),
             features: program.features().clone(),
+            editions: program.editions().into(),
             workspace: program.workspace().cloned(),
             imports,
             lexical: program.lexical.clone(),
@@ -1070,7 +1071,6 @@ impl Models {
             impl_arguments,
             impl_bounds,
             trait_instances,
-            kind_traits,
             associated: Shared::new(associated),
             std_traits,
             opaque_outputs: Shared::new(opaque_outputs(&program.items)),
@@ -1102,6 +1102,34 @@ impl Models {
             sources: program.source.table().clone(),
             entry: program.source.entry(),
             instances: program.instances.clone(),
+            templates: program
+                .items
+                .iter()
+                .filter_map(|shell| {
+                    let item::Kind::Function(function) = &shell.kind else {
+                        return None;
+                    };
+                    let key = shell.key.as_ref()?;
+                    if program.instances.templates.contains_key(key)
+                        || program.instances.types.contains_key(key)
+                    {
+                        return None;
+                    }
+                    Some((key.clone(), super::instance::template_parameters(function)?))
+                })
+                .chain(program.methods.iter().filter_map(|definition| {
+                    let key = definition.key();
+                    if program.instances.templates.contains_key(key)
+                        || program.instances.types.contains_key(key)
+                    {
+                        return None;
+                    }
+                    Some((
+                        key.clone(),
+                        super::instance::method_template_parameters(definition)?,
+                    ))
+                }))
+                .collect(),
             macros: program.macros.clone(),
             laid_out: laid_out(program, engine),
             macro_rules: program
@@ -1439,27 +1467,6 @@ impl Models {
                     .builtin_owner()
                     .is_none_or(|owner| Ty::from_resolved(owner) == *target)
             })
-    }
-
-    /// The index among `Into`'s instances of `target`, when `target`'s
-    /// `From` impls name two kinds of one runtime type (`From<u8>` and
-    /// `From<i64>`, or `From<&str>` and `From<String>`): `x.into()` of a
-    /// generic parameter's value picks one by the parameter's witness, as
-    /// `kind_traits`' calls do.
-    pub(super) fn kind_into(&self, target: &Ty) -> Option<usize> {
-        let index = self.trait_instances.get("Into")?.iter().position(
-            |instance| matches!(&instance[..], [only] if Ty::from_resolved(only) == *target),
-        )?;
-        let mut kinds = BTreeMap::<crate::INT, BTreeSet<crate::INT>>::new();
-        for conversion in self.conversions_into(target) {
-            let Some(source) = conversion.conversion().map(Ty::from_resolved) else {
-                continue;
-            };
-            if let (Some(key), Some(code)) = (builtin_code(&source), witness_code(&source)) {
-                kinds.entry(key).or_default().insert(code);
-            }
-        }
-        kinds.values().any(|codes| codes.len() > 1).then_some(index)
     }
 
     /// The inherent function `name` of `owner` that is private to a module
@@ -1822,6 +1829,15 @@ impl Models {
                 .any(|at| crate::resolve::block::contains(block, at))
     }
 
+    /// The edition the source being lowered is written in.
+    pub(super) fn edition(&self) -> crate::edition::Edition {
+        self.tables
+            .editions
+            .get(self.context.index())
+            .copied()
+            .unwrap_or_default()
+    }
+
     pub(super) fn for_source(&self, source: crate::program::source::Id) -> Self {
         let mut models = self.clone();
         models.context = source;
@@ -1909,33 +1925,6 @@ impl Nominal {
     pub(super) fn capabilities(&self) -> capability::Set {
         self.definition().capabilities()
     }
-}
-
-/// The traits whose impls name two kinds of one runtime type (`Models::
-/// kind_traits`): two builtin owners with one runtime key and two witness
-/// codes (`witness_code`).
-fn kind_traits(
-    trait_methods: &BTreeMap<(type_def::Id, ImmutableString), Vec<method::Definition>>,
-) -> BTreeSet<ImmutableString> {
-    let mut kinds = BTreeMap::<(ImmutableString, crate::INT), BTreeSet<crate::INT>>::new();
-    for definition in trait_methods.values().flatten() {
-        let (Some(trait_name), Some(owner)) = (definition.trait_name(), definition.builtin_owner())
-        else {
-            continue;
-        };
-        let owner = Ty::from_resolved(owner);
-        if let (Some(key), Some(code)) = (builtin_code(&owner), witness_code(&owner)) {
-            kinds
-                .entry((trait_name.clone(), key))
-                .or_default()
-                .insert(code);
-        }
-    }
-    kinds
-        .into_iter()
-        .filter(|(_, codes)| codes.len() > 1)
-        .map(|((trait_name, _), _)| trait_name)
-        .collect()
 }
 
 /// The crate traits each source's `use`s put in scope, each with the block

@@ -1072,9 +1072,19 @@ impl<'a> Parser<'a> {
     pub(super) fn parse_block_expr(&mut self) -> Result<ParsedExpr, Error> {
         let original = self.bindings.clone();
         let outer = std::mem::replace(&mut self.no_struct, false);
+        self.escape_tails();
         let block = self.parse_match_action();
         self.no_struct = outer;
-        let inner = std::mem::replace(&mut self.bindings, original);
+        let mut inner = std::mem::replace(&mut self.bindings, original);
+        // The tail's temporaries that went on to the scope around the
+        // block stay bound there.
+        for temporary in self.temporary_scopes.last().into_iter().flatten() {
+            if let Some(binding) = inner.remove(temporary.as_str()) {
+                self.bindings
+                    .entry(temporary.as_str().into())
+                    .or_insert(binding);
+            }
+        }
         for (name, binding) in &mut self.bindings {
             // A binding the block shadowed keeps its own state.
             if let Some(after) = inner.get(name)

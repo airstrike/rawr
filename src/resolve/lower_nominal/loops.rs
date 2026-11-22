@@ -66,10 +66,11 @@ impl<'a> Parser<'a> {
                 }
                 if !condition.after.is_empty() {
                     return Err(Error::UnsupportedNominalSyntax {
-                        construct: "a `while let` binding that shadows the local it moves a \
+                        construct: crate::resolve::Unsupported::said(
+                            "a `while let` binding that shadows the local it moves a \
                                     value whose type implements `Drop` out of: not supported in \
-                                    Rawr yet"
-                            .into(),
+                                    Rawr yet",
+                        ),
                         source: start,
                     });
                 }
@@ -114,7 +115,8 @@ impl<'a> Parser<'a> {
                 let condition = self.parse_head(Self::parse_expr);
                 // The condition's temporaries end before it leaves the loop
                 // or enters the body.
-                self.flow().close_temporaries(ScopeEnd::Statement);
+                let end = ScopeEnd::Statement(self.last_read());
+                self.flow().close_temporaries(end);
                 let jumped = self.leave_while_condition();
                 let frames = self.close_frames();
                 let temporaries = self.close_temporaries();
@@ -722,10 +724,12 @@ impl<'a> Parser<'a> {
                 if let Some((pipeline, item)) = pipelined {
                     if self.needs_drop(&item, lhs.span)? {
                         return Err(Error::UnsupportedNominalSyntax {
-                            construct: "a `for` over an iterator of values whose type implements \
-                                        `Drop`: dropping them where Rust does is not supported in \
-                                        Rawr yet; loop over the `Vec` itself"
-                                .into(),
+                            construct: crate::resolve::Unsupported::said(
+                                "a `for` over an iterator of values whose type implements \
+                                 `Drop`: dropping them where Rust does is not supported in Rawr \
+                                 yet",
+                            )
+                            .with_help("loop over the `Vec` itself"),
                             source: lhs.span,
                         });
                     }

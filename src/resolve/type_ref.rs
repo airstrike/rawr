@@ -2184,7 +2184,6 @@ impl Type {
 }
 
 /// `ty` with each generic parameter `types` names replaced by its type.
-#[cfg(feature = "rust-import")]
 pub(crate) fn substitute_parameters(ty: &Type, types: &[(ImmutableString, Type)]) -> Type {
     match ty {
         Type::Path(path) if matches!(path.target, Target::Parameter) => {
@@ -2193,6 +2192,19 @@ pub(crate) fn substitute_parameters(ty: &Type, types: &[(ImmutableString, Type)]
             }
             ty.clone()
         }
+        // `T::Output` at `T`'s type: `<u8 as Add>::Output`.
+        Type::Path(
+            path @ Path {
+                target: Target::Projection(base, trait_name),
+                ..
+            },
+        ) => Type::Path(Path {
+            target: Target::Projection(
+                Box::new(substitute_parameters(base, types)),
+                trait_name.clone(),
+            ),
+            ..path.clone()
+        }),
         Type::Path(path) => Type::Path(Path {
             arguments: path
                 .arguments
