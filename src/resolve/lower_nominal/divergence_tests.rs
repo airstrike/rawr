@@ -6609,3 +6609,48 @@ main();
     assert_eq!(generation(2, "Mutex::new(Vec::new())"), "[1, 2] 2\n");
     assert_eq!(generation(3, "Mutex::new(vec![0])"), "[0, 3] 3\n");
 }
+
+#[cfg(feature = "rust-import")]
+#[test]
+fn a_swap_releases_the_value_of_a_static_the_next_generation_declares_otherwise() {
+    // A swap to a generation that declares a static alike keeps its value.
+    // One whose initializer changed holds no value while the swap is
+    // checked, and drops the old one once admitted; a refused swap puts it
+    // back (#2519, D862).
+    use crate::place::statics::{apart, kept, After};
+    let program = |initializer: &str| {
+        format!(
+            "use std::sync::Mutex;\nstatic SWAPPED: Mutex<Vec<i32>> = {initializer};\n\
+             fn main() {{ SWAPPED.lock().unwrap().push(1); println!(\"{{:?}}\", SWAPPED.lock().unwrap()); }}\nmain();\n"
+        )
+    };
+    let alike = program("Mutex::new(Vec::new())");
+    let edited = Engine::new()
+        .compile_executable(program("Mutex::new(vec![0])"))
+        .unwrap_or_else(|error| panic!("{error}"));
+    let same = Engine::new()
+        .compile_executable(&alike)
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(printed(&alike), "[1]\n");
+    let ours = same.kept_statics();
+    assert_eq!(ours.len(), 1, "{ours:?}");
+    assert!(edited.kept_statics().is_disjoint(&ours));
+    // The statics of the tests running beside this one stay declared.
+    let declaring = |declared: std::collections::BTreeSet<crate::ImmutableString>| {
+        let mut others = kept();
+        others.retain(|key| !ours.contains(key));
+        others.extend(declared);
+        others
+    };
+    apart(|| declaring(same.kept_statics()), || ((), After::Release));
+    assert_eq!(printed(&alike), "[1, 1]\n");
+    let held = apart(
+        || declaring(edited.kept_statics()),
+        || (kept().is_superset(&ours), After::Restore),
+    );
+    assert!(held, "a withdrawn static keeps its slot, without its value");
+    assert_eq!(printed(&alike), "[1, 1, 1]\n");
+    apart(|| declaring(edited.kept_statics()), || ((), After::Release));
+    assert!(kept().is_disjoint(&ours));
+    assert_eq!(printed(&alike), "[1]\n");
+}

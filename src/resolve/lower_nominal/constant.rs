@@ -90,7 +90,8 @@ impl<'a> Parser<'a> {
             .as_ref()
             .map_or_else(|| definition.name.text.to_string(), ToString::to_string);
         let file = self.source_identity();
-        Some(format!("{file}#{path}@{:016x}", hasher.finish()).into())
+        let kept = crate::place::statics::KEPT;
+        Some(format!("{kept}{file}#{path}@{:016x}", hasher.finish()).into())
     }
 
     /// A read of the static the interpreter keeps as `key`, whose

@@ -151,7 +151,8 @@ impl Parser<'_> {
                 }
             } else {
                 let plain = constant::plain_initializer(value.iter().map(|(token, _)| token));
-                let key = (!plain).then_some(key);
+                let kept = crate::place::statics::KEPT;
+                let key = (!plain).then(|| format!("{kept}{key}").into());
                 Kind::Interpreted { value, key }
             };
             self.block_statics.push(Declared { name, ty, kind });

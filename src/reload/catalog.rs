@@ -41,6 +41,11 @@ impl Catalog {
         self.executable.in_async_fn(step)
     }
 
+    #[cfg(feature = "rust-import")]
+    pub(crate) fn kept_statics(&self) -> std::collections::BTreeSet<crate::ImmutableString> {
+        self.executable.kept_statics()
+    }
+
     /// Return the immutable executable generation owned by this catalog.
     pub(crate) const fn generation(&self) -> program::GenerationId {
         self.executable.generation()
