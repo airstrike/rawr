@@ -211,6 +211,53 @@ pub(super) static STEPS: &[Step] = &[
         ],
     },
     Step::Held {
+        std: "std::fs::File",
+        capabilities: &[
+            capability::Kind::Debug,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    },
+    Step::Held {
+        std: "std::fs::OpenOptions",
+        capabilities: &[
+            capability::Kind::Debug,
+            capability::Kind::Clone,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    },
+    Step::Held {
+        std: "std::fs::Metadata",
+        capabilities: &[
+            capability::Kind::Debug,
+            capability::Kind::Clone,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    },
+    Step::Held {
+        std: "std::fs::FileType",
+        capabilities: &[
+            capability::Kind::Debug,
+            capability::Kind::Clone,
+            capability::Kind::Copy,
+            capability::Kind::PartialEq,
+            capability::Kind::Eq,
+            capability::Kind::Hash,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    },
+    Step::Held {
+        std: "std::fs::DirEntry",
+        capabilities: &[
+            capability::Kind::Debug,
+            capability::Kind::Send,
+            capability::Kind::Static,
+        ],
+    },
+    Step::Held {
         std: "std::io::Cursor",
         capabilities: &[
             capability::Kind::Debug,
@@ -2416,6 +2463,276 @@ pub(super) static STEPS: &[Step] = &[
         output: Ty::Result(&Ty::Builtin(Builtin::Bool), &Ty::Registered("io::Error")),
     },
     Step::Item {
+        path: "fs::metadata",
+        kind: Kind::Function,
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Registered("ffi::OsString"),
+        }],
+        output: Ty::Result(
+            &Ty::Registered("fs::Metadata"),
+            &Ty::Registered("io::Error"),
+        ),
+    },
+    Step::Item {
+        path: "fs::metadata",
+        kind: Kind::Function,
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Registered("path::PathBuf"),
+        }],
+        output: Ty::Result(
+            &Ty::Registered("fs::Metadata"),
+            &Ty::Registered("io::Error"),
+        ),
+    },
+    Step::Item {
+        path: "fs::metadata",
+        kind: Kind::Function,
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Builtin(Builtin::String),
+        }],
+        output: Ty::Result(
+            &Ty::Registered("fs::Metadata"),
+            &Ty::Registered("io::Error"),
+        ),
+    },
+    Step::Item {
+        path: "fs::metadata",
+        kind: Kind::Function,
+        inputs: &[Ty::Registered("path::PathBuf")],
+        output: Ty::Result(
+            &Ty::Registered("fs::Metadata"),
+            &Ty::Registered("io::Error"),
+        ),
+    },
+    Step::Item {
+        path: "fs::metadata",
+        kind: Kind::Function,
+        inputs: &[Ty::Registered("ffi::OsString")],
+        output: Ty::Result(
+            &Ty::Registered("fs::Metadata"),
+            &Ty::Registered("io::Error"),
+        ),
+    },
+    Step::Item {
+        path: "fs::metadata",
+        kind: Kind::Function,
+        inputs: &[Ty::Builtin(Builtin::String)],
+        output: Ty::Result(
+            &Ty::Registered("fs::Metadata"),
+            &Ty::Registered("io::Error"),
+        ),
+    },
+    Step::Item {
+        path: "fs::symlink_metadata",
+        kind: Kind::Function,
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Registered("ffi::OsString"),
+        }],
+        output: Ty::Result(
+            &Ty::Registered("fs::Metadata"),
+            &Ty::Registered("io::Error"),
+        ),
+    },
+    Step::Item {
+        path: "fs::symlink_metadata",
+        kind: Kind::Function,
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Registered("path::PathBuf"),
+        }],
+        output: Ty::Result(
+            &Ty::Registered("fs::Metadata"),
+            &Ty::Registered("io::Error"),
+        ),
+    },
+    Step::Item {
+        path: "fs::symlink_metadata",
+        kind: Kind::Function,
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Builtin(Builtin::String),
+        }],
+        output: Ty::Result(
+            &Ty::Registered("fs::Metadata"),
+            &Ty::Registered("io::Error"),
+        ),
+    },
+    Step::Item {
+        path: "fs::symlink_metadata",
+        kind: Kind::Function,
+        inputs: &[Ty::Registered("path::PathBuf")],
+        output: Ty::Result(
+            &Ty::Registered("fs::Metadata"),
+            &Ty::Registered("io::Error"),
+        ),
+    },
+    Step::Item {
+        path: "fs::symlink_metadata",
+        kind: Kind::Function,
+        inputs: &[Ty::Registered("ffi::OsString")],
+        output: Ty::Result(
+            &Ty::Registered("fs::Metadata"),
+            &Ty::Registered("io::Error"),
+        ),
+    },
+    Step::Item {
+        path: "fs::symlink_metadata",
+        kind: Kind::Function,
+        inputs: &[Ty::Builtin(Builtin::String)],
+        output: Ty::Result(
+            &Ty::Registered("fs::Metadata"),
+            &Ty::Registered("io::Error"),
+        ),
+    },
+    Step::Item {
+        path: "fs::read_dir",
+        kind: Kind::Function,
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Registered("ffi::OsString"),
+        }],
+        output: Ty::Result(
+            &Ty::Iter(&Ty::Result(
+                &Ty::Registered("fs::DirEntry"),
+                &Ty::Registered("io::Error"),
+            )),
+            &Ty::Registered("io::Error"),
+        ),
+    },
+    Step::Item {
+        path: "fs::read_dir",
+        kind: Kind::Function,
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Registered("path::PathBuf"),
+        }],
+        output: Ty::Result(
+            &Ty::Iter(&Ty::Result(
+                &Ty::Registered("fs::DirEntry"),
+                &Ty::Registered("io::Error"),
+            )),
+            &Ty::Registered("io::Error"),
+        ),
+    },
+    Step::Item {
+        path: "fs::read_dir",
+        kind: Kind::Function,
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Builtin(Builtin::String),
+        }],
+        output: Ty::Result(
+            &Ty::Iter(&Ty::Result(
+                &Ty::Registered("fs::DirEntry"),
+                &Ty::Registered("io::Error"),
+            )),
+            &Ty::Registered("io::Error"),
+        ),
+    },
+    Step::Item {
+        path: "fs::read_dir",
+        kind: Kind::Function,
+        inputs: &[Ty::Registered("path::PathBuf")],
+        output: Ty::Result(
+            &Ty::Iter(&Ty::Result(
+                &Ty::Registered("fs::DirEntry"),
+                &Ty::Registered("io::Error"),
+            )),
+            &Ty::Registered("io::Error"),
+        ),
+    },
+    Step::Item {
+        path: "fs::read_dir",
+        kind: Kind::Function,
+        inputs: &[Ty::Registered("ffi::OsString")],
+        output: Ty::Result(
+            &Ty::Iter(&Ty::Result(
+                &Ty::Registered("fs::DirEntry"),
+                &Ty::Registered("io::Error"),
+            )),
+            &Ty::Registered("io::Error"),
+        ),
+    },
+    Step::Item {
+        path: "fs::read_dir",
+        kind: Kind::Function,
+        inputs: &[Ty::Builtin(Builtin::String)],
+        output: Ty::Result(
+            &Ty::Iter(&Ty::Result(
+                &Ty::Registered("fs::DirEntry"),
+                &Ty::Registered("io::Error"),
+            )),
+            &Ty::Registered("io::Error"),
+        ),
+    },
+    Step::Item {
+        path: "fs::canonicalize",
+        kind: Kind::Function,
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Registered("ffi::OsString"),
+        }],
+        output: Ty::Result(
+            &Ty::Registered("path::PathBuf"),
+            &Ty::Registered("io::Error"),
+        ),
+    },
+    Step::Item {
+        path: "fs::canonicalize",
+        kind: Kind::Function,
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Registered("path::PathBuf"),
+        }],
+        output: Ty::Result(
+            &Ty::Registered("path::PathBuf"),
+            &Ty::Registered("io::Error"),
+        ),
+    },
+    Step::Item {
+        path: "fs::canonicalize",
+        kind: Kind::Function,
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Builtin(Builtin::String),
+        }],
+        output: Ty::Result(
+            &Ty::Registered("path::PathBuf"),
+            &Ty::Registered("io::Error"),
+        ),
+    },
+    Step::Item {
+        path: "fs::canonicalize",
+        kind: Kind::Function,
+        inputs: &[Ty::Registered("path::PathBuf")],
+        output: Ty::Result(
+            &Ty::Registered("path::PathBuf"),
+            &Ty::Registered("io::Error"),
+        ),
+    },
+    Step::Item {
+        path: "fs::canonicalize",
+        kind: Kind::Function,
+        inputs: &[Ty::Registered("ffi::OsString")],
+        output: Ty::Result(
+            &Ty::Registered("path::PathBuf"),
+            &Ty::Registered("io::Error"),
+        ),
+    },
+    Step::Item {
+        path: "fs::canonicalize",
+        kind: Kind::Function,
+        inputs: &[Ty::Builtin(Builtin::String)],
+        output: Ty::Result(
+            &Ty::Registered("path::PathBuf"),
+            &Ty::Registered("io::Error"),
+        ),
+    },
+    Step::Item {
         path: "fs::create_dir",
         kind: Kind::Function,
         inputs: &[Ty::Reference {
@@ -3497,6 +3814,450 @@ pub(super) static STEPS: &[Step] = &[
         kind: Kind::Function,
         inputs: &[Ty::Builtin(Builtin::String), Ty::Builtin(Builtin::String)],
         output: Ty::Result(&Ty::Builtin(Builtin::U64), &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "fs::File::open",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Registered("ffi::OsString"),
+        }],
+        output: Ty::Result(&Ty::Registered("fs::File"), &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "fs::File::open",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Registered("path::PathBuf"),
+        }],
+        output: Ty::Result(&Ty::Registered("fs::File"), &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "fs::File::open",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Builtin(Builtin::String),
+        }],
+        output: Ty::Result(&Ty::Registered("fs::File"), &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "fs::File::open",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Registered("path::PathBuf")],
+        output: Ty::Result(&Ty::Registered("fs::File"), &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "fs::File::open",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Registered("ffi::OsString")],
+        output: Ty::Result(&Ty::Registered("fs::File"), &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "fs::File::open",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Builtin(Builtin::String)],
+        output: Ty::Result(&Ty::Registered("fs::File"), &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "fs::File::create",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Registered("ffi::OsString"),
+        }],
+        output: Ty::Result(&Ty::Registered("fs::File"), &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "fs::File::create",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Registered("path::PathBuf"),
+        }],
+        output: Ty::Result(&Ty::Registered("fs::File"), &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "fs::File::create",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Builtin(Builtin::String),
+        }],
+        output: Ty::Result(&Ty::Registered("fs::File"), &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "fs::File::create",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Registered("path::PathBuf")],
+        output: Ty::Result(&Ty::Registered("fs::File"), &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "fs::File::create",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Registered("ffi::OsString")],
+        output: Ty::Result(&Ty::Registered("fs::File"), &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "fs::File::create",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Builtin(Builtin::String)],
+        output: Ty::Result(&Ty::Registered("fs::File"), &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "fs::File::create_new",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Registered("ffi::OsString"),
+        }],
+        output: Ty::Result(&Ty::Registered("fs::File"), &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "fs::File::create_new",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Registered("path::PathBuf"),
+        }],
+        output: Ty::Result(&Ty::Registered("fs::File"), &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "fs::File::create_new",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Builtin(Builtin::String),
+        }],
+        output: Ty::Result(&Ty::Registered("fs::File"), &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "fs::File::create_new",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Registered("path::PathBuf")],
+        output: Ty::Result(&Ty::Registered("fs::File"), &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "fs::File::create_new",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Registered("ffi::OsString")],
+        output: Ty::Result(&Ty::Registered("fs::File"), &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "fs::File::create_new",
+        kind: Kind::AssociatedFunction,
+        inputs: &[Ty::Builtin(Builtin::String)],
+        output: Ty::Result(&Ty::Registered("fs::File"), &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "fs::OpenOptions::open",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Registered("ffi::OsString"),
+        }],
+        output: Ty::Result(&Ty::Registered("fs::File"), &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "fs::OpenOptions::open",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Registered("path::PathBuf"),
+        }],
+        output: Ty::Result(&Ty::Registered("fs::File"), &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "fs::OpenOptions::open",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Builtin(Builtin::String),
+        }],
+        output: Ty::Result(&Ty::Registered("fs::File"), &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "fs::OpenOptions::open",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[Ty::Registered("path::PathBuf")],
+        output: Ty::Result(&Ty::Registered("fs::File"), &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "fs::OpenOptions::open",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[Ty::Registered("ffi::OsString")],
+        output: Ty::Result(&Ty::Registered("fs::File"), &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "fs::OpenOptions::open",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[Ty::Builtin(Builtin::String)],
+        output: Ty::Result(&Ty::Registered("fs::File"), &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "fs::OpenOptions::new",
+        kind: Kind::AssociatedFunction,
+        inputs: &[],
+        output: Ty::Registered("fs::OpenOptions"),
+    },
+    Step::Item {
+        path: "fs::File::options",
+        kind: Kind::AssociatedFunction,
+        inputs: &[],
+        output: Ty::Registered("fs::OpenOptions"),
+    },
+    Step::Item {
+        path: "fs::OpenOptions::read",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Builtin(Builtin::Bool)],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("fs::OpenOptions"),
+        },
+    },
+    Step::Item {
+        path: "fs::OpenOptions::write",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Builtin(Builtin::Bool)],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("fs::OpenOptions"),
+        },
+    },
+    Step::Item {
+        path: "fs::OpenOptions::append",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Builtin(Builtin::Bool)],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("fs::OpenOptions"),
+        },
+    },
+    Step::Item {
+        path: "fs::OpenOptions::truncate",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Builtin(Builtin::Bool)],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("fs::OpenOptions"),
+        },
+    },
+    Step::Item {
+        path: "fs::OpenOptions::create",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Builtin(Builtin::Bool)],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("fs::OpenOptions"),
+        },
+    },
+    Step::Item {
+        path: "fs::OpenOptions::create_new",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Builtin(Builtin::Bool)],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("fs::OpenOptions"),
+        },
+    },
+    Step::Item {
+        path: "fs::File::metadata",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Result(
+            &Ty::Registered("fs::Metadata"),
+            &Ty::Registered("io::Error"),
+        ),
+    },
+    Step::Item {
+        path: "fs::File::sync_all",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Result(&Ty::Unit, &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "fs::File::sync_data",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Result(&Ty::Unit, &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "fs::File::set_len",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[Ty::Builtin(Builtin::U64)],
+        output: Ty::Result(&Ty::Unit, &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "fs::File::read_to_string",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: true,
+            target: &Ty::Builtin(Builtin::String),
+        }],
+        output: Ty::Result(&Ty::Builtin(Builtin::Usize), &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "fs::File::read_to_end",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: true,
+            target: &Ty::Vec(&Ty::Builtin(Builtin::U8)),
+        }],
+        output: Ty::Result(&Ty::Builtin(Builtin::Usize), &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "fs::File::write",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Slice(&Ty::Builtin(Builtin::U8)),
+        }],
+        output: Ty::Result(&Ty::Builtin(Builtin::Usize), &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "fs::File::write_all",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Slice(&Ty::Builtin(Builtin::U8)),
+        }],
+        output: Ty::Result(&Ty::Unit, &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "fs::File::write_fmt",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Builtin(Builtin::Arguments)],
+        output: Ty::Result(&Ty::Unit, &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "fs::File::flush",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[],
+        output: Ty::Result(&Ty::Unit, &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "fs::File::seek",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Registered("io::SeekFrom")],
+        output: Ty::Result(&Ty::Builtin(Builtin::U64), &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "fs::File::stream_position",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[],
+        output: Ty::Result(&Ty::Builtin(Builtin::U64), &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "fs::File::rewind",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[],
+        output: Ty::Result(&Ty::Unit, &Ty::Registered("io::Error")),
+    },
+    Step::Item {
+        path: "fs::Metadata::len",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Builtin(Builtin::U64),
+    },
+    Step::Item {
+        path: "fs::Metadata::is_file",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Builtin(Builtin::Bool),
+    },
+    Step::Item {
+        path: "fs::Metadata::is_dir",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Builtin(Builtin::Bool),
+    },
+    Step::Item {
+        path: "fs::Metadata::is_symlink",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Builtin(Builtin::Bool),
+    },
+    Step::Item {
+        path: "fs::Metadata::file_type",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Registered("fs::FileType"),
+    },
+    Step::Item {
+        path: "fs::Metadata::modified",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Result(
+            &Ty::Registered("time::SystemTime"),
+            &Ty::Registered("io::Error"),
+        ),
+    },
+    Step::Item {
+        path: "fs::Metadata::accessed",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Result(
+            &Ty::Registered("time::SystemTime"),
+            &Ty::Registered("io::Error"),
+        ),
+    },
+    Step::Item {
+        path: "fs::Metadata::created",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Result(
+            &Ty::Registered("time::SystemTime"),
+            &Ty::Registered("io::Error"),
+        ),
+    },
+    Step::Item {
+        path: "fs::FileType::is_file",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Builtin(Builtin::Bool),
+    },
+    Step::Item {
+        path: "fs::FileType::is_dir",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Builtin(Builtin::Bool),
+    },
+    Step::Item {
+        path: "fs::FileType::is_symlink",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Builtin(Builtin::Bool),
+    },
+    Step::Item {
+        path: "fs::DirEntry::path",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Registered("path::PathBuf"),
+    },
+    Step::Item {
+        path: "fs::DirEntry::file_name",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Registered("ffi::OsString"),
+    },
+    Step::Item {
+        path: "fs::DirEntry::metadata",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Result(
+            &Ty::Registered("fs::Metadata"),
+            &Ty::Registered("io::Error"),
+        ),
+    },
+    Step::Item {
+        path: "fs::DirEntry::file_type",
+        kind: Kind::Method(Mode::Shared),
+        inputs: &[],
+        output: Ty::Result(
+            &Ty::Registered("fs::FileType"),
+            &Ty::Registered("io::Error"),
+        ),
     },
     Step::Item {
         path: "process::id",
@@ -4898,28 +5659,8 @@ pub(super) static STEPS: &[Step] = &[
         std: "std::fs::DirBuilder",
     },
     Step::StdAlias {
-        path: "fs::DirEntry",
-        std: "std::fs::DirEntry",
-    },
-    Step::StdAlias {
-        path: "fs::File",
-        std: "std::fs::File",
-    },
-    Step::StdAlias {
         path: "fs::FileTimes",
         std: "std::fs::FileTimes",
-    },
-    Step::StdAlias {
-        path: "fs::FileType",
-        std: "std::fs::FileType",
-    },
-    Step::StdAlias {
-        path: "fs::Metadata",
-        std: "std::fs::Metadata",
-    },
-    Step::StdAlias {
-        path: "fs::OpenOptions",
-        std: "std::fs::OpenOptions",
     },
     Step::StdAlias {
         path: "fs::Permissions",
@@ -4934,20 +5675,8 @@ pub(super) static STEPS: &[Step] = &[
         std: "std::fs::TryLockError",
     },
     Step::StdAlias {
-        path: "fs::canonicalize",
-        std: "std::fs::canonicalize",
-    },
-    Step::StdAlias {
         path: "fs::hard_link",
         std: "std::fs::hard_link",
-    },
-    Step::StdAlias {
-        path: "fs::metadata",
-        std: "std::fs::metadata",
-    },
-    Step::StdAlias {
-        path: "fs::read_dir",
-        std: "std::fs::read_dir",
     },
     Step::StdAlias {
         path: "fs::read_link",
@@ -4972,10 +5701,6 @@ pub(super) static STEPS: &[Step] = &[
     Step::StdAlias {
         path: "fs::soft_link",
         std: "std::fs::soft_link",
-    },
-    Step::StdAlias {
-        path: "fs::symlink_metadata",
-        std: "std::fs::symlink_metadata",
     },
     Step::StdAlias {
         path: "io::BorrowedBuf",

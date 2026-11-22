@@ -66,6 +66,30 @@ const FUNCTIONS: &[Function] = &[
         call: |paths, _| std::fs::exists(&paths[0]).map(Dynamic::from_bool),
     },
     Function {
+        name: "metadata",
+        paths: &[Need::Read],
+        contents: false,
+        call: |paths, _| std::fs::metadata(&paths[0]).map(super::metadata::made),
+    },
+    Function {
+        name: "symlink_metadata",
+        paths: &[Need::Read],
+        contents: false,
+        call: |paths, _| std::fs::symlink_metadata(&paths[0]).map(super::metadata::made),
+    },
+    Function {
+        name: "read_dir",
+        paths: &[Need::Read],
+        contents: false,
+        call: |paths, _| std::fs::read_dir(&paths[0]).map(super::metadata::entries),
+    },
+    Function {
+        name: "canonicalize",
+        paths: &[Need::Read],
+        contents: false,
+        call: |paths, _| std::fs::canonicalize(&paths[0]).map(Dynamic::from),
+    },
+    Function {
         name: "create_dir",
         paths: &[Need::Write],
         contents: false,

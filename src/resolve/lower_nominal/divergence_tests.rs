@@ -7887,3 +7887,79 @@ main();
     );
     assert_eq!(output, "1 2 3\n(true, true, true) Less\n2 End(-1) [5]\n");
 }
+
+#[test]
+fn std_files_directories_and_metadata_run_as_stds() {
+    // std's `File` and `OpenOptions` read, write, append and seek; `fs`'s
+    // `metadata`, `read_dir` and `canonicalize` read the file system as far
+    // as the program's access reaches (#646).
+    let directory = std::env::temp_dir().join(format!("rawr-file-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    let source = format!(
+        r#"
+use std::fs::{{self, File, OpenOptions}};
+use std::io::{{Read, Seek, SeekFrom, Write}};
+use std::path::PathBuf;
+fn main() {{
+    let dir = PathBuf::from({directory:?});
+    fs::create_dir_all(&dir).unwrap();
+    let p = dir.join("a.txt");
+    let mut f = File::create(&p).unwrap();
+    f.write_all(b"one\n").unwrap();
+    writeln!(f, "two").unwrap();
+    drop(f);
+    let mut f = OpenOptions::new().append(true).open(&p).unwrap();
+    f.write(b"three\n").unwrap();
+    drop(f);
+    let mut s = String::new();
+    File::open(&p).unwrap().read_to_string(&mut s).unwrap();
+    print!("{{s}}");
+    let m = fs::metadata(&p).unwrap();
+    println!("{{}} {{}} {{}} {{}}", m.len(), m.is_file(), m.is_dir(), m.file_type().is_file());
+    fs::write(dir.join("b.txt"), "x").unwrap();
+    let mut names: Vec<String> = fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    for entry in fs::read_dir(&dir).unwrap() {{
+        let entry = entry.unwrap();
+        if entry.path().ends_with("b.txt") {{
+            let kind = entry.file_type().unwrap();
+            println!("{{:?}} {{}} {{}}", names, entry.metadata().unwrap().len(), kind.is_dir());
+        }}
+    }}
+    let mut f = File::open(&p).unwrap();
+    f.seek(SeekFrom::Start(4)).unwrap();
+    let mut rest = Vec::new();
+    f.read_to_end(&mut rest).unwrap();
+    println!("{{}} {{}}", rest.len(), f.stream_position().unwrap());
+    let mut options = OpenOptions::new();
+    options.write(true);
+    let missing = options.open(dir.join("c.txt")).map_err(|e| e.kind()).err();
+    options.create(true);
+    options.open(dir.join("c.txt")).unwrap().write_all(b"hi").unwrap();
+    let found = fs::canonicalize(dir.join(".").join("c.txt")).unwrap();
+    println!("{{:?}} {{}} {{}}", missing, fs::read_to_string(&found).unwrap(), found.ends_with("c.txt"));
+    let gone = File::open(dir.join("nope")).map_err(|e| e.kind()).err();
+    println!("{{:?}}", gone);
+}}
+main();
+"#
+    );
+    let output = printed_with(&source, crate::Access::all());
+    std::fs::remove_dir_all(&directory).unwrap();
+    assert_eq!(
+        output,
+        "one\ntwo\nthree\n14 true false true\n[\"a.txt\", \"b.txt\"] 1 false\n\
+         10 14\nSome(NotFound) hi true\nSome(NotFound)\n"
+    );
+    // A program its engine doesn't grant the files is refused as the
+    // operating system would refuse it.
+    let output = printed(
+        "fn main() {\n    let opened = std::fs::File::open(\"/\").map_err(|e| e.kind());\n    \
+         let listed = std::fs::read_dir(\"/\").map(|_| ()).map_err(|e| e.kind());\n    \
+         println!(\"{:?} {:?}\", opened.err(), listed);\n}\nmain();\n",
+    );
+    assert_eq!(output, "Some(PermissionDenied) Err(PermissionDenied)\n");
+}
