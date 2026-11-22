@@ -1860,8 +1860,9 @@ impl<'a> Parser<'a> {
         let kept = method_kept(&definition);
         self.mutable_arguments(&arguments, kept.iter().copied())?;
         self.lend_kept(&mut arguments, &kept)?;
+        let name = self.method_call_name(&definition, &substitution, span(owner_span.start(), end));
         let source = origin::Fragment::call(
-            method_name(&definition),
+            name.as_str(),
             arguments
                 .iter()
                 .map(ParsedExpr::rendered_source)

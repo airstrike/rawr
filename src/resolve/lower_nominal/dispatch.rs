@@ -10,10 +10,10 @@ use super::op::{
 use super::ty::{Float, Int, Ty};
 use super::{
     closure, default_value, drops, instance_dispatcher_name, instance_text, item_generics,
-    kind_code, kind_dispatcher_name, location, mentions_parameter, method_name, origin,
-    retain_locations, static_dispatcher_name, static_instance_dispatcher_name,
-    trait_dispatcher_name, witness_generics, witness_variable, Lowered, ParsedExpr, Parser,
-    CLOSURE_SENTINEL, DEFAULT_DISPATCHER, FALLBACK_INSTANCE, SENTINEL, UNKNOWN_WITNESS,
+    kind_code, location, mentions_parameter, method_name, origin, retain_locations,
+    static_dispatcher_name, static_instance_dispatcher_name, trait_dispatcher_name,
+    witness_generics, witness_variable, Lowered, ParsedExpr, Parser, CLOSURE_SENTINEL,
+    DEFAULT_DISPATCHER, FALLBACK_INSTANCE, SENTINEL, UNKNOWN_WITNESS,
 };
 use crate::resolve::{item, type_ref, Error, Program};
 use crate::type_def;
@@ -198,9 +198,6 @@ pub(super) fn write_trait_dispatchers(
                     );
                 }
             }
-            if models.kind_traits.contains(trait_name) {
-                write_kind_dispatcher(output, models, trait_name, *source, declared, function);
-            }
             // A std trait's dispatcher falls back to what Rawr does for a
             // type without a hand-written impl: a derive, or a builtin.
             let fallback = match (models.std_traits.contains(trait_name), trait_name.as_str()) {
@@ -305,102 +302,6 @@ fn unknown_witnesses(parameters: &str, definition: &method::Definition, models: 
         .chain(std::iter::repeat_n(UNKNOWN_WITNESS.to_string(), witnesses))
         .collect::<Vec<_>>()
         .join(", ")
-}
-
-/// The dispatcher of the kind trait `trait_name`'s method `function`
-/// (`Models::kind_traits`): the impl for the builtin type a generic
-/// parameter's witness names (`witness_code`), so a `T` that is `f32` runs
-/// `f32`'s impl and not `f64`'s, else the impl of the receiver's runtime
-/// type (`write_trait_dispatchers`).
-fn write_kind_dispatcher(
-    output: &mut location::Generated,
-    models: &Models,
-    trait_name: &str,
-    source: crate::program::source::Id,
-    declared: &item::Trait,
-    function: &item::Function,
-) {
-    let parameters = (0..function.parameters.len())
-        .map(|index| format!("__rawr_parameter_{index}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let separator = if parameters.is_empty() { "" } else { ", " };
-    let mut text = format!(
-        "__rawr_private fn {}(__rawr_witness{separator}{parameters}) {{\n",
-        kind_dispatcher_name(trait_name, &function.name.text)
-    );
-    for definition in models
-        .trait_methods
-        .iter()
-        .filter(|((_, name), _)| *name == function.name.text)
-        .flat_map(|(_, definitions)| definitions)
-        .filter(|definition| {
-            definition
-                .trait_name()
-                .is_some_and(|name| name == trait_name)
-        })
-    {
-        let Some(code) = definition
-            .builtin_owner()
-            .and_then(|owner| witness_code(&Ty::from_resolved(owner)))
-        else {
-            continue;
-        };
-        let _ = writeln!(
-            text,
-            "if __rawr_witness == {code} {{ return self.{}({}); }}",
-            method_name(definition),
-            unknown_witnesses(&parameters, definition, models)
-        );
-    }
-    let _ = write!(
-        text,
-        "return self.{}({parameters});\n}}\n",
-        trait_dispatcher_name(trait_name, &function.name.text)
-    );
-    output.declaration(source, declared.name.span, &text);
-}
-
-/// The name of `Into`'s dispatcher into its instance `index` by a generic
-/// parameter's witness (`Models::kind_into`).
-pub(super) fn kind_into_dispatcher_name(index: usize) -> String {
-    kind_dispatcher_name("Into", &format!("into__{index:08}"))
-}
-
-/// `x.into()` into `target`, `Into`'s instance `index`, by the witness of
-/// the generic parameter `x` is a value of: the `From` impl for the type
-/// it names, so a `T` that is `&str` runs `From<&str>` and not
-/// `From<String>`, else the impl of `x`'s runtime type.
-fn write_kind_into_dispatcher(
-    output: &mut location::Generated,
-    models: &Models,
-    source: crate::program::source::Id,
-    declared: &item::Trait,
-    target: &Ty,
-    index: usize,
-) {
-    let mut text = format!(
-        "__rawr_private fn {}(__rawr_witness) {{\n",
-        kind_into_dispatcher_name(index)
-    );
-    for conversion in models.conversions_into(target) {
-        if let Some(code) = conversion
-            .conversion()
-            .and_then(|from| witness_code(&Ty::from_resolved(from)))
-        {
-            let _ = writeln!(
-                text,
-                "if __rawr_witness == {code} {{ return {}(self); }}",
-                method_name(conversion)
-            );
-        }
-    }
-    let _ = write!(
-        text,
-        "return self.{}();\n}}\n",
-        instance_dispatcher_name("Into", "into", index)
-    );
-    output.declaration(source, declared.name.span, &text);
 }
 
 /// Whether `function` of the std trait `trait_name` reaches no value: no
@@ -674,9 +575,6 @@ pub(super) fn write_into_dispatchers(
                     method_name(conversion)
                 );
             }
-        }
-        if models.kind_into(&target).is_some() {
-            write_kind_into_dispatcher(output, models, source, declared, &target, index);
         }
         for (from, op) in builtin_conversions_into(&target) {
             let helper = format!("{SENTINEL}{}", ops.len());
@@ -1018,6 +916,7 @@ pub(super) fn write_default_dispatcher(
 
 pub(super) fn write_method(
     output: &mut location::Generated,
+    name: &str,
     definition: &method::Definition,
     body: &Lowered,
     models: &Models,
@@ -1038,11 +937,7 @@ pub(super) fn write_method(
             &format!("{this_type:?}."),
         );
     }
-    output.declaration(
-        source,
-        declaration,
-        &format!("{}(", method_name(definition)),
-    );
+    output.declaration(source, declaration, &format!("{name}("));
     for (index, parameter) in definition.parameters().iter().enumerate() {
         if index > 0 {
             output.declaration(source, declaration, ", ");

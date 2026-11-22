@@ -721,13 +721,8 @@ impl<'a> Parser<'a> {
                     chain: crate::resolve::Chain::default(),
                 });
             }
-            if let Some(error) = self.untold_impls(
-                &concrete,
-                &trait_name,
-                &positional,
-                value.span,
-                super::traits::Through::Object,
-            ) {
+            if let Some(error) = self.untold_impls(&concrete, &trait_name, &positional, value.span)
+            {
                 return Err(error);
             }
             // `dyn Shape<Output = i64>`: the type's `Output` is `i64`.

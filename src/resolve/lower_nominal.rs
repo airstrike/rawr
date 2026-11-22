@@ -43,6 +43,7 @@ mod host_call;
 mod host_signature;
 mod imported;
 mod inference;
+mod instance;
 #[cfg(feature = "rust-import")]
 mod interface;
 mod iterator;
@@ -185,7 +186,7 @@ pub(crate) use dispatch::this_parameter;
 use dispatch::{builtin_conversions_from, builtin_operator, BUILTIN_CONVERSIONS};
 use dispatch::{copied_parameters, inherit_block_names, inherit_names, method_copied};
 use dispatch::{function_copied, function_kept, method_kept};
-use dispatch::{kind_into_dispatcher_name, lent_parameters, method_lent};
+use dispatch::{lent_parameters, method_lent};
 /// The generated function that runs a value's `Drop` and its parts'.
 #[cfg(feature = "rust-import")]
 pub(crate) use drops::GLUE;
@@ -203,8 +204,8 @@ use from_str::{parse_text, ParseError};
 use generics::{
     assumed_generics, bound_kinds, bounded_value, const_generics, dyn_arguments,
     generic_conversion_call, host_witnesses, instantiate, is_iterator_trait, item_generics,
-    kind_into_bound, mentions_parameter, opaque_outputs, opaque_substitution, supertraits,
-    witness_generics, PendingInstance, UNKNOWN_WITNESS,
+    mentions_parameter, opaque_outputs, opaque_substitution, supertraits, witness_generics,
+    PendingInstance, UNKNOWN_WITNESS,
 };
 #[cfg(feature = "rust-import")]
 use generics::{ImplBounds, ImplProjection, Selection};
@@ -250,11 +251,11 @@ pub(crate) use naming::DEBUG_DISPATCHER;
 pub(crate) use naming::DEBUG_GENERIC;
 use naming::{
     call_placeholder, conversion_placeholder, function_name, instance_dispatcher_name,
-    instance_placeholder, instance_text, kind_dispatcher_name, lent_text_placeholder, method_name,
-    pattern_name, static_dispatcher_name, static_instance_dispatcher_name,
-    static_instance_placeholder, text_into_placeholder, trait_dispatcher_name, witness_placeholder,
-    witness_variable, CLOSURE_SENTINEL, DEFAULT_DISPATCHER, FALLBACK_INSTANCE, HIDDEN_DISPATCHER,
-    METHOD_SENTINEL, PRIVATE_PREFIX, SENTINEL,
+    instance_placeholder, instance_text, lent_text_placeholder, method_name, pattern_name,
+    static_dispatcher_name, static_instance_dispatcher_name, static_instance_placeholder,
+    text_into_placeholder, trait_dispatcher_name, witness_placeholder, witness_variable,
+    CLOSURE_SENTINEL, DEFAULT_DISPATCHER, FALLBACK_INSTANCE, HIDDEN_DISPATCHER, METHOD_SENTINEL,
+    PRIVATE_PREFIX, SENTINEL,
 };
 pub(crate) use naming::{function_display_name, private_function_name, PRIVATE_METHOD};
 use obligation::Obligation;
@@ -843,8 +844,16 @@ struct Parser<'a> {
     /// In an instance, each parameter its template bounds by `Into<U>`
     /// into a held std type, by its declaration, with its `U`
     /// (`Instances::conversions`).
-    #[cfg(feature = "rust-import")]
     instance_conversions: BTreeMap<Span, Ty>,
+    /// Each call of a template whose instance waits for the body's types
+    /// (D1115).
+    pending_template_calls: Vec<instance::Pending>,
+    /// The instances this body's calls bind, and the templates it calls by
+    /// their erased bodies.
+    instance_uses: instance::Uses,
+    /// Whether this body is a template's generic read, which its instances
+    /// lower again at their types (D1115).
+    template_read: bool,
     /// Whether this body is read only for those calls (`monomorphize`).
     #[cfg_attr(not(feature = "rust-import"), allow(dead_code))]
     collecting_instances: bool,
@@ -1181,9 +1190,11 @@ impl<'a> Parser<'a> {
             literal_values: Vec::new(),
             trait_parameters: BTreeMap::new(),
             instance_calls: Vec::new(),
-            #[cfg(feature = "rust-import")]
             instance_conversions: BTreeMap::new(),
             collecting_instances: false,
+            pending_template_calls: Vec::new(),
+            instance_uses: instance::Uses::default(),
+            template_read: false,
             reaches_host: false,
             impl_uses: Vec::new(),
             impl_instance: String::new(),

@@ -3,22 +3,20 @@
 
 #[cfg(feature = "rust-import")]
 use super::entry::Body;
-#[cfg(feature = "rust-import")]
 use super::models::Models;
-use super::ty::Ty;
-#[cfg(feature = "rust-import")]
-use super::ty::{Float, Int};
+use super::sequence;
+use super::ty::{Float, Int, Ty};
 #[cfg(feature = "rust-import")]
 use super::{
     body_source, contains_open_literal, holds_value, impl_surface_type, kept, lifetime_text,
-    mentions_parameter, reaches_param, sequence, source_span, ImportedContext, ImportedUse, Parser,
+    mentions_parameter, reaches_param, source_span, ImportedContext, ImportedUse, Parser,
 };
 use crate::resolve::type_ref;
 #[cfg(feature = "rust-import")]
 use crate::resolve::{item, Error, LoweringFailure, Program};
-use crate::ImmutableString;
 #[cfg(feature = "rust-import")]
-use crate::{method, type_def, Engine, Shared, Span};
+use crate::{method, Engine, Shared};
+use crate::{type_def, ImmutableString, Span};
 #[cfg(feature = "rust-import")]
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -269,19 +267,24 @@ impl CheckedBody<'_> {
         let models = models.for_source(self.source);
         let text = self.body.text(program);
         let context = Some(context.for_source(self.source));
+        let template = self
+            .key
+            .is_some_and(|key| models.templates.contains_key(key));
         let mut parser = match self.body {
-            Body::Function(_, definition) => Parser::for_function(
-                engine,
-                &text,
-                models,
-                definition,
-                self.key
-                    .cloned()
-                    .expect("resolved functions retain stable item keys"),
-                offset,
-                0,
-                context,
-            ),
+            Body::Function(_, definition) | Body::Instance(_, definition, ..) => {
+                Parser::for_function(
+                    engine,
+                    &text,
+                    models,
+                    definition,
+                    self.key
+                        .cloned()
+                        .expect("resolved functions retain stable item keys"),
+                    offset,
+                    0,
+                    context,
+                )
+            }
             Body::Method(definition) => {
                 match Parser::for_method(engine, &text, models, definition, offset, 0, context) {
                     Ok(parser) => parser,
@@ -289,13 +292,18 @@ impl CheckedBody<'_> {
                 }
             }
             Body::Script(_) => Parser::new_with_offset(engine, &text, models, offset, 0, context),
+            Body::MethodInstance(..) => unreachable!("the check reads no instance"),
         };
         parser.symbolic_only = true;
         parser.recover_misses = recover;
+        parser.template_read = template;
         let lowered = match self.body {
-            Body::Function(_, definition) => parser.parse_function_body(definition),
+            Body::Function(_, definition) | Body::Instance(_, definition, ..) => {
+                parser.parse_function_body(definition)
+            }
             Body::Method(definition) => parser.parse_method_body(definition),
             Body::Script(_) => parser.parse(),
+            Body::MethodInstance(..) => unreachable!("the check reads no instance"),
         };
         (lowered, std::mem::take(&mut parser.recovered))
     }
@@ -665,7 +673,6 @@ pub(super) fn named_output(
 /// The header type naming `ty`, a body's resolved type, as a signature
 /// writes it: `None` for a type no signature names (a closure, an
 /// iterator chain) or one still unknown.
-#[cfg(feature = "rust-import")]
 pub(super) fn named_type(ty: &Ty, models: &Models, span: Span) -> Option<type_ref::Type> {
     let builtin = |name: &str, arguments: Vec<type_ref::Type>| {
         type_ref::Type::Path(type_ref::Path {

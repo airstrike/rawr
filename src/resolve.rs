@@ -4094,6 +4094,9 @@ fn foreign_owner(ty: &type_ref::Type) -> Option<ImmutableString> {
 /// no other impl is for.
 pub(crate) const BLANKET_OWNER: i64 = -13;
 
+/// The impl owner of the array types `[T; N]` (`builtin_owner`).
+pub(crate) const ARRAY_OWNER: i64 = -14;
+
 /// The owner of a blanket impl bounded by `IntoIterator<Item = X>` or
 /// `Iterator<Item = X>` (a crate's `impl<'a, T, Message> IntoView<'a,
 /// Message> for T where T: IntoIterator<Item = Element<'a, Message>>`) is
@@ -4189,6 +4192,9 @@ pub(crate) fn builtin_owner(ty: &type_ref::Type) -> Option<(i64, ImmutableString
                 "Vec" => -8,
                 crate::item::type_ref::SLICE_TYPE => -11,
                 "Result" => -10,
+                // `[T; N]` owns its impls apart from `[T]` and `Vec<T>`,
+                // each length its own Self type.
+                name if crate::item::type_ref::array_length(name).is_some() => ARRAY_OWNER,
                 _ => return None,
             }
         }

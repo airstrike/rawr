@@ -527,10 +527,8 @@ impl<'a> Parser<'a> {
                 // An instance's parameter its template bounds by `T:
                 // Into<U>` converts into `U`, as rustc reads the generic
                 // body (D629).
-                #[cfg(feature = "rust-import")]
                 let bound = self.instance_into_target(&value);
                 value = self.parse_value_into(value, member_span)?;
-                #[cfg(feature = "rust-import")]
                 if let Some(target) = bound {
                     self.unify_type(&target, &value.ty);
                 }
@@ -1067,6 +1065,7 @@ impl<'a> Parser<'a> {
                 if let Some((trait_name, function)) =
                     self.bound_trait_function(&bounded, &member, member_span)?
                 {
+                    self.keep_bound_method(value.span, member_span, &builtin, &bounded, &function);
                     value = self.call_trait_method(
                         value,
                         bounded.clone(),
@@ -2202,7 +2201,11 @@ impl<'a> Parser<'a> {
                         .chain(witnesses),
                     ", ",
                 );
-                let method = method_name(&definition);
+                let method = self.method_call_name(
+                    &definition,
+                    &substitution,
+                    span(member_span.start(), end),
+                );
                 let places =
                     self.mutable_arguments(&args, method_copied(&definition, &self.models))?;
                 let lent = method_lent(&definition);
@@ -2306,7 +2309,8 @@ impl<'a> Parser<'a> {
                     .chain(witnesses),
                 ", ",
             );
-            let method = method_name(&definition);
+            let method =
+                self.method_call_name(&definition, &substitution, span(member_span.start(), end));
             let source = match writeback {
                 Some(Writeback::Owned) => {
                     let receiver = self.temporary("receiver");

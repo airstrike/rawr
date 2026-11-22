@@ -8898,47 +8898,115 @@ main();
 }
 
 #[test]
-fn impls_for_two_instances_reached_by_runtime_type_are_refused() {
-    // A generic parameter's or a trait object's value reaches its impl by
-    // its runtime type, which holds no type arguments: rawr refuses where
-    // two impls' Self types are one runtime type, rather than run the
-    // wrong one (#1178, #2569).
-    let refusal = "telling `Foo<i32>`'s impl of `Describe` from `Foo<i64>`'s through a generic \
-                   parameter or a trait object is not supported";
-    let source = |body: &str| {
-        format!(
-            r#"
-trait Describe {{ fn describe(&self) -> String; }}
-struct Foo<T> {{ value: T }}
-impl Describe for Foo<i32> {{ fn describe(&self) -> String {{ format!("i32 {{}}", self.value) }} }}
-impl Describe for Foo<i64> {{ fn describe(&self) -> String {{ format!("i64 {{}}", self.value) }} }}
-fn show<T: Describe>(x: &T) -> String {{ x.describe() }}
-fn main() {{ let a = Foo {{ value: 1i32 }}; {body} }}
-main();
-"#
-        )
-    };
-    for body in [
-        r#"println!("{}", show(&a));"#,
-        r#"let d: &dyn Describe = &a; println!("{}", d.describe());"#,
-    ] {
-        let report = refused(&source(body));
-        assert!(report.contains(refusal), "{report}");
-    }
+fn impls_for_two_instances_reached_by_a_trait_object_are_refused() {
+    // A trait object's value reaches its impl by its runtime type, which
+    // holds no type arguments: rawr refuses where two impls' Self types
+    // are one runtime type, rather than run the wrong one (#1178, #2212).
     let report = refused(
         r#"
-trait Scale<T> { fn scale(&self, by: T) -> String; }
-impl Scale<i64> for f32 { fn scale(&self, by: i64) -> String { format!("f32 {}", *self * by as f32) } }
-impl Scale<i64> for f64 { fn scale(&self, by: i64) -> String { format!("f64 {}", *self * by as f64) } }
-fn go<T: Scale<i64>>(x: T) -> String { x.scale(2) }
-fn main() { println!("{}", go(1.5f64)); }
+trait Describe { fn describe(&self) -> String; }
+struct Foo<T> { value: T }
+impl Describe for Foo<i32> { fn describe(&self) -> String { format!("i32 {}", self.value) } }
+impl Describe for Foo<i64> { fn describe(&self) -> String { format!("i64 {}", self.value) } }
+fn main() { let a = Foo { value: 1i32 }; let d: &dyn Describe = &a; println!("{}", d.describe()); }
 main();
 "#,
     );
     assert!(
-        report.contains("telling `f32`'s impl of `Scale` from `f64`'s"),
+        report.contains(
+            "telling `Foo<i32>`'s impl of `Describe` from `Foo<i64>`'s through a generic \
+             parameter or a trait object is not supported"
+        ),
         "{report}"
     );
+}
+
+#[test]
+fn a_generic_body_runs_at_its_callers_types() {
+    // A generic function whose body uses its parameters' types runs as
+    // rustc's monomorphised instance does: arithmetic, formatting, parse,
+    // sums and impl choice at the type each call gives it (D1115, #2569).
+    let output = printed(
+        r#"
+use std::fmt::{Debug, Display};
+use std::iter::Sum;
+use std::ops::{Add, Mul};
+use std::str::FromStr;
+trait Scale<T> { fn scale(&self, by: T) -> String; }
+impl Scale<i64> for f32 { fn scale(&self, by: i64) -> String { format!("f32 {}", *self * by as f32) } }
+impl Scale<i64> for f64 { fn scale(&self, by: i64) -> String { format!("f64 {}", *self * by as f64) } }
+trait Describe { fn describe(&self) -> String; }
+struct Foo<T> { value: T }
+impl Describe for Foo<i32> { fn describe(&self) -> String { format!("i32 {}", self.value) } }
+impl Describe for Foo<i64> { fn describe(&self) -> String { format!("i64 {}", self.value) } }
+fn twice<T: Add<Output = T> + Copy>(x: T) -> T { x + x }
+fn square<T: Mul<Output = T> + Copy + Display>(x: T) -> String { format!("{} {:>8.2}", x * x, x) }
+fn read<T: FromStr>(s: &str) -> Option<T> where T::Err: Debug { s.parse::<T>().ok() }
+fn text<T: ToString>(x: T) -> String { x.to_string() }
+fn total<T: Sum<T> + Copy>(v: &[T]) -> T { v.iter().copied().sum() }
+fn go<T: Scale<i64>>(x: T) -> String { x.scale(2) }
+fn show<T: Describe>(x: &T) -> String { x.describe() }
+fn main() {
+    println!("{} {}", twice(100u8), twice(1.1f32));
+    println!("{} | {}", square(3.3f32), square(3.3f64));
+    let a: Option<f32> = read("0.1");
+    println!("{:?} {:?}", a, read::<f32>("0.1").map(|x| x * 3.0));
+    println!("{} {} {}", text(0.3f32), text(0.3f64), text(7u8));
+    println!("{} {} {}", total(&[1i64, 2, 3]), total(&[0.1f32, 0.2]), total(&[100u8, 100, 50]));
+    println!("{} | {}", go(1.5f32), go(1.5f64));
+    println!("{} {}", show(&Foo { value: 1i32 }), show(&Foo { value: 2i64 }));
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "200 2.2\n10.889999     3.30 | 10.889999999999999     3.30\nSome(0.1) Some(0.3)\n\
+         0.3 0.3 7\n6 0.3 250\nf32 3 | f64 3\ni32 1 i64 2\n"
+    );
+    for (program, message) in [
+        (
+            "use std::ops::Add;\nfn twice<T: Add<Output = T> + Copy>(x: T) -> T { x + x }\n\
+             fn main() { println!(\"{}\", twice(200u8)); }\nmain();\n",
+            "attempt to add with overflow",
+        ),
+        (
+            "use std::iter::Sum;\nfn total<T: Sum<T> + Copy>(v: &[T]) -> T { v.iter().copied().sum() }\n\
+             fn main() { println!(\"{}\", total(&[100u8, 100, 100])); }\nmain();\n",
+            "attempt to add with overflow",
+        ),
+    ] {
+        let error = Engine::new()
+            .run(program)
+            .expect_err("a `u8` sum past 255 panics");
+        assert!(error.to_string().contains(message), "{error}");
+    }
+}
+
+#[test]
+fn an_instance_keeps_the_generic_reads_resolutions() {
+    // An instance calls what its template's bounds resolve, not what its
+    // type has of that name: a bound's method over an inherent one, a
+    // bound's associated function over the type's, and a nested generic
+    // at the instance's types (D1114, D1115).
+    let output = printed(
+        r#"
+trait Tr { fn len(&self) -> usize; }
+impl Tr for Vec<i32> { fn len(&self) -> usize { 99 } }
+trait Make { fn new() -> Self; fn tag(&self) -> &'static str; }
+struct A;
+impl A { fn new() -> Self { A } fn tag(&self) -> &'static str { "inherent tag" } }
+impl Make for A { fn new() -> Self { A } fn tag(&self) -> &'static str { "trait tag" } }
+fn size<T: Tr>(x: &T) -> usize { x.len() }
+fn made<T: Make>() -> &'static str { T::new().tag() }
+fn outer<T: Make>(x: &T) -> String { format!("{} {}", x.tag(), made::<T>()) }
+fn main() {
+    println!("{} {} {}", size(&vec![1, 2]), made::<A>(), outer(&A));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "99 trait tag trait tag trait tag\n");
 }
 
 #[test]
@@ -9869,4 +9937,86 @@ main();
         output,
         "60s true\n10ms true false\n4.5s true 2.25s\nabcd true bc\n"
     );
+}
+
+#[test]
+fn a_generic_impls_method_runs_at_its_receivers_types() {
+    // An inherent method of a generic impl whose body uses the impl's
+    // parameters runs at the receiver's type arguments, as rustc's
+    // instance does: an `f64`'s impl, a `u8`'s overflow, an `f32`'s digits
+    // (D1115).
+    let output = printed(
+        r#"
+use std::fmt::Display;
+use std::ops::Add;
+trait Half { fn half(&self) -> String; }
+impl Half for f32 { fn half(&self) -> String { format!("f32 {}", self / 2.0) } }
+impl Half for f64 { fn half(&self) -> String { format!("f64 {}", self / 2.0) } }
+struct W<T>(T);
+impl<T: Half> W<T> { fn go(&self) -> String { self.0.half() } }
+struct P<T>(T);
+impl<T: Add<Output = T> + Copy + Display> P<T> {
+    fn new(x: T) -> Self { P(x) }
+    fn dbl(&self) -> T { self.0 + self.0 }
+    fn shown(&self) -> String { format!("{}", self.0) }
+}
+fn main() {
+    println!("{} | {}", W(1.0f64).go(), W(1.0f32).go());
+    println!("{} {} {}", P(100u8).dbl(), P::new(0.1f32).shown(), P(1.1f32).dbl());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "f64 0.5 | f32 0.5\n200 0.1 2.2\n");
+    let error = Engine::new()
+        .run(
+            "struct P<T>(T);\nimpl<T: std::ops::Add<Output = T> + Copy> P<T> { fn dbl(&self) -> T \
+             { self.0 + self.0 } }\nfn main() { println!(\"{}\", P(200u8).dbl()); }\nmain();\n",
+        )
+        .expect_err("a `u8` sum past 255 panics");
+    assert!(
+        error.to_string().contains("attempt to add with overflow"),
+        "{error}"
+    );
+}
+
+#[test]
+fn an_array_type_owns_its_impls_apart_from_its_slice() {
+    // `impl Total for [i32; 3]` beside `impl Total for [i32]`, and an impl
+    // for every length of an array (#2214).
+    let output = printed(
+        r#"
+trait Total { fn total(&self) -> i32; }
+impl Total for [i32; 3] { fn total(&self) -> i32 { self.iter().sum() } }
+impl Total for [i32] { fn total(&self) -> i32 { self.iter().sum::<i32>() * 10 } }
+trait Len { fn size(&self) -> usize; }
+impl<const N: usize> Len for [u8; N] { fn size(&self) -> usize { N } }
+fn main() {
+    let a = [1, 2, 3];
+    println!("{} {} {} {}", a.total(), a[..].total(), [0u8; 4].size(), [1u8, 2].size());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "6 60 4 2\n");
+}
+
+#[test]
+fn a_relaxed_sized_parameter_tells_a_slice_from_a_vec() {
+    // `T: Tr + ?Sized` at `[i32]` and at `Vec<i32>` runs each one's impl,
+    // which their runtime value doesn't tell apart (#801).
+    let output = printed(
+        r#"
+trait Tr { fn name(&self) -> String; }
+impl<T> Tr for [T] { fn name(&self) -> String { format!("slice {}", self.len()) } }
+impl<T> Tr for Vec<T> { fn name(&self) -> String { format!("vec {}", self.len()) } }
+fn f<T: Tr + ?Sized>(t: &T) -> String { t.name() }
+fn main() {
+    let v = vec![1, 2, 3];
+    println!("{} {} {} {}", f(&v), f(&v[..]), f(&v[1..]), f(&vec!["a"]));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "vec 3 slice 3 slice 2 vec 1\n");
 }
