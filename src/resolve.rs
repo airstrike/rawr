@@ -5642,7 +5642,11 @@ fn generic_scope(
             .iter()
             .filter_map(|bound| {
                 let name = &bound.segments.last()?.name.text;
-                Some((crate::capability::Kind::from_name(name)?, bound.span))
+                let kind = match name.as_str() {
+                    "Send" => crate::capability::Kind::Send,
+                    name => crate::capability::Kind::from_name(name)?,
+                };
+                Some((kind, bound.span))
             })
             .collect();
         arguments.push(trait_arguments);

@@ -879,11 +879,8 @@ impl Parser<'_> {
         name: &ImmutableString,
         at: Span,
     ) -> Option<origin::Fragment> {
-        if self
-            .closures
-            .last()
-            .is_some_and(|scope| scope.captures.contains(name.as_str()))
-        {
+        let declaration = self.bindings.get(name.as_str())?.declaration;
+        if self.captured_here(name, declaration) {
             return None;
         }
         let (_, guard, ..) = self.cell_guards.get(name)?;
@@ -891,9 +888,7 @@ impl Parser<'_> {
             crate::engine::KEYWORD_MOVE,
             [origin::Fragment::plain(guard.as_str())],
         );
-        let binding = self.bindings.get_mut(name.as_str())?;
-        binding.available = false;
-        let declaration = binding.declaration;
+        self.bindings.get_mut(name.as_str())?.available = false;
         self.moved_at.insert(declaration, at);
         self.flow().moved(at.start());
         Some(self.prelude_op(PreludeOp::CellRelease, [taken]))

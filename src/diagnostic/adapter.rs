@@ -552,6 +552,36 @@ const DEBUG_INSTEAD: &str =
 /// rustc's last note on a static whose type isn't `Sync`.
 const SHARED_STATIC: &str = "shared static variables must have a type that implements `Sync`";
 
+/// What rustc's help on a missing auto trait says it is missing within.
+enum AutoWithin<'a> {
+    /// A closure, which rustc names by its place: no help is written.
+    Closure,
+    /// The outermost type the chain notes the missing trait within.
+    Type(Option<&'a str>),
+}
+
+/// Where the auto trait an unmet bound's `chain` ends in is missing
+/// within: the outermost type that holds the one lacking it, before the
+/// chain needs another trait.
+fn auto_within<'a>(chain: &'a [resolve::Requirement], lacking: &str) -> AutoWithin<'a> {
+    if chain
+        .iter()
+        .any(|requirement| matches!(requirement.site.as_deref(), Some(resolve::Site::Closure(_))))
+    {
+        return AutoWithin::Closure;
+    }
+    AutoWithin::Type(
+        chain
+            .iter()
+            .take_while(|requirement| {
+                requirement.trait_name == lacking
+                    && matches!(requirement.site.as_deref(), Some(resolve::Site::Within(_)))
+            })
+            .last()
+            .map(|holder| holder.ty.as_str()),
+    )
+}
+
 /// rustc's note on a type that holds one that doesn't implement a trait.
 fn appears_within(holder: &str) -> String {
     format!("required because it appears within the type `{holder}`")
@@ -2611,6 +2641,16 @@ fn resolution_builder(error: &resolve::Error) -> Builder {
                 "Sized" => builder.help(format!(
                     "the trait `Sized` is not implemented for `{owner}`"
                 )),
+                "Send" | "Sync" => match auto_within(chain.requirements(), capability) {
+                    AutoWithin::Closure => builder,
+                    AutoWithin::Type(Some(holder)) => builder.help(format!(
+                        "within `{holder}`, the trait `{capability}` is not implemented for \
+                         `{owner}`"
+                    )),
+                    AutoWithin::Type(None) => builder.help(format!(
+                        "the trait `{capability}` is not implemented for `{owner}`"
+                    )),
+                },
                 _ => builder,
             };
             // `Debug`'s own note for a type the program declares.

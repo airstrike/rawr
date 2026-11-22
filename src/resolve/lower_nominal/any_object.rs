@@ -95,7 +95,7 @@ impl Parser<'_> {
         while through && let Ty::Reference { target, .. } | Ty::Boxed(target) = ty {
             ty = self.inference.resolve(&target);
         }
-        matches!(&ty, Ty::Dyn(name, bindings) if name.as_str() == "Any" && bindings.is_empty())
+        matches!(&ty, Ty::Dyn(name, bindings, _) if name.as_str() == "Any" && bindings.is_empty())
             && self.models.std_trait("Any")
     }
 

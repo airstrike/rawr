@@ -79,6 +79,32 @@ impl Parser<'_> {
         }
     }
 
+    /// The method `member` of the program's impl for `owner` of the crate
+    /// trait spliced at `member_span`, by `bound_method` or as
+    /// `Trait::member(value, ..)` names it: what rustc calls there, over
+    /// an inherent namesake of any shape. The impl is known by the trait's
+    /// name, as the program's impls of crate traits are (`Models::impls`).
+    pub(super) fn spliced_impl_method(
+        &self,
+        owner: type_def::Id,
+        member: &str,
+        member_span: Span,
+    ) -> Option<method::Definition> {
+        let trait_path = self.spliced_traits.get(&member_span.start())?;
+        let name = trait_path.rsplit("::").next()?;
+        self.models
+            .trait_methods
+            .get(&(owner, member.into()))?
+            .iter()
+            .find(|definition| {
+                definition
+                    .trait_name()
+                    .and_then(|written| written.rsplit("::").next())
+                    == Some(name)
+            })
+            .cloned()
+    }
+
     /// `value.member(..)` with its member at `member_span`, on a value
     /// known by a trait that has `member`: the trait's method, as
     /// `Trait::member(&value, ..)` names it.

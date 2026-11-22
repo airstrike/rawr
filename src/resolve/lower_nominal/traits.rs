@@ -1287,7 +1287,7 @@ impl<'a> Parser<'a> {
             return true;
         }
         match ty {
-            Ty::Dyn(name, _) => {
+            Ty::Dyn(name, ..) => {
                 name == trait_name
                     || supertraits(&self.models, name)
                         .iter()
@@ -1501,8 +1501,8 @@ impl<'a> Parser<'a> {
             return true;
         }
         let candidates: Vec<Vec<Ty>> = match self.inference.resolve(ty) {
-            Ty::Dyn(name, bindings) if name == trait_name => vec![dyn_arguments(&bindings)],
-            Ty::Dyn(name, bindings) => {
+            Ty::Dyn(name, bindings, _) if name == trait_name => vec![dyn_arguments(&bindings)],
+            Ty::Dyn(name, bindings, _) => {
                 self.dyn_supertrait_instances(&name, &bindings, ty, trait_name)
             }
             ty @ (Ty::Param(..) | Ty::Projection(..)) => self

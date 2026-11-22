@@ -1105,7 +1105,7 @@ impl<'a> Parser<'a> {
                 _ => None,
             };
             if let Some(object) = object {
-                let Ty::Dyn(trait_name, _) = &object else {
+                let Ty::Dyn(trait_name, ..) = &object else {
                     unreachable!("matched a trait object");
                 };
                 // A native trait's method on its object is the crate's
@@ -2266,9 +2266,16 @@ impl<'a> Parser<'a> {
                 )
                 .map(Ok);
         }
-        let found = match self_typed {
-            Some(definition) => Some(definition),
-            None => self.probed_method(owner, &member, &value.ty),
+        // A crate trait's method the call names, or the bound of the
+        // `impl Trait` value it is on (`opaque_bound`), is that trait's
+        // impl's.
+        #[cfg(feature = "rust-import")]
+        let spliced = self.spliced_impl_method(owner, &member, member_span);
+        #[cfg(not(feature = "rust-import"))]
+        let spliced = None;
+        let found = match (spliced, self_typed) {
+            (Some(definition), _) | (None, Some(definition)) => Some(definition),
+            (None, None) => self.probed_method(owner, &member, &value.ty),
         };
         // Blanket impls of two traits that give one name: the one whose
         // where-clauses hold for the receiver, as rustc's probe takes it.

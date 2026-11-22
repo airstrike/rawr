@@ -902,8 +902,8 @@ pub(super) enum Ty {
     /// `dyn Trait`, behind `&` or `Box`: a value of some type implementing
     /// the trait, whose methods dispatch by the value's runtime type.
     /// With its associated type bindings by name (`dyn Shape<Output =
-    /// i64>`), sorted.
-    Dyn(ImmutableString, Box<[(ImmutableString, Ty)]>),
+    /// i64>`), sorted, and the auto traits written after it.
+    Dyn(ImmutableString, Box<[(ImmutableString, Ty)]>, Auto),
     /// A generic type parameter of the item being checked, or a function's
     /// opaque output, as `Parameter` says: by its name, opaque, with only
     /// its bounds' capabilities; any value at runtime.
@@ -921,6 +921,55 @@ pub(super) enum Ty {
     Const(ImmutableString),
     Infer(usize),
     Unknown,
+}
+
+/// The auto traits a trait object's type writes after its trait: `Send`
+/// of `dyn Shape + Send`. An object a crate's signature or a program's
+/// item signature names, or one rawr makes for std, has them unknown, and
+/// is taken to have each.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
+pub(super) enum Auto {
+    Unknown,
+    Written { send: bool, sync: bool },
+}
+
+impl Auto {
+    /// Whether an object of the trait `trait_name` is known not to be
+    /// `Send`: the program writes it without `+ Send`, and the trait has
+    /// no `Send` supertrait.
+    pub(super) fn unsent(self, models: &Models, trait_name: &str) -> bool {
+        matches!(self, Self::Written { send: false, .. })
+            && !models.traits.get(trait_name).is_some_and(|(_, declared)| {
+                declared
+                    .supertraits
+                    .0
+                    .contains(crate::capability::Kind::Send)
+            })
+    }
+
+    /// ` + Send + Sync`, as rustc names the object after its trait.
+    fn written(self) -> &'static str {
+        match self {
+            Self::Unknown
+            | Self::Written {
+                send: false,
+                sync: false,
+            } => "",
+            Self::Written {
+                send: true,
+                sync: false,
+            } => " + Send",
+            Self::Written {
+                send: false,
+                sync: true,
+            } => " + Sync",
+            Self::Written {
+                send: true,
+                sync: true,
+            } => " + Send + Sync",
+        }
+    }
 }
 
 /// What a [`Ty::Param`] is.
@@ -1212,7 +1261,11 @@ impl Ty {
                 )
                 .collect::<Vec<_>>();
             bindings.sort_by(|(a, _), (b, _)| a.cmp(b));
-            return Self::Dyn(trait_name.into(), bindings.into_boxed_slice());
+            return Self::Dyn(
+                trait_name.into(),
+                bindings.into_boxed_slice(),
+                Auto::Unknown,
+            );
         }
         if let Some((inputs, output)) = ty.fn_signature() {
             return Self::Fn {
@@ -1515,11 +1568,11 @@ impl Ty {
                     .join(", ")
             )
             .into(),
-            Self::Dyn(trait_name, bindings) if bindings.is_empty() => {
-                format!("dyn {trait_name}").into()
+            Self::Dyn(trait_name, bindings, auto) if bindings.is_empty() => {
+                format!("dyn {trait_name}{}", auto.written()).into()
             }
-            Self::Dyn(trait_name, bindings) => format!(
-                "dyn {trait_name}<{}>",
+            Self::Dyn(trait_name, bindings, auto) => format!(
+                "dyn {trait_name}<{}>{}",
                 dyn_arguments(bindings)
                     .iter()
                     .map(|ty| ty.name(models).to_string())
@@ -1530,7 +1583,8 @@ impl Ty {
                             .map(|(name, ty)| format!("{name} = {}", ty.name(models)))
                     )
                     .collect::<Vec<_>>()
-                    .join(", ")
+                    .join(", "),
+                auto.written()
             )
             .into(),
             Self::Host { proof, arguments } if arguments.is_empty() => {
@@ -1639,13 +1693,13 @@ impl Ty {
                 Nominal::Enum { .. } => TypeId::of::<nominal::Enum>(),
             }),
             // std's `dyn Error` is the error object `?` and `Box::new` make.
-            Self::Dyn(name, bindings)
+            Self::Dyn(name, bindings, _)
                 if name.as_str() == "Error" && bindings.is_empty() && models.std_error_trait() =>
             {
                 Some(TypeId::of::<error_object::ErrorObject>())
             }
             // std's `dyn Any` is the value with its type a coercion makes.
-            Self::Dyn(name, bindings)
+            Self::Dyn(name, bindings, _)
                 if name.as_str() == "Any" && bindings.is_empty() && models.std_trait("Any") =>
             {
                 Some(TypeId::of::<any_object::AnyObject>())

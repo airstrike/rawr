@@ -1828,8 +1828,13 @@ impl<'a> Parser<'a> {
             && matches!(self.peek(), Token::Pipe | Token::Or)
             && !self.bindings.contains_key("move")
         {
-            let token = self.next().0;
-            return self.parse_closure(token, name_span, true);
+            // `move ||` is the head rustc's notes mark.
+            let (token, at) = self.next();
+            let start = match token {
+                Token::Or => span(name_span.start(), text_end(at, "||")),
+                _ => name_span,
+            };
+            return self.parse_closure(token, start, true);
         }
 
         // A local binding shadows an item of the same name, as in Rust.
@@ -2408,10 +2413,7 @@ impl<'a> Parser<'a> {
         }
         // A local bound to a `RefCell` borrow: the cell's value. A closure
         // or async body reads its own borrows, not one it captures.
-        if self
-            .closures
-            .last()
-            .is_none_or(|scope| !scope.captures.contains(name.as_str()))
+        if !self.captured_here(&name, declaration)
             && let Some(value) = self.cell_guard_use(&name, name_span)
         {
             return Ok(value);

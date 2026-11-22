@@ -422,10 +422,10 @@ struct Parser<'a> {
     /// `arithmetic_overflow` and `unconditional_panic` lints check.
     known_values: BTreeMap<Span, Known>,
     known_indices: Vec<KnownIndex>,
-    /// A capture that keeps a closure from being `Send`, of each closure
-    /// that has one, by the closure's span: what `std::thread::spawn`
-    /// refuses (`thread.rs`).
-    unsent_captures: BTreeMap<Span, closure::Unsent>,
+    /// The capture that keeps a closure from being `Send`, as rustc's
+    /// E0277 names it, of each closure that has one, by the closure's
+    /// span: what `std::thread::spawn` refuses (`thread.rs`).
+    unsent_captures: BTreeMap<Span, counted::Unsendable>,
     /// Each closure's captures whose type holds an opaque output (D1109),
     /// which is `Send` as its hidden type is, known once every body is
     /// checked.

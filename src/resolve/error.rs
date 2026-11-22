@@ -571,6 +571,22 @@ pub enum Site {
         /// The type as rustc names it in the help: `W<T>`.
         written: ImmutableString,
     },
+    /// The program's type, or a function's `impl Trait` output, that holds
+    /// a type lacking an auto trait, at its name: "required because it
+    /// appears within the type `Sq`".
+    Within(Span),
+    /// The closure whose capture lacks an auto trait, at its head:
+    /// "required because it's used within this closure".
+    Closure(Span),
+}
+
+impl Site {
+    /// Whether this is an impl or derive a bound selects, which rustc's
+    /// help shows before the chain's notes.
+    #[must_use]
+    pub const fn selected(&self) -> bool {
+        matches!(self, Self::Impl { .. } | Self::Derive { .. })
+    }
 }
 
 impl Required {

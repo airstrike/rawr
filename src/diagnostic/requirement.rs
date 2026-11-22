@@ -17,10 +17,12 @@ enum Entry<'a> {
 /// The notes of `chain`, innermost first, that follow the report's own
 /// snippet: its lines before its first section.
 pub(super) fn lines(chain: &[resolve::Requirement]) -> Vec<String> {
-    if chain
-        .last()
-        .is_some_and(|outermost| outermost.site.is_some())
-    {
+    if chain.last().is_some_and(|outermost| {
+        outermost
+            .site
+            .as_deref()
+            .is_some_and(resolve::Site::selected)
+    }) {
         return Vec::new();
     }
     entries(chain)
@@ -67,6 +69,16 @@ fn entries(chain: &[resolve::Requirement]) -> Vec<Entry<'_>> {
     let mut index = 0;
     while let Some(requirement) = chain.get(index) {
         entries.push(entry(requirement));
+        // An auto trait's notes on the types that hold the one lacking it
+        // are each rustc's own, never folded.
+        if requirement
+            .site
+            .as_deref()
+            .is_some_and(|site| !site.selected())
+        {
+            index += 1;
+            continue;
+        }
         if !seen.contains(&&requirement.trait_name) {
             seen.push(&requirement.trait_name);
         }
@@ -157,6 +169,15 @@ fn placed(requirement: &resolve::Requirement, site: &resolve::Site, source: &Sou
                 "consider manually implementing `{}` to avoid undesired bounds",
                 written_trait(&requirement.trait_name)
             )),
+        resolve::Site::Within(name) => Section::note(format!(
+            "required because it appears within the type `{}`",
+            requirement.ty
+        ))
+        .primary(source.clone(), *name, None),
+        resolve::Site::Closure(head) => Section::note(
+            "required because it's used within this closure",
+        )
+        .primary(source.clone(), *head, None),
     }
 }
 
@@ -192,6 +213,7 @@ fn conditional(
             written,
             ..
         } => (*derive, *parameter, written),
+        resolve::Site::Within(_) | resolve::Site::Closure(_) => return None,
     };
     Some(
         Section::help(format!(

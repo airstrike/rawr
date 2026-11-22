@@ -16,13 +16,12 @@ use crate::tokenizer::Token;
 use crate::{ImmutableString, Position, Span};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// A capture that keeps its closure from being `Send`: one it holds that
-/// rawr knows isn't `Send`, or one it borrows that isn't `Sync`, as `&T` is
-/// `Send` only where `T` is `Sync`.
+/// A closure's capture, as its `Send` sees it: the type it holds, `&T` of
+/// one it borrows, and the closure's head (`move ||`).
 #[derive(Clone)]
 pub(super) struct Unsent {
     pub(super) ty: Ty,
-    pub(super) borrowed: bool,
+    pub(super) head: Span,
 }
 
 /// A closure passed to the host: it becomes its own generated function, an
@@ -314,6 +313,15 @@ impl<'a> Parser<'a> {
                 scope.captures.insert(name.clone());
             }
         }
+    }
+
+    /// Whether the innermost closure captures the local `name` declared at
+    /// `declaration`: a local of its own body that shadows a capture
+    /// (`let c = c.borrow();`) is not one.
+    pub(super) fn captured_here(&self, name: &str, declaration: Span) -> bool {
+        self.closures
+            .last()
+            .is_some_and(|scope| scope.outer.get(name) == Some(&declaration))
     }
 
     /// `|a, b: T| body`, `move |..| ..` or `|| ..`. A closure that captures
@@ -990,18 +998,22 @@ impl<'a> Parser<'a> {
                 let ty = self
                     .inference
                     .resolve(&self.bindings.get(name.as_str())?.ty);
-                let borrowed = !moved && !scope.consumed.contains_key(name);
-                Some(Unsent { ty, borrowed })
+                let ty = if !moved && !scope.consumed.contains_key(name) {
+                    Ty::Reference {
+                        mutable: false,
+                        target: Box::new(ty),
+                    }
+                } else {
+                    ty
+                };
+                Some(Unsent { ty, head: header })
             })
             .collect::<Vec<_>>();
-        if let Some(unsent) = captured.iter().find(|unsent| {
-            if unsent.borrowed {
-                !self.shared_between_threads(&unsent.ty)
-            } else {
-                self.not_send(&unsent.ty)
-            }
+        if let Some(unsendable) = captured.iter().find_map(|unsent| {
+            self.unsendable(&unsent.ty, &|_| None)
+                .map(|unsendable| unsendable.in_closure(unsent.head))
         }) {
-            self.unsent_captures.insert(expression, unsent.clone());
+            self.unsent_captures.insert(expression, unsendable);
         }
         let opaque = captured
             .into_iter()

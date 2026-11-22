@@ -665,6 +665,51 @@ impl Parser<'_> {
     }
 }
 
+/// An opaque output's hidden type, and where the output is written, as
+/// auto traits see through it (D1109).
+pub(super) type Reveal<'a> = dyn Fn(&Ty) -> Option<(Ty, Span)> + 'a;
+
+/// What makes a type not `Send`, as rustc's E0277 names it: the innermost
+/// type that lacks `Send`, or the `Sync` a shared reference or an `Arc` of
+/// it needs, and each type between, innermost first.
+#[derive(Clone)]
+pub(super) struct Unsendable {
+    ty: Ty,
+    capability: &'static str,
+    chain: Vec<crate::resolve::Requirement>,
+}
+
+impl Unsendable {
+    /// The same, used within the closure whose head is at `head`.
+    pub(super) fn in_closure(mut self, head: Span) -> Self {
+        self.chain.push(crate::resolve::Requirement {
+            ty: ImmutableString::new(),
+            trait_name: "Send".into(),
+            site: Some(Box::new(crate::resolve::Site::Closure(head))),
+        });
+        self
+    }
+
+    /// rustc's E0277 at `at`, where `required_by`'s bound needs `Send`.
+    pub(super) fn error(
+        self,
+        models: &Models,
+        at: Span,
+        required_by: Option<crate::resolve::Required>,
+    ) -> Error {
+        Error::MissingCapability {
+            owner: self.ty.name(models),
+            capability: self.capability.into(),
+            operation: at,
+            derive: false,
+            declared: None,
+            required_by,
+            formatted: None,
+            chain: crate::resolve::Chain::new(self.chain.into_boxed_slice()),
+        }
+    }
+}
+
 impl Parser<'_> {
     /// Whether a value of `ty` may be shared between threads, as rustc's
     /// `Sync` has it for the types rawr represents: a `RefCell`, a `Cell`,
@@ -675,8 +720,8 @@ impl Parser<'_> {
     }
 
     /// Whether rawr knows a value of `ty` isn't `Send`: it holds an `Rc`,
-    /// an `rc::Weak`, an `Arc` of what isn't `Sync`, or a shared
-    /// reference to what isn't. rawr proves no auto trait, so any other
+    /// an `rc::Weak`, an `Arc` of what isn't `Sync`, a shared reference to
+    /// what isn't, or a trait object the program writes without `+ Send`. rawr proves no auto trait, so any other
     /// type passes a `Send` bound, as a closure does whatever it captures.
     pub(super) fn not_send(&self, ty: &Ty) -> bool {
         self.not_send_in(ty, &mut Vec::new())
@@ -685,6 +730,7 @@ impl Parser<'_> {
     fn not_send_in(&self, ty: &Ty, visiting: &mut Vec<(type_def::Id, Box<[Ty]>)>) -> bool {
         match self.inference.resolve(ty) {
             Ty::Counted(Counter::Rc, _) | Ty::Weak(Counter::Rc, _) => true,
+            Ty::Dyn(name, _, auto) => auto.unsent(&self.models, &name),
             Ty::Counted(Counter::Arc, inner) | Ty::Weak(Counter::Arc, inner) => {
                 !self.shared_between_threads(&inner) || self.not_send_in(&inner, visiting)
             }
@@ -721,6 +767,125 @@ impl Parser<'_> {
             }
             _ => false,
         }
+    }
+
+    /// What makes `ty` not `Send`, when rawr knows it isn't, as rustc's
+    /// E0277 names it. `reveal` gives an opaque output's hidden type and
+    /// where the output is written; one it doesn't reveal is taken to be
+    /// `Send`.
+    pub(super) fn unsendable(&self, ty: &Ty, reveal: &Reveal<'_>) -> Option<Unsendable> {
+        let mut chain = Vec::new();
+        let (ty, capability) = self.unsent_part(ty, reveal, &mut chain, &mut Vec::new())?;
+        Some(Unsendable {
+            ty,
+            capability,
+            chain,
+        })
+    }
+
+    /// The type in `ty` that lacks `Send`, or the `Sync` a shared
+    /// reference or an `Arc` needs, with the types between into `chain`,
+    /// innermost first. Std's containers hold it without a note, as rustc
+    /// notes them at std's own source.
+    fn unsent_part(
+        &self,
+        ty: &Ty,
+        reveal: &Reveal<'_>,
+        chain: &mut Vec<crate::resolve::Requirement>,
+        visiting: &mut Vec<(type_def::Id, Box<[Ty]>)>,
+    ) -> Option<(Ty, &'static str)> {
+        let ty = self.inference.resolve(ty);
+        let found = match &ty {
+            Ty::Counted(Counter::Rc, _) | Ty::Weak(Counter::Rc, _) => return Some((ty, "Send")),
+            Ty::Dyn(name, _, auto) if auto.unsent(&self.models, name) => {
+                return Some((ty, "Send"));
+            }
+            // `Arc<T>: Send` and `&T: Send` need `T: Sync`, and an `Arc`
+            // needs `T: Send` too.
+            Ty::Counted(Counter::Arc, inner)
+            | Ty::Weak(Counter::Arc, inner)
+            | Ty::Reference {
+                mutable: false,
+                target: inner,
+            } => {
+                let found = if self.shared_between_threads(inner) {
+                    if matches!(ty, Ty::Reference { .. }) {
+                        return None;
+                    }
+                    self.unsent_part(inner, reveal, chain, visiting)?
+                } else {
+                    let mut appears = Vec::new();
+                    let culprit = self
+                        .unshared_part(inner, &mut appears, &mut Vec::new())
+                        .unwrap_or_else(|| self.inference.resolve(inner));
+                    chain.extend(appears.into_iter().map(|(holder, site)| {
+                        crate::resolve::Requirement {
+                            ty: holder,
+                            trait_name: "Sync".into(),
+                            site: site.map(|site| Box::new(crate::resolve::Site::Within(site))),
+                        }
+                    }));
+                    (culprit, "Sync")
+                };
+                chain.push(crate::resolve::Requirement {
+                    ty: ty.name(&self.models),
+                    trait_name: "Send".into(),
+                    site: None,
+                });
+                return Some(found);
+            }
+            Ty::Reference { target: inner, .. }
+            | Ty::Boxed(inner)
+            | Ty::Option(inner)
+            | Ty::Array { element: inner, .. }
+            | Ty::Reverse(inner)
+            | Ty::Iter(inner, _, _)
+            | Ty::Cell(_, inner) => return self.unsent_part(inner, reveal, chain, visiting),
+            Ty::Thread(kind, inner) if kind.sends() => {
+                return self.unsent_part(inner, reveal, chain, visiting);
+            }
+            Ty::Result(ok, err) => {
+                return self
+                    .unsent_part(ok, reveal, chain, visiting)
+                    .or_else(|| self.unsent_part(err, reveal, chain, visiting));
+            }
+            Ty::Tuple(members) | Ty::Keyed(_, members) => {
+                return members
+                    .iter()
+                    .find_map(|member| self.unsent_part(member, reveal, chain, visiting));
+            }
+            Ty::Script(id, arguments) => {
+                let key = (*id, arguments.clone());
+                if visiting.contains(&key) {
+                    return None;
+                }
+                visiting.push(key);
+                let found = self
+                    .field_types(*id, arguments)
+                    .iter()
+                    .find_map(|field| self.unsent_part(field, reveal, chain, visiting));
+                visiting.pop();
+                let site = self.models.name_declared_here(self.models.definition(*id));
+                (found?, site)
+            }
+            Ty::Param(_, ty::Parameter::Opaque(_)) => {
+                let (hidden, written) = reveal(&ty).filter(|(hidden, _)| *hidden != ty)?;
+                (
+                    self.unsent_part(&hidden, reveal, chain, visiting)?,
+                    Some(written),
+                )
+            }
+            _ => return None,
+        };
+        let (found, site) = found;
+        if let Some(site) = site {
+            chain.push(crate::resolve::Requirement {
+                ty: ty.name(&self.models),
+                trait_name: found.1.into(),
+                site: Some(Box::new(crate::resolve::Site::Within(site))),
+            });
+        }
+        Some(found)
     }
 
     /// The types of the fields and variant payloads of the program's type
