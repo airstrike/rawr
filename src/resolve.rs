@@ -2243,6 +2243,14 @@ pub(crate) fn hasher_alias(path: &str) -> Option<&'static str> {
         .find_map(|(alias, collection)| (alias == name).then_some(collection))
 }
 
+/// `std::fmt::Arguments`, what `format_args!` makes.
+pub(crate) fn std_arguments(path: &str) -> bool {
+    matches!(
+        path,
+        "std::fmt::Arguments" | "core::fmt::Arguments" | "alloc::fmt::Arguments"
+    )
+}
+
 /// `std::num::ParseIntError` and the other errors of `str::parse`, by
 /// their std paths: the error's name.
 pub(crate) fn std_parse_error(path: &str) -> Option<&'static str> {
@@ -2816,6 +2824,7 @@ fn resolve_item(
                 statics,
                 functions: functions.into_boxed_slice(),
                 associated: associated.into_boxed_slice(),
+                std: None,
             })
         }
         crate::item::Parsed::Trait(parsed) => {
@@ -3607,9 +3616,12 @@ fn resolve_methods(
 ) -> Result<ResolvedMethods, LocatedError> {
     forward::fold_reference_impls(items)?;
     declare_facade_traits(items, host)?;
-    let items = items.as_mut_slice();
     elaborate_supertraits(items)?;
-    let std_traits = std_trait::declarations(items, host);
+    let mut std_traits = std_trait::declarations(items, host);
+    // std's impls of those traits for its own types (`String: fmt::Write`).
+    let impls = std_trait::impls(&mut std_traits, items, items.len(), host);
+    items.extend(impls);
+    let items = items.as_mut_slice();
     resolve_projections(items, &std_traits)?;
     let traits = trait_table(items, std_traits)?;
     fill_trait_defaults(items, &traits);
@@ -3686,7 +3698,7 @@ fn resolve_methods(
                 .or_else(|| foreign_owner(&item.owner).map(|path| (None, path)));
             let builtin = outside
                 .map(|(code, owner_name)| {
-                    if declared.name.span == Span::NONE && !local_argument {
+                    if declared.name.span == Span::NONE && !local_argument && item.std.is_none() {
                         return Err(Error::InvalidImplOwner {
                             owner: format!(
                                 "{owner_name}: only traits defined in the current crate can be \
@@ -3858,6 +3870,9 @@ fn resolve_methods(
                     if let Some(text) = &declared.declaration {
                         definition = definition.with_body_text(text.clone());
                     }
+                } else if let Some(text) = &function.body.text {
+                    // std's impl, read from std's text (`std_trait::impls`).
+                    definition = definition.with_body_text(text.clone());
                 }
                 if builtin.is_some() {
                     definition = definition.for_builtin(item.owner.clone());

@@ -3119,3 +3119,202 @@ main();
     );
     assert_eq!(output, "3 Some(1) [\"a\"]\n");
 }
+
+#[test]
+fn a_std_from_into_a_float_widens_an_integer() {
+    // std's `From<u8> for f64` and the other integers a float holds
+    // exactly, through a generic's bound and concretely (#2475).
+    let output = printed(
+        r#"
+fn widened<T: From<u8>>(b: u8) -> T { T::from(b) }
+fn into_float<T: Into<f64>>(t: T) -> f64 { t.into() }
+fn main() {
+    let x: f64 = widened::<f64>(3);
+    let y: f64 = 4u8.into();
+    let z = f32::from(5u16);
+    let w: f64 = (-7i32).into();
+    println!("{} {} {} {} {}", x, y, z, w, into_float(9u32) / 2.0);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "3 4 5 -7 4.5\n");
+    let report = refused("fn main() { let x = f64::from(5u64); println!(\"{}\", x); }\nmain();");
+    assert!(
+        report.contains("the trait bound `f64: From<u64>` is not satisfied"),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_program_hasher_has_the_provided_writes() {
+    // rustc gives an impl of `Hasher` `write_u8` through `write_isize`,
+    // each writing the integer's native-endian bytes (#2481).
+    let output = printed(
+        r#"
+use std::hash::Hasher;
+struct Sum(u64, usize);
+impl Hasher for Sum {
+    fn finish(&self) -> u64 { self.0 }
+    fn write(&mut self, bytes: &[u8]) {
+        self.1 += 1;
+        for (i, b) in bytes.iter().enumerate() { self.0 += (i as u64 + 1) * *b as u64; }
+    }
+}
+fn feed<H: Hasher>(h: &mut H) -> u64 {
+    h.write_u16(0x0102);
+    h.write_i64(-2);
+    h.finish()
+}
+fn main() {
+    let mut h = Sum(0, 0);
+    h.write_u8(3);
+    h.write_u32(0x0102);
+    h.write_i8(-1);
+    h.write_usize(1);
+    h.write_u128(1);
+    h.write_i32(-1);
+    println!("{} {}", h.finish(), h.1);
+    let mut g = Sum(0, 0);
+    println!("{} {}", feed(&mut g), g.1);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "2814 6\n9183 2\n");
+}
+
+#[test]
+fn by_ref_of_a_program_iterator_goes_on_where_it_stopped() {
+    // `by_ref` lends the iterator, and std's `impl Iterator for &mut I`
+    // advances it in place (#2482).
+    let output = printed(
+        r#"
+struct C(i64);
+impl Iterator for C {
+    type Item = i64;
+    fn next(&mut self) -> Option<i64> { self.0 += 1; if self.0 < 8 { Some(self.0) } else { None } }
+}
+fn main() {
+    let mut c = C(0);
+    for x in c.by_ref() {
+        if x == 2 { break; }
+    }
+    let s: i64 = c.by_ref().take(2).sum();
+    let n = c.by_ref().next();
+    let mut rest = Vec::new();
+    let r = &mut c; for x in r { rest.push(x); }
+    println!("{} {:?} {:?} {}", s, n, rest, c.0);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "7 Some(5) [6, 7] 8\n");
+    let report = refused(
+        r#"
+struct C(i64);
+impl Iterator for C {
+    type Item = i64;
+    fn next(&mut self) -> Option<i64> { self.0 += 1; if self.0 < 8 { Some(self.0) } else { None } }
+}
+fn main() {
+    let c = C(0);
+    let v: Vec<i64> = c.by_ref().take(2).collect();
+    println!("{:?}", v);
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with(
+            "error[E0596]: cannot borrow `c` as mutable, as it is not declared as mutable"
+        ),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_generic_over_a_std_writer_runs_stds_impl() {
+    // std's `impl fmt::Write for String` and `impl io::Write for Vec<u8>`
+    // are what a generic bounded by the trait runs, and `write!` is the
+    // writer's `write_fmt` (#2483).
+    let output = printed(
+        r#"
+use std::fmt::Write;
+fn put<W: Write>(w: &mut W, n: i32) -> std::fmt::Result {
+    w.write_str("ab")?;
+    w.write_char('c')?;
+    w.write_fmt(format_args!("<{}>", n))?;
+    write!(w, "[{}]", n)?;
+    writeln!(w)
+}
+fn main() {
+    let mut s = String::new();
+    put(&mut s, 1).unwrap();
+    s.write_str("d").unwrap();
+    s.write_char('e').unwrap();
+    writeln!(s, "f{}", 2).unwrap();
+    print!("{}", s);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "abc<1>[1]\ndef2\n");
+    let output = printed(
+        r#"
+use std::io::Write;
+fn put<W: Write>(w: &mut W) -> std::io::Result<()> {
+    w.write_all(b"hi")?;
+    writeln!(w, " {}", 3)?;
+    w.flush()
+}
+fn main() {
+    let mut v: Vec<u8> = Vec::new();
+    put(&mut v).unwrap();
+    let n = v.write(b"!").unwrap();
+    v.write_all(b"?").unwrap();
+    write!(v, "{}", 4).unwrap();
+    println!("{} {:?}", n, v);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "1 [104, 105, 32, 51, 10, 33, 63, 52]\n");
+}
+
+#[test]
+fn fmt_arguments_is_a_written_type() {
+    // `fmt::Arguments` names what `format_args!` makes, so `write_fmt` is
+    // called and overridden as rustc has it (#2484).
+    let output = printed(
+        r#"
+use std::fmt::{self, Arguments, Write};
+struct Up(String);
+impl Write for Up {
+    fn write_str(&mut self, s: &str) -> fmt::Result { self.0.push_str(&s.to_uppercase()); Ok(()) }
+}
+struct Tagged(String);
+impl Write for Tagged {
+    fn write_str(&mut self, s: &str) -> fmt::Result { self.0.push_str(s); Ok(()) }
+    fn write_fmt(&mut self, args: fmt::Arguments<'_>) -> fmt::Result {
+        self.0.push('#');
+        self.write_str(&args.to_string())
+    }
+}
+fn show(args: Arguments<'_>) -> String { format!("[{}]", args) }
+fn main() {
+    let mut u = Up(String::new());
+    u.write_fmt(format_args!("a{}", 1)).unwrap();
+    write!(u, "b{}", 2).unwrap();
+    let args: fmt::Arguments = format_args!("c");
+    u.write_fmt(args).unwrap();
+    let mut t = Tagged(String::new());
+    write!(t, "x{}", 1).unwrap();
+    t.write_fmt(format_args!("y")).unwrap();
+    println!("{} {} {}", u.0, t.0, show(format_args!("z{}", 3)));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "A1B2C #x1#y [z3]\n");
+}

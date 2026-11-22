@@ -1496,6 +1496,7 @@ fn future_output(parsed: &item::type_ref::Path) -> Option<Option<&item::type_ref
 /// `fmt::Formatter` and `fmt::Result` (also under `std::` or
 /// `core::`): a hand-written `Debug` or `Display` impl writes its text into
 /// the formatter, which is Rawr's `String`, and returns `Result<(), ()>`.
+/// `fmt::Arguments` is the text `format_args!` formats.
 /// `parsed`, a path through a crate's re-export of a std item, as the std
 /// path it names, with its last segment's arguments.
 fn std_alias_path(
@@ -1582,6 +1583,15 @@ fn std_fmt_type(parsed: &item::type_ref::Path) -> Option<Path> {
             ("String", types(0))
         }
         "Result" if last.arguments.is_empty() => ("Result", types(2)),
+        // `fmt::Arguments<'_>`, what `format_args!` makes (`Ty::Arguments`).
+        "Arguments"
+            if last
+                .arguments
+                .iter()
+                .all(|argument| matches!(argument, item::type_ref::Argument::Lifetime(_))) =>
+        {
+            ("Arguments", types(0))
+        }
         _ => return None,
     };
     Some(Path {

@@ -435,6 +435,9 @@ pub(crate) struct Impl {
     pub functions: Box<[Function]>,
     /// Associated types: `type Output = i64;`.
     pub associated: Box<[(crate::item::Name, type_ref::Type)]>,
+    /// std's impl, of the std trait this defines, for one of std's own
+    /// types (`std_trait::impls`); `None` for the program's.
+    pub std: Option<&'static str>,
 }
 
 /// The trait of `impl Trait for Type`.

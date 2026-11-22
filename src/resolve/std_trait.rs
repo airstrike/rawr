@@ -292,6 +292,13 @@ const BODIES: &[(&str, &str, &str)] = &[
     }"#,
     ),
     (
+        "core::io::write::Write",
+        "write_fmt",
+        "fn write_fmt(&mut self, args: std::fmt::Arguments<'_>) -> std::io::Result<()> {
+        self.write_all(args.to_string().as_bytes())
+    }",
+    ),
+    (
         "std::io::Read",
         "read_to_end",
         r#"fn read_to_end(&mut self, buf: &mut Vec<u8>) -> std::io::Result<usize> {
@@ -349,6 +356,104 @@ const BODIES: &[(&str, &str, &str)] = &[
     }"#,
     ),
     (
+        "core::hash::Hasher",
+        "write_u8",
+        "fn write_u8(&mut self, i: u8) {
+        self.write(&[i])
+    }",
+    ),
+    (
+        "core::hash::Hasher",
+        "write_u16",
+        "fn write_u16(&mut self, i: u16) {
+        self.write(&i.to_ne_bytes())
+    }",
+    ),
+    (
+        "core::hash::Hasher",
+        "write_u32",
+        "fn write_u32(&mut self, i: u32) {
+        self.write(&i.to_ne_bytes())
+    }",
+    ),
+    (
+        "core::hash::Hasher",
+        "write_u64",
+        "fn write_u64(&mut self, i: u64) {
+        self.write(&i.to_ne_bytes())
+    }",
+    ),
+    (
+        "core::hash::Hasher",
+        "write_u128",
+        "fn write_u128(&mut self, i: u128) {
+        self.write(&i.to_ne_bytes())
+    }",
+    ),
+    (
+        "core::hash::Hasher",
+        "write_usize",
+        "fn write_usize(&mut self, i: usize) {
+        self.write(&i.to_ne_bytes())
+    }",
+    ),
+    (
+        "core::hash::Hasher",
+        "write_i8",
+        "fn write_i8(&mut self, i: i8) {
+        self.write_u8(i as u8)
+    }",
+    ),
+    (
+        "core::hash::Hasher",
+        "write_i16",
+        "fn write_i16(&mut self, i: i16) {
+        self.write_u16(i as u16)
+    }",
+    ),
+    (
+        "core::hash::Hasher",
+        "write_i32",
+        "fn write_i32(&mut self, i: i32) {
+        self.write_u32(i as u32)
+    }",
+    ),
+    (
+        "core::hash::Hasher",
+        "write_i64",
+        "fn write_i64(&mut self, i: i64) {
+        self.write_u64(i as u64)
+    }",
+    ),
+    (
+        "core::hash::Hasher",
+        "write_i128",
+        "fn write_i128(&mut self, i: i128) {
+        self.write_u128(i as u128)
+    }",
+    ),
+    (
+        "core::hash::Hasher",
+        "write_isize",
+        "fn write_isize(&mut self, i: isize) {
+        self.write_usize(i as usize)
+    }",
+    ),
+    (
+        "core::iter::traits::iterator::Iterator",
+        "by_ref",
+        "fn by_ref(&mut self) -> &mut Self {
+        self
+    }",
+    ),
+    (
+        "core::fmt::Write",
+        "write_fmt",
+        "fn write_fmt(&mut self, args: std::fmt::Arguments<'_>) -> std::fmt::Result {
+        self.write_str(&args.to_string())
+    }",
+    ),
+    (
         "core::fmt::Write",
         "write_char",
         "fn write_char(&mut self, c: char) -> std::fmt::Result {
@@ -356,6 +461,112 @@ const BODIES: &[(&str, &str, &str)] = &[
     }",
     ),
 ];
+
+/// std's impls of its traits for its own types, by the trait's definition,
+/// with std's bodies where rawr runs what they call: each one a program
+/// names the trait of is the program's impl, so a generic bounded by the
+/// trait runs it as it runs the program's own (#2483). `{trait}` is the
+/// name the program knows the trait by.
+const IMPLS: &[(&str, &str)] = &[
+    (
+        "core::fmt::Write",
+        "impl {trait} for String {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        self.push_str(s);
+        Ok(())
+    }
+    fn write_char(&mut self, c: char) -> std::fmt::Result {
+        self.push(c);
+        Ok(())
+    }
+}",
+    ),
+    (
+        "core::io::write::Write",
+        "impl {trait} for Vec<u8> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
+        self.extend_from_slice(buf);
+        Ok(())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}",
+    ),
+];
+
+/// std's impls (`IMPLS`) of the std traits the program names, `traits`,
+/// by the names it knows them by, each resolved as a program's impl is,
+/// its bodies read from std's text. A trait of one that only a `use` of
+/// `items` brings into scope, whose methods a call on std's value names,
+/// joins `traits`. `next` numbers their items.
+pub(crate) fn impls(
+    traits: &mut BTreeMap<crate::ImmutableString, item::Trait>,
+    items: &[item::Shell],
+    next: usize,
+    host: &host::Registry,
+) -> Vec<item::Shell> {
+    let declared = items
+        .iter()
+        .filter_map(|shell| match &shell.kind {
+            item::Kind::Trait(own) => Some(own.name.text.clone()),
+            _ => None,
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    for (name, qualified) in uses(items) {
+        if traits.contains_key(&name) || declared.contains(&name) {
+            continue;
+        }
+        if let Some(definition) = std_table::stable_trait(&qualified)
+            && IMPLS
+                .iter()
+                .any(|(implemented, _)| *implemented == definition)
+            && let Some(trait_) = declaration(definition, &[], host)
+        {
+            traits.insert(name, trait_);
+        }
+    }
+    let mut shells = Vec::new();
+    for (name, declared) in traits {
+        for (definition, source) in IMPLS
+            .iter()
+            .filter(|(definition, _)| declared.std == Some(*definition))
+        {
+            let source = source.replace("{trait}", name);
+            let Some(parsed) = crate::parser::parse_impl(&source) else {
+                continue;
+            };
+            let Ok(mut shell) = super::resolve_item(
+                crate::item::Id::from_index(next + shells.len()),
+                program::source::Id::ROOT,
+                None,
+                None,
+                crate::item::Parsed::Impl(parsed),
+                &BTreeMap::new(),
+                host,
+                #[cfg(feature = "rust-import")]
+                None,
+            ) else {
+                continue;
+            };
+            let item::Kind::Impl(implemented) = &mut shell.kind else {
+                continue;
+            };
+            // std's, which rustc's orphan rule (E0117) doesn't refuse.
+            implemented.std = Some(definition);
+            let text = crate::ImmutableString::from(source);
+            for function in implemented.functions.iter_mut() {
+                function.body.text = Some(text.clone());
+            }
+            shells.push(shell);
+        }
+    }
+    shells
+}
 
 /// `Self::Name` in `ty` as `<Self as trait_name>::Name` for each of the
 /// trait's own associated types `own`.
@@ -679,9 +890,11 @@ mod tests {
             declared("FromStr"),
             "<> : Set(0)  | Err | from_str(&str) -> Result<Self, Self::Err>"
         );
+        // `by_ref` is run from std's body (`BODIES`).
         assert_eq!(
             declared("Iterator"),
-            "<> : Set(0)  | Item | next(&mut self ) -> Option<Self::Item>"
+            "<> : Set(0)  | Item | by_ref(&mut self ) -> &mut Self provided; next(&mut self ) \
+             -> Option<Self::Item>"
         );
         assert_eq!(
             declared("Add"),

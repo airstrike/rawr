@@ -686,9 +686,11 @@ impl<'a> Parser<'a> {
             _ => {
                 // An iterator chain of one loop runs the body in it.
                 let iterated = self.inference.resolve(&lhs.ty);
+                // A `&mut` of a program's iterator walks it in place.
+                let walked = super::iterator::without_mutable_reference(&iterated);
                 let pipelined = if matches!(iterated, Ty::Iter(..) | Ty::InclusiveRange(_))
-                    || (iterated.script().is_some() || matches!(iterated, Ty::Host { .. }))
-                        && self.type_implements(&iterated, "Iterator")
+                    || (walked.script().is_some() || matches!(iterated, Ty::Host { .. }))
+                        && self.type_implements(walked, "Iterator")
                 {
                     self.for_pipeline(&lhs)
                 } else if matches!(iterated, Ty::Host { .. }) {

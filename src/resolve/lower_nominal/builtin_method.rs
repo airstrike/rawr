@@ -175,6 +175,10 @@ impl<'a> Parser<'a> {
             'u' => Ty::Int(Int::U32),
             'b' => Ty::Bool,
             'a' => Ty::Int(kind.unsigned()),
+            'y' => Ty::Array {
+                element: Box::new(Ty::Int(Int::U8)),
+                kind: sequence::Kind::Array(sequence::Length::Fixed(kind.bits() as usize / 8)),
+            },
             _ => ty.clone(),
         };
         let source = self.int_op(name, value.rendered_source(), argument, &ty, &operand_ty);
@@ -2615,7 +2619,8 @@ pub(super) fn slice_value(op: PreludeOp, args: &mut FnCallArgs) -> RawrResult {
 /// operators `<<`, `>>` and `!`, by code: `(name, operand, output)`, the
 /// operand `n` none, `s` the same kind, `u` a `u32`; the output `o` an
 /// `Option`, `t` the kind, `p` a `(value, overflowed)` pair, `u` a `u32`,
-/// `b` a `bool`, `a` the unsigned kind, `r` a `Result`.
+/// `b` a `bool`, `a` the unsigned kind, `r` a `Result`, `y` the kind's
+/// bytes, a `[u8; N]`.
 pub(super) const INT_METHODS: &[(&str, char, char)] = &[
     ("checked_add", 's', 'o'),
     ("checked_sub", 's', 'o'),
@@ -2655,6 +2660,9 @@ pub(super) const INT_METHODS: &[(&str, char, char)] = &[
     ("is_power_of_two", 'n', 'b'),
     ("ilog2", 'n', 'u'),
     ("ilog10", 'n', 'u'),
+    ("to_ne_bytes", 'n', 'y'),
+    ("to_le_bytes", 'n', 'y'),
+    ("to_be_bytes", 'n', 'y'),
     // The operators, not spellable as methods.
     ("<<", 'x', 't'),
     (">>", 'x', 't'),
@@ -2761,6 +2769,33 @@ pub(super) fn drain_window(
     }
 }
 
+/// The bytes of `value` of `kind` in the order `name` asks for:
+/// `to_le_bytes`, `to_be_bytes`, or `to_ne_bytes` in the target's.
+fn int_bytes(kind: Int, value: &Dynamic, name: &str) -> Dynamic {
+    let bits = match kind_value(value, kind) {
+        Wide::Unsigned(bits) => bits,
+        // A narrower kind's value sign-extends, and its bytes are the low
+        // ones.
+        Wide::Signed(value) => value as u128,
+    };
+    let width = kind.bits() as usize / 8;
+    let mut bytes = bits.to_le_bytes()[..width].to_vec();
+    let big = match name {
+        "to_be_bytes" => true,
+        "to_le_bytes" => false,
+        _ => cfg!(target_endian = "big"),
+    };
+    if big {
+        bytes.reverse();
+    }
+    Dynamic::from_array(
+        bytes
+            .into_iter()
+            .map(|byte| INT::from(byte).into())
+            .collect(),
+    )
+}
+
 /// `INT_METHODS[code]` on `value` of the kind `kinds[0]` (`Int::KINDS`
 /// index), its operand of the kind `kinds[1]`, as debug Rust computes it:
 /// in `i128`, a `u64`/`usize` read from its bits, the result truncated to
@@ -2773,6 +2808,9 @@ pub(super) fn int_method(kinds: [INT; 2], args: &mut FnCallArgs) -> RawrResult {
     let (kind, mut operand_kind) = (kind(kinds[0]), kind(kinds[1]));
     let code = usize::try_from(args[1].as_int().unwrap_or_default()).unwrap_or(0);
     let (name, operand_type, output) = INT_METHODS.get(code).copied().unwrap_or(("", 'n', 't'));
+    if output == 'y' {
+        return Ok(int_bytes(kind, args[0], name));
+    }
     if kind.wide() || operand_kind.wide() && name == "try_from" {
         return wide_method(kind, operand_kind, args);
     }

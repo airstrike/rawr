@@ -1159,6 +1159,7 @@ impl Ty {
                     "char" => Self::Char,
                     "String" => Self::String,
                     "Ordering" => Self::Ordering,
+                    "Arguments" => Self::Arguments,
                     "Duration" => Self::Time(Time::Duration),
                     "Instant" => Self::Time(Time::Instant),
                     // `RangeInclusive<f64>` and `RangeInclusive<i64>`, and

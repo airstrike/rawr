@@ -508,6 +508,22 @@ pub(crate) fn parse_trait(source: &str) -> Option<crate::item::Trait> {
     }
 }
 
+/// The one `impl` item `source` declares: std's impl of one of its traits
+/// for one of its own types (`std_trait::impls`).
+pub(crate) fn parse_impl(source: &str) -> Option<crate::item::Impl> {
+    let items = item::parse(
+        &Engine::new_raw(),
+        &crate::project::cargo::features::Enabled::default(),
+        source,
+    )
+    .ok()?
+    .items;
+    match <[_; 1]>::try_from(items.into_vec()).ok()? {
+        [crate::item::Parsed::Impl(implemented)] => Some(implemented),
+        _ => None,
+    }
+}
+
 impl Engine {
     /// Parse Rawr item headers while retaining ordinary script statements outside item bodies.
     /// No `cfg(feature = "..")` holds.

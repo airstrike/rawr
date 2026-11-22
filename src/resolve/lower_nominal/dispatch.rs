@@ -487,10 +487,13 @@ pub(super) fn write_into_dispatchers(
 
 /// Rust's prelude `From` impls among Rawr's builtin types, as
 /// `(target, source, op)` witness codes: `From<bool> for i64` and `f64`,
-/// `From<char> for String`. (`From<&str> for String` is the value itself.)
-pub(super) const BUILTIN_CONVERSIONS: [(crate::INT, crate::INT, PreludeOp); 3] = [
+/// `From<u8> for f64` and the other integers a float holds exactly (which
+/// of them std has is checked where the bound is), `From<char> for
+/// String`. (`From<&str> for String` is the value itself.)
+pub(super) const BUILTIN_CONVERSIONS: [(crate::INT, crate::INT, PreludeOp); 4] = [
     (-2, -5, PreludeOp::IntFromBool),
     (-3, -5, PreludeOp::FloatFromBool),
+    (-3, -2, PreludeOp::FloatFromInt),
     (-4, -6, PreludeOp::StringFromChar),
 ];
 
