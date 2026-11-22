@@ -4706,6 +4706,387 @@ pub(super) static STEPS: &[Step] = &[
         },
     },
     Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Slice(&Ty::Registered("ffi::OsString")),
+        }],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Option(&Ty::Registered("ffi::OsString")),
+        }],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Vec(&Ty::Registered("ffi::OsString")),
+        }],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Registered("path::PathBuf"),
+        }],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Vec(&Ty::Reference {
+            mutable: false,
+            target: &Ty::Registered("ffi::OsString"),
+        })],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Option(&Ty::Reference {
+            mutable: false,
+            target: &Ty::Registered("ffi::OsString"),
+        })],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Slice(&Ty::Reference {
+                mutable: false,
+                target: &Ty::Registered("ffi::OsString"),
+            }),
+        }],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Option(&Ty::Reference {
+                mutable: false,
+                target: &Ty::Registered("ffi::OsString"),
+            }),
+        }],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Vec(&Ty::Reference {
+                mutable: false,
+                target: &Ty::Registered("ffi::OsString"),
+            }),
+        }],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Slice(&Ty::Builtin(Builtin::String)),
+        }],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Option(&Ty::Builtin(Builtin::String)),
+        }],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Vec(&Ty::Builtin(Builtin::String)),
+        }],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Vec(&Ty::Reference {
+            mutable: false,
+            target: &Ty::Builtin(Builtin::String),
+        })],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Option(&Ty::Reference {
+            mutable: false,
+            target: &Ty::Builtin(Builtin::String),
+        })],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Slice(&Ty::Reference {
+                mutable: false,
+                target: &Ty::Builtin(Builtin::String),
+            }),
+        }],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Option(&Ty::Reference {
+                mutable: false,
+                target: &Ty::Builtin(Builtin::String),
+            }),
+        }],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Vec(&Ty::Reference {
+                mutable: false,
+                target: &Ty::Builtin(Builtin::String),
+            }),
+        }],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Slice(&Ty::Registered("path::PathBuf")),
+        }],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Option(&Ty::Registered("path::PathBuf")),
+        }],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Vec(&Ty::Registered("path::PathBuf")),
+        }],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Vec(&Ty::Reference {
+            mutable: false,
+            target: &Ty::Registered("path::PathBuf"),
+        })],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Option(&Ty::Reference {
+            mutable: false,
+            target: &Ty::Registered("path::PathBuf"),
+        })],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Slice(&Ty::Reference {
+                mutable: false,
+                target: &Ty::Registered("path::PathBuf"),
+            }),
+        }],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Option(&Ty::Reference {
+                mutable: false,
+                target: &Ty::Registered("path::PathBuf"),
+            }),
+        }],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Reference {
+            mutable: false,
+            target: &Ty::Vec(&Ty::Reference {
+                mutable: false,
+                target: &Ty::Registered("path::PathBuf"),
+            }),
+        }],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Vec(&Ty::Registered("ffi::OsString"))],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Option(&Ty::Registered("ffi::OsString"))],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Vec(&Ty::Builtin(Builtin::String))],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Option(&Ty::Builtin(Builtin::String))],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Vec(&Ty::Registered("path::PathBuf"))],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
+        path: "process::Command::args",
+        kind: Kind::Method(Mode::Mutable),
+        inputs: &[Ty::Option(&Ty::Registered("path::PathBuf"))],
+        output: Ty::Reference {
+            mutable: true,
+            target: &Ty::Registered("process::Command"),
+        },
+    },
+    Step::Item {
         path: "process::Command::env",
         kind: Kind::Method(Mode::Mutable),
         inputs: &[

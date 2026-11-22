@@ -493,10 +493,16 @@ impl<'a> Parser<'a> {
             return;
         }
         let (source, item) = match self.inference.resolve(&argument.ty) {
-            Ty::Iter(item, _, _) => (
-                self.prelude_op(PreludeOp::CollectVec, [argument.rendered_source()]),
-                item,
-            ),
+            Ty::Iter(item, _, _) => {
+                let item = Box::new(super::host_signature::lent_item(*item));
+                match self.collected_items(argument) {
+                    Some((source, _)) => (source, item),
+                    None => (
+                        self.prelude_op(PreludeOp::CollectVec, [argument.rendered_source()]),
+                        item,
+                    ),
+                }
+            }
             ty @ Ty::Host { .. } if self.type_implements(&ty, "Iterator") => {
                 let Some((source, item)) = self.collected_items(argument) else {
                     return;

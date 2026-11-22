@@ -105,6 +105,25 @@ fn exit_status(value: &Dynamic) -> Result<ExitStatus, Box<EvalAltResult>> {
         })
 }
 
+/// The items of the `IntoIterator` at `value`: the elements of a `Vec`, a
+/// slice or an iterator (an array at runtime), an `Option`'s value, or a
+/// path's components.
+fn items(value: &Dynamic) -> Result<Vec<Dynamic>, Box<EvalAltResult>> {
+    if let Some(option) = crate::option::read(value) {
+        return Ok(option.into_iter().collect());
+    }
+    if let Some(path) = value.read_lock::<std::path::PathBuf>() {
+        return Ok(path
+            .iter()
+            .map(|component| Dynamic::from(component.to_os_string()))
+            .collect());
+    }
+    value
+        .as_array_ref()
+        .map(|items| items.to_vec())
+        .map_err(|found| error(format!("expected the arguments' items, found `{found}`")))
+}
+
 /// Change the command at `args[0]` by `change`, and give the command back,
 /// as a builder call's `&mut Command`.
 fn building(
@@ -156,6 +175,14 @@ pub(super) fn bind(binds: &mut impl super::Bind) {
     bind("process::Command::arg", |args| {
         building(args, |command, arguments| {
             command.arg(super::path::os_like(arguments[0])?);
+            Ok(())
+        })
+    });
+    bind("process::Command::args", |args| {
+        building(args, |command, arguments| {
+            for argument in items(arguments[0])? {
+                command.arg(super::path::os_like(&argument)?);
+            }
             Ok(())
         })
     });
