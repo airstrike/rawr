@@ -2489,6 +2489,7 @@ core::hash::Hasher	std::hash::random::DefaultHasher	std::hash::DefaultHasher
 core::io::seek::Seek	&	&std::fs::File				
 core::io::seek::Seek	&mut	&mut S		S	S: std::io::Seek	
 core::io::seek::Seek	alloc::boxed::Box	Box<S>		S	S: std::io::Seek	
+core::io::seek::Seek	alloc::sync::Arc	std::sync::Arc<std::fs::File>			std::fs::File: std::io::Seek, &std::fs::File: std::io::Seek	
 core::io::seek::Seek	core::io::cursor::Cursor	std::io::Cursor<T>		T	T: AsRef<[u8]>	
 core::io::seek::Seek	core::io::util::Empty	std::io::Empty				
 core::io::seek::Seek	core::io::util::Take	std::io::Take<T>		T	T: std::io::Seek	
@@ -2507,8 +2508,12 @@ core::io::write::Write	&mut	&mut W		W	W: std::io::Write
 core::io::write::Write	&mut	&mut [u8]				
 core::io::write::Write	alloc::boxed::Box	Box<W>		W	W: std::io::Write	
 core::io::write::Write	alloc::collections::vec_deque::VecDeque	std::collections::VecDeque<u8, A>		A		
+core::io::write::Write	alloc::sync::Arc	std::sync::Arc<std::fs::File>			std::fs::File: std::io::Write, &std::fs::File: std::io::Write	
 core::io::write::Write	alloc::vec::Vec	Vec<u8, A>		A		
+core::io::write::Write	core::io::cursor::Cursor	std::io::Cursor<&mut Vec<u8, A>>		A		
 core::io::write::Write	core::io::cursor::Cursor	std::io::Cursor<&mut [u8]>				
+core::io::write::Write	core::io::cursor::Cursor	std::io::Cursor<Box<[u8], A>>		A		
+core::io::write::Write	core::io::cursor::Cursor	std::io::Cursor<Vec<u8, A>>		A		
 core::io::write::Write	core::io::cursor::Cursor	std::io::Cursor<[u8; N]>		const:N		
 core::io::write::Write	core::io::util::Empty	std::io::Empty				
 core::io::write::Write	core::io::util::Sink	std::io::Sink				
@@ -7923,6 +7928,7 @@ std::io::Read	&	&std::net::TcpStream
 std::io::Read	&mut	&mut R		R	R: std::io::Read	
 std::io::Read	alloc::boxed::Box	Box<R>		R	R: std::io::Read	
 std::io::Read	alloc::collections::vec_deque::VecDeque	std::collections::VecDeque<u8, A>		A		
+std::io::Read	alloc::sync::Arc	std::sync::Arc<std::fs::File>			std::fs::File: std::io::Read, &std::fs::File: std::io::Read	
 std::io::Read	core::io::cursor::Cursor	std::io::Cursor<T>		T	T: AsRef<[u8]>	
 std::io::Read	core::io::util::Chain	std::io::Chain<T, U>		T U	T: std::io::Read, U: std::io::Read	
 std::io::Read	core::io::util::Empty	std::io::Empty				

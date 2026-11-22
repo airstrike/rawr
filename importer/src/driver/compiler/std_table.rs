@@ -1273,21 +1273,141 @@ impl<'tcx> Table<'tcx> {
         for implementation in impls {
             if !crates.contains(&implementation.krate)
                 || tcx.impl_polarity(implementation) != ty::ImplPolarity::Positive
-                || stability(tcx, implementation).is_some()
             {
                 continue;
             }
-            if let Some(line) = self.impl_line(implementation, canonical) {
+            for line in self.impl_lines(implementation, canonical, crates) {
                 self.impls.insert(line);
             }
         }
     }
 
-    fn impl_line(&self, implementation: DefId, canonical: &str) -> Option<String> {
+    /// The lines of `implementation`: its own where it is stable, or, where
+    /// it holds through a hidden unstable trait std implements for its own
+    /// types (`impl<W: WriteThroughCursor> Write for Cursor<W>`), one for
+    /// each of those impls, which is the impl stable Rust sees: `Write for
+    /// Cursor<Vec<u8, A>>`. Such a line is stable by the impl's own
+    /// stability (`impl<T: IoHandle> Write for Arc<T>`), or, for an impl
+    /// hidden in an unstable module (`core::io`'s), by the inner impl's.
+    fn impl_lines(
+        &self,
+        implementation: DefId,
+        canonical: &str,
+        crates: &[CrateNum],
+    ) -> Vec<String> {
+        let tcx = self.tcx;
+        let identity = ty::GenericArgs::identity_for_item(tcx, implementation);
+        let own = Header {
+            arguments: identity,
+            parameters: own_parameters(tcx, implementation),
+            clauses: crate::compat::own_clauses(tcx, implementation)
+                .iter()
+                .map(|(clause, _)| *clause)
+                .collect(),
+        };
+        let hidden = self.hidden_bound(&own.clauses).filter(|_| {
+            stability(tcx, implementation).is_none() || tcx.is_doc_hidden(implementation)
+        });
+        let Some((parameter, through)) = hidden else {
+            if stability(tcx, implementation).is_some() {
+                return Vec::new();
+            }
+            return self
+                .impl_line(implementation, &own, canonical)
+                .into_iter()
+                .collect();
+        };
+        let mut inner = tcx.all_impls(through).collect::<Vec<_>>();
+        inner.sort_by_key(|inner| definition_path(tcx, *inner));
+        inner
+            .into_iter()
+            .filter(|inner| {
+                crates.contains(&inner.krate)
+                    && tcx.impl_polarity(*inner) == ty::ImplPolarity::Positive
+                    && (stability(tcx, implementation).is_none()
+                        || stability(tcx, *inner).is_none())
+            })
+            .filter_map(|inner| {
+                let subject = tcx
+                    .impl_trait_ref(inner)
+                    .instantiate_identity()
+                    .skip_norm_wip()
+                    .self_ty();
+                let arguments =
+                    tcx.mk_args_from_iter(identity.iter().enumerate().map(|(index, argument)| {
+                        match index == parameter.index as usize {
+                            true => subject.into(),
+                            false => argument,
+                        }
+                    }));
+                let hidden = parameter.name.to_string();
+                let parameters = own
+                    .parameters
+                    .iter()
+                    .filter(|name| **name != hidden)
+                    .cloned()
+                    .chain(own_parameters(tcx, inner))
+                    .collect();
+                let clauses = own
+                    .clauses
+                    .iter()
+                    .map(|clause| {
+                        ty::EarlyBinder::bind(tcx, *clause)
+                            .instantiate(tcx, arguments)
+                            .skip_norm_wip()
+                    })
+                    .filter(|clause| {
+                        !matches!(clause.kind().skip_binder(), ty::ClauseKind::Trait(predicate)
+                            if predicate.def_id() == through)
+                    })
+                    .chain(
+                        crate::compat::own_clauses(tcx, inner)
+                            .iter()
+                            .map(|(clause, _)| *clause),
+                    )
+                    .collect();
+                let header = Header {
+                    arguments,
+                    parameters,
+                    clauses,
+                };
+                self.impl_line(implementation, &header, canonical)
+            })
+            .collect()
+    }
+
+    /// The impl parameter `clauses` bound by a hidden unstable trait, which
+    /// no program names but std implements for its own types, and that
+    /// trait: `W` and `WriteThroughCursor` of `impl<W: WriteThroughCursor>
+    /// Write for Cursor<W>`.
+    fn hidden_bound(&self, clauses: &[ty::Clause<'tcx>]) -> Option<(ty::ParamTy, DefId)> {
+        let tcx = self.tcx;
+        clauses
+            .iter()
+            .find_map(|clause| match clause.kind().skip_binder() {
+                ty::ClauseKind::Trait(predicate)
+                    if stability(tcx, predicate.def_id()).is_some()
+                        && tcx.is_doc_hidden(predicate.def_id()) =>
+                {
+                    match predicate.self_ty().kind() {
+                        ty::Param(parameter) => Some((*parameter, predicate.def_id())),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            })
+    }
+
+    fn impl_line(
+        &self,
+        implementation: DefId,
+        header: &Header<'tcx>,
+        canonical: &str,
+    ) -> Option<String> {
         let tcx = self.tcx;
         let trait_ref = tcx
             .impl_trait_ref(implementation)
-            .instantiate_identity()
+            .instantiate(tcx, header.arguments)
             .skip_norm_wip();
         let self_ty = trait_ref.self_ty();
         let key = simplified(tcx, self_ty)?;
@@ -1301,20 +1421,8 @@ impl<'tcx> Table<'tcx> {
         if !self.nameable(self_ty) || !arguments.iter().all(|ty| self.nameable(*ty)) {
             return None;
         }
-        let generics = tcx
-            .generics_of(implementation)
-            .own_params
-            .iter()
-            .filter_map(|parameter| match parameter.kind {
-                GenericParamDefKind::Type { .. } => Some(parameter.name.to_string()),
-                GenericParamDefKind::Const { .. } => Some(format!("const:{}", parameter.name)),
-                GenericParamDefKind::Lifetime => None,
-            })
-            .collect::<Vec<_>>();
-        let clauses = crate::compat::own_clauses(tcx, implementation)
-            .iter()
-            .map(|(clause, _)| *clause)
-            .collect::<Vec<_>>();
+        let generics = &header.parameters;
+        let clauses = &header.clauses;
         // An impl that needs an unstable trait (`F: FnPtr`) is none stable
         // Rust can use, except through `A: Allocator`, which the default
         // `Global` satisfies, and `T: [const] Destruct`, which every type
@@ -1335,7 +1443,7 @@ impl<'tcx> Table<'tcx> {
         }
         // Each subject's bounds, in the order its clauses first name it.
         let mut subjects = Vec::new();
-        for clause in &clauses {
+        for clause in clauses {
             let subject = match clause.kind().skip_binder() {
                 ty::ClauseKind::Trait(predicate) => predicate.self_ty(),
                 ty::ClauseKind::Projection(predicate) => predicate.projection_term.args.type_at(0),
@@ -1348,7 +1456,7 @@ impl<'tcx> Table<'tcx> {
         let mut wheres = Vec::new();
         for subject in subjects {
             let bounds = self
-                .bounds(subject, &clauses)
+                .bounds(subject, clauses)
                 .into_iter()
                 .filter(|bound| bound != "?Sized")
                 .collect::<Vec<_>>();
@@ -1364,7 +1472,15 @@ impl<'tcx> Table<'tcx> {
             let Some(name) = tcx.opt_item_name(*member) else {
                 continue;
             };
-            let ty = tcx.type_of(*member).instantiate_identity().skip_norm_wip();
+            let arguments = ty::GenericArgs::identity_for_item(tcx, *member).rebase_onto(
+                tcx,
+                implementation,
+                header.arguments,
+            );
+            let ty = tcx
+                .type_of(*member)
+                .instantiate(tcx, arguments)
+                .skip_norm_wip();
             associated.push(format!("{name} = {}", self.ty(ty)));
         }
         Some(format!(
@@ -1411,6 +1527,29 @@ impl<'tcx> Table<'tcx> {
             }
         })
     }
+}
+
+/// An impl's header as one line of `impls.tsv` writes it: the arguments
+/// its own parameters stand at, the type and const parameters the line has
+/// (`T U const:N`), and its where-clauses at those arguments.
+struct Header<'tcx> {
+    arguments: ty::GenericArgsRef<'tcx>,
+    parameters: Vec<String>,
+    clauses: Vec<ty::Clause<'tcx>>,
+}
+
+/// The type and const parameters of the impl `implementation`, as a line
+/// writes them: `T U const:N`.
+fn own_parameters(tcx: TyCtxt<'_>, implementation: DefId) -> Vec<String> {
+    tcx.generics_of(implementation)
+        .own_params
+        .iter()
+        .filter_map(|parameter| match parameter.kind {
+            GenericParamDefKind::Type { .. } => Some(parameter.name.to_string()),
+            GenericParamDefKind::Const { .. } => Some(format!("const:{}", parameter.name)),
+            GenericParamDefKind::Lifetime => None,
+        })
+        .collect()
 }
 
 /// The key `impls.tsv` files an impl's self type under, as rustc's
