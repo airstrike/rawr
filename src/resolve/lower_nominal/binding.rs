@@ -591,18 +591,10 @@ impl<'a> Parser<'a> {
 
         self.consume_imported_value(&value, &name, value.span)?;
         self.move_local(&mut value)?;
-        // The temporaries the value made drop when it is made, unless a
-        // borrow of one is the value, which Rust keeps to the block's end.
-        let temporaries = self.close_temporaries();
+        // The temporaries the value made drop when it is made, unless the
+        // `let` extends one, which Rust keeps to the block's end.
+        let (extended, temporaries) = self.extended_temporaries();
         if !temporaries.is_empty() {
-            if borrowed_value {
-                return Err(Error::UnsupportedNominalSyntax {
-                    construct: "a `let` that borrows a temporary value whose type implements \
-                                `Drop`: keeping it to the block's end is not supported in Rawr yet"
-                        .into(),
-                    source: value.span,
-                });
-            }
             value.source = self.with_temporaries(&temporaries, value.rendered_source());
             value.prelude = origin::Fragment::default();
         }
@@ -623,6 +615,9 @@ impl<'a> Parser<'a> {
                 .map(|pipeline| (pipeline, *item)),
             _ => None,
         };
+        // An extended temporary is declared before the local, so it drops
+        // after it.
+        let declared = self.extend_temporaries(&extended, value.span)?;
         let hold = self.note_drop(&name, name_span, &ty)?;
         self.bound_value(&name, name_span, &value, value_start);
         self.local_types.push(LocalType {
@@ -648,7 +643,7 @@ impl<'a> Parser<'a> {
         // A shadowed value with drop glue is kept until its scope ends.
         if let Some(hold) = hold {
             let made = self.temporary("made");
-            let mut rendered = origin::Fragment::plain(format!("let {made} = "));
+            let mut rendered = origin::Fragment::plain(format!("{declared}let {made} = "));
             rendered.push(value.rendered_source());
             rendered.push_text(format!(
                 "; {hold} {keyword} {name} = {}({made});",
@@ -662,7 +657,7 @@ impl<'a> Parser<'a> {
                 .consume_binding_terminator(start, let_keyword)
                 .map(|_| ());
         }
-        let mut rendered = origin::Fragment::plain(format!("{keyword} {name} = "));
+        let mut rendered = origin::Fragment::plain(format!("{declared}{keyword} {name} = "));
         if let Some((pipeline, item)) = bound {
             let (code, pipeline, names) = self.bound_pipeline(pipeline);
             self.bound_iterators.insert(

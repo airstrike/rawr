@@ -5015,3 +5015,347 @@ main();
         );
     }
 }
+
+#[test]
+fn a_borrow_of_a_block_tail_temporary_kept_by_a_let_is_e0716() {
+    // A block tail's temporaries end with the block, as edition 2024 has
+    // it, so the `let` can't keep a borrow of one (#159).
+    for program in [
+        "fn main() { let r = { String::from(\"a\").as_str() }; println!(\"{r}\"); }\nmain();",
+        "fn main() { let v = vec![String::from(\"a\")]; let r: &str = { v.clone()[0].as_str() }; println!(\"{r}\"); }\nmain();",
+    ] {
+        let report = refused(program);
+        assert!(
+            report.starts_with("error[E0716]: temporary value dropped while borrowed"),
+            "{report}"
+        );
+    }
+    // A borrow the tail extends lives on with the `let`.
+    let output = printed(
+        r#"
+fn main() {
+    let r = { &String::from("a") };
+    let s: &str = { let _t = String::from("b"); &String::from("c") };
+    println!("{r} {s}");
+}
+main();
+"#,
+    );
+    assert_eq!(output, "a c\n");
+}
+
+#[test]
+fn a_block_or_a_box_keeps_the_borrows_of_its_value() {
+    // The value of a block is its tail's and a `Box`'s is what it boxes,
+    // with the borrows they hold (#147).
+    for value in [
+        "{ let c = || &v; c() }",
+        "Box::new(|| v.len())",
+        "Box::new(&v)",
+    ] {
+        let report = refused(&format!(
+            "fn main() {{ let mut v = vec![1]; let r = {value}; v.push(2); let _ = &r; }}\nmain();"
+        ));
+        assert!(
+            report.starts_with(
+                "error[E0502]: cannot borrow `v` as mutable because it is also borrowed as \
+                 immutable"
+            ),
+            "{value}: {report}"
+        );
+    }
+    let report = refused(
+        r#"
+fn make() -> Box<dyn Fn() -> usize> {
+    let v = vec![1];
+    Box::new(|| v.len())
+}
+fn main() { println!("{}", make()()); }
+main();
+"#,
+    );
+    assert!(
+        report.starts_with(
+            "error[E0373]: closure may outlive the current function, but it borrows `v`, which \
+             is owned by the current function"
+        ),
+        "{report}"
+    );
+    let output = printed(
+        r#"
+fn main() {
+    let mut v = vec![1, 2];
+    let n = { let a = &v; a.len() };
+    v.push(3);
+    let r = { let a = &v; a };
+    let b = Box::new(&v);
+    println!("{n} {r:?} {}", b.len());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "2 [1, 2, 3] 3\n");
+}
+
+#[test]
+fn a_move_out_of_a_static_is_e0507() {
+    // A static is a place, which no use moves out of (#192).
+    let program = |main: &str| {
+        format!(
+            "struct Pair {{ name: String, n: i32 }}\nstatic PAIR: Pair = Pair {{ name: String::new(), n: 2 }};\nstatic NAME: String = String::new();\nfn take(s: String) -> usize {{ s.len() }}\nfn main() {{ {main} }}\nmain();"
+        )
+    };
+    for (main, message) in [
+        ("take(NAME);", "cannot move out of static item `NAME`"),
+        ("let s = NAME;", "cannot move out of static item `NAME`"),
+        (
+            "let s = PAIR.name;",
+            "cannot move out of `PAIR.name` as `PAIR` is a static item",
+        ),
+        (
+            "static LOCAL: String = String::new(); let s = LOCAL;",
+            "cannot move out of static item `LOCAL`",
+        ),
+    ] {
+        let report = refused(&program(main));
+        assert!(
+            report.starts_with(&format!("error[E0507]: {message}")),
+            "{main}: {report}"
+        );
+    }
+    let output = printed(&program(
+        "let n = PAIR.n; let r = &PAIR.name; let c = PAIR.name.clone(); println!(\"{n} [{r}] [{c}] {}\", NAME.len());",
+    ));
+    assert_eq!(output, "2 [] [] 0\n");
+}
+
+#[test]
+fn a_static_of_a_type_that_is_not_sync_is_e0277() {
+    // Every thread shares a static, so its type is `Sync` (#1563).
+    let report = refused(
+        "use std::cell::RefCell;\nstatic HITS: RefCell<i32> = RefCell::new(0);\nfn main() {}\nmain();",
+    );
+    assert_eq!(
+        report,
+        r#"error[E0277]: `RefCell<i32>` cannot be shared between threads safely
+ --> <script>:2:14
+  |
+2 | static HITS: RefCell<i32> = RefCell::new(0);
+  |              ^^^^^^^^^^^^ `RefCell<i32>` cannot be shared between threads safely
+  |
+  = help: the trait `Sync` is not implemented for `RefCell<i32>`
+  = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` instead
+  = note: shared static variables must have a type that implements `Sync`"#
+    );
+    let report = refused(
+        "use std::cell::Cell;\nfn main() {\n    static C: Cell<i32> = Cell::new(0);\n    C.set(1);\n}\nmain();",
+    );
+    assert_eq!(
+        report,
+        r#"error[E0277]: `Cell<i32>` cannot be shared between threads safely
+ --> <script>:3:15
+  |
+3 |     static C: Cell<i32> = Cell::new(0);
+  |               ^^^^^^^^^ `Cell<i32>` cannot be shared between threads safely
+  |
+  = help: the trait `Sync` is not implemented for `Cell<i32>`
+  = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` or `std::sync::atomic::AtomicI32` instead
+  = note: shared static variables must have a type that implements `Sync`"#
+    );
+    let report = refused(
+        r#"use std::cell::Cell;
+struct Inner {
+    c: Cell<f64>,
+}
+struct Outer {
+    n: i32,
+    inner: Inner,
+}
+static O: Outer = Outer { n: 1, inner: Inner { c: Cell::new(0.0) } };
+static E: (i32, Cell<u8>) = (1, Cell::new(0));
+fn main() {}
+main();"#,
+    );
+    assert_eq!(
+        report,
+        r#"error[E0277]: `Cell<f64>` cannot be shared between threads safely
+ --> <script>:9:11
+  |
+9 | static O: Outer = Outer { n: 1, inner: Inner { c: Cell::new(0.0) } };
+  |           ^^^^^ `Cell<f64>` cannot be shared between threads safely
+  |
+  = help: within `Outer`, the trait `Sync` is not implemented for `Cell<f64>`
+  = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock`
+note: required because it appears within the type `Inner`
+ --> <script>:2:8
+  |
+2 | struct Inner {
+  |        ^^^^^
+note: required because it appears within the type `Outer`
+ --> <script>:5:8
+  |
+5 | struct Outer {
+  |        ^^^^^
+  = note: shared static variables must have a type that implements `Sync`"#
+    );
+    let report = refused(
+        "use std::cell::Cell;\nstatic E: (i32, Cell<u8>) = (1, Cell::new(0));\nfn main() {}\nmain();",
+    );
+    assert_eq!(
+        report,
+        r#"error[E0277]: `Cell<u8>` cannot be shared between threads safely
+ --> <script>:2:11
+  |
+2 | static E: (i32, Cell<u8>) = (1, Cell::new(0));
+  |           ^^^^^^^^^^^^^^^ `Cell<u8>` cannot be shared between threads safely
+  |
+  = help: within `(i32, Cell<u8>)`, the trait `Sync` is not implemented for `Cell<u8>`
+  = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` or `std::sync::atomic::AtomicU8` instead
+  = note: required because it appears within the type `(i32, Cell<u8>)`
+  = note: shared static variables must have a type that implements `Sync`"#
+    );
+    // A `Mutex` is `Sync`.
+    let output = printed(
+        "use std::sync::Mutex;\nstatic M: Mutex<i32> = Mutex::new(4);\nfn main() { println!(\"{}\", *M.lock().unwrap()); }\nmain();",
+    );
+    assert_eq!(output, "4\n");
+}
+
+#[test]
+fn temporaries_drop_where_rustc_2024_drops_them() {
+    // A temporary drops at the end of its statement, a block tail's before
+    // the block's locals, a condition's before the body, an `if let`
+    // subject's before the `else`, and one a `let` extends with the block
+    // (#870).
+    let output = printed(
+        r#"
+struct D(&'static str);
+impl Drop for D {
+    fn drop(&mut self) {
+        println!("drop {}", self.0);
+    }
+}
+impl D {
+    fn label(&self) -> &'static str {
+        self.0
+    }
+    fn again(&self) -> D {
+        D("again")
+    }
+    fn ok(&self) -> bool {
+        true
+    }
+}
+struct W<'a>(&'a D);
+fn main() {
+    let a = D("a");
+    println!("{}", a.again().label());
+    let n = D("let").label().len();
+    println!("after let {n}");
+    let x = {
+        let _l = D("local");
+        D("tail").label().len()
+    };
+    println!("after block {x}");
+    if D("cond").ok() {
+        println!("if body");
+    }
+    let mut once = true;
+    while D("while").ok() && once {
+        once = false;
+        println!("while body");
+    }
+    match D("scrutinee").ok() {
+        _ => println!("match arm"),
+    }
+    if let false = D("if let").ok() {
+        println!("if let body");
+    } else {
+        println!("if let else");
+    }
+    D("statement").ok();
+    let r = &D("extended");
+    let s = Some(&D("some"));
+    let w = W(&D("w"));
+    let t = (&D("t1"), D("t2"));
+    println!("end {} {} {} {}", r.0, s.unwrap().0, (w.0).0, (t.0).0);
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "again\ndrop again\ndrop let\nafter let 3\ndrop tail\ndrop local\nafter block 4\n\
+         drop cond\nif body\ndrop while\nwhile body\ndrop while\nmatch arm\ndrop scrutinee\n\
+         drop if let\nif let else\ndrop statement\nend extended some w t1\ndrop t2\ndrop t1\n\
+         drop w\ndrop some\ndrop extended\ndrop a\n"
+    );
+    // A `while let` subject's temporaries drop with each iteration, and at
+    // a jump out of the body.
+    let output = printed(
+        r#"
+struct D(&'static str);
+impl Drop for D {
+    fn drop(&mut self) {
+        println!("drop {}", self.0);
+    }
+}
+impl D {
+    fn pick(&self, n: i32) -> Option<i32> {
+        if n < 3 { Some(n) } else { None }
+    }
+}
+fn early(n: i32) -> i32 {
+    if let Some(k) = D("early").pick(n) {
+        if k == 0 {
+            return 10;
+        }
+        println!("past {k}");
+    }
+    n
+}
+fn main() {
+    let mut n = 0;
+    while let Some(k) = D("loop").pick(n) {
+        n += 1;
+        if k == 0 {
+            continue;
+        }
+        println!("body {k}");
+        if k == 2 {
+            break;
+        }
+    }
+    println!("{} {}", early(0), early(1));
+}
+main();
+"#,
+    );
+    assert_eq!(
+        output,
+        "drop loop\nbody 1\ndrop loop\nbody 2\ndrop loop\ndrop early\npast 1\ndrop early\n10 1\n"
+    );
+}
+
+#[test]
+fn an_if_let_subject_temporary_ends_before_the_else() {
+    // A temporary of an `if let` subject whose drop uses a borrow holds it
+    // through the consequent and not the alternative, as edition 2024 has
+    // it (#870).
+    let program = |consequent: &str, alternative: &str| {
+        format!(
+            "struct G<'a>(&'a Vec<i32>);\nimpl Drop for G<'_> {{ fn drop(&mut self) {{}} }}\nimpl G<'_> {{ fn first(&self) -> Option<i32> {{ self.0.first().copied() }} }}\nfn main() {{ let mut v: Vec<i32> = Vec::new(); if let Some(x) = G(&v).first() {{ {consequent} }} else {{ {alternative} }} println!(\"{{v:?}}\"); }}\nmain();"
+        )
+    };
+    assert_eq!(
+        printed(&program("println!(\"{x}\");", "v.push(1);")),
+        "[1]\n"
+    );
+    let report = refused(&program("v.push(x);", "println!(\"none\");"));
+    assert!(
+        report.starts_with(
+            "error[E0502]: cannot borrow `v` as mutable because it is also borrowed as immutable"
+        ),
+        "{report}"
+    );
+}

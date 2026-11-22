@@ -760,6 +760,7 @@ impl<'a> Parser<'a> {
     pub(super) fn parse_let_condition(
         &mut self,
         scrutinee: &str,
+        temporaries: drops::Subject,
     ) -> Result<
         (
             origin::Fragment,
@@ -774,7 +775,17 @@ impl<'a> Parser<'a> {
         let syntax = self.parse_pattern_syntax()?;
         self.expect(Token::Equals, "'=' after a `let` pattern")?;
         let dereferenced = matches!(self.peek(), Token::Multiply);
-        let (subject, matched) = self.parse_subject()?;
+        let scoped = temporaries == drops::Subject::Scoped;
+        if scoped {
+            self.open_temporaries();
+        }
+        let parsed = self.parse_subject();
+        let made = if scoped {
+            self.close_temporaries()
+        } else {
+            Vec::new()
+        };
+        let (subject, matched) = parsed?;
         // Matching through `&T` binds references, Rust's default binding mode.
         let written_ty = self.inference.resolve(&subject.ty);
         let subject_ty = self.referenced(&written_ty);
@@ -787,8 +798,9 @@ impl<'a> Parser<'a> {
         // The condition's scope: the value made for it, then its bindings,
         // which the caller closes after the consequent or body.
         self.open_drops();
+        let temporaries = self.scope_temporaries(made)?;
         let holder = self.subject_holder(&subject, scrutinee, dereferenced)?;
-        let otherwise = match &holder {
+        let mut otherwise = match &holder {
             drops::Holder::Local(place, _)
                 if place == scrutinee && self.needs_drop(&subject.ty, subject.span)? =>
             {
@@ -796,6 +808,7 @@ impl<'a> Parser<'a> {
             }
             _ => String::new(),
         };
+        otherwise.push_str(&self.temporary_drops(&temporaries));
         let (subject, operand) = match &place {
             Some(place) => (place.locate.clone(), place.operand(scrutinee)),
             None => (
@@ -853,6 +866,7 @@ impl<'a> Parser<'a> {
             operand,
             drops::Condition {
                 otherwise,
+                temporaries,
                 copies,
                 after,
             },
@@ -1725,7 +1739,7 @@ impl<'a> Parser<'a> {
             let outer = std::mem::replace(&mut self.chain_link, depth);
             if matches!(self.peek(), Token::Let) {
                 let scrutinee = self.temporary("match");
-                let parsed = self.parse_let_condition(&scrutinee);
+                let parsed = self.parse_let_condition(&scrutinee, drops::Subject::Statement);
                 self.chain_link = outer;
                 let (subject, arm, binds, operand, condition) = parsed?;
                 // A link's drops would need the chain's scopes.
@@ -1887,12 +1901,19 @@ impl<'a> Parser<'a> {
         };
         let mut operand = scrutinee.clone();
         let mut otherwise = None;
+        let mut temporaries = Vec::new();
+        // The borrow facts' temporaries of the subject, which end on each
+        // path out of the `if let`.
+        let mut ending = None;
         let mut copies = String::new();
         let mut after = String::new();
         let (pattern, condition, original_bindings) = if matches!(self.peek(), Token::Let) {
             let original_bindings = self.bindings.clone();
-            let (subject, arm, binds, switched, condition) =
-                self.parse_let_condition(&scrutinee)?;
+            self.flow().open_temporaries();
+            let parsed = self.parse_let_condition(&scrutinee, drops::Subject::Scoped);
+            ending = Some(self.flow().take_temporaries());
+            let (subject, arm, binds, switched, condition) = parsed?;
+            temporaries = condition.temporaries;
             otherwise = Some(condition.otherwise);
             copies = condition.copies;
             after = condition.after;
@@ -1936,8 +1957,14 @@ impl<'a> Parser<'a> {
         }
         let consequent_bindings = self.bindings.clone();
         self.bindings = original_bindings.clone();
+        if let Some(ending) = &ending {
+            self.flow().end_temporaries(ending);
+        }
         let consequent_end = self.flow().arm_end();
         self.flow().arm(split);
+        if let Some(ending) = &ending {
+            self.flow().end_temporaries(ending);
+        }
         let alternative = if !matches!(self.peek(), Token::Else) {
             self.require_else_less(if_span, &consequent)?;
             Branch {
@@ -1983,7 +2010,9 @@ impl<'a> Parser<'a> {
             } else {
                 format!("let {} = ", self.temporary("matched"))
             };
-            let mut source = origin::Fragment::plain(format!("{{\nlet {scrutinee} = "));
+            let mut source = origin::Fragment::plain("{\n");
+            source.push_text(drops::declarations(&temporaries));
+            source.push_text(format!("let {scrutinee} = "));
             source.push(subject);
             source.push_text(format!(";\n{copies}{matched}__rawr_switch {operand} {{\n"));
             source.push(arm);

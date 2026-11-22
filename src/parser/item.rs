@@ -1492,7 +1492,7 @@ fn parse_type_alias(
     })
 }
 
-/// `static NAME: T = value;`: an immutable static is read as a `const`,
+/// `static NAME: T = value;`: an immutable static, read as a `const` is,
 /// whose value it always has. A `static mut` is not supported yet.
 fn parse_static(
     input: &mut TokenStream,
@@ -1508,25 +1508,20 @@ fn parse_static(
         ))
         .into_err(*position));
     }
-    {
-        let name = parse_name(input, "after 'static'")?;
-        // Read as a `const`: a move out of it (rustc's E0507) is left to
-        // rustc.
-        #[cfg(test)]
-        crate::resolve::borrowck::note_unlowered("a `static` item, read as a `const`", name.span);
-        parse_const_rest(
-            input,
-            crate::item::Header {
-                attributes,
-                visibility,
-                span: Span::NONE,
-                scope: None,
-            },
-            start,
-            name,
-        )
-        .map(crate::item::Parsed::Function)
-    }
+    let name = parse_name(input, "after 'static'")?;
+    let mut function = parse_const_rest(
+        input,
+        crate::item::Header {
+            attributes,
+            visibility,
+            span: Span::NONE,
+            scope: None,
+        },
+        start,
+        name,
+    )?;
+    function.static_item = true;
+    Ok(crate::item::Parsed::Function(function))
 }
 
 /// The rest of a named `const` item after `const`: `const NAME: T = v;`,
@@ -3426,6 +3421,7 @@ fn parse_function_rest(
             body_span: semicolon,
             body_syntax: crate::item::BodySyntax::new(Vec::new()),
             constant: false,
+            static_item: false,
             asynchronous: false,
             span: Span::new(start, semicolon.end()),
         });
@@ -3450,6 +3446,7 @@ fn parse_function_rest(
         body_span,
         body_syntax,
         constant: false,
+        static_item: false,
         asynchronous: false,
         span,
     })
@@ -4447,6 +4444,7 @@ fn parse_associated_const(
             body_span: semicolon,
             body_syntax: crate::item::BodySyntax::new(Vec::new()),
             constant: true,
+            static_item: false,
             asynchronous: false,
             span: Span::new(start, semicolon.end()),
         });
@@ -4498,6 +4496,7 @@ fn finish_associated_const(
         body_span: Span::new(value_start, semicolon),
         body_syntax: crate::item::BodySyntax::new(tokens),
         constant: true,
+        static_item: false,
         asynchronous: false,
         span,
     })
@@ -4546,6 +4545,7 @@ fn parse_const_rest(
         body_span: Span::new(value_start, semicolon),
         body_syntax: crate::item::BodySyntax::new(tokens),
         constant: true,
+        static_item: false,
         asynchronous: false,
         span,
     })

@@ -50,6 +50,12 @@ impl<'a> Parser<'a> {
         if ty == Ty::Str {
             self.flow().set_origins(span, Vec::new());
         }
+        // A static is a place no use moves out of; a constant's use is a
+        // value of its own.
+        if function.definition.body.static_item {
+            self.unmovable
+                .insert(span, Unplaced::static_item(&function.definition.name.text));
+        }
         let source = origin::Fragment::call(function.generated.as_str(), []);
         self.operator_expr(source, ty, span)
     }

@@ -414,6 +414,9 @@ impl fmt::Display for ParseErrorType {
                     write!(f, "{}", crate::resolve::NotFound::Macro(name))
                 }
                 crate::resolve::Error::Unimplemented { message, .. } => f.write_str(message),
+                crate::resolve::Error::UnsharedStatic { ty, .. } => {
+                    write!(f, "{}", crate::resolve::Unsatisfied(ty, "Sync"))
+                }
                 crate::resolve::Error::WrongKind {
                     expected,
                     found,

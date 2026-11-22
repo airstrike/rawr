@@ -3176,6 +3176,7 @@ fn resolve_function(
             lowering: item::Lowering::Unavailable,
             syntax: parsed.body_syntax,
             constant: parsed.constant,
+            static_item: parsed.static_item,
             asynchronous: parsed.asynchronous,
             text: None,
             elide: None,
