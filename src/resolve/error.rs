@@ -1094,6 +1094,18 @@ pub enum Error {
         /// Expression or assignment span.
         expression: Span,
     },
+    /// A type mismatch where one type or both are a function's opaque
+    /// output (D1109), which rustc's label describes as "opaque type".
+    OpaqueMismatch {
+        /// Required type name.
+        expected: ImmutableString,
+        /// Actual type name.
+        actual: ImmutableString,
+        /// Which of the two are opaque.
+        opaque: Opaqueness,
+        /// Expression or assignment span.
+        expression: Span,
+    },
     /// A value that is no box where a `Box<dyn Error>` is expected, which
     /// rustc refuses (E0308): only a box unsizes to a trait object's box.
     Unboxed {
@@ -1835,7 +1847,9 @@ impl Error {
             Self::MovedValue { .. } => Category::MovedValue,
             Self::BorrowConflict { .. } | Self::ImmutableBorrow { .. } => Category::BorrowConflict,
             Self::InvalidConstruction { .. } => Category::InvalidConstruction,
-            Self::TypeMismatch { .. } | Self::Unboxed { .. } => Category::TypeMismatch,
+            Self::TypeMismatch { .. } | Self::OpaqueMismatch { .. } | Self::Unboxed { .. } => {
+                Category::TypeMismatch
+            }
             Self::IfWithoutElse { .. } => Category::IfWithoutElse,
             Self::ReturnWithoutValue { .. } => Category::ReturnWithoutValue,
             Self::ImmutableBinding { .. } => Category::ImmutableBinding,
@@ -1924,6 +1938,7 @@ impl Error {
             Self::RepeatedRest { .. } => "..",
             Self::NonExhaustive { ty, .. } | Self::Refutable { ty, .. } => ty.as_str(),
             Self::TypeMismatch { expected, .. }
+            | Self::OpaqueMismatch { expected, .. }
             | Self::Unboxed { expected, .. }
             | Self::IfWithoutElse { expected, .. } => expected.as_str(),
             Self::ReturnWithoutValue { output, .. } => output.as_str(),
@@ -1989,6 +2004,7 @@ impl Error {
             Self::BorrowConflict { access, .. } | Self::ImmutableBorrow { access, .. } => *access,
             Self::InvalidConstruction { construction, .. } => *construction,
             Self::TypeMismatch { expression, .. }
+            | Self::OpaqueMismatch { expression, .. }
             | Self::Unboxed { expression, .. }
             | Self::IfWithoutElse { expression, .. } => *expression,
             Self::ReturnWithoutValue { at, .. } => *at,
@@ -2095,6 +2111,7 @@ impl Error {
             | Self::Unimplemented { .. }
             | Self::InvalidConstruction { .. }
             | Self::TypeMismatch { .. }
+            | Self::OpaqueMismatch { .. }
             | Self::Unboxed { .. }
             | Self::IfWithoutElse { .. }
             | Self::ReturnWithoutValue { .. }
@@ -2936,9 +2953,29 @@ impl fmt::Display for Described<'_> {
             {
                 formatter.write_str("future")
             }
-            // A function's `-> impl Shape` (D1109).
-            ty if ty.starts_with("impl ") => formatter.write_str("opaque type"),
             ty => write!(formatter, "`{ty}`"),
+        }
+    }
+}
+
+/// Which types of an [`Error::OpaqueMismatch`] are opaque outputs.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum Opaqueness {
+    /// The expected type alone.
+    Expected,
+    /// The found type alone.
+    Found,
+    /// Both, two functions' opaque types.
+    Both,
+}
+
+impl Opaqueness {
+    /// rustc's E0308 label for `expected` and `found` of this mismatch.
+    pub(crate) fn label(self, expected: &str, found: &str) -> String {
+        match self {
+            Self::Expected => format!("expected opaque type, found {}", Described(found)),
+            Self::Found => format!("expected {}, found opaque type", Described(expected)),
+            Self::Both => "expected opaque type, found a different opaque type".into(),
         }
     }
 }
@@ -3184,6 +3221,12 @@ impl fmt::Display for Written<'_> {
                 expected,
                 actual,
                 expression,
+            }
+            | Error::OpaqueMismatch {
+                expected,
+                actual,
+                expression,
+                ..
             }
             | Error::Unboxed {
                 expected,

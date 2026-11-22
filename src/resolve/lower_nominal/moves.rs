@@ -608,7 +608,7 @@ impl<'a> Parser<'a> {
         // With `impl Drop` in the crate, a value of a generic type moves as
         // in Rust, unless its bounds make it `Copy`: its drop is its last
         // owner's.
-        if matches!(resolved, Ty::Param(_) | Ty::Projection(..)) {
+        if matches!(resolved, Ty::Param(..) | Ty::Projection(..)) {
             return !self.type_provides(&resolved, capability::Kind::Copy);
         }
         !matches!(
@@ -620,7 +620,7 @@ impl<'a> Parser<'a> {
                 | Ty::Dyn(..)
                 | Ty::Iter(..)
                 | Ty::Callable { .. }
-                | Ty::Param(_)
+                | Ty::Param(..)
                 | Ty::Projection(..)
         ) && !self.type_provides(&resolved, capability::Kind::Copy)
             && !self.copy_unsettled(&resolved)

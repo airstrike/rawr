@@ -1190,7 +1190,7 @@ impl<'a> Parser<'a> {
             {
                 true
             }
-            Ty::Param(_) | Ty::Projection(..) => self
+            Ty::Param(..) | Ty::Projection(..) => self
                 .bound_traits(ty)
                 .iter()
                 .any(|bound| bound == trait_name),
@@ -1300,7 +1300,7 @@ impl<'a> Parser<'a> {
         // conversions, and `impl<T, U: From<T>> Into<U> for T`.
         let resolved = self.inference.resolve(ty);
         if let [argument] = arguments
-            && !matches!(resolved, Ty::Param(_) | Ty::Projection(..))
+            && !matches!(resolved, Ty::Param(..) | Ty::Projection(..))
             && self.prelude_trait(trait_name)
         {
             let argument = self.inference.resolve(argument);
@@ -1367,7 +1367,7 @@ impl<'a> Parser<'a> {
             Ty::Dyn(name, bindings) => {
                 self.dyn_supertrait_instances(&name, &bindings, ty, trait_name)
             }
-            ty @ (Ty::Param(_) | Ty::Projection(..)) => self
+            ty @ (Ty::Param(..) | Ty::Projection(..)) => self
                 .bound_trait_arguments(&ty, trait_name)
                 .iter()
                 .map(|arguments| arguments.to_vec())
@@ -1513,7 +1513,7 @@ impl<'a> Parser<'a> {
         member: &str,
         span: Span,
     ) -> Result<Option<(ImmutableString, item::Function)>, Error> {
-        self.bound_trait_function(&Ty::Param(param.into()), member, span)
+        self.bound_trait_function(&Ty::param(param.into()), member, span)
     }
 
     /// The user trait bounds of a generic parameter or of an associated
@@ -1522,12 +1522,24 @@ impl<'a> Parser<'a> {
         match ty {
             // One trait bounding a parameter twice (`U: Convert<i64> +
             // Convert<String>`) is one trait here.
-            Ty::Param(name) => {
-                let mut traits = self
-                    .generic_traits
-                    .get(name)
-                    .map(|traits| traits.to_vec())
-                    .unwrap_or_default();
+            Ty::Param(name, parameter) => {
+                let mut traits = match parameter {
+                    Parameter::Declared => self
+                        .generic_traits
+                        .get(name)
+                        .map(|traits| traits.to_vec())
+                        .unwrap_or_default(),
+                    Parameter::Opaque(opaque) => self
+                        .opaque_bounds(opaque)
+                        .map(|generic| {
+                            generic
+                                .traits
+                                .iter()
+                                .map(|name| name.text.clone())
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                };
                 let mut seen = BTreeSet::new();
                 traits.retain(|name| seen.insert(name.clone()));
                 traits
@@ -1773,7 +1785,14 @@ impl<'a> Parser<'a> {
     /// associated type's (`type Item: Into<String>;`).
     pub(super) fn bound_trait_arguments(&self, ty: &Ty, trait_name: &str) -> Vec<Box<[Ty]>> {
         match ty {
-            Ty::Param(name) => self
+            Ty::Param(_, Parameter::Opaque(opaque)) => self
+                .opaque_bounds(opaque)
+                .into_iter()
+                .flat_map(|generic| generic.trait_arguments.iter())
+                .filter(|(bound, _)| bound == trait_name)
+                .map(|(_, arguments)| arguments.iter().map(Ty::from_resolved).collect())
+                .collect(),
+            Ty::Param(name, _) => self
                 .generic_trait_arguments
                 .get(&(name.clone(), trait_name.into()))
                 .cloned()

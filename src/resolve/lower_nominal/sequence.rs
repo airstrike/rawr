@@ -5,7 +5,7 @@
 
 #[cfg(feature = "rust-import")]
 use super::{invariant, origin, FnCallArgs, NativeCallContext, Op};
-use super::{type_ref, Error, Parser, Ty};
+use super::{type_ref, Error, Parameter, Parser, Ty};
 #[cfg(feature = "rust-import")]
 use crate::host::runtime::type_ref::Type;
 use crate::tokenizer::Token;
@@ -49,7 +49,7 @@ impl Length {
     pub(super) fn of_argument(ty: &Ty) -> Option<Self> {
         match ty {
             Ty::Const(value) => value.parse().ok().map(Self::Fixed),
-            Ty::Param(name) => Some(Self::Param(name.clone())),
+            Ty::Param(name, Parameter::Declared) => Some(Self::Param(name.clone())),
             Ty::Infer(id) => Some(Self::Infer(*id)),
             _ => None,
         }
@@ -60,7 +60,7 @@ impl Length {
     pub(super) fn argument(&self) -> Ty {
         match self {
             Self::Fixed(length) => Ty::Const(length.to_string().into()),
-            Self::Param(name) => Ty::Param(name.clone()),
+            Self::Param(name) => Ty::param(name.clone()),
             Self::Infer(id) => Ty::Infer(*id),
         }
     }
@@ -70,7 +70,7 @@ impl Length {
     pub(super) fn mapped(&self, map: impl FnOnce(&Ty) -> Ty) -> Self {
         match self {
             Self::Fixed(_) => self.clone(),
-            Self::Param(_) | Self::Infer(_) => {
+            Self::Param(..) | Self::Infer(_) => {
                 Self::of_argument(&map(&self.argument())).unwrap_or_else(|| self.clone())
             }
         }
@@ -80,7 +80,7 @@ impl Length {
     pub(super) fn fixed(&self) -> Option<usize> {
         match self {
             Self::Fixed(length) => Some(*length),
-            Self::Param(_) | Self::Infer(_) => None,
+            Self::Param(..) | Self::Infer(_) => None,
         }
     }
 }

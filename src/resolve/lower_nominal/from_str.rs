@@ -112,7 +112,7 @@ impl<'a> Parser<'a> {
             self.require_type(&from_str_error, error, span)?;
             return Ok(Some(format!("{}(", method_name(&definition))));
         }
-        if let Ty::Param(name) = &resolved
+        if let Ty::Param(name, _) = &resolved
             && self.type_implements(&resolved, "FromStr")
         {
             let projection =

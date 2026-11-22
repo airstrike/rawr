@@ -51,6 +51,10 @@ pub(crate) enum Target {
     /// A generic type parameter of the enclosing item: any type, erased at
     /// runtime.
     Parameter,
+    /// A function's `-> impl Bounds` (D1109): a type parameter no caller
+    /// chooses, which its function's body fills. `None` until
+    /// `resolve_function` gives it its function, and outside an output.
+    Opaque(Option<Opaque>),
     /// The associated type named by the path's name of this type, which is a
     /// generic parameter or a script type: `T::Output`, `Self::Output`, and
     /// the trait declaring it: written (`<T as Shape>::Output`) or found
@@ -63,6 +67,33 @@ pub(crate) enum Target {
     /// it: to Rawr's type for it, or to Rawr's not-yet error (D712.1) for
     /// one it doesn't represent yet. Never a resolved path's target.
     Std(ImmutableString),
+}
+
+/// Which opaque output a [`Target::Opaque`] is: the `index`th `impl` its
+/// defining function's output writes, the function named at `function` in
+/// `source`.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
+pub(crate) struct Opaque {
+    source: crate::program::source::Id,
+    function: Span,
+    index: usize,
+}
+
+impl Opaque {
+    /// The `index`th opaque output of the function whose name is at
+    /// `function` in `source`.
+    pub(crate) const fn new(
+        source: crate::program::source::Id,
+        function: Span,
+        index: usize,
+    ) -> Self {
+        Self {
+            source,
+            function,
+            index,
+        }
+    }
 }
 
 /// A type alias's parameters and its target, resolved once in the module
@@ -1238,12 +1269,11 @@ pub(super) fn host_trait(
 
 /// `impl Shape + Debug` of program or std traits, as a function's output
 /// writes it: rustc's opaque type (D1109), a type parameter no caller
-/// chooses, known by its bounds alone. Its name here is the text rustc
-/// prints (`impl Shape + Debug`), and `resolve_function` makes it the
-/// function's own (`item::type_ref::opaque_output`).
+/// chooses, known by its bounds alone. Its name is the text rustc prints
+/// (`impl Shape + Debug`), and `resolve_function` gives it its function.
 fn opaque_output(parsed: &item::type_ref::Path) -> Path {
     Path {
-        target: Target::Parameter,
+        target: Target::Opaque(None),
         name: item::type_ref::opaque_text(parsed).into(),
         arguments: Box::default(),
         span: parsed.span,

@@ -87,7 +87,7 @@ impl<'a> Parser<'a> {
     pub(super) fn payload_type(&self, expected: &Ty) -> NominalPayloadType {
         match self.inference.resolve(expected) {
             Ty::Unit => NominalPayloadType::Unit,
-            Ty::Param(_) | Ty::Infer(_) => NominalPayloadType::Any,
+            Ty::Param(..) | Ty::Infer(_) => NominalPayloadType::Any,
             Ty::Script(definition, ..) => {
                 let definition = self.models.definition(definition).definition();
                 NominalPayloadType::Script {

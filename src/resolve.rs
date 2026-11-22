@@ -32,9 +32,9 @@ pub(crate) use error::{
 pub use error::{
     Annotation, Arguments, Arms, Assignment, Beyond, BinaryOperation, BindingSite, Bound, Boxing,
     Callee, Category, Cloning, Detail, Error, Expansion, Fields, Import, Imported, Instead, Lint,
-    MacroScope, Missing, MissingImpl, MoveCause, MovedPlace, MutBinding, OwningParameter,
-    PatternOrigin, PatternTypes, Placeholder, Private, Receiver, Referent, Required, Shown,
-    Similar, Uncovered, Unexpected, Unresolved,
+    MacroScope, Missing, MissingImpl, MoveCause, MovedPlace, MutBinding, Opaqueness,
+    OwningParameter, PatternOrigin, PatternTypes, Placeholder, Private, Receiver, Referent,
+    Required, Shown, Similar, Uncovered, Unexpected, Unresolved,
 };
 pub use imports::{Candidate, Imports};
 use std::collections::BTreeMap;
@@ -926,6 +926,7 @@ fn invocation_path(ty: &type_ref::Type) -> Option<String> {
                 | type_ref::Target::Host { .. }
                 | type_ref::Target::Script { .. }
                 | type_ref::Target::Parameter
+                | type_ref::Target::Opaque(_)
                 | type_ref::Target::Projection(..)
                 | type_ref::Target::Alias(_)
                 | type_ref::Target::Std(_) => {}
@@ -3104,6 +3105,7 @@ fn resolve_function(
             written_impls,
             output,
             source,
+            parsed.name.span,
             types,
             host,
             #[cfg(feature = "rust-import")]
@@ -3198,59 +3200,61 @@ fn impl_outputs(ty: &crate::item::type_ref::Type, found: &mut Vec<crate::item::G
 }
 
 /// Each `impl Bounds` of program or std traits in `output`, of the ones
-/// `written` there (`impl_outputs`, `type_ref::opaque_output`), named as
-/// its own opaque type by where `source` writes it, and with its bounds
-/// read as a type parameter's (D1109).
+/// `written` there (`impl_outputs`, `type_ref::opaque_output`), given its
+/// function, named at `function` in `source`, and with its bounds read as
+/// a type parameter's (D1109).
 fn opaque_outputs(
     mut written: Vec<crate::item::GenericParam>,
     output: &mut type_ref::Type,
     source: program::source::Id,
+    function: Span,
     types: &BTreeMap<ImmutableString, type_ref::Target>,
     host: &host::Registry,
     #[cfg(feature = "rust-import")] native: Option<native::Site<'_>>,
-) -> Result<Box<[item::Generic]>, Error> {
+) -> Result<Box<[(type_ref::Opaque, item::Generic)]>, Error> {
     fn name_opaque(
         ty: &mut type_ref::Type,
         written: &mut Vec<crate::item::GenericParam>,
-        source: program::source::Id,
-        named: &mut Vec<crate::item::GenericParam>,
+        at: &dyn Fn(usize) -> type_ref::Opaque,
+        named: &mut Vec<(type_ref::Opaque, crate::item::GenericParam)>,
     ) {
         match ty {
             type_ref::Type::Unit(_) => {}
             type_ref::Type::Tuple { members, .. } => {
                 for member in members.iter_mut() {
-                    name_opaque(member, written, source, named);
+                    name_opaque(member, written, at, named);
                 }
             }
             type_ref::Type::Reference { target, .. } => {
-                name_opaque(target, written, source, named);
+                name_opaque(target, written, at, named);
             }
             type_ref::Type::Path(path) => {
-                if path.target == type_ref::Target::Parameter
-                    && crate::item::type_ref::opaque_output_text(&path.name) == Some(&*path.name)
+                if path.target == type_ref::Target::Opaque(None)
                     && let Some(index) = written
                         .iter()
                         .position(|generic| generic.name.span == path.span)
                 {
-                    path.name =
-                        crate::item::type_ref::opaque_output(&path.name, source, path.span).into();
+                    let opaque = at(named.len());
+                    path.target = type_ref::Target::Opaque(Some(opaque));
                     let mut generic = written.swap_remove(index);
                     generic.name.text = path.name.clone();
-                    named.push(generic);
+                    named.push((opaque, generic));
                 }
                 for argument in path.arguments.iter_mut() {
                     if let type_ref::Argument::Type(ty) = argument {
-                        name_opaque(ty, written, source, named);
+                        name_opaque(ty, written, at, named);
                     }
                 }
             }
         }
     }
     let mut named = Vec::new();
-    name_opaque(output, &mut written, source, &mut named);
+    let at = |index| type_ref::Opaque::new(source, function, index);
+    name_opaque(output, &mut written, &at, &mut named);
     if named.is_empty() {
         return Ok(Box::default());
     }
+    let (opaque, named): (Vec<_>, Vec<_>) = named.into_iter().unzip();
     let spans = named
         .iter()
         .map(|generic| generic.name.span)
@@ -3279,18 +3283,17 @@ fn opaque_outputs(
             });
         }
     }
-    Ok(generics)
+    Ok(opaque.into_iter().zip(generics).collect())
 }
 
-/// Whether `ty` names a type parameter, but for an opaque output's own.
+/// Whether `ty` names a type parameter.
 fn names_type_parameter(ty: &type_ref::Type) -> bool {
     match ty {
         type_ref::Type::Unit(_) => false,
         type_ref::Type::Tuple { members, .. } => members.iter().any(names_type_parameter),
         type_ref::Type::Reference { target, .. } => names_type_parameter(target),
         type_ref::Type::Path(path) => {
-            (path.target == type_ref::Target::Parameter
-                && crate::item::type_ref::opaque_output_text(&path.name).is_none())
+            path.target == type_ref::Target::Parameter
                 || path.arguments.iter().any(|argument| match argument {
                     type_ref::Argument::Type(ty) => names_type_parameter(ty),
                     type_ref::Argument::Lifetime(_) => false,
@@ -6392,13 +6395,6 @@ fn type_name_of(ty: &type_ref::Type, canonical: bool) -> String {
                 .collect::<Vec<_>>();
             let written = match &path.target {
                 type_ref::Target::Host { definition, .. } if canonical => definition.path(),
-                // An opaque output by the text it is written with, as an
-                // impl's `-> impl Shape` meets its trait's.
-                type_ref::Target::Parameter => {
-                    crate::item::type_ref::opaque_output_text(&path.name)
-                        .unwrap_or(&path.name)
-                        .to_string()
-                }
                 _ => path.name.to_string(),
             };
             if let type_ref::Target::Projection(base, _) = &path.target {
@@ -6453,6 +6449,7 @@ fn declared_type(
         type_ref::Target::Builtin
         | type_ref::Target::Host { .. }
         | type_ref::Target::Parameter
+        | type_ref::Target::Opaque(_)
         | type_ref::Target::Projection(..)
         | type_ref::Target::Alias(_)
         | type_ref::Target::Std(_)
@@ -7029,7 +7026,7 @@ mod tests {
                     "f64" => 0.0_f64.into(),
                     _ => panic!("unexpected builtin in test schema"),
                 },
-                Target::Parameter | Target::Projection(..) => {
+                Target::Parameter | Target::Opaque(_) | Target::Projection(..) => {
                     panic!("test schemas contain no generic parameters")
                 }
                 Target::Script { identity, .. } => {

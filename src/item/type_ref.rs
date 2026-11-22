@@ -172,35 +172,6 @@ fn type_text(ty: &Type) -> String {
     }
 }
 
-/// The marker between an opaque output's text and the place that makes it
-/// its function's own (`opaque_output`). Rust spells no type with it.
-const OPAQUE_OUTPUT_MARKER: char = '#';
-
-/// The name of the opaque type `text` (`impl Shape`) a function's output
-/// writes at `span` of `source` (D1109): one type for each place an `impl`
-/// is written, as rustc's is one per defining function.
-pub(crate) fn opaque_output(text: &str, source: impl std::fmt::Debug, span: crate::Span) -> String {
-    let start = span.start();
-    format!(
-        "{text}{OPAQUE_OUTPUT_MARKER}{source:?}:{}:{}",
-        start.line().unwrap_or_default(),
-        start.position().unwrap_or_default()
-    )
-}
-
-/// The text rustc prints for a type parameter that is an opaque output
-/// ([`opaque_output`]): `impl Shape`.
-pub(crate) fn opaque_output_text(parameter: &str) -> Option<&str> {
-    if !parameter.starts_with(IMPL_TYPE) || !parameter[IMPL_TYPE.len()..].starts_with(' ') {
-        return None;
-    }
-    Some(
-        parameter
-            .rsplit_once(OPAQUE_OUTPUT_MARKER)
-            .map_or(parameter, |(text, _)| text),
-    )
-}
-
 /// The constant an array type's builtin path name names as its length.
 pub(crate) fn array_length_name(name: &str) -> Option<&str> {
     let length = name.strip_prefix(ARRAY_PREFIX)?.strip_suffix(']')?;

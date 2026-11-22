@@ -911,6 +911,7 @@ impl<'a> Resolver<'a> {
                             type_ref::Target::Builtin
                             | type_ref::Target::Host { .. }
                             | type_ref::Target::Parameter
+                            | type_ref::Target::Opaque(_)
                             | type_ref::Target::Projection(..)
                             | type_ref::Target::Alias(_)
                             | type_ref::Target::Std(_),
@@ -994,6 +995,7 @@ impl<'a> Resolver<'a> {
                         type_ref::Target::Builtin
                         | type_ref::Target::Host { .. }
                         | type_ref::Target::Parameter
+                        | type_ref::Target::Opaque(_)
                         | type_ref::Target::Projection(..)
                         | type_ref::Target::Alias(_)
                         | type_ref::Target::Std(_),
@@ -2391,6 +2393,7 @@ impl<'a> Resolver<'a> {
                     Target::Type(
                         type_ref::Target::Builtin
                         | type_ref::Target::Parameter
+                        | type_ref::Target::Opaque(_)
                         | type_ref::Target::Projection(..),
                     ) => {
                         return Err(Failure {

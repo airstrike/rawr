@@ -936,7 +936,7 @@ impl<'a> Parser<'a> {
 
     pub(super) fn projection_base(&self, name: &str) -> Option<Ty> {
         if self.generics.contains_key(name) {
-            return Some(Ty::Param(name.into()));
+            return Some(Ty::param(name.into()));
         }
         if name == "Self" {
             return self.self_ty.clone();
@@ -966,13 +966,10 @@ impl<'a> Parser<'a> {
                 })
         };
         let candidates: Vec<ImmutableString> = match self.inference.resolve(base) {
-            Ty::Param(name) => self
-                .generic_traits
-                .get(&name)
+            ty @ Ty::Param(..) => self
+                .bound_traits(&ty)
                 .into_iter()
-                .flatten()
                 .filter(|trait_name| declares(trait_name))
-                .cloned()
                 .collect(),
             Ty::Script(id, _) => {
                 // In an impl of a trait giving it, `Self::Output` is that
@@ -1305,7 +1302,7 @@ impl<'a> Parser<'a> {
 
     pub(super) fn resolve_type(&mut self, name: &str, span: Span) -> Result<Ty, Error> {
         if self.generics.contains_key(name) {
-            return Ok(Ty::Param(name.into()));
+            return Ok(Ty::param(name.into()));
         }
         // `T` of `trait Convert<T>` in its impl's bodies.
         if let Some(ty) = self.trait_parameters.get(name) {
@@ -1458,6 +1455,21 @@ impl<'a> Parser<'a> {
             });
         }
         let (expected_name, found) = super::ty::mismatched_names(&expected, &actual, &self.models);
+        // A function's opaque output, which rustc's label describes.
+        let opaque = match (expected.is_opaque(), actual.is_opaque()) {
+            (true, true) => Some(crate::resolve::Opaqueness::Both),
+            (true, false) => Some(crate::resolve::Opaqueness::Expected),
+            (false, true) => Some(crate::resolve::Opaqueness::Found),
+            (false, false) => None,
+        };
+        if let Some(opaque) = opaque {
+            return Err(Error::OpaqueMismatch {
+                expected: expected_name,
+                actual: found,
+                opaque,
+                expression: self.expression_span(span),
+            });
+        }
         let mut found = found.to_string();
         // Arrays of two lengths: rustc's label for them.
         if let (
@@ -1584,7 +1596,7 @@ impl<'a> Parser<'a> {
         if let Some([crate::item::constant::Piece::Name(name)]) = pieces.as_deref()
             && self.constants.contains_key(name)
         {
-            return Ok(Ty::Param(name.clone()));
+            return Ok(Ty::param(name.clone()));
         }
         let value = pieces.and_then(|pieces| {
             crate::item::constant::evaluate(&pieces, &mut |name| self.constant_value(name, 0))

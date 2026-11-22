@@ -566,10 +566,10 @@ impl<'a> Parser<'a> {
             {
                 Some((Some(definition.clone()), true))
             }
-            Ty::Param(_) | Ty::Projection(..) if self.type_implements(&peeled, "PartialOrd") => {
+            Ty::Param(..) | Ty::Projection(..) if self.type_implements(&peeled, "PartialOrd") => {
                 Some((None, true))
             }
-            Ty::Param(_) | Ty::Projection(..) if self.type_implements(&peeled, "Ord") => {
+            Ty::Param(..) | Ty::Projection(..) if self.type_implements(&peeled, "Ord") => {
                 Some((None, false))
             }
             ty if self.std_ordered(ty, true) => Some((None, true)),
@@ -599,10 +599,10 @@ impl<'a> Parser<'a> {
         let (value, other) = (lhs.rendered_source(), rhs.rendered_source());
         let compare = match (definition, &peeled) {
             (Some(definition), _) => Self::std_call(&definition, value, &[other]),
-            (None, Ty::Param(_) | Ty::Projection(..)) if partial => {
+            (None, Ty::Param(..) | Ty::Projection(..)) if partial => {
                 Self::std_dispatch("PartialOrd", "partial_cmp", value, &[other])
             }
-            (None, Ty::Param(_) | Ty::Projection(..)) => {
+            (None, Ty::Param(..) | Ty::Projection(..)) => {
                 Self::std_dispatch("Ord", "cmp", value, &[other])
             }
             (None, _) => self.compare_op(&peeled, false, [value, other]),
@@ -858,7 +858,7 @@ impl<'a> Parser<'a> {
         }
         if let Ty::Option(_)
         | Ty::Result(..)
-        | Ty::Param(_)
+        | Ty::Param(..)
         | Ty::Projection(..)
         | Ty::Keyed(..)
         | Ty::Reverse(_)
@@ -977,7 +977,7 @@ impl<'a> Parser<'a> {
         {
             return Some(Self::std_call(cmp, lhs, &[rhs]));
         }
-        if matches!(ty, Ty::Param(_) | Ty::Projection(..)) {
+        if matches!(ty, Ty::Param(..) | Ty::Projection(..)) {
             return Some(Self::std_dispatch("Ord", "cmp", lhs, &[rhs]));
         }
         let compare = match ty {
@@ -1008,7 +1008,7 @@ impl<'a> Parser<'a> {
             | Ty::Boxed(..)
             | Ty::Counted(..)
             | Ty::Weak(..)
-            | Ty::Param(_)
+            | Ty::Param(..)
             | Ty::Projection(..) => false,
 
             // An `i128` or a `u128` past `i64` is boxed.
@@ -1086,7 +1086,7 @@ impl<'a> Parser<'a> {
         }
         let ord = match &ty {
             Ty::Script(id, _) if self.models.std_impl(*id, "Ord", "cmp").is_some() => true,
-            Ty::Param(_) | Ty::Projection(..) => self.type_implements(&ty, "Ord"),
+            Ty::Param(..) | Ty::Projection(..) => self.type_implements(&ty, "Ord"),
             // An imported type orders by the crate's `Ord`.
             Ty::Host { proof, .. } => proof
                 .definition
@@ -1489,7 +1489,7 @@ impl<'a> Parser<'a> {
                 self.prelude_op(PreludeOp::GenericEqual, [lhs, rhs])
             }
             // A generic value, or an associated type's by its bounds.
-            Ty::Param(_) | Ty::Projection(..) => {
+            Ty::Param(..) | Ty::Projection(..) => {
                 if !self.type_provides(&ty, capability::Kind::PartialEq) {
                     return Err(Error::MissingCapability {
                         owner: ty.name(&self.models),

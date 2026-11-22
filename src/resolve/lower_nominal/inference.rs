@@ -5,8 +5,9 @@
 use super::ImplProjection;
 use super::{
     builtin_operator, instantiate, is_iterator_trait, owner_id, sequence, Float, FnCandidate, Int,
-    ParseError, Ty,
+    Parameter, ParseError, Ty,
 };
+use crate::resolve::item;
 use crate::resolve::type_ref;
 use crate::{type_def, ImmutableString, Shared};
 use std::collections::{BTreeMap, BTreeSet};
@@ -23,6 +24,9 @@ pub(super) struct Inference {
     /// `T::Output = i64` of the bounds in scope (`T: Shape<Output = i64>`),
     /// by parameter, trait and name.
     pub(super) equalities: BTreeMap<(ImmutableString, ImmutableString, ImmutableString), Ty>,
+    /// Every function's opaque output (D1109), whose written bindings
+    /// (`impl Named<Out = i64>`) its projections are.
+    pub(super) opaque_outputs: Shared<BTreeMap<type_ref::Opaque, item::Generic>>,
     /// The variables a diverging expression was coerced into, as rustc's
     /// diverging type variables: one nothing else settles falls back once
     /// the body is read (`fall_back_diverging`). A rollback drops those it
@@ -433,12 +437,23 @@ impl Inference {
                     return self.resolve(ty);
                 }
             }
-            Ty::Param(parameter) => {
+            Ty::Param(parameter, Parameter::Declared) => {
                 if let Some(ty) =
                     self.equalities
                         .get(&(parameter.clone(), trait_name.clone(), name.clone()))
                 {
                     return self.resolve(ty);
+                }
+            }
+            // `impl Named<Out = i64>`: its written binding (D1109).
+            Ty::Param(_, Parameter::Opaque(opaque)) => {
+                if let Some((_, _, ty)) = self.opaque_outputs.get(opaque).and_then(|generic| {
+                    generic
+                        .projections
+                        .iter()
+                        .find(|(bound, item, _)| bound.text == *trait_name && item.text == *name)
+                }) {
+                    return self.resolve(&Ty::from_resolved(ty));
                 }
             }
             // `<&T as For>::Fore` of an impl for `&T` forwarding to `T`'s.
@@ -471,7 +486,7 @@ impl Inference {
         // `T::Fore` of `type Fore: Iterator<Item = T::For>;` is Rawr's
         // iterator of `T::For`, as a parameter `I: Iterator<Item = U>` is
         // (`erase_fn_bounds`).
-        if matches!(base, Ty::Param(_) | Ty::Projection(..))
+        if matches!(base, Ty::Param(..) | Ty::Projection(..))
             && let Some(item) =
                 self.associated_equality(&base, trait_name, name, is_iterator_trait, "Item")
         {
@@ -479,7 +494,7 @@ impl Inference {
         }
         // `T::Fore` of `type Fore: Iterator;` is an iterator of the opaque
         // `<T::Fore as Iterator>::Item`, as rustc types its items (T379).
-        if matches!(base, Ty::Param(_) | Ty::Projection(..))
+        if matches!(base, Ty::Param(..) | Ty::Projection(..))
             && self
                 .associated
                 .iterators

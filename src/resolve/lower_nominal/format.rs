@@ -2264,7 +2264,7 @@ impl<'a> Parser<'a> {
                 .models
                 .std_impl(*id, "Display", "fmt")
                 .map(|definition| Self::std_call(definition, value, &["\"\"".into()])),
-            Ty::Param(_) | Ty::Projection(..) | Ty::Dyn(..)
+            Ty::Param(..) | Ty::Projection(..) | Ty::Dyn(..)
                 if self.type_implements(ty, "Display") =>
             {
                 Some(Self::std_dispatch(
@@ -2299,7 +2299,7 @@ impl<'a> Parser<'a> {
         }
         match ty {
             Ty::Script(id, _) => self.models.std_impl(*id, "Display", "fmt").is_some(),
-            Ty::Param(_) | Ty::Projection(..) | Ty::Dyn(..) => self.type_implements(ty, "Display"),
+            Ty::Param(..) | Ty::Projection(..) | Ty::Dyn(..) => self.type_implements(ty, "Display"),
             _ => false,
         }
     }
@@ -2769,7 +2769,7 @@ impl<'a> Parser<'a> {
                     );
                 }
                 Ty::Script(..)
-                | Ty::Param(_)
+                | Ty::Param(..)
                 | Ty::Projection(..)
                 | Ty::Time(_)
                 | Ty::Host { .. } => {
@@ -2800,7 +2800,7 @@ impl<'a> Parser<'a> {
 
             // A generic value, an associated type's by its bounds, or a
             // trait object by its trait's.
-            Ty::Param(_) | Ty::Projection(..) | Ty::Dyn(..) => {
+            Ty::Param(..) | Ty::Projection(..) | Ty::Dyn(..) => {
                 if !self.type_provides(&ty, capability::Kind::Debug) {
                     return Err(Error::MissingCapability {
                         owner: ty.name(&self.models),

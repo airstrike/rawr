@@ -85,7 +85,7 @@ const fn nominal(ty: &Ty) -> bool {
             | Ty::FnChoice { .. }
             | Ty::Callable { .. }
             | Ty::Dyn(..)
-            | Ty::Param(_)
+            | Ty::Param(..)
             | Ty::Projection(..)
             | Ty::Const(_)
             | Ty::Iter(..)

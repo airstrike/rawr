@@ -662,8 +662,12 @@ impl<'a> Parser<'a> {
                         .iter()
                         .all(|argument| self.type_provides(argument, capability))
             }
-            // A generic parameter has exactly its bounds' capabilities.
-            Ty::Param(name) => self
+            // A generic parameter has exactly its bounds' capabilities, and
+            // an opaque output its written bounds' (D1109).
+            Ty::Param(_, Parameter::Opaque(opaque)) => self
+                .opaque_bounds(&opaque)
+                .is_some_and(|generic| generic.bounds.contains(capability)),
+            Ty::Param(name, _) => self
                 .generics
                 .get(&name)
                 .is_some_and(|bounds| bounds.contains(capability)),
@@ -915,7 +919,7 @@ impl<'a> Parser<'a> {
                     }
                 }
             }
-            Ty::Param(name)
+            Ty::Param(name, _)
                 if let Some(index) = self
                     .template_params
                     .borrow()
@@ -939,7 +943,7 @@ impl<'a> Parser<'a> {
             Ty::Dyn(name, _) if type_ref::is_native_trait(&name) => intrinsic::Type::Object(name),
             // `3` of `Buf<3>`, among a type's arguments.
             Ty::Const(value) => intrinsic::Type::Constant(value),
-            Ty::Param(_) | Ty::Projection(..) | Ty::Weak(..) | Ty::Dyn(..) => {
+            Ty::Param(..) | Ty::Projection(..) | Ty::Weak(..) | Ty::Dyn(..) => {
                 return Err(unpassable(ty.name(&self.models), operation, span));
             }
         })

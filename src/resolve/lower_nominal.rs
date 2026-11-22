@@ -312,8 +312,8 @@ use ty::{first_inference, mentions_script, reaches_param};
 use ty::{host_ty_proof_allocations, reset_host_ty_proof_allocations};
 use ty::{
     host_type_name, literal_fallback, numeric_type, same_head, same_host_definition, same_inferred,
-    CellKind, Counter, Float, FnCandidate, HostTyProof, Int, Keyed, PartialEqImpl, Pointer, Time,
-    Ty, Unassignable, Unplaced, UNSIGNED_SOURCE, WIDE_I128, WIDE_U128,
+    CellKind, Counter, Float, FnCandidate, HostTyProof, Int, Keyed, Parameter, PartialEqImpl,
+    Pointer, Time, Ty, Unassignable, Unplaced, UNSIGNED_SOURCE, WIDE_I128, WIDE_U128,
 };
 use wide::{
     kind_value, wide_i128, wide_method, wide_order, wide_u128, wide_value, PendingFloat,
@@ -396,9 +396,8 @@ struct Parser<'a> {
     #[cfg(feature = "rust-import")]
     revealing: Option<Ty>,
     /// The hidden type the body gives each opaque output of its own
-    /// (D1109), by the output's name: the fresh type `return_ty` has in
-    /// its place.
-    hidden_outputs: BTreeMap<ImmutableString, Ty>,
+    /// (D1109): the fresh type `return_ty` has in its place.
+    hidden_outputs: BTreeMap<type_ref::Opaque, Ty>,
     loops: Vec<LoopFrame>,
     closures: Vec<closure::Scope>,
     /// Where each moved local (by its declaration) was moved, for E0382.
@@ -954,6 +953,7 @@ impl<'a> Parser<'a> {
             tokens = expand_imported_variants(&models, tokens);
         }
         let associated = Shared::clone(&models.associated);
+        let opaque_outputs = Shared::clone(&models.opaque_outputs);
 
         let mut parser = Self {
             marker: std::marker::PhantomData,
@@ -971,6 +971,7 @@ impl<'a> Parser<'a> {
             last_expression: None,
             inference: Inference {
                 associated,
+                opaque_outputs,
                 ..Inference::default()
             },
             callable: None,

@@ -286,6 +286,7 @@ pub(crate) fn matches_type(value: &Dynamic, ty: &type_ref::Type) -> bool {
             // A generic parameter and its associated types are erased:
             // any value.
             type_ref::Target::Parameter
+            | type_ref::Target::Opaque(_)
             | type_ref::Target::Projection(..)
             | type_ref::Target::Alias(_)
             | type_ref::Target::Std(_) => true,

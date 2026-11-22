@@ -265,7 +265,7 @@ impl<'a> Parser<'a> {
             // A `T: Into<Length>` passed where the library takes a `Length`:
             // the caller converted it (`convert_into_host`), so it is one.
             if facade
-                && let ty @ (Ty::Param(_) | Ty::Projection(..)) =
+                && let ty @ (Ty::Param(..) | Ty::Projection(..)) =
                     self.inference.resolve(&argument.ty)
                 && let Some(target) = self
                     .bound_trait_arguments(&ty, "Into")
