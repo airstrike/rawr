@@ -414,6 +414,13 @@ struct Parser<'a> {
     /// that has one, by the closure's span: what `std::thread::spawn`
     /// refuses (`thread.rs`).
     unsent_captures: BTreeMap<Span, closure::Unsent>,
+    /// Each closure's captures whose type holds an opaque output (D1109),
+    /// which is `Send` as its hidden type is, known once every body is
+    /// checked.
+    opaque_captures: BTreeMap<Span, Vec<closure::Unsent>>,
+    /// Each thread's closure capturing an opaque output, whose `Send` bound
+    /// is checked once every body is.
+    opaque_sends: Vec<entry::HiddenSend>,
     /// A local a closure that isn't `move` borrows, of each closure that
     /// borrows one, by the closure's span: what a `'static` bound refuses
     /// (rustc's E0373), as `std::thread::spawn`'s does.
@@ -1007,6 +1014,8 @@ impl<'a> Parser<'a> {
             known_values: BTreeMap::new(),
             known_indices: Vec::new(),
             unsent_captures: BTreeMap::new(),
+            opaque_captures: BTreeMap::new(),
+            opaque_sends: Vec::new(),
             borrowed_captures: BTreeMap::new(),
             deferred: BTreeMap::new(),
             uninitialized: Vec::new(),

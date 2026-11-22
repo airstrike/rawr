@@ -760,6 +760,7 @@ pub(super) fn lower_with_context(
         Some((script.source, kept::Part::Script)),
     );
     witnessed_hidden(&witnesses, &assembly.hidden, &models)?;
+    sent_hidden(engine, &assembly.hidden, &models)?;
     #[cfg(feature = "rust-import")]
     if let Some(session) = &mut session {
         session.succeeded();
@@ -996,6 +997,19 @@ pub(super) struct Lowered {
 pub(super) struct Hidden {
     pub(super) filled: Vec<(type_ref::Opaque, Ty)>,
     pub(super) witnessed: Vec<(type_ref::Opaque, Span)>,
+    pub(super) sends: Vec<HiddenSend>,
+}
+
+/// A thread's closure capturing a value whose type `ty` holds an opaque
+/// output, by reference when `borrowed`: `item`'s `F: Send` holds as the
+/// hidden types do (D1109).
+#[derive(Clone)]
+#[cfg_attr(feature = "rust-import", derive(serde::Deserialize, serde::Serialize))]
+pub(super) struct HiddenSend {
+    pub(super) ty: Ty,
+    pub(super) borrowed: bool,
+    pub(super) closure: Span,
+    pub(super) item: ImmutableString,
 }
 
 /// A declaration of a local whose `Debug` text a debugger reads by its
@@ -1089,6 +1103,73 @@ fn witnessed_hidden(
                 }
                 .into(),
             ));
+        }
+    }
+    Ok(())
+}
+
+/// Refuse a thread's closure capturing an opaque output whose hidden type
+/// isn't `Send`, as rustc's auto traits see through it (D1109). An opaque
+/// output with no one hidden type passes, as rawr proves no auto trait.
+fn sent_hidden(
+    engine: &Engine,
+    hidden: &[(crate::program::source::Id, Hidden)],
+    models: &Models,
+) -> Result<(), LoweringFailure> {
+    let mut revealed = BTreeMap::<type_ref::Opaque, Option<Ty>>::new();
+    for (opaque, ty) in hidden.iter().flat_map(|(_, hidden)| &hidden.filled) {
+        revealed
+            .entry(*opaque)
+            .and_modify(|known| {
+                if known.as_ref() != Some(ty) {
+                    *known = None;
+                }
+            })
+            .or_insert_with(|| Some(ty.clone()));
+    }
+    let reveal = |ty: &Ty| match ty {
+        Ty::Param(_, super::ty::Parameter::Opaque(opaque)) => revealed.get(opaque)?.clone(),
+        _ => None,
+    };
+    for (source, hidden) in hidden {
+        if hidden.sends.is_empty() {
+            continue;
+        }
+        let parser = Parser::new_with_offset(
+            engine,
+            "",
+            models.for_source(*source),
+            0,
+            0,
+            #[cfg(feature = "rust-import")]
+            None,
+        );
+        for send in &hidden.sends {
+            // A hidden type may hold another function's opaque output.
+            let mut ty = send.ty.clone();
+            for _ in 0..=revealed.len() {
+                ty = super::generics::substitute(&ty, &reveal);
+            }
+            let refused = if send.borrowed {
+                !parser.shared_between_threads(&ty)
+            } else {
+                parser.not_send(&ty)
+            };
+            if refused {
+                return Err(LoweringFailure::original(
+                    *source,
+                    Error::MissingCapability {
+                        owner: ty.name(models),
+                        capability: if send.borrowed { "Sync" } else { "Send" }.into(),
+                        operation: send.closure,
+                        derive: false,
+                        declared: None,
+                        required_by: Some(crate::resolve::Required::by(send.item.clone())),
+                        formatted: None,
+                    }
+                    .into(),
+                ));
+            }
         }
     }
     Ok(())

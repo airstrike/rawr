@@ -92,6 +92,7 @@ impl<'a> Parser<'a> {
                 .map(|(opaque, hidden)| (*opaque, self.inference.resolve(hidden)))
                 .collect(),
             witnessed: std::mem::take(&mut self.witnessed_opaques),
+            sends: std::mem::take(&mut self.opaque_sends),
         }
     }
 

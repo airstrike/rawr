@@ -2819,3 +2819,36 @@ main();
     );
     assert_eq!(output, "7 0 1\n");
 }
+
+#[test]
+fn an_opaque_output_is_send_as_its_hidden_type_is() {
+    // rustc's auto traits see through an opaque type to its hidden type.
+    let program = |field: &str, value: &str| {
+        format!(
+            r#"
+use std::rc::Rc;
+trait Shape {{ fn area(&self) -> f64; }}
+struct Sq({field});
+impl Shape for Sq {{ fn area(&self) -> f64 {{ 2.0 }} }}
+fn make() -> impl Shape {{ Sq({value}) }}
+fn main() {{
+    let s = make();
+    let h = std::thread::spawn(move || s.area());
+    println!("{{}}", h.join().unwrap());
+}}
+main();
+"#
+        )
+    };
+    assert_eq!(printed(&program("f64", "2.0")), "2\n");
+    // rawr names the hidden type, as it names a captured `Sq` itself.
+    let report = refused(&program("Rc<f64>", "Rc::new(2.0)"));
+    assert!(
+        report.starts_with("error[E0277]: `Sq` cannot be sent between threads safely"),
+        "{report}"
+    );
+    assert!(
+        report.contains("required by a bound in `std::thread::spawn`"),
+        "{report}"
+    );
+}

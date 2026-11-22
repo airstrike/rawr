@@ -948,19 +948,32 @@ impl<'a> Parser<'a> {
             flow.set_origins(expression, closure.origins.clone());
             flow.set_closure_keeps(expression, closure.keeps.clone());
         }
-        if let Some(unsent) = scope.captures.iter().find_map(|name| {
-            let ty = self
-                .inference
-                .resolve(&self.bindings.get(name.as_str())?.ty);
-            let borrowed = !moved && !scope.consumed.contains(name);
-            let refused = if borrowed {
-                !self.shared_between_threads(&ty)
+        let captured = scope
+            .captures
+            .iter()
+            .filter_map(|name| {
+                let ty = self
+                    .inference
+                    .resolve(&self.bindings.get(name.as_str())?.ty);
+                let borrowed = !moved && !scope.consumed.contains(name);
+                Some(Unsent { ty, borrowed })
+            })
+            .collect::<Vec<_>>();
+        if let Some(unsent) = captured.iter().find(|unsent| {
+            if unsent.borrowed {
+                !self.shared_between_threads(&unsent.ty)
             } else {
-                self.not_send(&ty)
-            };
-            refused.then_some(Unsent { ty, borrowed })
+                self.not_send(&unsent.ty)
+            }
         }) {
-            self.unsent_captures.insert(expression, unsent);
+            self.unsent_captures.insert(expression, unsent.clone());
+        }
+        let opaque = captured
+            .into_iter()
+            .filter(|unsent| super::ty::contains(&unsent.ty, &Ty::is_opaque))
+            .collect::<Vec<_>>();
+        if !opaque.is_empty() {
+            self.opaque_captures.insert(expression, opaque);
         }
         if !moved
             && let Some(name) = scope
