@@ -1583,6 +1583,9 @@ pub enum Error {
         owner: ImmutableString,
         /// The value written into.
         at: Span,
+        /// The `Write` trait rustc suggests a `use` of: `std::fmt::Write`
+        /// for a `String`, `std::io::Write` for `Stdout`.
+        writer: &'static str,
         /// Where rustc puts the `use` of `Write` it suggests.
         placement: Option<crate::Position>,
     },

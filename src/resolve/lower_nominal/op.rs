@@ -2648,7 +2648,7 @@ impl ExecutableOp {
                     args,
                     &models.runtime,
                     Some(&equal),
-                    context.engine().access(),
+                    Some(context.engine()),
                 )
             }
             Self::Projection { proof } => {

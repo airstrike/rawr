@@ -291,10 +291,10 @@ impl Proof {
         // A field a pattern borrows is lent to the call alone, but a lender
         // of its own fields projects through it.
         let result = if self.definition.kind().lends() {
-            runtime.invoke(requirement, args, None, None, &crate::Access::NONE)
+            runtime.invoke(requirement, args, None, None, None)
         } else {
             crate::scope::opened(args, &mut |args| {
-                runtime.invoke(requirement, args, None, None, &crate::Access::NONE)
+                runtime.invoke(requirement, args, None, None, None)
             })
         };
 

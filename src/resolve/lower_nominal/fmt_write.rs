@@ -1,6 +1,7 @@
 //! `write!` and `writeln!` into a `String`, which `std::fmt::Write` gives
 //! it: the formatted text pushed onto the string, and `Ok(())`, a
-//! `fmt::Result`. A `fmt` body's formatter is written in `lower_nominal`.
+//! `fmt::Result`. Into another writer, as rustc expands them: its
+//! `write_fmt`. A `fmt` body's formatter is written in `lower_nominal`.
 
 use super::*;
 
@@ -26,9 +27,15 @@ impl Parser<'_> {
         let scoped = self.std_trait_in_scope("core::fmt::Write", at)
             || !matches!(owner, Ty::String)
                 && self.std_trait_in_scope("core::io::write::Write", at);
+        // std's writer of bytes (`Stdout`) has `io::Write`'s.
+        let writer = match self.std_writer(owner) {
+            true => "std::io::Write",
+            false => "std::fmt::Write",
+        };
         (!scoped).then(|| Error::UnscopedWrite {
             owner: owner.name(&self.models),
             at: target,
+            writer,
             placement: self.models.use_placement(),
         })
     }
@@ -59,18 +66,25 @@ impl Parser<'_> {
         {
             text_ty = target;
         }
-        if !matches!(self.inference.resolve(text_ty), Ty::String) {
-            return Err(Error::UnsupportedNominalSyntax {
-                construct: format!(
-                    "`{name}!` into a `{}` is not supported in Rawr yet; write into a `String` \
-                     or a `fmt` formatter",
-                    target.ty.name(&self.models)
-                )
-                .into(),
-                source: target.span,
-            });
-        }
         let owner = self.inference.resolve(text_ty);
+        if !matches!(owner, Ty::String) {
+            if !self.std_writer(&owner) {
+                return Err(Error::UnsupportedNominalSyntax {
+                    construct: format!(
+                        "`{name}!` into a `{}` is not supported in Rawr yet; write into a \
+                         `String` or a `fmt` formatter",
+                        target.ty.name(&self.models)
+                    )
+                    .into(),
+                    source: target.span,
+                });
+            }
+            if let Some(error) = self.unscoped_write(&owner, target.span) {
+                return Err(error);
+            }
+            self.splice_write_fmt(name, target.span.start())?;
+            return Ok(target);
+        }
         if let Some(error) = self.unscoped_write(&owner, span(target_start, target.span.start())) {
             return Err(error);
         }
@@ -133,9 +147,9 @@ impl Parser<'_> {
         while let Ty::Reference { target, .. } = ty {
             ty = self.inference.resolve(&target);
         }
-        // A writer by an impl, its own or std's, or by a generic's bound.
-        // A crate's or a std facade's writer (`Stdout`) has no `write_fmt`
-        // rawr runs yet, and another type is refused where it was.
+        // A writer by an impl, its own or std's, or by a generic's bound. A
+        // std facade's writer (`Stdout`) is any target's, below, and a
+        // crate's has no `write_fmt` rawr runs yet.
         let writes = !matches!(ty, Ty::String | Ty::Str | Ty::Host { .. })
             && (self.type_implements(&ty, "Write")
                 || super::op::owner_id(&ty).is_some_and(|owner| {
@@ -150,6 +164,26 @@ impl Parser<'_> {
         if let Some(error) = self.unscoped_write(&ty, span(target_start, at)) {
             return Err(error);
         }
+        self.splice_write_fmt(name, at)?;
+        self.splice_tokens(vec![(local_token, at)]);
+        let _ = name_span;
+        self.parse_primary().map(Some)
+    }
+
+    /// Whether `ty` is a writer std's facade holds, which has the `write_fmt`
+    /// of std's `Write` impl for it: `Stdout`, `Stderr`.
+    fn std_writer(&self, ty: &Ty) -> bool {
+        matches!(ty, Ty::Host { proof, .. } if self
+            .models
+            .host_items(&format!("{}::write_fmt", proof.definition.path()))
+            .is_some())
+    }
+
+    /// The rest of `write!(w, ..)` after its writer `w`, as rustc expands
+    /// it, `.write_fmt(format_args!(..))`, put back in the input for the
+    /// writer's postfix to call. `writeln!` adds the newline to the format
+    /// string, as std's does.
+    fn splice_write_fmt(&mut self, name: &str, at: Position) -> Result<(), Error> {
         let (mut arguments, close) = if matches!(self.peek(), Token::Comma) {
             self.next();
             self.splice_tokens(vec![(Token::LeftParen, at)]);
@@ -176,7 +210,6 @@ impl Parser<'_> {
         }
         let identifier = |text: &str| Token::Identifier(Box::new(text.into()));
         let mut tokens = vec![
-            (local_token, at),
             (Token::Period, at),
             (identifier("write_fmt"), at),
             (Token::LeftParen, at),
@@ -186,8 +219,7 @@ impl Parser<'_> {
         ];
         tokens.extend(arguments);
         tokens.extend([(Token::RightParen, close), (Token::RightParen, close)]);
-        let _ = name_span;
         self.splice_tokens(tokens);
-        self.parse_primary().map(Some)
+        Ok(())
     }
 }

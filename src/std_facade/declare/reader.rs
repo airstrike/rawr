@@ -144,6 +144,8 @@ impl<'a> Reader<'a> {
             "alloc::string::String" => return Some(Type::builtin(Builtin::String)),
             "core::time::Duration" => return Some(Type::builtin(Builtin::Duration)),
             "std::time::Instant" => return Some(Type::builtin(Builtin::Instant)),
+            // The text `format_args!` formats, which a `write_fmt` takes.
+            "core::fmt::Arguments" => return Some(Type::builtin(Builtin::Arguments)),
             "alloc::boxed::Box" => return Some(Type::boxed(argument(0)?)),
             // What a `Cow` holds is copied out: the type its `ToOwned`
             // makes.
