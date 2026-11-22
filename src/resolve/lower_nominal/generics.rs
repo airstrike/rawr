@@ -49,6 +49,15 @@ impl<'a> Parser<'a> {
             }
             substitution.insert(generic.name.text.clone(), fresh);
         }
+        // `where Vec<T>: Debug`: the parameter lifted for the clause is
+        // `Vec<T>` at this use, which its bounds then check.
+        for generic in generics {
+            if let Some(fixed) = &generic.fixed {
+                let fixed = instantiate(&Ty::from_resolved(fixed), &substitution);
+                let fits = self.unify_type(&substitution[&generic.name.text], &fixed);
+                debug_assert!(fits, "a fresh type unifies with any type");
+            }
+        }
         // `U: Convert<V>`: the trait's arguments may name any parameter.
         // A trait bounding one parameter twice (`U: Convert<i64> +
         // Convert<String>`) is checked once per argument list.
@@ -209,14 +218,21 @@ impl<'a> Parser<'a> {
                 .iter()
                 .find(|generic| substitution.get(&generic.name.text) == Some(ty))?;
             let bound = written(generic)?;
-            let parameter = Ty::Param(generic.name.text.clone());
+            // A parameter lifted for `where Vec<T>: Debug` is at the first
+            // argument whose type names a parameter `Vec<T>` names.
+            let named = generic
+                .fixed
+                .as_ref()
+                .map_or(Ty::Param(generic.name.text.clone()), Ty::from_resolved);
             let (_, argument) =
                 function
                     .parameters
                     .iter()
                     .zip(arguments)
                     .find(|(declared, _)| {
-                        contains(&Ty::from_resolved(&declared.ty), &|ty| *ty == parameter)
+                        contains(&Ty::from_resolved(&declared.ty), &|ty| {
+                            matches!(ty, Ty::Param(_)) && contains(&named, &|named| named == ty)
+                        })
                     })?;
             let place = crate::resolve::Bound {
                 bound,
@@ -250,6 +266,36 @@ impl<'a> Parser<'a> {
             });
             self.pending_traits[index].4 = site;
         }
+    }
+
+    /// The parameter a `where` clause in scope bounds `ty` as (`Vec<T>` of
+    /// `where Vec<T>: Debug`), whose bounds `ty` has in this body.
+    pub(super) fn assumed(&self, ty: &Ty) -> Option<Ty> {
+        if self.assumed.is_empty() {
+            return None;
+        }
+        let ty = self.inference.resolve(ty);
+        self.assumed
+            .iter()
+            .find(|(fixed, _)| *fixed == ty)
+            .map(|(_, name)| Ty::Param(name.clone()))
+    }
+
+    /// The parameter a `where` clause bounds `ty` as, when it has what
+    /// `holds` asks and `ty` has it only by the clause: a value whose own
+    /// type has it is written by its type.
+    pub(super) fn assumed_for(
+        &mut self,
+        ty: &Ty,
+        holds: impl Fn(&Self, &Ty) -> bool,
+    ) -> Option<Ty> {
+        let parameter = self
+            .assumed(ty)
+            .filter(|parameter| holds(self, parameter))?;
+        let assumed = std::mem::take(&mut self.assumed);
+        let own = holds(self, ty);
+        self.assumed = assumed;
+        (!own).then_some(parameter)
     }
 
     /// The name of the program's type `ty` where it is declared, when that
@@ -1126,6 +1172,18 @@ pub(super) fn const_generics(generics: &[item::Generic]) -> BTreeMap<ImmutableSt
         .filter_map(|generic| {
             let ty = generic.constant.as_ref()?;
             Some((generic.name.text.clone(), Ty::from_resolved(ty)))
+        })
+        .collect()
+}
+
+/// The type each parameter among `generics` lifted for a `where` bound on
+/// another type is (`Vec<T>` of `where Vec<T>: Debug`), with its name.
+pub(super) fn assumed_generics(generics: &[item::Generic]) -> Box<[(Ty, ImmutableString)]> {
+    generics
+        .iter()
+        .filter_map(|generic| {
+            let ty = generic.fixed.as_ref()?;
+            Some((Ty::from_resolved(ty), generic.name.text.clone()))
         })
         .collect()
 }

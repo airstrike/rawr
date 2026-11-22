@@ -1154,6 +1154,11 @@ impl<'a> Parser<'a> {
     /// Whether `ty` implements the crate trait `trait_name`: a script type
     /// with an impl of it, or a generic parameter bounded by it.
     pub(super) fn type_implements(&self, ty: &Ty, trait_name: &str) -> bool {
+        if let Some(parameter) = self.assumed(ty)
+            && self.type_implements(&parameter, trait_name)
+        {
+            return true;
+        }
         match ty {
             Ty::Dyn(name, _) => {
                 name == trait_name
@@ -1267,6 +1272,11 @@ impl<'a> Parser<'a> {
         arguments: &[Ty],
     ) -> bool {
         if arguments.is_empty() && self.type_implements(ty, trait_name) {
+            return true;
+        }
+        if let Some(parameter) = self.assumed(ty)
+            && self.type_implements_with(&parameter, trait_name, arguments)
+        {
             return true;
         }
         // A blanket impl whose where-clauses hold for `ty`.
@@ -1542,6 +1552,7 @@ impl<'a> Parser<'a> {
             .map(|generic| (generic.name.text.clone(), generic.bounds))
             .collect();
         self.constants = const_generics(&implementation.generics);
+        self.assumed = assumed_generics(&implementation.generics);
         self.generic_traits = generic_traits(&implementation.generics);
         self.generic_trait_arguments = generic_trait_arguments(&implementation.generics);
         self.inference.equalities = generic_equalities(&implementation.generics);

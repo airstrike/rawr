@@ -1525,3 +1525,180 @@ main();
         "{report}"
     );
 }
+
+/// rustc reads a `where` bound on an associated type of a parameter
+/// (`I::Item: AsRef<dyn Item>`, `<I as IntoIterator>::Item: Debug`) and
+/// uses it for method lookup and formatting in the body (#383). The output
+/// is rustc's for the same program.
+#[test]
+fn a_where_bound_on_an_associated_type_bounds_it() {
+    let source = r#"
+use std::fmt::{Debug, Display};
+trait Item { fn price(&self) -> i64; }
+struct Book(i64);
+impl Item for Book { fn price(&self) -> i64 { self.0 } }
+fn total<I>(items: I) -> i64
+where
+    I: IntoIterator,
+    I::Item: AsRef<dyn Item>,
+{
+    items.into_iter().fold(0, |sum, item| sum + item.as_ref().price())
+}
+fn show<I>(items: I) -> String
+where
+    I: Iterator,
+    I::Item: Display,
+{
+    items.map(|x| format!("<{x}>")).collect::<Vec<_>>().join(",")
+}
+fn count<I>(items: I) -> usize
+where
+    I: IntoIterator,
+    <I as IntoIterator>::Item: Debug,
+{
+    let mut n = 0;
+    for x in items { println!("{:?}", x); n += 1; }
+    n
+}
+fn largest<I>(items: I) -> Option<I::Item>
+where
+    I: IntoIterator,
+    I::Item: PartialOrd + Copy,
+{
+    let mut best = None;
+    for x in items {
+        best = match best { Some(b) if x <= b => Some(b), _ => Some(x) };
+    }
+    best
+}
+fn main() {
+    let cart: Vec<Box<dyn Item>> = vec![Box::new(Book(3)), Box::new(Book(4))];
+    println!("{}", total(&cart));
+    println!("{}", show(vec![1, 2].into_iter()));
+    println!("{}", count(vec!["a", "b"]));
+    println!("{:?}", largest(vec![3, 9, 4]));
+}
+main();
+"#;
+    assert_eq!(printed(source), "7\n<1>,<2>\n\"a\"\n\"b\"\n2\nSome(9)\n");
+}
+
+/// rustc reads a `where` bound on a compound type (`Vec<T>: Debug`, `&'a
+/// T: Display`, `Vec<T>: Summary`) as what the body may assume, which each
+/// call checks (#383). The output is rustc's for the same program.
+#[test]
+fn a_where_bound_on_a_compound_type_holds_in_the_body() {
+    let source = r#"
+use std::fmt::{Debug, Display};
+trait Summary { fn summary(&self) -> String; }
+impl<T: Debug> Summary for Vec<T> {
+    fn summary(&self) -> String { format!("{} items: {:?}", self.len(), self) }
+}
+fn dbg_vec<T>(v: Vec<T>) -> String
+where
+    Vec<T>: Debug,
+{
+    format!("{:?}", v)
+}
+fn by_ref<'a, T>(t: &'a T) -> String
+where
+    &'a T: Display,
+{
+    format!("[{}]", t)
+}
+fn sum<T>(v: Vec<T>) -> String
+where
+    Vec<T>: Summary,
+{
+    v.summary()
+}
+fn main() {
+    println!("{}", dbg_vec(vec![1u8, 2]));
+    println!("{}", by_ref(&7));
+    println!("{}", sum(vec![1, 2]));
+}
+main();
+"#;
+    assert_eq!(printed(source), "[1, 2]\n[7]\n2 items: [1, 2]\n");
+}
+
+/// A call whose type misses a `where` bound on an associated type is
+/// rustc's E0277 at the argument, naming the type and the bound. The body
+/// has only the bounds written, and rustc names the associated type
+/// `<I as Iterator>::Item` there (#383).
+#[test]
+fn an_unmet_where_bound_on_an_associated_type_is_e0277() {
+    let report = refused(
+        r#"
+use std::fmt::Display;
+fn show<I>(items: I) -> String
+where
+    I: Iterator,
+    I::Item: Display,
+{
+    items.map(|x| format!("<{x}>")).collect::<Vec<_>>().join(",")
+}
+fn main() {
+    println!("{}", show(vec![vec![1]].into_iter()));
+}
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0277]: `Vec<{integer}>` doesn't implement `std::fmt::Display`"),
+        "{report}"
+    );
+    assert!(
+        report.contains("required by this bound in `show`"),
+        "{report}"
+    );
+    let report = refused(
+        r#"
+use std::fmt::Debug;
+fn show<I>(items: I) -> String
+where
+    I: Iterator,
+    I::Item: Debug,
+{
+    let mut out = String::new();
+    for x in items { out = format!("{}", x); }
+    out
+}
+fn main() { println!("{}", show(vec![1].into_iter())); }
+main();
+"#,
+    );
+    assert!(
+        report.starts_with(
+            "error[E0277]: `<I as Iterator>::Item` doesn't implement `std::fmt::Display`"
+        ),
+        "{report}"
+    );
+}
+
+/// A call whose type misses a `where` bound on a compound type is rustc's
+/// E0277 at the argument (#383).
+#[test]
+fn an_unmet_where_bound_on_a_compound_type_is_e0277() {
+    let report = refused(
+        r#"
+fn by_ref<'a, T>(t: &'a T) -> String
+where
+    &'a T: std::fmt::Display,
+{
+    format!("[{}]", t)
+}
+struct Opaque;
+fn main() { println!("{}", by_ref(&Opaque)); }
+main();
+"#,
+    );
+    assert!(
+        report.starts_with("error[E0277]: `Opaque` doesn't implement `std::fmt::Display`"),
+        "{report}"
+    );
+    assert!(
+        report.contains("required by this bound in `by_ref`"),
+        "{report}"
+    );
+}

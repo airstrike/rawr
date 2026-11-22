@@ -18,6 +18,7 @@ import iterators from "../../../tests/fixtures/rust/iterators.rs";
 import moves from "../../../tests/fixtures/rust/moves.rs";
 import strings from "../../../tests/fixtures/rust/strings.rs";
 import traits from "../../../tests/fixtures/rust/traits.rs";
+import traitsTour from "../../../tests/fixtures/rust/traits_tour.rs";
 import useAfterMove from "../../../tests/fixtures/rust/use_after_move.rs";
 import wordCount from "../../../tests/fixtures/rust/word_count.rs";
 import ratatuiTodo from "../../../universe/programs/web/todo.rs";
@@ -46,6 +47,7 @@ export const EXAMPLES: Example[] = [
     { name: "Use after move (error)", code: useAfterMove },
     { name: "Enums, match and ?", code: enums },
     { name: "Traits and generics", code: traits },
+    { name: "Traits: Display, Add, Iterator, dyn", code: traitsTour },
     { name: "Closures and iterators", code: iterators },
     { name: "Word count", code: wordCount },
     { name: "Strings and let else", code: strings },

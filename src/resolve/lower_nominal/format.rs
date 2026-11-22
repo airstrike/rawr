@@ -1620,8 +1620,28 @@ impl<'a> Parser<'a> {
                 self.coerce_expr(&Ty::Int(Int::Usize), argument)?;
             }
             let mut ty = self.inference.resolve(&argument.ty);
+            let (display, debug) = pieces
+                .iter()
+                .fold((false, false), |(display, debug), piece| match piece {
+                    Err((used, spec)) if *used == index => (
+                        display || spec.kind == Kind::Display,
+                        debug || spec.kind == Kind::Debug,
+                    ),
+                    _ => (display, debug),
+                });
             // A reference, box, `Rc` or `Arc` displays as its target.
             loop {
+                // `where &'a T: Display`: the value writes as the parameter
+                // the clause bounds it as.
+                if (display || debug)
+                    && let Some(parameter) = self.assumed_for(&ty, |this, ty| {
+                        (!display || this.type_implements(ty, "Display"))
+                            && (!debug || this.type_provides(ty, capability::Kind::Debug))
+                    })
+                {
+                    ty = parameter;
+                    break;
+                }
                 ty = match ty {
                     Ty::Reference { target, .. } | Ty::Boxed(target) => {
                         self.inference.resolve(&target)
@@ -2076,6 +2096,13 @@ impl<'a> Parser<'a> {
         ty: &Ty,
         value: origin::Fragment,
     ) -> Option<origin::Fragment> {
+        // `where &'a T: Display`: the value writes as the parameter the
+        // clause bounds it as.
+        if let Some(parameter) =
+            self.assumed_for(ty, |this, ty| this.type_implements(ty, "Display"))
+        {
+            return self.display_text(&parameter, value);
+        }
         if let Some(text) = self.display_text(ty, value.clone()) {
             return Some(text);
         }
@@ -2135,6 +2162,19 @@ impl<'a> Parser<'a> {
             let mut ty = self.inference.resolve(&pending.ty);
             let mut name = origin::Fragment::plain(pending.name.as_str());
             loop {
+                // `where &'a T: Display`: the value writes as the
+                // parameter the clause bounds it as.
+                let debug = pending.debug;
+                if let Some(parameter) = self.assumed_for(&ty, |this, ty| {
+                    if debug {
+                        this.type_provides(ty, capability::Kind::Debug)
+                    } else {
+                        this.type_implements(ty, "Display")
+                    }
+                }) {
+                    ty = parameter;
+                    break;
+                }
                 ty = match ty {
                     Ty::Reference { target, .. } | Ty::Boxed(target) => {
                         self.inference.resolve(&target)
@@ -2687,6 +2727,13 @@ impl<'a> Parser<'a> {
         if let Ty::Cow(borrowed) = &ty {
             let payload = self.prelude_op(PreludeOp::CowValue, [value]);
             return self.debug_source(&cow::payload_ty(borrowed), payload, span);
+        }
+        // `where Vec<T>: Debug`: the value writes as the parameter the
+        // clause bounds it as.
+        if let Some(parameter) = self.assumed_for(&ty, |this, ty| {
+            this.type_provides(ty, capability::Kind::Debug)
+        }) {
+            return self.debug_source(&parameter, value, span);
         }
         if let Some(spec) = self.debug_spec.clone() {
             // A leaf under a `{:?}` spec: a number, `bool` or `()` takes it.

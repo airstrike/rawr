@@ -50,6 +50,37 @@ pub(crate) fn named_array_name(length: &str) -> String {
     format!("{ARRAY_PREFIX}{length}]")
 }
 
+/// The prefix of the parameter a function's `where` bound on an associated
+/// type lifts (`I::Item: Display`). Rust spells no identifier with it.
+const PROJECTION_PARAMETER_PREFIX: &str = "__rawr_projection__";
+
+/// The name of the parameter that stands for `<base as trait_name>::name`
+/// in a function whose `where` clause bounds it.
+pub(crate) fn projection_parameter(base: &str, trait_name: &str, name: &str) -> String {
+    format!("{PROJECTION_PARAMETER_PREFIX}{base}__{trait_name}__{name}")
+}
+
+/// The prefix of the parameter a function's `where` bound on a type other
+/// than its parameters and their associated types lifts (`Vec<T>: Debug`).
+/// Rust spells no identifier with it.
+const FIXED_PARAMETER_PREFIX: &str = "__rawr_where__";
+
+/// The name of the `index`th generic parameter of a function, lifted for a
+/// `where` bound on a type other than its parameters.
+pub(crate) fn fixed_parameter(index: usize) -> String {
+    format!("{FIXED_PARAMETER_PREFIX}{index}")
+}
+
+/// The associated type a parameter of [`projection_parameter`] stands for,
+/// as rustc writes it: `<I as Iterator>::Item`.
+pub(crate) fn projection_parameter_name(parameter: &str) -> Option<String> {
+    let mut parts = parameter
+        .strip_prefix(PROJECTION_PARAMETER_PREFIX)?
+        .splitn(3, "__");
+    let (base, trait_name, name) = (parts.next()?, parts.next()?, parts.next()?);
+    Some(format!("<{base} as {trait_name}>::{name}"))
+}
+
 /// The constant an array type's builtin path name names as its length.
 pub(crate) fn array_length_name(name: &str) -> Option<&str> {
     let length = name.strip_prefix(ARRAY_PREFIX)?.strip_suffix(']')?;
