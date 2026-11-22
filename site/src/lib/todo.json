@@ -1,7 +1,7 @@
 {
   "repo": "airstrike/rawr",
   "updated": "2026-11-21",
-  "version": "0.5.4",
+  "version": "0.5.5",
   "examples": {
     "running": 56,
     "total": 56,
@@ -11,6 +11,14 @@
     "intro": ["Each merge to main bumps the patch version. A minor version marks a milestone."],
     "unreleased": {"notes":["The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors."],"entries":[]},
     "releases": [
+      {
+        "version": "0.5.5",
+        "date": "2026-11-21",
+        "entries": [
+          {"text":"An impl of a native trait through its module, as `impl page::Page for BadgePage` after `use crate::page::{self}`, compiles as rustc resolves it, instead of being refused with E0404.","issues":[2452]},
+          {"text":"The playground has a New button beside Examples that starts from an empty `fn main`.","issues":[2467]}
+        ]
+      },
       {
         "version": "0.5.4",
         "date": "2026-11-21",
@@ -6064,7 +6072,7 @@
     {"issue":2449,"title":"A long hover over a function in rawr gui and the playground shows its definition","state":"open","category":"Health"},
     {"issue":2450,"title":"The reload's live lists, the owner's inbox and the program's statics each share one lock, the…","state":"closed","category":"Health","release":"0.4.107"},
     {"issue":2451,"title":"rawr gui shows no hover over a call, a macro or anything else the hover read doesn't run, as…","state":"closed","category":"Health","release":"0.4.107"},
-    {"issue":2452,"title":"A marked module's `impl page::Page for …` resolves `page::Page` as a module, not the trait","state":"open","category":"Health"},
+    {"issue":2452,"title":"A marked module's `impl page::Page for …` resolves `page::Page` as a module, not the trait","state":"closed","category":"Health","release":"0.5.5"},
     {"issue":2453,"title":"The VS Code extension starts rawr lsp beside rust-analyzer","state":"open","category":"Health"},
     {"issue":2454,"title":"The home page and Debugging show one program paused at the same line in rawr tui, rawr gui, the…","state":"closed","category":"Health","release":"0.5.0"},
     {"issue":2455,"title":"A method call on a program type calls its inherent method, as rustc does, when the type's impl…","state":"closed","category":"Health","release":"0.5.1"},
@@ -6078,7 +6086,10 @@
     {"issue":2463,"title":"Float literals converted into `(f32, f32)` or `Vec<f32>` are f32s, and `VecDeque::from(vec)`…","state":"closed","category":"Divergences from rustc","release":"0.5.4"},
     {"issue":2464,"title":"`s.parse()` in a generic fn bounded `T: FromStr` is E0277 \"`T: FromStr` is not satisfied\"","state":"open","category":"Divergences from rustc"},
     {"issue":2465,"title":"A program generic bounded `T: FromStr` called at `u8` is E0277 \"`u8: FromStr` is not satisfied\"","state":"open","category":"Divergences from rustc"},
-    {"issue":2466,"title":"crossing::an_opaque_output_two_crates_reach_is_one_type fails: missing runtime binding for an opaque explain method","state":"open","category":"Health"}
+    {"issue":2466,"title":"crossing::an_opaque_output_two_crates_reach_is_one_type fails: missing runtime binding for an opaque explain method","state":"open","category":"Health"},
+    {"issue":2467,"title":"The playground has a New button beside Examples that starts from an empty `fn main`","state":"closed","category":"Health","release":"0.5.5"},
+    {"issue":2468,"title":"A std path through a `super::` or `crate::` import of a std module fails when lowered","state":"open","category":"Divergences from rustc"},
+    {"issue":2469,"title":"`pub use` of a std trait from a program module is refused as a module re-export","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -8403,7 +8414,8 @@
           "note": "Left: an image in a shared snippet's preview (#530), a GIF that loops a program that never settles (#543).",
           "issues": [
             {"number":530,"title":"A shared iced snippet's link preview shows its frame","state":"open"},
-            {"number":543,"title":"?play loops a GIF of a program that never settles, or notes that it was cut","state":"open"}
+            {"number":543,"title":"?play loops a GIF of a program that never settles, or notes that it was cut","state":"open"},
+            {"number":2467,"title":"The playground has a New button beside Examples that starts from an empty `fn main`","state":"closed"}
           ]
         }
       ]
@@ -8850,7 +8862,9 @@
             {"number":2215,"title":"A tuple struct's constructor with a turbofish (`W::<i32>(1)`) is refused as an unknown value (E0425)","state":"open"},
             {"number":1168,"title":"A crate's tuple-struct constructor isn't callable from marked code","state":"open"},
             {"number":2250,"title":"`use krate::{module::Type}` and nested groups, `self` and globs inside a `use` group reach a…","state":"closed"},
-            {"number":2452,"title":"A marked module's `impl page::Page for …` resolves `page::Page` as a module, not the trait","state":"open"}
+            {"number":2452,"title":"A marked module's `impl page::Page for …` resolves `page::Page` as a module, not the trait","state":"closed"},
+            {"number":2468,"title":"A std path through a `super::` or `crate::` import of a std module fails when lowered","state":"open"},
+            {"number":2469,"title":"`pub use` of a std trait from a program module is refused as a module re-export","state":"open"}
           ]
         },
         {

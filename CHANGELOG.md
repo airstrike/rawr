@@ -6,6 +6,11 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors.
 
+## 0.5.5 (2026-11-21)
+
+- An impl of a native trait through its module, as `impl page::Page for BadgePage` after `use crate::page::{self}`, compiles as rustc resolves it, instead of being refused with E0404. (#2452)
+- The playground has a New button beside Examples that starts from an empty `fn main`. (#2467)
+
 ## 0.5.4 (2026-11-21)
 
 - A generic function's call takes its argument types from the let or return it is assigned to: `let b: P<&str> = f(&name)` coerces `&name` to `&str`. (#1419)

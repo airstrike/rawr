@@ -8,6 +8,14 @@
   },
   "releases": [
     {
+      "version": "0.5.5",
+      "date": "2026-11-21",
+      "entries": [
+        {"text":"An impl of a native trait through its module, as `impl page::Page for BadgePage` after `use crate::page::{self}`, compiles as rustc resolves it, instead of being refused with E0404.","issues":[2452]},
+        {"text":"The playground has a New button beside Examples that starts from an empty `fn main`.","issues":[2467]}
+      ]
+    },
+    {
       "version": "0.5.4",
       "date": "2026-11-21",
       "entries": [
