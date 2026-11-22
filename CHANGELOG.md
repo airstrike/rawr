@@ -6,6 +6,9 @@ Each merge to main bumps the patch version. A minor version marks a milestone.
 
 - The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors.
 - A `&mut` view of a collection's elements kept past its statement reaches them as rustc's does: `&mut v[a..b]`, `as_mut_slice()`, `make_contiguous()`, `split_at_mut`'s halves (side by side, from closures and scoped threads), `chunks_mut`'s chunks, `first_mut` and `last_mut` of a view, and a kept `iter_mut()` walked, zipped, reversed, enumerated, filtered, collected into a `Vec<&mut T>` or passed to a function. rustc's E0499 and E0502 hold while a view lives, and a view out of bounds panics with std's message. (#800, #806, #805)
+- A generic function picks a trait's impl by its type argument among f32 and f64, the integer kinds, and &str and String, as rustc does, including T::f() and T: Into<X> conversions. (#1177)
+- A generic body prints an f32 it is given as an f32, and prints floats with Rust's text and precision. (#1177)
+- Using an iterator local again after collect, count, a for loop or passing it on is E0382, as in rustc. (#2523)
 
 ## 0.5.16 (2026-11-22)
 

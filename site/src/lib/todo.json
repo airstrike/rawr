@@ -12,7 +12,10 @@
     "unreleased": {
       "notes": ["The next milestone is 0.6, Rust as rustc has it: code rustc accepts runs in rawr with rustc's semantics and errors."],
       "entries": [
-        {"text":"A `&mut` view of a collection's elements kept past its statement reaches them as rustc's does: `&mut v[a..b]`, `as_mut_slice()`, `make_contiguous()`, `split_at_mut`'s halves (side by side, from closures and scoped threads), `chunks_mut`'s chunks, `first_mut` and `last_mut` of a view, and a kept `iter_mut()` walked, zipped, reversed, enumerated, filtered, collected into a `Vec<&mut T>` or passed to a function. rustc's E0499 and E0502 hold while a view lives, and a view out of bounds panics with std's message.","issues":[800,806,805]}
+        {"text":"A `&mut` view of a collection's elements kept past its statement reaches them as rustc's does: `&mut v[a..b]`, `as_mut_slice()`, `make_contiguous()`, `split_at_mut`'s halves (side by side, from closures and scoped threads), `chunks_mut`'s chunks, `first_mut` and `last_mut` of a view, and a kept `iter_mut()` walked, zipped, reversed, enumerated, filtered, collected into a `Vec<&mut T>` or passed to a function. rustc's E0499 and E0502 hold while a view lives, and a view out of bounds panics with std's message.","issues":[800,806,805]},
+        {"text":"A generic function picks a trait's impl by its type argument among f32 and f64, the integer kinds, and &str and String, as rustc does, including T::f() and T: Into<X> conversions.","issues":[1177]},
+        {"text":"A generic body prints an f32 it is given as an f32, and prints floats with Rust's text and precision.","issues":[1177]},
+        {"text":"Using an iterator local again after collect, count, a for loop or passing it on is E0382, as in rustc.","issues":[2523]}
       ]
     },
     "releases": [
@@ -4932,7 +4935,7 @@
     {"issue":1174,"title":"A build target whose source file is a symlink is refused","state":"closed","category":"Health"},
     {"issue":1175,"title":"rawr runs a Cargo package's [[bin]] file only as a lone file, without the package's dependencies","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
     {"issue":1176,"title":"A package's `panic = \"abort\"` profile: a panic aborts, as cargo's build does","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
-    {"issue":1177,"title":"A generic body's trait call picks among f32/f64 or &str/String impls by runtime type","state":"open","category":"Divergences from rustc"},
+    {"issue":1177,"title":"A generic body's trait call picks among f32/f64 or &str/String impls by runtime type","state":"closed","category":"Divergences from rustc"},
     {"issue":1178,"title":"impls of one trait for Vec<i64> and Vec<String> (or Foo<i32> and Foo<i64>) are a duplicate method","state":"open","category":"Divergences from rustc"},
     {"issue":1179,"title":"The site's Run buttons run snippets in the browser","state":"closed","category":"Health","release":"0.3.172"},
     {"issue":1180,"title":"Top-level statements don't drop their last locals at the end of the snippet","state":"closed","category":"Divergences from rustc","release":"0.3.172"},
@@ -6277,7 +6280,7 @@
     {"issue":2520,"title":"A program macro called inside a std macro's arguments no longer makes `rawr run` rebuild…","state":"closed","category":"Health","release":"0.5.15"},
     {"issue":2521,"title":"String::drain and String::replace_range are not run","state":"closed","category":"Divergences from rustc","release":"0.5.16"},
     {"issue":2522,"title":"A generic R: RangeBounds<T> has no start_bound or end_bound, and std::ops::Bound is not represented","state":"open","category":"Divergences from rustc"},
-    {"issue":2523,"title":"A consuming iterator method doesn't move a non-range iterator local","state":"open","category":"Divergences from rustc"},
+    {"issue":2523,"title":"A consuming iterator method doesn't move a non-range iterator local","state":"closed","category":"Divergences from rustc"},
     {"issue":2524,"title":"Diagnostics name std's range types without their path","state":"open","category":"Divergences from rustc"},
     {"issue":2525,"title":"Borrow-conflict reports use generic labels, not rustc's","state":"open","category":"Divergences from rustc"},
     {"issue":2526,"title":"A function's `I: Iterator` or `I: IntoIterator` parameter with no `Item` written has the i","state":"closed","category":"Divergences from rustc","release":"0.5.16"},
@@ -6322,7 +6325,9 @@
     {"issue":2565,"title":"A function returning a tuple of `&mut` (`(&'a mut [T], &'a mut [T])`) is refused by the signature check","state":"open","category":"Divergences from rustc"},
     {"issue":2566,"title":"std's named iterator types (`std::slice::Iter<'a, T>`, `IterMut`) in a signature aren't run","state":"open","category":"Divergences from rustc"},
     {"issue":2567,"title":"`split_first_mut`, `split_last_mut`, `chunks_exact_mut`, `rchunks_mut` and `split_mut` of a slice aren't run","state":"open","category":"Divergences from rustc"},
-    {"issue":2568,"title":"A map's `iter_mut()` or `values_mut()` kept or given to an adaptor is refused","state":"open","category":"Divergences from rustc"}
+    {"issue":2568,"title":"A map's `iter_mut()` or `values_mut()` kept or given to an adaptor is refused","state":"open","category":"Divergences from rustc"},
+    {"issue":2569,"title":"A generic trait's impls for two kinds (Scale<i64> for f32 and f64) are picked by runtime type through T","state":"open","category":"Divergences from rustc"},
+    {"issue":2570,"title":"Argument-position `impl Iterator` without `<Item = T>` is a parse error","state":"open","category":"Divergences from rustc"}
   ],
   "groups": [
     {
@@ -8918,7 +8923,7 @@
             {"number":1034,"title":"? converts &str to String through From","state":"open"},
             {"number":1037,"title":"Infer a generic fn's type parameter from the let it's assigned to","state":"open"},
             {"number":1048,"title":"An integer literal is i64 where rustc infers usize from its use","state":"open"},
-            {"number":1177,"title":"A generic body's trait call picks among f32/f64 or &str/String impls by runtime type","state":"open"},
+            {"number":1177,"title":"A generic body's trait call picks among f32/f64 or &str/String impls by runtime type","state":"closed"},
             {"number":1178,"title":"impls of one trait for Vec<i64> and Vec<String> (or Foo<i32> and Foo<i64>) are a duplicate method","state":"open"},
             {"number":1257,"title":"let v = Vec::new() with no type settled is accepted where rustc gives E0282","state":"closed"},
             {"number":1293,"title":"A literal in an if/match arm, a nested block's tail or a closure body takes the enclosing expectation","state":"closed"},
@@ -9100,7 +9105,7 @@
             {"number":2519,"title":"A program static is evaluated again at each read, so a Mutex or atomic static loses its state","state":"closed"},
             {"number":2521,"title":"String::drain and String::replace_range are not run","state":"closed"},
             {"number":2522,"title":"A generic R: RangeBounds<T> has no start_bound or end_bound, and std::ops::Bound is not represented","state":"open"},
-            {"number":2523,"title":"A consuming iterator method doesn't move a non-range iterator local","state":"open"}
+            {"number":2523,"title":"A consuming iterator method doesn't move a non-range iterator local","state":"closed"}
           ]
         },
         {
