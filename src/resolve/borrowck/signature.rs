@@ -60,8 +60,12 @@ pub(crate) struct Summary {
     /// The inputs' positions borrowed for `'static`, or `None`.
     pub(crate) statics: Option<Vec<(Input, Path)>>,
     /// A `&mut` parameter other than the receiver may take another input's
-    /// borrows, which these facts do not follow yet.
+    /// borrows where the signature does not say which.
     pub(crate) unknown_stores: bool,
+    /// What each `&mut` parameter other than the receiver, by index, stores
+    /// of the other inputs in what it refers to, as `store<'a>(v: &mut
+    /// Vec<&'a i32>, x: &'a i32)` stores `x`'s borrow in `v`'s referent.
+    pub(crate) argument_stores: Vec<(usize, Vec<Tap>)>,
     /// The `&mut` arguments, by index, whose referents keep the receiver's
     /// borrow, as `scene.draw(&mut pass)` of `draw<'a>(&'a self, &mut
     /// RenderPass<'a>)` keeps `scene` borrowed in `pass`.
@@ -82,6 +86,7 @@ impl Summary {
             stores: Some(Vec::new()),
             statics: Some(Vec::new()),
             unknown_stores: true,
+            argument_stores: Vec::new(),
             receiver_into: Vec::new(),
         }
     }
@@ -95,6 +100,7 @@ impl Summary {
             stores: Some(stores),
             statics: Some(Vec::new()),
             unknown_stores: false,
+            argument_stores: Vec::new(),
             receiver_into: Vec::new(),
         }
     }
@@ -388,6 +394,11 @@ impl Reader<'_> {
             Type::Path(path) => {
                 match &path.target {
                     Target::Parameter if path.name == "Self" => match &self.lifetimes.owner {
+                        // A trait's own method, whose `self` is of its
+                        // parameter `Self`.
+                        Some(owner) if **owner == *ty => {
+                            out.push((at, Region::Parameter(path.name.clone())));
+                        }
                         Some(owner) => {
                             let owner = owner.clone();
                             self.positions(&owner, at, output, out);
@@ -1307,35 +1318,40 @@ pub(crate) fn summary(
             })
         })
         .collect();
-    // Another `&mut` input that can take a third's borrows.
-    let unknown_stores = signature.parameters.iter().enumerate().any(|(index, ty)| {
+    // Another `&mut` input that can take a third's borrows: what it takes
+    // at each position below its reference.
+    let mut unknown_stores = false;
+    let mut argument_stores = Vec::new();
+    for (index, ty) in signature.parameters.iter().enumerate() {
         if !matches!(ty, Type::Reference { mutable: true, .. }) {
-            return false;
+            continue;
         }
         let below = Path::of(&[Step::Arg(0)]);
-        let inner: Vec<&Region> = inputs
+        let others: Vec<(Input, Positions)> = inputs
+            .iter()
+            .filter(|(input, _)| *input != Input::Argument(index))
+            .cloned()
+            .collect();
+        let mut stored = Vec::new();
+        let known = inputs
             .iter()
             .filter(|(input, _)| *input == Input::Argument(index))
             .flat_map(|(_, positions)| positions)
             .filter(|(path, _)| path.starts_with(below))
-            .map(|(_, region)| region)
-            .collect();
-        inputs
-            .iter()
-            .filter(|(input, _)| *input != Input::Argument(index))
-            .flat_map(|(_, positions)| positions)
-            .any(|(_, region)| {
-                inner
-                    .iter()
-                    .any(|into| relates(region, into, bounds) != Some(false))
-            })
-    });
+            .all(|(path, region)| kept(*path, region, &others, bounds, &mut stored).is_some());
+        if !known {
+            unknown_stores = true;
+        } else if !stored.is_empty() {
+            argument_stores.push((index, stored));
+        }
+    }
     Summary {
         mode: signature.receiver,
         output: known.then_some(taps),
         stores,
         statics: Some(statics),
         unknown_stores,
+        argument_stores,
         receiver_into: Vec::new(),
     }
 }

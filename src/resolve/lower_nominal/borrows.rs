@@ -1005,6 +1005,41 @@ impl Parser<'_> {
         signature::summary(&signature, &|target| self.declared_lifetimes(target))
     }
 
+    /// What a call of the trait method `function`, as its trait declares
+    /// it, keeps of its inputs: the call of a generic parameter's bound
+    /// (`t.get()` of `T: Get`) or a trait object's (`b.get()` of `Box<dyn
+    /// Get>`), whichever impl it runs.
+    pub(super) fn trait_method_summary(&self, function: &item::Function) -> Summary {
+        let unit = type_ref::Type::Unit(function.body.span);
+        // `self` is of the trait's parameter `Self`.
+        let lifetimes = item::Lifetimes {
+            owner: Some(Box::new(type_ref::Type::Path(type_ref::Path {
+                name: "Self".into(),
+                target: type_ref::Target::Parameter,
+                arguments: Box::default(),
+                span: function.name.span,
+            }))),
+            ..function.lifetimes.clone()
+        };
+        let signature = signature::Signature {
+            receiver: function.receiver.as_ref().map(|receiver| match receiver {
+                crate::item::Receiver::Shared(_) => signature::Receiver::Shared,
+                crate::item::Receiver::Mutable(_) => signature::Receiver::Mutable,
+                crate::item::Receiver::Owned(_) | crate::item::Receiver::OwnedMutable(_) => {
+                    signature::Receiver::Owned
+                }
+            }),
+            parameters: function
+                .parameters
+                .iter()
+                .map(|parameter| &parameter.ty)
+                .collect(),
+            output: function.output.as_ref().unwrap_or(&unit),
+            lifetimes: &lifetimes,
+        };
+        signature::summary(&signature, &|target| self.declared_lifetimes(target))
+    }
+
     /// What a call of the facade or imported item `item` keeps of its
     /// inputs: the importer's lifetimes (D572.4). It admits a call whose
     /// value borrows only as a borrow guard, a lent `&str`, or a scope frame
@@ -1792,6 +1827,22 @@ impl Parser<'_> {
             None if any_holds => known = false,
             None => {}
         }
+        // What a `&mut` argument refers to takes another input's borrows
+        // (`store(&mut v, &x)`).
+        for (index, taps) in &summary.argument_stores {
+            for tap in taps {
+                match (
+                    self.read_input(&mut inputs, tap.from),
+                    arguments.get(*index),
+                ) {
+                    (Some(stored), _) if stored.is_empty() => {}
+                    (Some(stored), Some(argument)) => {
+                        known &= self.flow().store_through(argument.span, &stored);
+                    }
+                    _ => known = false,
+                }
+            }
+        }
         // The receiver's own borrow, kept in what a `&mut` argument
         // refers to (`scene.draw(&mut pass)`).
         for &index in &summary.receiver_into {
@@ -1994,6 +2045,37 @@ impl Parser<'_> {
                 self.flow().overloaded_index(value.span.start(), value.span);
             }
             _ => self.project_place(value, Projection::Index),
+        }
+    }
+
+    /// A field read of `value`, a value made here whose `Drop` uses the
+    /// borrows it holds (`G(&x).0`): a temporary its statement drops at its
+    /// end, which uses them there.
+    pub(super) fn field_of_temporary(&self, value: &ParsedExpr) {
+        if is_place(value) || self.flow().in_place(value.span) {
+            return;
+        }
+        let ty = self.inference.resolve(&value.ty);
+        if !self.made_here(value.span, &ty) || self.drop_use(&ty) != drops::DropUse::All {
+            return;
+        }
+        let held = self.flow().origins(value.span).map(<[_]>::to_vec);
+        if let Some(held) = held {
+            self.flow().hold_temporary(value.span, &held);
+        }
+    }
+
+    /// `cell.borrow()` or `cell.borrow_mut()` spanning `call`: its guard
+    /// holds the `&self` borrow of the cell for as long as it lives, as
+    /// `Ref` and `RefMut` do.
+    pub(super) fn cell_borrowed(&self, cell: &ParsedExpr, call: Span) {
+        if !is_place(cell) {
+            return;
+        }
+        let below = self.may_hold_borrow(&cell.ty);
+        let loan = self.flow().autoref(cell.span.start(), call, false, below);
+        if let Some(loan) = loan {
+            self.flow().set_origins(call, vec![(Path::OWN, loan)]);
         }
     }
 

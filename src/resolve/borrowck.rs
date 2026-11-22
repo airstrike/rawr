@@ -171,6 +171,9 @@ pub(crate) struct Loan {
     /// A reborrow's references it lasts within ([`Reborrow::through`]),
     /// where these facts place them.
     pub(crate) through: Option<Vec<Path>>,
+    /// A closure's capture: where its body first uses the place, which
+    /// rustc's E0597 names.
+    pub(crate) used: Option<Span>,
 }
 
 /// A value read through references that lasts within them, as rustc's
@@ -891,7 +894,7 @@ fn conflict(
             return Some(Conflict {
                 code: "E0597",
                 message: format!("`{name}` does not live long enough"),
-                access: loan.span,
+                access: loan.used.unwrap_or(loan.span),
                 borrow: span,
                 report: None,
             });

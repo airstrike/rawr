@@ -4,6 +4,25 @@
 use super::*;
 
 impl<'a> Parser<'a> {
+    /// Whether the type ahead is a reference written with a named lifetime
+    /// (`&'static T`, `&'a T` of the function's `'a`), which outlives the
+    /// body: a local of the type is borrowed for all of it, as its own
+    /// region holds all it refers to.
+    pub(super) fn outliving_reference_ahead(&self) -> bool {
+        let mut ahead = self.input.clone().map(|(token, _)| token);
+        match (ahead.next(), ahead.next(), ahead.next()) {
+            (
+                Some(Token::Ampersand),
+                Some(Token::Apostrophe),
+                Some(Token::Identifier(name) | Token::Reserved(name)),
+            ) => !self
+                .bound_lifetimes
+                .iter()
+                .any(|bound| bound.as_str() == name.as_str()),
+            _ => false,
+        }
+    }
+
     /// `PhantomData<T>`, which holds nothing: the unit type. Its arguments
     /// are read and left out.
     pub(super) fn parse_phantom_type(&mut self) -> Result<Ty, Error> {

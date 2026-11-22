@@ -1216,6 +1216,7 @@ impl<'a> Resolver<'a> {
         };
         let (methods, builtin_methods, std_traits) =
             super::resolve_methods(&mut shells, &definitions, self.host).map_err(unimported)?;
+        super::elided_lifetimes(&shells).map_err(unimported)?;
         super::resolve_functions(&mut shells).map_err(unimported)?;
         scripts.sort_by_key(|(source, ..)| source.index());
         let source_maps = scripts

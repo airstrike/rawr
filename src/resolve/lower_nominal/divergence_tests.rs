@@ -9870,3 +9870,316 @@ main();
         "60s true\n10ms true false\n4.5s true 2.25s\nabcd true bc\n"
     );
 }
+
+#[test]
+fn a_reference_type_written_with_a_named_lifetime_borrows_for_it() {
+    // `let x: &'static T` and `let x: &'a T` of the function's `'a` borrow
+    // what `x` is given for all of the body (#129).
+    let short = "error[E0597]: `n` does not live long enough";
+    refused_as(&[
+        (
+            "fn main() { let n = 5; let x: &'static i32 = &n; println!(\"{}\", x); }",
+            short,
+        ),
+        (
+            "fn main() { let x: &'static i32; { let n = 5; x = &n; } println!(\"{}\", x); }",
+            short,
+        ),
+        (
+            "fn f<'a>(r: &'a i32) -> &'a i32 { let n = 5; let x: &'a i32 = &n; println!(\"{}\", x); r }
+fn main() { let k = 1; println!(\"{}\", f(&k)); }",
+            short,
+        ),
+    ]);
+    let output = printed(
+        r#"
+static A: i32 = 1;
+const C: i32 = 3;
+struct H<'a>(&'a i32);
+impl<'a> H<'a> {
+    fn g(&self) -> i32 { let y: &'a i32 = self.0; let z: &'a i32 = &*self.0; *y + *z }
+}
+fn f<'a>(r: &'a i32) -> i32 { let x: &'a i32 = r; let w: &'a i32 = &*r; *x + *w }
+fn main() {
+    let s: &'static str = "a";
+    let x: &'static i32 = &A;
+    let y: &'static i32 = &5;
+    let z: &'static i32 = &C;
+    let w: &'static [i32] = &[1, 2];
+    let t: &'static str;
+    t = s;
+    let k = 4;
+    println!("{} {} {} {} {:?} {} {} {}", s, x, y, z, w, t, H(&k).g(), f(&k));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "a 1 5 3 [1, 2] a 8 8\n");
+}
+
+#[test]
+fn a_field_that_leaves_out_its_types_lifetime_is_e0106() {
+    // `w: Wrapper` of `struct Wrapper<'a>`, in a field, a payload or a
+    // type argument, as rustc refuses it (#160).
+    let missing = "error[E0106]: missing lifetime specifier";
+    refused_as(&[
+        (
+            "struct Wrapper<'a> { r: &'a i32 }
+struct Outer { w: Wrapper }
+fn main() { let a = 1; let o = Outer { w: Wrapper { r: &a } }; println!(\"{}\", o.w.r); }",
+            missing,
+        ),
+        (
+            "struct W<'a> { r: &'a i32 }
+enum E { A(i32), B(Option<W>) }
+fn main() {}",
+            missing,
+        ),
+        (
+            "struct W<'a, T> { r: &'a T }
+struct O { w: Vec<W<i32>> }
+fn main() {}",
+            missing,
+        ),
+        (
+            "struct O<'a> { w: &'a W }
+struct W<'a> { r: &'a i32 }
+fn main() {}",
+            missing,
+        ),
+    ]);
+    let output = printed(
+        r#"
+struct W<'a, T> { r: &'a T }
+struct O<'a> { w: Vec<W<'a, i32>>, f: fn(i32) -> i32 }
+enum E<'b> { A(W<'b, u8>), B }
+fn main() {
+    let a = 1;
+    let b = 2u8;
+    let o = O { w: vec![W { r: &a }], f: |n| n + 1 };
+    let e = E::A(W { r: &b });
+    if let E::A(w) = e {
+        println!("{} {}", (o.f)(*o.w[0].r), w.r);
+    }
+    let _ = E::B;
+}
+main();
+"#,
+    );
+    assert_eq!(output, "2 2\n");
+}
+
+#[test]
+fn a_closure_that_moves_out_a_capture_where_fn_is_needed_is_e0507() {
+    // A closure written for an `F: Fn` or `impl FnMut` parameter has that
+    // kind, which can't move out a capture (#193).
+    refused_as(&[
+        (
+            "fn call_twice<F: Fn() -> usize>(f: F) -> usize { f() + f() }
+fn main() { let s = String::from(\"ab\"); println!(\"{}\", call_twice(move || { let t = s; t.len() })); }",
+            "error[E0507]: cannot move out of `s`, a captured variable in an `Fn` closure",
+        ),
+        (
+            "fn mutable(mut f: impl FnMut() -> usize) -> usize { f() }
+fn main() { let u = String::from(\"abc\"); println!(\"{}\", mutable(|| { let t = u; t.len() })); }",
+            "error[E0507]: cannot move out of `u`, a captured variable in an `FnMut` closure",
+        ),
+    ]);
+    let output = printed(
+        r#"
+fn once<F: FnOnce() -> usize>(f: F) -> usize { f() }
+fn twice<F: Fn() -> usize>(f: F) -> usize { f() + f() }
+fn main() {
+    let s = String::from("ab");
+    let t = String::from("abc");
+    println!("{} {}", once(move || { let u = s; u.len() }), twice(|| t.len()));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "2 6\n");
+}
+
+#[test]
+fn a_cells_guard_keeps_the_cell_borrowed_until_it_drops() {
+    // `c.borrow()` borrows `c` for as long as its `Ref` lives, whose drop
+    // at its scope's end uses the borrow (#185).
+    let assigned = "error[E0506]: cannot assign to `c` because it is borrowed";
+    refused_as(&[
+        (
+            "use std::cell::RefCell;
+fn main() { let mut c = RefCell::new(1); let b = c.borrow(); c = RefCell::new(2); println!(\"{}\", b); }",
+            assigned,
+        ),
+        (
+            "use std::cell::RefCell;
+fn main() { let mut c = RefCell::new(1); let b = c.borrow_mut(); c = RefCell::new(2); }",
+            assigned,
+        ),
+    ]);
+    let output = printed(
+        r#"
+use std::cell::RefCell;
+fn main() {
+    let mut c = RefCell::new(1);
+    let n = *c.borrow();
+    c = RefCell::new(n + 1);
+    {
+        let b = c.borrow();
+        println!("{}", b);
+    }
+    c = RefCell::new(5);
+    let b = c.borrow_mut();
+    drop(b);
+    c = RefCell::new(6);
+    *c.borrow_mut() += 1;
+    let r = &c;
+    let g = r.borrow();
+    println!("{} {}", g, c.borrow());
+}
+main();
+"#,
+    );
+    assert_eq!(output, "2\n7 7\n");
+}
+
+#[test]
+fn a_field_read_of_a_drop_temporary_keeps_its_borrows_to_the_statements_end() {
+    // `G(&x, 7).1` keeps the temporary `G` to the statement's end, where
+    // its `Drop` uses `&x` (#185).
+    refused_as(&[(
+        "struct G<'a>(&'a i32, i32);
+impl Drop for G<'_> { fn drop(&mut self) {} }
+fn bump(x: &mut i32) -> i32 { *x += 1; *x }
+fn main() { let mut x = 1; let n = G(&x, 7).1 + bump(&mut x); println!(\"{}\", n); }",
+        "error[E0502]: cannot borrow `x` as mutable because it is also borrowed as immutable",
+    )]);
+    let output = printed(
+        r#"
+struct G<'a>(&'a i32, i32);
+impl Drop for G<'_> { fn drop(&mut self) {} }
+struct P<'a>(&'a i32, i32);
+fn bump(x: &mut i32) -> i32 { *x += 1; *x }
+fn main() {
+    let mut x = 1;
+    let a = G(&x, 7).1;
+    let b = bump(&mut x);
+    let c = P(&x, 2).1 + bump(&mut x);
+    let d = *G(&x, 3).0;
+    println!("{} {} {} {}", a, b, c, d);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "7 2 5 3\n");
+}
+
+#[test]
+fn a_trait_method_and_a_mut_parameter_keep_what_their_signatures_say() {
+    // A call through a generic bound or a trait object keeps what the
+    // trait's signature says, and a `&mut` parameter takes another
+    // argument's borrow its lifetimes tie to it (#132).
+    let assigned =
+        |name: &str| format!("error[E0506]: cannot assign to `{name}` because it is borrowed");
+    let (t, b, a) = (assigned("t"), assigned("b"), assigned("a"));
+    refused_as(&[
+        (
+            "trait Get { fn get(&self) -> &i32; }
+struct S(i32);
+impl Get for S { fn get(&self) -> &i32 { &self.0 } }
+fn f<T: Get>(mut t: T, u: T) { let r = t.get(); t = u; println!(\"{}\", r); }
+fn main() { f(S(1), S(2)); }",
+            &t,
+        ),
+        (
+            "trait Get { fn get(&self) -> &i32; }
+struct S(i32);
+impl Get for S { fn get(&self) -> &i32 { &self.0 } }
+fn main() { let mut b: Box<dyn Get> = Box::new(S(1)); let r = b.get(); b = Box::new(S(2)); \
+             println!(\"{} {}\", r, b.get()); }",
+            &b,
+        ),
+        (
+            "fn store<'a>(dst: &mut Vec<&'a i32>, x: &'a i32) { dst.push(x); }
+fn main() { let mut a = 1; let mut v = Vec::new(); store(&mut v, &a); a = 2; println!(\"{:?} {}\", v, a); }",
+            &a,
+        ),
+        (
+            "struct Holder<'a> { r: &'a i32 }
+fn put<'a>(h: &mut Holder<'a>, x: &'a i32) { h.r = x; }
+fn main() { let z = 0; let mut a = 1; let mut h = Holder { r: &z }; put(&mut h, &a); a = 2; \
+             println!(\"{} {}\", h.r, a); }",
+            &a,
+        ),
+    ]);
+    let output = printed(
+        r#"
+struct Holder<'a> { r: &'a i32 }
+fn put<'a>(h: &mut Holder<'a>, x: &'a i32) { h.r = x; }
+fn count(v: &mut Vec<i32>, x: &i32) { v.push(*x); }
+fn store<'a>(dst: &mut Vec<&'a i32>, x: &'a i32) { dst.push(x); }
+trait Get { fn get(&self) -> &i32; fn twice(&self) -> i32 { *self.get() * 2 } }
+struct S(i32);
+impl Get for S { fn get(&self) -> &i32 { &self.0 } }
+fn show<T: Get>(t: &T) -> i32 { let r = t.get(); *r + t.twice() }
+fn main() {
+    let z = 0;
+    let mut a = 1;
+    let mut v = Vec::new();
+    count(&mut v, &a);
+    a = 2;
+    let mut w = Vec::new();
+    store(&mut w, &z);
+    let mut h = Holder { r: &z };
+    put(&mut h, &z);
+    let b: Box<dyn Get> = Box::new(S(4));
+    let r = b.get();
+    println!("{:?} {} {:?} {} {} {}", v, a, w, h.r, r, show(&S(3)));
+}
+main();
+"#,
+    );
+    assert_eq!(output, "[1] 2 [0] 0 4 9\n");
+}
+
+#[test]
+fn a_closure_storing_a_borrow_in_a_capture_stores_it_in_the_captured_local() {
+    // `|| w.push(&x)` stores the borrow of `x` in `w` itself, which a
+    // later use of `w` keeps. rustc names the use of `x` in the body, as
+    // it does for any capture that does not live long enough (#148).
+    refused_as(&[
+        (
+            "fn main() { let mut w: Vec<&i32> = Vec::new(); { let x = 1; let mut f = || w.push(&x); f(); } \
+             println!(\"{:?}\", w); }",
+            "error[E0597]: `x` does not live long enough\n --> <script>:1:84",
+        ),
+        (
+            "fn main() { let f; { let x = 1; f = || x + 1; } println!(\"{}\", f()); }",
+            "error[E0597]: `x` does not live long enough\n --> <script>:1:40",
+        ),
+        (
+            "fn main() { let mut x = 1; let mut w: Vec<&i32> = Vec::new(); let mut f = || w.push(&x); f(); \
+             x = 2; println!(\"{:?} {}\", w, x); }",
+            "error[E0506]: cannot assign to `x` because it is borrowed",
+        ),
+    ]);
+    let output = printed(
+        r#"
+fn main() {
+    let x = 1;
+    let y = 2;
+    let mut w: Vec<&i32> = Vec::new();
+    {
+        let mut f = || w.push(&x);
+        f();
+        f();
+    }
+    let mut g = |r: &i32| { let _ = r; w.push(&y) };
+    g(&3);
+    println!("{:?}", w);
+}
+main();
+"#,
+    );
+    assert_eq!(output, "[1, 1, 2]\n");
+}

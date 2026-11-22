@@ -340,6 +340,9 @@ pub(crate) struct Struct {
     /// How many lifetime parameters it declares.
     pub lifetimes: usize,
     pub regions: TypeRegions,
+    /// Each type its fields name by one segment with no lifetime argument,
+    /// with where its name is: E0106 if it declares one.
+    pub unnamed: Box<[(type_def::Id, Span)]>,
     pub fields: Box<[Field]>,
     pub form: crate::item::StructForm,
 }
@@ -373,6 +376,9 @@ pub(crate) struct Enum {
     /// How many lifetime parameters it declares.
     pub lifetimes: usize,
     pub regions: TypeRegions,
+    /// Each type its fields name by one segment with no lifetime argument,
+    /// with where its name is: E0106 if it declares one.
+    pub unnamed: Box<[(type_def::Id, Span)]>,
     pub variants: Box<[Variant]>,
 }
 

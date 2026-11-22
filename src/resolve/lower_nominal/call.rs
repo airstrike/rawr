@@ -711,7 +711,7 @@ impl<'a> Parser<'a> {
         }
         // A closure that moves out a capture is `FnOnce`: its call moves it.
         if let Ty::FnItem { key, .. } = &ty
-            && self.once_closures.contains(&**key)
+            && self.once_closures.contains_key(&**key)
             && matches!(binding.kind, BindingKind::Local)
         {
             let declaration = binding.declaration;
@@ -1530,6 +1530,7 @@ impl<'a> Parser<'a> {
                         .flatten()
                         .unwrap_or(error));
                 }
+                self.closure_kind_needed(&parameter.ty, argument)?;
                 self.convert_into_host(&function.definition.generics, &parameter.ty, argument)?;
                 self.store_argument(&parameter.ty, argument)?;
                 self.move_local(argument)?;
@@ -1972,6 +1973,7 @@ impl<'a> Parser<'a> {
         for (argument, parameter) in arguments.iter_mut().zip(definition.parameters()) {
             let expected = instantiate(&Ty::from_resolved(&parameter.ty), substitution);
             self.coerce_argument(&parameter.ty, &expected, argument)?;
+            self.closure_kind_needed(&parameter.ty, argument)?;
             self.store_argument(&parameter.ty, argument)?;
             self.move_local(argument)?;
             self.move_generic_reference(argument, &parameter.ty);

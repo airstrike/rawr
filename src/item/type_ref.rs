@@ -2,19 +2,28 @@
 
 use crate::{item, Span};
 
-/// The builtin path name of a function type: `fn(A, ..) -> B`, `impl Fn`
-/// and `dyn Fn` parse to this one segment, whose type arguments are the
-/// inputs and then the output.
+/// The builtin path name of a function type: `impl Fn(A, ..) -> B` and
+/// `dyn Fn` parse to this one segment, whose type arguments are the inputs
+/// and then the output.
 pub(crate) const FN_TYPE: &str = "fn";
 
-/// The builtin path name of `impl FnMut`, `impl FnOnce` and their `dyn`
-/// and bound forms: a function type ([`FN_TYPE`]) whose call takes the
-/// function `&mut` (or by value), which no Rust path can spell.
+/// The builtin path name of a `fn(A, ..) -> B` pointer: a function type
+/// ([`FN_TYPE`]) that no closure capturing a value is.
+pub(crate) const FN_POINTER_TYPE: &str = "fn pointer";
+
+/// The builtin path name of `impl FnMut` and its `dyn` and bound forms: a
+/// function type ([`FN_TYPE`]) whose call takes the function `&mut`, which
+/// no Rust path can spell.
 pub(crate) const FN_MUT_TYPE: &str = "fn mut";
+
+/// The builtin path name of `impl FnOnce` and its `dyn` and bound forms: a
+/// function type ([`FN_TYPE`]) whose call takes the function by value,
+/// which Rawr's call takes `&mut` as it does [`FN_MUT_TYPE`]'s.
+pub(crate) const FN_ONCE_TYPE: &str = "fn once";
 
 /// Whether `name` is a function type's builtin path name.
 pub(crate) fn is_fn_type(name: &str) -> bool {
-    name == FN_TYPE || name == FN_MUT_TYPE
+    matches!(name, FN_TYPE | FN_POINTER_TYPE | FN_MUT_TYPE | FN_ONCE_TYPE)
 }
 
 /// The builtin path name of the never type `!`, the type of an expression

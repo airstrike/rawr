@@ -67,9 +67,10 @@ pub(super) type Hint = (Option<Box<[Ty]>>, Option<Output>);
 pub(super) struct Scope {
     pub(super) outer: BTreeMap<ImmutableString, Span>,
     pub(super) captures: BTreeSet<ImmutableString>,
-    /// The captures the body moves out, which a closure that is not
-    /// `move` takes by value. A closure that has one is `FnOnce`.
-    pub(super) consumed: BTreeSet<ImmutableString>,
+    /// The captures the body moves out, each where it first does, which a
+    /// closure that is not `move` takes by value. A closure that has one
+    /// is `FnOnce`.
+    pub(super) consumed: BTreeMap<ImmutableString, Span>,
     /// An async body, where `.await` may appear.
     pub(super) asynchronous: bool,
     /// The `&mut` borrows of places declared outside the closure that its
@@ -619,7 +620,7 @@ impl<'a> Parser<'a> {
                 .map(|(name, binding)| (name.clone(), binding.declaration))
                 .collect(),
             captures: BTreeSet::new(),
-            consumed: BTreeSet::new(),
+            consumed: BTreeMap::new(),
             asynchronous: async_step.is_some(),
             held: Vec::new(),
             relayed: Vec::new(),
@@ -981,7 +982,7 @@ impl<'a> Parser<'a> {
                 let ty = self
                     .inference
                     .resolve(&self.bindings.get(name.as_str())?.ty);
-                let borrowed = !moved && !scope.consumed.contains(name);
+                let borrowed = !moved && !scope.consumed.contains_key(name);
                 Some(Unsent { ty, borrowed })
             })
             .collect::<Vec<_>>();
@@ -1005,7 +1006,7 @@ impl<'a> Parser<'a> {
             && let Some(name) = scope
                 .captures
                 .iter()
-                .find(|name| !scope.consumed.contains(*name))
+                .find(|name| !scope.consumed.contains_key(*name))
         {
             let name = if name == "self" {
                 "self".into()
@@ -1020,7 +1021,7 @@ impl<'a> Parser<'a> {
         // in only the captures its body moves out.
         let mut moving = BTreeSet::new();
         for name in &scope.captures {
-            if name == "self" || !(moved || scope.consumed.contains(name)) {
+            if name == "self" || !(moved || scope.consumed.contains_key(name)) {
                 continue;
             }
             // A `&mut` borrow of a place moves into a `move` closure: the
@@ -1224,13 +1225,22 @@ impl<'a> Parser<'a> {
                 self.owning_closures.insert((**key).clone());
             }
             if !scope.consumed.is_empty() || moves_out {
-                // A use that needs `Fn` or `FnMut` refuses it (E0507), which
-                // is left to rustc: the lowering does not read those bounds.
-                self.flow().unmodeled(
-                    "a closure that moves out a capture, where `Fn` or `FnMut` is needed",
-                    expression,
-                );
-                self.once_closures.insert((**key).clone());
+                // A use that needs `Fn` or `FnMut` refuses a move out of a
+                // capture (E0507, `closure_kind_needed`). A move out of a
+                // part of one is left to rustc.
+                let first = scope
+                    .consumed
+                    .iter()
+                    .min_by_key(|(_, at)| at.start())
+                    .map(|(name, at)| (name.clone(), *at));
+                if first.is_none() {
+                    self.flow().unmodeled(
+                        "a closure that moves out a capture, where `Fn` or `FnMut` is needed",
+                        expression,
+                    );
+                }
+                self.once_closures
+                    .insert((**key).clone(), (expression, first));
             }
         }
         if moved && !scope.captures.is_empty() || !moved && !moving.is_empty() {
@@ -1287,6 +1297,45 @@ impl<'a> Parser<'a> {
         }
         let source = Self::with_held(&scope.held, source);
         Ok(self.operator_expr(source.surrounded("(", ")"), ty, expression))
+    }
+
+    /// A closure written as the argument for a parameter of type `ty` that
+    /// is `Fn` or `FnMut` (`F: Fn()`, `impl FnMut()`) has that kind, as rustc
+    /// infers it there: one that moves out a capture is rustc's E0507 at
+    /// the move.
+    pub(super) fn closure_kind_needed(
+        &self,
+        ty: &crate::resolve::type_ref::Type,
+        argument: &ParsedExpr,
+    ) -> Result<(), Error> {
+        use crate::item::type_ref::{FN_MUT_TYPE, FN_TYPE};
+        use crate::resolve::type_ref::{Target, Type};
+        let Ty::FnItem { key, .. } = self.inference.resolve(&argument.ty) else {
+            return Ok(());
+        };
+        let Some((written, Some((name, moved)))) = self.once_closures.get(&*key) else {
+            return Ok(());
+        };
+        let kind = match ty {
+            Type::Path(path) if path.target == Target::Builtin => match path.name.as_str() {
+                FN_TYPE => "Fn",
+                FN_MUT_TYPE => "FnMut",
+                _ => return Ok(()),
+            },
+            _ => return Ok(()),
+        };
+        if *written != argument.span {
+            return Ok(());
+        }
+        Err(Error::BorrowConflict {
+            code: "E0507",
+            message: format!(
+                "cannot move out of `{name}`, a captured variable in an `{kind}` closure"
+            )
+            .into(),
+            access: *moved,
+            borrow: *moved,
+        })
     }
 }
 
